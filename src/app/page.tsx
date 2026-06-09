@@ -41,6 +41,22 @@ interface ProductRow {
   name: string; domain: string; price: string; score: number;
   keyword: string; affiliate: MonLevel;
 }
+type PinFormat = "Close-up" | "Moodboard" | "Text Overlay" | "Tutorial" | "Blog Style" | "Lifestyle";
+interface PinIdea {
+  title: string; format: PinFormat; imgId: string;
+  demand: "High Demand" | "Rising" | "Evergreen";
+  competition: "Low Competition" | "Moderate"; saves: string;
+}
+interface ProductIdea {
+  title: string; source: "Etsy" | "Shopify" | "Gumroad";
+  productType: "Physical" | "Digital" | "Printable";
+  category: string; price: string; score: number;
+  demand: "High Demand" | "Rising"; competition: "Low Competition" | "Moderate"; imgId: string;
+}
+interface PlanDay {
+  day: string; date: number; title: string; board: string;
+  time: string; status: "Ready" | "Needs details" | "Planned"; imgId: string;
+}
 
 // ── Config maps ───────────────────────────────────────────────────────────────
 const TAG: Record<TagKey, { label: string; bg: string; color: string; dot: string }> = {
@@ -137,6 +153,34 @@ const PRODUCT_SIGNALS = [
   { name: "Rattan Wall Mirror 24\"",         domain: "amazon.com",         price: "$52", saves: "18.4K", score: 78, keyword: "japandi interior",      affiliate: "MID"  as MonLevel },
   { name: "Soy + Beeswax Candle Set",        domain: "etsy.com",           price: "$28", saves: "15.1K", score: 71, keyword: "cottagecore kitchen",   affiliate: "MID"  as MonLevel },
   { name: "Minimalist Bookend Pair",         domain: "urbanoutfitters.com", price: "$42", saves: "12.9K", score: 63, keyword: "dark academia bedroom", affiliate: "LOW"  as MonLevel },
+];
+
+const PIN_IDEAS: PinIdea[] = [
+  { title: "Neutral Nails Inspo",                  format: "Close-up",     imgId: "1573408301185-9519f945b18d", demand: "High Demand", competition: "Low Competition", saves: "12.4K" },
+  { title: "Cozy Bedroom Aesthetic",               format: "Moodboard",    imgId: "1586023492125-27b2c045efd7", demand: "Rising",      competition: "Low Competition", saves: "8.7K"  },
+  { title: "5 Morning Habits That Shift Everything",format: "Text Overlay", imgId: "1504257432389-52343af06ae3", demand: "High Demand", competition: "Moderate",       saves: "22.1K" },
+  { title: "Japandi Living Room Ideas",            format: "Lifestyle",    imgId: "1600585154340-be6161a56a0c", demand: "Rising",      competition: "Low Competition", saves: "15.3K" },
+  { title: "Iced Matcha Step-by-Step",             format: "Tutorial",     imgId: "1490645935967-10de6ba17061", demand: "Rising",      competition: "Low Competition", saves: "9.8K"  },
+  { title: "Small Room Office Setup",              format: "Blog Style",   imgId: "1515886657613-9f3515b0c78f", demand: "High Demand", competition: "Low Competition", saves: "18.6K" },
+];
+
+const PRODUCT_IDEAS: ProductIdea[] = [
+  { title: "Minimalist Wall Art Set",   source: "Etsy",    productType: "Printable", category: "Home Decor",       price: "$12–$28", score: 91, demand: "High Demand", competition: "Low Competition", imgId: "1490645935967-10de6ba17061" },
+  { title: "Boho Rattan Pendant Light", source: "Etsy",    productType: "Physical",  category: "Home Decor",       price: "$45–$89", score: 87, demand: "High Demand", competition: "Low Competition", imgId: "1586023492125-27b2c045efd7" },
+  { title: "Printable Daily Planner",   source: "Gumroad", productType: "Printable", category: "Printables",       price: "$7–$15",  score: 82, demand: "Rising",      competition: "Low Competition", imgId: "1504257432389-52343af06ae3" },
+  { title: "Notion Finance Tracker",    source: "Gumroad", productType: "Digital",   category: "Digital Products", price: "$15–$29", score: 78, demand: "Rising",      competition: "Low Competition", imgId: "1515886657613-9f3515b0c78f" },
+  { title: "Gold Hoop Earrings",        source: "Etsy",    productType: "Physical",  category: "Jewelry",          price: "$24–$68", score: 85, demand: "High Demand", competition: "Low Competition", imgId: "1573408301185-9519f945b18d" },
+  { title: "Fantasy Map Pack Assets",   source: "Gumroad", productType: "Digital",   category: "Digital Products", price: "$8–$22",  score: 73, demand: "Rising",      competition: "Low Competition", imgId: "1596462502278-27bfdc403348" },
+];
+
+const WEEKLY_PLAN: PlanDay[] = [
+  { day: "Mon", date: 9,  title: "Boho Living Room Ideas",    board: "Living Room", time: "10:00 AM", status: "Ready",         imgId: "1586023492125-27b2c045efd7" },
+  { day: "Tue", date: 10, title: "Small Space Storage Hacks", board: "Home Ideas",  time: "08:30 AM", status: "Ready",         imgId: "1490645935967-10de6ba17061" },
+  { day: "Wed", date: 11, title: "Cottagecore Kitchen Inspo", board: "Home Decor",  time: "11:00 AM", status: "Needs details", imgId: "1513694153872-ec09ab67aab2" },
+  { day: "Thu", date: 12, title: "Quiet Luxury Outfits",      board: "Fashion",     time: "07:00 PM", status: "Ready",         imgId: "1515886657613-9f3515b0c78f" },
+  { day: "Fri", date: 13, title: "Japandi Bedroom Inspo",     board: "Bedroom",     time: "09:00 AM", status: "Planned",       imgId: "1600585154340-be6161a56a0c" },
+  { day: "Sat", date: 14, title: "Desk Setup Aesthetic",      board: "Home Office", time: "09:00 AM", status: "Ready",         imgId: "1504257432389-52343af06ae3" },
+  { day: "Sun", date: 15, title: "Weekend Moodboard",         board: "Lifestyle",   time: "11:30 AM", status: "Planned",       imgId: "1596462502278-27bfdc403348" },
 ];
 
 const TREND_TICKERS = [
@@ -359,21 +403,45 @@ function DiscoverPanel() {
 }
 
 function ViralPanel() {
+  const formats = ["All Formats", "Close-up", "Moodboard", "Lifestyle", "Text Overlay", "Tutorial", "Blog Style"];
+  const [activeFormat, setActiveFormat] = useState("All Formats");
+  const filtered = activeFormat === "All Formats" ? PIN_IDEAS : PIN_IDEAS.filter(p => p.format === activeFormat);
+  const display = filtered.length > 0 ? filtered : PIN_IDEAS;
   return (
-    <div style={{ maxHeight: 360, overflow: "auto" }}>
+    <div style={{ maxHeight: 380, overflow: "auto" }}>
+      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b overflow-x-auto" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+        {formats.map(f => (
+          <button key={f} type="button" onClick={() => setActiveFormat(f)}
+            className="rounded-full px-2.5 py-1 text-[10px] font-semibold whitespace-nowrap shrink-0 transition-all"
+            style={activeFormat === f
+              ? { background: "rgba(217,70,239,0.18)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.30)" }
+              : { background: "rgba(255,255,255,0.04)", color: "#4B5563", border: "1px solid rgba(255,255,255,0.07)" }}>
+            {f}
+          </button>
+        ))}
+      </div>
       <div className="grid grid-cols-3 gap-2 p-4">
-        {VIRAL_PINS.map((pin, i) => (
+        {display.map((idea, i) => (
           <div key={i} className="relative rounded-xl overflow-hidden cursor-pointer group/pin" style={{ aspectRatio: "2/3" }}>
-            <Image src={pin.src} alt="" fill className="object-cover transition-transform duration-500 group-hover/pin:scale-105" sizes="110px" unoptimized />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-transparent" />
+            <Image src={u(idea.imgId, 300, 450)} alt="" fill className="object-cover transition-transform duration-500 group-hover/pin:scale-105" sizes="110px" unoptimized />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/15 to-transparent" />
             <div className="absolute top-1.5 left-1.5 rounded-full px-1.5 py-0.5 text-[8px] font-bold"
-              style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(6px)", color: "#D1D5DB" }}>
-              {pin.format}
+              style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(6px)", color: "#D1D5DB" }}>
+              {idea.format}
+            </div>
+            <div className="absolute top-1.5 right-1.5 rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+              style={{ background: idea.demand === "High Demand" ? "rgba(16,185,129,0.25)" : "rgba(8,145,178,0.25)",
+                       color: idea.demand === "High Demand" ? "#10B981" : "#38BDF8" }}>
+              {idea.demand === "High Demand" ? "↑ High" : "Rising"}
             </div>
             <div className="absolute bottom-0 left-0 right-0 p-2">
-              <p className="text-[9px] font-black text-white">💾 {pin.saves}</p>
-              <p className="text-[8px] font-semibold text-emerald-400">↑ {pin.vel}</p>
-              <p className="text-[8px]" style={{ color: "#4B5563", ...MONO }}>{pin.domain}</p>
+              <p className="text-[9px] font-bold text-white leading-tight mb-1 line-clamp-2">{idea.title}</p>
+              <div className="flex items-center justify-between">
+                <span className="text-[7px] font-semibold" style={{ color: idea.competition === "Low Competition" ? "#10B981" : "#F59E0B" }}>
+                  {idea.competition === "Low Competition" ? "Low Comp" : "Moderate"}
+                </span>
+                <span className="text-[8px] font-black text-white">💾 {idea.saves}</span>
+              </div>
             </div>
           </div>
         ))}
@@ -383,31 +451,352 @@ function ViralPanel() {
 }
 
 function ProductsPanel() {
+  const categories = ["All Categories", "Home Decor", "Jewelry", "Printables", "Digital Products"];
+  const [activeCat, setActiveCat] = useState("All Categories");
+  const filtered = activeCat === "All Categories" ? PRODUCT_IDEAS : PRODUCT_IDEAS.filter(p => p.category === activeCat);
+  const display = filtered.length > 0 ? filtered : PRODUCT_IDEAS;
+  const srcColor = (src: string) => src === "Etsy" ? "#F87171" : src === "Gumroad" ? "#A78BFA" : "#60A5FA";
+  const typeColor = (t: string) => t === "Physical" ? "#FCD34D" : t === "Printable" ? "#38BDF8" : "#C4B5FD";
+  const typeBg   = (t: string) => t === "Physical" ? "rgba(245,158,11,0.20)" : t === "Printable" ? "rgba(8,145,178,0.20)" : "rgba(139,92,246,0.20)";
   return (
-    <div style={{ maxHeight: 360, overflow: "auto" }}>
-      <div className="grid items-center px-4 py-2 border-b"
-        style={{ gridTemplateColumns: "1fr 5.5rem 3rem 3.5rem 4.5rem", gap: "0.75rem", borderColor: "rgba(255,255,255,0.05)" }}>
-        {["product", "domain", "price", "affiliate", "score"].map(h => (
-          <span key={h} className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: "#374151", ...MONO }}>{h}</span>
+    <div style={{ maxHeight: 380, overflow: "auto" }}>
+      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b overflow-x-auto" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+        {categories.map(c => (
+          <button key={c} type="button" onClick={() => setActiveCat(c)}
+            className="rounded-full px-2.5 py-1 text-[10px] font-semibold whitespace-nowrap shrink-0 transition-all"
+            style={activeCat === c
+              ? { background: "rgba(16,185,129,0.18)", color: "#10B981", border: "1px solid rgba(16,185,129,0.30)" }
+              : { background: "rgba(255,255,255,0.04)", color: "#4B5563", border: "1px solid rgba(255,255,255,0.07)" }}>
+            {c}
+          </button>
         ))}
       </div>
-      {PRODUCTS_TABLE.map((p, i) => (
-        <div key={i}
-          className="grid items-center px-4 py-2.5 border-b last:border-0 cursor-pointer"
-          style={{ gridTemplateColumns: "1fr 5.5rem 3rem 3.5rem 4.5rem", gap: "0.75rem", borderColor: "rgba(255,255,255,0.04)", transition: "background 0.12s ease" }}
-          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.025)")}
-          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-          <div className="min-w-0">
-            <p className="text-[12px] font-semibold truncate" style={{ color: "#E5E7EB" }}>{p.name}</p>
-            <p className="text-[9px] capitalize" style={{ color: "#4B5563" }}>{p.keyword}</p>
+      <div className="grid grid-cols-3 gap-2 p-4">
+        {display.map((prod, i) => (
+          <div key={i} className="rounded-xl overflow-hidden cursor-pointer group/prod"
+            style={{ background: "#080E0B", border: "1px solid rgba(255,255,255,0.06)", transition: "border-color 0.15s ease" }}
+            onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(16,185,129,0.25)")}
+            onMouseLeave={e => (e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)")}>
+            <div className="relative" style={{ aspectRatio: "1/1" }}>
+              <Image src={u(prod.imgId, 200, 200)} alt="" fill className="object-cover" sizes="100px" unoptimized />
+              <div className="absolute top-1 right-1 rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                style={{ background: "rgba(0,0,0,0.78)", color: srcColor(prod.source), backdropFilter: "blur(4px)" }}>
+                {prod.source}
+              </div>
+              <div className="absolute top-1 left-1 rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                style={{ background: typeBg(prod.productType), color: typeColor(prod.productType) }}>
+                {prod.productType}
+              </div>
+            </div>
+            <div className="p-2">
+              <p className="text-[10px] font-bold text-white leading-tight mb-0.5 line-clamp-2">{prod.title}</p>
+              <p className="text-[10px] font-black mb-1" style={{ color: "#E5E7EB", ...MONO }}>{prod.price}</p>
+              <div className="flex flex-wrap gap-1">
+                <span className="rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                  style={{ background: "rgba(16,185,129,0.15)", color: "#10B981" }}>
+                  {prod.demand === "High Demand" ? "↑ Demand" : "Rising"}
+                </span>
+                <span className="rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                  style={{ background: "rgba(8,145,178,0.15)", color: "#38BDF8" }}>
+                  Low Comp
+                </span>
+              </div>
+            </div>
           </div>
-          <span className="text-[10px] font-medium" style={{ color: "#6B7280", ...MONO }}>{p.domain}</span>
-          <span className="text-[11px] font-bold tabular-nums text-white" style={MONO}>{p.price}</span>
-          <MonBadge level={p.affiliate} />
-          <ScoreBar score={p.score} delay={i * 80} />
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
+  );
+}
+
+// ── Pin Ideas full section ────────────────────────────────────────────────────
+function PinIdeasSection() {
+  const formats = ["All Formats", "Close-up", "Moodboard", "Lifestyle", "Text Overlay", "Tutorial", "Blog Style"];
+  const [activeFormat, setActiveFormat] = useState("All Formats");
+  const filtered = activeFormat === "All Formats" ? PIN_IDEAS : PIN_IDEAS.filter(p => p.format === activeFormat);
+  const display = filtered.length > 0 ? filtered : PIN_IDEAS;
+  return (
+    <section id="pin-ideas" className="py-20 border-b" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+      <div className="max-w-[1060px] mx-auto px-5">
+        <div className="mb-8">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#D946EF" }}>Pin Ideas</p>
+          <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-3">
+            Pin Ideas that match what people already save.
+          </h2>
+          <p className="max-w-xl text-[15px] leading-relaxed" style={{ color: "#6B7280" }}>
+            Find Pinterest-native formats, layouts, and content angles before you create.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border overflow-hidden" style={{ background: "#0C1410", borderColor: "rgba(255,255,255,0.09)" }}>
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b" style={{ background: "#0A1210", borderColor: "rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60" style={{ background: "#D946EF" }} />
+                <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "#D946EF" }} />
+              </span>
+              <span className="text-[10px] font-bold tracking-[0.16em] uppercase" style={{ color: "#4B5563", ...MONO }}>pin_ideas_feed</span>
+            </div>
+            <span className="text-[10px]" style={{ color: "#374151", ...MONO }}>save velocity tracked · daily refresh</span>
+          </div>
+
+          {/* Filter chips */}
+          <div className="flex items-center gap-1.5 px-4 py-3 border-b overflow-x-auto" style={{ borderColor: "rgba(255,255,255,0.05)", background: "#0A1210" }}>
+            {formats.map(f => (
+              <button key={f} type="button" onClick={() => setActiveFormat(f)}
+                className="rounded-full px-3 py-1.5 text-[11px] font-semibold whitespace-nowrap shrink-0 transition-all"
+                style={activeFormat === f
+                  ? { background: "rgba(217,70,239,0.18)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.35)" }
+                  : { background: "rgba(255,255,255,0.04)", color: "#4B5563", border: "1px solid rgba(255,255,255,0.07)" }}>
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {/* Pin cards grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-5">
+            {display.map((idea, i) => (
+              <div key={i} className="relative rounded-xl overflow-hidden cursor-pointer group/pin" style={{ aspectRatio: "2/3" }}>
+                <Image src={u(idea.imgId, 300, 450)} alt="" fill className="object-cover transition-transform duration-500 group-hover/pin:scale-105" sizes="160px" unoptimized />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/92 via-black/20 to-transparent" />
+                <div className="absolute top-1.5 left-1.5 rounded-full px-2 py-0.5 text-[8px] font-bold"
+                  style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(6px)", color: "#D1D5DB", border: "1px solid rgba(255,255,255,0.10)" }}>
+                  {idea.format}
+                </div>
+                <div className="absolute top-1.5 right-1.5 rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                  style={{ background: idea.demand === "High Demand" ? "rgba(16,185,129,0.28)" : "rgba(8,145,178,0.28)",
+                           color: idea.demand === "High Demand" ? "#10B981" : "#38BDF8" }}>
+                  {idea.demand === "High Demand" ? "↑ Demand" : "Rising"}
+                </div>
+                <div className="absolute bottom-0 left-0 right-0 p-2.5">
+                  <p className="text-[9px] font-bold text-white leading-tight mb-1.5 line-clamp-2">{idea.title}</p>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                      style={{ background: idea.competition === "Low Competition" ? "rgba(16,185,129,0.18)" : "rgba(245,158,11,0.18)",
+                               color: idea.competition === "Low Competition" ? "#10B981" : "#F59E0B" }}>
+                      {idea.competition === "Low Competition" ? "Low Comp" : "Moderate"}
+                    </span>
+                    <span className="text-[8px] font-black text-white">💾 {idea.saves}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Footer */}
+          <div className="flex items-center justify-between px-5 py-4 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "#0A1210" }}>
+            <span className="text-[10px]" style={{ color: "#374151", ...MONO }}>Save to References · Use as Pin reference</span>
+            <Link href="/app/discover?demo=true"
+              className="flex items-center gap-1.5 rounded-full px-4 py-2 text-[11px] font-bold text-white transition-opacity hover:opacity-80"
+              style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}>
+              Explore Pin Ideas <ArrowRight className="w-3 h-3" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── Product Ideas full section ─────────────────────────────────────────────────
+function ProductIdeasSection() {
+  const categories = ["All Categories", "Home Decor", "Jewelry", "Printables", "Digital Products"];
+  const [activeCat, setActiveCat] = useState("All Categories");
+  const filtered = activeCat === "All Categories" ? PRODUCT_IDEAS : PRODUCT_IDEAS.filter(p => p.category === activeCat);
+  const display = filtered.length > 0 ? filtered : PRODUCT_IDEAS;
+  const srcColor = (src: string) => src === "Etsy" ? "#F87171" : src === "Gumroad" ? "#A78BFA" : "#60A5FA";
+  const typeBg   = (t: string) => t === "Physical" ? "rgba(245,158,11,0.20)" : t === "Printable" ? "rgba(8,145,178,0.20)" : "rgba(139,92,246,0.20)";
+  const typeColor= (t: string) => t === "Physical" ? "#FCD34D" : t === "Printable" ? "#38BDF8" : "#C4B5FD";
+  return (
+    <section id="product-ideas" className="py-20 border-b" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
+      <div className="max-w-[1060px] mx-auto px-5">
+        <div className="mb-8">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#10B981" }}>Product Ideas</p>
+          <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-3">
+            Product Ideas worth promoting or selling.
+          </h2>
+          <p className="max-w-xl text-[15px] leading-relaxed" style={{ color: "#6B7280" }}>
+            Find physical and digital products with demand signals, low competition, and clear content angles.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border overflow-hidden" style={{ background: "#0C1410", borderColor: "rgba(255,255,255,0.09)" }}>
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b" style={{ background: "#0A1210", borderColor: "rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <span className="text-[10px] font-bold tracking-[0.16em] uppercase" style={{ color: "#4B5563", ...MONO }}>product_ideas_feed</span>
+            </div>
+            <span className="text-[10px]" style={{ color: "#374151", ...MONO }}>affiliate potential scored · daily refresh</span>
+          </div>
+
+          {/* Filter chips */}
+          <div className="flex items-center gap-1.5 px-4 py-3 border-b overflow-x-auto" style={{ borderColor: "rgba(255,255,255,0.05)", background: "#0A1210" }}>
+            {categories.map(c => (
+              <button key={c} type="button" onClick={() => setActiveCat(c)}
+                className="rounded-full px-3 py-1.5 text-[11px] font-semibold whitespace-nowrap shrink-0 transition-all"
+                style={activeCat === c
+                  ? { background: "rgba(16,185,129,0.18)", color: "#10B981", border: "1px solid rgba(16,185,129,0.35)" }
+                  : { background: "rgba(255,255,255,0.04)", color: "#4B5563", border: "1px solid rgba(255,255,255,0.07)" }}>
+                {c}
+              </button>
+            ))}
+          </div>
+
+          {/* Product cards grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-5">
+            {display.map((prod, i) => (
+              <div key={i} className="rounded-xl overflow-hidden cursor-pointer"
+                style={{ background: "#080E0B", border: "1px solid rgba(255,255,255,0.07)", transition: "border-color 0.15s" }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(16,185,129,0.30)")}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)")}>
+                <div className="relative" style={{ aspectRatio: "1/1" }}>
+                  <Image src={u(prod.imgId, 200, 200)} alt="" fill className="object-cover" sizes="120px" unoptimized />
+                  <div className="absolute top-1 right-1 rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                    style={{ background: "rgba(0,0,0,0.80)", color: srcColor(prod.source), backdropFilter: "blur(4px)" }}>
+                    {prod.source}
+                  </div>
+                  <div className="absolute top-1 left-1 rounded-full px-1.5 py-0.5 text-[7px] font-bold"
+                    style={{ background: typeBg(prod.productType), color: typeColor(prod.productType) }}>
+                    {prod.productType}
+                  </div>
+                </div>
+                <div className="p-2.5">
+                  <p className="text-[10px] font-bold text-white leading-tight mb-0.5 line-clamp-2">{prod.title}</p>
+                  <p className="text-[11px] font-black mb-1.5" style={{ color: "#E5E7EB", ...MONO }}>{prod.price}</p>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="rounded-full px-1.5 py-0.5 text-[7px] font-bold" style={{ background: "rgba(16,185,129,0.15)", color: "#10B981" }}>
+                      {prod.demand === "High Demand" ? "↑ Demand" : "Rising"}
+                    </span>
+                    <span className="rounded-full px-1.5 py-0.5 text-[7px] font-bold" style={{ background: "rgba(8,145,178,0.15)", color: "#38BDF8" }}>
+                      Low Comp
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Footer */}
+          <div className="flex items-center justify-between px-5 py-4 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "#0A1210" }}>
+            <span className="text-[10px]" style={{ color: "#374151", ...MONO }}>Save to My Products · Use as product image</span>
+            <Link href="/app/discover?demo=true"
+              className="flex items-center gap-1.5 rounded-full px-4 py-2 text-[11px] font-bold text-white transition-opacity hover:opacity-80"
+              style={{ background: "linear-gradient(135deg,#10B981,#0891B2)" }}>
+              Explore Product Ideas <ArrowRight className="w-3 h-3" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── Weekly Plan visual section ─────────────────────────────────────────────────
+const STATUS_STYLE: Record<"Ready"|"Needs details"|"Planned", { bg: string; color: string }> = {
+  "Ready":        { bg: "rgba(16,185,129,0.18)",  color: "#10B981" },
+  "Needs details":{ bg: "rgba(245,158,11,0.18)",  color: "#F59E0B" },
+  "Planned":      { bg: "rgba(8,145,178,0.18)",   color: "#38BDF8" },
+};
+
+function WeeklyPlanSection() {
+  return (
+    <section id="weekly-plan" className="py-20 border-b" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+      <div className="max-w-[1060px] mx-auto px-5">
+        <div className="text-center mb-10">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#4D5E58" }}>Weekly Plan</p>
+          <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-3">
+            From ideas to 7 Pins in one weekly plan.
+          </h2>
+          <p className="max-w-xl mx-auto text-[15px] leading-relaxed" style={{ color: "#6B7280" }}>
+            Select what is worth making, then organise the week visually.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border overflow-hidden" style={{ background: "#0C1410", borderColor: "rgba(255,255,255,0.09)" }}>
+          {/* Calendar header */}
+          <div className="flex items-center justify-between px-5 py-3 border-b" style={{ background: "#0A1210", borderColor: "rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center gap-3">
+              <span className="rounded-full px-3 py-1 text-[11px] font-semibold border" style={{ color: "#E5E7EB", borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
+                Jun 9 – Jun 15, 2026
+              </span>
+              <span className="text-[10px]" style={{ color: "#374151", ...MONO }}>This week</span>
+            </div>
+            <div className="flex items-center gap-2 text-[10px]" style={{ color: "#374151", ...MONO }}>
+              {(["Ready","Needs details","Planned"] as const).map(s => (
+                <span key={s} className="flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: STATUS_STYLE[s].color }} />
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* 7-day columns */}
+          <div className="overflow-x-auto">
+            <div className="grid min-w-[700px]" style={{ gridTemplateColumns: "repeat(7,1fr)", gap: "1px", background: "rgba(255,255,255,0.05)" }}>
+              {WEEKLY_PLAN.map((day, i) => (
+                <div key={i} style={{ background: "#0C1410" }}>
+                  {/* Day header */}
+                  <div className="px-2 py-2 border-b" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+                    <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "#4B5563" }}>{day.day}</p>
+                    <p className="text-[18px] font-black text-white leading-none">{day.date}</p>
+                  </div>
+                  {/* Pin card */}
+                  <div className="p-2">
+                    <div className="relative rounded-lg overflow-hidden mb-2" style={{ aspectRatio: "4/5" }}>
+                      <Image src={u(day.imgId, 160, 200)} alt="" fill className="object-cover" sizes="100px" unoptimized />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+                    </div>
+                    <p className="text-[9px] font-bold text-white leading-tight mb-1 line-clamp-2">{day.title}</p>
+                    <p className="text-[8px] mb-1.5" style={{ color: "#4B5563" }}>{day.board} · {day.time}</p>
+                    <span className="inline-block rounded-full px-2 py-0.5 text-[7px] font-bold"
+                      style={{ background: STATUS_STYLE[day.status].bg, color: STATUS_STYLE[day.status].color }}>
+                      {day.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Unscheduled row */}
+          <div className="px-5 py-3 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "#0A1210" }}>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-semibold shrink-0" style={{ color: "#4B5563", ...MONO }}>Unscheduled Ideas (3)</span>
+              <div className="flex items-center gap-2 overflow-x-auto">
+                {[
+                  { imgId: "1513694153872-ec09ab67aab2", title: "Boho Art Print" },
+                  { imgId: "1596462502278-27bfdc403348", title: "Skincare Routine" },
+                  { imgId: "1573408301185-9519f945b18d", title: "Gold Jewellery" },
+                ].map((item, i) => (
+                  <div key={i} className="relative shrink-0 rounded-lg overflow-hidden" style={{ width: 36, height: 36 }}>
+                    <Image src={u(item.imgId, 72, 72)} alt={item.title} fill className="object-cover" sizes="36px" unoptimized />
+                  </div>
+                ))}
+                <div className="shrink-0 h-9 w-9 rounded-lg flex items-center justify-center text-[14px]"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px dashed rgba(255,255,255,0.10)", color: "#374151" }}>
+                  +
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer CTA */}
+          <div className="flex items-center justify-between px-5 py-4 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "#080E0B" }}>
+            <span className="text-[10px]" style={{ color: "#374151", ...MONO }}>Review each Pin before publishing · You confirm every action</span>
+            <Link href="/app/discover?demo=true"
+              className="btn-cta flex items-center gap-1.5 rounded-full px-4 py-2 text-[11px] font-bold text-white">
+              Build my next 7 Pins <ArrowRight className="w-3 h-3" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -449,10 +838,10 @@ export default function HomePage() {
             </span>
           </div>
           <div className="hidden md:flex items-center gap-7 text-[13px] font-medium" style={{ color: "#6B7280" }}>
-            <a href="#terminal"     className="hover:text-white transition-colors">Intelligence</a>
-            <a href="#decisions"    className="hover:text-white transition-colors">Decisions</a>
-            <a href="#saturation"   className="hover:text-white transition-colors">Saturation</a>
-            <a href="#pricing"      className="hover:text-white transition-colors">Pricing</a>
+            <a href="#terminal"      className="hover:text-white transition-colors">Intelligence</a>
+            <a href="#pin-ideas"     className="hover:text-white transition-colors">Pin Ideas</a>
+            <a href="#product-ideas" className="hover:text-white transition-colors">Product Ideas</a>
+            <a href="#pricing"       className="hover:text-white transition-colors">Pricing</a>
           </div>
           <div className="flex items-center gap-2.5">
             <Link href="/login"
@@ -801,6 +1190,9 @@ export default function HomePage() {
         </div>
       </section>
 
+      <PinIdeasSection />
+      <ProductIdeasSection />
+
       {/* ══ DECISION CARDS — "WHAT TO DO TODAY" ════════════════════════════════ */}
       <section id="decisions" className="py-20 border-b" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
         <div className="max-w-[1060px] mx-auto px-5">
@@ -958,52 +1350,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ══ WORKFLOW ═══════════════════════════════════════════════════════════ */}
-      <section className="py-20 border-b" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <div className="max-w-[1060px] mx-auto px-5">
-          <div className="text-center mb-14">
-            <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-3" style={{ color: "#4D5E58" }}>Workflow</p>
-            <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-3">From signal to weekly plan in one session.</h2>
-            <p className="max-w-xl mx-auto text-[15px] leading-relaxed" style={{ color: "#6B7280" }}>
-              Select what is worth making first. Then create.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { step: 1, icon: Target,    title: "Find the opportunity",   sub: "Discover",    desc: "Browse ranked opportunities by demand, saturation, and monetization score. Know what is worth your time before you start." },
-              { step: 2, icon: BarChart2, title: "Check the evidence",     sub: "Trend Radar", desc: "Study high-save Pins for your keyword. Format type, save velocity, source domain — demand confirmed before you create anything." },
-              { step: 3, icon: Sparkles,  title: "Build your weekly batch", sub: "Studio",     desc: "Select 7 opportunities. Get title angles, monetization paths, and Pin formats pre-loaded — ready to act on." },
-              { step: 4, icon: Zap,       title: "Review and publish",       sub: "Calendar",   desc: "Review your Pin plan, confirm each publish action, and schedule to your boards. You stay in control of every publish." },
-            ].map(s => (
-              <div key={s.step}
-                className="relative rounded-2xl border p-6 overflow-hidden"
-                style={{ background: "var(--surface-2)", borderColor: "rgba(255,255,255,0.06)" }}>
-                <div className="pointer-events-none absolute -right-6 -bottom-6 h-24 w-24 rounded-full"
-                  style={{ background: "radial-gradient(circle, rgba(8,145,178,0.06) 0%, transparent 70%)" }} />
-                <div className="flex items-center gap-2.5 mb-4">
-                  <div className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0 border"
-                    style={{ background: "rgba(8,145,178,0.10)", borderColor: "rgba(8,145,178,0.20)" }}>
-                    <s.icon className="h-4 w-4" style={{ color: "#0891B2" }} strokeWidth={1.8} />
-                  </div>
-                  <span className="h-5 w-5 rounded-full text-[11px] font-black flex items-center justify-center shrink-0"
-                    style={{ background: "rgba(8,145,178,0.15)", color: "#0891B2", ...MONO }}>
-                    {s.step}
-                  </span>
-                </div>
-                <p className="text-[10px] font-bold uppercase tracking-widest mb-1.5" style={{ color: "#4D5E58" }}>{s.sub}</p>
-                <p className="text-[14px] font-bold text-white mb-2">{s.title}</p>
-                <p className="text-[12px] leading-relaxed" style={{ color: "#4D5E58" }}>{s.desc}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-8 text-center">
-            <Link href="/app/discover?demo=true"
-              className="btn-cta inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-bold text-white">
-              Build my next 7 Pins <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
-        </div>
-      </section>
+      <WeeklyPlanSection />
 
       {/* ══ DATA PIPELINE ══════════════════════════════════════════════════════ */}
       <section className="py-16 border-b" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
