@@ -1,26 +1,248 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  /* ── Surfaces ─────────────────────────────────────────────────────────── */
+  --bg:           #F7F8FA;
+  --surface:      #FFFFFF;
+  --surface-2:    #F9FAFB;
+  --border:       #E5E7EB;
+  --border-hi:    #D1D5DB;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  /* ── Typography ───────────────────────────────────────────────────────── */
+  --text:         #111827;
+  --text-2:       #6B7280;
+  --text-dim:     #9CA3AF;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* ── Brand (pink / magenta / purple) ─────────────────────────────────── */
+  --brand:        #D946EF;
+  --brand-dark:   #C026D3;
+  --brand-cta:    #FF4D8D;
+  --brand-dim:    rgba(217, 70, 239, 0.08);
+  --brand-glow:   rgba(217, 70, 239, 0.14);
+  --brand-grad:   linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%);
+
+  /* ── Semantic ─────────────────────────────────────────────────────────── */
+  --green:        #10B981;
+  --amber:        #F59E0B;
+  --red:          #EF4444;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 99px; }
+
+*:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-7px); }
+}
+
+.marquee-track {
+  display: inline-flex;
+  width: max-content;
+  animation: marquee 40s linear infinite;
+  will-change: transform;
+}
+.marquee-track:hover { animation-play-state: paused; }
+.float-anim { animation: float 4s ease-in-out infinite; }
+
+/* ── Brand text gradient ─────────────────────────────────────────────────── */
+.aurora-text {
+  background: var(--brand-grad);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── CTA button ──────────────────────────────────────────────────────────── */
+.btn-cta {
+  background: var(--brand-grad);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(217, 70, 239, 0.22);
+  transition: filter 0.15s ease, box-shadow 0.15s ease;
+}
+.btn-cta:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 2px 16px rgba(217, 70, 239, 0.32);
+}
+
+/* legacy .btn-glow → same as .btn-cta */
+.btn-glow {
+  background: var(--brand-grad);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(217, 70, 239, 0.22);
+  transition: filter 0.15s ease;
+}
+.btn-glow:hover { filter: brightness(1.06); }
+
+/* ── Masonry ─────────────────────────────────────────────────────────────── */
+.pin-masonry { column-gap: 0.75rem; column-fill: balance; }
+.pin-masonry--sm   { columns: 2; }
+.pin-masonry--md   { columns: 2; }
+.pin-masonry--hero { columns: 2; }
+
+@media (min-width: 640px)  { .pin-masonry--sm { columns: 3; } }
+@media (min-width: 1024px) {
+  .pin-masonry--md   { columns: 4; }
+  .pin-masonry--hero { columns: 2; }
+}
+
+.pin-masonry-item { break-inside: avoid; margin-bottom: 0.75rem; }
+
+/* ── Pin card ────────────────────────────────────────────────────────────── */
+.pin-card-save { opacity: 0; transition: opacity 0.15s ease; }
+.group:hover .pin-card-save { opacity: 1; }
+
+/* ── Mobile horizontal pin scroll ───────────────────────────────────────── */
+.pin-scroll {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 0.75rem;
+}
+.pin-scroll::-webkit-scrollbar { display: none; }
+.pin-scroll > * { flex-shrink: 0; scroll-snap-align: start; }
+
+/* ── Surface cards ───────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.card-2 {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+/* ── Section label ───────────────────────────────────────────────────────── */
+.section-label {
+  display: inline-block;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 0.25rem 0.875rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 0.75rem;
+}
+
+/* ── App shell theme (set data-theme on /app layout root) ───────────────── */
+[data-theme="light"] {
+  --app-bg:          #F8FAFC;
+  --app-surface:     #FFFFFF;
+  --app-surface-2:   #F9FAFB;
+  --app-surface-3:   #F1F5F9;
+  --app-border:      #E5E7EB;
+  --app-border-hi:   #D1D5DB;
+  --app-text:        #0F172A;
+  --app-text-sec:    #64748B;
+  --app-text-muted:  #94A3B8;
+  --app-text-dim:    #CBD5E1;
+  --app-shell-bg:    #F7F8FA;
+  --app-sidebar-bg:  #FFFFFF;
+  --app-topbar-bg:   #FFFFFF;
+  --app-sidebar-border: #E5E7EB;
+  --app-nav-text:    #64748B;
+  --app-nav-text-active: #0F172A;
+  --app-nav-active-bg: rgba(192, 38, 211, 0.08);
+  --app-dropdown-bg: #FFFFFF;
+  --app-dropdown-border: #E5E7EB;
+  --app-dropdown-text: #374151;
+  --app-dropdown-muted: #94A3B8;
+  --app-dropdown-hover: #F9FAFB;
+}
+
+[data-theme="dark"] {
+  --app-bg:          #0B0E17;
+  --app-surface:     #161D2E;
+  --app-surface-2:   #111827;
+  --app-surface-3:   #1A2236;
+  --app-border:      rgba(255, 255, 255, 0.07);
+  --app-border-hi:   rgba(255, 255, 255, 0.12);
+  --app-text:        #E2E8F0;
+  --app-text-sec:    #8892A4;
+  --app-text-muted:  #4A5568;
+  --app-text-dim:    #374151;
+  --app-shell-bg:    #0B0E17;
+  --app-sidebar-bg:  #111827;
+  --app-topbar-bg:   #111827;
+  --app-sidebar-border: rgba(255, 255, 255, 0.06);
+  --app-nav-text:    #6B7A96;
+  --app-nav-text-active: #E2E8F0;
+  --app-nav-active-bg: rgba(59, 130, 246, 0.12);
+  --app-dropdown-bg: #161D2E;
+  --app-dropdown-border: rgba(255, 255, 255, 0.08);
+  --app-dropdown-text: #C4CFDF;
+  --app-dropdown-muted: #6B7A96;
+  --app-dropdown-hover: rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+.app-page {
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+
+/* Tailwind utility overrides in dark mode */
+[data-theme="dark"] .bg-white            { background-color: var(--app-surface) !important; }
+[data-theme="dark"] .bg-gray-50,
+[data-theme="dark"] .bg-gray-50\/50       { background-color: var(--app-surface-2) !important; }
+[data-theme="dark"] .bg-\[\#F8FAFC\],
+[data-theme="dark"] .bg-\[\#F7F8FA\]      { background-color: var(--app-bg) !important; }
+[data-theme="dark"] .text-gray-900,
+[data-theme="dark"] .text-gray-800,
+[data-theme="dark"] .text-neutral-800     { color: var(--app-text) !important; }
+[data-theme="dark"] .text-gray-700,
+[data-theme="dark"] .text-gray-600,
+[data-theme="dark"] .text-gray-500        { color: var(--app-text-sec) !important; }
+[data-theme="dark"] .text-gray-400        { color: var(--app-text-muted) !important; }
+[data-theme="dark"] .border-gray-100,
+[data-theme="dark"] .border-gray-200,
+[data-theme="dark"] .border-gray-300      { border-color: var(--app-border) !important; }
+[data-theme="dark"] .hover\:bg-gray-50:hover,
+[data-theme="dark"] .hover\:bg-gray-50\/50:hover { background-color: var(--app-dropdown-hover) !important; }
+[data-theme="dark"] .shadow-sm,
+[data-theme="dark"] .shadow-md,
+[data-theme="dark"] .shadow-xl,
+[data-theme="dark"] .shadow-2xl           { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); }
+
+/* ── Landing page dark theme (scoped to .lp wrapper) ────────────────────── */
+.lp {
+  --bg:        #080E0B;
+  --surface:   #0F1512;
+  --surface-2: #161D19;
+  --border:    rgba(255,255,255,0.07);
+  --border-hi: rgba(255,255,255,0.13);
+  --text:      #F0F4F2;
+  --text-2:    #8B9E97;
+  --text-dim:  #4D5E58;
+}
+
+/* ── Terminal blink cursor ───────────────────────────────────────────────── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.cursor-blink { animation: blink 1s step-start infinite; }
