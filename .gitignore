@@ -38,7 +38,8 @@ playwright-report/
 test-results/
 playwright-report-*.png
 report-*.png
-*.png
+# ignore stray screenshot PNGs at the web/ root only — keep public/ assets tracked
+/*.png
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -49,3 +50,5 @@ report-*.png
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
