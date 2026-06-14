@@ -30,12 +30,14 @@ const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','C
 const SERIF: React.CSSProperties = { fontFamily: "'Playfair Display',Georgia,serif" };
 const scoreColor = (s: number) => (s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : "#EF4444");
 
-// All photo IDs are HTTP-200 verified. (See PART 5 dedup note in handoff.)
+// Images are sourced ONLY from the project's curated library in
+// src/app/data/styles.ts (STYLE_CARDS) — the Pin/Product-Idea reference set.
+// (4 library IDs currently 404 on Unsplash and are intentionally not used.)
 const HERO_DAYS: HeroDay[] = [
-  { day: "Mon", date: 6, title: "Cozy Bedroom Inspo",   status: "Rising",  img: "1586023492125-27b2c045efd7" },
-  { day: "Tue", date: 7, title: "Minimal Entryway",     status: "Rising",  img: "1616486338812-3dadae4b4ace" },
-  { day: "Wed", date: 8, title: "Japandi Living Room",  status: "Planned", img: "1567016432779-094069958ea5" },
-  { day: "Thu", date: 9, title: "Small Space Decor",    status: "Ready",   img: "1522708323590-d24dbb6b0267" },
+  { day: "Mon", date: 6, title: "Cozy Bedroom Inspo",    status: "Rising",  img: "1586023492125-27b2c045efd7" },
+  { day: "Tue", date: 7, title: "Minimal Living Room",   status: "Rising",  img: "1484101403633-562f891dc89a" },
+  { day: "Wed", date: 8, title: "Shelf Styling Ideas",   status: "Planned", img: "1555041469-a586c61ea9bc" },
+  { day: "Thu", date: 9, title: "Slow Living Aesthetic", status: "Ready",   img: "1504257432389-52343af06ae3" },
 ];
 
 const INTEL_ROWS: IntelRow[] = [
@@ -48,38 +50,38 @@ const INTEL_ROWS: IntelRow[] = [
 
 const PIN_IDEAS: PinIdea[] = [
   { title: "Slow mornings, done right", format: "Text Overlay",     img: "1504674900247-0877df9cc836", overlay: "Slow\nmornings,\ndone right.", demand: "Rising",      competition: "Low Competition" },
-  { title: "Watch detail close-up",     format: "Close-up",         img: "1523170335258-f5ed11844a49", demand: "High Demand", competition: "Low Competition" },
+  { title: "Clean beauty close-up",     format: "Close-up",         img: "1522335789203-aabd1fc54bc9", demand: "High Demand", competition: "Low Competition" },
   { title: "10-minute weeknight dinner",format: "Tutorial",         img: "1490645935967-10de6ba17061", overlay: "10-MINUTE\nDINNER", demand: "High Demand", competition: "Moderate" },
   { title: "Summer outfit lifestyle",   format: "Lifestyle",        img: "1515886657613-9f3515b0c78f", demand: "High Demand", competition: "Moderate" },
-  { title: "Neutral tones moodboard",   format: "Moodboard",        img: "1556905055-8f358a7a47b2", demand: "Rising",      competition: "Low Competition" },
+  { title: "Neutral tones moodboard",   format: "Moodboard",        img: "1596462502278-27bfdc403348", demand: "Rising",      competition: "Low Competition" },
   { title: "How to style the trend",    format: "Blog Style",       img: "1483985988355-763728e1935b", overlay: "How to\nstyle the\ntrend", demand: "Rising",      competition: "Low Competition" },
-  { title: "Sneaker product showcase",  format: "Product Showcase", img: "1542291026-7eec264c27ff", demand: "High Demand", competition: "Low Competition" },
+  { title: "Cozy gift set showcase",    format: "Product Showcase", img: "1549465220-1a8b9238cd48", demand: "High Demand", competition: "Low Competition" },
 ];
 
 const PRODUCT_IDEAS: ProductIdea[] = [
-  { title: "Daily Glow Serum",         source: "Shopify", type: "Physical",  price: "$18–$39", demand: "High Demand", competition: "Low Competition", img: "1556228720-195a672e8a03" },
-  { title: "Printable Daily Planner",  source: "Gumroad", type: "Printable", price: "$7–$15",  demand: "High Demand", competition: "Low Competition", img: "1611532736597-de2d4265fba3" },
-  { title: "Gold Layering Set",        source: "Etsy",    type: "Physical",  price: "$24–$68", demand: "High Demand", competition: "Moderate",        img: "1606760227091-3dd870d97f1d" },
-  { title: "Brand Kit Canva Template", source: "Gumroad", type: "Template",  price: "$15–$39", demand: "Rising",      competition: "Low Competition", img: "1497032628192-86f99bcd76bc" },
-  { title: "Notion Finance Dashboard", source: "Gumroad", type: "Digital",   price: "$12–$29", demand: "Rising",      competition: "Low Competition", img: "1499951360447-b19be8fe80f5" },
-  { title: "Everyday Knit Sneakers",   source: "Shopify", type: "Physical",  price: "$40–$85", demand: "High Demand", competition: "Low Competition", img: "1560769629-975ec94e6a86" },
+  { title: "Daily Glow Serum",        source: "Shopify", type: "Physical",  price: "$18–$39", demand: "High Demand", competition: "Low Competition", img: "1512207736890-6ffed8a84e8d" },
+  { title: "Printable Daily Planner", source: "Gumroad", type: "Printable", price: "$7–$15",  demand: "High Demand", competition: "Low Competition", img: "1611532736597-de2d4265fba3" },
+  { title: "Gold Layering Set",       source: "Etsy",    type: "Physical",  price: "$24–$68", demand: "High Demand", competition: "Moderate",        img: "1506629082955-511b1aa562c8" },
+  { title: "Curated Gift Box",        source: "Etsy",    type: "Physical",  price: "$28–$60", demand: "Rising",      competition: "Low Competition", img: "1607344645866-009c320b63e0" },
+  { title: "Capsule Wardrobe Edit",   source: "Shopify", type: "Physical",  price: "$40–$120", demand: "High Demand", competition: "Low Competition", img: "1490481651871-ab68de25d43d" },
+  { title: "Wellness Ritual Kit",     source: "Etsy",    type: "Physical",  price: "$22–$55", demand: "Rising",      competition: "Low Competition", img: "1545205597-3d9d02c29597" },
 ];
 
 // Create + Plan composer
 const COMPOSER = {
-  products: ["1595425970377-c9703cf48b6d", "1571781926291-c477ebfd024b", "1631730486572-226d1f595b68"],
-  refs:     ["1512207736890-6ffed8a84e8d", "1522335789203-aabd1fc54bc9", "1493666438817-866a91353ca9"],
+  products: ["1586023492125-27b2c045efd7", "1484101403633-562f891dc89a", "1555041469-a586c61ea9bc"],
+  refs:     ["1504257432389-52343af06ae3", "1515886657613-9f3515b0c78f", "1483985988355-763728e1935b"],
   direction: "Modern boho living room, warm natural light, earthy tones, cozy minimal style.",
   gen: [
-    { title: "Simple Boho Living", img: "1555041469-a586c61ea9bc" },
-    { title: "Slow Living Space",  img: "1583847268964-b28dc8f51f92" },
-    { title: "Warm Neutral Tones", img: "1600585154340-be6161a56a0c" },
-    { title: "Cozy Corner",        img: "1538688525198-9b88f6f53126" },
+    { title: "Simple Boho Living", img: "1607344645866-009c320b63e0" },
+    { title: "Slow Living Space",  img: "1549465220-1a8b9238cd48" },
+    { title: "Warm Neutral Tones", img: "1490645935967-10de6ba17061" },
+    { title: "Cozy Corner",        img: "1504674900247-0877df9cc836" },
   ] as GenPin[],
   plan: [
-    { day: "Mon 12", img: "1490481651871-ab68de25d43d" },
-    { day: "Tue 13", img: "1556909114-f6e7ad7d3136" },
-    { day: "Wed 14", img: "1542435503-956c469947f6" },
+    { day: "Mon 12", img: "1512207736890-6ffed8a84e8d" },
+    { day: "Tue 13", img: "1506629082955-511b1aa562c8" },
+    { day: "Wed 14", img: "1611532736597-de2d4265fba3" },
   ],
 };
 
@@ -93,12 +95,12 @@ const STATS = [
 const BRAND_ROW = ["Etsy", "Shopify", "Stan", "Creative Market", "Teachable", "Gumroad"];
 
 const USE_CASES: UseCase[] = [
-  { cat: "Home Decor",        headline: "Make rooms people want to save", desc: "Turn trending room styles into Pins that drive saves and shop clicks.", workflow: "Find decor trends → save moodboards → generate room Pins → plan the week.", imgs: ["1484101403633-562f891dc89a", "1583847268964-b28dc8f51f92", "1602143407151-7111542de6e8"] },
+  { cat: "Home Decor",        headline: "Make rooms people want to save", desc: "Turn trending room styles into Pins that drive saves and shop clicks.", workflow: "Find decor trends → save moodboards → generate room Pins → plan the week.", imgs: ["1484101403633-562f891dc89a", "1586023492125-27b2c045efd7", "1555041469-a586c61ea9bc"] },
   { cat: "Fashion",           headline: "Style Pins that convert",        desc: "Spot outfit trends early and turn product shots into editorial Pins.",      workflow: "Find outfit trends → save references → generate looks → schedule drops.", imgs: ["1515886657613-9f3515b0c78f", "1490481651871-ab68de25d43d", "1483985988355-763728e1935b"] },
-  { cat: "Beauty",            headline: "Glow-worthy routine Pins",       desc: "Build clean-beauty Pins from your product images and references.",            workflow: "Find beauty trends → save formats → generate routine Pins → plan posts.", imgs: ["1595425970377-c9703cf48b6d", "1571781926291-c477ebfd024b", "1522335789203-aabd1fc54bc9"] },
-  { cat: "Food & Drink",      headline: "Recipe Pins that get made",      desc: "Turn recipes into tutorial and text-overlay Pins built for saves.",          workflow: "Find recipe trends → save layouts → generate Pins → plan a week of food.", imgs: ["1490645935967-10de6ba17061", "1556909114-f6e7ad7d3136", "1522771739844-6a9f6d5f14af"] },
-  { cat: "Digital Products",  headline: "Sell templates & printables",    desc: "Match digital products to real demand and Pin them with destination URLs.",    workflow: "Find product demand → link product → generate Pins → plan promotion.", imgs: ["1611532736597-de2d4265fba3", "1499951360447-b19be8fe80f5", "1497032628192-86f99bcd76bc"] },
-  { cat: "Pinterest Managers",headline: "Plan client weeks fast",         desc: "Build a reviewable weekly plan per client — you confirm every Pin.",          workflow: "Find opportunities → batch create → plan boards → review & schedule.", imgs: ["1556228453-efd6c1ff04f6", "1493663284031-b7e3aefcae8e", "1567538096630-e0c55bd6374c" ] },
+  { cat: "Beauty",            headline: "Glow-worthy routine Pins",       desc: "Build clean-beauty Pins from your product images and references.",            workflow: "Find beauty trends → save formats → generate routine Pins → plan posts.", imgs: ["1512207736890-6ffed8a84e8d", "1522335789203-aabd1fc54bc9", "1596462502278-27bfdc403348"] },
+  { cat: "Food & Drink",      headline: "Recipe Pins that get made",      desc: "Turn recipes into tutorial and text-overlay Pins built for saves.",          workflow: "Find recipe trends → save layouts → generate Pins → plan a week of food.", imgs: ["1490645935967-10de6ba17061", "1504674900247-0877df9cc836", "1545205597-3d9d02c29597"] },
+  { cat: "Digital Products",  headline: "Sell templates & printables",    desc: "Match digital products to real demand and Pin them with destination URLs.",    workflow: "Find product demand → link product → generate Pins → plan promotion.", imgs: ["1611532736597-de2d4265fba3", "1607344645866-009c320b63e0", "1549465220-1a8b9238cd48"] },
+  { cat: "Pinterest Managers",headline: "Plan client weeks fast",         desc: "Build a reviewable weekly plan per client — you confirm every Pin.",          workflow: "Find opportunities → batch create → plan boards → review & schedule.", imgs: ["1504257432389-52343af06ae3", "1506629082955-511b1aa562c8", "1490481651871-ab68de25d43d"] },
 ];
 
 const TESTIMONIALS: Testimonial[] = [
@@ -334,7 +336,7 @@ export default function HomePage() {
             {/* Generated pin row */}
             <div className="flex items-center gap-2.5 px-4 py-3 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "#0A0E16" }}>
               <div className="relative rounded-lg overflow-hidden shrink-0" style={{ width: 38, height: 38 }}>
-                <Image src={u("1602143407151-7111542de6e8", 76, 76)} alt="" fill className="object-cover" sizes="38px" unoptimized />
+                <Image src={u("1607344645866-009c320b63e0", 76, 76)} alt="" fill className="object-cover" sizes="38px" unoptimized />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[11px] font-bold text-white">Generated Pin</p>
