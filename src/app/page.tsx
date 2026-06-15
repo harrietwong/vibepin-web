@@ -7,7 +7,8 @@ import {
   ArrowRight, ArrowLeft, Check, Sparkles, Plus, Bookmark, ImageIcon,
   Search, Wand2, CalendarDays, ShoppingBag, Rocket, Signal, TrendingUp, X,
 } from "lucide-react";
-import { useLandingAssets, take, placeholders, type LandingAsset } from "@/lib/landingAssets";
+import { take, placeholders, type LandingAsset } from "@/lib/landingAssets";
+import { bohoReferences, bohoProducts } from "@/lib/landing/bohoLivingRoomDemo";
 import OpportunityIntelligence from "@/components/landing/OpportunityIntelligence";
 import IntelligenceInAction from "@/components/landing/IntelligenceInAction";
 import ExecutionSystem from "@/components/landing/ExecutionSystem";
@@ -51,7 +52,7 @@ function AssetImg({ asset, label }: { asset?: LandingAsset; label?: string }) {
     // Real VibePin asset (pin_sample / product_opportunity). Plain <img> loads any
     // CDN host and is hotlink-friendly for Pinterest images.
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={asset.imageUrl} alt={asset.title} loading="lazy" className="absolute inset-0 w-full h-full object-cover" />;
+    return <img src={asset.imageUrl} alt={asset.title} loading="lazy" className="absolute inset-0 w-full h-full object-cover" style={{ objectPosition: asset.objectPosition ?? "center" }} />;
   }
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1" style={{ background: "linear-gradient(135deg,#141622,#0b0d15)" }}>
@@ -478,7 +479,9 @@ function WorkflowTimelineStep({ n, title, copy, bullets, mock, icon }: { n: numb
 }
 
 export default function HomePage() {
-  const { pinSamples, products } = useLandingAssets();
+  // Curated Boho Living Room landing assets (single source of truth in the manifest).
+  const pinSamples = bohoReferences;
+  const products = bohoProducts;
 
   // Asset derivations (real data → placeholder fallback)
   const heroMainImg  = pinSamples.find(a => a.category === "Home Decor") ?? pinSamples[0];

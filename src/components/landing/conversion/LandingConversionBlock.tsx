@@ -1,6 +1,4 @@
-"use client";
-
-import { useLandingAssets } from "@/lib/landingAssets";
+import { bohoReferences, bohoProducts } from "@/lib/landing/bohoLivingRoomDemo";
 import { LandingAudienceSection } from "./LandingAudienceSection";
 import { SupportedNichesStrip } from "./SupportedNichesStrip";
 import { WorkflowStoriesSection } from "./WorkflowStoriesSection";
@@ -10,7 +8,8 @@ import { FinalConversionCTA } from "./FinalConversionCTA";
 import { LandingFooter } from "./LandingFooter";
 
 export function LandingConversionBlock() {
-  const { pinSamples, products } = useLandingAssets();
+  const pinSamples = bohoReferences;
+  const products = bohoProducts;
   return (
     <>
       <LandingAudienceSection pinSamples={pinSamples} products={products} />

@@ -9,7 +9,7 @@ export const VibeBtn =
 export function AssetImg({ asset, label }: { asset?: LandingAsset; label?: string }) {
   if (asset?.imageUrl) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={asset.imageUrl} alt={asset.title} loading="lazy" className="absolute inset-0 w-full h-full object-cover" />;
+    return <img src={asset.imageUrl} alt={asset.title} loading="lazy" className="absolute inset-0 w-full h-full object-cover" style={{ objectPosition: asset.objectPosition ?? "center" }} />;
   }
   return (
     <div className="absolute inset-0 flex items-center justify-center text-[7px] font-semibold uppercase tracking-wide" style={{ background: "linear-gradient(135deg,#141622,#0b0d15)", color: "#2A2F3E" }}>

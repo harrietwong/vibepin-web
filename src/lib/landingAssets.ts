@@ -30,6 +30,7 @@ export interface LandingAsset {
   url?: string;
   price?: string | null;
   score?: number | null;
+  objectPosition?: string; // optional per-image crop, e.g. "55% center"
 }
 
 const norm = (s?: string | null) => (s ?? "").toLowerCase();
