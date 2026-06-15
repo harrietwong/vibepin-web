@@ -9,6 +9,7 @@ import {
   Search, Wand2, CalendarDays, Star, ShoppingBag, Rocket, Signal, TrendingUp, X,
 } from "lucide-react";
 import { useLandingAssets, take, pickByCategory, placeholders, type LandingAsset } from "@/lib/landingAssets";
+import OpportunityIntelligence from "@/components/landing/OpportunityIntelligence";
 
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace" };
 const SERIF: React.CSSProperties = { fontFamily: "'Playfair Display',Georgia,serif" };
@@ -643,34 +644,8 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ══ WORKFLOW TIMELINE ══ */}
-      <section id="create" className="py-20 border-t relative overflow-hidden" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
-        <div className="pointer-events-none absolute inset-x-0 top-10 h-72 blur-3xl" style={{ background: "radial-gradient(ellipse at 50% 20%, rgba(217,70,239,0.12), transparent 68%)" }} />
-        <div className="max-w-[1180px] mx-auto px-5 relative">
-          <div className="text-center mb-14">
-            <p className="text-[11px] font-bold uppercase tracking-[0.22em] mb-3" style={{ color: "#A855F7" }}>HOW IT WORKS</p>
-            <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight mb-4 leading-[1.05]">From signals to scheduled Pins.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 55%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>The VibePin autopilot in 5 simple steps.</span></h2>
-            <p className="text-[14px] sm:text-[15px] max-w-3xl mx-auto" style={{ color: "#8B93A1" }}>Go from Pinterest demand signals to product-aware Pin drafts and a weekly plan - without guessing what to create next.</p>
-          </div>
-          <div className="relative">
-            <WorkflowTimelineStep n={1} icon={<Signal className="w-5 h-5" />} title="Find what works" copy="Discover high-demand keywords, niches, and Pinterest trends with demand, competition, and save signals so you know what topics and styles are worth creating." bullets={["See demand and competition signals", "Spot rising keywords and niches", "Compare opportunities at a glance"]} mock={<WorkflowKeywordTrendsMock />} />
-            <WorkflowTimelineStep n={2} icon={<ShoppingBag className="w-5 h-5" />} title="Find products worth promoting" copy="Find high-potential products from Pinterest demand signals. VibePin helps you choose products that match real audience interest instead of guessing what to promote." bullets={["Match products to demand signals", "Compare opportunity and competition", "Save products for Pin generation"]} mock={<WorkflowProductOpportunitiesMock assets={tlProducts} />} />
-            <WorkflowTimelineStep n={3} icon={<Bookmark className="w-5 h-5" />} title="Collect creative references" copy="Save Pin formats, layouts, and visual references that already work. Product images and Pin references stay separate so the AI knows what to feature and what to use as style direction." bullets={["Save Pin Ideas as visual direction", "Organize references by category or niche", "Keep references separate from products"]} mock={<WorkflowPinIdeasMock assets={tlPinIdeas} />} />
-            <WorkflowTimelineStep n={4} icon={<Wand2 className="w-5 h-5" />} title="Create product-aware Pins" copy="Add product images, choose references, and generate Pinterest-native Pin drafts that keep the product in focus while following the visual direction you selected." bullets={["Add product images", "Add Pin references", "Generate multiple Pin drafts"]} mock={<WorkflowCreatePinsMock products={tlCreateProd} refs={tlCreateRefs} />} />
-            <WorkflowTimelineStep n={5} icon={<CalendarDays className="w-5 h-5" />} title="Plan & publish your week" copy="Review every Pin, add destination URLs and linked products, then let VibePin place the best drafts into your weekly plan with clear statuses and posting windows." bullets={["Review every Pin before publishing", "Add destination URLs and linked products", "Plan Pins by date and status"]} mock={<WorkflowWeeklyPlanMock assets={tlWeek} />} />
-          </div>
-          <div className="mt-5 rounded-2xl border p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5" style={{ background: "linear-gradient(135deg,rgba(12,16,24,0.98),rgba(19,16,34,0.96))", borderColor: "rgba(255,255,255,0.09)", boxShadow: "0 24px 80px rgba(0,0,0,0.26)" }}>
-            <div className="flex items-center gap-4">
-              <span className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(217,70,239,0.15)", color: "#FB7185", border: "1px solid rgba(217,70,239,0.20)" }}><Rocket className="w-5 h-5" /></span>
-              <div><h3 className="text-[18px] font-black text-white tracking-tight">Let VibePin run your Pinterest growth.</h3><p className="text-[13px] mt-1" style={{ color: "#8B93A1" }}>More discovery. More saves. More traffic. One autopilot workflow.</p></div>
-            </div>
-            <div className="lg:text-center">
-              <Link href="/app/discover?demo=true" className={`${VibeBtn} inline-flex items-center justify-center gap-2 px-8 py-3.5 text-[14px] min-w-[240px]`}>Start your free workflow <ArrowRight className="w-4 h-4" /></Link>
-              <p className="mt-2 text-[11px]" style={{ color: "#4B5563" }}>No credit card required - Cancel anytime</p>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* ══ OPPORTUNITY INTELLIGENCE ══ */}
+      <OpportunityIntelligence pinSamples={pinSamples} products={products} />
 
       {/* ══ INTELLIGENCE ══ */}
       <section id="intelligence" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
