@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight, ArrowLeft, Check, Sparkles, Plus, Bookmark, ImageIcon,
-  Search, Wand2, CalendarDays, Star,
+  Search, Wand2, CalendarDays, Star, ShoppingBag, Rocket, Signal, TrendingUp, X,
 } from "lucide-react";
 import { useLandingAssets, take, pickByCategory, placeholders, type LandingAsset } from "@/lib/landingAssets";
 
@@ -31,13 +31,12 @@ const TL_KEYWORDS = [
   { k: "boho living room ideas",   t: "+129%", d: "High",   c: "Low",    o: 79 },
   { k: "outdoor wall decor ideas", t: "+96%",  d: "Medium", c: "Low",    o: 72 },
 ];
-const STATS_BIG = [
-  { value: "240,909+", label: "opportunities discovered" },
-  { value: "14,258+",  label: "creators & businesses" },
-  { value: "400+",     label: "categories tracked" },
-  { value: "32",       label: "languages supported" },
+const SIGNAL_STATS = [
+  { value: "12K+",  label: "High-save Pins analyzed",       grad: "#FF4D8D,#D946EF" },
+  { value: "2K+",   label: "Product signals discovered",    grad: "#D946EF,#A855F7" },
+  { value: "1.3K+", label: "Pinterest keywords researched", grad: "#A855F7,#7C3AED" },
+  { value: "Daily", label: "Signal intelligence updates",   grad: "#38BDF8,#22D3EE" },
 ];
-const BRAND_ROW = ["Etsy", "Shopify", "Stan.", "Creative Market", "Teachable", "Gumroad"];
 const USE_CASE_META = [
   { cat: "Home Decor",        headline: "Make rooms people want to save", desc: "Turn trending room styles into Pins that drive saves and shop clicks.", workflow: "Find decor trends → save moodboards → generate room Pins → plan the week.", pool: "pin" },
   { cat: "Fashion",           headline: "Style Pins that convert",        desc: "Spot outfit trends early and turn product shots into editorial Pins.",      workflow: "Find outfit trends → save references → generate looks → schedule drops.", pool: "pin" },
@@ -182,6 +181,68 @@ function HeroComposer({ products, refs }: { products: LandingAsset[]; refs: Land
   );
 }
 
+// ── Hero opportunity card ─────────────────────────────────────────────────────
+function ScoreRing({ score }: { score: number }) {
+  const r = 24, circ = 2 * Math.PI * r, off = circ * (1 - score / 100);
+  return (
+    <div className="relative" style={{ width: 60, height: 60 }}>
+      <svg width="60" height="60" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="30" cy="30" r={r} fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth="4" />
+        <circle cx="30" cy="30" r={r} fill="none" stroke="url(#scoreGrad)" strokeWidth="4" strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off} />
+        <defs><linearGradient id="scoreGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#FF4D8D" /><stop offset="1" stopColor="#A855F7" /></linearGradient></defs>
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center leading-none"><span className="text-[15px] font-black text-white" style={MONO}>{score}</span><span className="text-[7px]" style={{ color: "#6B7280" }}>/100</span></div>
+    </div>
+  );
+}
+
+function HeroOpportunityCard({ mainImg, signals, refs }: { mainImg?: LandingAsset; signals: LandingAsset[]; refs: LandingAsset[] }) {
+  const metrics = [
+    { icon: <TrendingUp className="w-4 h-4" />,  v: "+210%", l: "Demand (vs last 30 days)", c: "#10B981" },
+    { icon: <Bookmark className="w-4 h-4" />,    v: "18",    l: "High-save Pins",           c: "#E879F9" },
+    { icon: <ShoppingBag className="w-4 h-4" />, v: "7",     l: "Matched products",         c: "#38BDF8" },
+  ];
+  return (
+    <div className="rounded-2xl border overflow-hidden shadow-2xl" style={{ background: "linear-gradient(180deg,#0E1018,#0A0C14)", borderColor: "rgba(168,85,247,0.28)", boxShadow: "0 0 70px rgba(168,85,247,0.14)" }}>
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] mb-1" style={{ color: "#E879F9" }}>Recommended Opportunity</p>
+            <h3 className="text-[22px] font-black text-white tracking-tight">Boho Living Room</h3>
+          </div>
+          <div className="flex flex-col items-center shrink-0"><ScoreRing score={94} /><span className="text-[9px] mt-1" style={{ color: "#6B7280" }}>Opportunity score</span></div>
+        </div>
+        <div className="grid grid-cols-[1.4fr_1fr] gap-3 mb-4">
+          <div className="relative rounded-xl overflow-hidden" style={{ aspectRatio: "4/3" }}><AssetImg asset={mainImg} label="Boho Living Room" /></div>
+          <div className="flex flex-col justify-center gap-2.5">
+            {metrics.map(m => (
+              <div key={m.l} className="flex items-center gap-2.5">
+                <span className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${m.c}1A`, color: m.c }}>{m.icon}</span>
+                <div className="min-w-0"><p className="text-[15px] font-black text-white leading-none" style={MONO}>{m.v}</p><p className="text-[9px] mt-0.5" style={{ color: "#6B7280" }}>{m.l}</p></div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: "#4B5563" }}>Top Product Signals</p>
+        <div className="flex gap-1.5 mb-3">{signals.slice(0, 7).map((a, i) => <div key={i} className="relative rounded-lg overflow-hidden flex-1" style={{ aspectRatio: "1/1", border: "1px solid rgba(255,255,255,0.08)" }}><AssetImg asset={a} /></div>)}</div>
+        <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: "#4B5563" }}>Top Pin References</p>
+        <div className="flex gap-1.5 mb-4">
+          {refs.slice(0, 5).map((a, i) => <div key={i} className="relative rounded-lg overflow-hidden flex-1" style={{ aspectRatio: "1/1", border: "1px solid rgba(255,255,255,0.08)" }}><AssetImg asset={a} /></div>)}
+          <div className="rounded-lg flex-1 flex items-center justify-center text-center text-[8px] font-bold leading-tight" style={{ aspectRatio: "1/1", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#6B7280" }}>+15<br />more</div>
+        </div>
+        <div className="rounded-xl p-3 mb-4" style={{ background: "rgba(168,85,247,0.07)", border: "1px solid rgba(168,85,247,0.18)" }}>
+          <p className="text-[9px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5" style={{ color: "#C4B5FD" }}><Sparkles className="w-3 h-3" /> Creative Direction</p>
+          <p className="text-[11px] leading-relaxed" style={{ color: "#C8CDD6" }}>Warm neutrals, natural textures, layered lighting. Lifestyle angles showing cozy, lived-in spaces.</p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button type="button" className={`${VibeBtn} flex-1 py-2.5 text-[12px] flex items-center justify-center gap-1.5`}><Sparkles className="w-3.5 h-3.5" /> Generate 7 Pins</button>
+          <button type="button" className="flex-1 rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><CalendarDays className="w-3.5 h-3.5" /> Add to weekly plan</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Timeline mocks ────────────────────────────────────────────────────────────
 function Mock({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -194,6 +255,7 @@ function Mock({ title, icon, children }: { title: string; icon: React.ReactNode;
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function KeywordTrendsMock() {
   const cols = "1fr 3rem 3.4rem 4.2rem 2.4rem";
   return (
@@ -218,6 +280,7 @@ function KeywordTrendsMock() {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function PinIdeasMock({ assets }: { assets: LandingAsset[] }) {
   return (
     <Mock title="Pin Ideas" icon={<Bookmark className="w-3.5 h-3.5" />}>
@@ -233,6 +296,7 @@ function PinIdeasMock({ assets }: { assets: LandingAsset[] }) {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function CreatePinsMock({ products, refs }: { products: LandingAsset[]; refs: LandingAsset[] }) {
   return (
     <Mock title="Create Pins" icon={<Wand2 className="w-3.5 h-3.5" />}>
@@ -255,6 +319,7 @@ function CreatePinsMock({ products, refs }: { products: LandingAsset[]; refs: La
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function WeeklyPlanMock({ assets }: { assets: LandingAsset[] }) {
   const days = ["Mon 12", "Tue 13", "Wed 14", "Thu 15", "Fri 16", "Sat 17"];
   const statuses = ["Scheduled", "Scheduled", "Draft", "Review", "Scheduled", "Draft"];
@@ -283,6 +348,7 @@ function WeeklyPlanMock({ assets }: { assets: LandingAsset[] }) {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function TimelineStep({ n, title, copy, bullets, mock, flip }: { n: number; title: string; copy: string; bullets: string[]; mock: React.ReactNode; flip: boolean }) {
   const [ref, vis] = useInView(0.25);
   return (
@@ -300,6 +366,158 @@ function TimelineStep({ n, title, copy, bullets, mock, flip }: { n: number; titl
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
+function WorkflowKeywordTrendsMock() {
+  const cols = "1fr 3rem 3.4rem 4.2rem 2.4rem";
+  return (
+    <Mock title="Keyword Trends" icon={<Search className="w-3.5 h-3.5" />}>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="flex-1 flex items-center gap-2 rounded-lg px-2.5 py-1.5 min-w-0" style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.08)" }}><Search className="w-3 h-3 shrink-0" style={{ color: "#4B5563" }} /><span className="text-[11px] truncate" style={{ color: "#8B93A1" }}>spring home decor</span></div>
+          <span className="rounded-lg px-3 py-1.5 text-[11px] font-bold text-white shrink-0" style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}>Search</span>
+        </div>
+        <span className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold shrink-0" style={{ color: "#A855F7" }}>View all <ArrowRight className="w-3 h-3" /></span>
+      </div>
+      <div className="grid items-center px-1 py-1.5 border-b" style={{ gridTemplateColumns: cols, gap: "0.4rem", borderColor: "rgba(255,255,255,0.06)" }}>
+        {["Keyword / topic", "Trend", "Demand", "Competition", "Opp."].map(h => <span key={h} className="text-[8px] font-bold uppercase tracking-wider" style={{ color: "#374151", ...MONO }}>{h}</span>)}
+      </div>
+      {TL_KEYWORDS.map(r => (
+        <div key={r.k} className="grid items-center px-1 py-2 border-b last:border-0" style={{ gridTemplateColumns: cols, gap: "0.4rem", borderColor: "rgba(255,255,255,0.04)" }}>
+          <span className="text-[11px] font-semibold text-white truncate">{r.k}</span>
+          <span className="text-[10px] font-bold tabular-nums text-emerald-400" style={MONO}>{r.t}</span>
+          <Pill label={r.d} tone={r.d === "High" ? "green" : "amber"} />
+          <Pill label={r.c} tone={r.c === "Low" ? "green" : "amber"} />
+          <span className="text-[11px] font-black tabular-nums text-right" style={{ color: scoreColor(r.o), ...MONO }}>{r.o}</span>
+        </div>
+      ))}
+    </Mock>
+  );
+}
+
+function WorkflowProductOpportunitiesMock({ assets }: { assets: LandingAsset[] }) {
+  return (
+    <Mock title="Product Opportunities" icon={<ShoppingBag className="w-3.5 h-3.5" />}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-1.5"><Pill label="Matched to demand" tone="green" /><Pill label="Low competition" tone="cyan" /></div>
+        <span className="inline-flex items-center gap-1 text-[9px] font-bold" style={{ color: "#A855F7" }}>View all <ArrowRight className="w-3 h-3" /></span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {assets.map((a, i) => {
+          const score = Math.round(a.score ?? [94, 87, 82, 76][i % 4]);
+          return (
+            <div key={a.id} className="rounded-xl overflow-hidden" style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <div className="relative" style={{ aspectRatio: "1/1" }}><AssetImg asset={a} label="Product" /><span className="absolute top-1.5 right-1.5"><ScoreChip score={score} /></span></div>
+              <div className="p-2">
+                <p className="text-[9px] font-bold text-white leading-tight line-clamp-2 min-h-[2.4em]">{a.title}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1"><Pill label={i % 2 === 0 ? "High demand" : "Rising"} tone="green" /><Pill label={i === 1 ? "Medium" : "Low comp"} tone={i === 1 ? "amber" : "cyan"} /></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Mock>
+  );
+}
+
+function WorkflowPinIdeasMock({ assets }: { assets: LandingAsset[] }) {
+  return (
+    <Mock title="Pin Ideas" icon={<Bookmark className="w-3.5 h-3.5" />}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-1.5 overflow-hidden">
+          {["Lifestyle", "Close-up", "Text Overlay", "Tutorial", "Moodboard"].map((c, i) => <span key={c} className="rounded-full px-2 py-0.5 text-[9px] font-semibold whitespace-nowrap shrink-0" style={i === 0 ? { background: "rgba(217,70,239,0.18)", color: "#E879F9" } : { background: "rgba(255,255,255,0.05)", color: "#6B7280" }}>{c}</span>)}
+        </div>
+        <span className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold ml-2 shrink-0" style={{ color: "#A855F7" }}>Explore all <ArrowRight className="w-3 h-3" /></span>
+      </div>
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+        {assets.map((a, i) => (
+          <div key={a.id} className="relative rounded-lg overflow-hidden" style={{ aspectRatio: "3/4" }}>
+            <AssetImg asset={a} label="Pin" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent pointer-events-none" />
+            <span className="absolute left-1 bottom-1 rounded-full px-1.5 py-0.5 text-[7px] font-bold" style={{ background: "rgba(0,0,0,0.72)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.28)" }}>{PIN_FORMATS[i % PIN_FORMATS.length]}</span>
+          </div>
+        ))}
+      </div>
+    </Mock>
+  );
+}
+
+function WorkflowCreatePinsMock({ products, refs }: { products: LandingAsset[]; refs: LandingAsset[] }) {
+  return (
+    <Mock title="Create Pins" icon={<Wand2 className="w-3.5 h-3.5" />}>
+      <div className="grid grid-cols-1 sm:grid-cols-[0.9fr_1.1fr] gap-3">
+        <div>
+          <div className="rounded-xl p-2 mb-2.5" style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: "#4B5563" }}><ShoppingBag className="w-3 h-3" /> Product Images</p>
+            <div className="flex gap-1">{products.map((a, i) => <div key={i} className="relative rounded overflow-hidden shrink-0" style={{ width: 34, height: 34 }}><AssetImg asset={a} /></div>)}<div className="flex items-center justify-center rounded shrink-0" style={{ width: 34, height: 34, border: "1px dashed rgba(255,255,255,0.14)", color: "#4B5563" }}><Plus className="w-3 h-3" /></div></div>
+          </div>
+          <div className="rounded-xl p-2 mb-2.5" style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: "#4B5563" }}><Bookmark className="w-3 h-3" /> Pin References</p>
+            <div className="flex gap-1">{refs.map((a, i) => <div key={i} className="relative rounded overflow-hidden shrink-0" style={{ width: 34, height: 34 }}><AssetImg asset={a} /></div>)}<div className="flex items-center justify-center rounded shrink-0" style={{ width: 34, height: 34, border: "1px dashed rgba(255,255,255,0.14)", color: "#4B5563" }}><Plus className="w-3 h-3" /></div></div>
+          </div>
+          <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: "#4B5563" }}>Creative Direction</p>
+          <div className="rounded px-2 py-1.5 text-[9px] leading-relaxed" style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.07)", color: "#8B93A1" }}>Modern, minimal, warm natural light, soft neutrals, cozy spring vibes.</div>
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-1.5"><p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: "#4B5563" }}>Generated Pins</p><span className="text-[8px] font-semibold" style={{ color: "#38BDF8" }}>View all drafts <ArrowRight className="inline w-2.5 h-2.5" /></span></div>
+          <div className="grid grid-cols-3 gap-1 mb-2">{placeholders(3, "AI", "generated_pin").map((_, i) => <div key={i} className="relative rounded overflow-hidden" style={{ aspectRatio: "3/4" }}><GenTile label={i === 1 ? "Draft" : ""} /></div>)}</div>
+          <span className="inline-flex rounded-full px-2.5 py-1 text-[9px] font-bold text-white items-center gap-1" style={{ background: "rgba(8,12,18,0.92)", border: "1px solid rgba(255,255,255,0.15)" }}><Plus className="w-3 h-3" /> Add to Plan</span>
+        </div>
+      </div>
+    </Mock>
+  );
+}
+
+function WorkflowWeeklyPlanMock({ assets }: { assets: LandingAsset[] }) {
+  const days = ["Mon 12", "Tue 13", "Wed 14", "Thu 15", "Fri 16", "Sat 17", "Sun 18"];
+  const statuses = ["Scheduled", "Ready", "Needs review", "Scheduled", "Draft", "Draft", "Scheduled"];
+  const stStyle = (s: string) => s === "Scheduled" ? { bg: "rgba(16,185,129,0.18)", c: "#10B981" } : s === "Ready" ? { bg: "rgba(8,145,178,0.18)", c: "#38BDF8" } : s === "Needs review" ? { bg: "rgba(245,158,11,0.18)", c: "#F59E0B" } : { bg: "rgba(148,151,160,0.16)", c: "#9097A0" };
+  return (
+    <Mock title="Weekly Plan" icon={<CalendarDays className="w-3.5 h-3.5" />}>
+      <div className="flex items-center justify-between mb-2.5">
+        <span className="text-[10px] font-semibold" style={{ color: "#8B93A1" }}>May 12 - May 18, 2025</span>
+        <div className="flex gap-1"><span className="rounded px-2 py-0.5 text-[9px] font-semibold" style={{ background: "rgba(124,58,237,0.55)", color: "#fff" }}>Week</span><span className="rounded px-2 py-0.5 text-[9px] font-semibold" style={{ color: "#4B5563" }}>Today</span></div>
+      </div>
+      <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
+        {days.map((d, i) => { const st = stStyle(statuses[i]); return (
+          <div key={d}>
+            <p className="text-[7px] font-bold mb-1" style={{ color: "#4B5563" }}>{d}</p>
+            <div className="relative rounded overflow-hidden mb-1" style={{ aspectRatio: "3/4" }}><AssetImg asset={assets[i]} label="Pin" /></div>
+            <span className="block rounded-full px-1 py-0.5 text-[6px] font-bold text-center truncate" style={{ background: st.bg, color: st.c }}>{statuses[i]}</span>
+          </div>
+        ); })}
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-lg py-1.5" style={{ background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.18)" }}><p className="text-[9px] font-bold" style={{ color: "#E879F9" }}>5.2/day</p><p className="text-[7px]" style={{ color: "#6B7280" }}>Cadence</p></div>
+        <div className="rounded-lg py-1.5" style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.18)" }}><p className="text-[9px] font-bold" style={{ color: "#10B981" }}>On track</p><p className="text-[7px]" style={{ color: "#6B7280" }}>Plan health</p></div>
+        <div className="rounded-lg py-1.5" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.18)" }}><p className="text-[9px] font-bold" style={{ color: "#F59E0B" }}>8:30 PM</p><p className="text-[7px]" style={{ color: "#6B7280" }}>Best slot</p></div>
+      </div>
+    </Mock>
+  );
+}
+
+function WorkflowTimelineStep({ n, title, copy, bullets, mock, icon }: { n: number; title: string; copy: string; bullets: string[]; mock: React.ReactNode; icon: React.ReactNode }) {
+  const [ref, vis] = useInView(0.25);
+  return (
+    <div ref={ref} className="relative grid lg:grid-cols-[minmax(0,0.92fr)_72px_minmax(0,1.08fr)] gap-5 lg:gap-0 items-stretch pb-8 lg:pb-9">
+      <div className="rounded-2xl border p-5 sm:p-6 transition-all duration-300 hover:-translate-y-1" style={{ background: "linear-gradient(180deg,rgba(12,16,24,0.96),rgba(8,12,18,0.96))", borderColor: vis ? "rgba(217,70,239,0.24)" : "rgba(255,255,255,0.08)", boxShadow: vis ? "0 18px 60px rgba(0,0,0,0.28)" : "none", transition: "all .55s ease" }}>
+        <div className="flex items-start gap-4">
+          <span className="h-11 w-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(217,70,239,0.15)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.20)" }}>{icon}</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 mb-2"><span className="lg:hidden h-7 w-7 rounded-full flex items-center justify-center text-[12px] font-black text-white" style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)", ...MONO }}>{n}</span><span className="text-[11px] font-bold uppercase tracking-[0.16em]" style={{ color: "#A855F7" }}>Step {n}</span></div>
+            <h3 className="text-2xl font-black text-white tracking-tight mb-3">{title}</h3>
+            <p className="text-[14px] leading-relaxed mb-4" style={{ color: "#8B93A1" }}>{copy}</p>
+            <ul className="space-y-2">{bullets.map(b => <li key={b} className="flex items-start gap-2.5 text-[12px]" style={{ color: "#C8CDD6" }}><Check className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "#A855F7" }} />{b}</li>)}</ul>
+          </div>
+        </div>
+      </div>
+      <div className="hidden lg:flex relative items-center justify-center">
+        <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px" style={{ background: "linear-gradient(180deg,rgba(217,70,239,0.08),rgba(217,70,239,0.45),rgba(124,58,237,0.42),rgba(217,70,239,0.08))" }} />
+        <div className="z-20 h-11 w-11 rounded-full flex items-center justify-center text-[15px] font-black text-white" style={{ background: vis ? "linear-gradient(135deg,#D946EF,#7C3AED)" : "#161A26", border: "4px solid var(--surface)", boxShadow: vis ? "0 0 0 5px rgba(217,70,239,0.15), 0 0 28px rgba(217,70,239,0.55)" : "none", transition: "all .45s ease", ...MONO }}>{n}</div>
+      </div>
+      <div style={{ transition: "all .55s ease .1s" }}>{mock}</div>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [showSticky, setShowSticky] = useState(false);
   const [yearly, setYearly] = useState(false);
@@ -320,19 +538,20 @@ export default function HomePage() {
   useEffect(() => { if (useCaseHover) return; const t = setInterval(() => setUcIndex(p => (p + 1) % USE_CASE_META.length), 5000); return () => clearInterval(t); }, [useCaseHover]);
 
   const filteredTests = testGroup === "All" ? TESTIMONIALS : TESTIMONIALS.filter(t => t.group === testGroup);
-  useEffect(() => { setTIndex(0); }, [testGroup]);
   useEffect(() => { if (testHover || filteredTests.length <= 1) return; const t = setInterval(() => setTIndex(p => (p + 1) % filteredTests.length), 4500); return () => clearInterval(t); }, [testHover, filteredTests.length]);
   const tCard = filteredTests[tIndex % filteredTests.length];
 
   // Asset derivations (real data → placeholder fallback)
-  const heroProducts = take(products, 3, "Product");
-  const heroRefs     = take(pinSamples, 3, "Reference");
+  const heroMainImg  = pinSamples.find(a => a.category === "Home Decor") ?? pinSamples[0];
+  const heroSignals  = take(products, 7, "Product");
+  const heroRefs     = take(pinSamples, 5, "Reference", 1);
   const pinCards     = take(pinSamples, 8, "Pin idea");
   const productCards = take(products, 8, "Product");
   const tlPinIdeas   = take(pinSamples, 5, "Pin idea", 8);
+  const tlProducts   = take(products, 4, "Product", 0);
   const tlCreateProd = take(products, 3, "Product", 3);
   const tlCreateRefs = take(pinSamples, 3, "Reference", 13);
-  const tlWeek       = take(pinSamples, 6, "Planned Pin", 18);
+  const tlWeek       = take(pinSamples, 7, "Planned Pin", 18);
   const ucMeta = USE_CASE_META[ucIndex];
   const ucPool = ucMeta.pool === "product" ? products : pinSamples;
   const ucImgs = pickByCategory(ucPool, ucMeta.cat, 3, ucMeta.cat);
@@ -365,16 +584,20 @@ export default function HomePage() {
         <div className="pointer-events-none absolute -top-32 right-[-8%] h-[460px] w-[460px] rounded-full blur-3xl" style={{ background: "radial-gradient(circle, rgba(217,70,239,0.16), transparent 70%)" }} />
         <div className="max-w-[1240px] mx-auto px-5 grid grid-cols-1 lg:grid-cols-[0.92fr_1.18fr] gap-10 lg:gap-12 items-center relative">
           <div>
-            <div className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 mb-6" style={{ background: "rgba(217,70,239,0.08)", borderColor: "rgba(217,70,239,0.25)" }}><Sparkles className="w-3 h-3" style={{ color: "#E879F9" }} /><span className="text-[11px] font-semibold tracking-wide" style={{ color: "#E879F9" }}>Pinterest Intelligence · Pins · Plan</span></div>
-            <h1 className="text-[2.5rem] sm:text-[3.2rem] lg:text-[3.5rem] font-black text-white leading-[1.04] tracking-[-0.045em] mb-5">Find what&apos;s worth<br />making.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>Turn it into Pinterest Pins. Plan your week.</span></h1>
-            <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[440px]" style={{ color: "#8B93A1" }}>VibePin helps creators and sellers discover Pinterest demand, create product-aware Pins, and plan a week of content before publishing.</p>
-            <div className="flex flex-col sm:flex-row gap-3 mb-5">
+            <div className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 mb-6" style={{ background: "rgba(217,70,239,0.08)", borderColor: "rgba(217,70,239,0.25)" }}><Sparkles className="w-3 h-3" style={{ color: "#E879F9" }} /><span className="text-[11px] font-semibold tracking-wide" style={{ color: "#E879F9" }}>Pinterest Growth Intelligence</span></div>
+            <h1 className="text-[2.6rem] sm:text-[3.3rem] lg:text-[3.6rem] font-black text-white leading-[1.03] tracking-[-0.045em] mb-5">Pinterest growth starts with signals.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>VibePin turns demand into content.</span></h1>
+            <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[460px]" style={{ color: "#8B93A1" }}>VibePin discovers what people want, shows which products and Pin formats are already working, then turns them into ready-to-publish Pins and a weekly content plan.</p>
+            <div className="flex flex-col sm:flex-row gap-3 mb-6">
               <Link href="/app/discover?demo=true" className={`${VibeBtn} px-7 py-3.5 text-[14px] flex items-center justify-center gap-2`}>Build my next 7 Pins <ArrowRight className="w-4 h-4" /></Link>
               <a href="#intelligence" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>See this week&apos;s opportunities</a>
             </div>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">{["No credit card required", "You review every Pin", "Cancel anytime"].map(t => <span key={t} className="flex items-center gap-1.5 text-[11px]" style={{ color: "#6B7280" }}><Check className="w-3 h-3" style={{ color: "#10B981" }} /> {t}</span>)}</div>
+            <div className="flex items-center gap-3 mb-5">
+              <div className="flex -space-x-2">{["#FF4D8D", "#D946EF", "#A855F7", "#7C3AED"].map((g, i) => <span key={i} className="h-8 w-8 rounded-full border-2" style={{ borderColor: "var(--bg)", background: `linear-gradient(135deg,${g},#0C1018)` }} />)}</div>
+              <span className="text-[12px]" style={{ color: "#8B93A1" }}>Built for Pinterest creators, sellers and managers</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">{["No credit card required", "Cancel anytime", "Set up in 30 seconds"].map(t => <span key={t} className="flex items-center gap-1.5 text-[11px]" style={{ color: "#6B7280" }}><Check className="w-3 h-3" style={{ color: "#10B981" }} /> {t}</span>)}</div>
           </div>
-          <HeroComposer products={heroProducts} refs={heroRefs} />
+          <HeroOpportunityCard mainImg={heroMainImg} signals={heroSignals} refs={heroRefs} />
         </div>
       </section>
 
@@ -385,47 +608,67 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* ══ STATS + LOGOS ══ */}
+      {/* ══ STATS — SIGNAL ANALYSIS ══ */}
       <section className="py-12 border-b" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
         <div className="max-w-[1100px] mx-auto px-5">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px rounded-2xl overflow-hidden mb-10" style={{ background: "rgba(255,255,255,0.06)" }}>
-            {STATS_BIG.map(s => <div key={s.label} className="px-6 py-7 text-center" style={{ background: "var(--bg)" }}><p className="text-3xl sm:text-4xl font-black tracking-tight mb-1" style={{ background: "linear-gradient(120deg,#FF4D8D,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", ...MONO }}>{s.value}</p><p className="text-[12px]" style={{ color: "#8B93A1" }}>{s.label}</p></div>)}
+          <div className="rounded-2xl border overflow-hidden" style={{ background: "linear-gradient(180deg,#0C1018,#0A0C14)", borderColor: "rgba(255,255,255,0.08)", boxShadow: "0 0 50px rgba(168,85,247,0.06)" }}>
+            <p className="text-center text-[11px] font-semibold uppercase tracking-[0.2em] pt-6" style={{ color: "#6B7280" }}>Powered by continuous Pinterest signal analysis</p>
+            <div className="grid grid-cols-2 lg:grid-cols-4 px-4 pt-4 pb-7">
+              {SIGNAL_STATS.map((s, i) => (
+                <div key={s.label} className="px-6 py-4 text-center" style={{ borderLeft: i === 0 ? "none" : "1px solid rgba(255,255,255,0.07)" }}>
+                  <p className="text-3xl sm:text-4xl font-black tracking-tight mb-1" style={{ background: `linear-gradient(120deg,${s.grad})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", ...MONO }}>{s.value}</p>
+                  <p className="text-[12px]" style={{ color: "#8B93A1" }}>{s.label}</p>
+                </div>
+              ))}
+            </div>
           </div>
-          <p className="text-center text-[11px] font-semibold uppercase tracking-[0.18em] mb-5" style={{ color: "#4B5563" }}>Trusted by creators and brands around the world</p>
-          <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-4">{BRAND_ROW.map(b => <span key={b} className="text-[18px] font-black tracking-tight transition-opacity hover:opacity-100" style={{ color: "#5B6472", opacity: 0.65 }}>{b}</span>)}</div>
         </div>
       </section>
 
-      {/* ══ PROBLEM ══ */}
+      {/* ══ PROBLEM / COMPARISON ══ */}
       <section className="py-20 relative overflow-hidden">
         <div className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 h-72 mx-auto max-w-3xl rounded-full blur-3xl" style={{ background: "radial-gradient(ellipse, rgba(124,58,237,0.10), transparent 70%)" }} />
-        <div className="max-w-[900px] mx-auto px-5 relative">
-          <div className="text-center mb-10"><p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#4B5563" }}>The problem</p><h2 className="text-3xl sm:text-[2.4rem] font-black text-white tracking-tight leading-[1.12]">Most tools help you make more.<br />VibePin helps you decide what&apos;s worth making.</h2></div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div className="rounded-2xl border p-6" style={{ background: "rgba(220,38,38,0.04)", borderColor: "rgba(220,38,38,0.18)" }}>
-              <div className="flex items-center gap-2.5 mb-4"><span className="h-7 w-7 rounded-full flex items-center justify-center text-[14px]" style={{ background: "rgba(220,38,38,0.15)", color: "#F87171" }}>✕</span><div><p className="text-[14px] font-bold text-white">Generate more content</p><p className="text-[11px]" style={{ color: "#6B7280" }}>More volume, more guessing.</p></div></div>
-              <ul className="space-y-2">{["No demand signals", "Hard to know what people want", "More content, less results"].map(t => <li key={t} className="flex items-center gap-2 text-[12px]" style={{ color: "#6B7280" }}><span className="h-1 w-1 rounded-full" style={{ background: "#6B7280" }} />{t}</li>)}</ul>
+        <div className="max-w-[1000px] mx-auto px-5 relative">
+          <div className="text-center mb-12"><p className="text-[11px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: "#4B5563" }}>The problem</p><h2 className="text-3xl sm:text-[2.5rem] font-black text-white tracking-tight leading-[1.1]">Most tools help you make more.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>VibePin helps you decide what&apos;s worth making.</span></h2></div>
+          <div className="grid sm:grid-cols-2 gap-5">
+            <div className="rounded-2xl border p-6 sm:p-7 transition-transform hover:-translate-y-1" style={{ background: "linear-gradient(180deg,rgba(220,38,38,0.05),rgba(12,16,24,0.35))", borderColor: "rgba(220,38,38,0.20)" }}>
+              <div className="flex items-center gap-3 mb-5"><span className="h-9 w-9 rounded-full flex items-center justify-center" style={{ background: "rgba(220,38,38,0.18)", color: "#F87171" }}><X className="w-5 h-5" /></span><div><p className="text-[16px] font-black text-white">Other tools</p><p className="text-[12px]" style={{ color: "#F87171" }}>More content, more guessing.</p></div></div>
+              <ul className="space-y-3">{["Start from a blank prompt", "Generate more content", "Guess what might work", "Use separate tools", "Hard to know what will perform"].map(t => <li key={t} className="flex items-center gap-3 text-[13px]" style={{ color: "#9097A0" }}><span className="h-6 w-6 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(220,38,38,0.10)", color: "#F87171" }}><X className="w-3.5 h-3.5" /></span>{t}</li>)}</ul>
             </div>
-            <div className="rounded-2xl border p-6" style={{ background: "rgba(124,58,237,0.07)", borderColor: "rgba(168,85,247,0.30)" }}>
-              <div className="flex items-center gap-2.5 mb-4"><span className="h-7 w-7 rounded-full flex items-center justify-center" style={{ background: "rgba(168,85,247,0.20)" }}><Check className="w-4 h-4" style={{ color: "#C4B5FD" }} /></span><div><p className="text-[14px] font-bold text-white">Find it, create it, plan it</p><p className="text-[11px]" style={{ color: "#9097A0" }}>One workflow from signal to scheduled Pin.</p></div></div>
-              <ul className="space-y-2">{["Real Pinterest demand signals", "Product-aware Pin creation", "Weekly content planning"].map(t => <li key={t} className="flex items-center gap-2 text-[12px]" style={{ color: "#C8CDD6" }}><Check className="w-3 h-3 shrink-0" style={{ color: "#A855F7" }} />{t}</li>)}</ul>
+            <div className="rounded-2xl border p-6 sm:p-7 transition-transform hover:-translate-y-1" style={{ background: "linear-gradient(180deg,rgba(124,58,237,0.12),rgba(12,16,24,0.35))", borderColor: "rgba(168,85,247,0.34)", boxShadow: "0 0 40px rgba(168,85,247,0.08)" }}>
+              <div className="flex items-center gap-3 mb-5"><span className="h-9 w-9 rounded-full flex items-center justify-center" style={{ background: "rgba(168,85,247,0.22)", color: "#C4B5FD" }}><Check className="w-5 h-5" /></span><div><p className="text-[16px] font-black text-white">VibePin</p><p className="text-[12px]" style={{ color: "#C4B5FD" }}>Better decisions, better results.</p></div></div>
+              <ul className="space-y-3">{["Start from real Pinterest demand", "See why an opportunity matters", "Bring products and references together", "Turn decisions into Pins and a weekly plan", "Focus on what will perform"].map(t => <li key={t} className="flex items-center gap-3 text-[13px]" style={{ color: "#C8CDD6" }}><span className="h-6 w-6 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(168,85,247,0.16)", color: "#C4B5FD" }}><Check className="w-3.5 h-3.5" /></span>{t}</li>)}</ul>
             </div>
           </div>
         </div>
       </section>
 
       {/* ══ WORKFLOW TIMELINE ══ */}
-      <section id="create" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
-        <div className="max-w-[1080px] mx-auto px-5">
-          <div className="text-center mb-12"><p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#A855F7" }}>How it works</p><h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-3">How VibePin turns Pinterest signals into planned Pins.</h2><p className="text-[14px] max-w-2xl mx-auto" style={{ color: "#8B93A1" }}>Go from demand signals to product-aware Pin drafts and a weekly plan — without guessing what to create next.</p></div>
-          <div className="relative">
-            <div className="hidden lg:block absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-px" style={{ background: "linear-gradient(180deg,transparent,rgba(217,70,239,0.4),rgba(124,58,237,0.4),transparent)" }} />
-            <TimelineStep n={1} flip={false} title="Find what works" copy="VibePin surfaces Pinterest keywords, niches, and product opportunities with demand, competition, trend, and save signals — so you decide what is worth making before creating content." bullets={["See demand and competition signals", "Spot rising keywords and niches", "Compare opportunities at a glance"]} mock={<KeywordTrendsMock />} />
-            <TimelineStep n={2} flip={true} title="Collect the right references" copy="Save Pin formats, layouts, and visual references before generating. VibePin separates Pin references from product images, so the AI knows what guides style versus what to feature." bullets={["Save Pin Ideas as visual direction", "Organize references by category or niche", "Keep references separate from product images"]} mock={<PinIdeasMock assets={tlPinIdeas} />} />
-            <TimelineStep n={3} flip={false} title="Create product-aware Pins" copy="Add product images, choose references, and generate Pinterest-native Pin drafts that preserve the product while following the visual direction you selected." bullets={["Add product images", "Add Pin references", "Generate multiple Pin drafts"]} mock={<CreatePinsMock products={tlCreateProd} refs={tlCreateRefs} />} />
-            <TimelineStep n={4} flip={true} title="Plan the week before publishing" copy="Review each generated Pin, attach destination URLs and products, then add the best drafts into a weekly plan so you know what is ready, what needs a date, and what is scheduled." bullets={["Review every Pin before publishing", "Add destination URLs and linked products", "Plan Pins by date and status"]} mock={<WeeklyPlanMock assets={tlWeek} />} />
+      <section id="create" className="py-20 border-t relative overflow-hidden" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
+        <div className="pointer-events-none absolute inset-x-0 top-10 h-72 blur-3xl" style={{ background: "radial-gradient(ellipse at 50% 20%, rgba(217,70,239,0.12), transparent 68%)" }} />
+        <div className="max-w-[1180px] mx-auto px-5 relative">
+          <div className="text-center mb-14">
+            <p className="text-[11px] font-bold uppercase tracking-[0.22em] mb-3" style={{ color: "#A855F7" }}>HOW IT WORKS</p>
+            <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight mb-4 leading-[1.05]">From signals to scheduled Pins.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 55%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>The VibePin autopilot in 5 simple steps.</span></h2>
+            <p className="text-[14px] sm:text-[15px] max-w-3xl mx-auto" style={{ color: "#8B93A1" }}>Go from Pinterest demand signals to product-aware Pin drafts and a weekly plan - without guessing what to create next.</p>
           </div>
-          <div className="mt-6 text-center"><Link href="/app/discover?demo=true" className={`${VibeBtn} inline-flex items-center gap-2 px-7 py-3.5 text-[14px]`}>Start your free workflow <ArrowRight className="w-4 h-4" /></Link><p className="mt-3 text-[11px]" style={{ color: "#4B5563" }}>No credit card required · Cancel anytime</p></div>
+          <div className="relative">
+            <WorkflowTimelineStep n={1} icon={<Signal className="w-5 h-5" />} title="Find what works" copy="Discover high-demand keywords, niches, and Pinterest trends with demand, competition, and save signals so you know what topics and styles are worth creating." bullets={["See demand and competition signals", "Spot rising keywords and niches", "Compare opportunities at a glance"]} mock={<WorkflowKeywordTrendsMock />} />
+            <WorkflowTimelineStep n={2} icon={<ShoppingBag className="w-5 h-5" />} title="Find products worth promoting" copy="Find high-potential products from Pinterest demand signals. VibePin helps you choose products that match real audience interest instead of guessing what to promote." bullets={["Match products to demand signals", "Compare opportunity and competition", "Save products for Pin generation"]} mock={<WorkflowProductOpportunitiesMock assets={tlProducts} />} />
+            <WorkflowTimelineStep n={3} icon={<Bookmark className="w-5 h-5" />} title="Collect creative references" copy="Save Pin formats, layouts, and visual references that already work. Product images and Pin references stay separate so the AI knows what to feature and what to use as style direction." bullets={["Save Pin Ideas as visual direction", "Organize references by category or niche", "Keep references separate from products"]} mock={<WorkflowPinIdeasMock assets={tlPinIdeas} />} />
+            <WorkflowTimelineStep n={4} icon={<Wand2 className="w-5 h-5" />} title="Create product-aware Pins" copy="Add product images, choose references, and generate Pinterest-native Pin drafts that keep the product in focus while following the visual direction you selected." bullets={["Add product images", "Add Pin references", "Generate multiple Pin drafts"]} mock={<WorkflowCreatePinsMock products={tlCreateProd} refs={tlCreateRefs} />} />
+            <WorkflowTimelineStep n={5} icon={<CalendarDays className="w-5 h-5" />} title="Plan & publish your week" copy="Review every Pin, add destination URLs and linked products, then let VibePin place the best drafts into your weekly plan with clear statuses and posting windows." bullets={["Review every Pin before publishing", "Add destination URLs and linked products", "Plan Pins by date and status"]} mock={<WorkflowWeeklyPlanMock assets={tlWeek} />} />
+          </div>
+          <div className="mt-5 rounded-2xl border p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5" style={{ background: "linear-gradient(135deg,rgba(12,16,24,0.98),rgba(19,16,34,0.96))", borderColor: "rgba(255,255,255,0.09)", boxShadow: "0 24px 80px rgba(0,0,0,0.26)" }}>
+            <div className="flex items-center gap-4">
+              <span className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(217,70,239,0.15)", color: "#FB7185", border: "1px solid rgba(217,70,239,0.20)" }}><Rocket className="w-5 h-5" /></span>
+              <div><h3 className="text-[18px] font-black text-white tracking-tight">Let VibePin run your Pinterest growth.</h3><p className="text-[13px] mt-1" style={{ color: "#8B93A1" }}>More discovery. More saves. More traffic. One autopilot workflow.</p></div>
+            </div>
+            <div className="lg:text-center">
+              <Link href="/app/discover?demo=true" className={`${VibeBtn} inline-flex items-center justify-center gap-2 px-8 py-3.5 text-[14px] min-w-[240px]`}>Start your free workflow <ArrowRight className="w-4 h-4" /></Link>
+              <p className="mt-2 text-[11px]" style={{ color: "#4B5563" }}>No credit card required - Cancel anytime</p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -531,7 +774,7 @@ export default function HomePage() {
       <section className="py-20 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }} onMouseEnter={() => setTestHover(true)} onMouseLeave={() => setTestHover(false)}>
         <div className="max-w-[1000px] mx-auto px-5">
           <div className="text-center mb-8"><p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#E879F9" }}>What creators say</p><h2 className="text-3xl font-black text-white tracking-tight">Loved by creators, sellers, and agencies.</h2></div>
-          <div className="flex items-center justify-center gap-2 mb-8">{TEST_GROUPS.map(g => <button key={g} type="button" onClick={() => setTestGroup(g)} className="rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all" style={g === testGroup ? { background: "rgba(217,70,239,0.18)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.35)" } : { background: "rgba(255,255,255,0.04)", color: "#9097A0", border: "1px solid rgba(255,255,255,0.08)" }}>{g}</button>)}</div>
+          <div className="flex items-center justify-center gap-2 mb-8">{TEST_GROUPS.map(g => <button key={g} type="button" onClick={() => { setTestGroup(g); setTIndex(0); }} className="rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all" style={g === testGroup ? { background: "rgba(217,70,239,0.18)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.35)" } : { background: "rgba(255,255,255,0.04)", color: "#9097A0", border: "1px solid rgba(255,255,255,0.08)" }}>{g}</button>)}</div>
           {tCard && (
             <div key={testGroup + tIndex} className="max-w-2xl mx-auto rounded-2xl border p-8 text-center" style={{ background: "#0C1018", borderColor: "rgba(255,255,255,0.10)" }}>
               <div className="flex justify-center gap-0.5 mb-4">{[...Array(5)].map((_, i) => <Star key={i} className="w-4 h-4" style={{ color: "#FB923C", fill: "#FB923C" }} />)}</div>
