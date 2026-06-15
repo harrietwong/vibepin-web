@@ -3,18 +3,17 @@
 import BrandLogo from "@/components/BrandLogo";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowRight, ArrowLeft, Check, Sparkles, Plus, Bookmark, ImageIcon,
-  Search, Wand2, CalendarDays, Star, ShoppingBag, Rocket, Signal, TrendingUp, X,
+  Search, Wand2, CalendarDays, ShoppingBag, Rocket, Signal, TrendingUp, X,
 } from "lucide-react";
-import { useLandingAssets, take, pickByCategory, placeholders, type LandingAsset } from "@/lib/landingAssets";
+import { useLandingAssets, take, placeholders, type LandingAsset } from "@/lib/landingAssets";
 import OpportunityIntelligence from "@/components/landing/OpportunityIntelligence";
 import IntelligenceInAction from "@/components/landing/IntelligenceInAction";
 import ExecutionSystem from "@/components/landing/ExecutionSystem";
+import { LandingConversionBlock } from "@/components/landing/conversion/LandingConversionBlock";
 
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace" };
-const SERIF: React.CSSProperties = { fontFamily: "'Playfair Display',Georgia,serif" };
 const scoreColor = (s: number) => (s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : "#EF4444");
 const VibeBtn = "btn-cta rounded-full font-bold text-white transition-transform hover:scale-[1.03] active:scale-100";
 const PIN_FORMATS = ["Lifestyle", "Close-up", "Text Overlay", "Tutorial", "Moodboard", "Blog Style", "Product Showcase"];
@@ -40,43 +39,12 @@ const SIGNAL_STATS = [
   { value: "1.3K+", label: "Pinterest keywords researched", grad: "#A855F7,#7C3AED" },
   { value: "Daily", label: "Signal intelligence updates",   grad: "#38BDF8,#22D3EE" },
 ];
-const USE_CASE_META = [
-  { cat: "Home Decor",        headline: "Make rooms people want to save", desc: "Turn trending room styles into Pins that drive saves and shop clicks.", workflow: "Find decor trends → save moodboards → generate room Pins → plan the week.", pool: "pin" },
-  { cat: "Fashion",           headline: "Style Pins that convert",        desc: "Spot outfit trends early and turn product shots into editorial Pins.",      workflow: "Find outfit trends → save references → generate looks → schedule drops.", pool: "pin" },
-  { cat: "Beauty",            headline: "Glow-worthy routine Pins",       desc: "Build clean-beauty Pins from your product images and references.",            workflow: "Find beauty trends → save formats → generate routine Pins → plan posts.", pool: "pin" },
-  { cat: "Food & Drink",      headline: "Recipe Pins that get made",      desc: "Turn recipes into tutorial and text-overlay Pins built for saves.",          workflow: "Find recipe trends → save layouts → generate Pins → plan a week of food.", pool: "pin" },
-  { cat: "Digital Products",  headline: "Sell templates & printables",    desc: "Match digital products to real demand and Pin them with destination URLs.",    workflow: "Find product demand → link product → generate Pins → plan promotion.", pool: "product" },
-  { cat: "Pinterest Managers",headline: "Plan client weeks fast",         desc: "Build a reviewable weekly plan per client — you confirm every Pin.",          workflow: "Find opportunities → batch create → plan boards → review & schedule.", pool: "pin" },
-];
-const TESTIMONIALS = [
-  { quote: "VibePin tells me what to create next. I stopped guessing and my saves went up.", name: "Emma J.",  role: "Home Decor Creator",   group: "Creators" },
-  { quote: "I collect references and draft Pins in one place. It's my daily workflow now.",   name: "Jason P.",  role: "Etsy Seller",          group: "Sellers" },
-  { quote: "Product-aware Pins made my listings look so much better. More clicks, less work.", name: "Sarah K.", role: "Digital Product Seller", group: "Sellers" },
-  { quote: "Managing multiple clients is finally organized — one plan, everything in view.",   name: "Daniel M.", role: "Pinterest Manager",     group: "Agencies" },
-  { quote: "The weekly plan keeps me consistent without burning a whole afternoon.",           name: "Priya N.",  role: "Fashion Creator",       group: "Creators" },
-  { quote: "Demand signals before I create saved me from chasing crowded niches.",             name: "Leo R.",    role: "Agency Lead",           group: "Agencies" },
-];
-const TEST_GROUPS = ["All", "Creators", "Sellers", "Agencies"];
 const TICKERS = [
   { emoji: "🌿", name: "Boho Living Room",  yoy: "+214%" }, { emoji: "💅", name: "Summer Nails 2026", yoy: "+187%" },
   { emoji: "👗", name: "Minimalist Outfits", yoy: "+128%" }, { emoji: "🪨", name: "Japandi Interiors", yoy: "+98%" },
   { emoji: "🖼️", name: "Gallery Wall Art",  yoy: "+145%" }, { emoji: "🕯️", name: "Cottagecore Kitchen", yoy: "+120%" },
   { emoji: "💎", name: "Quiet Luxury",       yoy: "+310%" }, { emoji: "☕", name: "Slow Mornings",      yoy: "+176%" },
 ];
-const PRICING = [
-  { plan: "Free",    monthly: "$0",  yearly: "$0",  period: "",    planKey: "free",    desc: "Discover opportunities and try the workflow.", features: ["Top opportunities (limited)", "Pin Ideas (limited)", "Product Opportunities (limited)", "Manual export"], highlighted: false, cta: "Get started" },
-  { plan: "Creator", monthly: "$19", yearly: "$15", period: "/mo", planKey: "creator", desc: "Find, create, and plan as a solo creator.",     features: ["Full opportunity feed", "Pin Ideas + references", "Create Pins (150/mo)", "Weekly Plan board"], highlighted: false, cta: "Start free trial" },
-  { plan: "Growth",  monthly: "$49", yearly: "$39", period: "/mo", planKey: "growth",  desc: "Scale product-aware content for your store.",    features: ["Everything in Creator", "Create Pins (500/mo)", "Linked-product Pins + URLs", "Priority support"], highlighted: true, cta: "Start free trial" },
-  { plan: "Agency",  monthly: "$99", yearly: "$79", period: "/mo", planKey: "pro",     desc: "Plan Pinterest content for multiple brands.",    features: ["Everything in Growth", "Team workspace (3 seats)", "Unlimited Weekly Plans", "API access (coming soon)"], highlighted: false, cta: "Start free trial" },
-];
-const FAQ = [
-  { q: "What does VibePin actually do?", a: "It finds high-signal Pinterest opportunities, turns them into product-aware Pin drafts, and helps you plan a week of content you review before publishing." },
-  { q: "Pin Ideas vs Product Opportunities?", a: "Pin Ideas are content references (formats and angles). Product Opportunities are physical or digital products with real demand you can promote or sell." },
-  { q: "Does it publish automatically?", a: "No. You review and confirm every Pin. VibePin never bulk-posts or acts on your account without approval." },
-  { q: "Do I need to connect Pinterest?", a: "No. Intelligence, Pin Ideas, and Product Opportunities are read-only. You connect only when you choose to publish." },
-  { q: "Where does the data come from?", a: "Pinterest public data and the official Trends API, scored for demand, competition, and trend velocity. Scores are a timing signal, not a guarantee." },
-];
-
 // ── Primitives ────────────────────────────────────────────────────────────────
 function AssetImg({ asset, label }: { asset?: LandingAsset; label?: string }) {
   if (asset?.imageUrl) {
@@ -110,18 +78,6 @@ function Pill({ label, tone }: { label: string; tone: "green" | "cyan" | "amber"
 function ScoreChip({ score }: { score: number }) {
   const c = scoreColor(score);
   return <span className="inline-flex items-center justify-center rounded-lg px-2 py-1 text-[11px] font-black tabular-nums" style={{ ...MONO, color: c, background: `${c}1A`, border: `1px solid ${c}40`, minWidth: 32 }}>{score}</span>;
-}
-
-function FaqItem({ q, a }: { q: string; a: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="rounded-xl border overflow-hidden transition-colors" style={{ borderColor: open ? "rgba(217,70,239,0.30)" : "rgba(255,255,255,0.08)", background: open ? "rgba(217,70,239,0.04)" : "transparent" }}>
-      <button type="button" onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between px-5 py-4 text-left text-[14px] font-semibold transition-colors hover:text-white" style={{ color: "#D1D5DB" }}>
-        {q}<span className={`ml-4 text-xl leading-none transition-transform duration-200 shrink-0 ${open ? "rotate-45" : ""}`} style={{ color: open ? "#E879F9" : "#4B5563" }}>+</span>
-      </button>
-      {open && <p className="px-5 pb-5 text-[13px] leading-relaxed max-w-2xl" style={{ color: "#6B7280" }}>{a}</p>}
-    </div>
-  );
 }
 
 function Rail({ children, accent }: { children: React.ReactNode; accent: string }) {
@@ -522,44 +478,15 @@ function WorkflowTimelineStep({ n, title, copy, bullets, mock, icon }: { n: numb
 }
 
 export default function HomePage() {
-  const [showSticky, setShowSticky] = useState(false);
-  const [yearly, setYearly] = useState(false);
-  const [useCaseHover, setUseCaseHover] = useState(false);
-  const [testHover, setTestHover] = useState(false);
-  const [testGroup, setTestGroup] = useState("All");
-  const [ucIndex, setUcIndex] = useState(0);
-  const [tIndex, setTIndex] = useState(0);
-  const router = useRouter();
   const { pinSamples, products } = useLandingAssets();
-
-  useEffect(() => {
-    const h = () => setShowSticky(window.scrollY > 700);
-    window.addEventListener("scroll", h, { passive: true });
-    return () => window.removeEventListener("scroll", h);
-  }, []);
-
-  useEffect(() => { if (useCaseHover) return; const t = setInterval(() => setUcIndex(p => (p + 1) % USE_CASE_META.length), 5000); return () => clearInterval(t); }, [useCaseHover]);
-
-  const filteredTests = testGroup === "All" ? TESTIMONIALS : TESTIMONIALS.filter(t => t.group === testGroup);
-  useEffect(() => { if (testHover || filteredTests.length <= 1) return; const t = setInterval(() => setTIndex(p => (p + 1) % filteredTests.length), 4500); return () => clearInterval(t); }, [testHover, filteredTests.length]);
-  const tCard = filteredTests[tIndex % filteredTests.length];
 
   // Asset derivations (real data → placeholder fallback)
   const heroMainImg  = pinSamples.find(a => a.category === "Home Decor") ?? pinSamples[0];
   const heroSignals  = take(products, 7, "Product");
   const heroRefs     = take(pinSamples, 5, "Reference", 1);
-  const pinCards     = take(pinSamples, 8, "Pin idea");
-  const productCards = take(products, 8, "Product");
-  const tlPinIdeas   = take(pinSamples, 5, "Pin idea", 8);
-  const tlProducts   = take(products, 4, "Product", 0);
   const tlCreateProd = take(products, 3, "Product", 3);
   const tlCreateRefs = take(pinSamples, 3, "Reference", 13);
   const tlWeek       = take(pinSamples, 7, "Planned Pin", 18);
-  const ucMeta = USE_CASE_META[ucIndex];
-  const ucPool = ucMeta.pool === "product" ? products : pinSamples;
-  const ucImgs = pickByCategory(ucPool, ucMeta.cat, 3, ucMeta.cat);
-
-  const srcColor = (s: string) => (s === "Etsy" ? "#F87171" : s === "Gumroad" ? "#A78BFA" : "#34D399");
 
   return (
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -570,7 +497,7 @@ export default function HomePage() {
           <div className="flex items-center gap-2"><BrandLogo size={28} /><span className="font-black text-white tracking-tight text-[17px]">VibePin</span></div>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>
             <a href="#create" className="hover:text-white transition-colors">How it works</a>
-            <a href="#products" className="hover:text-white transition-colors">Product Opportunities</a>
+            <Link href="/app/products?demo=true" className="hover:text-white transition-colors">Product Opportunities</Link>
             <a href="#create" className="hover:text-white transition-colors">Create Pins</a>
             <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
           </div>
@@ -654,133 +581,8 @@ export default function HomePage() {
       {/* ══ EXECUTION SYSTEM ══ */}
       <ExecutionSystem pinSamples={pinSamples} products={products} />
 
-      {/* ══ PRODUCT OPPORTUNITIES ══ */}
-      <section id="products" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <div className="max-w-[1100px] mx-auto px-5">
-          <div className="flex items-end justify-between gap-4 mb-6">
-            <div>
-              <div className="flex items-center gap-2 mb-3"><span className="h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-black" style={{ background: "rgba(16,185,129,0.15)", color: "#10B981" }}>3</span><p className="text-[11px] font-bold uppercase tracking-[0.16em]" style={{ color: "#10B981" }}>Product Opportunities</p></div>
-              <h2 className="text-3xl font-black text-white tracking-tight mb-2">Find products worth promoting.</h2>
-              <p className="text-[14px] leading-relaxed max-w-md" style={{ color: "#8B93A1" }}>Discover physical and digital products with real Pinterest demand behind them.</p>
-            </div>
-            <Link href="/app/discover?demo=true" className="hidden sm:inline-flex items-center gap-1.5 text-[12px] font-bold transition-opacity hover:opacity-80 shrink-0" style={{ color: "#10B981" }}>Explore all products <ArrowRight className="w-3.5 h-3.5" /></Link>
-          </div>
-          <Rail accent="#10B981">
-            {productCards.map((p, i) => (
-              <div key={p.id} className="snap-start shrink-0 rounded-xl overflow-hidden transition-transform hover:-translate-y-1" style={{ width: 188, background: "#0C1018", border: "1px solid rgba(255,255,255,0.08)" }}>
-                <div className="relative" style={{ aspectRatio: "1/1" }}><AssetImg asset={p} label="Product" />{p.score != null && <span className="absolute top-1.5 right-1.5"><ScoreChip score={Math.round(p.score)} /></span>}</div>
-                <div className="p-2.5">
-                  <p className="text-[11px] font-bold text-white leading-tight mb-0.5 line-clamp-1">{p.title}</p>
-                  <p className="text-[9px] font-bold mb-1.5" style={{ color: srcColor("") }}>{p.price ? <span style={{ ...MONO }}>{p.price}</span> : "Product opportunity"}</p>
-                  <div className="flex flex-wrap gap-1 mb-2"><Pill label={i % 2 === 0 ? "High Demand" : "Rising"} tone="green" /><Pill label="Low Comp" tone="cyan" /></div>
-                  <div className="flex items-center gap-3 text-[9px] font-semibold pt-2 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", color: "#6B7280" }}><span className="flex items-center gap-1 hover:text-white transition-colors"><Bookmark className="w-2.5 h-2.5" /> Save</span><span className="flex items-center gap-1 hover:text-white transition-colors"><ImageIcon className="w-2.5 h-2.5" /> Use in Pins</span></div>
-                </div>
-              </div>
-            ))}
-          </Rail>
-        </div>
-      </section>
+      <LandingConversionBlock />
 
-      {/* ══ USE VIBEPIN FOR ══ */}
-      <section className="py-20 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }} onMouseEnter={() => setUseCaseHover(true)} onMouseLeave={() => setUseCaseHover(false)}>
-        <div className="max-w-[1100px] mx-auto px-5">
-          <div className="text-center mb-8"><p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#A855F7" }}>Use VibePin for</p><h2 className="text-3xl font-black text-white tracking-tight">Built for your kind of Pinterest.</h2></div>
-          <div className="flex items-center justify-center gap-2 mb-7 flex-wrap">{USE_CASE_META.map((c, i) => <button key={c.cat} type="button" onClick={() => setUcIndex(i)} className="rounded-full px-4 py-2 text-[12px] font-semibold transition-all" style={i === ucIndex ? { background: "linear-gradient(135deg,#D946EF,#7C3AED)", color: "#fff" } : { background: "rgba(255,255,255,0.04)", color: "#9097A0", border: "1px solid rgba(255,255,255,0.08)" }}>{c.cat}</button>)}</div>
-          <div key={ucMeta.cat} className="rounded-2xl border overflow-hidden grid lg:grid-cols-[0.85fr_1.15fr]" style={{ background: "#0C1018", borderColor: "rgba(255,255,255,0.10)" }}>
-            <div className="p-7 flex flex-col justify-center">
-              <h3 className="text-2xl font-black text-white tracking-tight mb-3">{ucMeta.headline}</h3>
-              <p className="text-[14px] leading-relaxed mb-5" style={{ color: "#8B93A1" }}>{ucMeta.desc}</p>
-              <div className="rounded-xl p-3.5 mb-5" style={{ background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.20)" }}><p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: "#C4B5FD" }}>The workflow</p><p className="text-[12px] leading-relaxed" style={{ color: "#C8CDD6" }}>{ucMeta.workflow}</p></div>
-              <Link href="/app/discover?demo=true" className="inline-flex items-center gap-1.5 text-[13px] font-bold" style={{ color: "#E879F9" }}>Explore {ucMeta.cat} <ArrowRight className="w-3.5 h-3.5" /></Link>
-            </div>
-            <div className="grid grid-cols-3 gap-1.5 p-3" style={{ background: "#0A0E16" }}>{ucImgs.map((a, i) => <div key={i} className="relative rounded-xl overflow-hidden" style={{ aspectRatio: "3/4" }}><AssetImg asset={a} label={ucMeta.cat} /><div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" /></div>)}</div>
-          </div>
-        </div>
-      </section>
-
-      {/* ══ TESTIMONIALS ══ */}
-      <section className="py-20 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }} onMouseEnter={() => setTestHover(true)} onMouseLeave={() => setTestHover(false)}>
-        <div className="max-w-[1000px] mx-auto px-5">
-          <div className="text-center mb-8"><p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#E879F9" }}>What creators say</p><h2 className="text-3xl font-black text-white tracking-tight">Loved by creators, sellers, and agencies.</h2></div>
-          <div className="flex items-center justify-center gap-2 mb-8">{TEST_GROUPS.map(g => <button key={g} type="button" onClick={() => { setTestGroup(g); setTIndex(0); }} className="rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all" style={g === testGroup ? { background: "rgba(217,70,239,0.18)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.35)" } : { background: "rgba(255,255,255,0.04)", color: "#9097A0", border: "1px solid rgba(255,255,255,0.08)" }}>{g}</button>)}</div>
-          {tCard && (
-            <div key={testGroup + tIndex} className="max-w-2xl mx-auto rounded-2xl border p-8 text-center" style={{ background: "#0C1018", borderColor: "rgba(255,255,255,0.10)" }}>
-              <div className="flex justify-center gap-0.5 mb-4">{[...Array(5)].map((_, i) => <Star key={i} className="w-4 h-4" style={{ color: "#FB923C", fill: "#FB923C" }} />)}</div>
-              <p className="text-[18px] font-semibold text-white leading-relaxed mb-6" style={SERIF}>&ldquo;{tCard.quote}&rdquo;</p>
-              <div className="flex items-center justify-center gap-3"><span className="h-10 w-10 rounded-full flex items-center justify-center text-[14px] font-black text-white" style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}>{tCard.name.charAt(0)}</span><div className="text-left"><p className="text-[13px] font-bold text-white">{tCard.name}</p><p className="text-[11px]" style={{ color: "#6B7280" }}>{tCard.role}</p></div></div>
-              <div className="flex justify-center gap-1.5 mt-6">{filteredTests.map((_, i) => <button key={i} type="button" onClick={() => setTIndex(i)} aria-label={`Testimonial ${i + 1}`} className="h-1.5 rounded-full transition-all" style={{ width: i === tIndex % filteredTests.length ? 20 : 6, background: i === tIndex % filteredTests.length ? "#E879F9" : "rgba(255,255,255,0.15)" }} />)}</div>
-            </div>
-          )}
-          <p className="text-center text-[10px] mt-4" style={{ color: "#374151" }}>Illustrative customer quotes — replace with verified testimonials before launch.</p>
-        </div>
-      </section>
-
-      {/* ══ PRICING ══ */}
-      <section id="pricing" className="py-20 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
-        <div className="max-w-[1100px] mx-auto px-5">
-          <div className="text-center mb-9">
-            <p className="text-[11px] font-bold uppercase tracking-[0.16em] mb-3" style={{ color: "#4B5563" }}>Pricing</p>
-            <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-5">Choose the plan that grows with you.</h2>
-            <div className="inline-flex items-center gap-1 rounded-full border p-1.5" style={{ background: "#080C12", borderColor: "rgba(255,255,255,0.08)" }}>{[{ label: "Monthly", val: false }, { label: "Yearly", val: true }].map(o => <button key={o.label} type="button" onClick={() => setYearly(o.val)} className="rounded-full px-5 py-2 text-[13px] font-bold transition-all flex items-center gap-2" style={yearly === o.val ? { background: "var(--surface-2)", color: "#E5E7EB" } : { color: "#4B5563" }}>{o.label}{o.val && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold text-white" style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}>Save 20%</span>}</button>)}</div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 items-stretch">
-            {PRICING.map(c => (
-              <div key={c.plan} className="relative flex flex-col rounded-2xl p-6 transition-transform hover:-translate-y-1" style={c.highlighted ? { background: "linear-gradient(180deg,rgba(124,58,237,0.14),rgba(217,70,239,0.05))", border: "1px solid rgba(168,85,247,0.40)" } : { background: "var(--surface-2)", border: "1px solid rgba(255,255,255,0.08)" }}>
-                {c.highlighted && <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-[10px] font-bold text-white" style={{ background: "linear-gradient(135deg,#D946EF,#7C3AED)" }}>Most popular</span>}
-                <p className="text-[12px] font-bold uppercase tracking-widest mb-3" style={{ color: "#9097A0" }}>{c.plan}</p>
-                <div className="flex items-end gap-1 mb-1"><span className="text-4xl font-black text-white" style={MONO}>{yearly ? c.yearly : c.monthly}</span><span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>{c.period}</span></div>
-                <p className="text-[12px] mb-5 leading-relaxed" style={{ color: "#6B7280" }}>{c.desc}</p>
-                <ul className="flex-1 space-y-2.5 mb-6">{c.features.map(f => <li key={f} className="flex items-start gap-2.5 text-[12px]"><Check className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: c.highlighted ? "#A855F7" : "#10B981" }} /><span style={{ color: "#C8CDD6" }}>{f}</span></li>)}</ul>
-                <button type="button" onClick={() => router.push(c.planKey === "free" ? "/app/discover?demo=true" : `/signup?plan=${c.planKey}`)} className={`w-full rounded-full py-3 text-[13px] font-bold transition-all ${c.highlighted ? VibeBtn : "border hover:text-white hover:border-white/30"}`} style={c.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}>{c.cta}</button>
-              </div>
-            ))}
-          </div>
-          <p className="text-center text-[11px] mt-6" style={{ color: "#4B5563" }}>No credit card required · Cancel anytime</p>
-        </div>
-      </section>
-
-      {/* ══ FAQ ══ */}
-      <section className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <div className="max-w-2xl mx-auto px-5"><h2 className="text-3xl font-black text-white tracking-tight text-center mb-8">Questions, answered.</h2><div className="space-y-2.5">{FAQ.map(f => <FaqItem key={f.q} q={f.q} a={f.a} />)}</div></div>
-      </section>
-
-      {/* ══ FINAL CTA ══ */}
-      <section className="py-24 relative overflow-hidden border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(ellipse 50% 60% at 50% 50%, rgba(217,70,239,0.12), transparent 70%)" }} />
-        <div className="max-w-2xl mx-auto px-5 text-center relative">
-          <h2 className="text-4xl sm:text-5xl font-black text-white tracking-tight mb-4 leading-[1.05]">Ready to find what&apos;s worth making?</h2>
-          <p className="text-[15px] mb-9" style={{ color: "#8B93A1" }}>Build your next 7 Pins and plan your week — all in one intelligent workflow.</p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center"><Link href="/app/discover?demo=true" className={`${VibeBtn} flex items-center justify-center gap-2 px-9 py-4 text-[15px]`}>Build my next 7 Pins <ArrowRight className="w-4 h-4" /></Link><a href="#intelligence" className="flex items-center justify-center gap-2 rounded-full border px-9 py-4 text-[15px] font-bold transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}>See this week&apos;s opportunities</a></div>
-          <p className="mt-5 text-[11px]" style={{ color: "#4B5563" }}>No credit card required · You review every Pin before publishing</p>
-        </div>
-      </section>
-
-      {/* ══ FOOTER ══ */}
-      <footer className="border-t pt-14 pb-8" style={{ borderColor: "rgba(255,255,255,0.07)", background: "var(--surface)" }}>
-        <div className="max-w-[1200px] mx-auto px-5 grid grid-cols-2 md:grid-cols-5 gap-8 mb-10">
-          <div className="col-span-2 md:col-span-1">
-            <div className="flex items-center gap-2 mb-3"><BrandLogo size={28} /><span className="font-black text-white text-sm tracking-tight">VibePin</span></div>
-            <p className="text-[11px] leading-relaxed mb-4" style={{ color: "#4B5563" }}>AI-powered Pinterest workflow for creators and businesses.</p>
-            <div className="flex items-center gap-3">{["P", "I", "Y", "T"].map(s => <span key={s} className="h-7 w-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-colors hover:text-white" style={{ background: "rgba(255,255,255,0.05)", color: "#4B5563" }}>{s}</span>)}</div>
-          </div>
-          {[
-            { title: "Product", links: [["How it works", "#create"], ["Product Opportunities", "#products"], ["Pricing", "#pricing"]] },
-            { title: "Company", links: [["About", "#"], ["Blog", "#"], ["Careers", "#"], ["Contact", "mailto:support@vibepin.co"]] },
-            { title: "Resources", links: [["Help Center", "#"], ["Tutorials", "#"], ["Pinterest Guide", "#"]] },
-            { title: "Legal", links: [["Privacy", "/privacy"], ["Terms", "/terms"], ["Pinterest App", "/pinterest-app"]] },
-          ].map(col => (
-            <div key={col.title}><p className="text-[10px] font-bold uppercase tracking-widest mb-3" style={{ color: "#4B5563" }}>{col.title}</p><ul className="space-y-2.5">{col.links.map(([l, h]) => <li key={l}><a href={h} className="text-[12px] transition-colors hover:text-gray-300" style={{ color: "#5B6472" }}>{l}</a></li>)}</ul></div>
-          ))}
-        </div>
-        <div className="max-w-[1200px] mx-auto px-5 border-t pt-6 flex flex-col sm:flex-row justify-between gap-2 text-[11px]" style={{ borderColor: "rgba(255,255,255,0.06)", color: "#374151" }}><p>© 2026 VibePin. Find it. Create it. Plan it.</p><p>You review every Pin before publishing</p></div>
-      </footer>
-
-      {/* ══ STICKY CTA ══ */}
-      <div className={`fixed bottom-0 left-0 right-0 z-50 border-t backdrop-blur-md px-5 py-3 flex items-center justify-between gap-4 transition-all duration-300 ${showSticky ? "translate-y-0 opacity-100" : "translate-y-full opacity-0"}`} style={{ background: "rgba(8,12,18,0.95)", borderColor: "rgba(255,255,255,0.09)" }}>
-        <p className="font-bold text-white text-[13px] hidden sm:block">Find it. Create it. Plan your Pinterest week.</p>
-        <p className="font-bold text-white text-[12px] sm:hidden">Plan your Pinterest week</p>
-        <Link href="/app/discover?demo=true" className={`${VibeBtn} shrink-0 px-5 py-2.5 text-[13px]`}>Build my next 7 Pins</Link>
-      </div>
     </div>
   );
 }

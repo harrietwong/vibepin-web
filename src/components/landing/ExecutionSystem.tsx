@@ -231,22 +231,7 @@ export default function ExecutionSystem({ pinSamples, products }: { pinSamples: 
 
         <div className="mb-10"><CreatePinsFeature product={product} refs={refs} outputs={pool} /></div>
         <div className="mb-10"><WorkflowStrip /></div>
-        <div className="mb-14"><WeeklyPlanFeature pins={pool} /></div>
-
-        {/* Final CTA */}
-        <div className="rounded-2xl border p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6" style={{ background: "linear-gradient(135deg,#0E1018,#140B22)", borderColor: "rgba(168,85,247,0.24)", boxShadow: "0 24px 80px rgba(0,0,0,0.28)" }}>
-          <div className="flex items-center gap-4">
-            <span className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(217,70,239,0.16)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.22)" }}><Sparkles className="w-5 h-5" /></span>
-            <div>
-              <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight">From idea to impact—<span style={{ background: "linear-gradient(100deg,#FF4D8D,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>one seamless workflow.</span></h3>
-              <p className="text-[13px] mt-1" style={{ color: "#8B93A1" }}>Discover what&apos;s working, create with confidence, and plan your next week of Pinterest content.</p>
-            </div>
-          </div>
-          <div className="flex flex-col items-stretch sm:items-center gap-2 shrink-0">
-            <Link href="/signup" className={`${VibeBtn} inline-flex items-center justify-center gap-2 px-8 py-3.5 text-[14px]`}>Start your free trial <ArrowRight className="w-4 h-4" /></Link>
-            <div className="flex items-center gap-4 justify-center text-[11px]" style={{ color: "#6B7280" }}><span className="flex items-center gap-1"><Check className="w-3 h-3" style={{ color: "#10B981" }} /> No credit card required</span><span className="flex items-center gap-1"><Check className="w-3 h-3" style={{ color: "#10B981" }} /> Cancel anytime</span></div>
-          </div>
-        </div>
+        <div><WeeklyPlanFeature pins={pool} /></div>
       </div>
     </section>
   );
