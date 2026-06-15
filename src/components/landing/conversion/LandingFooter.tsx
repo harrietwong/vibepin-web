@@ -23,7 +23,11 @@ const FOOTER_COLUMNS = [
   },
   {
     title: "Company",
-    links: [{ label: "Contact", href: "mailto:support@vibepin.co" }],
+    links: [
+      { label: "About", href: "/about" },
+      { label: "Careers", href: "/careers" },
+      { label: "Contact", href: "/contact" },
+    ],
   },
   {
     title: "Legal",
