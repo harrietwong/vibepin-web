@@ -1,7 +1,22 @@
 import type { PersonaAccent } from "@/lib/landing/conversionData";
+import type { LandingAsset } from "@/lib/landingAssets";
 
 export const VibeBtn =
   "btn-cta rounded-full font-bold text-white transition-transform hover:scale-[1.03] active:scale-100";
+
+/** Real VibePin asset thumbnail (pin_sample / product). Plain <img> so any CDN host
+ *  loads; dark fallback tile when no asset is available. Parent must be relative. */
+export function AssetImg({ asset, label }: { asset?: LandingAsset; label?: string }) {
+  if (asset?.imageUrl) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={asset.imageUrl} alt={asset.title} loading="lazy" className="absolute inset-0 w-full h-full object-cover" />;
+  }
+  return (
+    <div className="absolute inset-0 flex items-center justify-center text-[7px] font-semibold uppercase tracking-wide" style={{ background: "linear-gradient(135deg,#141622,#0b0d15)", color: "#2A2F3E" }}>
+      {label ?? "VibePin"}
+    </div>
+  );
+}
 
 export const SECTION = "py-24 lg:py-32 border-t";
 export const CONTAINER = "max-w-[1280px] mx-auto px-6 lg:px-8";

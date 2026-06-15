@@ -1,3 +1,6 @@
+"use client";
+
+import { useLandingAssets } from "@/lib/landingAssets";
 import { LandingAudienceSection } from "./LandingAudienceSection";
 import { SupportedNichesStrip } from "./SupportedNichesStrip";
 import { WorkflowStoriesSection } from "./WorkflowStoriesSection";
@@ -7,14 +10,15 @@ import { FinalConversionCTA } from "./FinalConversionCTA";
 import { LandingFooter } from "./LandingFooter";
 
 export function LandingConversionBlock() {
+  const { pinSamples, products } = useLandingAssets();
   return (
     <>
-      <LandingAudienceSection />
+      <LandingAudienceSection pinSamples={pinSamples} products={products} />
       <SupportedNichesStrip />
-      <WorkflowStoriesSection />
+      <WorkflowStoriesSection pinSamples={pinSamples} products={products} />
       <PricingSection />
       <FaqSection />
-      <FinalConversionCTA />
+      <FinalConversionCTA pinSamples={pinSamples} products={products} />
       <LandingFooter />
     </>
   );
