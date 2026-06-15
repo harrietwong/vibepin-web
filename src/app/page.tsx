@@ -568,8 +568,7 @@ export default function HomePage() {
         <div className="max-w-[1240px] mx-auto px-5 h-[60px] flex items-center justify-between">
           <div className="flex items-center gap-2"><BrandLogo size={28} /><span className="font-black text-white tracking-tight text-[17px]">VibePin</span></div>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>
-            <a href="#intelligence" className="hover:text-white transition-colors">Intelligence</a>
-            <a href="#pin-ideas" className="hover:text-white transition-colors">Pin Ideas</a>
+            <a href="#create" className="hover:text-white transition-colors">How it works</a>
             <a href="#products" className="hover:text-white transition-colors">Product Opportunities</a>
             <a href="#create" className="hover:text-white transition-colors">Create Pins</a>
             <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
@@ -591,7 +590,7 @@ export default function HomePage() {
             <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[460px]" style={{ color: "#8B93A1" }}>VibePin discovers what people want, shows which products and Pin formats are already working, then turns them into ready-to-publish Pins and a weekly content plan.</p>
             <div className="flex flex-col sm:flex-row gap-3 mb-6">
               <Link href="/app/discover?demo=true" className={`${VibeBtn} px-7 py-3.5 text-[14px] flex items-center justify-center gap-2`}>Build my next 7 Pins <ArrowRight className="w-4 h-4" /></Link>
-              <a href="#intelligence" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>See this week&apos;s opportunities</a>
+              <a href="#create" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>See this week&apos;s opportunities</a>
             </div>
             <div className="flex items-center gap-3 mb-5">
               <div className="flex -space-x-2">{["#FF4D8D", "#D946EF", "#A855F7", "#7C3AED"].map((g, i) => <span key={i} className="h-8 w-8 rounded-full border-2" style={{ borderColor: "var(--bg)", background: `linear-gradient(135deg,${g},#0C1018)` }} />)}</div>
@@ -650,60 +649,6 @@ export default function HomePage() {
 
       {/* ══ INTELLIGENCE IN ACTION ══ */}
       <IntelligenceInAction pinSamples={pinSamples} products={products} />
-
-      {/* ══ INTELLIGENCE ══ */}
-      <section id="intelligence" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
-        <div className="max-w-[1060px] mx-auto px-5 grid lg:grid-cols-[0.8fr_1.2fr] gap-10 items-center">
-          <div>
-            <div className="flex items-center gap-2 mb-3"><span className="h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-black" style={{ background: "rgba(8,145,178,0.15)", color: "#38BDF8" }}>1</span><p className="text-[11px] font-bold uppercase tracking-[0.16em]" style={{ color: "#38BDF8" }}>Intelligence</p></div>
-            <h2 className="text-3xl font-black text-white tracking-tight mb-3">Start with Pinterest demand signals.</h2>
-            <p className="text-[14px] leading-relaxed mb-5" style={{ color: "#8B93A1" }}>Discover keywords and topics ranked by demand, competition, and trend direction.</p>
-            <Link href="/app/discover?demo=true" className="inline-flex items-center gap-1.5 text-[13px] font-bold rounded-full border px-4 py-2 transition-colors hover:text-white hover:border-cyan-500/40" style={{ color: "#38BDF8", borderColor: "rgba(8,145,178,0.30)" }}>View all opportunities <ArrowRight className="w-3.5 h-3.5" /></Link>
-          </div>
-          <div className="rounded-2xl border overflow-hidden" style={{ background: "#0C1018", borderColor: "rgba(255,255,255,0.10)" }}>
-            <div className="hidden sm:grid items-center px-5 py-2.5 border-b" style={{ gridTemplateColumns: "1fr 4.5rem 5rem 4rem 4rem", gap: "0.75rem", borderColor: "rgba(255,255,255,0.06)", background: "#0A0E16" }}>{["keyword / topic", "demand", "competition", "trend", "score"].map(h => <span key={h} className="text-[9px] font-bold uppercase tracking-[0.12em]" style={{ color: "#374151", ...MONO }}>{h}</span>)}</div>
-            {INTEL_ROWS.map(r => (
-              <div key={r.rank} className="grid items-center px-5 py-3 border-b last:border-0 transition-colors hover:bg-white/[0.02]" style={{ gridTemplateColumns: "1fr 4.5rem 5rem 4rem 4rem", gap: "0.75rem", borderColor: "rgba(255,255,255,0.04)" }}>
-                <div className="flex items-center gap-2 min-w-0"><span className="text-[11px] tabular-nums" style={{ color: "#374151", ...MONO }}>{r.rank}</span><span className="text-[13px] font-semibold text-white truncate">{r.name}</span></div>
-                <span className="text-[11px] font-bold tabular-nums text-emerald-400" style={MONO}>↗ {r.trend}</span>
-                <Pill label={r.competition === "Low" ? "Low" : "Medium"} tone={r.competition === "Low" ? "green" : "amber"} />
-                <svg viewBox="0 0 48 16" className="h-4 w-12" fill="none"><polyline points="0,13 10,11 20,12 30,5 40,7 48,3" stroke="#38BDF8" strokeWidth="1.6" /></svg>
-                <ScoreChip score={r.score} />
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ══ PIN IDEAS ══ */}
-      <section id="pin-ideas" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
-        <div className="max-w-[1100px] mx-auto px-5">
-          <div className="flex items-end justify-between gap-4 mb-6">
-            <div>
-              <div className="flex items-center gap-2 mb-3"><span className="h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-black" style={{ background: "rgba(217,70,239,0.15)", color: "#E879F9" }}>2</span><p className="text-[11px] font-bold uppercase tracking-[0.16em]" style={{ color: "#E879F9" }}>Pin Ideas</p></div>
-              <h2 className="text-3xl font-black text-white tracking-tight mb-2">Find Pin formats before you create.</h2>
-              <p className="text-[14px] leading-relaxed max-w-md" style={{ color: "#8B93A1" }}>Save the references, layouts, and angles that already fit Pinterest behavior.</p>
-            </div>
-            <Link href="/app/discover?demo=true" className="hidden sm:inline-flex items-center gap-1.5 text-[12px] font-bold transition-opacity hover:opacity-80 shrink-0" style={{ color: "#E879F9" }}>Explore all ideas <ArrowRight className="w-3.5 h-3.5" /></Link>
-          </div>
-          <Rail accent="#E879F9">
-            {pinCards.map((p, i) => (
-              <div key={p.id} className="snap-start shrink-0 rounded-xl overflow-hidden group/pin transition-transform hover:-translate-y-1" style={{ width: 188, background: "#0C1018", border: "1px solid rgba(255,255,255,0.08)" }}>
-                <div className="relative" style={{ aspectRatio: "3/4" }}>
-                  <AssetImg asset={p} label="Pin idea" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent pointer-events-none" />
-                  <span className="absolute top-1.5 left-1.5 rounded-full px-2 py-0.5 text-[8px] font-bold" style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(6px)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.30)" }}>{PIN_FORMATS[i % PIN_FORMATS.length]}</span>
-                  <span className="absolute top-1.5 right-1.5 h-6 w-6 rounded-full flex items-center justify-center opacity-0 group-hover/pin:opacity-100 transition-opacity" style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)" }}><Bookmark className="w-3 h-3 text-white" /></span>
-                </div>
-                <div className="p-2.5">
-                  <p className="text-[11px] font-bold text-white leading-tight mb-2 line-clamp-1">{p.title}</p>
-                  <div className="flex flex-wrap gap-1"><Pill label={i % 2 === 0 ? "High signal" : "Rising"} tone="green" /><Pill label="Low comp" tone="cyan" /></div>
-                </div>
-              </div>
-            ))}
-          </Rail>
-        </div>
-      </section>
 
       {/* ══ PRODUCT OPPORTUNITIES ══ */}
       <section id="products" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
@@ -815,7 +760,7 @@ export default function HomePage() {
             <div className="flex items-center gap-3">{["P", "I", "Y", "T"].map(s => <span key={s} className="h-7 w-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-colors hover:text-white" style={{ background: "rgba(255,255,255,0.05)", color: "#4B5563" }}>{s}</span>)}</div>
           </div>
           {[
-            { title: "Product", links: [["Intelligence", "#intelligence"], ["Pin Ideas", "#pin-ideas"], ["Product Opportunities", "#products"], ["Create Pins", "#create"], ["Pricing", "#pricing"]] },
+            { title: "Product", links: [["How it works", "#create"], ["Product Opportunities", "#products"], ["Pricing", "#pricing"]] },
             { title: "Company", links: [["About", "#"], ["Blog", "#"], ["Careers", "#"], ["Contact", "mailto:support@vibepin.co"]] },
             { title: "Resources", links: [["Help Center", "#"], ["Tutorials", "#"], ["Pinterest Guide", "#"]] },
             { title: "Legal", links: [["Privacy", "/privacy"], ["Terms", "/terms"], ["Pinterest App", "/pinterest-app"]] },
