@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useLandingAssets, take, pickByCategory, placeholders, type LandingAsset } from "@/lib/landingAssets";
 import OpportunityIntelligence from "@/components/landing/OpportunityIntelligence";
+import IntelligenceInAction from "@/components/landing/IntelligenceInAction";
 
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace" };
 const SERIF: React.CSSProperties = { fontFamily: "'Playfair Display',Georgia,serif" };
@@ -646,6 +647,9 @@ export default function HomePage() {
 
       {/* ══ OPPORTUNITY INTELLIGENCE ══ */}
       <OpportunityIntelligence pinSamples={pinSamples} products={products} />
+
+      {/* ══ INTELLIGENCE IN ACTION ══ */}
+      <IntelligenceInAction pinSamples={pinSamples} products={products} />
 
       {/* ══ INTELLIGENCE ══ */}
       <section id="intelligence" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
