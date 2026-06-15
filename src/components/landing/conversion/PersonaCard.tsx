@@ -21,8 +21,8 @@ function CreatorsPreview({ pins }: { pins: LandingAsset[] }) {
         <span className="rounded-md px-1.5 py-0.5 text-[8px] font-bold" style={{ background: "rgba(217,70,239,0.16)", color: "#E879F9" }}>Trending topic</span>
         <span className="rounded-md px-1.5 py-0.5 text-[8px] font-semibold" style={{ background: "rgba(255,255,255,0.05)", color: "#9097A0" }}>Bedroom decor ideas</span>
       </div>
-      <div className="grid grid-cols-3 gap-1.5">
-        {pins.slice(0, 3).map((a, i) => <div key={i} className="relative rounded-lg overflow-hidden" style={{ aspectRatio: "3/4" }}><AssetImg asset={a} label="Pin" /></div>)}
+      <div className="grid grid-cols-3 gap-2">
+        {pins.slice(0, 3).map((a, i) => <div key={i} className="relative rounded-lg overflow-hidden" style={{ aspectRatio: "2/3" }}><AssetImg asset={a} label="Pin" /></div>)}
       </div>
     </div>
   );
@@ -30,8 +30,8 @@ function CreatorsPreview({ pins }: { pins: LandingAsset[] }) {
 
 function ProductPreview({ product, name, sub, score }: { product?: LandingAsset; name: string; sub: string; score: number }) {
   return (
-    <div className="rounded-xl border p-2.5 flex items-center gap-3" style={{ background: "#0A0E16", borderColor: "rgba(255,255,255,0.08)" }}>
-      <div className="relative rounded-lg overflow-hidden shrink-0" style={{ width: 56, height: 56 }}><AssetImg asset={product} label="Product" /></div>
+    <div className="rounded-xl border p-3 flex items-center gap-3 min-h-[120px] xl:min-h-[135px]" style={{ background: "#0A0E16", borderColor: "rgba(255,255,255,0.08)" }}>
+      <div className="relative rounded-xl overflow-hidden shrink-0 size-20 xl:size-24"><AssetImg asset={product} label="Product" /></div>
       <div className="flex-1 min-w-0">
         <p className="text-[11px] font-bold text-white leading-tight truncate">{name}</p>
         <p className="text-[9px] mb-1" style={{ color: "#6B7280" }}>{sub}</p>
@@ -52,8 +52,8 @@ function ManagersPreview({ pins }: { pins: LandingAsset[] }) {
         {days.map((d, i) => (
           <div key={d}>
             <p className="text-[8px] font-bold mb-1" style={{ color: "#6B7280" }}>{d}</p>
-            <div className="relative rounded-lg overflow-hidden mb-1" style={{ aspectRatio: "3/4" }}><AssetImg asset={pins[i]} label="Pin" /></div>
-            <span className="block rounded px-1 py-0.5 text-[7px] font-bold text-center" style={{ background: "rgba(56,189,248,0.16)", color: "#38BDF8" }}>Scheduled</span>
+            <div className="relative rounded-lg overflow-hidden mb-1" style={{ aspectRatio: "2/3" }}><AssetImg asset={pins[i]} label="Pin" /></div>
+            <span className="block rounded px-1 py-0.5 text-[7px] font-bold text-center" style={{ background: i === 2 ? "rgba(16,185,129,0.16)" : "rgba(56,189,248,0.16)", color: i === 2 ? "#10B981" : "#38BDF8" }}>{i === 2 ? "Ready" : "Scheduled"}</span>
           </div>
         ))}
       </div>
@@ -76,7 +76,7 @@ export function PersonaCard({ data, pinSamples, products }: { data: PersonaCardD
 
   return (
     <article
-      className="relative flex h-full flex-col rounded-2xl border p-5 xl:p-6 overflow-hidden transition-transform hover:-translate-y-1"
+      className="relative flex h-full min-h-[500px] xl:min-h-[540px] flex-col rounded-2xl border p-5 xl:p-6 overflow-hidden transition-transform hover:-translate-y-1"
       style={{ background: "linear-gradient(180deg,#0d1220,#0A0C14)", borderColor: "rgba(255,255,255,0.08)" }}
     >
       <span className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full blur-3xl" style={{ background: c.bg }} aria-hidden />
