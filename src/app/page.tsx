@@ -11,6 +11,7 @@ import {
 import { useLandingAssets, take, pickByCategory, placeholders, type LandingAsset } from "@/lib/landingAssets";
 import OpportunityIntelligence from "@/components/landing/OpportunityIntelligence";
 import IntelligenceInAction from "@/components/landing/IntelligenceInAction";
+import ExecutionSystem from "@/components/landing/ExecutionSystem";
 
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace" };
 const SERIF: React.CSSProperties = { fontFamily: "'Playfair Display',Georgia,serif" };
@@ -649,6 +650,9 @@ export default function HomePage() {
 
       {/* ══ INTELLIGENCE IN ACTION ══ */}
       <IntelligenceInAction pinSamples={pinSamples} products={products} />
+
+      {/* ══ EXECUTION SYSTEM ══ */}
+      <ExecutionSystem pinSamples={pinSamples} products={products} />
 
       {/* ══ PRODUCT OPPORTUNITIES ══ */}
       <section id="products" className="py-16 border-t" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
