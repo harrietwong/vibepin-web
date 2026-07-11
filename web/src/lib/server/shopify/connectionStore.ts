@@ -353,6 +353,31 @@ export async function updateSyncProgress(
   return (data as StoreConnectionRow | null) ?? null;
 }
 
+/**
+ * Non-terminal pause (WP3 §3.4 限流退避 / 分片预算): a chunk that stops with more
+ * pages left (budget hit, page cap, or a persistent THROTTLED) keeps the run
+ * `running` with its cursor, but expires the lock NOW so the driving client's
+ * immediate next /sync chunk can take over (acquireSyncLock's expired-lock
+ * branch) and resume from the cursor instead of hitting 409 sync_in_progress.
+ * Guarded by sync_run_id + running so a superseded run releases nothing → false.
+ */
+export async function releaseSyncLock(id: string, runId: string): Promise<boolean> {
+  const { data, error } = await db()
+    .from(TABLE)
+    .update({
+      sync_lock_expires_at: new Date(Date.now() - 1_000).toISOString(),
+      updated_at: nowIso(),
+    })
+    .eq("id", id)
+    .eq("sync_run_id", runId)
+    .eq("sync_status", "running")
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw dbError("release sync lock", error.code, error.message);
+  return Boolean(data);
+}
+
 export type SyncOutcome = "completed" | "limit_reached" | "error";
 
 /**
