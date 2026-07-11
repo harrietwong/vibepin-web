@@ -15,6 +15,8 @@
     "test:pin-draft-sync": "npx tsx scripts/test-pin-draft-sync.ts",
     "test:shopify-entitlements": "npx tsx scripts/test-shopify-entitlements.ts",
     "test:shopify-connection-store": "npx tsx scripts/test-shopify-connection-store.ts",
+    "test:shopify-hmac": "npx tsx scripts/test-shopify-hmac.ts",
+    "test:shopify-oauth-state": "npx tsx scripts/test-shopify-oauth-state.ts",
     "test:batch-edit": "npx tsx scripts/test-batch-edit-planning.ts",
     "test:optional-url": "npx tsx scripts/test-optional-website-url.ts",
     "test:pin-board": "npx tsx scripts/test-pin-board-store.ts",
