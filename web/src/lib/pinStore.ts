@@ -8,8 +8,12 @@
  * Emits "vp:pin_store_updated" on window after every write so listeners can re-read.
  */
 
+import type { StoreSyncAdapter } from "./userStoreSync";
+
 const STORE_KEY  = "vp:pin_store:v1";
-const MAX_SESSIONS = 200;
+export const PIN_STORE_EVENT = "vp:pin_store_updated";
+/** Local hot-cache cap (sessions). `let` so tests can shrink it; product default 200. */
+let MAX_SESSIONS = 200;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -28,6 +32,7 @@ export interface PinRecord {
   weeklyPlanItemId?: string;
   addedToPlanAt?:   string;
   createdAt:        string;
+  updatedAt?:       string;   // ISO — stamped on every write (account sync LWW key)
 }
 
 export interface PinSession {
@@ -51,6 +56,15 @@ interface StoreData {
 
 // ── Internal I/O ─────────────────────────────────────────────────────────────
 
+// Capacity-eviction shadows (account sync, WP-B). See pinMetadataStore for the
+// rationale: localStorage is a bounded hot cache, but the sync server is the FULL
+// set, so capacity-evicted sessions/pins are kept here (this session) and still
+// reported by the adapters' getAll() — a trim never looks like a user delete, so no
+// tombstone storm. Real deletes aren't a public op here, so nothing removes from the
+// shadows except re-materialization; reload starts them empty (safe via baseline).
+const _evictedSessions = new Map<string, PinSession>();
+const _evictedPins     = new Map<string, PinRecord>();
+
 function ok(): boolean { return typeof window !== "undefined"; }
 
 function load(): StoreData {
@@ -66,10 +80,19 @@ function load(): StoreData {
 function persist(data: StoreData): void {
   if (!ok()) return;
   // Trim to newest MAX_SESSIONS sessions before writing
-  const sorted = Object.values(data.sessions)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, MAX_SESSIONS);
+  const sortedAll = Object.values(data.sessions).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const sorted = sortedAll.slice(0, MAX_SESSIONS);
+  const keptSessionIds = new Set(sorted.map(s => s.id));
   const keepPinIds = new Set(sorted.flatMap(s => s.pinIds));
+
+  // Capacity-evicted sessions/pins → shadows (keep them in the sync set, no tombstone).
+  for (const s of sortedAll.slice(MAX_SESSIONS)) _evictedSessions.set(s.id, s);
+  for (const id of keptSessionIds) _evictedSessions.delete(id);
+  for (const [id, p] of Object.entries(data.pins)) {
+    if (!keepPinIds.has(p.id)) _evictedPins.set(id, p);
+  }
+  for (const id of keepPinIds) _evictedPins.delete(id);
+
   const trimmed: StoreData = {
     sessions: Object.fromEntries(sorted.map(s => [s.id, s])),
     pins:     Object.fromEntries(
@@ -91,7 +114,7 @@ function persist(data: StoreData): void {
 }
 
 function emit(): void {
-  if (ok()) window.dispatchEvent(new Event("vp:pin_store_updated"));
+  if (ok()) window.dispatchEvent(new Event(PIN_STORE_EVENT));
 }
 
 // ── Writes ────────────────────────────────────────────────────────────────────
@@ -128,6 +151,7 @@ export function createSession(
         refUrl:     g.refUrl,
         status:     "generated",
         createdAt:  now,
+        updatedAt:  now,
       };
       groupPinIds.push(pinId);
       allPinIds.push(pinId);
@@ -171,6 +195,7 @@ export function markPinsByImageUrls(imageUrls: string[], weeklyPlanItemId?: stri
     if (!pin) continue;
     pin.status        = "added_to_plan";
     pin.addedToPlanAt = now;
+    pin.updatedAt     = now;
     if (weeklyPlanItemId) pin.weeklyPlanItemId = weeklyPlanItemId;
     touchedSessions.add(pin.sessionId);
   }
@@ -245,4 +270,110 @@ export function sessionStatusColor(status: SessionStatus): string {
   if (status === "added_to_plan")           return "#059669";
   if (status === "partially_added_to_plan") return "#D97706";
   return "#94A3B8";
+}
+
+// ── Account-level sync (WP-B) ────────────────────────────────────────────────
+// Two adapters over the ONE localStorage doc: `pin_sessions` (doc_id = session id)
+// and `pin_records` (doc_id = pin id). They share PIN_STORE_EVENT. Both report the
+// hot cache PLUS their capacity-eviction shadow so MAX_SESSIONS trims never look
+// like deletes. Each mergeServer LWW-merges then persists+emits once.
+
+function pinStoreTsMs(v: string | null | undefined): number {
+  const ms = v ? Date.parse(v) : NaN;
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+/** Stable LWW key for a pin: updatedAt if present, else its createdAt. */
+function pinUpdatedAt(p: PinRecord): string {
+  return p.updatedAt || p.createdAt;
+}
+
+export const pinSessionsSyncAdapter: StoreSyncAdapter<PinSession> = {
+  storeKey: "pin_sessions",
+  eventName: PIN_STORE_EVENT,
+  getAll() {
+    const present = load().sessions;
+    const out: Array<{ id: string; updatedAt: string; doc: PinSession }> = [];
+    const seen = new Set<string>();
+    for (const s of Object.values(present)) {
+      out.push({ id: s.id, updatedAt: s.updatedAt, doc: s });
+      seen.add(s.id);
+    }
+    for (const s of _evictedSessions.values()) {
+      if (!seen.has(s.id)) out.push({ id: s.id, updatedAt: s.updatedAt, doc: s });
+    }
+    return out;
+  },
+  mergeServer(live, deleted) {
+    if (!ok()) return;
+    const data = load();
+    let changed = false;
+    for (const inc of live) {
+      if (!inc || typeof inc.id !== "string" || !inc.id) continue;
+      const local = data.sessions[inc.id] ?? _evictedSessions.get(inc.id) ?? null;
+      if (local && pinStoreTsMs(inc.updatedAt) <= pinStoreTsMs(local.updatedAt)) continue;
+      data.sessions[inc.id] = inc;
+      _evictedSessions.delete(inc.id);
+      changed = true;
+    }
+    for (const t of deleted) {
+      if (!t || typeof t.id !== "string") continue;
+      const local = data.sessions[t.id] ?? _evictedSessions.get(t.id) ?? null;
+      if (!local) continue;
+      if (pinStoreTsMs(local.updatedAt) >= pinStoreTsMs(t.deletedAt)) continue;
+      delete data.sessions[t.id];
+      _evictedSessions.delete(t.id);
+      changed = true;
+    }
+    if (changed) { persist(data); emit(); }
+  },
+};
+
+export const pinRecordsSyncAdapter: StoreSyncAdapter<PinRecord> = {
+  storeKey: "pin_records",
+  eventName: PIN_STORE_EVENT,
+  getAll() {
+    const present = load().pins;
+    const out: Array<{ id: string; updatedAt: string; doc: PinRecord }> = [];
+    const seen = new Set<string>();
+    for (const p of Object.values(present)) {
+      out.push({ id: p.id, updatedAt: pinUpdatedAt(p), doc: p });
+      seen.add(p.id);
+    }
+    for (const p of _evictedPins.values()) {
+      if (!seen.has(p.id)) out.push({ id: p.id, updatedAt: pinUpdatedAt(p), doc: p });
+    }
+    return out;
+  },
+  mergeServer(live, deleted) {
+    if (!ok()) return;
+    const data = load();
+    let changed = false;
+    for (const inc of live) {
+      if (!inc || typeof inc.id !== "string" || !inc.id) continue;
+      const local = data.pins[inc.id] ?? _evictedPins.get(inc.id) ?? null;
+      if (local && pinStoreTsMs(pinUpdatedAt(inc)) <= pinStoreTsMs(pinUpdatedAt(local))) continue;
+      data.pins[inc.id] = inc;
+      _evictedPins.delete(inc.id);
+      changed = true;
+    }
+    for (const t of deleted) {
+      if (!t || typeof t.id !== "string") continue;
+      const local = data.pins[t.id] ?? _evictedPins.get(t.id) ?? null;
+      if (!local) continue;
+      if (pinStoreTsMs(pinUpdatedAt(local)) >= pinStoreTsMs(t.deletedAt)) continue;
+      delete data.pins[t.id];
+      _evictedPins.delete(t.id);
+      changed = true;
+    }
+    if (changed) { persist(data); emit(); }
+  },
+};
+
+// ── Test-only hooks (not used by product code) ───────────────────────────────
+export function __setMaxSessionsForTests(n: number): void { MAX_SESSIONS = n; }
+export function __resetPinStoreForTests(): void {
+  _evictedSessions.clear();
+  _evictedPins.clear();
+  MAX_SESSIONS = 200;
 }

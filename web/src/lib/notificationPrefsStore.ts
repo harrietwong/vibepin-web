@@ -7,6 +7,8 @@
  * decide whether to show a given notification type.
  */
 
+import { makeSingletonAdapter } from "./userStoreSyncHelpers";
+
 export type NotificationKey =
   | "publishSuccess"
   | "publishFailed"
@@ -75,3 +77,17 @@ export function saveNotificationPrefs(prefs: NotificationPrefs): NotificationPre
   }
   return payload;
 }
+
+/**
+ * Account-level sync adapter (WP-B). Singleton doc under storeKey
+ * `notification_prefs`. Reuses the existing STORE_KEY + NOTIFICATION_PREFS_EVENT +
+ * updatedAt (already stamped by saveNotificationPrefs); in-app surfaces reading the
+ * prefs are unaffected, the engine only adds cross-device persistence.
+ */
+export const notificationPrefsSyncAdapter = makeSingletonAdapter<NotificationPrefs & Record<string, unknown>>({
+  storeKey: "notification_prefs",
+  eventName: NOTIFICATION_PREFS_EVENT,
+  localStorageKey: STORE_KEY,
+  docId: "prefs",
+  emit,
+});

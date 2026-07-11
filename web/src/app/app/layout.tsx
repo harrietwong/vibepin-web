@@ -27,6 +27,7 @@ import { AssistantPanel } from "@/components/assistant/AssistantPanel";
 import { useSessionUser } from "@/lib/useSessionUser";
 import { markNavClick, markRouteVisible } from "@/lib/navTiming";
 import { initPinDraftSync } from "@/lib/pinDraftSync";
+import { initAllUserStoreSync } from "@/lib/userStoreSyncRegistry";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -329,9 +330,13 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // initPinDraftSync is idempotent and SSR-safe; failures degrade to the
   // existing pure-localStorage behaviour (outbox retries in the background).
   useEffect(() => {
-    initPinDraftSync(async () =>
-      (await supabase.auth.getSession()).data.session?.access_token ?? null,
-    );
+    const getToken = async () =>
+      (await supabase.auth.getSession()).data.session?.access_token ?? null;
+    initPinDraftSync(getToken);
+    // WP-B: account-level sync for the settings/prefs + local caches (schedule,
+    // notifications, publishing, brand, affiliate, niches, bookmarks, pin metadata,
+    // pin sessions/records). Same token; same degrade-to-localStorage guarantees.
+    initAllUserStoreSync(getToken);
   }, []);
 
   // Dev-only nav timing: log once the new route has committed.

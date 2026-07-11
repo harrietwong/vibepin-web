@@ -98,6 +98,46 @@ export const localStorageRepo: CreatorProductLinkRepo = {
   },
 };
 
+/**
+ * Account-level sync adapter (WP-B). Collection under storeKey
+ * `creator_product_links` (doc_id = link id). LWW per id on `updatedAt`, tombstone
+ * per id. Reuses loadAll/persistAll so a merge does a single persist + single
+ * CREATOR_PRODUCT_LINK_EVENT emit; the localStorage shape is untouched.
+ */
+export const creatorProductLinksSyncAdapter: import("../userStoreSync").StoreSyncAdapter<CreatorProductLink> = {
+  storeKey: "creator_product_links",
+  eventName: CREATOR_PRODUCT_LINK_EVENT,
+  getAll() {
+    return Object.values(loadAll()).map((l) => ({ id: l.id, updatedAt: l.updatedAt, doc: l }));
+  },
+  mergeServer(live, deleted) {
+    if (typeof window === "undefined") return;
+    const map = loadAll();
+    let changed = false;
+    for (const inc of live) {
+      if (!inc || typeof inc.id !== "string" || !inc.id) continue;
+      const local = map[inc.id];
+      if (local && cplTsMs(inc.updatedAt) <= cplTsMs(local.updatedAt)) continue; // local wins / equal
+      map[inc.id] = inc;
+      changed = true;
+    }
+    for (const t of deleted) {
+      if (!t || typeof t.id !== "string") continue;
+      const local = map[t.id];
+      if (!local) continue;
+      if (cplTsMs(local.updatedAt) >= cplTsMs(t.deletedAt)) continue; // newer local edit survives
+      delete map[t.id];
+      changed = true;
+    }
+    if (changed) persistAll(map); // single persist + single emit
+  },
+};
+
+function cplTsMs(v: string | null | undefined): number {
+  const ms = v ? Date.parse(v) : NaN;
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 /** In-memory repo for unit tests (no window required). */
 export function createInMemoryRepo(seed: CreatorProductLink[] = []): CreatorProductLinkRepo {
   const map = new Map<string, CreatorProductLink>(seed.map(l => [l.id, l]));

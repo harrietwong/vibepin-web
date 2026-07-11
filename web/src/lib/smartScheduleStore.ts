@@ -7,6 +7,8 @@
  * is unchanged.
  */
 
+import { makeSingletonAdapter } from "./userStoreSyncHelpers";
+
 export type SmartScheduleBoard = {
   boardId:   string;
   boardName: string;
@@ -388,3 +390,17 @@ export function allConfiguredSlotTimes(config?: SmartScheduleConfig): string[] {
   }
   return [...set].sort();
 }
+
+/**
+ * Account-level sync adapter (WP-B). Singleton doc under storeKey `smart_schedule`.
+ * Reuses the existing STORE_KEY + SMART_SCHEDULE_EVENT + updatedAt (already stamped
+ * by saveSmartScheduleConfig), so every scheduling surface keeps its single
+ * canonical source; the engine only adds cross-device persistence.
+ */
+export const smartScheduleSyncAdapter = makeSingletonAdapter<SmartScheduleConfig & Record<string, unknown>>({
+  storeKey: "smart_schedule",
+  eventName: SMART_SCHEDULE_EVENT,
+  localStorageKey: STORE_KEY,
+  docId: "config",
+  emit,
+});

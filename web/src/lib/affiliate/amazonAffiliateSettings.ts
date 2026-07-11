@@ -6,6 +6,7 @@
  */
 
 import { normalizeMarketplace, type AmazonMarketplace } from "./amazon";
+import { makeSingletonAdapter } from "../userStoreSyncHelpers";
 
 export type AmazonAffiliateSettings = {
   marketplace: AmazonMarketplace;
@@ -16,15 +17,22 @@ export type AmazonAffiliateSettings = {
    * backward compatibility with previously-saved settings; new saves set it true.
    */
   enabled: boolean;
+  /** ISO — stamped on every save (account sync LWW key). */
+  updatedAt?: string;
 };
 
 const STORE_KEY = "vp:amazon_affiliate_settings:v1";
+export const AMAZON_AFFILIATE_SETTINGS_EVENT = "vp:amazon_affiliate_settings_updated";
 
 export function defaultAmazonAffiliateSettings(): AmazonAffiliateSettings {
   return { marketplace: "US", trackingId: "", enabled: true };
 }
 
 function ok(): boolean { return typeof window !== "undefined"; }
+
+function emit(): void {
+  if (ok()) window.dispatchEvent(new Event(AMAZON_AFFILIATE_SETTINGS_EVENT));
+}
 
 export function getAmazonAffiliateSettings(): AmazonAffiliateSettings {
   if (!ok()) return defaultAmazonAffiliateSettings();
@@ -36,6 +44,7 @@ export function getAmazonAffiliateSettings(): AmazonAffiliateSettings {
       marketplace: normalizeMarketplace(p.marketplace),
       trackingId: typeof p.trackingId === "string" ? p.trackingId.trim() : "",
       enabled: typeof p.enabled === "boolean" ? p.enabled : true,
+      updatedAt: typeof p.updatedAt === "string" ? p.updatedAt : undefined,
     };
   } catch {
     return defaultAmazonAffiliateSettings();
@@ -51,11 +60,29 @@ export function saveAmazonAffiliateSettings(settings: AmazonAffiliateSettings): 
     // MVP: presence of a tracking ID is the enable signal — keep the legacy flag
     // consistent so any old code paths reading `enabled` stay correct.
     enabled: trackingId.length > 0,
+    updatedAt: new Date().toISOString(),
   };
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(clean));
+    emit();
   } catch { /* quota exceeded — ignore */ }
 }
+
+/**
+ * Account-level sync adapter (WP-B). Singleton doc under storeKey
+ * `amazon_affiliate_settings`. This carries the creator's affiliate tracking ID —
+ * correctness-critical — so LWW is keyed strictly on `updatedAt`: a server value is
+ * only written locally when it is STRICTLY newer than the local one. Same
+ * localStorage key + event as the getter/setter (link generation reads it via
+ * getAmazonAffiliateSettings), so nothing downstream changes.
+ */
+export const amazonAffiliateSettingsSyncAdapter = makeSingletonAdapter<AmazonAffiliateSettings>({
+  storeKey: "amazon_affiliate_settings",
+  eventName: AMAZON_AFFILIATE_SETTINGS_EVENT,
+  localStorageKey: STORE_KEY,
+  docId: "settings",
+  emit,
+});
 
 /**
  * Settings are usable for link generation as soon as a tracking ID is present.
