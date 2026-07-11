@@ -20,11 +20,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const text = body && typeof body.body === "string" ? body.body.trim() : "";
   if (!text) return Response.json({ error: "Reply body is required" }, { status: 400 });
 
+  // Optional: present when the admin composed the reply in Chinese and it
+  // was translated to the customer's language before sending (see
+  // preview-translation). `body` above is always what's actually sent.
+  const originalZh = body && typeof body.originalZh === "string" ? body.originalZh.trim() : undefined;
+  const translatedLanguage = body && typeof body.translatedLanguage === "string" ? body.translatedLanguage : undefined;
+  const manuallyEdited = body && typeof body.manuallyEdited === "boolean" ? body.manuallyEdited : undefined;
+
   try {
     const ticket = await getTicketById(id);
     if (!ticket) return Response.json({ error: "Not found" }, { status: 404 });
 
-    const message = await addMessage({ ticketId: id, senderType: "admin", senderId: session.user.id, body: text, isInternal: false });
+    const translationFields = originalZh
+      ? {
+          originalText: originalZh,
+          originalLanguage: "zh",
+          translatedText: text,
+          translatedLanguage: translatedLanguage ?? null,
+          translationStatus: "success" as const,
+          translationManuallyEdited: manuallyEdited ?? false,
+        }
+      : {};
+    const message = await addMessage({ ticketId: id, senderType: "admin", senderId: session.user.id, body: text, isInternal: false, ...translationFields });
     await addEvent({ ticketId: id, eventType: "admin_replied", metadata: { messageId: message.id, actor: session.user.id } });
 
     if (ticket.status !== "Resolved" && ticket.status !== "Closed") {

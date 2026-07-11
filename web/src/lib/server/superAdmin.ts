@@ -42,7 +42,7 @@ function localAdminBypassEnabled(): boolean {
 }
 
 const LOCAL_DEV_ADMIN: AuthUser = {
-  id: "local-dev-admin",
+  id: "00000000-0000-0000-0000-000000000000",
   email: "local-dev-admin@localhost",
   app_metadata: { role: "super_admin" },
   user_metadata: {},
@@ -101,7 +101,7 @@ export async function requireSuperAdminFromRequest(request: Request): Promise<Au
     process.env.E2E_TEST_MODE === "true" &&
     request.headers.get("x-e2e-super-admin") === "true"
   ) {
-    return { id: "e2e-super-admin", app_metadata: { role: "super_admin" }, user_metadata: {} };
+    return { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} };
   }
   // Local-dev bypass (double-gated; never active in production). See helper above.
   if (localAdminBypassEnabled()) return LOCAL_DEV_ADMIN;
@@ -115,7 +115,7 @@ export async function getCurrentSuperAdmin(): Promise<AuthUser | null> {
     process.env.E2E_TEST_MODE === "true" &&
     headerStore.get("x-e2e-super-admin") === "true"
   ) {
-    return { id: "e2e-super-admin", app_metadata: { role: "super_admin" }, user_metadata: {} };
+    return { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} };
   }
   // Local-dev bypass (double-gated; never active in production). See helper above.
   if (localAdminBypassEnabled()) return LOCAL_DEV_ADMIN;
@@ -163,10 +163,10 @@ export async function getCurrentAdminRole(): Promise<AdminSession | null> {
   const headerStore = await headers();
   if (process.env.E2E_TEST_MODE === "true") {
     if (headerStore.get("x-e2e-super-admin") === "true") {
-      return { role: "super_admin", user: { id: "e2e-super-admin", app_metadata: { role: "super_admin" }, user_metadata: {} } };
+      return { role: "super_admin", user: { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} } };
     }
     if (headerStore.get("x-e2e-support-admin") === "true") {
-      return { role: "support", user: { id: "e2e-support-admin", app_metadata: { role: "support" }, user_metadata: {} } };
+      return { role: "support", user: { id: "00000000-0000-0000-0000-000000000002", app_metadata: { role: "support" }, user_metadata: {} } };
     }
   }
   if (localAdminBypassEnabled()) return { role: "super_admin", user: LOCAL_DEV_ADMIN };
@@ -178,10 +178,10 @@ export async function getCurrentAdminRole(): Promise<AdminSession | null> {
 export async function requireAdminRoleFromRequest(request: Request): Promise<AdminSession | null> {
   if (process.env.E2E_TEST_MODE === "true") {
     if (request.headers.get("x-e2e-super-admin") === "true") {
-      return { role: "super_admin", user: { id: "e2e-super-admin", app_metadata: { role: "super_admin" }, user_metadata: {} } };
+      return { role: "super_admin", user: { id: "00000000-0000-0000-0000-000000000001", app_metadata: { role: "super_admin" }, user_metadata: {} } };
     }
     if (request.headers.get("x-e2e-support-admin") === "true") {
-      return { role: "support", user: { id: "e2e-support-admin", app_metadata: { role: "support" }, user_metadata: {} } };
+      return { role: "support", user: { id: "00000000-0000-0000-0000-000000000002", app_metadata: { role: "support" }, user_metadata: {} } };
     }
   }
   if (localAdminBypassEnabled()) return { role: "super_admin", user: LOCAL_DEV_ADMIN };

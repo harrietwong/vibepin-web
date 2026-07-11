@@ -65,7 +65,7 @@ alter table support_tickets enable row level security;
 create table if not exists support_messages (
     id           uuid        primary key default gen_random_uuid(),
     ticket_id    uuid        not null references support_tickets(id) on delete cascade,
-    sender_type  text        not null check (sender_type in ('user', 'admin', 'system')),
+    sender_type  text        not null check (sender_type in ('user', 'admin', 'ai', 'system')),
     sender_id    uuid,
     body         text        not null,
     is_internal  boolean     not null default false,
@@ -96,7 +96,7 @@ alter table support_attachments enable row level security;
 
 -- ── support_events ───────────────────────────────────────────────────────
 -- Append-only audit trail: ticket_created, status_changed, priority_changed,
--- admin_replied, user_replied, internal_note_added, ticket_resolved, ticket_closed.
+-- admin_replied, user_replied, ai_replied, internal_note_added, ticket_resolved, ticket_closed.
 create table if not exists support_events (
     id          uuid        primary key default gen_random_uuid(),
     ticket_id   uuid        not null references support_tickets(id) on delete cascade,

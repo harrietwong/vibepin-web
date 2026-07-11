@@ -4,6 +4,7 @@
  */
 
 import { getUserFromBearer } from "@/lib/server/superAdmin";
+import { generateAiFirstResponse } from "@/lib/support/aiResponder";
 import { buildSupportContext } from "@/lib/support/context";
 import { addAttachments, addEvent, addMessage, createTicket, listTicketsForUser, nextTicketNumber } from "@/lib/support/db";
 import { adminNewTicketEmail, sendEmail, userTicketConfirmationEmail } from "@/lib/support/email";
@@ -77,6 +78,26 @@ export async function POST(req: Request) {
 
     await addEvent({ ticketId: ticket.id, eventType: "ticket_created", metadata: { category, priority, source } });
 
+    // AI First Responder — best-effort, article-grounded first reply. Never
+    // allowed to fail ticket creation: any error here is swallowed and
+    // logged, and the ticket still returns 201 with aiReplied: false.
+    let aiReplied = false;
+    try {
+      const aiResult = await generateAiFirstResponse({
+        category,
+        subject: ticket.subject,
+        description: ticket.description,
+        context: ticket.context,
+      });
+      if (aiResult?.canAnswer && aiResult.reply.trim()) {
+        const aiMessage = await addMessage({ ticketId: ticket.id, senderType: "ai", body: aiResult.reply.trim(), isInternal: false });
+        await addEvent({ ticketId: ticket.id, eventType: "ai_replied", metadata: { messageId: aiMessage.id } });
+        aiReplied = true;
+      }
+    } catch (err) {
+      console.error("[support/tickets POST] AI first response failed", err);
+    }
+
     const userEmail = ticket.email;
     if (userEmail) {
       const confirmation = userTicketConfirmationEmail({
@@ -101,7 +122,7 @@ export async function POST(req: Request) {
       void sendEmail({ to: adminNotifyEmail, ...notify });
     }
 
-    return Response.json({ id: ticket.id, ticketNumber: ticket.ticketNumber, status: ticket.status, contextSummary: summary }, { status: 201 });
+    return Response.json({ id: ticket.id, ticketNumber: ticket.ticketNumber, status: ticket.status, contextSummary: summary, aiReplied }, { status: 201 });
   } catch (err) {
     console.error("[support/tickets POST]", err);
     return Response.json({ error: "Failed to create ticket" }, { status: 500 });
@@ -113,7 +134,13 @@ export async function GET(req: Request) {
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const tickets = await listTicketsForUser(user.id);
+    const rawTickets = await listTicketsForUser(user.id);
+    // Admin-only fields (customerLanguage/aiSummary/aiSummaryAt, Phase B)
+    // must never reach the user — strip explicitly rather than relying on
+    // JSON.stringify dropping them.
+    const tickets = rawTickets.map(({ id, ticketNumber, userId, workspaceId, email, category, priority, status, subject, description, source, createdAt, updatedAt, resolvedAt, closedAt }) => ({
+      id, ticketNumber, userId, workspaceId, email, category, priority, status, subject, description, source, createdAt, updatedAt, resolvedAt, closedAt,
+    }));
     return Response.json({ tickets });
   } catch (err) {
     console.error("[support/tickets GET]", err);

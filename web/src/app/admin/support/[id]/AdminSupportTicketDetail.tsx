@@ -4,10 +4,17 @@
  * AdminSupportTicketDetail — /admin/support/:id. Context panel, conversation
  * (internal notes visually marked, never sent to the user API), reply box,
  * status/priority selectors, resolve/close shortcuts.
+ *
+ * Phase B: VibePin's support operators work in Chinese while customers
+ * write in any language. This adds a Chinese AI summary of the ticket,
+ * automatic user-message -> Chinese translation, and a reply composer
+ * where the admin writes Chinese and gets an editable translated preview
+ * before sending. Translation failures never block reading or replying —
+ * "直接发送原文" always sends the Chinese draft untranslated.
  */
 
 import { useEffect, useState } from "react";
-import { Loader2, Send, Lock } from "lucide-react";
+import { Loader2, Send, Lock, Sparkles, Languages, RefreshCw } from "lucide-react";
 import {
   SUPPORT_CATEGORY_LABELS, SUPPORT_PRIORITIES, SUPPORT_STATUSES,
   type SupportMessage, type SupportPriority, type SupportStatus, type SupportTicket,
@@ -22,6 +29,11 @@ const selectStyle: React.CSSProperties = {
   padding: "7px 10px", borderRadius: 8, border: "1px solid #1E293B", background: "#0F172A", color: "#E2E8F0", fontSize: 12.5, fontWeight: 700,
 };
 
+const aiButtonStyle: React.CSSProperties = {
+  padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(45,212,191,0.35)", background: "rgba(45,212,191,0.1)",
+  color: "#2DD4BF", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+};
+
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: "include", headers: { "Content-Type": "application/json" }, ...init });
   const data = await res.json().catch(() => ({}));
@@ -33,17 +45,80 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [reply, setReply] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Reply composer state (Chinese draft -> translated preview -> send).
+  const [replyZh, setReplyZh] = useState("");
+  const [previewText, setPreviewText] = useState<string | null>(null);
+  const [previewOriginal, setPreviewOriginal] = useState<string | null>(null);
+  const [previewTargetLanguage, setPreviewTargetLanguage] = useState<string | null>(null);
+  const [previewSkipped, setPreviewSkipped] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const [sendBusy, setSendBusy] = useState(false);
+
+  // AI summary state.
+  const [summaryBusy, setSummaryBusy] = useState(false);
+
+  // Per-message retry-translation state.
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+
+  function mergeMessages(updated: SupportMessage[]) {
+    setMessages((prev) => {
+      const byId = new Map(prev.map((m) => [m.id, m]));
+      for (const m of updated) byId.set(m.id, m);
+      return prev.map((m) => byId.get(m.id) ?? m);
+    });
+  }
+
+  // Silent, non-blocking: translate any user messages that don't already
+  // have a successful translation. Failures are swallowed — the message
+  // bubble itself shows a "翻译失败" state with a manual retry.
+  async function autoTranslate(currentMessages: SupportMessage[]) {
+    const needsTranslation = currentMessages.some((m) => m.senderType === "user" && !m.isInternal && m.translationStatus !== "success");
+    if (!needsTranslation) return;
+    try {
+      const d = await jsonFetch<{ messages: SupportMessage[]; customerLanguage: string | null }>(
+        `/api/admin/support/tickets/${ticketId}/translate`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      mergeMessages(d.messages);
+      if (d.customerLanguage) setTicket((prev) => (prev ? { ...prev, customerLanguage: d.customerLanguage } : prev));
+    } catch {
+      // Silent — translation is best-effort and must never block the UI.
+    }
+  }
+
   function load() {
     jsonFetch<{ ticket: SupportTicket; messages: SupportMessage[] }>(`/api/admin/support/tickets/${ticketId}`)
-      .then((d) => { setTicket(d.ticket); setMessages(d.messages); })
+      .then((d) => {
+        setTicket(d.ticket);
+        setMessages(d.messages);
+        void autoTranslate(d.messages);
+      })
       .catch((e) => setError(e.message));
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` intentionally re-runs only on ticketId; autoTranslate is a stable-enough helper closed over ticketId, not reactive state.
   useEffect(load, [ticketId]);
+
+  async function retryTranslate(messageId: string) {
+    setRetryingIds((prev) => new Set(prev).add(messageId));
+    try {
+      const d = await jsonFetch<{ messages: SupportMessage[]; customerLanguage: string | null }>(
+        `/api/admin/support/tickets/${ticketId}/translate`,
+        { method: "POST", body: JSON.stringify({ messageIds: [messageId] }) },
+      );
+      mergeMessages(d.messages);
+      if (d.customerLanguage) setTicket((prev) => (prev ? { ...prev, customerLanguage: d.customerLanguage } : prev));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRetryingIds((prev) => { const next = new Set(prev); next.delete(messageId); return next; });
+    }
+  }
 
   async function patch(body: Partial<{ status: SupportStatus; priority: SupportPriority }>) {
     if (!ticket) return;
@@ -54,15 +129,82 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
 
-  async function sendReply() {
-    if (!reply.trim()) return;
-    setBusy(true);
+  async function generateSummary() {
+    setSummaryBusy(true);
     try {
-      const d = await jsonFetch<{ message: SupportMessage }>(`/api/admin/support/tickets/${ticketId}/reply`, { method: "POST", body: JSON.stringify({ body: reply.trim() }) });
+      const d = await jsonFetch<{ summary: string; aiSummaryAt: string }>(`/api/admin/support/tickets/${ticketId}/summary`, { method: "POST" });
+      setTicket((prev) => (prev ? { ...prev, aiSummary: d.summary, aiSummaryAt: d.aiSummaryAt } : prev));
+    } catch (e) { setError((e as Error).message); } finally { setSummaryBusy(false); }
+  }
+
+  async function suggestReply() {
+    setSuggestBusy(true);
+    try {
+      const d = await jsonFetch<{ suggestion: string }>(`/api/admin/support/tickets/${ticketId}/suggest-reply`, { method: "POST" });
+      setReplyZh(d.suggestion);
+    } catch (e) { setError((e as Error).message); } finally { setSuggestBusy(false); }
+  }
+
+  async function previewTranslation() {
+    if (!replyZh.trim()) return;
+    setPreviewBusy(true);
+    setPreviewError(null);
+    try {
+      const d = await jsonFetch<{ translatedText: string; targetLanguage: string; skipped?: boolean }>(
+        `/api/admin/support/tickets/${ticketId}/preview-translation`,
+        { method: "POST", body: JSON.stringify({ zhText: replyZh.trim() }) },
+      );
+      setPreviewText(d.translatedText);
+      setPreviewOriginal(d.translatedText);
+      setPreviewTargetLanguage(d.targetLanguage);
+      setPreviewSkipped(!!d.skipped);
+    } catch (e) {
+      setPreviewError((e as Error).message || "Translation failed");
+    } finally {
+      setPreviewBusy(false);
+    }
+  }
+
+  function resetComposer() {
+    setReplyZh("");
+    setPreviewText(null);
+    setPreviewOriginal(null);
+    setPreviewTargetLanguage(null);
+    setPreviewSkipped(false);
+    setPreviewError(null);
+  }
+
+  async function sendReply() {
+    if (!previewText || !replyZh.trim()) return;
+    setSendBusy(true);
+    try {
+      const d = await jsonFetch<{ message: SupportMessage }>(`/api/admin/support/tickets/${ticketId}/reply`, {
+        method: "POST",
+        body: JSON.stringify({
+          body: previewText,
+          originalZh: replyZh.trim(),
+          translatedLanguage: previewTargetLanguage ?? undefined,
+          manuallyEdited: previewOriginal !== null && previewText !== previewOriginal,
+        }),
+      });
       setMessages((prev) => [...prev, d.message]);
-      setReply("");
+      resetComposer();
       load();
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    } catch (e) { setError((e as Error).message); } finally { setSendBusy(false); }
+  }
+
+  async function sendRaw() {
+    if (!replyZh.trim()) return;
+    setSendBusy(true);
+    try {
+      const d = await jsonFetch<{ message: SupportMessage }>(`/api/admin/support/tickets/${ticketId}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ body: replyZh.trim() }),
+      });
+      setMessages((prev) => [...prev, d.message]);
+      resetComposer();
+      load();
+    } catch (e) { setError((e as Error).message); } finally { setSendBusy(false); }
   }
 
   async function addNote() {
@@ -79,6 +221,7 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
   if (!ticket) return <div style={{ padding: 24, display: "flex", alignItems: "center", gap: 8, color: "#64748B", fontSize: 13 }}><Loader2 size={15} className="animate-spin" /> Loading ticket…</div>;
 
   const contextEntries = Object.entries(ticket.context ?? {});
+  const canSend = !!(previewText && replyZh.trim());
 
   return (
     <div style={{ flex: 1, display: "flex", overflow: "hidden", color: "#E2E8F0" }}>
@@ -86,37 +229,119 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
         <div>
           <p style={{ margin: 0, fontSize: 12, color: "#64748B", fontWeight: 700 }}>{ticket.ticketNumber}</p>
           <h1 style={{ margin: "2px 0 0", fontSize: 19, fontWeight: 800 }}>{ticket.subject || SUPPORT_CATEGORY_LABELS[ticket.category]}</h1>
-          <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "#94A3B8" }}>
-            {ticket.email} · {SUPPORT_CATEGORY_LABELS[ticket.category]} · {ticket.source || "—"}
+          <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "#94A3B8", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <span>{ticket.email} · {SUPPORT_CATEGORY_LABELS[ticket.category]} · {ticket.source || "—"}</span>
+            {ticket.customerLanguage && (
+              <span data-testid="admin-support-customer-language" style={{
+                padding: "1px 7px", borderRadius: 999, background: "rgba(99,102,241,0.14)", border: "1px solid rgba(99,102,241,0.35)",
+                color: "#A5B4FC", fontSize: 10.5, fontWeight: 700, textTransform: "uppercase",
+              }}>
+                {ticket.customerLanguage}
+              </span>
+            )}
           </p>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {messages.map((m) => (
-            <div key={m.id} data-testid={m.isInternal ? "admin-internal-note" : "admin-message"} style={{
-              padding: "10px 13px", borderRadius: 10,
-              background: m.isInternal ? "rgba(251,191,36,0.08)" : m.senderType === "admin" ? "rgba(99,102,241,0.12)" : "#111827",
-              border: m.isInternal ? "1px dashed rgba(251,191,36,0.4)" : "1px solid #1E293B",
-            }}>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.body}</p>
-              <p style={{ margin: "4px 0 0", fontSize: 10, color: "#64748B", display: "flex", alignItems: "center", gap: 4 }}>
-                {m.isInternal && <Lock size={10} />}
-                {m.senderType === "admin" ? "Admin" : m.senderType === "user" ? "User" : "System"}{m.isInternal ? " · internal note" : ""}
-              </p>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <label style={{ fontSize: 11.5, fontWeight: 700, color: "#64748B" }}>Reply to user</label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input data-testid="admin-support-reply-input" value={reply} onChange={(e) => setReply(e.target.value)}
-              style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: "1px solid #1E293B", background: "#0F172A", color: "#E2E8F0", fontSize: 13 }} />
-            <button type="button" data-testid="admin-support-reply-submit" onClick={() => void sendReply()} disabled={busy || !reply.trim()}
-              style={{ padding: "0 14px", borderRadius: 8, border: "none", background: "#4338CA", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center" }}>
-              <Send size={14} />
+        {/* AI summary card */}
+        <div data-testid="admin-support-summary-card" style={{ padding: "12px 14px", borderRadius: 10, background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#A5B4FC", textTransform: "uppercase" }}>AI 摘要</p>
+            <button type="button" data-testid="admin-support-summary-btn" onClick={() => void generateSummary()} disabled={summaryBusy}
+              style={{ ...aiButtonStyle, borderColor: "rgba(99,102,241,0.35)", background: "rgba(99,102,241,0.12)", color: "#A5B4FC", padding: "4px 10px" }}>
+              {summaryBusy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+              {ticket.aiSummary ? "刷新摘要" : "生成摘要"}
             </button>
           </div>
+          {ticket.aiSummary ? (
+            <>
+              <p style={{ margin: "8px 0 0", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "#E2E8F0" }}>{ticket.aiSummary}</p>
+              {ticket.aiSummaryAt && <p style={{ margin: "6px 0 0", fontSize: 10, color: "#64748B" }}>更新于 {new Date(ticket.aiSummaryAt).toLocaleString()}</p>}
+            </>
+          ) : (
+            <p style={{ margin: "8px 0 0", fontSize: 12, color: "#64748B" }}>尚未生成摘要。</p>
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {messages.map((m) => {
+            const isRetrying = retryingIds.has(m.id);
+            return (
+              <div key={m.id} data-testid={m.isInternal ? "admin-internal-note" : "admin-message"} style={{
+                padding: "10px 13px", borderRadius: 10,
+                background: m.isInternal ? "rgba(251,191,36,0.08)" : m.senderType === "admin" ? "rgba(99,102,241,0.12)" : m.senderType === "ai" ? "rgba(45,212,191,0.12)" : "#111827",
+                border: m.isInternal ? "1px dashed rgba(251,191,36,0.4)" : m.senderType === "ai" ? "1px solid rgba(45,212,191,0.35)" : "1px solid #1E293B",
+              }}>
+                <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.body}</p>
+
+                {m.senderType === "user" && !m.isInternal && m.translatedText && (
+                  <div data-testid="admin-support-message-translation" style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #1E293B" }}>
+                    <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: "#64748B" }}>中文翻译</p>
+                    <p style={{ margin: "3px 0 0", fontSize: 12.5, lineHeight: 1.5, whiteSpace: "pre-wrap", color: "#CBD5E1" }}>{m.translatedText}</p>
+                  </div>
+                )}
+                {m.senderType === "user" && !m.isInternal && m.translationStatus === "failed" && (
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed rgba(248,113,113,0.3)", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: "#F87171" }}>翻译失败</span>
+                    <button type="button" data-testid={`admin-support-retry-translate-${m.id}`} onClick={() => void retryTranslate(m.id)} disabled={isRetrying}
+                      style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: "#94A3B8", fontSize: 11, cursor: "pointer" }}>
+                      {isRetrying ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                      重试
+                    </button>
+                  </div>
+                )}
+                {m.senderType === "admin" && m.originalText && (
+                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "#64748B", whiteSpace: "pre-wrap" }}>原文(中文): {m.originalText}</p>
+                )}
+
+                <p style={{ margin: "4px 0 0", fontSize: 10, color: "#64748B", display: "flex", alignItems: "center", gap: 4 }}>
+                  {m.isInternal && <Lock size={10} />}
+                  {m.senderType === "admin" ? "Admin" : m.senderType === "user" ? "User" : m.senderType === "ai" ? "AI" : "System"}{m.isInternal ? " · internal note" : ""}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Reply composer: Chinese draft -> editable translated preview -> send. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <label style={{ fontSize: 11.5, fontWeight: 700, color: "#64748B" }}>Reply to user</label>
+          <textarea data-testid="admin-support-reply-zh" value={replyZh} onChange={(e) => { setReplyZh(e.target.value); setPreviewText(null); setPreviewOriginal(null); setPreviewError(null); }}
+            placeholder="用中文输入回复…" rows={3}
+            style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #1E293B", background: "#0F172A", color: "#E2E8F0", fontSize: 13, fontFamily: "inherit", resize: "vertical" }} />
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" data-testid="admin-support-suggest-btn" onClick={() => void suggestReply()} disabled={suggestBusy}
+              style={aiButtonStyle}>
+              {suggestBusy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+              建议回复
+            </button>
+            <button type="button" data-testid="admin-support-preview-btn" onClick={() => void previewTranslation()} disabled={previewBusy || !replyZh.trim()}
+              style={aiButtonStyle}>
+              {previewBusy ? <Loader2 size={12} className="animate-spin" /> : <Languages size={12} />}
+              翻译预览
+            </button>
+            <button type="button" data-testid="admin-support-send-btn" onClick={() => void sendReply()} disabled={sendBusy || !canSend}
+              style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "#4338CA", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+              <Send size={12} />
+              发送
+            </button>
+            <button type="button" data-testid="admin-support-send-raw-btn" onClick={() => void sendRaw()} disabled={sendBusy || !replyZh.trim()}
+              style={{ padding: "7px 10px", borderRadius: 8, border: "none", background: "transparent", color: "#64748B", fontSize: 11.5, fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}>
+              直接发送原文
+            </button>
+          </div>
+
+          {previewError && <p style={{ margin: 0, fontSize: 11.5, color: "#F87171" }}>{previewError} — 可编辑上方中文后点击“直接发送原文”。</p>}
+
+          {previewText !== null && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B" }}>
+                {previewSkipped ? "预览（客户语言为中文，无需翻译）" : `预览（${previewTargetLanguage ?? "目标语言"}）— 可编辑`}
+              </label>
+              <textarea data-testid="admin-support-reply-preview" value={previewText} onChange={(e) => setPreviewText(e.target.value)} rows={3}
+                style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid rgba(52,211,153,0.35)", background: "#0F172A", color: "#E2E8F0", fontSize: 13, fontFamily: "inherit", resize: "vertical" }} />
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

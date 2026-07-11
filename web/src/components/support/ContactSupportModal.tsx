@@ -147,6 +147,11 @@ export function ContactSupportModal({
             <p style={{ margin: 0, fontSize: 12.5, color: UI.textSec, maxWidth: 340, lineHeight: 1.5 }}>
               We&apos;ll reply by email.
             </p>
+            {result.aiReplied && (
+              <p style={{ margin: 0, fontSize: 12.5, color: UI.textSec, maxWidth: 340, lineHeight: 1.5 }}>
+                We&apos;ve posted a first answer to your ticket.
+              </p>
+            )}
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               <Link href={`/app/support/tickets/${result.id}`} data-testid="contact-support-view-ticket"
                 style={{ padding: "9px 16px", borderRadius: 9, border: `1px solid ${UI.border}`, color: UI.text, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>

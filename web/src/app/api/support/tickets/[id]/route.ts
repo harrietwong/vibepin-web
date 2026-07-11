@@ -18,7 +18,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const ticket = await getTicketById(id);
     if (!ticket || ticket.userId !== user.id) return Response.json({ error: "Not found" }, { status: 404 });
 
-    const messages = await listMessagesForUser(id);
+    const rawMessages = await listMessagesForUser(id);
+    // Admin-only fields (originalText/translatedText/etc, Phase B) must
+    // never reach the user-facing API even though listMessagesForUser's
+    // SupportMessage type carries them — strip explicitly, don't rely on
+    // JSON.stringify happening to drop undefined.
+    const messages = rawMessages.map(({ id: messageId, ticketId, senderType, senderId, body, isInternal, createdAt: messageCreatedAt }) => ({
+      id: messageId,
+      ticketId,
+      senderType,
+      senderId,
+      body,
+      isInternal,
+      createdAt: messageCreatedAt,
+    }));
     const { id: ticketId, ticketNumber, userId, workspaceId, email, category, priority, status, subject, description, source, createdAt, updatedAt, resolvedAt, closedAt } = ticket;
     const safeTicket = { id: ticketId, ticketNumber, userId, workspaceId, email, category, priority, status, subject, description, source, createdAt, updatedAt, resolvedAt, closedAt };
     return Response.json({ ticket: safeTicket, messages });

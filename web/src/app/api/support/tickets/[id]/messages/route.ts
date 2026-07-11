@@ -30,7 +30,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       await updateTicket(id, { status: "Open" });
     }
 
-    return Response.json({ message }, { status: 201 });
+    // Admin-only fields (Phase B) must never reach the user, even as nulls.
+    const { id: messageId, ticketId, senderType, senderId, body: messageBody, isInternal, createdAt } = message;
+    const safeMessage = { id: messageId, ticketId, senderType, senderId, body: messageBody, isInternal, createdAt };
+    return Response.json({ message: safeMessage }, { status: 201 });
   } catch (err) {
     console.error("[support/tickets/:id/messages POST]", err);
     return Response.json({ error: "Failed to add message" }, { status: 500 });

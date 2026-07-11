@@ -50,7 +50,7 @@ export const SUPPORT_SOURCES = [
 ] as const;
 export type SupportSource = (typeof SUPPORT_SOURCES)[number];
 
-export type SenderType = "user" | "admin" | "system";
+export type SenderType = "user" | "admin" | "ai" | "system";
 
 export type SupportTicket = {
   id: string;
@@ -69,6 +69,15 @@ export type SupportTicket = {
   updatedAt: string;
   resolvedAt: string | null;
   closedAt: string | null;
+  // Admin-only (Phase B, migrate_v42). Never exposed on user-facing routes.
+  // Best-effort detected language of the customer (ISO 639-1-ish, e.g. "es",
+  // "zh"); null until a message or translation preview has detected it.
+  customerLanguage?: string | null;
+  // Concise Chinese AI summary of the ticket for the (Chinese-speaking)
+  // support agent, plus when it was last generated. Never emailed, never
+  // shown to the user.
+  aiSummary?: string | null;
+  aiSummaryAt?: string | null;
 };
 
 export type SupportMessage = {
@@ -76,9 +85,35 @@ export type SupportMessage = {
   ticketId: string;
   senderType: SenderType;
   senderId: string | null;
+  // User-facing canonical text: for user messages, what the user typed;
+  // for admin messages, what was actually sent to the user (already in
+  // their language). User-facing APIs return only this field plus the
+  // pre-existing ones below — never the translation fields.
   body: string;
   isInternal: boolean;
   createdAt: string;
+  // Admin-only (Phase B, migrate_v42). Never exposed on user-facing routes.
+  //
+  // What the SENDER typed, in the sender's own language. For an admin
+  // reply composed in Chinese, originalText = the Chinese draft and
+  // originalLanguage = "zh". For a user message, originalText is usually
+  // null (body IS the original) and originalLanguage is the detected
+  // language of body.
+  originalText?: string | null;
+  originalLanguage?: string | null;
+  // The cross-language counterpart to `body`. For a user message: the
+  // Chinese translation shown to admins (translatedLanguage = "zh"). For
+  // an admin reply: equals body/customer language (may be set for
+  // symmetry even though body already holds it).
+  translatedText?: string | null;
+  translatedLanguage?: string | null;
+  // null = never attempted / not needed; "success"; "failed". A failed or
+  // null status must never block reading or replying — see the "send
+  // original as-is" fallback in the admin UI.
+  translationStatus?: "success" | "failed" | null;
+  // True when an admin hand-edited the machine-translated preview before
+  // sending it.
+  translationManuallyEdited?: boolean;
 };
 
 export type SupportAttachment = {
@@ -97,6 +132,7 @@ export type SupportEventType =
   | "priority_changed"
   | "admin_replied"
   | "user_replied"
+  | "ai_replied"
   | "internal_note_added"
   | "ticket_resolved"
   | "ticket_closed";
@@ -127,4 +163,9 @@ export type CreateTicketResult = {
   id: string;
   ticketNumber: string;
   status: SupportStatus;
+  // True when the AI First Responder posted a confident, article-grounded
+  // reply immediately after ticket creation. Absent/false is the common case
+  // (no LINAPI_KEY configured, or the AI wasn't confident) — a human still
+  // always follows up either way.
+  aiReplied?: boolean;
 };

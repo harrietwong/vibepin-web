@@ -33,6 +33,19 @@ export function SupportTicketDetail({ ticketId }: { ticketId: string }) {
       .catch((e) => setError((e as Error).message));
   }, [ticketId]);
 
+  // Lightweight polling so an admin (or AI) reply shows up without a manual
+  // refresh. Silent on failure — a missed poll shouldn't surface an error
+  // banner over an otherwise-working page — and never touches the reply
+  // input, so an in-progress draft reply is never lost mid-poll.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchMySupportTicket(ticketId)
+        .then((data) => { setTicket(data.ticket); setMessages(data.messages); })
+        .catch(() => {});
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [ticketId]);
+
   async function handleReply() {
     if (!reply.trim()) return;
     setSending(true);
@@ -61,17 +74,22 @@ export function SupportTicketDetail({ ticketId }: { ticketId: string }) {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {messages.map((m) => (
-          <div key={m.id} style={{
-            alignSelf: m.senderType === "admin" ? "flex-start" : "flex-end",
-            maxWidth: "80%", padding: "10px 13px", borderRadius: 12,
-            background: m.senderType === "admin" ? UI.surface2 : UI.gradient,
-            color: m.senderType === "admin" ? UI.text : "#fff",
-          }}>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.body}</p>
-            <p style={{ margin: "4px 0 0", fontSize: 10, opacity: 0.7 }}>{m.senderType === "admin" ? "Support" : "You"}</p>
-          </div>
-        ))}
+        {messages.map((m) => {
+          const isAgent = m.senderType === "admin" || m.senderType === "ai";
+          return (
+            <div key={m.id} style={{
+              alignSelf: isAgent ? "flex-start" : "flex-end",
+              maxWidth: "80%", padding: "10px 13px", borderRadius: 12,
+              background: isAgent ? UI.surface2 : UI.gradient,
+              color: isAgent ? UI.text : "#fff",
+            }}>
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.body}</p>
+              <p style={{ margin: "4px 0 0", fontSize: 10, opacity: 0.7 }}>
+                {m.senderType === "admin" ? "Support" : m.senderType === "ai" ? "VibePin AI · automated reply" : "You"}
+              </p>
+            </div>
+          );
+        })}
       </div>
 
       {ticket.status !== "Closed" && (

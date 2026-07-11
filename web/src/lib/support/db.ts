@@ -38,6 +38,9 @@ type TicketRow = {
   updated_at: string;
   resolved_at: string | null;
   closed_at: string | null;
+  customer_language?: string | null;
+  ai_summary?: string | null;
+  ai_summary_at?: string | null;
 };
 
 function mapTicket(row: TicketRow): SupportTicket {
@@ -58,6 +61,9 @@ function mapTicket(row: TicketRow): SupportTicket {
     updatedAt: row.updated_at,
     resolvedAt: row.resolved_at,
     closedAt: row.closed_at,
+    customerLanguage: row.customer_language ?? null,
+    aiSummary: row.ai_summary ?? null,
+    aiSummaryAt: row.ai_summary_at ?? null,
   };
 }
 
@@ -69,6 +75,12 @@ type MessageRow = {
   body: string;
   is_internal: boolean;
   created_at: string;
+  original_text?: string | null;
+  original_language?: string | null;
+  translated_text?: string | null;
+  translated_language?: string | null;
+  translation_status?: string | null;
+  translation_manually_edited?: boolean | null;
 };
 
 function mapMessage(row: MessageRow): SupportMessage {
@@ -80,6 +92,12 @@ function mapMessage(row: MessageRow): SupportMessage {
     body: row.body,
     isInternal: row.is_internal,
     createdAt: row.created_at,
+    originalText: row.original_text ?? null,
+    originalLanguage: row.original_language ?? null,
+    translatedText: row.translated_text ?? null,
+    translatedLanguage: row.translated_language ?? null,
+    translationStatus: (row.translation_status as SupportMessage["translationStatus"]) ?? null,
+    translationManuallyEdited: row.translation_manually_edited ?? false,
   };
 }
 
@@ -183,13 +201,25 @@ export async function listTicketsForAdmin(filters: AdminTicketFilters): Promise<
 
 export async function updateTicket(
   id: string,
-  patch: Partial<{ status: SupportStatus; priority: SupportPriority; resolvedAt: string | null; closedAt: string | null }>,
+  patch: Partial<{
+    status: SupportStatus;
+    priority: SupportPriority;
+    resolvedAt: string | null;
+    closedAt: string | null;
+    customerLanguage: string | null;
+    aiSummary: string | null;
+  }>,
 ): Promise<SupportTicket> {
   const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (patch.status !== undefined) row.status = patch.status;
   if (patch.priority !== undefined) row.priority = patch.priority;
   if (patch.resolvedAt !== undefined) row.resolved_at = patch.resolvedAt;
   if (patch.closedAt !== undefined) row.closed_at = patch.closedAt;
+  if (patch.customerLanguage !== undefined) row.customer_language = patch.customerLanguage;
+  if (patch.aiSummary !== undefined) {
+    row.ai_summary = patch.aiSummary;
+    row.ai_summary_at = new Date().toISOString();
+  }
 
   const { data, error } = await db().from("support_tickets").update(row).eq("id", id).select("*").single();
   if (error) throw new Error(`updateTicket: ${error.message}`);
@@ -204,19 +234,53 @@ export async function addMessage(input: {
   senderId?: string | null;
   body: string;
   isInternal?: boolean;
+  originalText?: string | null;
+  originalLanguage?: string | null;
+  translatedText?: string | null;
+  translatedLanguage?: string | null;
+  translationStatus?: "success" | "failed" | null;
+  translationManuallyEdited?: boolean;
 }): Promise<SupportMessage> {
-  const { data, error } = await db()
-    .from("support_messages")
-    .insert({
-      ticket_id: input.ticketId,
-      sender_type: input.senderType,
-      sender_id: input.senderId ?? null,
-      body: input.body,
-      is_internal: input.isInternal ?? false,
-    })
-    .select("*")
-    .single();
+  const row: Record<string, unknown> = {
+    ticket_id: input.ticketId,
+    sender_type: input.senderType,
+    sender_id: input.senderId ?? null,
+    body: input.body,
+    is_internal: input.isInternal ?? false,
+  };
+  if (input.originalText !== undefined) row.original_text = input.originalText;
+  if (input.originalLanguage !== undefined) row.original_language = input.originalLanguage;
+  if (input.translatedText !== undefined) row.translated_text = input.translatedText;
+  if (input.translatedLanguage !== undefined) row.translated_language = input.translatedLanguage;
+  if (input.translationStatus !== undefined) row.translation_status = input.translationStatus;
+  if (input.translationManuallyEdited !== undefined) row.translation_manually_edited = input.translationManuallyEdited;
+
+  const { data, error } = await db().from("support_messages").insert(row).select("*").single();
   if (error) throw new Error(`addMessage: ${error.message}`);
+  return mapMessage(data as MessageRow);
+}
+
+/**
+ * Admin-only: attach/update the machine translation for an existing
+ * message (used by the user-message -> Chinese auto-translate flow).
+ * Never called from user-facing routes.
+ */
+export async function updateMessageTranslation(
+  id: string,
+  patch: {
+    translatedText?: string | null;
+    translatedLanguage?: string | null;
+    originalLanguage?: string | null;
+    translationStatus: "success" | "failed";
+  },
+): Promise<SupportMessage> {
+  const row: Record<string, unknown> = { translation_status: patch.translationStatus };
+  if (patch.translatedText !== undefined) row.translated_text = patch.translatedText;
+  if (patch.translatedLanguage !== undefined) row.translated_language = patch.translatedLanguage;
+  if (patch.originalLanguage !== undefined) row.original_language = patch.originalLanguage;
+
+  const { data, error } = await db().from("support_messages").update(row).eq("id", id).select("*").single();
+  if (error) throw new Error(`updateMessageTranslation: ${error.message}`);
   return mapMessage(data as MessageRow);
 }
 
