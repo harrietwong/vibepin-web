@@ -5,7 +5,7 @@
  */
 
 import { getUserFromBearer } from "@/lib/server/superAdmin";
-import { getTicketById, listMessagesForUser } from "@/lib/support/db";
+import { getAiFeedbackVerdict, getTicketById, listAttachmentsForTicket, listMessagesForUser } from "@/lib/support/db";
 
 export const dynamic = "force-dynamic";
 
@@ -32,9 +32,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       isInternal,
       createdAt: messageCreatedAt,
     }));
+    const rawAttachments = await listAttachmentsForTicket(id);
+    const attachments = rawAttachments.map(({ id: attachmentId, messageId, fileUrl, fileName, fileType, createdAt: attachmentCreatedAt }) => ({
+      id: attachmentId,
+      messageId,
+      fileUrl,
+      fileName,
+      fileType,
+      createdAt: attachmentCreatedAt,
+    }));
+    const aiFeedback = await getAiFeedbackVerdict(id);
     const { id: ticketId, ticketNumber, userId, workspaceId, email, category, priority, status, subject, description, source, createdAt, updatedAt, resolvedAt, closedAt } = ticket;
     const safeTicket = { id: ticketId, ticketNumber, userId, workspaceId, email, category, priority, status, subject, description, source, createdAt, updatedAt, resolvedAt, closedAt };
-    return Response.json({ ticket: safeTicket, messages });
+    return Response.json({ ticket: safeTicket, messages, attachments, aiFeedback });
   } catch (err) {
     console.error("[support/tickets/:id GET]", err);
     return Response.json({ error: "Failed to load ticket" }, { status: 500 });

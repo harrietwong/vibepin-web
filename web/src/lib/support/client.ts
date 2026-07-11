@@ -5,7 +5,7 @@
  */
 
 import { createBrowserClient } from "@supabase/ssr";
-import type { CreateTicketInput, CreateTicketResult, SupportMessage, SupportTicket } from "./types";
+import type { CreateTicketInput, CreateTicketResult, SupportAttachment, SupportMessage, SupportTicket } from "./types";
 
 let _client: ReturnType<typeof createBrowserClient> | null = null;
 function browser() {
@@ -41,7 +41,12 @@ export async function fetchMySupportTickets(): Promise<SupportTicket[]> {
   return data.tickets;
 }
 
-export async function fetchMySupportTicket(id: string): Promise<{ ticket: Omit<SupportTicket, "context">; messages: SupportMessage[] }> {
+export async function fetchMySupportTicket(id: string): Promise<{
+  ticket: Omit<SupportTicket, "context">;
+  messages: SupportMessage[];
+  attachments: Omit<SupportAttachment, "ticketId">[];
+  aiFeedback: "helped" | "not_helpful" | null;
+}> {
   const res = await fetch(`/api/support/tickets/${id}`, { headers: await authHeaders() });
   return asJson(res);
 }
@@ -50,4 +55,10 @@ export async function replyToMySupportTicket(id: string, body: string): Promise<
   const res = await fetch(`/api/support/tickets/${id}/messages`, { method: "POST", headers: await authHeaders(), body: JSON.stringify({ body }) });
   const data = await asJson<{ message: SupportMessage }>(res);
   return data.message;
+}
+
+export async function sendAiFeedback(id: string, helped: boolean): Promise<"helped" | "not_helpful"> {
+  const res = await fetch(`/api/support/tickets/${id}/ai-feedback`, { method: "POST", headers: await authHeaders(), body: JSON.stringify({ helped }) });
+  const data = await asJson<{ verdict: "helped" | "not_helpful" }>(res);
+  return data.verdict;
 }

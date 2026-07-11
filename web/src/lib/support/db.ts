@@ -331,6 +331,16 @@ export async function addAttachments(
   return (data as AttachmentRow[]).map(mapAttachment);
 }
 
+export async function listAttachmentsForTicket(ticketId: string): Promise<SupportAttachment[]> {
+  const { data, error } = await db()
+    .from("support_attachments")
+    .select("*")
+    .eq("ticket_id", ticketId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`listAttachmentsForTicket: ${error.message}`);
+  return (data as AttachmentRow[]).map(mapAttachment);
+}
+
 // ── Events ────────────────────────────────────────────────────────────────
 
 export async function addEvent(input: {
@@ -345,4 +355,24 @@ export async function addEvent(input: {
     .single();
   if (error) throw new Error(`addEvent: ${error.message}`);
   return data as unknown as SupportEvent;
+}
+
+/**
+ * The user-visible verdict of the AI first-reply feedback prompt, derived
+ * from support_events. Newest of the two verdict event types wins (a ticket
+ * should only ever get one, but this stays correct even if that changes).
+ */
+export async function getAiFeedbackVerdict(ticketId: string): Promise<"helped" | "not_helpful" | null> {
+  const { data, error } = await db()
+    .from("support_events")
+    .select("event_type, created_at")
+    .eq("ticket_id", ticketId)
+    .in("event_type", ["ai_resolved", "ai_not_helpful"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getAiFeedbackVerdict: ${error.message}`);
+  if (!data) return null;
+  const eventType = (data as { event_type: string }).event_type;
+  return eventType === "ai_resolved" ? "helped" : "not_helpful";
 }

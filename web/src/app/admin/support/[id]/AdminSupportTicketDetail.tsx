@@ -14,11 +14,41 @@
  */
 
 import { useEffect, useState } from "react";
-import { Loader2, Send, Lock, Sparkles, Languages, RefreshCw } from "lucide-react";
+import { Loader2, Send, Lock, Sparkles, Languages, RefreshCw, Paperclip } from "lucide-react";
 import {
   SUPPORT_CATEGORY_LABELS, SUPPORT_PRIORITIES, SUPPORT_STATUSES,
-  type SupportMessage, type SupportPriority, type SupportStatus, type SupportTicket,
+  type SupportAttachment, type SupportMessage, type SupportPriority, type SupportStatus, type SupportTicket,
 } from "@/lib/support/types";
+
+function AdminAttachmentThumb({ attachment }: { attachment: SupportAttachment }) {
+  const isImage = !!attachment.fileType && attachment.fileType.startsWith("image/");
+  if (isImage) {
+    return (
+      <a href={attachment.fileUrl} target="_blank" rel="noopener noreferrer">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={attachment.fileUrl}
+          alt={attachment.fileName || "Attachment"}
+          style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, cursor: "pointer", display: "block", border: "1px solid #1E293B" }}
+        />
+      </a>
+    );
+  }
+  return (
+    <a
+      href={attachment.fileUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999,
+        border: "1px solid #1E293B", background: "#0F172A", color: "#94A3B8", fontSize: 11.5, fontWeight: 600, textDecoration: "none",
+      }}
+    >
+      <Paperclip size={11} />
+      {attachment.fileName || "Attachment"}
+    </a>
+  );
+}
 
 const HIGHLIGHT_KEYS = new Set([
   "draftId", "publishJobId", "generationRequestId", "boardName", "publishErrorMessage",
@@ -44,6 +74,7 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
 export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
   const [messages, setMessages] = useState<SupportMessage[]>([]);
+  const [attachments, setAttachments] = useState<SupportAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -92,10 +123,11 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
   }
 
   function load() {
-    jsonFetch<{ ticket: SupportTicket; messages: SupportMessage[] }>(`/api/admin/support/tickets/${ticketId}`)
+    jsonFetch<{ ticket: SupportTicket; messages: SupportMessage[]; attachments: SupportAttachment[] }>(`/api/admin/support/tickets/${ticketId}`)
       .then((d) => {
         setTicket(d.ticket);
         setMessages(d.messages);
+        setAttachments(d.attachments ?? []);
         void autoTranslate(d.messages);
       })
       .catch((e) => setError(e.message));
@@ -222,6 +254,8 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
 
   const contextEntries = Object.entries(ticket.context ?? {});
   const canSend = !!(previewText && replyZh.trim());
+  const firstUserMessageId = messages.find((m) => m.senderType === "user")?.id ?? null;
+  const unassignedAttachments = attachments.filter((a) => a.messageId === null);
 
   return (
     <div style={{ flex: 1, display: "flex", overflow: "hidden", color: "#E2E8F0" }}>
@@ -265,6 +299,8 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {messages.map((m) => {
             const isRetrying = retryingIds.has(m.id);
+            const messageAttachments = attachments.filter((a) => a.messageId === m.id);
+            const showUnassigned = m.id === firstUserMessageId && unassignedAttachments.length > 0;
             return (
               <div key={m.id} data-testid={m.isInternal ? "admin-internal-note" : "admin-message"} style={{
                 padding: "10px 13px", borderRadius: 10,
@@ -272,6 +308,13 @@ export function AdminSupportTicketDetail({ ticketId }: { ticketId: string }) {
                 border: m.isInternal ? "1px dashed rgba(251,191,36,0.4)" : m.senderType === "ai" ? "1px solid rgba(45,212,191,0.35)" : "1px solid #1E293B",
               }}>
                 <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.body}</p>
+
+                {(messageAttachments.length > 0 || showUnassigned) && (
+                  <div data-testid="admin-support-attachments" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                    {messageAttachments.map((a) => <AdminAttachmentThumb key={a.id} attachment={a} />)}
+                    {showUnassigned && unassignedAttachments.map((a) => <AdminAttachmentThumb key={a.id} attachment={a} />)}
+                  </div>
+                )}
 
                 {m.senderType === "user" && !m.isInternal && m.translatedText && (
                   <div data-testid="admin-support-message-translation" style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #1E293B" }}>

@@ -135,7 +135,10 @@ export type SupportEventType =
   | "ai_replied"
   | "internal_note_added"
   | "ticket_resolved"
-  | "ticket_closed";
+  | "ticket_closed"
+  | "ai_resolved"
+  | "ai_not_helpful"
+  | "ai_declined";
 
 export type SupportEvent = {
   id: string;

@@ -15,7 +15,6 @@ import BrandLogo from "@/components/BrandLogo";
 import { EXISTING_APP_TOKEN_BALANCE } from "@/lib/accountSummary";
 import {
   SETTINGS_DEFAULT_PATH,
-  SETTINGS_SUPPORT_PATH,
 } from "@/lib/settingsPaths";
 import { SettingsModal, type SettingsTab } from "@/components/settings/SettingsModal";
 import { ThemeProvider, useTheme } from "@/lib/theme/ThemeProvider";
@@ -257,7 +256,7 @@ function UserDropdown({ email, onLogout, onClose, onOpenSettings }: {
           <DropdownItem
             icon={HelpCircle}
             label={t("account.support")}
-            onClick={() => navigate(SETTINGS_SUPPORT_PATH)}
+            onClick={() => navigate("/app/help")}
           />
 
           {/* Appearance toggle */}

@@ -4,7 +4,7 @@
  */
 
 import { requireAdminRoleFromRequest } from "@/lib/server/superAdmin";
-import { addEvent, getTicketById, listMessagesForAdmin, updateTicket } from "@/lib/support/db";
+import { addEvent, getTicketById, listAttachmentsForTicket, listMessagesForAdmin, updateTicket } from "@/lib/support/db";
 import { SUPPORT_PRIORITIES, SUPPORT_STATUSES, type SupportPriority, type SupportStatus } from "@/lib/support/types";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const ticket = await getTicketById(id);
     if (!ticket) return Response.json({ error: "Not found" }, { status: 404 });
     const messages = await listMessagesForAdmin(id);
-    return Response.json({ ticket, messages });
+    const attachments = await listAttachmentsForTicket(id);
+    return Response.json({ ticket, messages, attachments });
   } catch (err) {
     console.error("[admin/support/tickets/:id GET]", err);
     return Response.json({ error: "Failed to load ticket" }, { status: 500 });

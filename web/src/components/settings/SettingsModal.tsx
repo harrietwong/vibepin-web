@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useRef, Suspense, useCallback } from "react";
 import Link from "next/link";
-import { X, ArrowUpRight, Bell, Loader2, Copy, Bug, Mail, AlertCircle, Zap, Moon, Sun, Monitor, Check } from "lucide-react";
+import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Moon, Sun, Monitor, Check, LifeBuoy, TicketCheck } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
 import { toast } from "sonner";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { PinterestSettingsPanel } from "@/components/pinterest/PinterestSettingsPanel";
 import { PinterestAdvancedSettings } from "@/components/pinterest/PinterestAdvancedSettings";
 import { SocialAccountsPanel } from "@/components/social/SocialAccountsPanel";
@@ -64,12 +64,6 @@ import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { ShopifyTab } from "@/components/settings/ShopifyTab";
 
 const PRICING_PATH = "/pricing";
-const SUPPORT_EMAIL = "support@vibepin.co";
-const BUG_TEMPLATE = `Page:
-What happened:
-What I expected:
-Steps to reproduce:
-Screenshot:`;
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -1073,15 +1067,14 @@ function AppearanceTab() {
 
 // ── Support Tab ───────────────────────────────────────────────────────────────
 
-function SupportTab() {
+function SupportTab({ onClose }: { onClose: () => void }) {
   const { t } = useLocale();
   const pathname = usePathname();
+  const router = useRouter();
 
-  async function copyBugTemplate() {
-    try {
-      await navigator.clipboard.writeText(`Subject: VibePin Bug Report\n\n${BUG_TEMPLATE}`);
-      toast.success(t("toast.bugTemplateCopied"));
-    } catch { toast.error(t("toast.couldNotCopy")); }
+  function goTo(href: string) {
+    onClose();
+    router.push(href);
   }
 
   async function copyDiagnosticInfo() {
@@ -1106,8 +1099,6 @@ function SupportTab() {
     } catch { toast.error(t("toast.couldNotCopyDiagnostic")); }
   }
 
-  const bugMailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("VibePin Bug Report")}&body=${encodeURIComponent(BUG_TEMPLATE)}`;
-
   function SupportCard({ icon, title, description, children }: {
     icon: React.ReactNode; title: string; description: string; children: React.ReactNode;
   }) {
@@ -1127,37 +1118,28 @@ function SupportTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <SupportCard icon={<Mail size={16} style={{ color: UI.textSec }} />}
-        title={t("support.contactTitle")}
-        description={t("support.contactDesc")}>
-        <a href={`mailto:${SUPPORT_EMAIL}`} data-testid="support-email-button" style={{
+      <SupportCard icon={<LifeBuoy size={16} style={{ color: UI.textSec }} />}
+        title="Help & Support"
+        description="Browse help articles or contact our support team. Tickets get a reply by email.">
+        <button type="button" data-testid="support-open-help-button" onClick={() => goTo("/app/help")} style={{
           display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 14px",
-          borderRadius: 9, background: UI.gradient, color: "#fff", textDecoration: "none",
-          fontSize: 12, fontWeight: 800,
+          borderRadius: 9, border: "none", background: UI.gradient, color: "#fff",
+          fontSize: 12, fontWeight: 800, cursor: "pointer",
         }}>
-          <Mail size={13} /> {t("support.emailSupport")}
-        </a>
+          <LifeBuoy size={13} /> Open Help &amp; Support
+        </button>
       </SupportCard>
 
-      <SupportCard icon={<Bug size={16} style={{ color: UI.textSec }} />}
-        title={t("support.reportBugTitle")}
-        description={t("support.reportBugDesc")}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <a href={bugMailto} data-testid="support-report-bug-button" style={{
-            display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 9,
-            border: "1px solid rgba(59,130,246,0.32)", background: "rgba(59,130,246,0.14)",
-            color: UI.blue, textDecoration: "none", fontSize: 12, fontWeight: 700,
-          }}>
-            <Bug size={13} /> {t("support.reportViaEmail")}
-          </a>
-          <button type="button" onClick={copyBugTemplate} style={{
-            display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 9,
-            border: `1px solid ${UI.border}`, background: "transparent", color: UI.text,
-            fontSize: 12, fontWeight: 700, cursor: "pointer",
-          }}>
-            <Copy size={13} /> {t("support.copyTemplate")}
-          </button>
-        </div>
+      <SupportCard icon={<TicketCheck size={16} style={{ color: UI.textSec }} />}
+        title="My support tickets"
+        description="See the status of tickets you've already opened.">
+        <button type="button" data-testid="support-my-tickets-button" onClick={() => goTo("/app/support/tickets")} style={{
+          display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 9,
+          border: `1px solid ${UI.border}`, background: "transparent", color: UI.text,
+          fontSize: 12, fontWeight: 700, cursor: "pointer",
+        }}>
+          <TicketCheck size={13} /> View my tickets
+        </button>
       </SupportCard>
 
       <SupportCard icon={<AlertCircle size={16} style={{ color: UI.textSec }} />}
@@ -1333,7 +1315,7 @@ export function SettingsModal({
             {tab === "ai-settings"    && <AiSettingsTab    saveFnRef={aiSettingsSaveFn} onOpenTab={setTab} />}
             {tab === "appearance"     && <AppearanceTab />}
             {tab === "language"       && <LanguageTab      saveFnRef={languageSaveFn} />}
-            {tab === "support"        && <SupportTab />}
+            {tab === "support"        && <SupportTab onClose={onClose} />}
           </div>
         </div>
 

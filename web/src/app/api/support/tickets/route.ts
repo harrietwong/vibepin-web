@@ -93,6 +93,10 @@ export async function POST(req: Request) {
         const aiMessage = await addMessage({ ticketId: ticket.id, senderType: "ai", body: aiResult.reply.trim(), isInternal: false });
         await addEvent({ ticketId: ticket.id, eventType: "ai_replied", metadata: { messageId: aiMessage.id } });
         aiReplied = true;
+      } else if (aiResult) {
+        await addEvent({ ticketId: ticket.id, eventType: "ai_declined", metadata: { reason: "not_confident", category } });
+      } else {
+        await addEvent({ ticketId: ticket.id, eventType: "ai_declined", metadata: { reason: "unavailable", category } });
       }
     } catch (err) {
       console.error("[support/tickets POST] AI first response failed", err);

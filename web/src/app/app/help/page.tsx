@@ -55,9 +55,18 @@ export default function HelpSupportPage() {
           </div>
 
           <div>
-            <p style={{ margin: "0 0 10px", fontSize: 11.5, fontWeight: 700, color: UI.textSec, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Popular help
-            </p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+              <p style={{ margin: 0, fontSize: 11.5, fontWeight: 700, color: UI.textSec, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Popular help
+              </p>
+              <Link
+                href="/app/support/tickets"
+                data-testid="help-my-tickets-link"
+                style={{ fontSize: 12, color: UI.textSec, textDecoration: "none" }}
+              >
+                My tickets →
+              </Link>
+            </div>
             <div data-testid="help-article-list" style={{ display: "flex", flexDirection: "column", borderRadius: 12, border: `1px solid ${UI.border}`, overflow: "hidden" }}>
               {filtered.length === 0 && (
                 <p style={{ margin: 0, padding: 16, fontSize: 12.5, color: UI.textMuted }}>No articles match &quot;{query}&quot;.</p>
