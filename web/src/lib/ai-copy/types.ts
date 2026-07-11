@@ -49,6 +49,15 @@ export type ProductContext = {
   productUrl?: string;
   attributes?: string[];
   source?: string;
+  // ── Shopify-only grounding fields (WP6, §3.7.1) ────────────────────────────
+  // Populated only when the primary linked product's source is "shopify" and the
+  // draft snapshot actually carries the field; never fabricated when absent.
+  vendor?: string;
+  /** Up to 10 tags. */
+  tags?: string[];
+  /** Display-formatted, e.g. "USD 19.99" — currency already folded in. */
+  price?: string;
+  availability?: string;
 };
 
 export type BoardContext = {

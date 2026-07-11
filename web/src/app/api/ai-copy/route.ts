@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { retrievePinterestKeywords, type KeywordContextResult } from "@/lib/ai-copy/keywordContext";
+import { appendShopifyProductDetails } from "@/lib/ai-copy/shopifyGrounding";
 import {
   CopyError,
   GENERIC_COPY_MESSAGE,
@@ -31,7 +32,18 @@ export const runtime = "nodejs";
 
 // ── Route-local types + context helpers ──────────────────────────────────────
 
-type ProductContext = { title?: string; category?: string; productUrl?: string; attributes?: string[] };
+type ProductContext = {
+  title?: string;
+  category?: string;
+  productUrl?: string;
+  attributes?: string[];
+  // ── Shopify-only grounding fields (WP6, §3.7.2) — optional, never fabricated ──
+  vendor?: string;
+  tags?: string[];
+  /** Display-formatted, currency already folded in (e.g. "USD 19.99"). */
+  price?: string;
+  availability?: string;
+};
 type PageContext = { title?: string; description?: string; domain?: string };
 type BoardContext = { name?: string; description?: string };
 
@@ -290,7 +302,10 @@ export async function POST(req: Request) {
       timings.imageFetch = img.latencyMs;
       mark("imageFetched");
       const hints = keywordHints({ analysis: null, productContext, pageContext, boardContext, category: body.category });
-      const contextBlock = buildContextBlock({ productContext, pageContext, boardContext, keywords: hints, category: body.category });
+      const contextBlock = appendShopifyProductDetails(
+        buildContextBlock({ productContext, pageContext, boardContext, keywords: hints, category: body.category }),
+        productContext,
+      );
       mark("promptBuilt");
 
       const modelStart = performance.now();

@@ -1,4 +1,5 @@
 import { applyDraftToPinFields, generatePinMetadataDraft } from "@/lib/pinMetadata";
+import type { LinkedProduct } from "@/lib/pinMetadata";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { track, trackLatency } from "@/lib/analytics";
 import type {
@@ -71,15 +72,62 @@ async function resolveCachedAnalysis(
   return { analysis: null, recommendedKeywords: input.recommendedKeywords ?? [] };
 }
 
-function inferProductContext(input: GeneratePinterestPinCopyInput): ProductContext {
+/** Loose read of Shopify-only fields that may ride along on a LinkedProduct snapshot
+ *  without widening the LinkedProduct type itself — mirrors the existing
+ *  `productWithLooseMeta` cast pattern above. Fields are simply absent (never
+ *  fabricated) when the snapshot doesn't carry them. */
+type ShopifyLooseLinkedProduct = LinkedProduct & {
+  vendor?: string;
+  tags?: string[];
+  availability?: string;
+  productType?: string;
+};
+
+/** "USD 19.99" — currency folded into a single display string; undefined when
+ *  there is no price to show. */
+function formatShopifyPrice(price?: string, currency?: string): string | undefined {
+  const trimmed = price?.trim();
+  if (!trimmed) return undefined;
+  return currency ? `${currency} ${trimmed}` : trimmed;
+}
+
+/** The Shopify "Select product" flow (StudioBoard.tsx §3.6) writes `linkedProducts`
+ *  directly onto the draft with no `setupSnapshot` — resolve the primary linked
+ *  product (by `primaryProductId`, else the first) so that flow still has something
+ *  to ground on. Returns undefined unless that product's source is "shopify". */
+function resolvePrimaryShopifyProduct(storeDraft?: pinDraftStore.PinDraft | null): ShopifyLooseLinkedProduct | undefined {
+  const linked = storeDraft?.linkedProducts?.length
+    ? (storeDraft.linkedProducts.find(p => p.productId === storeDraft.primaryProductId) ?? storeDraft.linkedProducts[0])
+    : undefined;
+  return linked?.source === "shopify" ? (linked as ShopifyLooseLinkedProduct) : undefined;
+}
+
+/** Exported for direct unit testing (test-shopify-ai-grounding.ts, WP6 §10) — same
+ *  function generatePinterestPinCopy() calls internally, not a parallel copy. */
+export function inferProductContext(input: GeneratePinterestPinCopyInput, storeDraft?: pinDraftStore.PinDraft | null): ProductContext {
   const product = input.setupSnapshot?.selectedProducts?.find(p => p.title?.trim() || p.productUrl?.trim());
   const productWithLooseMeta = product as typeof product & { category?: string; attributes?: string[] } | undefined;
-  return {
+  const base: ProductContext = {
     title: product?.title || undefined,
     category: productWithLooseMeta?.category || input.category || undefined,
     productUrl: product?.productUrl || input.destinationUrl || undefined,
     attributes: productWithLooseMeta?.attributes,
     source: product?.source,
+  };
+
+  const shopify = resolvePrimaryShopifyProduct(storeDraft);
+  if (!shopify) return base; // non-Shopify (or no linked product): unchanged.
+
+  return {
+    title: base.title || shopify.title || undefined,
+    category: base.category || shopify.productType || undefined,
+    productUrl: base.productUrl || shopify.productUrl || shopify.canonicalUrl || undefined,
+    attributes: base.attributes,
+    source: base.source || shopify.source,
+    vendor: shopify.vendor || undefined,
+    tags: shopify.tags?.length ? shopify.tags.slice(0, 10) : undefined,
+    price: formatShopifyPrice(shopify.price, shopify.currency),
+    availability: shopify.availability || undefined,
   };
 }
 
@@ -105,7 +153,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
   const { analysis: cachedAnalysis, recommendedKeywords } = await resolveCachedAnalysis(input);
   const cacheHit = !!cachedAnalysis;
 
-  const productContext = inferProductContext(input);
+  const productContext = inferProductContext(input, storeDraft);
   const board = input.boards?.find(b => b.id === input.boardId);
   const boardContext = {
     name: board?.name || input.boardName || undefined,

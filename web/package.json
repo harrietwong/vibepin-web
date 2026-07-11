@@ -21,6 +21,8 @@
     "test:shopify-sync-engine": "npx tsx scripts/test-shopify-sync-engine.ts",
     "test:shopify-client": "npx tsx scripts/test-shopify-client.ts",
     "test:shopify-product-selection": "npx tsx scripts/test-shopify-product-selection.ts",
+    "test:shopify-ai-grounding": "npx tsx scripts/test-shopify-ai-grounding.ts",
+    "test:shopify-linked-product-display": "npx tsx scripts/test-shopify-linked-product-display.ts",
     "test:batch-edit": "npx tsx scripts/test-batch-edit-planning.ts",
     "test:optional-url": "npx tsx scripts/test-optional-website-url.ts",
     "test:pin-board": "npx tsx scripts/test-pin-board-store.ts",

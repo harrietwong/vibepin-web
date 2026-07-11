@@ -23,6 +23,7 @@ import type { PinDetailView, GenerationSetupSnapshot, RecoveryQuality } from "./
 import { getGenerationSetupSnapshot } from "./pinDetails";
 import { ProductPickerModal } from "./ProductPickerModal";
 import type { ProductSelection } from "./ProductPickerModal";
+import { getShopifyProductFreshness, type ShopifyFreshnessState } from "@/lib/shopifyClient";
 
 const UI = {
   card: "var(--app-surface, #161D2E)",
@@ -138,6 +139,47 @@ function productSourceBadgeStyle(source: string): { bg: string; color: string } 
     case "manual":        return { bg: "rgba(148,163,184,0.15)", color: "#CBD5E1" };
     default:              return { bg: "rgba(124,58,237,0.18)",  color: "#C4B5FD" };
   }
+}
+
+// ── Shopify freshness (WP7 §7.5) ────────────────────────────────────────────────
+// Independent, additive warning layer for a linked Shopify primary product —
+// never touches the Unscheduled/Scheduled/Posted lifecycle (§2). Kept as pure
+// functions so they're directly unit-testable.
+
+export type ShopifyFreshnessBadge = { text: string; tone: "amber" | "gray" };
+
+const SHOPIFY_FRESHNESS_BADGE: Record<Exclude<ShopifyFreshnessState, null>, ShopifyFreshnessBadge> = {
+  deleted:     { text: "Product no longer in your store", tone: "amber" },
+  archived:    { text: "Product archived",                tone: "amber" },
+  unavailable: { text: "Out of stock",                     tone: "gray" },
+};
+
+/** Pure: badge shown on the primary product card for a freshness state (or null = no badge). */
+export function shopifyFreshnessBadge(state: ShopifyFreshnessState): ShopifyFreshnessBadge | null {
+  return state ? SHOPIFY_FRESHNESS_BADGE[state] : null;
+}
+
+const SHOPIFY_FRESHNESS_WARNING: Record<Exclude<ShopifyFreshnessState, null>, string> = {
+  deleted:     "This product is no longer in your store — the link may no longer work.",
+  archived:    "This product has been archived in your store — the link may no longer work.",
+  unavailable: "This product is currently out of stock.",
+};
+
+/**
+ * Pure: confirm copy for "Use as destination URL" / "Use product URL as
+ * destination" (§4G — a warning must never block). Returns null when no
+ * confirmation should be shown at all (fresh product + destination currently
+ * empty — the existing silent direct-fill behavior).
+ */
+export function buildUseAsDestinationConfirm(opts: {
+  destinationIsFilled: boolean;
+  freshness: ShopifyFreshnessState;
+}): string | null {
+  const warning = opts.freshness ? ` ${SHOPIFY_FRESHNESS_WARNING[opts.freshness]}` : "";
+  if (opts.destinationIsFilled) {
+    return `Replace the current destination URL with the primary product URL?${warning}`;
+  }
+  return opts.freshness ? `Use the primary product URL as the destination?${warning}` : null;
 }
 
 // ── Product source chip ─────────────────────────────────────────────────────────
@@ -484,6 +526,25 @@ export function PinDetailsDrawer({
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [pickerReplaceKey,  setPickerReplaceKey]  = useState<string | null>(null);
   const [editingProductUrl, setEditingProductUrl] = useState<string | false>(false);
+  const [shopifyFreshness, setShopifyFreshness]   = useState<ShopifyFreshnessState>(null);
+
+  // Shopify freshness check (WP7 §7.5): best-effort, 60s-cached probe of the
+  // primary product when it's a linked Shopify product. Computed ahead of the
+  // `!open || !detail` early return below so this hook always runs in the same
+  // order. Display-only warning — never gates the Pin lifecycle.
+  const freshnessProduct   = resolvePinProducts(metadataForm?.metadataDraft).primary;
+  const freshnessProductId = freshnessProduct?.productId;
+  const freshnessIsShopify = normalizeProductSource(freshnessProduct?.source) === "shopify";
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset per opened pin/product before re-probing
+    setShopifyFreshness(null);
+    if (!open || !freshnessIsShopify || !freshnessProductId) return;
+    let cancelled = false;
+    getShopifyProductFreshness(freshnessProductId)
+      .then(state => { if (!cancelled) setShopifyFreshness(state); })
+      .catch(() => { /* freshness is an enhancement, not a gate — stay silent on failure */ });
+    return () => { cancelled = true; };
+  }, [open, freshnessIsShopify, freshnessProductId]);
 
   // Reset tab and remix draft when a new pin is opened or initialTab changes
   useEffect(() => {
@@ -545,10 +606,16 @@ export function PinDetailsDrawer({
 
   // Safe "use product URL as destination URL": fill when empty; confirm before
   // overwriting an existing custom destination URL (never silently clobber).
+  // When the primary product is a stale/deleted Shopify product, the confirm
+  // copy gains a warning sentence (§4G — warnings never block); an otherwise
+  // silent empty-fill also gets a one-time confirm in that case (WP7 §7.5).
   const applyPrimaryUrlToDestination = () => {
     if (!primaryUrl) return;
-    if (destFilled && destValue !== primaryUrl
-      && !window.confirm("Replace the current destination URL with the primary product URL?")) return;
+    const confirmMsg = buildUseAsDestinationConfirm({
+      destinationIsFilled: destFilled,
+      freshness: primaryProduct?.source === "shopify" ? shopifyFreshness : null,
+    });
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
     onMetadataChange({ destinationUrl: primaryUrl });
   };
 
@@ -1145,6 +1212,16 @@ export function PinDetailsDrawer({
                               {primaryProduct.productUrl && editingProductUrl === false && (
                                 <p style={{ margin: "3px 0 0", fontSize: 9, color: "#818CF8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{primaryProduct.productUrl}</p>
                               )}
+                              {primaryProduct.source === "shopify" && (() => {
+                                const badge = shopifyFreshnessBadge(shopifyFreshness);
+                                if (!badge) return null;
+                                return (
+                                  <p data-testid="pin-details-product-freshness"
+                                    style={{ margin: "3px 0 0", fontSize: 9, fontWeight: badge.tone === "amber" ? 700 : 400, color: badge.tone === "amber" ? UI.warning : UI.textMuted }}>
+                                    {badge.text}
+                                  </p>
+                                );
+                              })()}
                               {editingProductUrl !== false && (
                                 <div style={{ marginTop: 5, display: "flex", gap: 4 }}>
                                   <input value={editingProductUrl} onChange={e => setEditingProductUrl(e.target.value)} style={{ ...fieldStyle, flex: 1, padding: "4px 7px", fontSize: 10 }}

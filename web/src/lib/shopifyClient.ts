@@ -369,3 +369,69 @@ export async function getShopifyProduct(id: string): Promise<ShopifyProductDetai
   if (!res.ok) throw await parseError(res);
   return (await res.json()) as ShopifyProductDetail;
 }
+
+// ── product freshness (WP7 §7.5 — 60s in-memory cache per product id) ─────────
+// A best-effort, non-blocking check: callers (PinDetailsDrawer) show it as an
+// independent warning badge and never let it gate the Unscheduled/Scheduled/
+// Posted lifecycle.
+
+export type ShopifyFreshnessState = "deleted" | "archived" | "unavailable" | null;
+
+const FRESHNESS_TTL_MS = 60_000;
+const freshnessCache = new Map<string, { at: number; value: ShopifyFreshnessState }>();
+const freshnessInflight = new Map<string, Promise<ShopifyFreshnessState>>();
+
+/** Pure: derive the freshness state from a fetched product detail's `stale` flags.
+ *  Priority when more than one is set: deleted > archived > unavailable. */
+export function freshnessFromProductDetail(detail: Pick<ShopifyProductDetail, "stale">): ShopifyFreshnessState {
+  if (detail.stale.deleted) return "deleted";
+  if (detail.stale.archived) return "archived";
+  if (detail.stale.unavailable) return "unavailable";
+  return null;
+}
+
+/** Drop cached freshness for one product (or all, if omitted). */
+export function invalidateShopifyProductFreshnessCache(productId?: string): void {
+  if (productId) {
+    freshnessCache.delete(productId);
+    freshnessInflight.delete(productId);
+  } else {
+    freshnessCache.clear();
+    freshnessInflight.clear();
+  }
+}
+
+/**
+ * Best-effort freshness probe for a linked Shopify product (§7.5): fetches
+ * `/products/[id]` (60s cache; concurrent callers for the same id coalesce
+ * into one request) and derives deleted/archived/unavailable. A 404 (product
+ * purged from the store) also resolves to "deleted". Any other failure
+ * (network, 5xx, etc.) rejects — callers must treat that as "don't warn"
+ * (freshness is an enhancement, never a gate) and swallow it silently.
+ */
+export async function getShopifyProductFreshness(productId: string): Promise<ShopifyFreshnessState> {
+  const cached = freshnessCache.get(productId);
+  if (cached && Date.now() - cached.at < FRESHNESS_TTL_MS) return cached.value;
+  const inflight = freshnessInflight.get(productId);
+  if (inflight) return inflight;
+
+  const run = (async () => {
+    try {
+      const detail = await getShopifyProduct(productId);
+      return freshnessFromProductDetail(detail);
+    } catch (err) {
+      if ((err as ShopifyClientError)?.httpStatus === 404) return "deleted" as ShopifyFreshnessState;
+      throw err;
+    }
+  })()
+    .then(value => {
+      freshnessCache.set(productId, { at: Date.now(), value });
+      return value;
+    })
+    .finally(() => {
+      freshnessInflight.delete(productId);
+    });
+
+  freshnessInflight.set(productId, run);
+  return run;
+}
