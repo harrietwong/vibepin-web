@@ -1,0 +1,74 @@
+交接文档 — Create Pins Studio
+本次改动的文件（共3个）
+文件	状态	说明
+web/src/app/app/layout.tsx	全量重写	App侧边栏 + 顶部栏 + 用户下拉菜单
+web/src/app/app/studio/page.tsx	全量重写	Create Pins 主页面
+web/tests/e2e/studio-workflow.spec.ts	新建	18个 Playwright E2E 测试用例
+以后改 Create Pins，先看这些文件（按优先级）
+1. 主页面
+web/src/app/app/studio/page.tsx
+
+深色主题常量 D（顶部约15行）
+类型定义：StudioPin / RefGroup / GenerationSession
+AssetSection 组件 — 上传池 + 已选状态的切换逻辑
+CreatePinsContent 主组件 — 所有 state + handler
+hydrate() — 从 prefill 加载初始数据
+handleGenerate() — 调用 /api/generate，创建 placeholder 组，更新 sessions
+handleAddToPlan() — 写入 pinDraftStore，不弹表单
+2. 资产持久化
+web/src/lib/assetStore.ts
+
+localStorage key：vp_assets_v1
+saveAsset({ role, source, imageUrl }) — role 只能是 "product" 或 "style_reference"
+getAssets() + subscribe() — 供 useSyncExternalStore 使用（在 AssetSection 里）
+3. 生成历史
+web/src/lib/studioPersistence.ts
+
+localStorage key：vp:studio:history
+addHistory() / loadHistory() — 刷新后恢复 sessions 的来源
+createRunningSessionInDb() / updateSessionInDb() — 写 Supabase pin_generations 表
+4. 周计划集成
+web/src/lib/pinDraftStore.ts
+
+localStorage key：vp:pin_drafts:v1
+createDraft({ imageUrl, keyword, scheduledDate }) — Add to Plan 的核心操作
+getAllDrafts() — 用来计算下一个可用排期日期
+5. 跳转入口/预填充
+web/src/lib/createPinsPrefill.ts
+
+其他页面（Workspace/产品信号/病毒Pin）通过 openCreatePins(router.push, prefill) 跳转
+Studio 在 mount 时读 ?prefillKey= → loadPrefill() → hydrate()
+buildPromptFromPrefill(prefill) — 自动生成 prompt 的逻辑在这里
+6. 资产选择弹窗（未改，了解即可）
+web/src/components/studio/CreateAssetPicker.tsx
+
+900px 居中弹窗，产品/参考图两种 role
+确认后调 onConfirm(urls)，Studio 页面接收后更新 products/refs state
+数据从哪来
+数据	来源
+上传的产品图（池）	assetStore localStorage，role="product"
+上传的参考图（池）	assetStore localStorage，role="style_reference"
+本次选中的产品/参考	products: string[] / refs: string[] state（仅本次任务）
+Opportunity 列表	Supabase trend_keywords 表（在 OpportunityDrawer 里查询）
+生成图片	POST /api/generate → 返回 { ok, urls: string[] }
+生成历史（刷新恢复）	localStorage vp:studio:history
+周计划草稿	localStorage vp:pin_drafts:v1
+用户邮箱/登录态	Supabase auth.getUser()（在 layout.tsx 里）
+跳转预填充数据	sessionStorage vbp_cp_* 或 Supabase composer_drafts 表
+关键不变量（接手后必须维持）
+Generate 不清空输入 — promptTouched ref 保护手动编辑的 prompt
+取消选中 ≠ 从池中删除 — 切换 pool item 只改 products/refs state，不动 assetStore
+产品图和参考图永不混池 — 两个独立的 AssetSection，独立的 assetStore role
+外层 div 用 flex: 1，不用 height: 100dvh — layout 顶栏占 52px，页面填满剩余
+Add to Plan 是简单操作 — 只调 pinDraftStore.createDraft()，不弹复杂表单
+DropdownItem 必须在模块级定义 — 不能放在 UserDropdown 函数体内，否则触发 React Compiler 规则报错
+运行测试
+
+# E2E 测试（需要 dev server 在跑，.env.local 里设 E2E_TEST_MODE=true）
+npx playwright test studio-workflow.spec.ts
+
+# 类型检查
+npx tsc --noEmit
+
+# Lint
+node_modules/.bin/eslint src/app/app/studio/page.tsx src/app/app/layout.tsx

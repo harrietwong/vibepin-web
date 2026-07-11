@@ -1,0 +1,55 @@
+keyword,category,subcategory,intent_type,content_type,weekly_change,monthly_change,yearly_change,search_volume_level,status,source,notes,region,season
+living room decor ideas,home,living_room,inspirational,inspiration,5,18,42,high,active,pinterest_trends,,US,
+cozy bedroom decor,home,bedroom,inspirational,inspiration,8,22,55,high,active,pinterest_trends,,US,
+boho living room ideas,home,living_room,inspirational,inspiration,3,12,38,medium,active,pinterest_trends,,US,
+neutral living room decor,home,living_room,inspirational,inspiration,6,20,60,high,active,pinterest_trends,,US,
+modern farmhouse decor,home,farmhouse,inspirational,inspiration,2,8,30,medium,active,pinterest_trends,,US,
+small apartment decor,home,apartment,informational,inspiration,10,25,70,high,active,pinterest_trends,,US,
+wall art decor ideas,home,wall_art,inspirational,product,4,15,45,high,active,pinterest_trends,,US,
+coffee table styling,home,living_room,inspirational,inspiration,7,19,50,medium,active,pinterest_trends,,US,
+vintage home decor,home,vintage,inspirational,inspiration,1,6,20,medium,active,pinterest_trends,,US,
+home decor collage,home,collage,inspirational,inspiration,3,10,35,medium,active,pinterest_trends,,US,
+japandi living room,home,living_room,inspirational,inspiration,12,30,80,high,active,pinterest_trends,,US,
+aesthetic room decor,home,bedroom,inspirational,inspiration,15,35,90,high,active,pinterest_trends,,US,
+kitchen decor ideas,home,kitchen,inspirational,inspiration,5,16,48,high,active,pinterest_trends,,US,
+bathroom decor ideas,home,bathroom,inspirational,inspiration,4,14,42,medium,active,pinterest_trends,,US,
+shelf styling ideas,home,living_room,inspirational,inspiration,9,23,65,medium,active,pinterest_trends,,US,
+summer outfit ideas,fashion,casual,inspirational,inspiration,20,45,85,high,active,pinterest_trends,,US,summer_2026
+casual outfit ideas,fashion,casual,inspirational,inspiration,8,22,60,high,active,pinterest_trends,,US,
+aesthetic outfits,fashion,aesthetic,inspirational,inspiration,18,40,95,high,active,pinterest_trends,,US,
+outfit ideas women,fashion,women,inspirational,inspiration,10,28,72,high,active,pinterest_trends,,US,
+spring fashion 2026,fashion,seasonal,inspirational,inspiration,25,55,110,high,active,pinterest_trends,,US,spring_2026
+minimalist outfit,fashion,minimalist,inspirational,inspiration,12,30,75,medium,active,pinterest_trends,,US,
+boho outfit ideas,fashion,boho,inspirational,inspiration,6,18,50,medium,active,pinterest_trends,,US,
+streetwear outfits,fashion,streetwear,inspirational,inspiration,15,35,88,high,active,pinterest_trends,,US,
+work outfit ideas,fashion,professional,informational,inspiration,7,20,55,medium,active,pinterest_trends,,US,
+date night outfit,fashion,evening,inspirational,inspiration,9,24,65,medium,active,pinterest_trends,,US,
+nail ideas 2026,beauty,nails,inspirational,inspiration,22,50,100,high,active,pinterest_trends,,US,
+aesthetic nails,beauty,nails,inspirational,inspiration,30,65,130,high,active,pinterest_trends,,US,
+summer nails 2026,beauty,nails,inspirational,inspiration,28,60,120,high,active,pinterest_trends,,US,summer_2026
+natural makeup look,beauty,makeup,informational,tutorial,10,25,70,high,active,pinterest_trends,,US,
+skincare routine,beauty,skincare,informational,tutorial,15,35,90,high,active,pinterest_trends,,US,
+makeup aesthetic,beauty,makeup,inspirational,inspiration,12,28,75,high,active,pinterest_trends,,US,
+hair ideas,beauty,hair,inspirational,inspiration,8,20,58,medium,active,pinterest_trends,,US,
+glowy makeup look,beauty,makeup,inspirational,tutorial,14,32,82,high,active,pinterest_trends,,US,
+clean girl aesthetic,beauty,skincare,inspirational,inspiration,20,45,95,high,active,pinterest_trends,,US,
+lip liner looks,beauty,makeup,inspirational,tutorial,18,40,88,medium,active,pinterest_trends,,US,
+90s home decor,home,vintage,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+luxury home decor,home,luxury,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,
+southern home decor,home,southern,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+cute home decor,home,general,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+spanish home decor,home,spanish,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+witchy home decor,home,witchy,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+graduation outfit ideas,fashion,graduation,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,spring_2026
+cubs game outfit,fashion,sports,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+yankee game outfit women,fashion,sports,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+senior cap and gown pictures,fashion,graduation,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,spring_2026
+kesha concert outfit ideas,fashion,concert,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+state testing outfits,fashion,school,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,
+grad nails,beauty,nails,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,spring_2026
+graduation nails,beauty,nails,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,spring_2026
+large box braids parting guide,beauty,hair,informational,tutorial,0,0,0,medium,active,pinterest_trends_manual,,US,
+summer pedicure ideas,beauty,pedicure,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,summer_2026
+summer toe nails,beauty,nails,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,summer_2026
+summer pedicure,beauty,pedicure,inspirational,inspiration,0,0,0,high,active,pinterest_trends_manual,,US,summer_2026
+may nails,beauty,nails,inspirational,inspiration,0,0,0,medium,active,pinterest_trends_manual,,US,

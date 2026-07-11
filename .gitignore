@@ -1,0 +1,52 @@
+# Secrets — never commit. Covers api/.env, web/.env.local, etc.
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+# Migration-only credential files (flat root: api.env / api.env.migration)
+api.env
+api.env.*
+**/api.env
+**/api.env.*
+!**/api.env.example
+# Dotenv files inside an api/ directory (api/.env, api/.env.migration, etc.)
+api/.env
+api/.env.*
+**/api/.env
+**/api/.env.*
+!**/api/.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+api/.venv/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Logs & local artifacts
+*.log
+dev*.log
+.vercel
+test-results/
+playwright-report/
+
+# Secret-bearing notes at repo root (Vercel env var dumps etc.)
+导入到vercel的环境变量*.txt
+
+# Local tool state & scratch
+.openclaw/
+.continue/
+memory/
+tmp/
+pw_temp/
+logs/
+screenshots/
+
+# OS
+.DS_Store

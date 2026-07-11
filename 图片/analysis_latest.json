@@ -1,0 +1,30 @@
+{
+  "materials": [
+    "chrome",
+    "glass",
+    "marble",
+    "metal",
+    "wood",
+    "paper",
+    "jute"
+  ],
+  "colors": [
+    "bright orange",
+    "chrome silver",
+    "black",
+    "white",
+    "pink",
+    "natural beige"
+  ],
+  "vibe": [
+    "modern",
+    "retro",
+    "bold",
+    "graphic",
+    "artistic",
+    "minimalist",
+    "textured"
+  ],
+  "best_style": "Mid-Century Modern",
+  "style_reasoning": "The collection features an iconic arc lamp, bold graphic art, and a mix of materials and colors characteristic of the Mid-Century Modern aesthetic."
+}

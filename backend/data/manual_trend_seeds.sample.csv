@@ -1,0 +1,54 @@
+keyword,category,region,source,trend_type,search_volume,weekly_growth,monthly_growth,yearly_growth,curator_priority,curator_note,seasonality_hint,commercial_intent_hint,product_potential_hint,reference_potential_hint
+quiet luxury outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,high,evergreen high-intent commercial term,year_round,high,high,high
+coquette aesthetic outfit,fashion,US,manual_bootstrap,growing,,,,,high,trending aesthetic with strong product tie-in,spring,high,high,high
+oversized blazer outfit,fashion,US,manual_bootstrap,evergreen,,,,,medium,,fall,high,high,medium
+linen summer outfit,fashion,US,manual_bootstrap,seasonal,,,,,medium,seasonal lift expected,summer,high,high,medium
+capsule wardrobe basics,fashion,US,manual_bootstrap,evergreen,,,,,high,evergreen pillar topic,year_round,high,high,high
+old money aesthetic outfit,fashion,US,manual_bootstrap,growing,,,,,medium,,year_round,high,medium,high
+streetwear outfit men,fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+cottagecore dress outfit,fashion,US,manual_bootstrap,seasonal,,,,,low,,spring,medium,high,high
+business casual outfit women,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+festival outfit ideas,fashion,US,manual_bootstrap,seasonal,,,,,low,seasonal only,summer,high,high,high
+fall capsule wardrobe women,womens-fashion,US,manual_bootstrap,seasonal,,,,,high,strong seasonal pillar,fall,high,high,high
+work outfit women aesthetic,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+midi skirt outfit,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,high,high,medium
+date night outfit women,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,high
+petite outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+postpartum outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,niche but steady,year_round,medium,medium,medium
+boho living room decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,evergreen pillar with high product potential,year_round,high,high,high
+small bedroom decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,high-volume evergreen,year_round,high,high,high
+japandi living room,home-decor,US,manual_bootstrap,growing,,,,,medium,growing aesthetic,year_round,high,high,high
+cozy reading nook ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,fall,medium,medium,high
+gallery wall layout ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,high
+modern farmhouse kitchen,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+minimalist desk setup,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+apartment patio decor,home-decor,US,manual_bootstrap,seasonal,,,,,low,,spring,medium,high,medium
+entryway decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+dorm room decor aesthetic,home-decor,US,manual_bootstrap,seasonal,,,,,high,back-to-school seasonal spike,fall,high,high,high
+coastal bathroom decor,home-decor,US,manual_bootstrap,evergreen,,,,,low,,summer,medium,high,medium
+christmas mantel decor ideas,home-decor,US,manual_bootstrap,seasonal,,,,,low,winter seasonal only,winter,high,high,high
+clean girl makeup look,beauty,US,manual_bootstrap,growing,,,,,high,trending evergreen routine,year_round,high,high,high
+glazed donut skin routine,beauty,US,manual_bootstrap,growing,,,,,medium,,year_round,high,high,high
+everyday natural makeup,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+short nails design ideas,beauty,US,manual_bootstrap,evergreen,,,,,high,high-volume evergreen nails,year_round,high,high,high
+curtain bangs hairstyle,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,medium,high
+summer nail aesthetic,beauty,US,manual_bootstrap,seasonal,,,,,low,seasonal,summer,high,high,high
+skincare routine for acne,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+balayage hair color ideas,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,high,medium,high
+soft glam makeup tutorial,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+hydrating skincare products,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+wedding guest makeup,beauty,US,manual_bootstrap,seasonal,,,,,low,wedding season,summer,high,high,high
+fall nail colors ideas,beauty,US,manual_bootstrap,seasonal,,,,,low,seasonal,fall,high,high,high
+low maintenance haircut,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+printable budget planner template,digital-products,US,csv_bootstrap,evergreen,,,,,high,top-selling digital category,year_round,high,high,low
+digital wedding invitation template,digital-products,US,csv_bootstrap,seasonal,,,,,medium,wedding season lift,summer,high,high,low
+notion aesthetic dashboard template,digital-products,US,csv_bootstrap,growing,,,,,medium,growing niche,year_round,high,high,medium
+printable wall art set,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+canva instagram template pack,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable meal planner,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+digital planner goodnotes,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+resume template modern,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable chore chart kids,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+etsy shop banner template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable christmas gift tags,digital-products,US,csv_bootstrap,seasonal,,,,,low,winter seasonal only,winter,high,high,low
+small business invoice template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low

@@ -1,0 +1,35 @@
+# VibePin Pin/crawler cloud runner (oneshot). DISABLED by default.
+# Calls scripts/cloud_run_pin_crawl.sh. Default mode `preflight` = safe no-op;
+# even a manual `systemctl start` writes nothing until VIBEPIN_CRAWL_MODE=crawl
+# AND VIBEPIN_CRAWL_CONFIRM=RUN_CRAWL are set deliberately.
+[Unit]
+Description=VibePin Pin/crawler daily refresh (preflight-gated, tree-kill)
+After=network-online.target
+Wants=network-online.target
+# Throttle accidental rapid manual restarts (StartLimit* belong in [Unit]).
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vibepin/backend
+EnvironmentFile=-/opt/vibepin/backend/.env
+Environment=VIBEPIN_CRAWL_MODE=preflight
+Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
+ExecStart=/opt/vibepin/backend/scripts/cloud_run_pin_crawl.sh
+
+# Outer bound for the oneshot ExecStart (> the wrapper's 5400s crawl cap). On timeout
+# systemd SIGTERMs then (after TimeoutStopSec) SIGKILLs the whole service cgroup.
+# Type=oneshot ignores RuntimeMaxSec, so TimeoutStartSec is the correct bound here.
+TimeoutStartSec=6000
+TimeoutStopSec=60
+KillMode=control-group
+Restart=no
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vibepin-pin-crawl
+
+[Install]
+WantedBy=multi-user.target

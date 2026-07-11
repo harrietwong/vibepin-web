@@ -1,0 +1,33 @@
+# VibePin keyword-trends cloud runner (oneshot). DISABLED by default.
+# Calls scripts/cloud_run_keyword_trends.sh. Default mode `preflight` = safe no-op;
+# a real refresh needs VIBEPIN_TRENDS_MODE=trends AND VIBEPIN_TRENDS_CONFIRM=RUN_TRENDS.
+[Unit]
+Description=VibePin keyword-trends daily refresh (preflight-gated, tree-kill)
+After=network-online.target
+Wants=network-online.target
+# Throttle accidental rapid manual restarts (StartLimit* belong in [Unit]).
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vibepin/backend
+EnvironmentFile=-/opt/vibepin/backend/.env
+Environment=VIBEPIN_TRENDS_MODE=preflight
+Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
+ExecStart=/opt/vibepin/backend/scripts/cloud_run_keyword_trends.sh
+
+# Outer bound for the oneshot ExecStart (> the wrapper's 1800s cap). On timeout
+# systemd SIGTERMs then (after TimeoutStopSec) SIGKILLs the whole service cgroup.
+# Type=oneshot ignores RuntimeMaxSec, so TimeoutStartSec is the correct bound here.
+TimeoutStartSec=2400
+TimeoutStopSec=60
+KillMode=control-group
+Restart=no
+Nice=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vibepin-keyword-trends
+
+[Install]
+WantedBy=multi-user.target

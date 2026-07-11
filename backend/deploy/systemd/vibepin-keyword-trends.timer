@@ -1,0 +1,17 @@
+# VibePin keyword-trends daily timer. DISABLED by default (enable with systemctl enable).
+# 09:00 Asia/Shanghai: replenishes trend_keywords + crawl_queue (Pinterest Trends API,
+# no Playwright) BEFORE the 10:30 crawl consumes the queue. Separate window from the
+# residential-IP crawl and the 23:00 Product-Supply run.
+# The OnCalendar line pins Asia/Shanghai explicitly, so the schedule is correct
+# regardless of the host timezone (VPS is Asia/Shanghai; old 09:00 cron is disabled).
+[Unit]
+Description=Daily trigger for VibePin keyword-trends refresh
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Asia/Shanghai
+RandomizedDelaySec=300
+Persistent=false
+Unit=vibepin-keyword-trends.service
+
+[Install]
+WantedBy=timers.target

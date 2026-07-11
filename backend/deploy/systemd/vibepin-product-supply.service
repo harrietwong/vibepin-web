@@ -1,0 +1,58 @@
+# VibePin Product-Supply cloud runner (oneshot).
+#
+# DISABLED BY DEFAULT. Installed but NOT started/enabled until an operator approves.
+# Calls the hardened wrapper ONLY (never run_worker.py directly). The wrapper runs a
+# read-only preflight and refuses on an unsafe state; default mode is `preflight`
+# (a safe no-op) so even a manual `systemctl start` of this service writes nothing
+# until VIBEPIN_CLOUD_MODE is deliberately changed to dry-run/apply.
+#
+# Install (run on the VPS, does NOT enable the timer):
+#   cp deploy/systemd/vibepin-product-supply.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload
+# Enable later, ONLY after explicit approval:
+#   systemctl enable --now vibepin-product-supply.timer
+
+[Unit]
+Description=VibePin Product-Supply cloud runner (hardened, preflight-gated)
+# Don't start while a network-heavy job is up; advisory only.
+After=network-online.target
+Wants=network-online.target
+# Throttle accidental rapid manual restarts (StartLimit* belong in [Unit]).
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vibepin/backend
+
+# Secrets come from the .env file, never inlined here. '-' = tolerate if absent.
+EnvironmentFile=-/opt/vibepin/backend/.env
+# Non-secret runtime config. Default mode is the SAFE no-op preflight.
+Environment=VIBEPIN_CLOUD_MODE=preflight
+Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
+Environment=VIBEPIN_TIMEOUT_SECONDS=2400
+
+ExecStart=/opt/vibepin/backend/scripts/cloud_run_product_supply.sh
+
+# Hard outer bound for the oneshot ExecStart (> the runner's own --timeout-seconds
+# tree-kill). If the wrapper ever hangs, systemd SIGTERMs then (after TimeoutStopSec)
+# SIGKILLs the whole service cgroup — every child (runner, run_worker, Playwright/
+# chromium) dies; defence-in-depth against orphans. Type=oneshot ignores RuntimeMaxSec,
+# so TimeoutStartSec is the correct bound here.
+TimeoutStartSec=3000
+TimeoutStopSec=60
+KillMode=control-group
+
+# Fail closed; no automatic retries initially.
+Restart=no
+
+# Low priority so it never starves interactive/crawl work.
+Nice=10
+IOSchedulingClass=idle
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vibepin-product-supply
+
+[Install]
+WantedBy=multi-user.target

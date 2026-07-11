@@ -1,0 +1,1522 @@
+[
+  {
+    "post_number": 1,
+    "username": "PinterestHaley",
+    "name": "PinterestHaley",
+    "created_at": "2026-05-14T14:15:33.649Z",
+    "content": "Stocksy-28499981920×1280 602 KB\n\nHey Pinterest Developer Community,\n\nWe wanted to reach out to acknowledge that we are aware of current delays in the app approval process, and we sincerely apologize for any disruption this may be causing to your development timelines.\n\nOur team is actively working to resolve the backlog and get things moving as quickly as possible. We understand how important timely access is to building and launching your integrations, and we take that seriously.\n\nIn the meantime, if you have an urgent need, please don’t hesitate to submit a support ticket and flag it as high priority. Our support team will do their best to triage urgent cases as quickly as possible.\n\nIf you leave a comment or a post, please do not include your App ID or email address for privacy purposes — you may include them in your ticket as those are private to our support team!\n\nSubmit a support ticket: https://help.pinterest.com/en/contact\n\nWe appreciate your patience and continued partnership with Pinterest. We’ll share further updates as the situation progresses.\n\nThank you, The Pinterest API Support Team",
+    "reply_to_post_number": "",
+    "like_count": 11,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/1"
+  },
+  {
+    "post_number": 3,
+    "username": "manojshakya78605",
+    "name": "Manojshakya78605",
+    "created_at": "2026-05-23T09:53:33.616Z",
+    "content": "I need Standard access to publish organic pins via n8n workflow (using image_url to my verified website).\n\nPlease approve the transition from Trial to Standard access.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/3"
+  },
+  {
+    "post_number": 4,
+    "username": "holisticsouljourney",
+    "name": "Holisticsouljourney",
+    "created_at": "2026-05-25T08:02:11.065Z",
+    "content": "Dear Support,\n\nI have also recently submitted my Standard Access application and was wondering if @PinterestHaley could take a look at my request.\n\nLooking forward to using the API\n\nMany thanks!\n\nKind Regards\n\nMouniYadhul",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/4"
+  },
+  {
+    "post_number": 5,
+    "username": "convenientsupplies1",
+    "name": "Convenientsupplies1",
+    "created_at": "2026-05-25T08:02:20.432Z",
+    "content": "Hello Pinterest Developer Support,\n\nI’m requesting review and approval.\n\nApp Name:\n\nConvenient Supplies\n\nCurrent Use Case:\n\nPinterest content publishing\n\nPin scheduling\n\nProduct/catalog integrations\n\nAnalytics reporting for internal business operations\n\nThe application is intended for a single internal business account and is not being used for spam, mass posting, scraping, or third-party redistribution.\n\nRequested scopes are limited to:\n\nboards:read\n\nboards:write\n\npins:read\n\npins:write\n\nuser_accounts:read\n\nThe app is currently stuck in “Trial Access Pending” status and we would appreciate review/approval so we can complete integration testing and production verification.\n\nThank you for your time and support.",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/5"
+  },
+  {
+    "post_number": 6,
+    "username": "soumae",
+    "name": "Soumae",
+    "created_at": "2026-05-25T08:02:23.737Z",
+    "content": "Hello, I’m requesting trial access approval for my app Sou Mãe Pipeline. It’s an internal tool for our own blog soumae.org (a Brazilian\n\nmotherhood blog). The app will publish Pins from our published articles and read our own account analytics (impressions, saves, clicks). It operates only on\n\nour own Pinterest Business account (@soumae_). Could you please review and approve trial access? Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/6"
+  },
+  {
+    "post_number": 7,
+    "username": "2bwsr7b8vkkkd0d8661fqmx8oronwk",
+    "name": "2bwsr7b8vkkkd0d8661fqmx8oronwk",
+    "created_at": "2026-05-25T16:41:34.843Z",
+    "content": "Hello Pinterest Team,\n\nI’m requesting trial access approval for my application:\n\nApp name: limmerNET Pin Automation\n\nPinterest account: @limmernet (limmerNET e. K., Business Account)\n\nUse case: Automated posting of curated affiliate content pins\n\nto my own 6 Pinterest boards. All pins comply with Pinterest\n\ncommunity guidelines and include proper affiliate disclosure\n\n(#Werbung as required by German law). Pins drive traffic to\n\nAmazon product pages via Amazon Partner program links.\n\nScopes needed: boards:read, boards:write, pins:read, pins:write\n\nVolume: max 5-10 pins per day to my own boards\n\nCurrently getting: “Your application consumer type is not supported”\n\non all API v5 endpoints.\n\nThank you for activating trial access on this app.\n\nBest regards,\n\nlimmerNET e. K.",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/7"
+  },
+  {
+    "post_number": 8,
+    "username": "creatorintelhq",
+    "name": "Creatorintelhq",
+    "created_at": "2026-05-26T09:23:06.129Z",
+    "content": "Hi Pinterest Developer Team,\n\nI’m writing to request a review of my app’s Trial access, which has been in “Trial access pending” status with no updates.\n\nApp Details:\n\n• App Name: CreatorIntelHQ Pin Publisher\n\nCould you please review and approve my Trial access request at your earliest convenience? I’m happy to provide any additional information needed.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/8"
+  },
+  {
+    "post_number": 9,
+    "username": "gtvapp",
+    "name": "Gtvapp",
+    "created_at": "2026-05-26T17:29:49.591Z",
+    "content": "I’m writing to request a review of my app’s Trial access, which has been in “Trial access pending” status with no updates. We are under urgent timelines to launch our Pinterest integration.\n\nApp Details:\n\n• App Name: GTV\n\nCould you please review and approve our Trial access request at your earliest convenience? We are happy to provide any additional information needed.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/9"
+  },
+  {
+    "post_number": 10,
+    "username": "avekpl",
+    "name": "Avekpl",
+    "created_at": "2026-05-27T07:54:46.878Z",
+    "content": "Hi Pinterest Developer team,\n\nI’m requesting approval for Trial Access for my app AVEK Dashboard.\n\nUse case: I run a small e-commerce brand called AVEK (men’s accessories — jewelry, sunglasses, bags, wallets). I’m building an internal analytics dashboard to track our Pinterest performance alongside other social media channels (Instagram, TikTok, Threads, etc.).\n\nWhat the app does:\n\nReads our own Pinterest account analytics (impressions, engagement, followers)\n\nReads our boards and pins for performance tracking\n\nThis is a first-party app — it only accesses our own business account\n\nNo user data is collected, no third parties involved\n\nThe trial request has been pending for over a week now. I’d really appreciate a review of my application.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/10"
+  },
+  {
+    "post_number": 11,
+    "username": "briansuarezm",
+    "name": "Briansuarezm",
+    "created_at": "2026-05-27T14:51:40.845Z",
+    "content": "Hi Pinterest Developer Support,\n\nApp Name: Nuvola Pets AI Publisher\n\nCurrent issue:\n\nApp secret shows “Unavailable while trial access pending”\n\nAll API calls return 401: “consumer type not supported”\n\nUse case:\n\nI want to automate organic Pin publishing for my own\n\necommerce store (nuvolapets.com — pet accessories).\n\nI will only post to my own boards on my own Business account.\n\nScopes needed:\n\nboards:read, boards:write, pins:read, pins:write\n\nPlease approve trial access.\n\nThank you.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/11"
+  },
+  {
+    "post_number": 12,
+    "username": "PinterestAnna",
+    "name": "Anna",
+    "created_at": "2026-05-28T23:36:20.949Z",
+    "content": "Hi there @briansuarezm, @avekpl, @gtvapp, @creatorintelhq, @2bwsr7b8vkkkd0d8661fqmx8oronwk, @soumae, @convenientsupplies1, @holisticsouljourney, and @manojshakya78605! Welcome to the Community\n\nI apologize for the delay in response! So you know, our team is working on resolving a backlog of approving app access for folks.\n\nAs Haley on our Developers team mentioned in this post, If you have an urgent need, please don’t hesitate to submit a support ticket and flag it as high priority. Our support team will do their best to triage urgent cases as quickly as possible!\n\nSubmit a support ticket: https://help.pinterest.com/en/contact\n\nThank you all!\n\nWarmly,\n\nAnna K.\n\nCommunity Manager",
+    "reply_to_post_number": "",
+    "like_count": 3,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/12"
+  },
+  {
+    "post_number": 13,
+    "username": "landedmoneyca",
+    "name": "Landedmoneyca",
+    "created_at": "2026-05-29T16:11:10.016Z",
+    "content": "Hi Pinterest Developer team,\n\nI applied for Standard access for my app (account @landedmoney) and submitted the requested video\n\ndemo, but it’s still showing as pending review.\n\nThe integration is fully working on Trial access — OAuth is connected and authentication/reads work fine. The only\n\nthing blocking me is creating Pins in production, where I get:\n\ncode 29: “Apps with Trial access may not create Pins in production https://api.pinterest.com - use API Sandbox\n\nhttps://api-sandbox.pinterest.com instead.”\n\nCould you please review my Standard access submission, or let me know if you need anything further from me to complete\n\nit? I’m happy to re-send the demo or provide additional detail.\n\nThank you!\n\n— landedmoney.ca",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/13"
+  },
+  {
+    "post_number": 14,
+    "username": "PinterestAnna",
+    "name": "Anna",
+    "created_at": "2026-05-29T20:02:15.513Z",
+    "content": "Welcome to the Community, @landedmoneyca! Our team is working on approving a backlog of requests, so if you could give them a little time they’ll attend to your request ASAP! Keep checking and if in a week or so you don’t get approval please let me know and tag me on this thread.\n\nHave a great weekend and again, we appreciate your patience immensely!\n\nWarmly,\n\nAnna K.\n\nCommunity Manager",
+    "reply_to_post_number": 13,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/14"
+  },
+  {
+    "post_number": 15,
+    "username": "jolt",
+    "name": "Joltpost",
+    "created_at": "2026-06-01T00:03:27.453Z",
+    "content": "Hi @PinterestHaley @PinterestHaley - not an urgent requirement but we’ve been waiting to roll out app since three weeks now.\n\nWondering if there’s any update on how far Pinterest has gotten to resolve the backlog.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/15"
+  },
+  {
+    "post_number": 16,
+    "username": "edojapandi",
+    "name": "Edojapandi",
+    "created_at": "2026-06-01T08:08:19.161Z",
+    "content": "Hello Pinterest Developer Support team,\n\nMy app has been pending Trial access review for over one week.\n\nI would appreciate an expedited review.\n\nUse case: Automated pin publishing for my Etsy shop “Edo Japandi”\n\n— a curated collection of Japanese ukiyo-e art digital prints.\n\nThe app creates pins that link directly to product listings.\n\nPlease let me know if any additional information is needed.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/16"
+  },
+  {
+    "post_number": 17,
+    "username": "Lifelongdeo",
+    "name": "Lifelongdeo",
+    "created_at": "2026-06-01T10:56:17.827Z",
+    "content": "Hello,\n\nif pinterest could please give me access so I am not stuck on trial access would be great.\n\nMy business account - lifelongdeo\n\nI am approved shopify merchant. Please help or reach out and let me know the next steps.\n\nThanks",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/17"
+  },
+  {
+    "post_number": 18,
+    "username": "kurohyofire",
+    "name": "Kurohyofire",
+    "created_at": "2026-06-02T07:52:43.984Z",
+    "content": "Hello Pinterest team,\n\nI submitted my app for Trial access on May 20, 2026, but it is still showing “Trial access pending” 13 days later. Could you please review and approve it, or let me know if anything is missing on my side?\n\nApp details:\n\n- App name: kurohyo blog auto-pin\n\n- Business: Kurohyo-sensei (independent web writer, Japan)\n\n- Website: https://kurohyofire.com\n\n- Privacy policy: プライバシーポリシー | クロヒョウ先生＠Webライター\n\n- Use case: creating and scheduling Pins that link to my own blog articles (helpful info on sick leave, disability pension, and household finance for my readers)\n\n- Audience: my own account and my blog’s readers\n\nThank you very much for your help.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/18"
+  },
+  {
+    "post_number": 19,
+    "username": "SuaviusDigital",
+    "name": "Suavius Digital",
+    "created_at": "2026-06-02T12:50:17.335Z",
+    "content": "Hello Pinterest Developer Support, @PinterestAnna\n\nMy app shows “Trial access pending” and every API call (including Sandbox)\n\nreturns 401 “Your application consumer type is not supported”. Could you please\n\nreview and approve trial access?\n\nApp name: Etseeflow\n\nBusiness: SuaviusDigital\n\nWebsite: https://www.etsy.com/shop/SuaviusDigital\n\nUse case: automated pin publishing for my own Etsy shop (SuaviusDigital). The app\n\ncreates pins from my product listings that link directly to those listings.\n\nOwn-account only.\n\nAudience: my own account.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/19"
+  },
+  {
+    "post_number": 20,
+    "username": "navadecorco",
+    "name": "Navadecorco",
+    "created_at": "2026-06-02T13:54:00.691Z",
+    "content": "Hi Pinterest team — requesting trial access approval for my app “Nava Decor Ops”, submitted on May 22 and still showing “Trial access pending” a week later.\n\nIt’s a single-account internal tool for our own Pinterest business account (Nava Decor) — for updating our board descriptions/metadata and pulling our own organic analytics for reporting. Scopes needed: boards:read, boards:write, pins:read, user_accounts:read. No multi-user functionality, no ad campaign management.\n\nWould really appreciate a review when possible — happy to provide anything else you need. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/20"
+  },
+  {
+    "post_number": 21,
+    "username": "denmarkweddingservices",
+    "name": "Denmarkweddingservices",
+    "created_at": "2026-06-02T20:58:35.656Z",
+    "content": "Hi, our developer app currently shows Trial access active with a Standard access upgrade pending.\n\nWe submitted the Standard upgrade request on 14 May 2026 — so it has been pending for about 2.5 weeks now.\n\nIt’s a straightforward first-party use case: publishing our own original content to our own single business account, low volume, fully policy-compliant.\n\nCould anyone share the typical review timeline for a pending Standard upgrade, and whether there’s anything we can do to help it move along?\n\nThanks!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/21"
+  },
+  {
+    "post_number": 22,
+    "username": "pawvectors",
+    "name": "Pawvectors",
+    "created_at": "2026-06-03T12:55:41.703Z",
+    "content": "Hi team,\n\n(PawVectors n8n bot) was submitted for Standard Access on 17 May 2026. Today is day 17 of review.\n\nI received the initial submission acknowledgement email shortly after, but no further communication since. Wanted to flag in case the submission is stuck or there’s something I need to act on.\n\nQuick context on the app:\n\nBusiness: PawVectors — affiliate-driven SVG bundle reviews for crafters\n\nTwo verified business properties: pawvectors.com, psalmkids.com (domain-verified via meta tag)\n\nBoth sites have live Privacy Policy, Terms of Service, About, Affiliate Disclosure, and Contact pages\n\n5 boards created on the Pinterest business account, profile branded with bio + website\n\nApp dashboard fully filled (redirect URI added, scopes requested are minimum needed for own-account pin publishing)\n\nIntegration end-to-end tested via the Sandbox API and ready for production switch\n\nIf a staff member with visibility into the review queue could take a quick look — or let me know if there’s something missing on my end that’s holding it up — I’d really appreciate it.\n\nHappy to provide any additional info needed.\n\nThanks!\n\n— Aleksandr",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/22"
+  },
+  {
+    "post_number": 23,
+    "username": "wordofmouthfloors",
+    "name": "Wordofmouthfloors",
+    "created_at": "2026-06-03T19:08:41.828Z",
+    "content": "Hi Pinterest Developer team,\n\nRequesting trial API access activation for our app.\n\nApp name: Word Of Mouth Floors Publisher\n\nAccount: @wordofmouthfloors (Verified Merchant — 188k+ monthly views)\n\nWebsite: https://www.wordofmouthfloors.com\n\nWe are a Canadian flooring retailer and Verified Merchant on Pinterest. We’re requesting API access to automate publishing our own high-quality room-scene Pins (photography of our flooring products installed in real, designed spaces) to our own boards on our own account.\n\nUse case: scheduled, brand-owned content publishing to our own Pinterest business account — no third-party data, no posting to accounts we don’t own. We use the Pinterest API v5 endpoints: boards:read (to target the correct board), pins:read, and pins:write (to create Pins with media_source image_url, title, description, and a link back to wordofmouthfloors.com).\n\nCurrently all API calls return 401 “Your application consumer type is not supported, please contact support,” which indicates the app is pending/denied trial access. Could you please activate trial access for App ID 1558015 so we can proceed (and subsequently apply for Standard access with a demo video)?\n\nPrivacy policy: Privacy policy– Word of Mouth Floors\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/23"
+  },
+  {
+    "post_number": 24,
+    "username": "Loveukristina",
+    "name": "Loveukristina",
+    "created_at": "2026-06-04T07:22:25.366Z",
+    "content": "Hi team, I recently created an app and am requesting trial access approval.\n\nApp name: Kristina Claude MCP\n\nUse case: Personal read-only integration to access my own Pinterest boards and saved pins via the v5 API (boards:read, pins:read, user_accounts:read). This is for private personal use only — no third-party users, no publishing or ad management.\n\nThe app is currently showing “trial access denied” in the developer portal. All API requests return 401 with “consumer type not supported.” Happy to provide any additional info needed.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/24"
+  },
+  {
+    "post_number": 25,
+    "username": "ergosia_official",
+    "name": "Ergosia Official",
+    "created_at": "2026-06-04T22:05:59.159Z",
+    "content": "Business: Ergosia (ergosia.fr), a French e-commerce store selling ergonomic cushions. We are a verified merchant on Pinterest (@ergosia_official), with our domain claimed and our Shopify catalog connected.\n\nUse case: publish our OWN organic Pins to our OWN boards (linking to our blog articles and product pages) and read our OWN analytics. Own business account only — no third-party data, no posting on behalf of other users.\n\nProblem: the app secret shows “Unavailable while trial access refused.” After generating an access token, every endpoint fails before any endpoint logic:\n\nGET /v5/user_account → {“code”:3,“message”:“Your application consumer type is not supported, please contact support.”}\n\nGET /v5/boards → 401\n\nThe app Details form is complete (business name, website, privacy policy, and use case) and there is no option in the developer dashboard to re-request access.\n\nAsk: could you please review and approve trial access for App ID 1548418 (or advise how to make the consumer type supported)? Happy to provide any verification needed. Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/25"
+  },
+  {
+    "post_number": 26,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-05T08:16:40.622Z",
+    "content": "Hey everyone, and a warm welcome to all the new members joining the PBC!\n\nWe don’t have an exact turnaround time, but our team will review your requests and respond as soon as possible. This post by @PinterestHaley includes additional details on developer app approvals. Thanks for your patience with this!\n\nFeel free to reach if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/26"
+  },
+  {
+    "post_number": 27,
+    "username": "mixtapeprintsshop",
+    "name": "Mixtapeprintsshop",
+    "created_at": "2026-06-03T17:17:03.542Z",
+    "content": "Can you please review my trial application. Seems like it was denied automatically.\n\nThis app automates organic content publishing for MixTape Prints, a small ecommerce business selling custom 3D printed goods on Shopify. The app integrates our product catalog with Pinterest by creating Product Pins linked directly to our Shopify product pages. It uses the Pinterest API to programmatically create Pins with AI-generated titles and descriptions, post to product-specific boards, and pull performance analytics. All content is published from and owned by our own business Pinterest account — this is not a multi-user or SaaS tool. The OAuth flow authenticates our own business account to enable automated publishing as part of our content pipeline.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/27"
+  },
+  {
+    "post_number": 28,
+    "username": "superinvitation",
+    "name": "Superinvitation",
+    "created_at": "2026-06-03T23:53:39.620Z",
+    "content": "Hi Pinterest team,\n\nI submitted a Standard Access upgrade request for my app over a week ago and it’s still showing as “Pending” in the developer portal. I also submitted a support ticket today.\n\nApp: Super Invitation\n\nPortal status: Trial active, Standard upgrade pending\n\nUse case: Organic pin publishing for wedding inspiration content on our official business account. No ads, no catalog sales — just pins:write and boards:write for automated content from our platform.\n\nThe demo video was already submitted through the Standard Access upgrade form in the developer portal (initial request + updated submission with OAuth flow demo).\n\nCould you please check the status of our review or let us know if anything else is needed?\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/28"
+  },
+  {
+    "post_number": 29,
+    "username": "shellbellecouture",
+    "name": "Shellbellecouture",
+    "created_at": "2026-06-05T09:03:07.030Z",
+    "content": "Hi Pinterest Developer team,\n\nI submitted my app for Trial access and it has been showing\n\n“Trial access pending” without any update.\n\nApp details:\n\nApp name: Shell Belle Couture Pin Automation\n\nPurpose: Automatically pin new products from my Shopify store\n\nto my Pinterest business account.\n\nFirst-party use only — no third-party users.\n\nScopes needed: pins:write, boards:read\n\nCould you please review my application? Happy to provide any\n\nadditional information needed.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/29"
+  },
+  {
+    "post_number": 30,
+    "username": "muggalicious",
+    "name": "Muggalicious",
+    "created_at": "2026-06-05T09:03:11.316Z",
+    "content": "Hi Pinterest Developer team,\n\nI submitted my app for Trial access on May 23, 2026, and it has been showing\n\n“Trial access pending” for 13 days without any update.\n\nApp details:\n\nApp name: Sole Design Studio Pin Automation\n\nPurpose: Automatically pin new products from my Shopify store\n\n(soledesignstudio.com) to my Pinterest business account.\n\nFirst-party use only — no third-party users.\n\nScopes needed: pins:write, boards:read\n\nCould you please review my application? Happy to provide any additional\n\ninformation needed.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/30"
+  },
+  {
+    "post_number": 31,
+    "username": "Transformation_Avenue",
+    "name": "Transformation  Avenue",
+    "created_at": "2026-06-05T11:33:59.738Z",
+    "content": "Hello Pinterest team, I would like to request activation of trial access for my app, Transformation Avenue Poster. I plan to publish pins to my own Pinterest business account for my education brand for kids. My app secret currently shows “Unavailable while trial access pending.” Could you please activate trial access so I can generate my secret and use the pins:write scope? Appreciated.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/31"
+  },
+  {
+    "post_number": 32,
+    "username": "easyteachpl",
+    "name": "Easyteachpl",
+    "created_at": "2026-06-05T12:26:03.950Z",
+    "content": "Hi Pinterest team,\n\nMy app has been stuck in “Trial access pending” for 14 days and I’d like to\n\nrequest activation of trial access.\n\nApp name: Easy Teach Automation\n\nApp created: 2026-05-22\n\nThe app secret shows “Unavailable while trial access pending”. I generated a\n\nfresh access token today (Limited production environment, read scopes:\n\npins:read, boards:read, user_accounts:read, ads:read, catalogs:read), but every\n\nv5 endpoint returns:\n\nHTTP 401\n\n{“code”:3,“message”:“Your application consumer type is not supported, please contact support.”}\n\nI tested both /v5/user_account and /v5/boards with the same result.\n\nUse case: read-only access to my own Pinterest business account (@easyteachpl)\n\nto export my pin/board analytics for internal weekly reporting. Single account,\n\nno third-party users.\n\nCould you please activate trial access? Happy to provide any\n\nadditional details. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/32"
+  },
+  {
+    "post_number": 33,
+    "username": "japan_michi",
+    "name": "Japan Michi",
+    "created_at": "2026-06-05T12:26:20.493Z",
+    "content": "Hi Pinterest Developer team,\n\nI am requesting Standard Access for my app\n\nMICHI Autoposter\n\nUse case:\n\nI publish an English-language Osaka travel\n\nmedia (japan-michi.com) and need to\n\nautomatically post article pins to our own\n\nPinterest boards only.\n\nNo third-party users involved\n\nOnly posting to our own account\n\nWebsite: https://japan-michi.com\n\nPlease advise on next steps.\n\nThank you.\n\nShuhei Makigi\n\nStay Buddy Inc.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/33"
+  },
+  {
+    "post_number": 34,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-05T14:12:03.210Z",
+    "content": "Hi all! Welcome to all the new members!\n\nOur team is currently working through your approval requests, so while we can’t share an exact turnaround time, they’ll review your request as soon as possible. We really appreciate your patience in the meantime.\n\nAlso, this post by @PinterestHaley has some additional context around developer app approvals.\n\nIf you have any questions in the meantime, don’t hesitate to reach out!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/34"
+  },
+  {
+    "post_number": 35,
+    "username": "redaktionseismart",
+    "name": "Redaktionseismart",
+    "created_at": "2026-06-06T22:32:01.671Z",
+    "content": "Hi Pinterest API team,\n\nOur app has been in “Trial access pending” status for a few weeks now.\n\nUse case: first-party, single-account integration for our own German consumer-advice website (Pinterest business account with claimed domain, same domain as in the app profile). The app will create pins from our own articles on our own boards. No third-party users, no third-party data.\n\nCould you please review our trial access request? Happy to provide any additional information.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/35"
+  },
+  {
+    "post_number": 36,
+    "username": "AxisterraWorks",
+    "name": "Axisterra Works",
+    "created_at": "2026-06-07T07:54:58.227Z",
+    "content": "Hi Pinterest API team,\n\nOur app has been in “Trial access pending” status for two few weeks now.\n\nCould you please review our trial access request? Happy to provide any additional information.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/36"
+  },
+  {
+    "post_number": 37,
+    "username": "novustore",
+    "name": "Novustore",
+    "created_at": "2026-06-07T22:02:36.338Z",
+    "content": "Hi Pinterest team. My app “NOVU Claude” has been stuck in “Trial access pending” for over two weeks.\n\nCould you please review and approve trial access?\n\nUse case: first-party, single business account — I want to publish/schedule Pins, manage boards, and read analytics for my own Shopify store (https/novustores.com/ — domain already claimed, Verified Merchant Program submitted).\n\nNeeded scopes: pins:read, pins:write, boards:read, boards:write, user_accounts:read, catalogs:read. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/37"
+  },
+  {
+    "post_number": 38,
+    "username": "mathieudessaint10",
+    "name": "Mathieudessaint10",
+    "created_at": "2026-06-08T06:47:04.862Z",
+    "content": "Hi Pinterest team, requesting trial access approval for (Bloglink). It’s been pending ~6 days, past the usual 1–2 day turnaround.\n\nIt’s a first-party tool: it creates pins on our own Pinterest business account’s boards for articles published on our own niche content sites (e.g. woodworkstarter). Single owned account via OAuth2, posting only to boards we own, rate-limited, no third-party user access. Happy to provide anything else you need. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/38"
+  },
+  {
+    "post_number": 39,
+    "username": "FemmeBotanicals",
+    "name": "Femme Botanicals",
+    "created_at": "2026-06-08T07:55:37.778Z",
+    "content": "(post deleted by author)",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/39"
+  },
+  {
+    "post_number": 40,
+    "username": "0lm5vu37fbnbvoeyr7v4ds0y09a0ni",
+    "name": "0lm5vu37fbnbvoeyr7v4ds0y09a0ni",
+    "created_at": "2026-06-04T22:06:10.695Z",
+    "content": "Hi Pinterest team,\n\nCould you please review and approve trial access for my app?\n\nApp name: Divinav.com Integration\n\nSubmitted: 2026-05-27 (still showing “Trial access pending” 8+ days later)\n\nUse case: First-party, single-account automation. We only post Pins to our own\n\nbusiness account’s own boards (@divinav) — a scheduled publisher for our own\n\nmarketing content. No third-party users, no access to other accounts.\n\nScopes needed: pins:write, pins:read, boards:read, user_accounts:read\n\nRedirect URI we intend to use: http://localhost:8085/callback\n\nThe app has been pending well past the usual window and the app secret + redirect\n\nURI fields stay locked until trial access is granted, so we can’t complete OAuth.\n\nAny help moving this along would be appreciated. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/40"
+  },
+  {
+    "post_number": 41,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-08T09:26:40.395Z",
+    "content": "@redaktionseismart @AxisterraWorks @novustore @mathieudessaint10 @FemmeBotanicals @0lm5vu37fbnbvoeyr7v4ds0y09a0ni\n\nHi everyone, and a special welcome to our newest members!\n\nOur team is currently reviewing approval requests. While we’re not able to provide an exact timeline right now, please know that your request will be reviewed as soon as possible. We truly appreciate your patience while this process is underway.\n\nIn the meantime, @PinterestHaley’s post also includes some helpful additional information about developer app approvals.\n\nIf any questions come up, please feel free to reach out!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/41"
+  },
+  {
+    "post_number": 42,
+    "username": "akinbolawa90",
+    "name": "Akinbolawa90",
+    "created_at": "2026-06-08T09:49:15.975Z",
+    "content": "Dear Team,\n\nBringing this to the top of your mind.\n\nTrial access pending and Standard access.\n\nWarm Regards.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/42"
+  },
+  {
+    "post_number": 43,
+    "username": "madamebridal",
+    "name": "Madamebridal",
+    "created_at": "2026-06-08T09:53:19.833Z",
+    "content": "Hello,\n\nWe made an app 2 weeks ago and while Trial access was allowed right away, we got stuck with:\n\nTrial access active\n\nWe have submitted everything to move to production mode, but never got any answer.\n\nThanks",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/43"
+  },
+  {
+    "post_number": 44,
+    "username": "annalorekfoto",
+    "name": "Annalorekfoto",
+    "created_at": "2026-06-08T10:12:48.590Z",
+    "content": "Hi Pinterest team,\n\nI’m getting HTTP 401 with error code 3 — \"Your application consumer type is\n\nnot supported, please contact support.\" — on every v5 endpoint (including\n\nGET /v5/user_account and GET /v5/boards). The app secret in the console shows\n\n“Unavailable while trial access pending”, so it looks like my app is stuck in\n\ntrial-access-pending state.\n\nCould you please activate trial access for my app?\n\n- Account: Business account\n\n- Use case: Automatically publishing my own photography portfolio (my website) as pins to my own boards — a simple scheduled auto-pin tool for\n\nmy own content, no third-party data.\n\n- Scopes needed: boards:read, boards:write, pins:read, pins:write,\n\nuser_accounts:read\n\nThanks a lot for your help!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/44"
+  },
+  {
+    "post_number": 45,
+    "username": "aimakerspruche",
+    "name": "Aimakerspruche",
+    "created_at": "2026-06-08T12:08:54.077Z",
+    "content": "Hello Pinterest team,\n\nOur app has been showing “Trial access pending” for several days and the app secret is still unavailable.\n\n- App name: AI Maker Sprüche\n\n- Account: @aimakerspruche (business account, type: Content creator)\n\n- Intended use: scheduling and publishing our own Pins via the API (v5)\n\nCould you please activate trial access for this app so we can retrieve the app secret and continue development? Thank you very much!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/45"
+  },
+  {
+    "post_number": 46,
+    "username": "henrybuisness3",
+    "name": "Henrybuisness3",
+    "created_at": "2026-06-08T19:11:35.425Z",
+    "content": "Hi! My app is stuck on Trial access pending. The app secret shows “unavailable while trial access pending” and all v5 API calls (e.g. /v5/user_account, /v5/boards) return error code 3: “Your application consumer type is not supported, please contact support.” My access token authenticates fine. Could you please activate/approve Trial access for my app so I can create pins on my own Pinterest account? Thank you very much!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/46"
+  },
+  {
+    "post_number": 47,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-09T08:25:06.456Z",
+    "content": "@akinbolawa90 @madamebridal @annalorekfoto @aimakerspruche @henrybuisness3\n\nHi all, and welcome to our newest members!\n\nWe’re so glad you’re here and appreciate everyone’s patience as our team works through approval requests. While we’re not able to share an exact timeline right now, please know that each request will be reviewed as soon as possible.\n\nThanks again for being part of the community, and if any questions come up, please feel free to reach out.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/47"
+  },
+  {
+    "post_number": 49,
+    "username": "access10301",
+    "name": "Access10301",
+    "created_at": "2026-06-09T11:45:39.207Z",
+    "content": "My app ‘Recept-radar’ is stuck in Trial access pending and all v5 endpoints return 401 ‘consumer type is not supported’.\n\nCould you please activate trial access?\n\nUse case: internal recipe-trend analysis via the Trends API.\n\nThanks!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/49"
+  },
+  {
+    "post_number": 50,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-09T17:00:29.339Z",
+    "content": "Hi there @access10301, and welcome to the PBC!\n\nThank you for sharing this information. Please note that we don’t have an exact turnaround time, but our team will review your request and respond as soon as possible!\n\nThank you for your patience, and please let us know if you have any questions in the meantime!",
+    "reply_to_post_number": 49,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/50"
+  },
+  {
+    "post_number": 51,
+    "username": "muggalicious",
+    "name": "Muggalicious",
+    "created_at": "2026-06-10T08:47:34.385Z",
+    "content": "Update — June 10, 2026:\n\nGood news: Trial access was approved shortly after this post. Thank you!\n\nWe have now also submitted a Standard access upgrade request. The upgrade is currently showing as “pending” in our developer dashboard.\n\nOur integration is fully built and tested — OAuth flow working, analytics connected, and 795 Shopify products queued for pin publishing. We’re just waiting on Standard access to go live.\n\nAny update on the expected review timeline for Standard access upgrades would be greatly appreciated!\n\nThank you,\n\nSole Design Studio",
+    "reply_to_post_number": 30,
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/51"
+  },
+  {
+    "post_number": 52,
+    "username": "akinbolawa90",
+    "name": "Akinbolawa90",
+    "created_at": "2026-06-10T08:52:20.488Z",
+    "content": "Please help in deleting my app. I can’t see a button to delete.\n\nI need to delete so I can create a new app with the correct information.\n\nThank you in advance",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/52"
+  },
+  {
+    "post_number": 53,
+    "username": "jolt",
+    "name": "Joltpost",
+    "created_at": "2026-06-11T06:13:25.685Z",
+    "content": "Hi Pinterest Developer team,\n\nI submitted my app for Trial access on May 13, 2026, and it has been showing “Trial access pending” for several weeks without any update.\n\nApp details:\n\nPurpose: A cross-platform social media scheduler that lets users connect their Pinterest account via OAuth 2.0, compose image or video pins, choose one of their boards, and publish immediately or on a schedule.\n\nScopes requested:\n\nuser_accounts:read - Read the connected Pinterest account on connect, including username, account type, and profile details. Also used for account-level analytics and follower count.\n\nboards:read - List the user’s boards so they can choose where to publish a pin. Also required for pin analytics.\n\nboards:write - Create boards from the app when the user wants a new destination board while composing.\n\npins:read - Read pins published through the app and support pin analytics.\n\npins:write - Create pins on the board selected by the user. This is the core publishing action.\n\nThe app only stores what is needed to publish on the user’s behalf, including encrypted OAuth access and refresh tokens, basic connected account profile information (id, username, avatar URL), and the board ID selected for each scheduled pin. Board lists are fetched live from Pinterest when the user opens the board picker and are never stored in our database.\n\nUsers can disconnect Pinterest at any time from the app’s settings, which revokes access and deletes the stored Pinterest tokens and profile data.\n\nWe do not collect Pinterest passwords, do not use session cookies, do not scrape Pinterest, do not access secret boards, and do not resell or share Pinterest data. Analytics are shown only to the connected account owner and are not used for ad targeting or audience profiling.\n\nCould you please review my application? I noticed some later applications have already been approved, so I wanted to check if anything else is needed from my side.\n\nHappy to provide any additional information.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/53"
+  },
+  {
+    "post_number": 54,
+    "username": "americanwesternwalls",
+    "name": "Americanwesternwalls",
+    "created_at": "2026-06-11T08:14:42.768Z",
+    "content": "Hi Pinterest. I understand there is a backlog, we’ve been stuck at Upgrade to Standard access pending which we need to finish our Pinterest integration. We are a small POD business looking to mirror our artwork collection over to Pinterest and have already built our integration as well as we can without standard access. and if someone could take a look and approve it, it would be very helpful! I’m happy to provide any more information that would be required. Our app will only be used by me and one other employee so very limited in scope. Thanks and all the best!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/54"
+  },
+  {
+    "post_number": 55,
+    "username": "akinbolawa90",
+    "name": "Akinbolawa90",
+    "created_at": "2026-06-11T09:16:28.070Z",
+    "content": "Dear team,\n\nNew request has been logge. please grant approval\n\nWarm regards",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/55"
+  },
+  {
+    "post_number": 56,
+    "username": "TheUnfoldingJapan",
+    "name": "The Unfolding Japan",
+    "created_at": "2026-06-10T00:55:27.240Z",
+    "content": "Hello Pinterest Developer team,\n\nI’d like to request a review of my trial access.\n\nApp name: TheUnfoldingJapan apps\n\nSubmitted: May 31, 2026 (10+ days pending)\n\nDeveloper purpose: Developing an app for my own personal/organization use\n\nUse cases: Pin creation & scheduling, Reporting\n\nAPI scopes: pins:read, pins:write, boards:read, user_accounts:read\n\nAudience: Pinners (managing my own Etsy shop’s pins)\n\nThe app has been in “Trial access pending” status for over 10 days, and the App secret key field is still locked. Could you please review and approve it?\n\nThank you.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/56"
+  },
+  {
+    "post_number": 57,
+    "username": "emily12981",
+    "name": "Emily12981",
+    "created_at": "2026-06-09T22:10:15.592Z",
+    "content": "My app is stuck in Trial access pending and all v5 endpoints return 401 “consumer type is not supported.”\n\nCould you please activate trial access?\n\nUse case: saving fashion product pins to my own boards via the Pins API.\n\nThanks!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/57"
+  },
+  {
+    "post_number": 58,
+    "username": "alexander_lipkin",
+    "name": "Alexander Lipkin",
+    "created_at": "2026-06-11T07:57:24.534Z",
+    "content": "Hi Pinterest team,\n\nMy app “utopia milano agent” has Trial access active,\n\nand the upgrade request to Standard access has been pending for a while.\n\nThe app publishes organic Pins for my own photography business account\n\n(@alexander_lipkin) — content publishing and analytics only, single user.\n\nI have a complete demo video of the full OAuth flow ready (authorization\n\nscreen → Allow → token exchange → successful production API calls to\n\n/user_account and /boards), and can provide it if needed.\n\nCould you please check the status of my request or let me know if\n\nanything else is required?\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/58"
+  },
+  {
+    "post_number": 59,
+    "username": "postershop_dk",
+    "name": "Postershop Dk",
+    "created_at": "2026-06-11T12:05:21.937Z",
+    "content": "Hello Pinterest Developer team,\n\nI would like to kindly request a review of my Trial access application.\n\nApp name: Postershop Pin Engine\n\nSubmitted: June 10, 2026\n\nDeveloper purpose: App for my own organization/personal use only\n\nUse cases: Pin creation & scheduling, Reporting\n\nRequested scopes: pins:read, pins:write, boards:read, boards:write, user_accounts:read\n\nAudience: Content creators (managing organic pins for my own webshop postershop.dk, which is connected to my Pinterest business account as verified merchant)\n\nThe app is currently in “Trial access pending” status and the App secret key field is locked. We are eager to test the API properly (and to subsequently apply for Standard access with the required OAuth demo video).\n\nCould you please review and approve it? Thank you very much!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/59"
+  },
+  {
+    "post_number": 60,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-11T17:02:40.282Z",
+    "content": "@muggalicious @akinbolawa90 @jolt @americanwesternwalls @TheUnfoldingJapan @emily12981 @alexander_lipkin @postershop_dk\n\nHi all, welcome to the Community and thank you for taking the time to share details about the situation each of you are facing!\n\nAlthough we can’t share an exact turnaround time at this time, our team is actively reviewing your requests and will follow up as soon as possible.\n\nThank you for your understanding and patience. If any questions come up in the meantime, please feel free to reach out.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/60"
+  },
+  {
+    "post_number": 61,
+    "username": "sanikbofficial",
+    "name": "Sanikbofficial",
+    "created_at": "2026-06-12T07:52:44.421Z",
+    "content": "Hi, requesting trial access activation\n\nAccount type: Business\n\nUse case: We run SANIKB (https://sanikb.com), a kitchen & bath fixtures store. We want to publish our own product Pins to our own boards via the v5 API to promote our catalog.\n\nScopes needed: pins:read, pins:write, boards:read, boards:write\n\nThe App secret currently shows “Unavailable while trial access denied” and generated tokens are read-only. Could you please review and activate trial access? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/61"
+  },
+  {
+    "post_number": 62,
+    "username": "rosebaieparis",
+    "name": "Rosebaieparis",
+    "created_at": "2026-06-11T20:21:07.737Z",
+    "content": "Hello Pinterest Developer Support,\n\nMy app has been stuck in “Trial access pending” since June 1, 2026 (10+ days).\n\nApp name: Rosebaie Ads Reporting\n\nCompany: ROSEBAIE PARIS\n\nWebsite: https://www.rosebaie.com/\n\nCurrent issues:\n\nApp secret is unavailable (“Unavailable while Trial access pending”)\n\nAll v5 Ads API requests return:\n\n{“code”:3,“message”:“Your application consumer type is not supported, please contact support.”}\n\nUse case:\n\nInternal read-only tool that pulls analytics from our own Pinterest Ads\n\naccount — campaigns, spend, impressions,\n\nclicks, conversions — to generate a daily internal performance report.\n\nNo posting, no third-party data access.\n\nThe app details (company name, website, privacy policy, purpose) are\n\nfully completed. Could you please review and activate Trial access,\n\nor let me know if anything is missing?\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/62"
+  },
+  {
+    "post_number": 63,
+    "username": "Kreslo_Relax",
+    "name": "Kreslo Relax",
+    "created_at": "2026-06-11T18:24:51.758Z",
+    "content": "Hello Pinterest team,\n\nI have two business apps that appear to be stuck in “trial access pending” and cannot make any API calls.\n\nSymptoms (both apps):\n\nEvery Pinterest API v5 endpoint returns HTTP 401, code 3: “Your application consumer type is not supported, please contact support.” This happens on both production (api.pinterest.com) and sandbox (api-sandbox.pinterest.com).\n\nThe App secret shows “Unavailable while trial access is pending.”\n\nI generated an access token from the dashboard (both the Limited production and the Sandbox environments). Every endpoint, including GET /v5/user_account, still returns the same 401 “consumer type” error.\n\nUse case (own-business only):\n\nI publish my own content (images and videos) to my own Pinterest business accounts on a schedule, and I read analytics for my own pins. No third-party or agency use.\n\nPrivacy policy: Политика конфиденциальности — mnogoGPT\n\nRedirect URI: https://mnogogpt.ru/pin-oauth/callback.php\n\nCould you please review and activate Trial access for both App IDs\n\nThank you very much!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/63"
+  },
+  {
+    "post_number": 64,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-12T08:42:52.045Z",
+    "content": "Hi @sanikbofficial, @rosebaieparis and @Kreslo_Relax! Welcome to the PBC!\n\nWe don’t have an exact turnaround time, but our team will review your requests and respond ASAP!\n\nThis post by @PinterestHaley includes additional info on developer app approvals.\n\nThanks for your patience with this! Please let us know if you have any questions in the meantime.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/64"
+  },
+  {
+    "post_number": 65,
+    "username": "annalorekfoto",
+    "name": "Annalorekfoto",
+    "created_at": "2026-06-12T16:52:28.657Z",
+    "content": "Hi @PinterestAnna @PinterestFernanda - is there any new news on the API approval?",
+    "reply_to_post_number": 44,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/65"
+  },
+  {
+    "post_number": 66,
+    "username": "million_hot",
+    "name": "Million Hot",
+    "created_at": "2026-06-13T11:18:29.763Z",
+    "content": "Hello Pinterest Developer team,\n\nI would like to kindly request a review of my Trial access application.\n\nApp name: my_postiz_app\n\nSubmitted: June 31, 2026\n\nDeveloper purpose: App for my own organization/personal use only\n\nUse cases: Pin creation & scheduling, Reporting\n\nRequested scopes: pins:read, pins:write, boards:read, boards:write, user_accounts:read\n\nThe app is currently in “Trial access pending” status and the App secret key field is locked.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/66"
+  },
+  {
+    "post_number": 67,
+    "username": "Remontostroy",
+    "name": "Remontostroy",
+    "created_at": "2026-06-12T18:57:53.552Z",
+    "content": "Dear Pinterest Developer Support Team,\n\nI am writing to kindly request an update and possible acceleration of the review process for my applications submitted on June 2nd. I am seeking test (sandbox) access to the Pinterest API.\n\nI have carefully reviewed Pinterest’s API guidelines and prepared all the required information for testing. I understand that reviews take time, but as a business user, I would greatly appreciate any help to move the process forward so I can begin integrating and testing with the API.\n\nIf there is any additional information or action required from my side, please let me know. Thank you for your time and support.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/67"
+  },
+  {
+    "post_number": 68,
+    "username": "holdmomentscontact",
+    "name": "Holdmomentscontact",
+    "created_at": "2026-06-13T21:22:24.067Z",
+    "content": "Hi,\n\nMy API app is stuck on “trial access pending”:\n\nThe app secret shows “Unavailable while trial access pending”.\n\nOnly read scopes are available (pins:read, boards:read, user_accounts:read,\n\nads:read, catalogs:read) — there’s no pins:write or boards:write.\n\nI want to publish Pins to my OWN business account automatically — my own\n\nproducts only, fully compliant, no scraping or spam.\n\nQuestions:\n\nHow do I move from trial access to Standard access to get pins:write and\n\nboards:write?\n\nWhy is the app secret unavailable while trial access is pending — is approval\n\nrequired first, and roughly how long does it take?\n\nIs there a form or use-case description I need to submit?\n\nThanks!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/68"
+  },
+  {
+    "post_number": 69,
+    "username": "seanmwill2468100001",
+    "name": "Seanmwill2468100001",
+    "created_at": "2026-06-14T06:08:55.110Z",
+    "content": "Hi Pinterest team,\n\nI’d appreciate a review of my app for Trial access.\n\nApp name: Zeva\n\nStatus: “Trial access pending”\n\nMy app lets businesses connect their own Pinterest account and publish Pins\n\nthey create in Zeva, with their approval — standard create/read of boards and\n\nPins on the user’s own account via the v5 API. All app details are complete\n\n(icon, description, privacy policy, terms, and a verified company website, all\n\nfilled in the app settings), and it’s been pending review for a while.\n\nCould you please review it for Trial access when you have a chance? Happy to\n\nprovide any additional info you need.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/69"
+  },
+  {
+    "post_number": 70,
+    "username": "hadanoteofficial",
+    "name": "Hadanoteofficial",
+    "created_at": "2026-06-14T08:17:21.877Z",
+    "content": "My app (App name: Hadanote - Skincare Media for Women in their 30s-50s) is stuck in trial access pending state.\n\nI have a valid OAuth token but all v5 endpoints return 401 error: “consumer type is not supported” (code 3).\n\nCould you please activate trial access for my app?\n\nThank you.\n\nMy app (App name: 肌研究ノート｜30〜50代女性向けのスキンケアメディア) is stuck in trial access pending state.\n\nI have a valid OAuth token but all v5 endpoints return 401 error: “consumer type is not supported” (code 3).\n\nCould you please activate trial access for my app?\n\nThank you.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/70"
+  },
+  {
+    "post_number": 71,
+    "username": "holisticsouljourney",
+    "name": "Holisticsouljourney",
+    "created_at": "2026-06-14T14:33:12.778Z",
+    "content": "Dear Support, I submitted my Standard Access application and was wondering if @PinterestHaley could take a look at my request. Looking forward to using the API Many thanks! Kind Regards MouniYadhul",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/71"
+  },
+  {
+    "post_number": 72,
+    "username": "partydressesaustralia",
+    "name": "Partydressesaustralia",
+    "created_at": "2026-06-15T07:55:45.764Z",
+    "content": "Hi Pinterest Developer team,\n\nI’d like to kindly request a review of my pending Trial access application.\n\nApp name: Party Dresses Australia App\n\nBusiness account: partydressesaustralia\n\nWebsite: partydresses.com.au\n\nDeveloper purpose: For my own organisation / personal business use only — this is not a third-party or multi-user app.\n\nUse case: I run a small Australian party-dress affiliate website. I want to use the Pinterest API solely to schedule and publish pins of my own blog content to my own Pinterest business account, to promote my posts consistently. The app only ever acts on behalf of my own account.\n\nRequested scopes: pins:read, pins:write, boards:read, boards:write, user_accounts:read\n\nThe application has been in “Trial access pending” status for around two weeks, and the App secret key is currently unavailable while it stays pending. Could you please review when you have a chance? Happy to provide any further details you need.\n\nThank you for your time.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/72"
+  },
+  {
+    "post_number": 73,
+    "username": "yuki88231910",
+    "name": "Yuki88231910",
+    "created_at": "2026-06-15T07:55:48.974Z",
+    "content": "Hi team,\n\nMy newly created app (“Japan Finds”) returns 401\n\n“Your application consumer type is not supported, please contact support”\n\non all v5 endpoints. The app secret shows trial access pending.\n\nCould you please activate trial access.\n\nUse case: posting my own curated Japanese-product pins to my own board\n\n(scopes: pins:write, boards:read). Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/73"
+  },
+  {
+    "post_number": 74,
+    "username": "akinbolawa90",
+    "name": "Akinbolawa90",
+    "created_at": "2026-06-15T08:17:55.870Z",
+    "content": "Hello Team,\n\nPlease approve.\n\nBolawa IT Solutions Limited app\n\nWarm regards.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/74"
+  },
+  {
+    "post_number": 75,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-15T10:20:34.933Z",
+    "content": "@annalorekfoto @million_hot @Remontostroy @holdmomentscontact @seanmwill2468100001 @hadanoteofficial @holisticsouljourney @partydressesaustralia @yuki88231910 @akinbolawa90\n\nHi all, and welcome to our newest members!\n\nAt this time, we’re unable to provide an exact turnaround time, but our team will review your request and respond as soon as possible.\n\nWe really appreciate your patience, and please feel free to reach out if any other questions come up.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/75"
+  },
+  {
+    "post_number": 76,
+    "username": "bucketlistburkes",
+    "name": "Bucketlistburkes",
+    "created_at": "2026-06-15T16:59:17.587Z",
+    "content": "Hi Pinterest Developer Team,\n\nI’m requesting a review of my pending Trial access application.\n\n• App name: BucketListBurkes Pin Scheduler\n\n• Submitted: June 12, 2026 (still showing “Trial access pending”)\n\n• Developer type: First-party / single account — for my own use only\n\nUse case: This app schedules and publishes pins for my own Etsy store\n\n(single shop, owner-operated). Once a week it creates 2–4 pins promoting\n\nmy Etsy listings — each with a product image, a short description, and a\n\nlink back to the listing. Every pin is human-reviewed and approved before\n\npublishing. It posts only to boards owned by my account, on behalf of my\n\naccount only — no third-party users.\n\nScopes requested: pins:write, pins:read, boards:read, user_accounts:read\n\nIt’s been pending for several days with no status change. Could you please\n\nreview when you have a chance? Happy to provide any additional detail.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/76"
+  },
+  {
+    "post_number": 77,
+    "username": "SacredHomeStudios",
+    "name": "Sacred Home Studios",
+    "created_at": "2026-06-16T01:54:47.625Z",
+    "content": "Hi Pinterest team,\n\nMy app is stuck in “trial access pending” and can’t make any v5 API calls.\n\nApp name: SacredHomeStudios Marketing\n\nAccount: Business account (SacredHomeStudios)\n\nSymptoms:\n\nThe app secret shows “Unavailable while trial access pending.”\n\nEvery v5 endpoint returns HTTP 401, code 3: “Your application consumer type is\n\nnot supported, please contact support.” This includes GET /v5/user_account,\n\nGET /v5/pins, and GET /v5/boards.\n\nThe same error occurs on both production and sandbox, so it isn’t an environment or token issue.\n\nUse case: I want to publish organic Pins for my own business (a scripture wall-art\n\nshop) and read analytics for my own Pins. It is all first-party, no third-party data access.\n\nCould you please activate trial access? Happy to provide any\n\nadditional details. Thank you!\n\nCamden",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/77"
+  },
+  {
+    "post_number": 78,
+    "username": "focolaserdesign",
+    "name": "Focolaserdesign",
+    "created_at": "2026-06-15T20:48:03.999Z",
+    "content": "My app has been stuck in “trial access pending” status.\n\nThe app secret shows “Unavailable while trial access pending”, and every\n\nv5 endpoint returns HTTP 401 code 3: “Your application consumer type is\n\nnot supported, please contact support.” — on BOTH production\n\n(api.pinterest.com) and sandbox (api-sandbox.pinterest.com), with both\n\nsandbox and limited-production tokens.\n\nApp purpose: automatically publish our own product photos to our Pinterest\n\nBusiness boards, organized by category, on a schedule. We are an e-commerce\n\nbusiness (Foco Laser — focolaser.com.br) selling personalized laser-cut\n\nproducts. Auth is OAuth 2.0 (Authorization Code). Scopes: boards:read,\n\npins:read, pins:write.\n\nCould you please activate trial access so we can start\n\nintegrating? Happy to provide any additional info. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/78"
+  },
+  {
+    "post_number": 79,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-16T08:02:52.766Z",
+    "content": "Hi there @bucketlistburkes, @SacredHomeStudios and @focolaserdesign!\n\nThank you for reaching out here at the PBC! We don’t have an exact turnaround time, but our team is working diligently to respond as soon as they can to review and respond your requests.\n\nThank you for your patience at this time. Please, let us know if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/79"
+  },
+  {
+    "post_number": 80,
+    "username": "johb2498",
+    "name": "Johb2498",
+    "created_at": "2026-06-16T09:10:34.622Z",
+    "content": "Hi Pinterest Developer Team,\n\nCould you please review and approve Trial access for my app? It has been in “Trial access pending” status since June 5, 2026 (about 11 days now) with no status update.\n\nApp details:\n\nApp name: harukapin\n\nBusiness account website: https://first-money-guide.com\n\nUse case: I publish Pins for my own blog articles to my own Pinterest business account through the API (Pin creation / scheduled posting). This is a personal, single-account app — it does not act on other users’ accounts.\n\nThank you for your help.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/80"
+  },
+  {
+    "post_number": 81,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-16T17:00:42.466Z",
+    "content": "Hey @access10301, and welcome to the PBC!\n\nThank you for sharing this information. We don’t have an exact turnaround time, but our team will review your request and respond as soon as possible!\n\nThanks for your patience, and please let us know if you have any questions in the meantime!",
+    "reply_to_post_number": 80,
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/81"
+  },
+  {
+    "post_number": 82,
+    "username": "clabadji",
+    "name": "Clabadji",
+    "created_at": "2026-06-16T18:30:30.925Z",
+    "content": "Hi, my app ( “Claude Connect”) is stuck in “Trial access pending”. All v5 endpoints (/user_account, /boards, /pins) return 401 code 3 “Your application consumer type is not supported”. The app secret is unavailable and the redirect URI is greyed out. My account is a business account. Use case: read-only access to my own boards and pins for personal design-reference organization. Could you please activate trial access / unblock the app? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/82"
+  },
+  {
+    "post_number": 83,
+    "username": "ANTIKHOLZPL",
+    "name": "Antikholzpl",
+    "created_at": "2026-06-16T19:44:37.187Z",
+    "content": "Hi, My app Antik Holz Charaziński Contents has been in “Trial access pending” status for over 7 days. The application includes:\n\nCompany website: [link]\n\nPrivacy policy: [link]\n\nUse case: publishing our own product photos to our company Pinterest account @ANTIKHOLZPL using Pinterest API v5\n\nCould a Pinterest team member please review and activate trial access? Thank you.\n\nDawid",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/83"
+  },
+  {
+    "post_number": 84,
+    "username": "SterenFromCornwall",
+    "name": "Steren From Cornwall",
+    "created_at": "2026-06-16T19:54:26.110Z",
+    "content": "Hi Pinterest team,\n\nMy app has been in “trial access pending” for several days. The app secret still\n\nshows “Unavailable while trial access pending,” and every v5 endpoint returns\n\nHTTP 401 “application consumer type is not supported” — including a simple\n\nGET /v5/user_account on my own account.\n\nCould you please activate trial access for my app?\n\nApp name: MysticCornwall Pin Performance\n\nPinterest account: [@MysticCornwall]\n\nUse case: read-only analytics for my own organic Pins (scopes pins:read,\n\nboards:read). Single user (the account owner). No third-party data, no\n\ncontent publishing, no ads.\n\nThank you very much for your help.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/84"
+  },
+  {
+    "post_number": 85,
+    "username": "militellodaniele022018",
+    "name": "Militellodaniele022018",
+    "created_at": "2026-06-17T00:23:31.631Z",
+    "content": "Titolo: Trial access activation request\n\nHi Pinterest team, my app is stuck in “trial access pending” and all v5 endpoints return HTTP 401, code 3 (“consumer type is not supported”). The app secret shows “unavailable while trial access pending.”\n\nAccount: Business account\n\nUse case: internal market/trend analysis for product research (reading trending keywords and categories)\n\nScopes: ads:read, pins:read\n\nCould you please review and activate trial access? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/85"
+  },
+  {
+    "post_number": 86,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-17T08:52:38.492Z",
+    "content": "@clabadji @ANTIKHOLZPL @SterenFromCornwall @militellodaniele022018\n\nHi all, and welcome to the Community!\n\nAt this time, we’re not able to provide an exact turnaround time, but please know the team is diligently working through requests.\n\nWe really appreciate your patience. In the meantime, feel free to let us know if any questions come up.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/86"
+  },
+  {
+    "post_number": 87,
+    "username": "sosuites",
+    "name": "Sosuites",
+    "created_at": "2026-06-17T09:53:49.870Z",
+    "content": "Hi, my newly created app returns error code 3 “Your application consumer type is not supported” on all v5 endpoints (/user_account, /boards). The app secret shows “Unavailable while trial access pending”. Could you please manually activate trial access? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/87"
+  },
+  {
+    "post_number": 88,
+    "username": "arun5329",
+    "name": "Arun5329",
+    "created_at": "2026-06-17T13:58:38.177Z",
+    "content": "App name: hotspot\n\nAccount type: Business\n\nEvery v5 endpoint returns HTTP 401, code 3:\n\n“Your application consumer type is not supported, please contact support.”\n\nThis happens on both production and sandbox, with the production-limited token.\n\nThe app secret shows “Unavailable while trial access pending.”\n\nPlease activate trial access for this app.\n\nUse case: read-only retrieval of public eyewear/fashion imagery via /search/pins\n\nand board/pin reads, for an internal visual trend-analysis prototype. Read-only;\n\nno posting, no user data collection.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/88"
+  },
+  {
+    "post_number": 89,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-17T16:35:34.691Z",
+    "content": "Hey @sosuites and @arun5329, welcome to the Community!\n\nThank you for sharing details about this situation. We’re not able to provide an exact turnaround time at the moment, but our team is reviewing your request and will follow up as soon as possible.\n\nThanks for your patience at this time, and please let me know if we can help with anything else!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/89"
+  },
+  {
+    "post_number": 90,
+    "username": "PinterestAnna",
+    "name": "Anna",
+    "created_at": "2026-06-17T18:36:38.052Z",
+    "content": "Hey Pinterest Developer Community! Another kind reminder:\n\nWe wanted to reach out to acknowledge that we are aware of current delays in the app approval process, and we sincerely apologize for any disruption this may be causing to your development timelines.\n\nUnfortunately, we cannot speed up the process at this time so we appreciate your patience in advance!\nOur team is actively working to resolve the backlog and get things moving as quickly as possible. We understand how important timely access is to building and launching your integrations, and we take that seriously.\n\nIn the meantime, if you have an urgent need, please don’t hesitate to submit a support ticket and flag it as high priority. Our support team will do their best to triage urgent cases as quickly as possible.\n\nPlease note that unfortunately, we cannot speed up the process at this time so we appreciate your patience in advance! If you leave a comment or a post, please do not include your App ID or email address for privacy purposes — you may include them in your ticket as those are private to our support team!\nFor updates on your trial request, submit a support ticket: https://help.pinterest.com/en/contact\n\nWe appreciate your patience and continued partnership with Pinterest. We’ll share further updates as the situation progresses.",
+    "reply_to_post_number": "",
+    "like_count": 4,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/90"
+  },
+  {
+    "post_number": 91,
+    "username": "mrscrochetworld",
+    "name": "Mrscrochetworld",
+    "created_at": "2026-06-17T20:53:14.782Z",
+    "content": "Hi Pinterest team, I submitted a Standard access upgrade request for my app about 10 days ago and it still shows as pending, so I wanted to kindly ask for a review. App name: MrsCrochetWorld Agent App. Current access: Trial (active and working well for several weeks). Request type: upgrade to Standard access. My submission included the required demo video showing the full OAuth authentication flow and a live API call, as well as a publicly accessible privacy policy on our own domain. Could you please check the status of this request or let me know if any additional information is needed? Thank you very much for your help!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/91"
+  },
+  {
+    "post_number": 92,
+    "username": "s2almagemea",
+    "name": "S2almagemea",
+    "created_at": "2026-06-17T21:52:34.122Z",
+    "content": "Hello Pinterest team,\n\nMy newly created app is stuck in “trial access pending” and every v5 endpoint\n\n(GET /v5/user_account, /v5/boards, /v5/pins) returns HTTP 401 code 3:\n\n“Your application consumer type is not supported, please contact support.”\n\nThe app secret also shows “Unavailable while trial access pending.”\n\nCould you please activate trial access for:\n\nUse case: organic content management (create/read pins and boards) + analytics\n\nAccount type: business\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/92"
+  },
+  {
+    "post_number": 93,
+    "username": "falecomalolucro",
+    "name": "Falecomalolucro",
+    "created_at": "2026-06-18T07:56:43.467Z",
+    "content": "Hi team! My newly created app is stuck in “trial access pending” — every v5 endpoint returns HTTP 401 code 3: “Your application consumer type is not supported, please contact support.” The app secret shows “Unavailable while trial access pending.”\n\nCould you please activate trial access for this app?\n\n• Business: Alô, Lucro! (Antes & Depois) — a WhatsApp assistant for home bakers in Brazil\n\n• Account type: Business\n\n• Scope needed: user_accounts:read\n\n• Use case: read Pinterest Trends (trending keywords for Brazil) to suggest product ideas inside the assistant. Read-only.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/93"
+  },
+  {
+    "post_number": 94,
+    "username": "deco_petit_espace",
+    "name": "Deco Petit Espace",
+    "created_at": "2026-06-18T08:52:24.284Z",
+    "content": "Hi Pinterest team,\n\nMy app is stuck in “Trial access pending”. The app secret shows “Unavailable while trial access pending”, and every v5 endpoint (including GET /v5/boards) returns HTTP 401, code 3: “Your application consumer type is not supported, please contact support.” This happens with the Production Limited token.\n\nApp Name: PetitEspaceDeco_Auto\n\nAccount type: Business\n\nUse case: Automating publication of my own content to my own Pinterest boards.\n\nCould you please manually activate Trial access for this app? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/94"
+  },
+  {
+    "post_number": 95,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-18T15:01:44.302Z",
+    "content": "Hey @mrscrochetworld, @s2almagemea, @falecomalolucro and @deco_petit_espace!\n\nWe don’t have an exact turnaround time, but our team will review your requests and respond as soon as possible. This post by @PinterestHaley includes additional details on developer app approvals. Thanks for your patience with this!\n\nYou can also check this reply from one of our Community Managers for further guidance.\n\nFeel free to reach if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/95"
+  },
+  {
+    "post_number": 96,
+    "username": "tompat79",
+    "name": "Tompat79",
+    "created_at": "2026-06-18T21:38:28.185Z",
+    "content": "Hi Pinterest team,\n\nMy newly created app is stuck in “Trial access pending”. Every v5 API call (e.g. GET /v5/user_account) returns 401 code 3: “Your application consumer type is not supported, please contact support.” The App secret also shows “Unavailable while trial access pending”.\n\nApp name: tom&pat Pins\n\nBusiness account, verified domain tom-pat.de (claimed)\n\nUse case: managing my own boards and pins for my Shopify shop (creating and organizing pins, linking them to product pages; read + write boards and pins).\n\nCould you please activate trial access for this app? Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/96"
+  },
+  {
+    "post_number": 97,
+    "username": "PortalEducativo10",
+    "name": "Portal Educativo10",
+    "created_at": "2026-06-19T07:51:37.005Z",
+    "content": "Hi Pinterest team,\n\nMy app has been in “Trial access pending” for over two weeks\n\nwith no response. I understand Trial access is usually granted within 1–2 business\n\ndays, so I believe it may be stuck in the queue.\n\nUse case (fully compliant): we are an educational content publisher and want to\n\nuse the API v5 to publish our OWN original, free educational printables to our OWN\n\nPinterest Business account and boards. No scraping, no posting to other accounts,\n\nno bulk spam — only our own free resources through the official OAuth flow.\n\nCould a moderator please help review and grant Trial access?\n\nThank you so much!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/97"
+  },
+  {
+    "post_number": 98,
+    "username": "0lhi2fx3omwgxcx2eov71xhiseg8ts",
+    "name": "0lhi2fx3omwgxcx2eov71xhiseg8ts",
+    "created_at": "2026-06-19T08:32:40.951Z",
+    "content": "Hello Pinterest Developer Support,\n\nMy app is stuck in Trial access pending for approximately 2 weeks now.\n\nApp name: annabeljeuring-boards\n\nUse case: I am a professional portrait photographer based in the Netherlands. This app is used exclusively to automatically publish photos from my own portfolio to my own Pinterest boards, as part of my website’s content workflow. No third-party accounts are involved.\n\nCould you please review and activate the app?\n\nThank you.\n\nAnnabel",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/98"
+  },
+  {
+    "post_number": 99,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-19T09:10:41.238Z",
+    "content": "@tompat79 @PortalEducativo10 @0lhi2fx3omwgxcx2eov71xhiseg8ts\n\nHi everyone, and welcome to the Community!\n\nOur team is currently reviewing approval requests. While we can’t share an exact timeline right now, your request will be reviewed as soon as possible. Thank you for your patience.\n\nFor more information, please see this reply from one of our Community Managers. If you have any questions, feel free to reach out.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/99"
+  },
+  {
+    "post_number": 100,
+    "username": "dyn07kz",
+    "name": "Dyn07kz",
+    "created_at": "2026-06-19T10:08:47.516Z",
+    "content": "Hello Pinterest Developers team,\n\nCould you please manually review and activate trial access for my app? It has been pending since June 14, 2026.\n\nApp name: SprayArtAutopost\n\nAccount type: Business\n\nUse case: creating and scheduling organic Pins on my own verified business account (canvas spray-art paintings shop), linking to my claimed website art.kissmyhands.ru\n\nScopes needed: pins:read, pins:write, boards:read, boards:write, user_accounts:read\n\nCurrent state: app secret shows “Unavailable while trial access pending” and the Redirect URI field is greyed out — same situation as other recently pending apps. The website is already claimed and verified.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/100"
+  },
+  {
+    "post_number": 101,
+    "username": "brokerchampionofficial",
+    "name": "Brokerchampionofficial",
+    "created_at": "2026-06-19T16:27:26.674Z",
+    "content": "Hi Pinterest team,\n\nI submitted my app for Standard access on June 8, 2026, and the status has been stuck on “Upgrade to Standard access pending” for 11 days now. Could you please check on the review status?\n\nApp details:\n\nApp name: BrokerChampion Auto-Poster\n\nAccount: @brokerchampionofficial (BUSINESS account)\n\nUse case: This is a first-party tool that publishes our OWN original educational content (broker-review pin graphics) to our OWN single business account on a fixed daily schedule, via the v5 API (POST /v5/pins). It is not a multi-tenant product and collects no third-party data.\n\nRequested scopes: boards:read, boards:write, pins:read, pins:write, user_accounts:read\n\nI provided the use-case description, a demo video of the OAuth flow plus a live authenticated GET /v5/user_account call, and our privacy policy (Privacy Policy — Brokerchampion) with the submission.\n\nIf anything in the application needs clarification or correction, I’m happy to provide it right away. Thank you for your help!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/101"
+  },
+  {
+    "post_number": 102,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-19T16:55:17.678Z",
+    "content": "Hi @dyn07kz and @brokerchampionofficial, welcome to the Community!\n\nThank you both for sharing this information. Please note that we don’t have an exact turnaround time, but our team will review your request and respond as soon as possible!\n\nThank you for your patience, and please let us know if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/102"
+  },
+  {
+    "post_number": 103,
+    "username": "ANTIKHOLZPL",
+    "name": "Antikholzpl",
+    "created_at": "2026-06-21T12:30:07.905Z",
+    "content": "any update on this topic ?",
+    "reply_to_post_number": 86,
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/103"
+  },
+  {
+    "post_number": 104,
+    "username": "arcturus9dcouncilhiro",
+    "name": "Arcturus9dcouncilhiro",
+    "created_at": "2026-06-20T03:26:17.209Z",
+    "content": "Hello Pinterest team,\n\nOur Standard access upgrade request has been showing “pending” since May 26, 2026 (about 25 days), well beyond the typical 1-3 business day review window, with no status change and no follow-up request for additional materials.\n\nBusiness account: arcturus9dcouncilhiro\n\nOur business website is verified/claimed in the account, and a privacy policy is published (both are set in the app details).\n\nUse case: automated daily publishing of our own original content to our own first-party Pinterest business account only (single account, about 1 pin per day). We do not access or store any third-party user data, and users are taken through the OAuth flow appropriately.\n\nCould you please review the request or advise on next steps? A short screen recording of the OAuth flow and the API calls is available on request. Thank you very much.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/104"
+  },
+  {
+    "post_number": 105,
+    "username": "Remontostroy",
+    "name": "Remontostroy",
+    "created_at": "2026-06-20T22:02:48.937Z",
+    "content": "Dear Pinterest Developer Support Team,\n\nI hope this message finds you well.\n\nI am writing to kindly request an expedited review of my applications for standard (production) access to the Pinterest API. I have already completed the initial testing phase and have now submitted the formal requests for full access.\n\nI have thoroughly reviewed Pinterest’s API policies and ensured that all required information is provided. I am fully prepared to proceed with integration and would greatly appreciate any assistance in moving the review forward.\n\nIf any additional details or actions are needed from my side, please do not hesitate to let me know. I am happy to supply them promptly.\n\nThank you for your time and support. I look forward to your positive response.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/105"
+  },
+  {
+    "post_number": 106,
+    "username": "Mafrenesiedecoration",
+    "name": "Mafrenesiedecoration",
+    "created_at": "2026-06-22T07:51:20.567Z",
+    "content": "Hi Pinterest Developer team,\n\nMy app “Mafrenesie Tools” has been showing “Upgrade to Standard access — pending” for a long time, with no further communication after the initial submission. Trial access is active, but the upgrade has not progressed.\n\nI submitted the required demo video with my original Standard access application, and the portal shows no rejection or requested changes — only the pending state. There is nothing indicated as missing on my side.\n\nCould you please check the status of this request and either let me know if anything else is required, or help move it forward? I’d really appreciate an update.\n\nApp name: Mafrenesie Tools\n\nRedirect URI: https://pinterest-demo-alpha.vercel.app/\n\nIntended use: publishing and scheduling product Pins for my own e-commerce store (mafrenesidecoration.com).\n\nThank you for your help.\n\n@PinterestGabby @PinterestLeslie",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/106"
+  },
+  {
+    "post_number": 107,
+    "username": "noahtf0302",
+    "name": "Noahtf0302",
+    "created_at": "2026-06-22T07:51:25.189Z",
+    "content": "Hello Pinterest team,\n\nMy newly created app is stuck in “Trial access pending”.\n\nEvery v5 API call (e.g. GET /v5/boards) returns 401:\n\n“Your application consumer type is not supported, please contact support.”\n\nApp name: Luxe Story Tool\n\nUse case: Personal tool to retrieve my own followed boards’ new pins\n\nfor content preparation (read-only, boards:read and pins:read scopes).\n\nCould you please activate trial access for this app?\n\nThank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/107"
+  },
+  {
+    "post_number": 108,
+    "username": "DimaKozminykh",
+    "name": "Dima Kozminykh",
+    "created_at": "2026-06-22T07:51:30.742Z",
+    "content": "Hi Pinterest Developer Team,\n\nI submitted my app for Trial access and it has been pending for some time without a response.\n\nApp details:\n\nApp Name: Kozminykh Autopost\n\nUse case: I am a professional photographer based in Tver, Russia. I want to use the Pinterest API exclusively to automate organic Pin publishing to my own Pinterest business account (DimaKozminykh). This is not a third-party app — it only acts on behalf of my own account to promote my photography work.\n\nCould you please review the status of my application or send me a direct link to file a support ticket?\n\nThank you for your time!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/108"
+  },
+  {
+    "post_number": 109,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-22T10:03:08.436Z",
+    "content": "@ANTIKHOLZPL @arcturus9dcouncilhiro @Remontostroy @Mafrenesiedecoration @noahtf0302 @DimaKozminykh\n\nHi all, and welcome to our newest members!\n\nWe’re so glad you’re here and appreciate everyone’s patience as our team works through approval requests. While we’re not able to share an exact timeline right now, please know that each request will be reviewed as soon as possible.\n\nThanks again for your patience, and if any questions come up, please feel free to reach out.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/109"
+  },
+  {
+    "post_number": 110,
+    "username": "hogaroo",
+    "name": "Hogaroo",
+    "created_at": "2026-06-22T14:10:06.549Z",
+    "content": "Title: Trial access pending over 2 weeks\n\nBody: Hi Pinterest team, our app (“Hogaroo Marketing”, account @hogaroo) has been stuck in Trial access pending review for over a week. It’s a simple first-party use case: publishing our own product catalog and blog content to our own single business account (hogaroo.es). All required fields are completed and our privacy policy (Política de Privacidad | Hogaroo) is live and accessible. Could you please review and approve our Trial access? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/110"
+  },
+  {
+    "post_number": 111,
+    "username": "albuquerque2800",
+    "name": "Albuquerque2800",
+    "created_at": "2026-06-22T15:30:52.989Z",
+    "content": "Hi, my app (App ID 1583499) is stuck in “Trial access pending” and every v5 API\n\ncall returns 401: “Your application consumer type is not supported, please contact\n\nsupport.” The associated Pinterest account is a Business account. Could you please\n\nactivate trial access for this app? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/111"
+  },
+  {
+    "post_number": 112,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-22T16:30:20.404Z",
+    "content": "Hi @hogaroo, welcome to the community and hey @albuquerque2800!\n\nThank you for sharing this information here. We don’t have an exact turnaround time, but our team will review your request and respond as soon as possible!\n\nThanks for your patience, and please let us know if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/112"
+  },
+  {
+    "post_number": 113,
+    "username": "ahmadsrezqallah",
+    "name": "Ahmadsrezqallah",
+    "created_at": "2026-06-22T20:46:03.578Z",
+    "content": "Thanks for the transparency on this. I’m also waiting on a Standard Access upgrade past the usual review window and have submitted a support ticket as suggested. I understand the backlog — just flagging that timely access matters for getting our integration live. Appreciate the team’s effort and hoping to see movement soon.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/113"
+  },
+  {
+    "post_number": 114,
+    "username": "thegoldseam",
+    "name": "Thegoldseam",
+    "created_at": "2026-06-22T21:03:31.289Z",
+    "content": "App name: GoldSeam Content\n\nBusiness account: yes\n\nUse case: Publishing my own original editorial content (image + caption)\n\nto my own Pinterest business account. Single account, owner-operated,\n\nno scraping or spam.\n\nThe app has been showing “Trial access pending” for multiple days. Could you please review\n\nand activate trial access? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/114"
+  },
+  {
+    "post_number": 115,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-23T08:50:53.332Z",
+    "content": "Hi @ahmadsrezqallah and @thegoldseam, welcome to the Community!\n\nThanks so much for your patience, and sorry for the delayed response. Our team will review your requests and get back to you as soon as possible.\n\nFeel free to reach if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/115"
+  },
+  {
+    "post_number": 116,
+    "username": "SolleneHome",
+    "name": "Sollene Home",
+    "created_at": "2026-06-23T11:27:08.914Z",
+    "content": "Hello Pinterest team,\n\nMy app is stuck in “Trial access pending” and all v5 API calls return 401\n\n“Your application consumer type is not supported.”\n\nApp name: Solenne Boss\n\nUse case: Posting home decor affiliate pins to my own Pinterest boards for\n\nmy personal brand Solenne Home.\n\nCould you please activate trial access?\n\nThank you",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/116"
+  },
+  {
+    "post_number": 117,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-23T16:45:31.186Z",
+    "content": "Hey @SolleneHome, and welcome to the PBC!\n\nThank you for sharing this information. We don’t have an exact turnaround time, but our team will review your request and get back to you as soon as they can.\n\nThanks for your patience, and please let us know if you have any questions in the meantime!",
+    "reply_to_post_number": 116,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/117"
+  },
+  {
+    "post_number": 118,
+    "username": "mrscrochetworld",
+    "name": "Mrscrochetworld",
+    "created_at": "2026-06-24T05:57:47.832Z",
+    "content": "Subject: Standard Access still pending after weeks\n\nHi @PinterestHaley,\n\nI submitted my Standard Access upgrade request for my app MrsCrochetWorld (App ID: ) on approximately June 1, 2026. It has now been pending for over 5 weeks with no update.\n\nWe are a crochet pattern brand MrsCrochetWorld . com and need Standard Access to publish Pins to our Pinterest board programmatically. Trial access is active and working — we just need the upgrade approved to go live.\n\nCould you please check the status of our application? Happy to provide any additional information needed.\n\nThank you!\n\nSophie | MrsCrochetWorld",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/118"
+  },
+  {
+    "post_number": 119,
+    "username": "venkyswathi044",
+    "name": "Venkyswathi044",
+    "created_at": "2026-06-24T08:07:37.603Z",
+    "content": "Hi Pinterest Developer team,\n\nApp name: Swifty Publisher\n\nAccount type: Business\n\nI’m getting the following error on every v5 endpoint\n\n(GET /v5/boards, GET /v5/pins, GET /v5/user_account)\n\non both production and sandbox:\n\nHTTP 401, code 3:\n\n“Your application consumer type is not supported,\n\nplease contact support.”\n\nThe app secret key shows “Unavailable while trial\n\naccess pending.”\n\nUse case: I’m building an automated pin scheduling\n\ntool that posts image content to my own Pinterest\n\nboards via POST /v5/pins for my personal business\n\naccount only. No third-party users involved.\n\nCould you please manually activate trial access\n\nfor the App?\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/119"
+  },
+  {
+    "post_number": 120,
+    "username": "taejoong4486",
+    "name": "Taejoong4486",
+    "created_at": "2026-06-24T08:13:08.137Z",
+    "content": "Hi Pinterest Developer Support team,\n\nI’m requesting activation/review of trial access for my app, as all v5 API\n\ncalls are currently blocked at the consumer-type gate.\n\nApp details\n\nApp name: NEO Stage\n\nCurrent status: “Trial access pending” (awaiting review)\n\nProblem\n\nEvery authenticated v5 endpoint returns HTTP 401 with:\n\n{ “code”: 3, “message”: “Your application consumer type is not supported,\n\nplease contact support.” }\n\nThe 401 fires before any endpoint logic, so it is not an endpoint- or\n\nscope-specific issue. Confirmed on:\n\nGET /v5/user_account\n\n(and it is reported by other developers on boards/pins endpoints as well.)\n\nWhat I’ve verified on my side\n\nOAuth completes and a valid access token is issued (correct “pina_” format).\n\nApp credentials, redirect URI (http://localhost:3052/), and requested scopes\n\n(boards:read, boards:write, pins:read, pins:write, user_accounts:read) are\n\nall configured correctly.\n\nThe rejection is therefore at the application consumer-type level, not in my\n\nintegration code.\n\nIntended use case\n\nI’m building a Model Context Protocol (MCP) server that lets an AI assistant\n\nread and manage my own Pinterest boards and pins (listing boards, viewing pins,\n\ncreating boards/pins) for design reference and moodboard workflows. Access is\n\nfor my own account only.\n\nRequest\n\nCould you please review and activate trial access for App ID 1584070, or let me\n\nknow what additional information you need? I’d really appreciate your help.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/120"
+  },
+  {
+    "post_number": 121,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-24T08:30:41.361Z",
+    "content": "Hi there @mrscrochetworld! Hey @venkyswathi044 and @taejoong4486, welcome to the Community!\n\nWhile we can’t share a specific timeline just yet, we want to assure you that each request will be reviewed as soon as possible.\n\nThanks for your patience, and please feel free to reach out with any questions.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/121"
+  },
+  {
+    "post_number": 122,
+    "username": "PROBENEX",
+    "name": "Probenex",
+    "created_at": "2026-06-24T09:10:17.491Z",
+    "content": "Hi Pinterest team,\n\nMy app “PROBENEX Content” has been stuck on “Trial access pending” and the App secret is unavailable, so I can’t start the OAuth flow.\n\nMy Pinterest business account is already an approved merchant with an active catalog. I only need pins:write to publish organic content pins to my own boards.\n\nCould you please activate trial access? Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/122"
+  },
+  {
+    "post_number": 123,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-24T16:45:35.416Z",
+    "content": "Hi there @PROBENEX, and welcome to the PBC!\n\nThank you for sharing this information. Please note that we don’t have an exact turnaround time, but our team will review your request and respond as soon as possible!\n\nThanks so much for your understanding, and please let us know if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/123"
+  },
+  {
+    "post_number": 124,
+    "username": "celebratedayly",
+    "name": "Celebratedayly",
+    "created_at": "2026-06-25T03:35:54.899Z",
+    "content": "Hi Pinterest People! We, Celebrate Dayly, just submitted to upgrade from trial access to standard access yesterday. We can’t wait to have our OAuth flow verified and approved to post our fun, everyday holiday content out to the Pinterest community. No issues with the process on our end. We just wanted to say thank you!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/124"
+  },
+  {
+    "post_number": 125,
+    "username": "kocoredisk",
+    "name": "Kocoredisk",
+    "created_at": "2026-06-24T18:41:30.607Z",
+    "content": "Hi Pinterest team,\n\nCould you please review and approve trial access for our app? It has been pending for a while with no status change.\n\nApp name: HanCut.ai Marketing Bot\n\nAccount: @kocoredisk (HanCut.ai)\n\nUse case: HanCut.ai is an AI photo-generation service. We want to publish our own content (Pins) to our own business account — AI before/after photo examples linking back to our site. We need pins:write to create Pins programmatically on our own account.\n\nThank you for the manual review!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/125"
+  },
+  {
+    "post_number": 126,
+    "username": "DataSavvyFinance",
+    "name": "Data Savvy Finance",
+    "created_at": "2026-06-24T22:44:35.996Z",
+    "content": "Hi Pinterest Developer team,\n\nI’m requesting help moving my app from Trial access to Standard access.\n\nApp name: DataSaavyFinanceStaggingApp\n\nCreated: May 24 2026\n\nUse case: I run a single, first-party automation for my own personal\n\nfinance blog datasavvyfinance The integration generates and\n\npublishes Pinterest pins for my own content, I am the only intended\n\nuser, posting to my own boards on my own account. There are no other\n\nend users involved.\n\nI’ve tested the integration successfully against the sandbox\n\nenvironment and confirmed pins post\n\ncorrectly, including board routing, titles, descriptions, and images.\n\nI’m ready to move to production but need Standard access to post\n\noutside the sandbox.\n\nNote: I previously submitted a demo video for a related app that was not approved. I’ve since confirmed the integration works correctly in sandbox for my new app and would appreciate guidance on what’s needed to move forward with Standard access.\n\nCould someone from the team please review and help move this forward?\n\nThank you for your time.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/126"
+  },
+  {
+    "post_number": 127,
+    "username": "theunfoldpress",
+    "name": "Theunfoldpress",
+    "created_at": "2026-06-25T00:28:23.170Z",
+    "content": "Hi Pinterest Developer team,\n\nMy app has been stuck in “Trial access pending” for longer than the usual 1–3 business day window. All required app details are completed (app name, company, website, privacy policy, and app purpose).\n\nCould you please review and activate trial access for my app?\n\nApp name: Unfold Press Scheduler\n\nUse case: Scheduling and publishing pins to my own Pinterest boards.\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/127"
+  },
+  {
+    "post_number": 128,
+    "username": "masascottforwork",
+    "name": "Masascottforwork",
+    "created_at": "2026-06-25T07:54:38.148Z",
+    "content": "Hello, our app “2000collective curation autopost” has been in “Trial access pending” status for about 4 days. We are a small D2C business and want to use the Pinterest API v5 to publish our own product Pins to our own boards on a schedule (pins:write / boards:write). Our privacy policy is public at プライバシーポリシー – 2000collective . Could you please review and grant trial access? Thank you very much.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/128"
+  },
+  {
+    "post_number": 129,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-25T09:31:48.868Z",
+    "content": "Hi @celebratedayly, thanks so much for sharing this update with us! We’re really happy to hear that!",
+    "reply_to_post_number": 124,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/129"
+  },
+  {
+    "post_number": 130,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-25T09:35:13.263Z",
+    "content": "@kocoredisk @DataSavvyFinance @theunfoldpress @masascottforwork\n\nHi all, welcome to the Community!\n\nOur team is working through approval requests now. We aren’t able to share an exact timeline at the moment, but your request will be reviewed as soon as possible. Thanks so much for your patience in the meantime.\n\nFor more information, please check out this reply from one of our Community Managers. And if you have any questions, feel free to reach out.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/130"
+  },
+  {
+    "post_number": 131,
+    "username": "0fw5g5otu9ze2hhuj1ijeqzwv0aii7",
+    "name": "0fw5g5otu9ze2hhuj1ijeqzwv0aii7",
+    "created_at": "2026-06-25T14:05:40.795Z",
+    "content": "Hi Pinterest Developer Support,\n\nI’d like to request a review / activation of Trial access for our app\n\n(“Koltao Postiz_2”). The request is currently pending.\n\nWe are Koltao, a real-estate agency based in Barcelona, Spain, using a\n\nPinterest business account. The app is for internal use only: we schedule\n\nand publish our own pins (property photos and videos) to our own business\n\naccount and boards via API v5 with OAuth, and check our own account analytics.\n\nA previous app was denied; the cause was our privacy policy\n\nnot being machine-readable. This new app uses a fully accessible static\n\nprivacy policy → Política de Privacitat — Koltao\n\nUse cases: Create & schedule Pins, Reports (own-account analytics).\n\nWe do not access other users’ data.\n\nCould you please review and activate Trial access?\n\nThank you very much!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/131"
+  },
+  {
+    "post_number": 132,
+    "username": "PinterestIvania",
+    "name": "Ivânia",
+    "created_at": "2026-06-25T16:48:52.521Z",
+    "content": "Hey @0fw5g5otu9ze2hhuj1ijeqzwv0aii7, welcome to the Community!\n\nI’m sorry for the delayed response. Please know that our team will review your request and get back to you as soon as possible.\n\nThank you for your patience, and please feel free to contact us if you have any questions.",
+    "reply_to_post_number": 131,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/132"
+  },
+  {
+    "post_number": 133,
+    "username": "Roomelia_home",
+    "name": "Roomelia Home",
+    "created_at": "2026-06-26T14:17:23.685Z",
+    "content": "Hi Pinterest Developer team,\n\nI’m requesting a manual review of my pending Trial access application. It has been in “Trial access pending” status for about 13 days with no update, so I believe it may be stuck in the review queue.\n\nApp details:\n\nApp name: Roomelia PinFlow\n\nAccount type: Business\n\nUse case: Roomelia is a home goods brand operated by our company, selling products on the Ozon marketplace. We use the Pinterest API solely to automate the creation, scheduling, and publishing of our own organic product Pins to our own Pinterest business account. The app is for internal use only — it operates exclusively on our own account, does not connect third-party users, and does not share or sell any Pinterest data.\n\nCould you please manually review and activate Trial access for this app? Happy to provide any additional information if needed. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/133"
+  },
+  {
+    "post_number": 134,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-26T15:01:36.101Z",
+    "content": "Hi there @Roomelia_home!\n\nWe don’t have an exact turnaround time, but our team will review your request and respond as soon as possible. This post by @PinterestHaley includes additional details on developer app approvals.\n\nYou can also check this reply from one of our Community Managers for further guidance.\n\nFeel free to reach if you have any questions in the meantime. Thanks for your patience with this!",
+    "reply_to_post_number": 133,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/134"
+  },
+  {
+    "post_number": 135,
+    "username": "sosuites",
+    "name": "Sosuites",
+    "created_at": "2026-06-26T16:20:29.605Z",
+    "content": "can you please validate my app it is so long !!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/135"
+  },
+  {
+    "post_number": 136,
+    "username": "0lhi2fx3omwgxcx2eov71xhiseg8ts",
+    "name": "0lhi2fx3omwgxcx2eov71xhiseg8ts",
+    "created_at": "2026-06-28T11:28:39.606Z",
+    "content": "Hi Pinterest team! My app has been stuck in “Trial access pending” for about 4 weeks. I just submitted a support ticket (API Access → Application Status) with my App ID and all details. Would really appreciate it if someone could take a look — fingers crossed! Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/136"
+  },
+  {
+    "post_number": 137,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-29T14:10:37.643Z",
+    "content": "Hi there @sosuites and @0lhi2fx3omwgxcx2eov71xhiseg8ts, thanks for reaching out!\n\nPlease refer to this reply for more info on App Approvals:\n\nPinterestIvania:\n\nwelcome to the Community!\n\nI’m sorry for the delayed response. Please know that our team will review your request and get back to you as soon as possible.\n\nThank you for your patience, and please feel free to contact us if you have any questions.\n\nLet us know if you need anything else!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/137"
+  },
+  {
+    "post_number": 138,
+    "username": "halvi7672",
+    "name": "Halvi7672",
+    "created_at": "2026-06-28T17:29:29.306Z",
+    "content": "Hello Pinterest Developer Team,\n\nI submitted my application to upgrade my app from Trial Access to Standard Access approximately 14 days ago, and I have also opened a support ticket today.\n\nThe required demo video was included with my application, and my Developer Dashboard still shows “Upgrade to Standard access pending.”\n\nIf someone from the team could kindly review the status of my application or let me know if any additional information is needed, I would greatly appreciate it.\n\nThank you for your time and support.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/138"
+  },
+  {
+    "post_number": 139,
+    "username": "renaliev",
+    "name": "Renaliev",
+    "created_at": "2026-06-29T10:28:31.296Z",
+    "content": "Hello Pinterest Developer Support,\n\nI’m requesting manual activation of trial access for my app, which appears to be\n\nstuck in “trial access pending” state.\n\nApp name: Melamori\n\nAccount type: Business\n\nWebsite: https://melamori.shop\n\nProblem:\n\nEvery Pinterest API v5 endpoint returns HTTP 401 with error code 3:\n\n“Your application consumer type is not supported, please contact support.”\n\nThis happens on ALL endpoints I’ve tried (GET /v5/user_account, GET /v5/boards,\n\nGET /v5/pins), using a valid pina_ access token, on BOTH environments:\n\nProduction: https://api.pinterest.com/v5 → 401, code 2 “Authentication failed”\n\nSandbox: https://api-sandbox.pinterest.com/v5 → 401, code 3 “consumer type not supported”\n\nIn the developer console the App Secret is shown as\n\n“Unavailable while trial access pending”, so I cannot complete OAuth or generate\n\na working token. The 401 fires before any endpoint logic, so this looks like the\n\nconsumer-type / trial-access check rejecting the app at the gateway level rather\n\nthan anything in my code.\n\nUse case (organic, non-spam):\n\nWe are a Russian mattress manufacturer (MeLamori). We want to publish a small number\n\nof product/interior Pins (vertical images of bedrooms and mattresses) that link back\n\nto our website melamori.shop. Low volume, original brand content, no automation abuse.\n\nRequested scopes:\n\nboards:read, boards:write, pins:read, pins:write, user_accounts:read\n\nCould you please manually activate trial access for App ID 1583795 so the\n\nconsumer-type check passes and the App Secret becomes available?\n\nThank you very much.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/139"
+  },
+  {
+    "post_number": 140,
+    "username": "empowerhub369",
+    "name": "Empowerhub369",
+    "created_at": "2026-06-29T12:06:45.355Z",
+    "content": "Hello, I’m requesting trial access activation for my app.\n\nApp name: EmpowerHub Dashboard\n\nUse case: Internal dashboard for our own business that reads our own Pinterest account’s analytics (impressions, saves, clicks) and ad performance for marketing reporting.\n\nThe app is stuck on “Trial access pending.” The App secret shows “Unavailable while trial access pending,” and every v5 endpoint (including GET /v5/user_account) returns code 3: “Your application consumer type is not supported, please contact support.” I’ve generated a production-limited token, which authenticates correctly but returns this error on all endpoints.\n\nCould you please activate trial access for App ID 1585356? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/140"
+  },
+  {
+    "post_number": 141,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-29T15:06:09.912Z",
+    "content": "Hi there @halvi7672, @renaliev and @empowerhub369! Welcome to the PBC!\n\nWe don’t have an exact turnaround time, but our team will review your requests and respond by email as we’re not able to discuss your account specifics here.\n\nThanks for your patience with this.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/141"
+  },
+  {
+    "post_number": 142,
+    "username": "olliforbrands",
+    "name": "Olliforbrands",
+    "created_at": "2026-06-29T15:37:18.464Z",
+    "content": "Hi Pinterest team,\n\nRequesting your review on my developer app named “OLLI for Brands”. It’s been around 2 weeks when I submitted the app for review. Would really appreciate a response on that.\n\nThanks",
+    "reply_to_post_number": 141,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/142"
+  },
+  {
+    "post_number": 143,
+    "username": "fatlosskitchenytchannel",
+    "name": "Fatlosskitchenytchannel",
+    "created_at": "2026-06-29T21:14:54.765Z",
+    "content": "Hi Pinterest team,\n\nMy app is stuck in “Trial access pending” and\n\nevery API endpoint returns 401 error code 3.\n\nApp name: Global Goodness Pinner\n\nApp ID: 1585845\n\nAccount: Business account\n\nUse case: Automating publication of my own\n\nrecipe content to my own Pinterest boards.\n\nCould you please manually activate trial\n\naccess for my app?\n\nThank you",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/143"
+  },
+  {
+    "post_number": 144,
+    "username": "lumorabooks",
+    "name": "Lumorabooks",
+    "created_at": "2026-06-30T08:58:11.907Z",
+    "content": "Hi, our app Lumora Storybooks (App ID 1583830) submitted a Standard access upgrade request on June 23, 2026 with the required demo video, and it has been pending for 7 days. The app publishes our own marketing Pins (storybook cover illustrations that link to lumora.kids) to our own Lumora business account on a schedule, using pins:write and boards:write. The demo video shows the OAuth consent flow and successful API calls. Could the team please review our upgrade request when possible? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/144"
+  },
+  {
+    "post_number": 145,
+    "username": "theoutdoorgearlab",
+    "name": "Theoutdoorgearlab",
+    "created_at": "2026-06-30T12:31:03.660Z",
+    "content": "Hi, my app “Outdoor Gear Lab Pinner” has been in “Trial access pending” status for 4 business days. The official timeline says 1-3 days. Could someone from the Pinterest team please check the status and help move this forward? Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/145"
+  },
+  {
+    "post_number": 146,
+    "username": "lunessadigitalstudio",
+    "name": "Lunessadigitalstudio",
+    "created_at": "2026-06-30T12:32:07.640Z",
+    "content": "Hi Pinterest team,\n\nMy newly created app is stuck in “trial access pending” and the app secret shows\n\n“Unavailable while trial access pending.” Every v5 endpoint — including the sandbox\n\nenvironment — returns:\n\n{\"code\":3,\"message\":\"Your application consumer type is not supported, please contact support.\"}\n\nThis happens on GET /v5/user_account, GET /v5/boards, and POST /v5/boards, on both\n\napi.pinterest.com and api-sandbox.pinterest.com, using a freshly generated sandbox token.\n\nCould you please activate/unblock trial access for my app so the consumer type is\n\nsupported?\n\nApp name: Lunessa Pin Manager\n\nUse case: Pin creation & scheduling for my own Etsy digital shop\n\nAccount type: Business\n\nThank you very much!",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/146"
+  },
+  {
+    "post_number": 147,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-06-30T14:58:50.299Z",
+    "content": "Hi there @olliforbrands, @fatlosskitchenytchannel, @lumorabooks, @theoutdoorgearlab and @lunessadigitalstudio, welcome to the PBC!\n\nWe don’t have an exact turnaround time, but our team will review your requests and respond as soon as possible. This post by @PinterestHaley includes additional details on developer app approvals. Thanks for your patience with this!\n\nYou can also check this reply from one of our Community Managers for further guidance.\n\nFeel free to reach if you have any questions in the meantime!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/147"
+  },
+  {
+    "post_number": 148,
+    "username": "Nifarrrr",
+    "name": "Nifarrrr",
+    "created_at": "2026-07-01T10:05:12.007Z",
+    "content": "Hi Pinterest Developer team,\n\nMy app is currently stuck in “Trial access pending” status and the app details fields are locked, so I’m unable to correct some information I entered.\n\nApp Name: NIFAR Automation\n\nAccount type: Business\n\nUse case: We are a digital products brand (NIFAR) selling Minecraft-niche guides. We’d like to use the Pinterest API to automate publishing of our own pre-produced Pins (images + descriptions) to our own boards on a scheduled basis, as part of our internal content pipeline (built on n8n). We do not access or post on behalf of any other user’s account.\n\nCould you please either:\n\nApprove/process this trial access request, or\n\nLet me know if I should submit a new app instead, since edits are currently locked while this one is pending.\n\nAppreciate any help speeding this up. Thank you!",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/148"
+  },
+  {
+    "post_number": 149,
+    "username": "kurohyofire",
+    "name": "Kurohyofire",
+    "created_at": "2026-07-01T05:29:16.509Z",
+    "content": "Hi Pinterest Developer team,\n\nI’m following up on my Standard access upgrade request for App ID 1572664\n\n(kurohyo blog auto-pin). I submitted the upgrade request on June 4, 2026,\n\nincluding the required OAuth flow demo video. It has now been “pending”\n\nfor about four weeks, past the usual review window.\n\nApp details:\n\nApp name: kurohyo blog auto-pin\n\nBusiness: Kurohyo Sensei (web writer)\n\nWebsite: my personal blog (URL is registered in the app settings)\n\nIntended use: automatically creating and scheduling up to 3 Pins per day\n\nfrom my own blog articles (single user, my own original content only)\n\nCurrent status: Trial approved; Standard upgrade still pending\n\nCould you please check on the status of this request, or let me know if\n\nanything further is needed from my side? Thank you very much.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/149"
+  },
+  {
+    "post_number": 150,
+    "username": "Remontostroy",
+    "name": "Remontostroy",
+    "created_at": "2026-06-30T18:02:07.165Z",
+    "content": "Dear Pinterest Developer Support Team,\n\nI hope this message finds you well.\n\nI am writing to kindly request an expedited review of my applications for standard (production) access to the Pinterest API. I have already completed the initial testing phase and have now submitted the formal requests for full access.\n\nI have thoroughly reviewed Pinterest’s API policies and ensured that all required information is provided. I am fully prepared to proceed with integration and would greatly appreciate any assistance in moving the review forward.\n\nIf any additional details or actions are needed from my side, please do not hesitate to let me know. I am happy to supply them promptly.\n\nThank you for your time and support. I look forward to your positive response.",
+    "reply_to_post_number": "",
+    "like_count": 1,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/150"
+  },
+  {
+    "post_number": 151,
+    "username": "soullight",
+    "name": "Soullight",
+    "created_at": "2026-07-01T10:09:11.442Z",
+    "content": "Hi Pinterest Developer Support — requesting trial access activation. All v5 endpoints return 401 “Your application consumer type is not supported, please contact support” with a freshly generated token.\n\n▎ • App name: Daily Forager\n\n▎ • Account type: Business\n\n▎ • Use case: Automated content scheduling — programmatically creating Pins that link to articles lication (dailyforager.com), pinning to our own boards.\n\n▎ • Scopes configured: boards:read, boards:write, pins:read, pins:write, user_accounts:read\n\n▎ • Redirect URI configured.\n\n▎ Please activate trial access for this app. Thank you.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/151"
+  },
+  {
+    "post_number": 152,
+    "username": "PinterestFernanda",
+    "name": "Fernanda",
+    "created_at": "2026-07-01T15:56:49.847Z",
+    "content": "@Nifarrrr, @kurohyofire, @Remontostroy @soullight\n\nHi everyone, welcome to the PBC!\n\nOur team is working through approval requests now. We can’t share an exact timeline, but your requests will be reviewed ASAP. Thank you so much for your patience at this time.\n\nFor more information, please check out this reply from one of our Community Managers. And if you have any further questions, feel free to reach out.",
+    "reply_to_post_number": "",
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/152"
+  },
+  {
+    "post_number": 153,
+    "username": "moyamatchahu",
+    "name": "Moyamatchahu",
+    "created_at": "2026-07-02T09:51:06.960Z",
+    "content": "Hi Pinterest Developer Team,\n\nCould you please activate trial access for my app?\n\nApp name: Moya Claude Code MCP\n\nUse case: Read-only access to our own business account’s boards, pins, and\n\nanalytics (organic + ads reporting) for internal marketing automation via API v5\n\nwith OAuth. Later we plan to schedule/publish pins to our own boards.\n\nAll v5 endpoints currently return HTTP 401 “Your application consumer type is not\n\nsupported, please contact support.” and the App Secret shows “Unavailable while\n\ntrial access pending.”\n\nThank you!",
+    "reply_to_post_number": "",
+    "like_count": 2,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/153"
+  },
+  {
+    "post_number": 155,
+    "username": "DimaKozminykh",
+    "name": "Dima Kozminykh",
+    "created_at": "2026-07-03T14:52:03.777Z",
+    "content": "“Bumping this — still waiting for approval. App name: Kozminykh Autopost. Could you please update on the status?”",
+    "reply_to_post_number": 108,
+    "like_count": 0,
+    "post_url": "https://community.pinterest.biz/t/update-developer-app-approvals/45527/155"
+  }
+]

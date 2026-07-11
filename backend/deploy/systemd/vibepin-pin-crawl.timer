@@ -1,0 +1,17 @@
+# VibePin Pin/crawler daily timer. DISABLED by default (enable with systemctl enable).
+# 10:30 Asia/Shanghai: residential-IP Playwright crawl window. Runs AFTER the
+# keyword-trends refresh (09:00) so the crawl_queue is freshly replenished, and long
+# BEFORE the Product-Supply window (23:00) so no two Pinterest jobs overlap.
+# The OnCalendar line pins Asia/Shanghai explicitly, so the schedule is correct
+# regardless of the host timezone.
+[Unit]
+Description=Daily trigger for VibePin Pin/crawler refresh
+
+[Timer]
+OnCalendar=*-*-* 10:30:00 Asia/Shanghai
+RandomizedDelaySec=600
+Persistent=false
+Unit=vibepin-pin-crawl.service
+
+[Install]
+WantedBy=timers.target

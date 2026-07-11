@@ -1,0 +1,201 @@
+keyword,category,region,source,trend_type,search_volume,weekly_growth,monthly_growth,yearly_growth,curator_priority,curator_note,seasonality_hint,commercial_intent_hint,product_potential_hint,reference_potential_hint
+quiet luxury outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,high,evergreen high-intent commercial term,year_round,high,high,high
+capsule wardrobe basics,fashion,US,manual_bootstrap,evergreen,,,,,high,evergreen pillar topic,year_round,high,high,high
+minimalist outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,high,,year_round,high,high,high
+coquette aesthetic outfit,fashion,US,manual_bootstrap,growing,,,,,high,trending aesthetic strong product tie-in,year_round,high,high,high
+job interview outfit,fashion,US,manual_bootstrap,evergreen,,,,,high,high purchase intent,year_round,high,high,medium
+leather jacket outfit,fashion,US,manual_bootstrap,evergreen,,,,,high,,fall,high,high,medium
+fall layering outfit,fashion,US,manual_bootstrap,seasonal,,,,,high,seasonal spike,fall,high,high,high
+graduation outfit ideas,fashion,US,manual_bootstrap,seasonal,,,,,high,seasonal purchase moment,spring,high,high,medium
+oversized blazer outfit,fashion,US,manual_bootstrap,evergreen,,,,,medium,,fall,high,high,medium
+linen summer outfit,fashion,US,manual_bootstrap,seasonal,,,,,medium,seasonal lift,summer,high,high,medium
+old money aesthetic outfit,fashion,US,manual_bootstrap,growing,,,,,medium,,year_round,high,medium,high
+business casual outfit men,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+smart casual outfit men,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+trench coat outfit,fashion,US,manual_bootstrap,seasonal,,,,,medium,,fall,high,high,medium
+neutral color outfit,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,medium
+winter coat outfit ideas,fashion,US,manual_bootstrap,seasonal,,,,,medium,,winter,high,high,medium
+athleisure outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+y2k outfit ideas,fashion,US,manual_bootstrap,growing,,,,,medium,,year_round,medium,high,high
+preppy outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+korean fashion outfit,fashion,US,manual_bootstrap,growing,,,,,medium,,year_round,high,high,high
+travel outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+airport outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+fall boots outfit,fashion,US,manual_bootstrap,seasonal,,,,,medium,,fall,high,high,medium
+white sneakers outfit,fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+streetwear outfit men,fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+monochrome outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+denim on denim outfit,fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+cottagecore dress outfit,fashion,US,manual_bootstrap,seasonal,,,,,low,,spring,medium,high,high
+festival outfit ideas,fashion,US,manual_bootstrap,seasonal,,,,,low,seasonal only,summer,high,high,high
+summer linen shirt outfit,fashion,US,manual_bootstrap,seasonal,,,,,low,,summer,medium,medium,low
+brunch outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,low
+concert outfit ideas,fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+fall capsule wardrobe women,womens-fashion,US,manual_bootstrap,seasonal,,,,,high,strong seasonal pillar,fall,high,high,high
+work outfit women aesthetic,womens-fashion,US,manual_bootstrap,evergreen,,,,,high,high commercial intent,year_round,high,high,medium
+wide leg jeans outfit women,womens-fashion,US,manual_bootstrap,growing,,,,,high,trending silhouette,year_round,high,high,high
+wedding guest dress outfit,womens-fashion,US,manual_bootstrap,seasonal,,,,,high,seasonal purchase moment,summer,high,high,high
+office outfit women,womens-fashion,US,manual_bootstrap,evergreen,,,,,high,high purchase intent,year_round,high,high,medium
+maxi dress outfit,womens-fashion,US,manual_bootstrap,seasonal,,,,,high,,summer,high,high,medium
+date night outfit women,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,high
+midi skirt outfit,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+plus size outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+casual fall outfit women,womens-fashion,US,manual_bootstrap,seasonal,,,,,medium,,fall,high,high,medium
+winter outfit women,womens-fashion,US,manual_bootstrap,seasonal,,,,,medium,,winter,high,high,medium
+spring outfit women,womens-fashion,US,manual_bootstrap,seasonal,,,,,medium,,spring,high,high,medium
+summer dress outfit,womens-fashion,US,manual_bootstrap,seasonal,,,,,medium,,summer,high,high,medium
+blazer dress outfit,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+trousers outfit women,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+cocktail dress outfit,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+maternity outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+teacher outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+vacation outfit women,womens-fashion,US,manual_bootstrap,seasonal,,,,,medium,,summer,high,high,medium
+ankle boots outfit women,womens-fashion,US,manual_bootstrap,seasonal,,,,,medium,,fall,high,high,medium
+petite outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+postpartum outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,niche but steady,year_round,medium,medium,medium
+jumpsuit outfit women,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+cardigan outfit women,womens-fashion,US,manual_bootstrap,seasonal,,,,,low,,fall,medium,medium,low
+leggings outfit women,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,low
+going out top outfit,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,low
+nurse outfit ideas,womens-fashion,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,low
+sweater weather outfit,womens-fashion,US,manual_bootstrap,seasonal,,,,,low,,fall,medium,medium,low
+boho living room decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,evergreen pillar high product potential,year_round,high,high,high
+small bedroom decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,high-volume evergreen,year_round,high,high,high
+small kitchen organization,home-decor,US,manual_bootstrap,evergreen,,,,,high,high product attach,year_round,high,high,medium
+neutral living room decor,home-decor,US,manual_bootstrap,evergreen,,,,,high,,year_round,high,high,high
+home office decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,high product attach,year_round,high,high,medium
+coffee bar station ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,strong product attach,year_round,high,high,high
+closet organization ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,high product attach,year_round,high,high,medium
+pantry organization ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,high product attach,year_round,high,high,medium
+small apartment decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,,year_round,high,high,high
+bathroom organization ideas,home-decor,US,manual_bootstrap,evergreen,,,,,high,high product attach,year_round,high,high,medium
+dorm room decor aesthetic,home-decor,US,manual_bootstrap,seasonal,,,,,high,back-to-school spike,fall,high,high,high
+japandi living room,home-decor,US,manual_bootstrap,growing,,,,,medium,growing aesthetic,year_round,high,high,high
+cozy reading nook ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,fall,medium,medium,high
+gallery wall layout ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,high
+modern farmhouse kitchen,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+minimalist desk setup,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+living room shelf decor,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+accent wall ideas bedroom,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,medium
+bookshelf styling ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,high
+scandinavian bedroom decor,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,high
+mid century modern living room,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,high
+nursery decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+kids room decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+kitchen counter decor,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+patio furniture ideas,home-decor,US,manual_bootstrap,seasonal,,,,,medium,,summer,high,high,medium
+laundry room decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+dining room table decor,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+bedroom lighting ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+floating shelves decor,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+wall art arrangement ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,high
+indoor plant decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,medium
+studio apartment layout,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,high
+teen girl bedroom ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,high
+cozy bedroom aesthetic,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,high
+living room color scheme,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,high,medium
+tv wall decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+apartment patio decor,home-decor,US,manual_bootstrap,seasonal,,,,,low,,spring,medium,high,medium
+entryway decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+coastal bathroom decor,home-decor,US,manual_bootstrap,evergreen,,,,,low,,summer,medium,high,medium
+christmas mantel decor ideas,home-decor,US,manual_bootstrap,seasonal,,,,,low,winter seasonal only,winter,high,high,high
+front porch decor ideas,home-decor,US,manual_bootstrap,seasonal,,,,,low,,spring,medium,high,medium
+fall front porch decor,home-decor,US,manual_bootstrap,seasonal,,,,,low,,fall,medium,high,medium
+command center wall ideas,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,low
+mudroom decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,low
+cottagecore bedroom decor,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,high
+open shelving kitchen ideas,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+guest bedroom decor ideas,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+bathroom shelf decor,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+rug layering living room,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,low
+bedroom bench decor,home-decor,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,low
+clean girl makeup look,beauty,US,manual_bootstrap,growing,,,,,high,trending evergreen routine,year_round,high,high,high
+short nails design ideas,beauty,US,manual_bootstrap,evergreen,,,,,high,high-volume evergreen nails,year_round,high,high,high
+french tip nails ideas,beauty,US,manual_bootstrap,evergreen,,,,,high,high product attach,year_round,high,high,high
+wedding hairstyles updo,beauty,US,manual_bootstrap,seasonal,,,,,high,seasonal purchase moment,summer,high,high,high
+bridal makeup look,beauty,US,manual_bootstrap,seasonal,,,,,high,seasonal high intent,summer,high,high,high
+chrome nails design,beauty,US,manual_bootstrap,growing,,,,,high,trending nail look,year_round,high,high,high
+gel nails ideas,beauty,US,manual_bootstrap,evergreen,,,,,high,,year_round,high,high,medium
+almond nails design,beauty,US,manual_bootstrap,evergreen,,,,,high,,year_round,high,high,high
+glazed donut skin routine,beauty,US,manual_bootstrap,growing,,,,,medium,,year_round,high,high,high
+everyday natural makeup,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+curtain bangs hairstyle,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,medium,high
+skincare routine for acne,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+blush makeup look,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+bronde hair color,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,medium,high
+medium length haircut,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,medium,high
+red nails ideas,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+natural makeup tutorial,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+dewy skin makeup,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+brown lip combo,beauty,US,manual_bootstrap,growing,,,,,medium,,year_round,high,high,high
+eye makeup for hooded eyes,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+acne safe makeup,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+minimal makeup routine,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+lob haircut ideas,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,medium,high
+neutral nail colors,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+glowy makeup look,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+layered haircut ideas,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,medium,medium,high
+lip liner combo,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+summer nail aesthetic,beauty,US,manual_bootstrap,seasonal,,,,,low,seasonal,summer,high,high,high
+fall nail colors ideas,beauty,US,manual_bootstrap,seasonal,,,,,low,seasonal,fall,high,high,high
+balayage hair color ideas,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,high,medium,high
+soft glam makeup tutorial,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,high,medium
+hydrating skincare products,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+wedding guest makeup,beauty,US,manual_bootstrap,seasonal,,,,,low,wedding season,summer,high,high,high
+low maintenance haircut,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+wolf cut hairstyle,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,high
+money piece highlights,beauty,US,manual_bootstrap,evergreen,,,,,low,,year_round,medium,medium,medium
+winter skincare routine,beauty,US,manual_bootstrap,seasonal,,,,,low,,winter,high,high,medium
+self tanner routine,beauty,US,manual_bootstrap,seasonal,,,,,low,,summer,high,high,low
+printable budget planner template,digital-products,US,csv_bootstrap,evergreen,,,,,high,top-selling digital category,year_round,high,high,low
+social media content calendar template,digital-products,US,csv_bootstrap,evergreen,,,,,high,high buyer intent,year_round,high,high,medium
+canva pinterest pin templates,digital-products,US,csv_bootstrap,evergreen,,,,,high,high buyer intent,year_round,high,high,medium
+notion aesthetic dashboard template,digital-products,US,csv_bootstrap,growing,,,,,high,growing niche,year_round,high,high,medium
+canva instagram template pack,digital-products,US,csv_bootstrap,evergreen,,,,,high,,year_round,high,high,low
+digital vision board template,digital-products,US,csv_bootstrap,growing,,,,,high,trending,year_round,high,high,medium
+weekly planner printable,digital-products,US,csv_bootstrap,evergreen,,,,,high,,year_round,high,high,low
+digital wedding invitation template,digital-products,US,csv_bootstrap,seasonal,,,,,medium,wedding season lift,summer,high,high,low
+printable wall art set,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+printable meal planner,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+digital planner goodnotes,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable cleaning checklist,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+canva ebook template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable habit tracker,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+notion student planner template,digital-products,US,csv_bootstrap,seasonal,,,,,medium,,fall,high,high,low
+wedding seating chart template,digital-products,US,csv_bootstrap,seasonal,,,,,medium,,summer,high,high,low
+canva logo template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+meal prep planner printable,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable savings tracker,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+notion content planner template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+digital teacher planner,digital-products,US,csv_bootstrap,seasonal,,,,,medium,,fall,high,high,low
+canva story template pack,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable wedding planner,digital-products,US,csv_bootstrap,seasonal,,,,,medium,,summer,high,high,low
+business plan template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable daily planner,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+notion finance tracker template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable monthly budget sheet,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+digital bullet journal template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable workout planner,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+resume template modern,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable chore chart kids,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+etsy shop banner template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable christmas gift tags,digital-products,US,csv_bootstrap,seasonal,,,,,low,winter seasonal only,winter,high,high,low
+small business invoice template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable baby shower games,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable thank you cards,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,medium,low
+printable grocery list,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,medium,medium,low
+printable wall calendar,digital-products,US,csv_bootstrap,seasonal,,,,,low,,winter,high,high,low
+printable kids activity sheets,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable birthday invitation template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+small business pricing guide template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+digital recipe book template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+printable reading log,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,medium,medium,low
+printable christmas planner,digital-products,US,csv_bootstrap,seasonal,,,,,low,,winter,high,high,low
+press on nails ideas,beauty,US,manual_bootstrap,evergreen,,,,,medium,high product attach,year_round,high,high,medium
+skin tint makeup look,beauty,US,manual_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+printable wedding welcome sign,digital-products,US,csv_bootstrap,seasonal,,,,,medium,,summer,high,high,low
+canva email newsletter template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+printable price list template,digital-products,US,csv_bootstrap,evergreen,,,,,low,,year_round,high,high,low
+notion project tracker template,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,low
+digital art print bundle,digital-products,US,csv_bootstrap,evergreen,,,,,medium,,year_round,high,high,medium
+printable gift card holder,digital-products,US,csv_bootstrap,seasonal,,,,,low,,winter,high,high,low

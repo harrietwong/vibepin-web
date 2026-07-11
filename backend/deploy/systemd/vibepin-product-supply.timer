@@ -1,0 +1,27 @@
+# VibePin Product-Supply daily timer.
+#
+# DISABLED BY DEFAULT. Shipping this file does NOT schedule anything — a timer only
+# fires once an operator runs `systemctl enable --now vibepin-product-supply.timer`.
+# Do not enable until explicitly approved.
+#
+# Schedule rationale: 23:00 Asia/Shanghai is a low-traffic window that sits well AFTER
+# the keyword-trends (09:00) and crawl (10:30) windows — ~12.5h after the crawl, far
+# beyond the 120-min Pinterest cooldown — so a future dry-run/apply has fresh source
+# pins and a satisfied cooldown. The randomized delay avoids a thundering-herd if
+# multiple timers ever share the slot.
+# The OnCalendar line pins Asia/Shanghai explicitly, so the schedule is unambiguous
+# regardless of the host timezone (no reliance on the VPS being UTC).
+
+[Unit]
+Description=Daily trigger for VibePin Product-Supply cloud runner
+# Bind to the service of the same name.
+
+[Timer]
+OnCalendar=*-*-* 23:00:00 Asia/Shanghai
+RandomizedDelaySec=900
+# Do NOT run a missed job on boot — avoids surprise catch-up runs after downtime.
+Persistent=false
+Unit=vibepin-product-supply.service
+
+[Install]
+WantedBy=timers.target
