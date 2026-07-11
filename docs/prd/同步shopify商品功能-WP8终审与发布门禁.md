@@ -27,9 +27,9 @@
 | # | 项 | 负责 | 状态 |
 |---|---|---|---|
 | 1 | SQL Editor 执行 `backend/db/migrate_v38_pin_drafts.sql` | 用户 | ✅ 已执行（2026-07-11，另会话核实） |
-| 2 | SQL Editor 执行 `backend/db/migrate_v39_shopify_store_sync.sql`，回读验证 4 表存在 + RLS on + 无 policy | 用户 | ⬜ |
-| 3 | Shopify Partner dashboard：Scopes 改为仅 `read_products`，Release 新版本 | 用户 | ⬜ |
-| 4 | Shopify Partner dashboard：3 个 GDPR compliance webhook URL 全部指向 `https://vibepin.co/api/integrations/shopify/webhooks` | 用户 | ⬜ |
+| 2 | SQL Editor 执行 `backend/db/migrate_v39_shopify_store_sync.sql`，回读验证 4 表存在 + RLS on + 无 policy | 用户 | ✅ 已执行（2026-07-12 用户确认） |
+| 3 | Shopify Partner dashboard：Scopes 改为仅 `read_products`，Release 新版本 | 用户 | ✅ 已改并 Release（2026-07-12 用户确认） |
+| 4 | 注册 3 个 GDPR compliance webhooks：优先 dashboard UI 直填 URL；或用仓库根的 `shopify.app.toml`（2026-07-12 已建）走 `shopify app config link` → 核对 diff → `shopify app deploy` | 用户 | ⬜ |
 | 5 | Vercel Production env 核对：`SHOPIFY_REDIRECT_URI=https://vibepin.co/api/integrations/shopify/callback`、`SHOPIFY_APP_URL=https://vibepin.co`（此前曾误填一次性部署域名） | 用户 | ⬜ |
 | 6 | 部署代码到生产（沿用 ASCII-copy + hostname preload 的 vercel CLI 工作流） | 双方 | ⬜ |
 | 7 | dev store 冒烟：连接→初次同步→picker 选品建卡→AI Copy 带产品 grounding→显式采用产品链接→排期；断开/重装；卸载 webhook；删除商品→tombstone→drawer 警告 | 双方 | ⬜ |
