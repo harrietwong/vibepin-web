@@ -10,6 +10,7 @@ import { cleanProductTitle } from "@/lib/productTitle";
 import { CATEGORIES } from "@/lib/categories";
 import { fetchProductUrlImport } from "@/lib/productUrlImportClient";
 import { deriveProductSaveCount } from "@/lib/productOpportunityCounts";
+import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { toast } from "sonner";
 
 // A product chosen in the picker, with the metadata Create Pins needs to preserve.
@@ -202,15 +203,23 @@ export function ProductOpportunityPicker({
       }));
   }, [myProducts, search]);
 
-  function handleUpload(files: FileList | null) {
+  async function handleUpload(files: FileList | null) {
     if (!files?.length) return;
     const added: PickerSelection[] = [];
-    Array.from(files).forEach(file => {
-      const url = URL.createObjectURL(file);
+    for (const file of Array.from(files)) {
       const title = cleanProductTitle(file.name.replace(/\.[a-z0-9]+$/i, ""));
-      assetStore.saveAsset({ role: "product", source: "upload", imageUrl: url, title });
-      added.push({ imageUrl: url, title, source: "uploaded" });
-    });
+      // Externalize to a stable hosted URL (fixes the old blob: URL that died on
+      // refresh). Fall back to an object URL on failure; the media-offload sweep
+      // will try to externalize it while it is still resolvable this session.
+      let imageUrl: string;
+      try {
+        imageUrl = (await uploadPinImage(file)).publicUrl;
+      } catch {
+        imageUrl = URL.createObjectURL(file);
+      }
+      const saved = assetStore.saveAsset({ role: "product", source: "upload", imageUrl, title });
+      added.push({ id: saved.id, imageUrl, title, source: "uploaded" });
+    }
     setSelected(prev => {
       const next = { ...prev };
       added.forEach(s => { next[keyOf(s)] = s; });
@@ -375,7 +384,7 @@ export function ProductOpportunityPicker({
                   <span className="text-[11px] text-gray-400">PNG / JPG · added to your selection and saved to My Products</span>
                 </button>
                 <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
-                  onChange={e => handleUpload(e.target.files)} />
+                  onChange={e => { void handleUpload(e.target.files); }} />
               </div>
             )}
 

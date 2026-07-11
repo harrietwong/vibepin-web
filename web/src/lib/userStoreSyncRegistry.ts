@@ -12,6 +12,7 @@
  */
 
 import { initUserStoreSync, registerStoreSync, type GetAccessToken } from "./userStoreSync";
+import { startMediaOffloadSweep } from "./mediaOffload";
 
 import { smartScheduleSyncAdapter } from "./smartScheduleStore";
 import { notificationPrefsSyncAdapter } from "./notificationPrefsStore";
@@ -23,6 +24,9 @@ import { creatorProductLinksSyncAdapter } from "./affiliate/creatorProductLink";
 import { bookmarksSyncAdapter } from "./useBookmarks";
 import { pinMetadataSyncAdapter } from "./pinMetadataStore";
 import { pinSessionsSyncAdapter, pinRecordsSyncAdapter } from "./pinStore";
+import { productLibrarySyncAdapter, referenceLibrarySyncAdapter } from "./productLibraryStore";
+import { assetsSyncAdapter } from "./assetStore";
+import { basketSyncAdapter } from "./basketStore";
 
 let _registered = false;
 
@@ -42,6 +46,12 @@ function registerAll(): void {
   registerStoreSync(pinMetadataSyncAdapter);
   registerStoreSync(pinSessionsSyncAdapter);
   registerStoreSync(pinRecordsSyncAdapter);
+  // WP-C: image-bearing stores. getAll() excludes docs still holding a local
+  // (data:/blob:) image; the media-offload sweep (below) externalizes those.
+  registerStoreSync(productLibrarySyncAdapter);
+  registerStoreSync(referenceLibrarySyncAdapter);
+  registerStoreSync(assetsSyncAdapter);
+  registerStoreSync(basketSyncAdapter);
 }
 
 /**
@@ -52,4 +62,8 @@ function registerAll(): void {
 export function initAllUserStoreSync(getToken: GetAccessToken): void {
   registerAll();
   initUserStoreSync(getToken);
+  // WP-C: externalize any base64/blob images in the product library, asset and
+  // basket stores to stable hosted URLs. Idempotent, SSR-safe, self-terminating,
+  // and self-re-arming on store events; failures back off and retry.
+  startMediaOffloadSweep(getToken);
 }

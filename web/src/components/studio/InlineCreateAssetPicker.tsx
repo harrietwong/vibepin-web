@@ -37,6 +37,7 @@ import { toPreviewProduct, asinForAsset } from "@/lib/studio/productPreview";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { ShopifyProductPickerPanel } from "@/components/studio/ShopifyProductPickerPanel";
 import type { ShopifyPanelImage } from "@/components/studio/ShopifyProductPickerPanel";
+import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 
 export type InlineAssetItem = {
   id: string;
@@ -737,7 +738,14 @@ export function InlineCreateAssetPicker({
     if (!files?.length) return;
     const savedIds: string[] = [];
     for (const file of Array.from(files)) {
-      const imageUrl = await readFileAsDataUrl(file);
+      // Externalize uploads to stable hosted URLs so they sync across devices; fall
+      // back to a data URL on failure (the media-offload sweep fixes it up later).
+      let imageUrl: string;
+      try {
+        imageUrl = (await uploadPinImage(file)).publicUrl;
+      } catch {
+        imageUrl = await readFileAsDataUrl(file);
+      }
       const saved = assets.saveAsset({
         role,
         assetRole: role === "product" ? "product_image" : "pin_reference",
