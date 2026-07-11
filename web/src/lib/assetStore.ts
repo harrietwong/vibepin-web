@@ -20,7 +20,8 @@ export type AssetSource =
   | "pin_opportunity"
   | "viral_pin"
   | "url"
-  | "recent";
+  | "recent"
+  | "shopify";
 
 export type AssetItem = {
   id:           string;

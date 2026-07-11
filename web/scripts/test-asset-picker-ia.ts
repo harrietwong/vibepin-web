@@ -36,8 +36,12 @@ function extractConstTabLabels(constName: string): string[] {
   return [...match[1].matchAll(/label:\s*"([^"]+)"/g)].map(m => m[1]);
 }
 
-test("Product picker renders My Products / Product Ideas tabs", () => {
-  assertEqual(extractConstTabLabels("PRODUCT_PICKER_TABS"), ["My Products", "Product Ideas"], "product tabs");
+test("Product picker renders My Products / Product Ideas / From Shopify tabs", () => {
+  // "From Shopify" (WP5) is flag-gated at render time (isShopifyIntegrationEnabled()) —
+  // with the flag off it never appears in the DOM, but it is declared here so the tab
+  // id/type union covers it. See ProductPickerModal.tsx and StudioBoard.tsx for the
+  // matching flag-gated "Select product" entry points.
+  assertEqual(extractConstTabLabels("PRODUCT_PICKER_TABS"), ["My Products", "Product Ideas", "From Shopify"], "product tabs");
 });
 
 test("Product picker defaults to My Products", () => {

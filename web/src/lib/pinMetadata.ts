@@ -21,7 +21,8 @@ export type ProductSourceKind =
   | "product_ideas"
   | "manual"
   | "upload"
-  | "recent";
+  | "recent"
+  | "shopify";
 
 export type LinkedProduct = {
   productId?:    string;
@@ -50,6 +51,7 @@ export function normalizeProductSource(raw: string | undefined): ProductSourceKi
     case "upload":
     case "uploaded":       return "upload";
     case "recent":         return "recent";
+    case "shopify":        return "shopify";
     default:               return raw ? "my_products" : "manual";
   }
 }
@@ -62,6 +64,7 @@ export function productSourceLabel(source: ProductSourceKind | string | undefine
     case "manual":       return "Manual";
     case "upload":       return "Upload";
     case "recent":       return "Recent";
+    case "shopify":      return "Shopify";
     default:             return "My Products";
   }
 }

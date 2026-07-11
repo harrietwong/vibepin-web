@@ -9,6 +9,10 @@ import {
   reasonLabel,
 } from "@/lib/productUrlImportClient";
 import type { ProductUrlImportApiResponse } from "@/lib/productUrlImportClient";
+import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
+import { getShopifyStatus } from "@/lib/shopifyClient";
+import { ShopifyProductPickerPanel } from "./ShopifyProductPickerPanel";
+import type { ShopifyPanelImage, ShopifyProductSelectionCompat } from "./ShopifyProductPickerPanel";
 
 type FetchedResult = ProductUrlImportApiResponse["results"][0];
 
@@ -45,6 +49,8 @@ export type ProductSelection = {
   asPrimary:     boolean;
   /** Whether a reusable product record was saved to My Products. */
   saveToLibrary: boolean;
+  /** Extra selected images beyond imageUrl (Shopify multi-image row detail only). */
+  images?:       { url: string; alt?: string }[];
 };
 
 export type RecommendedProduct = {
@@ -64,6 +70,8 @@ function sourceBadge(source: string): { label: string; bg: string; color: string
     return { label: "URL Imported",  bg: "rgba(99,102,241,0.18)",  color: "#A5B4FC" };
   if (source === "product_signal" || source === "product_ideas")
     return { label: "Product Ideas", bg: "rgba(16,185,129,0.15)",  color: "#6EE7B7" };
+  if (source === "shopify")
+    return { label: "Shopify",       bg: "rgba(149,191,71,0.18)",  color: "#95BF47" };
   return   { label: "My Products",   bg: "rgba(124,58,237,0.18)",  color: "#C4B5FD" };
 }
 
@@ -74,7 +82,7 @@ function truncateUrl(url: string, len = 40): string {
   } catch { return url.slice(0, len); }
 }
 
-type PickerTab = "recommended" | "my_products" | "use_link" | "create";
+type PickerTab = "recommended" | "my_products" | "shopify" | "use_link" | "create";
 type LinkStep  = "input" | "fetching" | "review";
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -164,6 +172,7 @@ export function ProductPickerModal({
   bulkCount,
   recommendedProducts,
   hasPrimary = false,
+  initialTab,
   onSelect,
   onClose,
 }: {
@@ -173,16 +182,23 @@ export function ProductPickerModal({
   recommendedProducts?: RecommendedProduct[];
   /** Whether the Pin already has a Primary product (affects the default link mode). */
   hasPrimary?:          boolean;
+  /** Open on a specific tab (e.g. StudioBoard's "Select product" opens straight to Shopify). */
+  initialTab?:          PickerTab;
   onSelect:             (p: ProductSelection) => void;
   onClose:              () => void;
 }) {
   const hasRecommended = (recommendedProducts?.length ?? 0) > 0;
+  const shopifyEnabled = isShopifyIntegrationEnabled();
 
   // Link mode: a new product becomes Primary by default only when none exists yet.
   const [makePrimary,   setMakePrimary]   = useState<boolean>(!hasPrimary);
   const [saveToLibrary, setSaveToLibrary] = useState<boolean>(true);
+  // Shopify's "Save to My Products" defaults OFF — never auto-populate My Products
+  // from a store sync/selection (决策5), unlike the Use-a-Link/Create tabs above.
+  const [shopifySaveToLibrary, setShopifySaveToLibrary] = useState<boolean>(false);
+  const [shopifyStoreLabel, setShopifyStoreLabel] = useState<string | undefined>(undefined);
 
-  const [tab,              setTab]              = useState<PickerTab>(hasRecommended ? "recommended" : "my_products");
+  const [tab,              setTab]              = useState<PickerTab>(initialTab ?? (hasRecommended ? "recommended" : "my_products"));
   const [search,           setSearch]           = useState("");
 
   // Use a Link state
@@ -210,6 +226,19 @@ export function ProductPickerModal({
     refresh();
     return unsub;
   }, []);
+
+  // Shop name/domain for the ProductSelection.store field (§3.5). Best-effort —
+  // the picker still works if this never resolves (store stays undefined).
+  useEffect(() => {
+    if (!shopifyEnabled) return;
+    let cancelled = false;
+    getShopifyStatus().then(status => {
+      if (cancelled) return;
+      const conn = status.connections[0];
+      setShopifyStoreLabel(conn?.shopName || conn?.shopDomain || undefined);
+    }).catch(() => { /* store label is best-effort */ });
+    return () => { cancelled = true; };
+  }, [shopifyEnabled]);
 
   // Reset link state when switching to/from use_link tab
   useEffect(() => {
@@ -261,6 +290,39 @@ export function ProductPickerModal({
   function selectRecommended(r: RecommendedProduct) {
     if (r.id) assetStore.markUsed(r.id);
     onSelect({ id: r.id, title: r.title, imageUrl: r.imageUrl, url: r.url, source: r.source, asPrimary: makePrimary, saveToLibrary: true });
+  }
+
+  function selectShopifyProduct(selection: ShopifyProductSelectionCompat, images: ShopifyPanelImage[]) {
+    if (shopifySaveToLibrary) {
+      assetStore.saveAsset({
+        role:        "product",
+        source:      "shopify",
+        imageUrl:    selection.imageUrl ?? images[0]?.url ?? "",
+        title:       selection.title,
+        productUrl:  selection.url,
+        canonicalUrl: selection.canonicalUrl,
+        store:       selection.store,
+        price:       selection.price,
+        currency:    selection.currency,
+        allImages:   images.map(i => i.url),
+      });
+    }
+    // id stays the server store_products.id (LinkedProduct.productId semantics, §3.1) —
+    // never the localStorage asset id created above for the My Products copy.
+    onSelect({
+      id:           selection.id,
+      title:        selection.title,
+      imageUrl:     selection.imageUrl,
+      url:          selection.url,
+      canonicalUrl: selection.canonicalUrl,
+      store:        selection.store,
+      price:        selection.price,
+      currency:     selection.currency,
+      source:       "shopify",
+      asPrimary:    makePrimary,
+      saveToLibrary: shopifySaveToLibrary,
+      images,
+    });
   }
 
   async function handleFetchProduct() {
@@ -342,6 +404,7 @@ export function ProductPickerModal({
   const TABS: { id: PickerTab; label: string; count?: number }[] = [
     ...(hasRecommended ? [{ id: "recommended" as const, label: "Recommended", count: recommendedProducts!.length }] : []),
     { id: "my_products", label: "Search products" },
+    ...(shopifyEnabled ? [{ id: "shopify" as const, label: "Shopify" }] : []),
     { id: "use_link",    label: "Use a link" },
     { id: "create",      label: "Create manually" },
   ];
@@ -426,6 +489,12 @@ export function ProductPickerModal({
           {(tab === "use_link" || tab === "create") && (
             <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: UI.textSec, cursor: "pointer", flexShrink: 0 }}>
               <input type="checkbox" checked={saveToLibrary} onChange={e => setSaveToLibrary(e.target.checked)} style={{ accentColor: UI.purple, cursor: "pointer" }} />
+              Save to My Products
+            </label>
+          )}
+          {tab === "shopify" && (
+            <label data-testid="shopify-save-to-library" style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: UI.textSec, cursor: "pointer", flexShrink: 0 }}>
+              <input type="checkbox" checked={shopifySaveToLibrary} onChange={e => setShopifySaveToLibrary(e.target.checked)} style={{ accentColor: UI.purple, cursor: "pointer" }} />
               Save to My Products
             </label>
           )}
@@ -540,6 +609,17 @@ export function ProductPickerModal({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── SHOPIFY tab ──────────────────────────────────────────────────────── */}
+        {tab === "shopify" && shopifyEnabled && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "12px 20px 16px" }}>
+            <ShopifyProductPickerPanel
+              mode="select-product"
+              storeLabel={shopifyStoreLabel}
+              onSelectProduct={selectShopifyProduct}
+            />
           </div>
         )}
 

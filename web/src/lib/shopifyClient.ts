@@ -277,3 +277,95 @@ export async function runSyncToCompletion(
     }
   }
 }
+
+// ── products (picker query, WP5 §6.7/§6.8) ─────────────────────────────────────
+
+export type ShopifyProductStatus = "active" | "draft" | "archived" | "deleted";
+export type ShopifyProductAvailability = "in_stock" | "out_of_stock" | "unknown";
+
+export type ShopifyProductPrice = {
+  amount: number | null;
+  currency: string | null;
+  compareAt: number | null;
+};
+
+export type ShopifyProductListItem = {
+  id: string;
+  title: string;
+  handle: string | null;
+  /** Present on both list rows and the detail response (serializeProduct §products/serialize.ts). */
+  description?: string | null;
+  productUrl: string | null;
+  adminUrl: string | null;
+  status: ShopifyProductStatus;
+  availability: ShopifyProductAvailability;
+  vendor: string | null;
+  productType: string | null;
+  tags: string[];
+  price: ShopifyProductPrice;
+  primaryImageUrl: string | null;
+  imageCount: number;
+  updatedAtSource: string | null;
+  deletedAt: string | null;
+};
+
+export type ShopifyProductImage = {
+  id: string;
+  url: string;
+  width: number | null;
+  height: number | null;
+  altText: string | null;
+  position: number;
+};
+
+export type ShopifyProductDetail = ShopifyProductListItem & {
+  images: ShopifyProductImage[];
+  stale: { deleted: boolean; archived: boolean; unavailable: boolean };
+};
+
+export type ListShopifyProductsParams = {
+  connectionId?: string;
+  q?: string;
+  status?: "active" | "draft" | "archived";
+  includeDeleted?: boolean;
+  cursor?: string | null;
+  /** Clamped server-side to 30 (MAX_LIMIT in products/route.ts). */
+  limit?: number;
+};
+
+export type ListShopifyProductsResult = {
+  products: ShopifyProductListItem[];
+  nextCursor: string | null;
+};
+
+/** Picker query (§6.7): search/status/pagination. Never throws on "no products" — an
+ *  empty array is a normal, successful result (not connected / table not applied also
+ *  resolve to an empty array server-side, per 裁决 i). */
+export async function listShopifyProducts(
+  params: ListShopifyProductsParams = {},
+): Promise<ListShopifyProductsResult> {
+  const sp = new URLSearchParams();
+  if (params.connectionId) sp.set("connectionId", params.connectionId);
+  if (params.q?.trim()) sp.set("q", params.q.trim());
+  if (params.status) sp.set("status", params.status);
+  if (params.includeDeleted) sp.set("includeDeleted", "true");
+  if (params.cursor) sp.set("cursor", params.cursor);
+  sp.set("limit", String(Math.min(Math.max(params.limit ?? 30, 1), 30)));
+
+  const res = await fetch(`/api/integrations/shopify/products?${sp.toString()}`, {
+    headers: await authHeaders(),
+    cache: "no-store",
+  });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as ListShopifyProductsResult;
+}
+
+/** Product detail + images + freshness (§6.8). 404 (`not_found`) on a purged/unknown id. */
+export async function getShopifyProduct(id: string): Promise<ShopifyProductDetail> {
+  const res = await fetch(`/api/integrations/shopify/products/${encodeURIComponent(id)}`, {
+    headers: await authHeaders(),
+    cache: "no-store",
+  });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as ShopifyProductDetail;
+}

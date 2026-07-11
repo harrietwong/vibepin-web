@@ -15,6 +15,7 @@ export function serializeProduct(row: StoreProductRow, shopDomain: string | unde
     id: row.id,
     title: row.title,
     handle: row.handle,
+    description: row.description_text,
     productUrl: row.product_url,
     adminUrl: adminUrl(shopDomain, row.external_product_id),
     status: row.status,

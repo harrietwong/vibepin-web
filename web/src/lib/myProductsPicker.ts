@@ -56,6 +56,7 @@ export function productSourceLabel(item: AssetItem): string {
   if (item.source === "upload") return "Uploaded";
   if (item.source === "url") return "URL Imported";
   if (item.source === "product_signal" || item.source === "product_ideas") return "Product Ideas";
+  if (item.source === "shopify") return "Shopify";
   return "Recent";
 }
 

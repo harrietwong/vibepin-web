@@ -33,6 +33,9 @@ import { PinBoardCard } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI } from "@/components/studio/boardUI";
+import { ProductPickerModal, type ProductSelection } from "@/components/studio/ProductPickerModal";
+import { normalizeProductSource, type LinkedProduct } from "@/lib/pinMetadata";
+import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 type AiDrawerState = { mode: "version"; draft: PinDraft } | { mode: "scratch" } | null;
@@ -71,6 +74,8 @@ export function StudioBoard() {
   const [aiDrawer, setAiDrawer] = useState<AiDrawerState>(null);
   const [aiSetupCache, setAiSetupCache] = useState<Record<string, AiVersionDrawerSetup>>({});
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [showProductPicker, setShowProductPicker] = useState(false);
+  const shopifyEnabled = isShopifyIntegrationEnabled();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const flashSaved = useCallback(() => { setSaving(true); setTimeout(() => setSaving(false), 300); }, []);
@@ -171,6 +176,41 @@ export function StudioBoard() {
       toast.error("Failed to publish. Please try again.");
     } finally { endPublish(id); }
   }, [noBoardAccess]);
+
+  // ── Product → Pin (Shopify "Select product", §3.6) ─────────────────────────
+  // Opening/browsing the picker never creates anything — only a confirmed selection
+  // does. destinationUrl is intentionally left empty (never auto-filled, §2).
+  const handleProductSelect = useCallback((p: ProductSelection) => {
+    setShowProductPicker(false);
+    // Multi-image selection → the first chosen image becomes the card's cover.
+    const chosenImageUrl = p.images?.[0]?.url ?? p.imageUrl ?? "";
+    if (!chosenImageUrl) { toast.error("That product has no image to use yet."); return; }
+    const linkedProduct: LinkedProduct = {
+      productId:    p.id,
+      title:        p.title?.trim() || "Product",
+      imageUrl:     chosenImageUrl,
+      thumbnailUrl: chosenImageUrl,
+      productUrl:   p.url,
+      canonicalUrl: p.canonicalUrl,
+      store:        p.store,
+      price:        p.price,
+      currency:     p.currency,
+      source:       normalizeProductSource(p.source),
+      linkType:     "auto",
+    };
+    const created = pinDraftStore.createBoardDraft({
+      imageUrl: chosenImageUrl,
+      source:   "uploaded_image",
+      title:    p.title?.trim() || undefined,
+    });
+    pinDraftStore.updateDraft(created.id, {
+      linkedProducts: [linkedProduct],
+      primaryProductId: linkedProduct.productId,
+    });
+    void startImageAnalysis(created.id);
+    flashSaved();
+    toast.success("Created a Pin from your product.");
+  }, [flashSaved]);
 
   // ── AI drawers ─────────────────────────────────────────────────────────────
   const handleGenerateAiImage = useCallback((d: PinDraft) => setAiDrawer({ mode: "version", draft: d }), []);
@@ -357,6 +397,12 @@ export function StudioBoard() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
             {savedIndicator}
+            {shopifyEnabled && (
+              <button type="button" data-testid="board-select-product" onClick={() => setShowProductPicker(true)}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: BUI.textSec, background: "none", border: `1px solid ${BUI.border}`, borderRadius: 20, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+                Select product
+              </button>
+            )}
             <Link href="/app/history" data-testid="board-history" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: BUI.textSec, textDecoration: "none", border: `1px solid ${BUI.border}`, borderRadius: 20, padding: "5px 12px" }}>
               <Clock style={{ width: 12, height: 12 }} /> History
             </Link>
@@ -393,6 +439,12 @@ export function StudioBoard() {
               style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, fontSize: 12, fontWeight: 700, color: BUI.purple, cursor: "pointer", fontFamily: "inherit" }}>
               No image yet? Create with AI <ArrowRight style={{ width: 13, height: 13 }} />
             </button>
+            {shopifyEnabled && (
+              <button type="button" data-testid="board-select-product-empty" onClick={() => setShowProductPicker(true)}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, fontSize: 12, fontWeight: 700, color: BUI.purple, cursor: "pointer", fontFamily: "inherit" }}>
+                Create from your store? Select a product <ArrowRight style={{ width: 13, height: 13 }} />
+              </button>
+            )}
           </div>
         ) : items.length === 0 ? (
           <div data-testid="board-empty-filter" style={{ minHeight: 240, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, textAlign: "center", color: BUI.textSec }}>
@@ -432,6 +484,16 @@ export function StudioBoard() {
           }}
           onClose={() => setAiDrawer(null)}
           onGenerate={handleAiGenerate}
+        />
+      )}
+
+      {showProductPicker && (
+        <ProductPickerModal
+          title="Select product"
+          subtitle="Create a Pin from a product in your store."
+          initialTab="shopify"
+          onSelect={handleProductSelect}
+          onClose={() => setShowProductPicker(false)}
         />
       )}
     </div>

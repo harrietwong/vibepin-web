@@ -34,6 +34,9 @@ import {
 } from "@/lib/assetClassification";
 import { ProductHoverPreview } from "@/components/studio/ProductPreview";
 import { toPreviewProduct, asinForAsset } from "@/lib/studio/productPreview";
+import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
+import { ShopifyProductPickerPanel } from "@/components/studio/ShopifyProductPickerPanel";
+import type { ShopifyPanelImage } from "@/components/studio/ShopifyProductPickerPanel";
 
 export type InlineAssetItem = {
   id: string;
@@ -56,6 +59,7 @@ export type InlineCreateAssetPickerProps = {
 export const PRODUCT_PICKER_TABS = [
   { id: "my_products", label: "My Products" },
   { id: "product_ideas", label: "Product Ideas" },
+  { id: "shopify", label: "From Shopify" },
 ] as const;
 
 export const REFERENCE_PICKER_TABS = [
@@ -821,6 +825,28 @@ export function InlineCreateAssetPicker({
     toggle(saved.id);
   }
 
+  function saveShopifyImages(images: ShopifyPanelImage[], product: { title: string; productUrl?: string }) {
+    const savedIds: string[] = [];
+    for (const img of images) {
+      const existing = allAssets.find(a => a.role === "product" && a.imageUrl === img.url);
+      const saved = existing ?? assets.saveAsset({
+        role:            "product",
+        assetRole:       "product_image",
+        itemType:        "product",
+        productType:     "physical_product",
+        destinationType: "product_page",
+        sourceContext:   "url_imported",
+        source:          "shopify",
+        imageUrl:        img.url,
+        title:           product.title,
+        productUrl:      product.productUrl,
+        store:           "Shopify",
+      });
+      savedIds.push(saved.id);
+    }
+    setSelected(prev => new Set([...prev, ...savedIds]));
+  }
+
   function selectPinIdea(pin: PinIdea) {
     const mapped = mapPinIdeaToPickerAsset(pin);
     const existing = allAssets.find(a => a.role === "style_reference" && a.imageUrl === pin.image_url);
@@ -885,8 +911,10 @@ export function InlineCreateAssetPicker({
   const filteredMyProducts = filterMyProducts(myAssets, productFilter, search);
   const filteredMyRefs     = filterMyReferences(myAssets, refFilter, search);
 
+  const shopifyEnabled = isShopifyIntegrationEnabled();
   const title = isProduct ? "Choose Product Images" : "Choose Pin References";
-  const tabs = isProduct ? PRODUCT_PICKER_TABS : REFERENCE_PICKER_TABS;
+  const tabs = (isProduct ? PRODUCT_PICKER_TABS : REFERENCE_PICKER_TABS)
+    .filter(t => t.id !== "shopify" || shopifyEnabled);
   const activeTab = isProduct ? productTab : referenceTab;
   const setActiveTab = (tab: string) => {
     setSearch("");
@@ -1089,6 +1117,13 @@ export function InlineCreateAssetPicker({
           </div>
           <p style={{ margin: 0, padding: "0 18px 10px", color: UI.textSec, fontSize: 11 }}>Selected items are also saved to My Products.</p>
         </>
+      )}
+
+      {isProduct && productTab === "shopify" && shopifyEnabled && (
+        <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
+          <ShopifyProductPickerPanel mode="select-images" onSelectImages={saveShopifyImages} />
+          <p style={{ margin: "10px 0 0", color: UI.textSec, fontSize: 11 }}>Selected images are also saved to My Products.</p>
+        </div>
       )}
 
       {!isProduct && referenceTab === "my_references" && (
