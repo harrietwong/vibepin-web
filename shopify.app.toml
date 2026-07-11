@@ -1,43 +1,25 @@
-# Shopify app configuration for vibePin (Partner org: PocketProfit Studio).
-# Mirrors the dev-dashboard baseline (2026-07-12). Used to register the GDPR
-# compliance webhooks via `shopify app deploy`.
-#
-# Workflow:
-#   1. shopify app config link      # bind this file to the existing vibePin app
-#   2. review the diff it shows     # must match the dashboard baseline below
-#   3. shopify app deploy           # releases a new version incl. compliance webhooks
-#
-# NOTE: `shopify app deploy` replaces the app's active version with THIS file's
-# contents. Keep every field below in sync with the dashboard before deploying.
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "c3e2bffb5543d30a68e724f26e5a7f2c"
 name = "vibePin"
 application_url = "https://vibepin.co/api/integrations/shopify/launch"
 embedded = false
 
-[access_scopes]
-scopes = "read_products"
-use_legacy_install_flow = true
-
-[auth]
-redirect_urls = [
-  "https://vibepin.co/api/integrations/shopify/callback"
-]
-
 [webhooks]
 api_version = "2026-07"
 
-# Required GDPR compliance topics (public distribution requirement).
-# Handler: web/src/app/api/integrations/shopify/webhooks/route.ts
-#   - verifies X-Shopify-Hmac-Sha256 over the raw body (invalid -> 401)
-#   - dispatches by X-Shopify-Topic
-#   - customers/data_request, customers/redact: no customer data stored; logged + 200
-#   - shop/redact: purges store_connections/store_products/images/variants for the shop
-# app/uninstalled is registered per-shop at OAuth time (callback route), not here.
-[[webhooks.subscriptions]]
-compliance_topics = [
-  "customers/data_request",
-  "customers/redact",
-  "shop/redact"
-]
-uri = "https://vibepin.co/api/integrations/shopify/webhooks"
+  [[webhooks.subscriptions]]
+  uri = "/api/integrations/shopify/webhooks"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products"
+use_legacy_install_flow = true
+optional_scopes = [ ]
+
+[auth]
+redirect_urls = [ "https://vibepin.co/api/integrations/shopify/callback" ]
+
+[app_preferences]
+url = "https://vibepin.co/app/settings/integrations"
