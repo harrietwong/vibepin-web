@@ -1,0 +1,68 @@
+{
+  "passed": 10,
+  "failed": 0,
+  "issues": [
+    {
+      "sev": "P2",
+      "label": "No pin cards found (may need data or different selector)",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "Add to Plan button not found on Studio page (may need cards)",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "Select/Batch action not found",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "Weekly Plan calendar element not detected by selector",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "No scheduled pin items found (may need data)",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "\"Needs date\" not visible in Studio (may need a pin added to plan without date)",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "\"Needs date\" not visible in Plan page (may need data)",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "No hoverable pin images found (need scheduled pins)",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "No checkboxes found — Batch Edit trigger skipped",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "Batch Edit button not found (need selected pins)",
+      "detail": ""
+    },
+    {
+      "sev": "P2",
+      "label": "Billing section not found",
+      "detail": ""
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ]
+}

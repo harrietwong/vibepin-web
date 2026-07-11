@@ -25,7 +25,7 @@
 
 | 能力 | 状态 | 依据（审计） | 差距动作 |
 |---|---|---|---|
-| OAuth state/CSRF/加密 token 存储 | Done（模板） | B3：`oauthState.ts`、`crypto.ts`、`connectionStore.ts` | 按模板新建 Shopify 版；`crypto.ts` 增加按 env 名取密钥的 cipher 工厂（`SHOPIFY_TOKEN_ENC_KEY`，裁决 g） |
+| OAuth state/CSRF/加密 token 存储 | Done（模板） | B3：`oauthState.ts`、`crypto.ts`、`connectionStore.ts` | 按模板新建 Shopify 版；`crypto.ts` 增加按 env 名取密钥的 cipher 工厂（`SHOPIFY_TOKEN_ENCRYPTION_KEY`，裁决 g） |
 | HMAC 验签（launch/webhook） | Missing | B11：无任何 webhook 端点 | 新建 `server/shopify/hmac.ts`，复用 `crypto.ts:118-123 safeEqual` + node:crypto createHmac |
 | StoreConnection 四态 + sync state | Missing | B3 差距①②④ | v39 新表，复合唯一键 `(vibepin_user_id, shop_domain)`（裁决 b） |
 | 产品选择/关联体系 | Done（宿主） | B4：ProductSelection、linkedProducts/primaryProduct 两层、saveToLibrary 逐个可选 | 扩 `ProductSourceKind` 加 `"shopify"`（裁决 d）+ picker 加 tab/source |
@@ -80,11 +80,11 @@ auth.users (Supabase)
 
 ### 3.3 OAuth 流程（文字步骤）
 
-1. 入口 A（Shopify 侧）：`GET /launch?shop=x.myshopify.com&hmac=…&timestamp=…` → 校验 query HMAC（去除 hmac 参数、按 key 字典序拼 `k=v&…`、HMAC-SHA256(hex, SHOPIFY_API_SECRET)、`safeEqual`）+ shop 域名正则 `^[a-z0-9][a-z0-9-]*\.myshopify\.com$` → 已登录（`getUserIdFromCookieSession`）→ 进入第 3 步；未登录 → 302 `/login?returnTo=/app/settings/shopify?shop=x.myshopify.com`（登录后落 Shopify tab，shop 预填）。
+1. 入口 A（Shopify 侧）：`GET /launch?shop=x.myshopify.com&hmac=…&timestamp=…` → 校验 query HMAC（去除 hmac 参数、按 key 字典序拼 `k=v&…`、HMAC-SHA256(hex, SHOPIFY_CLIENT_SECRET)、`safeEqual`）+ shop 域名正则 `^[a-z0-9][a-z0-9-]*\.myshopify\.com$` → 已登录（`getUserIdFromCookieSession`）→ 进入第 3 步；未登录 → 302 `/login?returnTo=/app/settings/shopify?shop=x.myshopify.com`（登录后落 Shopify tab，shop 预填）。
 2. 入口 B（VibePin 侧）：Settings Shopify tab 输入 shop 域名点 Connect → `POST /connect {shopDomain}`。
-3. connect：校验配置（`SHOPIFY_API_KEY/SECRET/REDIRECT_URI/TOKEN_ENC_KEY` 齐备，缺失 → 500 `config_error`）→ 校验域名 → **entitlement 检查**（`resolvePlan(userId)`，活跃连接数 ≥ maxStores → 403 `plan_limit_stores`；free maxStores=0 直接拒）→ 生成 state（`randomBytes(32)` base64url，照 `oauthState.ts:59-61`）→ `{state, uid, shopDomain, exp(10min), returnTo}` AES-GCM seal 进 HttpOnly cookie `shopify_oauth_state` → 302/返回 `https://{shop}/admin/oauth/authorize?client_id={KEY}&scope=read_products&redirect_uri={REDIRECT_URI}&state={state}`。
+3. connect：校验配置（`SHOPIFY_CLIENT_ID/SECRET/REDIRECT_URI/TOKEN_ENC_KEY` 齐备，缺失 → 500 `config_error`）→ 校验域名 → **entitlement 检查**（`resolvePlan(userId)`，活跃连接数 ≥ maxStores → 403 `plan_limit_stores`；free maxStores=0 直接拒）→ 生成 state（`randomBytes(32)` base64url，照 `oauthState.ts:59-61`）→ `{state, uid, shopDomain, exp(10min), returnTo}` AES-GCM seal 进 HttpOnly cookie `shopify_oauth_state` → 302/返回 `https://{shop}/admin/oauth/authorize?client_id={KEY}&scope=read_products&redirect_uri={REDIRECT_URI}&state={state}`。
 4. callback：`GET /callback?code=…&shop=…&state=…&hmac=…` → 校验 query HMAC → unseal cookie：state 匹配 + uid 匹配 + 未过期 + shop 与 sealed shopDomain 一致 → **单次使用清除 cookie**（照 `oauthState.ts:81-92`）→ `POST https://{shop}/admin/oauth/access_token {client_id, client_secret, code}` → 得 offline `{access_token, scope}`（legacy install flow，token 不过期）。
-5. 落库：token 用 SHOPIFY_TOKEN_ENC_KEY 加密（`v1:` 前缀格式照 `crypto.ts:22-25`）→ GraphQL `shop { name primaryDomain { host } }` 取店名/主域 → upsert `store_connections`（onConflict `(vibepin_user_id, shop_domain)`，status=connected，清 disconnected_at/uninstalled_at）→ GraphQL `webhookSubscriptionCreate(topic: APP_UNINSTALLED, callbackUrl: …/webhooks)` 注册卸载 webhook（失败仅记 sync_error 级日志，不阻断）。
+5. 落库：token 用 SHOPIFY_TOKEN_ENCRYPTION_KEY 加密（`v1:` 前缀格式照 `crypto.ts:22-25`）→ GraphQL `shop { name primaryDomain { host } }` 取店名/主域 → upsert `store_connections`（onConflict `(vibepin_user_id, shop_domain)`，status=connected，清 disconnected_at/uninstalled_at）→ GraphQL `webhookSubscriptionCreate(topic: APP_UNINSTALLED, callbackUrl: …/webhooks)` 注册卸载 webhook（失败仅记 sync_error 级日志，不阻断）。
 6. 302 → `/app/settings/shopify?shopify=connected`（打开 Shopify tab，见 §7 UI）；tab 引导语指向 Create Pins 的 Select product（§3.1 任务书）。任何失败 → 302 `/app/settings/shopify?shopify=<error_code>`。
 7. Reconnect = 重走 3–6 覆盖凭证（决策 13）；reauth_required 状态由 API 调用收到 401/`invalid token` 时置位。
 
@@ -198,7 +198,7 @@ create table if not exists store_connections (
   shop_domain              text not null,                        -- lowercase *.myshopify.com
   shop_name                text,
   primary_domain           text,                                 -- storefront host for product URLs
-  access_token_encrypted   text,                                 -- AES-256-GCM "v1:" via SHOPIFY_TOKEN_ENC_KEY; never plaintext
+  access_token_encrypted   text,                                 -- AES-256-GCM "v1:" via SHOPIFY_TOKEN_ENCRYPTION_KEY; never plaintext
   scopes                   text[] not null default '{}',
   status                   text not null default 'connected'
     check (status in ('connected','degraded','reauth_required','disconnected')),
@@ -334,7 +334,7 @@ alter table store_product_variants enable row level security;
 |---|---|---|
 | `web/src/lib/server/crypto.ts` | M | 追加 `createTokenCipher(envVarName)` 工厂（返回 encrypt/decrypt/sealJson/unsealJson，绑定指定 env 密钥）；Pinterest 现有导出零改动 |
 | `web/src/lib/server/entitlements.ts` | C | `PlanKey`→`{maxStores, maxSyncedProducts}` 常量表（free 0/0、starter 1/100、pro 2/500、business 3/1000）+ `resolvePlan(userId)`（supabase admin getUserById → `user_metadata.plan`，email 白名单与 `useUserTier.ts:6-28` 对齐映射 pro）。不写 DB 约束（裁决 h） |
-| `web/src/lib/server/shopify/config.ts` | C | 读 `SHOPIFY_API_KEY/API_SECRET/REDIRECT_URI/API_VERSION`；`isShopifyConfigured()`、`buildAuthorizeUrl(shop, state)`、`isValidShopDomain()`。参照 `server/pinterest/config.ts` 模式 |
+| `web/src/lib/server/shopify/config.ts` | C | 读 `SHOPIFY_CLIENT_ID/CLIENT_SECRET/REDIRECT_URI/API_VERSION`；`isShopifyConfigured()`、`buildAuthorizeUrl(shop, state)`、`isValidShopDomain()`。参照 `server/pinterest/config.ts` 模式 |
 | `web/src/lib/server/shopify/hmac.ts` | C | `verifyLaunchQueryHmac(searchParams)`（字典序 k=v& + HMAC-SHA256 hex）、`verifyWebhookHmac(rawBody, headerB64)`；依赖 node:crypto createHmac + `crypto.ts safeEqual`（裁决 k） |
 | `web/src/lib/server/shopify/oauthState.ts` | C | 照 `server/pinterest/oauthState.ts` 全套语义（10min TTL、单次使用、returnTo 白名单），cookie 名 `shopify_oauth_state`，payload 增 `shopDomain`，seal 用 shopify cipher |
 | `web/src/lib/server/shopify/connectionStore.ts` | C | `store_connections` CRUD：`upsertConnection`、`listConnections(userId)`、`getConnection(userId, id)`、`acquireSyncLock`(CAS)、`updateSyncProgress`、`finishSync`、`markReauthRequired`、`markUninstalled(shopDomain)`、`disconnect`、`toSafeStatus`（token 永不出响应，照 `connectionStore.ts:237-252`）；`isMissingTableError` 降级 |
@@ -379,7 +379,7 @@ alter table store_product_variants enable row level security;
 | `web/src/lib/ai-copy/generatePinCopy.ts` | M | `inferProductContext`（`:60-84`）扩 vendor/tags/price/availability |
 | `web/src/app/api/ai-copy/route.ts` | M | `ProductContext` 类型 + `buildContextBlock`（`:119-126`）扩字段；shopify 产品图 SSRF allowlist 校验挂点 |
 | `web/src/app/api/ai-copy/analyze/route.ts` | M | 同上 SSRF allowlist 校验 |
-| `web/.env.example` | M | 追加 `SHOPIFY_API_KEY/API_SECRET/REDIRECT_URI/API_VERSION=2026-07/TOKEN_ENC_KEY` + `NEXT_PUBLIC_SHOPIFY_INTEGRATION`（裁决 g） |
+| `web/.env.example` | M | 追加 `SHOPIFY_CLIENT_ID/CLIENT_SECRET/REDIRECT_URI/API_VERSION=2026-07/TOKEN_ENCRYPTION_KEY/SCOPES/APP_URL` + `SHOPIFY_PRODUCT_LIMIT_FREE|STARTER|PRO|BUSINESS`（entitlement env 覆盖，缺省 0/100/500/1000）+ `NEXT_PUBLIC_SHOPIFY_INTEGRATION`。命名以用户 2026-07-11 已配置的 Vercel/本地变量为准；另有 `SHOPIFY_OAUTH_STATE_SECRET`、`SHOPIFY_INTEGRATION_ENABLED` 已存在但暂不消费（state seal 直接用 TOKEN_ENCRYPTION_KEY；UI flag 必须用 NEXT_PUBLIC_ 前缀变量） |
 | `web/package.json` | M | 新增 test scripts（§9） |
 
 注意：`web/AGENTS.md` 警告本仓库 Next.js 与常识版本有差异——执行代理写任何 route/页面前先读 `node_modules/next/dist/docs/` 对应章节。
@@ -434,7 +434,7 @@ alter table store_product_variants enable row level security;
 - body `{connectionId}` → `{ok: true}`（吊销尽力而为；连接 status=disconnected、token null、商品全部 tombstone；草稿引用保留=stale）
 
 ### 6.10 webhooks（POST，单端点分发）
-- 校验 `X-Shopify-Hmac-Sha256`（base64 HMAC-SHA256(raw body, SHOPIFY_API_SECRET)，`safeEqual`）失败 → 401
+- 校验 `X-Shopify-Hmac-Sha256`（base64 HMAC-SHA256(raw body, SHOPIFY_CLIENT_SECRET)，`safeEqual`）失败 → 401
 - `X-Shopify-Topic`: `app/uninstalled` | `customers/data_request` | `customers/redact` | `shop/redact`；处理成功一律 200 `{ok: true}`；幂等（重复投递安全）
 
 ---
@@ -574,7 +574,7 @@ alter table store_product_variants enable row level security;
 **⑤ 发布门禁清单**：
 1. Partner dashboard scopes 改为仅 `read_products`（§7A 待修正项 1）；
 2. 三个 GDPR webhook URL 配置为 `https://vibepin.co/api/integrations/shopify/webhooks`（待修正项 2），投递测试通过；
-3. Vercel 生产 env：`SHOPIFY_API_KEY/API_SECRET/REDIRECT_URI/API_VERSION=2026-07/TOKEN_ENC_KEY`（独立密钥，非 Pinterest 共用）；
+3. Vercel 生产 env：`SHOPIFY_CLIENT_ID/CLIENT_SECRET/REDIRECT_URI/API_VERSION=2026-07/TOKEN_ENCRYPTION_KEY`（独立密钥，非 Pinterest 共用）——用户已于 2026-07-11 配置，**但 REDIRECT_URI/APP_URL 曾指向一次性部署域名，需确认已改为 `https://vibepin.co/...`**；UI 灰度另需 `NEXT_PUBLIC_SHOPIFY_INTEGRATION`；
 4. SQL Editor：v32–v37 应用状态盘点 → 执行 v38、v39 并回读验证（表存在 + RLS on + 无 policy）；
 5. `npm run test` 全绿 + `next build` 通过 + 两条 Playwright spec 通过；
 6. dev store 冒烟：连接/同步/断开/重装/卸载 webhook/坏 token reauth/删除商品 tombstone；

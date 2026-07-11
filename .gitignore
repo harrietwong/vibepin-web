@@ -25,6 +25,8 @@ api/.venv/
 
 # Node
 node_modules/
+.node_modules_broken*/
+*node_modules_broken*/
 .next/
 out/
 *.tsbuildinfo
@@ -38,6 +40,9 @@ playwright-report/
 
 # Secret-bearing notes at repo root (Vercel env var dumps etc.)
 导入到vercel的环境变量*.txt
+
+# Archived nested git repo (web's old history; do not track)
+web/.git-archived/
 
 # Local tool state & scratch
 .openclaw/

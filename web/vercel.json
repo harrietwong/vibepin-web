@@ -1,0 +1,13 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "outputDirectory": ".next",
+  "redirects": [
+    {
+      "source": "/www",
+      "destination": "https://vibepin.co",
+      "permanent": true
+    }
+  ]
+}

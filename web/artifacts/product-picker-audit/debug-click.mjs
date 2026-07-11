@@ -1,0 +1,13 @@
+﻿import { chromium } from "playwright";
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, baseURL: "http://127.0.0.1:3000" });
+await page.goto("/app/studio", { waitUntil: "domcontentloaded" });
+await page.getByTestId("composer-panel").waitFor();
+const btn = page.getByTestId("add-product-images");
+console.log('button', await btn.textContent(), await btn.isEnabled(), await btn.boundingBox());
+await btn.click({ force: true });
+await page.waitForTimeout(1000);
+console.log('after testids', await page.locator('[data-testid]').evaluateAll(els => els.map(e => e.getAttribute('data-testid')).filter(x => x?.includes('picker')).slice(0,20)));
+console.log((await page.locator('body').innerText()).slice(0,1500));
+await page.screenshot({ path: "artifacts/product-picker-audit/debug-after-click.png", fullPage: true });
+await browser.close();
