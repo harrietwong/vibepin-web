@@ -60,6 +60,8 @@ import {
   type AmazonAffiliateSettings,
 } from "@/lib/affiliate/amazonAffiliateSettings";
 import { AMAZON_MARKETPLACES, type AmazonMarketplace } from "@/lib/affiliate/amazon";
+import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
+import { ShopifyTab } from "@/components/settings/ShopifyTab";
 
 const PRICING_PATH = "/pricing";
 const SUPPORT_EMAIL = "support@vibepin.co";
@@ -82,6 +84,7 @@ export type SettingsTab =
   | "social"
   | "publishing"
   | "amazon"
+  | "shopify"
   | "smart-schedule"
   | "ai-settings"
   | "appearance"
@@ -1183,6 +1186,7 @@ const TABS: { id: SettingsTab; labelKey?: MessageKey; label?: string; testId: st
   { id: "social",         labelKey: "settings.tab.social",        testId: "settings-tab-social" },
   { id: "publishing",     labelKey: "settings.tab.publishing",    testId: "settings-tab-publishing" },
   { id: "amazon",         labelKey: "settings.tab.amazon",        testId: "settings-tab-amazon" },
+  { id: "shopify",        label: "Shopify",                       testId: "settings-tab-shopify" },
   { id: "smart-schedule", labelKey: "settings.tab.smartSchedule", testId: "settings-tab-smart-schedule" },
   { id: "ai-settings",    labelKey: "settings.tab.aiSettings",    testId: "settings-tab-ai-settings" },
   { id: "appearance",     labelKey: "settings.tab.appearance",    testId: "settings-tab-appearance" },
@@ -1293,7 +1297,7 @@ export function SettingsModal({
             width: 164, flexShrink: 0, borderRight: `1px solid ${UI.border}`,
             padding: "12px 8px", display: "flex", flexDirection: "column", gap: 2, overflowY: "auto",
           }}>
-            {TABS.map(tabItem => {
+            {TABS.filter(tabItem => tabItem.id !== "shopify" || isShopifyIntegrationEnabled()).map(tabItem => {
               const active = tab === tabItem.id;
               return (
                 <button key={tabItem.id} type="button" data-testid={tabItem.testId} onClick={() => setTab(tabItem.id)}
@@ -1320,6 +1324,11 @@ export function SettingsModal({
             {tab === "social"         && <SocialAccountsPanel />}
             {tab === "publishing"     && <PublishingTab    saveFnRef={publishingSaveFn} />}
             {tab === "amazon"         && <AmazonTab        saveFnRef={amazonSaveFn} />}
+            {/* Rendered whenever the tab is active, regardless of the flag: launch/callback
+                routes are never flag-gated (§8.4), so a real OAuth return can land here even
+                with the UI flag off. The flag only gates discoverability (TABS filter above,
+                picker/StudioBoard entry points) — never a real, already-connected state. */}
+            {tab === "shopify"        && <ShopifyTab />}
             {tab === "smart-schedule" && <SmartScheduleTab saveFnRef={smartScheduleSaveFn} />}
             {tab === "ai-settings"    && <AiSettingsTab    saveFnRef={aiSettingsSaveFn} onOpenTab={setTab} />}
             {tab === "appearance"     && <AppearanceTab />}

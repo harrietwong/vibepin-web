@@ -1,6 +1,7 @@
 /** Canonical dark-app Settings routes (English UI). */
 
 export const SETTINGS_PINTEREST_PATH = "/app/settings/pinterest";
+export const SETTINGS_SHOPIFY_PATH = "/app/settings/shopify";
 export const SETTINGS_PROFILE_PATH = "/app/settings/profile";
 export const SETTINGS_BILLING_PATH = "/app/settings/billing";
 export const SETTINGS_LANGUAGE_PATH = "/app/settings/language";

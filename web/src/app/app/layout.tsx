@@ -355,6 +355,8 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       setSettingsTab("billing"); setSettingsOpen(true);
     } else if (path.startsWith("/app/settings/pinterest")) {
       setSettingsTab("pinterest"); setSettingsOpen(true);
+    } else if (path.startsWith("/app/settings/shopify")) {
+      setSettingsTab("shopify"); setSettingsOpen(true);
     } else if (path.startsWith("/app/settings/social")) {
       setSettingsTab("social"); setSettingsOpen(true);
     } else if (path.startsWith("/app/settings/publishing") || path.startsWith("/app/settings/scheduler")) {
