@@ -77,12 +77,34 @@ test("computeWeeklyPlanStats exposes scheduled, published, and unscheduled", () 
   assert(stats.ready === 0, `ready should no longer be user-facing, got ${stats.ready}`);
 });
 
-test("added pins without a calendar date count as unscheduled, not needs details", () => {
+test("added-but-dateless pins are NOT unscheduled (they own the added-needs-date section)", () => {
+  // The header "unscheduled" count must equal the Unscheduled Pins rail, whose
+  // tooltip reads "Generated Pins not placed on the calendar" (the generated tray).
+  // A pin added to the plan but still lacking a date lives in the added-needs-date
+  // section, so it must NOT be double-counted as unscheduled.
   const stats = computeWeeklyPlanStatsFromDrafts([
     draft({ id: "d6", addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "" }),
   ], "2026-06-08");
-  assert(stats.unscheduled === 1, "added without date should count as unscheduled");
+  assert(stats.unscheduled === 0, "added-but-dateless must not count as unscheduled");
   assert(stats.needsDetails === 0, "needsDetails should not be a lifecycle state");
+});
+
+test("header unscheduled count uses the SAME selector as the Unscheduled rail", () => {
+  // Regression: header count, month-view toggle, rail badge and rail list must all
+  // agree. Rail badge/list both call getUnaddedGeneratedDrafts (→ isUnaddedGeneratedDraft),
+  // so header stats.unscheduled must equal drafts filtered by that same predicate.
+  const drafts: PinDraft[] = [
+    draft({ id: "dated",  addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "2026-06-08" }), // on calendar
+    draft({ id: "needsDate", addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "" }),          // added-needs-date section
+    { ...draft({ id: "board" }), source: "ai_generated_from_upload" },                              // Studio board, not the tray
+    draft({ id: "tray1", scheduledDate: "" }),                                                      // generated tray
+    draft({ id: "tray2", scheduledDate: "" }),                                                      // generated tray
+  ];
+  const stats = computeWeeklyPlanStatsFromDrafts(drafts, "2026-06-08");
+  const railCount = drafts.filter(d => pinDraftStore.isUnaddedGeneratedDraft(d)).length;
+  assert(railCount === 2, `rail selector should see 2 tray pins, got ${railCount}`);
+  assert(stats.unscheduled === railCount, `header (${stats.unscheduled}) must equal rail (${railCount})`);
+  assert(stats.unscheduledGenerated === railCount, `month toggle (${stats.unscheduledGenerated}) must equal rail (${railCount})`);
 });
 
 test("missing optional publish fields do not create a lifecycle status", () => {

@@ -107,8 +107,12 @@ export function computeWeeklyPlanStatsFromDrafts(drafts: PinDraft[], weekStart: 
   //   inWeek  → has a date inside this week (on the calendar)
   //   needsDate → added to plan but no date yet
   //   unscheduled → neither added nor dated (still in the generated tray)
+  // The "unscheduled" bucket MUST match the Unscheduled Pins rail exactly (same
+  // selector), so header count, month-view toggle, rail badge and rail list never
+  // disagree. Added-but-dateless drafts live in the added-needs-date section, and
+  // Studio-board drafts live on the Create Pins board — neither is "unscheduled".
   const inWeek      = drafts.filter(d => hasScheduledDate(d) && dateInWeek(d.scheduledDate, weekStart));
-  const unscheduled = drafts.filter(d => !d.postedAt && !hasScheduledDate(d));
+  const unscheduled = drafts.filter(d => pinDraftStore.isUnaddedGeneratedDraft(d));
 
   const published = inWeek.filter(d => !!d.postedAt).length;
   const scheduled = inWeek.length - published;

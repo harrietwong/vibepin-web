@@ -54,7 +54,7 @@ import * as pinDraftStore   from "@/lib/pinDraftStore";
 import type { PinDraft }    from "@/lib/pinDraftStore";
 import { PinHoverTarget, type PinHoverPreviewActions, setPinPreviewSuspended } from "@/components/plan/PinHoverPreview";
 import { PinThumbnail } from "@/components/plan/PinThumbnail";
-import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, buildDaySlotRows, dayHasFreeFutureSlot, configuredSlotCountForDate, formatScheduleDateLabel } from "@/lib/smartSchedule";
+import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, buildDaySlotRows, dayHasFreeFutureSlot, classifyDayDropBlock, formatScheduleDateLabel } from "@/lib/smartSchedule";
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "@/lib/planCalendar";
 import { filterUnscheduledPinIds } from "@/lib/smartScheduleActions";
 import { displayTitle, sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
@@ -1731,11 +1731,28 @@ function PlanPageInner() {
       // never an overflow slot, never rolled to another day behind the user's back.
       const dayDrafts = pinDraftStore.getAllDrafts().filter(d => d.scheduledDate === date && d.id !== id);
       if (!dayHasFreeFutureSlot(date, dayDrafts)) {
-        const count = configuredSlotCountForDate(date);
-        toast.error(`No available slots on ${formatScheduleDateLabel(date)}.`, {
-          description: `This day already has ${count} scheduled Pin${count === 1 ? "" : "s"} based on your Smart Schedule. Increase pins per day or choose another day.`,
-          action: { label: "Edit Smart Schedule", onClick: () => setSmartScheduleOpen(true) },
-        });
+        const label = formatScheduleDateLabel(date);
+        const { reason, scheduledCount } = classifyDayDropBlock(date, dayDrafts);
+        const editAction = { label: "Edit Smart Schedule", onClick: () => setSmartScheduleOpen(true) };
+        if (reason === "all_past") {
+          // The day is NOT full — its remaining slots have simply already passed
+          // (e.g. dragging onto today after the last slot time). Tell the truth.
+          toast.error(`No open time left on ${label}.`, {
+            description: `${label}'s remaining Smart Schedule slots have already passed. Pick a later custom time today, or choose another day.`,
+            action: editAction,
+          });
+        } else if (reason === "no_slots") {
+          toast.error(`No Smart Schedule slots on ${label}.`, {
+            description: `${label} has no Smart Schedule time slots yet. Add a slot in Smart Schedule, or choose another day.`,
+            action: editAction,
+          });
+        } else {
+          // Genuinely full: every configured slot on the TARGET day is taken.
+          toast.error(`No available slots on ${formatScheduleDateLabel(date)}.`, {
+            description: `This day already has ${scheduledCount} scheduled Pin${scheduledCount === 1 ? "" : "s"} filling every Smart Schedule slot. Increase pins per day or choose another day.`,
+            action: editAction,
+          });
+        }
         setDraggingId(null);
         setDragOverKey(null);
         return;

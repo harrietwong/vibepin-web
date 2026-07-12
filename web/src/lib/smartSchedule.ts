@@ -154,6 +154,36 @@ export function configuredSlotCountForDate(dateISO: string, config?: SmartSchedu
   return (cfg.weeklySlots[dow] ?? []).length;
 }
 
+export type DayDropBlockReason = "all_past" | "full" | "no_slots";
+
+/**
+ * Explain WHY a day can't accept a day-level drop — only meaningful when
+ * `dayHasFreeFutureSlot` is false. This exists so the drop-rejection toast tells
+ * the truth instead of always claiming the day is "full":
+ *   "no_slots" → the weekday has no configured Smart Schedule slots at all
+ *   "all_past" → slots exist and are free, but every remaining one is in the past
+ *                (e.g. dragging onto TODAY after its last slot time has passed)
+ *   "full"     → every configured slot is occupied by a scheduled Pin
+ * `scheduledCount` is the REAL number of Pins already scheduled on that day
+ * (grid + off-grid) — never the configured-slot count.
+ */
+export function classifyDayDropBlock(
+  dateISO: string,
+  dayDrafts: PinDraft[],
+  opts?: { config?: SmartScheduleConfig; now?: Date },
+): { reason: DayDropBlockReason; scheduledCount: number } {
+  const rows = buildDaySlotRows(dateISO, dayDrafts, opts);
+  const scheduledCount = rows.filter(r => r.draft).length;
+  if (configuredSlotCountForDate(dateISO, opts?.config) === 0) {
+    return { reason: "no_slots", scheduledCount };
+  }
+  // A free-but-past configured slot means the day HAS capacity, just not in the
+  // future — so it is "all_past", not "full".
+  const hasEmptyPastSlot = rows.some(r => !r.draft && !r.offGrid && r.isPast);
+  if (hasEmptyPastSlot) return { reason: "all_past", scheduledCount };
+  return { reason: "full", scheduledCount };
+}
+
 /** Canonical "next available slot" entry point: always reads the shared Smart
  *  Schedule weeklySlots (unless a config is passed for tests). Every Schedule /
  *  Add to Plan / Schedule-selected path resolves time through this. */

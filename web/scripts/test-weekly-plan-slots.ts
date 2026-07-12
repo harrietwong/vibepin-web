@@ -29,6 +29,7 @@ import {
 } from "../src/lib/smartScheduleStore";
 import {
   findNextAvailableScheduleSlot, buildDaySlotRows, dayHasFreeFutureSlot, configuredSlotCountForDate,
+  classifyDayDropBlock,
 } from "../src/lib/smartSchedule";
 
 let passed = 0, failed = 0;
@@ -141,6 +142,71 @@ test("7. full future day → no free slot (drag rejected, not mutated)", () => {
   assert(/Increase pins per day or choose another day/.test(srcPlan), "full-day guidance missing");
   assert(/label: "Edit Smart Schedule"/.test(srcPlan), "Edit Smart Schedule action missing");
   assert(/if \(!dayHasFreeFutureSlot\(date, dayDrafts\)\)/.test(srcPlan), "drop handler does not guard full days");
+});
+
+// Root-cause regression (prod bug): dragging onto TODAY when every remaining slot
+// is in the past must be classified "all_past" with scheduledCount 0 — NOT "full",
+// and NEVER report the day as "already has N scheduled Pins".
+test("today with only past slots → all_past, scheduledCount 0 (not a false 'full')", () => {
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [WED]: SLOTS } as Partial<Record<WeekdayIndex, string[]>> };
+  // A past Wed (all four slots earlier than now), with NO pins scheduled on it.
+  const past = new Date(); past.setDate(past.getDate() - 14); while (weekdayIdx(past) !== WED) past.setDate(past.getDate() - 1);
+  const dateISO = isoOf(past);
+  assert(!dayHasFreeFutureSlot(dateISO, [], { config: cfg }), "all-past day must have no free slot");
+  const res = classifyDayDropBlock(dateISO, [], { config: cfg, now: new Date() });
+  assert(res.reason === "all_past", `expected all_past, got ${res.reason}`);
+  assert(res.scheduledCount === 0, `expected 0 scheduled Pins on the target day, got ${res.scheduledCount}`);
+  // The configured-slot count (4) must NOT be mistaken for the scheduled-Pin count.
+  assert(configuredSlotCountForDate(dateISO, cfg) === 4, "configured count sanity");
+});
+
+// A genuinely full FUTURE day → "full" with the REAL scheduled-Pin count (target day).
+test("full future day → reason 'full' with real scheduledCount", () => {
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [WED]: SLOTS } as Partial<Record<WeekdayIndex, string[]>> };
+  const dateISO = isoOf(futureWeekdayAt(WED, 0, 0));
+  const full = SLOTS.map((t, i) => draftAt(`F${i}`, dateISO, t));
+  const res = classifyDayDropBlock(dateISO, full, { config: cfg, now: new Date() });
+  assert(res.reason === "full", `expected full, got ${res.reason}`);
+  assert(res.scheduledCount === 4, `expected 4 real scheduled Pins, got ${res.scheduledCount}`);
+});
+
+// A weekday with no configured slots → "no_slots" (never a false "full").
+test("weekday with no configured slots → reason 'no_slots'", () => {
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: {} as Partial<Record<WeekdayIndex, string[]>> };
+  const dateISO = isoOf(futureWeekdayAt(WED, 0, 0));
+  const res = classifyDayDropBlock(dateISO, [], { config: cfg, now: new Date() });
+  assert(res.reason === "no_slots", `expected no_slots, got ${res.reason}`);
+});
+
+// Cross-timezone date attribution: a Pin dated on the NEXT day must never be counted
+// against the dragged-onto day. String-equality date attribution + local slot rows
+// keep the day boundary stable regardless of UTC parsing.
+test("next-day Pins never leak into the target day's occupancy (UTC+8 scenario)", () => {
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [5 as WeekdayIndex]: ["09:00", "18:00"] } as Partial<Record<WeekdayIndex, string[]>> };
+  // Sat (past) with 2 pins scheduled on the FOLLOWING Sun — mirrors the prod report.
+  const sat = new Date(); sat.setDate(sat.getDate() - 7); while (weekdayIdx(sat) !== (5 as WeekdayIndex)) sat.setDate(sat.getDate() - 1);
+  const satISO = isoOf(sat);
+  const sun = new Date(sat); sun.setDate(sun.getDate() + 1);
+  const sunISO = isoOf(sun);
+  const sundayPins = [draftAt("S1", sunISO, "10:00"), draftAt("S2", sunISO, "18:00")];
+  // The drop handler filters dayDrafts by scheduledDate === satISO, so Sunday's pins
+  // are excluded — the target day sees 0 occupants.
+  const satDayDrafts = sundayPins.filter(d => d.scheduledDate === satISO);
+  assert(satDayDrafts.length === 0, "Sunday pins must not be attributed to Saturday");
+  const res = classifyDayDropBlock(satISO, satDayDrafts, { config: cfg, now: new Date() });
+  assert(res.scheduledCount === 0, `Saturday must show 0 scheduled Pins, got ${res.scheduledCount}`);
+});
+
+// The drop-rejection toast tells the truth: distinct branches for all_past / no_slots,
+// and "already has N scheduled" is confined to the genuinely-full branch.
+test("drop-rejection toast is truthful (all_past / no_slots branches, full-only count)", () => {
+  assert(/reason === "all_past"/.test(srcPlan), "missing all_past branch");
+  assert(/remaining Smart Schedule slots have already passed/.test(srcPlan), "missing truthful all-past copy");
+  assert(/reason === "no_slots"/.test(srcPlan), "missing no_slots branch");
+  assert(/classifyDayDropBlock\(date, dayDrafts\)/.test(srcPlan), "handler must classify the block reason");
+  // "already has N scheduled" must use the classified scheduledCount, not the config count.
+  assert(/already has \$\{scheduledCount\} scheduled Pin/.test(srcPlan), "full-day copy must use real scheduledCount");
+  assert(!/configuredSlotCountForDate\(date\)/.test(srcPlan), "must not label configured-slot count as scheduled Pins");
 });
 
 // Week View renders the slot grid (occupied + empty future + disabled past).
