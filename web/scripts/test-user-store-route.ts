@@ -10,8 +10,10 @@
 
 import assert from "node:assert";
 import {
+  applyQuota,
   clampLimit,
   decodeCursor,
+  DEFAULT_COLLECTION_QUOTA,
   DEFAULT_LIMIT,
   encodeCursor,
   isMissingTableError,
@@ -22,6 +24,8 @@ import {
   MAX_LIMIT,
   parseMs,
   payloadTooLarge,
+  quotaFor,
+  SINGLETON_QUOTA,
   validateDocIds,
   validateDocs,
 } from "../src/app/api/user-store/logic";
@@ -134,6 +138,63 @@ test("validateDocIds filters non-strings, rejects empty & oversize batch", () =>
   assert.ok(!validateDocIds([]).ok);
   assert.ok(!validateDocIds([1, 2, 3]).ok, "all non-strings → empty → rejected");
   assert.ok(!validateDocIds(Array.from({ length: MAX_BATCH + 1 }, (_, i) => `d${i}`)).ok);
+});
+
+// ── quota table + decision ───────────────────────────────────────────────────
+test("quotaFor: singletons=4, known collections, unknown default", () => {
+  assert.equal(quotaFor("smart_schedule"), SINGLETON_QUOTA);
+  assert.equal(quotaFor("basket"), SINGLETON_QUOTA);
+  assert.equal(quotaFor("amazon_affiliate_settings"), SINGLETON_QUOTA);
+  assert.equal(quotaFor("pin_metadata"), 2000);
+  assert.equal(quotaFor("pin_records"), 5000);
+  assert.equal(quotaFor("assets"), 1000);
+  assert.equal(quotaFor("product_library"), 2000);
+  assert.equal(quotaFor("something_unknown"), DEFAULT_COLLECTION_QUOTA);
+});
+
+test("applyQuota: updates to existing docIds always accepted, even at/over cap", () => {
+  const r = applyQuota({
+    quota: 4,
+    liveCount: 4, // already full
+    existingDocIds: new Set(["a", "b"]),
+    candidateDocIds: ["a", "b"], // both are updates
+  });
+  assert.deepEqual(r.acceptedDocIds, ["a", "b"]);
+  assert.deepEqual(r.rejected, []);
+});
+
+test("applyQuota: new inserts fill headroom; the tail is rejected in order", () => {
+  const r = applyQuota({
+    quota: 4,
+    liveCount: 2, // headroom = 2
+    existingDocIds: new Set(),
+    candidateDocIds: ["n1", "n2", "n3", "n4"],
+  });
+  assert.deepEqual(r.acceptedDocIds, ["n1", "n2"]);
+  assert.deepEqual(r.rejected, ["n3", "n4"]);
+});
+
+test("applyQuota: mix of updates + new inserts — updates never consume headroom", () => {
+  const r = applyQuota({
+    quota: 3,
+    liveCount: 3, // full via existing live rows
+    existingDocIds: new Set(["u1", "u2"]),
+    candidateDocIds: ["u1", "new1", "u2", "new2"],
+  });
+  // both updates pass; both new inserts rejected (no headroom).
+  assert.deepEqual(r.acceptedDocIds, ["u1", "u2"]);
+  assert.deepEqual(r.rejected, ["new1", "new2"]);
+});
+
+test("applyQuota: headroom clamps at 0 when liveCount exceeds quota", () => {
+  const r = applyQuota({
+    quota: 4,
+    liveCount: 10, // somehow over (e.g. cap lowered later)
+    existingDocIds: new Set(["keep"]),
+    candidateDocIds: ["keep", "new"],
+  });
+  assert.deepEqual(r.acceptedDocIds, ["keep"]);
+  assert.deepEqual(r.rejected, ["new"]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

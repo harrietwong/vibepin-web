@@ -411,6 +411,10 @@ const zhCN: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "重试",
   "publishDestinations.footerConnected": "连接更多账号，将这条商品内容分发到各个平台。每个账号可能需要不同的文案、媒体格式或账号连接。",
   "publishDestinations.footerNone": "连接账号，将这条商品内容分发到各个平台。你只能在审核并批准内容后才能发布。",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "所有更改已同步",
+  "sync.status.syncing": "正在同步…",
+  "sync.status.error": "同步遇到问题，正在重试；你的数据仍保存在本设备。",
 };
 
 export default zhCN;

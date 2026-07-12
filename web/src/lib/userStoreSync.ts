@@ -87,7 +87,39 @@ export interface StoreSyncDebug {
   ready: boolean;
   outboxSize: number;
   failureCount: number;
+  /** Cumulative count of docs the server refused (quota) and we dropped from the outbox. */
+  rejectedCount: number;
   outboxKinds: Record<string, "put" | "delete">;
+}
+
+/**
+ * WP-E: engine-wide aggregate sync status, collapsed across every registered
+ * instance so a single UI indicator can render it. `errorStores` lists the
+ * storeKeys of instances that have hit the error threshold (failureCount >= 3).
+ */
+export interface AggregateSyncStatus {
+  state: "synced" | "syncing" | "error";
+  pendingCount: number;
+  errorStores: string[];
+}
+
+/** Threshold at which an instance is considered to be in a sustained-error state. */
+const ERROR_THRESHOLD = 3;
+
+/**
+ * WP-E telemetry hooks. Injected by the registry (setSyncTelemetry) so the engine
+ * emits analytics ONLY on state transitions without importing the analytics module
+ * directly (keeps the engine side-effect-free under the node test harness).
+ */
+export interface SyncTelemetry {
+  /** Fired once when an instance crosses into the sustained-error state. */
+  onErrorEntered?(storeKey: string, failureCount: number): void;
+  /** Fired once when an instance recovers; downMs is the coarse interruption span. */
+  onRecovered?(storeKey: string, downMs: number): void;
+  /** Fired when the server refuses docs over quota (per flush that rejects any). */
+  onQuotaRejected?(storeKey: string, count: number): void;
+  /** Fired when a doc is skipped for exceeding the per-doc payload cap. */
+  onOversizeSkipped?(storeKey: string, docId: string): void;
 }
 
 // ── Internal types & module state ──────────────────────────────────────────────
@@ -139,12 +171,98 @@ interface Instance<T = unknown> {
   flushing: boolean;
   flushQueued: boolean;
   failureCount: number;
+  /** Cumulative docs the server refused over quota (debug/telemetry only). */
+  rejectedCount: number;
+  /** WP-E: whether this instance is currently in the sustained-error state. */
+  inErrorState: boolean;
+  /** WP-E: epoch ms when the current error state began (for recovery duration). */
+  errorSince: number;
   unsubscribe: (() => void) | null;
 }
 
 let _initialized = false;
 let _getToken: GetAccessToken | null = null;
 const _instances = new Map<string, Instance>();
+
+// ── WP-E: aggregate status pub/sub + telemetry (all module-level) ──────────────
+let _telemetry: SyncTelemetry | null = null;
+const _statusSubs = new Set<() => void>();
+/** Last computed aggregate — returned by getAggregateSyncStatus for ref stability. */
+let _lastAggregate: AggregateSyncStatus | null = null;
+
+/** Register engine-wide telemetry hooks (registry layer). Pass null to detach. */
+export function setSyncTelemetry(telemetry: SyncTelemetry | null): void {
+  _telemetry = telemetry;
+}
+
+function computeAggregate(): AggregateSyncStatus {
+  let pendingCount = 0;
+  let anySyncing = false;
+  const errorStores: string[] = [];
+  for (const inst of _instances.values()) {
+    pendingCount += inst.outbox.size;
+    if (inst.failureCount >= ERROR_THRESHOLD) errorStores.push(inst.adapter.storeKey);
+    if (inst.outbox.size > 0 || !inst.ready) anySyncing = true;
+  }
+  errorStores.sort();
+  const state: AggregateSyncStatus["state"] =
+    errorStores.length > 0 ? "error" : anySyncing ? "syncing" : "synced";
+  return { state, pendingCount, errorStores };
+}
+
+function aggregateEqual(a: AggregateSyncStatus, b: AggregateSyncStatus): boolean {
+  return (
+    a.state === b.state &&
+    a.pendingCount === b.pendingCount &&
+    a.errorStores.length === b.errorStores.length &&
+    a.errorStores.every((s, i) => s === b.errorStores[i])
+  );
+}
+
+/** Recompute the aggregate; notify subscribers ONLY when the value actually changed. */
+function notifyStatus(): void {
+  const next = computeAggregate();
+  if (_lastAggregate && aggregateEqual(_lastAggregate, next)) return;
+  _lastAggregate = next;
+  for (const cb of _statusSubs) {
+    try { cb(); } catch { /* a subscriber must never break the engine */ }
+  }
+}
+
+/**
+ * Current aggregate status across every registered store. Reference-stable: the
+ * SAME object is returned until the aggregate genuinely changes, so it is safe as
+ * a useSyncExternalStore getSnapshot.
+ */
+export function getAggregateSyncStatus(): AggregateSyncStatus {
+  if (!_lastAggregate) _lastAggregate = computeAggregate();
+  return _lastAggregate;
+}
+
+/** Subscribe to aggregate-status changes (useSyncExternalStore). Returns unsubscribe. */
+export function subscribeSyncStatus(cb: () => void): () => void {
+  _statusSubs.add(cb);
+  return () => { _statusSubs.delete(cb); };
+}
+
+/** Cross the error threshold once → fire telemetry + mark the instance in-error. */
+function maybeEnterError(inst: Instance): void {
+  if (inst.failureCount >= ERROR_THRESHOLD && !inst.inErrorState) {
+    inst.inErrorState = true;
+    inst.errorSince = Date.now();
+    _telemetry?.onErrorEntered?.(inst.adapter.storeKey, inst.failureCount);
+  }
+}
+
+/** Recover from the error state once → fire telemetry with the coarse down span. */
+function maybeRecover(inst: Instance): void {
+  if (inst.inErrorState) {
+    const downMs = Date.now() - inst.errorSince;
+    inst.inErrorState = false;
+    inst.errorSince = 0;
+    _telemetry?.onRecovered?.(inst.adapter.storeKey, downMs);
+  }
+}
 
 function resolveOpts(options?: StoreSyncOptions): ResolvedOpts {
   const out: ResolvedOpts = { ...DEFAULTS, fetchImpl: options?.fetchImpl };
@@ -182,9 +300,13 @@ export function registerStoreSync<T>(adapter: StoreSyncAdapter<T>, options?: Sto
     flushing: false,
     flushQueued: false,
     failureCount: 0,
+    rejectedCount: 0,
+    inErrorState: false,
+    errorSince: 0,
     unsubscribe: null,
   };
   _instances.set(adapter.storeKey, inst as Instance);
+  notifyStatus(); // a fresh (not-yet-ready) instance shifts the aggregate to "syncing"
 
   if (_initialized && typeof window !== "undefined") mount(inst as Instance);
   return makeHandle(inst as Instance);
@@ -228,6 +350,7 @@ function makeHandle(inst: Instance): StoreSyncHandle {
     unregister: () => {
       teardown(inst);
       _instances.delete(inst.adapter.storeKey);
+      notifyStatus();
     },
   };
 }
@@ -260,11 +383,14 @@ async function startupPull(inst: Instance): Promise<void> {
 
     inst.ready = true;
     inst.failureCount = 0;
-    diffNow(inst);
+    maybeRecover(inst);
+    diffNow(inst); // diffNow calls notifyStatus (covers the ready transition)
   } catch {
     // Server unreachable / table pending: retry the pull with backoff. Local
     // behaviour stays pure-localStorage until the pull succeeds.
     inst.failureCount++;
+    maybeEnterError(inst);
+    notifyStatus();
     scheduleRetry(inst, () => void startupPull(inst));
   }
 }
@@ -322,6 +448,7 @@ function diffNow(inst: Instance): void {
 
   inst.lastSeen = current;
   if (changed) scheduleFlush(inst);
+  notifyStatus(); // outbox may have grown/shrunk → aggregate may have changed
 }
 
 function scheduleFlush(inst: Instance): void {
@@ -376,6 +503,7 @@ async function flush(inst: Instance): Promise<void> {
       if (payloadBytes(cur.doc) > inst.opts.maxPayloadBytes) {
         console.warn(`[userStoreSync:${inst.adapter.storeKey}] doc ${id} exceeds ${inst.opts.maxPayloadBytes} bytes — skipped`);
         inst.outbox.delete(id);
+        _telemetry?.onOversizeSkipped?.(inst.adapter.storeKey, id);
         continue;
       }
       puts.push({ id, entry, updatedAt: cur.updatedAt, doc: cur.doc });
@@ -393,6 +521,16 @@ async function flush(inst: Instance): Promise<void> {
       });
       if (!res.ok && res.status !== 202) throw new Error(`user-store PUT failed: ${res.status}`);
       if (res.status === 202) throw new DeferredError(); // table not applied yet — keep outbox, retry later
+      // Server may refuse NEW inserts that exceed the per-store quota (200 body with a
+      // `rejected` list). ackEntries below drops every chunk entry from the outbox, so
+      // the refused docs stop retrying too; here we only surface the drop. Same shape
+      // as the 200KB skip warning above.
+      const rejected = await parseRejected(res);
+      if (rejected.length > 0) {
+        console.warn(`[userStoreSync:${inst.adapter.storeKey}] server rejected ${rejected.length} doc(s) over quota — dropped from outbox`);
+        inst.rejectedCount += rejected.length;
+        _telemetry?.onQuotaRejected?.(inst.adapter.storeKey, rejected.length);
+      }
       ackEntries(inst, chunk);
     }
 
@@ -410,10 +548,14 @@ async function flush(inst: Instance): Promise<void> {
     }
 
     inst.failureCount = 0;
+    maybeRecover(inst);
+    notifyStatus(); // outbox drained + failure cleared → likely back to "synced"
   } catch {
     // Outbox entries stay put — exponential backoff (capped), forever. A 202
     // deferred (table not applied) backs off the same way.
     inst.failureCount++;
+    maybeEnterError(inst);
+    notifyStatus();
     scheduleRetry(inst, () => void flush(inst));
   } finally {
     inst.flushing = false;
@@ -437,6 +579,18 @@ function tsMs(value: string | undefined): number {
 /** UTF-8 byte length of the serialized doc (matches the server-side check). */
 function payloadBytes(doc: unknown): number {
   return new TextEncoder().encode(JSON.stringify(doc)).length;
+}
+
+/** Extract the server's quota-`rejected` docId list from a 200 PUT body (best-effort). */
+async function parseRejected(res: Response): Promise<string[]> {
+  try {
+    const body = (await res.json()) as { rejected?: unknown };
+    return Array.isArray(body?.rejected)
+      ? body.rejected.filter((x): x is string => typeof x === "string")
+      : [];
+  } catch {
+    return []; // non-JSON 200 → treat as a plain ack
+  }
 }
 
 /** Remove acked entries — unless a newer store write replaced them mid-flight. */
@@ -479,6 +633,7 @@ function debugOf(inst: Instance): StoreSyncDebug {
     ready: inst.ready,
     outboxSize: inst.outbox.size,
     failureCount: inst.failureCount,
+    rejectedCount: inst.rejectedCount,
     outboxKinds,
   };
 }
@@ -491,6 +646,9 @@ export function __resetUserStoreSyncForTests(): void {
   _instances.clear();
   _initialized = false;
   _getToken = null;
+  _telemetry = null;
+  _statusSubs.clear();
+  _lastAggregate = null;
 }
 
 export function __getUserStoreSyncDebug(storeKey: string): StoreSyncDebug | null {

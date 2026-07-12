@@ -472,6 +472,10 @@ const en = {
   "publishDestinations.tryAgain": "Try again",
   "publishDestinations.footerConnected": "Connect more accounts to repurpose this product post across platforms. Each account may require a different caption, media format, or account connection.",
   "publishDestinations.footerNone": "Connect accounts to repurpose this product post across platforms. You can publish only after reviewing and approving the content.",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 } as const;
 
 export type MessageKey = keyof typeof en;

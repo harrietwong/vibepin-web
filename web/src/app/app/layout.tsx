@@ -27,6 +27,7 @@ import { useSessionUser } from "@/lib/useSessionUser";
 import { markNavClick, markRouteVisible } from "@/lib/navTiming";
 import { initPinDraftSync } from "@/lib/pinDraftSync";
 import { initAllUserStoreSync } from "@/lib/userStoreSyncRegistry";
+import { SyncStatusIndicator } from "@/components/sync/SyncStatusIndicator";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -497,6 +498,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           background: "var(--app-topbar-bg)",
           borderBottom: "1px solid var(--app-sidebar-border)",
         }}>
+          {/* WP-E: account-sync status (hidden when synced; dot+tooltip otherwise) */}
+          <SyncStatusIndicator />
+
           {/* Top-right quick controls: App language + Theme (sync with Settings) */}
           <TopbarLanguageTheme />
 

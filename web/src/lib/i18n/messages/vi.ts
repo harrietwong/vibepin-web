@@ -411,6 +411,10 @@ const vi: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "Văn bản giao diện",
   "publishDestinations.footerConnected": "Văn bản giao diện",
   "publishDestinations.footerNone": "Văn bản giao diện",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default vi;

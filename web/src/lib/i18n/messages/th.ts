@@ -411,6 +411,10 @@ const th: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "ข้อความอินเทอร์เฟซ",
   "publishDestinations.footerConnected": "ข้อความอินเทอร์เฟซ",
   "publishDestinations.footerNone": "ข้อความอินเทอร์เฟซ",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default th;

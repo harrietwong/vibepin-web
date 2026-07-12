@@ -20,6 +20,7 @@
 import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import {
+  applyQuota,
   clampLimit,
   decodeCursor,
   encodeCursor,
@@ -29,6 +30,7 @@ import {
   isValidStoreKey,
   parseMs,
   pgQuote,
+  quotaFor,
   validateDocIds,
   validateDocs,
 } from "./logic";
@@ -158,22 +160,51 @@ export async function PUT(req: Request) {
   const existingMs = new Map<string, number>(
     (existing ?? []).map(r => [r.doc_id as string, parseMs(r.updated_at as string) ?? 0]),
   );
+  // Any doc_id already present (live OR tombstoned) is an update/revive — the quota
+  // gate always lets those through; only brand-new inserts are capped.
+  const existingDocIds = new Set<string>((existing ?? []).map(r => r.doc_id as string));
 
-  const rows: Record<string, unknown>[] = [];
+  // Current live (non-tombstoned) row count for this (user, storeKey) → headroom.
+  const { count: liveCountRaw, error: countError } = await db
+    .from(TABLE)
+    .select("doc_id", { count: "exact", head: true })
+    .eq("vibepin_user_id", userId)
+    .eq("store_key", storeKey)
+    .is("deleted_at", null);
+  if (countError) {
+    if (isMissingTableError(countError)) return deferred();
+    console.error("[user-store PUT] count error:", countError.message);
+    return jsonError(503, "database_unavailable", "Store storage is unavailable");
+  }
+
+  // Post-staleness rows to write, plus the quota decision over their doc_ids.
+  const candidate: { docId: string; row: Record<string, unknown> }[] = [];
   let skippedStale = 0;
   for (const d of incoming) {
     const incMs = parseMs(d.updatedAt)!;
     if (isStalePut(incMs, existingMs.get(d.docId))) { skippedStale++; continue; } // server LWW
-    rows.push({
-      vibepin_user_id: userId,
-      store_key:       storeKey,
-      doc_id:          d.docId,
-      payload:         d.payload,
-      updated_at:      d.updatedAt,
-      deleted_at:      null, // a newer PUT revives a tombstoned doc
-      // created_at intentionally omitted: default now() on insert, unchanged on conflict-update.
+    candidate.push({
+      docId: d.docId,
+      row: {
+        vibepin_user_id: userId,
+        store_key:       storeKey,
+        doc_id:          d.docId,
+        payload:         d.payload,
+        updated_at:      d.updatedAt,
+        deleted_at:      null, // a newer PUT revives a tombstoned doc
+        // created_at intentionally omitted: default now() on insert, unchanged on conflict-update.
+      },
     });
   }
+
+  const { acceptedDocIds, rejected } = applyQuota({
+    quota: quotaFor(storeKey),
+    liveCount: liveCountRaw ?? 0,
+    existingDocIds,
+    candidateDocIds: candidate.map(c => c.docId),
+  });
+  const accepted = new Set(acceptedDocIds);
+  const rows = candidate.filter(c => accepted.has(c.docId)).map(c => c.row);
 
   if (rows.length > 0) {
     const { error: upsertError } = await db
@@ -186,7 +217,14 @@ export async function PUT(req: Request) {
     }
   }
 
-  return Response.json({ applied: rows.length, skippedStale });
+  // 200 even when some inserts were refused: the client acks (drops) `rejected` from
+  // its outbox rather than retrying forever. `code` present only when there is a
+  // refusal, so healthy responses are byte-for-byte unchanged.
+  return Response.json({
+    applied: rows.length,
+    skippedStale,
+    ...(rejected.length > 0 ? { rejected, code: "quota_exceeded" } : {}),
+  });
 }
 
 // ── DELETE — batched tombstone ────────────────────────────────────────────────

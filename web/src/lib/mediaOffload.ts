@@ -59,6 +59,15 @@ export interface MediaOffloadCandidate {
   replace: (stableUrl: string) => void;
 }
 
+/** WP-E telemetry hook, injected by the registry (keeps analytics out of the sweep). */
+export interface MediaOffloadTelemetry {
+  /** Fired ONCE per sweep run when upload retries first exceed the error threshold. */
+  onSweepFailure?(failureCount: number): void;
+}
+
+/** Retry count at which a sweep is considered to be in a sustained-failure state. */
+const SWEEP_ERROR_THRESHOLD = 3;
+
 export interface MediaOffloadOptions {
   /** Injectable fetch (tests). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
@@ -155,8 +164,14 @@ let _current: Promise<void> | null = null;
 let _getToken: GetAccessToken | null = null;
 let _opts: MediaOffloadOptions | undefined;
 let _rearmAttached = false;
+let _telemetry: MediaOffloadTelemetry | null = null;
 /** Permanently-skipped URLs (dead blob handles / malformed data URLs). */
 const _skip = new Set<string>();
+
+/** Register the sweep telemetry hook (registry layer). Pass null to detach. */
+export function setMediaOffloadTelemetry(telemetry: MediaOffloadTelemetry | null): void {
+  _telemetry = telemetry;
+}
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -205,6 +220,8 @@ async function runPool(
 async function sweep(): Promise<void> {
   const { fetchImpl, uploadEndpoint, backoffBaseMs, backoffMaxMs, concurrency } = resolveOpts(_opts);
   let failCount = 0;
+  let uploadFailStreak = 0; // consecutive upload-retry passes (drives telemetry)
+  let firedFailure = false; // media_offload_failed is emitted at most once per sweep
   for (;;) {
     const items = gather();
     if (items.length === 0) return; // nothing left → stop
@@ -236,7 +253,13 @@ async function sweep(): Promise<void> {
 
     if (anySuccess) {
       failCount = 0;
+      uploadFailStreak = 0;
     } else if (anyRetryable) {
+      uploadFailStreak++;
+      if (uploadFailStreak > SWEEP_ERROR_THRESHOLD && !firedFailure) {
+        firedFailure = true;
+        _telemetry?.onSweepFailure?.(uploadFailStreak);
+      }
       await delay(Math.min(backoffBaseMs * 2 ** failCount, backoffMaxMs));
       failCount++;
     }
@@ -289,6 +312,7 @@ export function __resetMediaOffloadForTests(): void {
   _getToken = null;
   _opts = undefined;
   _rearmAttached = false;
+  _telemetry = null;
   _skip.clear();
 }
 

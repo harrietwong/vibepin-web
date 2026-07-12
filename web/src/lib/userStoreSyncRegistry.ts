@@ -13,6 +13,7 @@
 
 import { initUserStoreSync, registerStoreSync, type GetAccessToken } from "./userStoreSync";
 import { startMediaOffloadSweep } from "./mediaOffload";
+import { installSyncTelemetry } from "./syncAnalytics";
 
 import { smartScheduleSyncAdapter } from "./smartScheduleStore";
 import { notificationPrefsSyncAdapter } from "./notificationPrefsStore";
@@ -60,6 +61,9 @@ function registerAll(): void {
  * pure-localStorage behaviour (the engine retries in the background).
  */
 export function initAllUserStoreSync(getToken: GetAccessToken): void {
+  // WP-E: make hidden sync failures observable — analytics on state transitions.
+  // Installed before init so the first startup pull/flush is already instrumented.
+  installSyncTelemetry();
   registerAll();
   initUserStoreSync(getToken);
   // WP-C: externalize any base64/blob images in the product library, asset and

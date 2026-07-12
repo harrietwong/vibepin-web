@@ -819,15 +819,17 @@ export function isDraftAddedToWeeklyPlan(draft: PinDraft): boolean {
  *  Create Pins v2 board drafts (uploads / AI pins) live on the Studio board, not the
  *  Weekly Plan tray, until explicitly added — so board‑origin unadded drafts are
  *  excluded here (prevents fresh uploads from leaking into Weekly Plan). */
+export function isUnaddedGeneratedDraft(d: PinDraft, category?: string): boolean {
+  if (category && d.category !== category) return false;
+  if (d.archivedAt) return false;
+  if (sanitizeHandoffField(d.scheduledDate)) return false;
+  if (isDraftAddedToWeeklyPlan(d)) return false;
+  if (isBoardSource(d)) return false;
+  return true;
+}
+
 export function getUnaddedGeneratedDrafts(category?: string): PinDraft[] {
-  return getAllDrafts().filter(d => {
-    if (category && d.category !== category) return false;
-    if (d.archivedAt) return false;
-    if (sanitizeHandoffField(d.scheduledDate)) return false;
-    if (isDraftAddedToWeeklyPlan(d)) return false;
-    if (isBoardSource(d)) return false;
-    return true;
-  });
+  return getAllDrafts().filter(d => isUnaddedGeneratedDraft(d, category));
 }
 
 // ── Create Pins board selectors (studioBoardV2) ────────────────────────────────

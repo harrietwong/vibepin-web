@@ -411,6 +411,10 @@ const de: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "Oberflächentext",
   "publishDestinations.footerConnected": "Oberflächentext",
   "publishDestinations.footerNone": "Oberflächentext",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default de;

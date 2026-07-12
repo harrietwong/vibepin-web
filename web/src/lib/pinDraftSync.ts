@@ -50,6 +50,27 @@ export interface PinDraftSyncOptions {
   endpoint?: string;
 }
 
+/**
+ * WP-E: same-shape aggregate status as userStoreSync.AggregateSyncStatus, so a
+ * single UI indicator can merge both engines. The pin-draft engine is a singleton,
+ * so errorStores is either [] or ["pin-drafts"].
+ */
+export interface PinDraftSyncStatus {
+  state: "synced" | "syncing" | "error";
+  pendingCount: number;
+  errorStores: string[];
+}
+
+/** WP-E telemetry hooks, injected by the registry (keeps analytics out of the engine). */
+export interface PinDraftSyncTelemetry {
+  onErrorEntered?(failureCount: number): void;
+  onRecovered?(downMs: number): void;
+  onOversizeSkipped?(draftId: string): void;
+}
+
+const PIN_DRAFT_STORE_KEY = "pin-drafts";
+const ERROR_THRESHOLD = 3;
+
 type OutboxEntry =
   | { kind: "put"; updatedAt: string }
   | { kind: "delete"; deletedAt: string };
@@ -89,6 +110,74 @@ let _flushing = false;
 let _flushQueued = false;
 let _failureCount = 0;
 let _unsubscribe: (() => void) | null = null;
+
+// ── WP-E: status pub/sub + telemetry ───────────────────────────────────────────
+let _telemetry: PinDraftSyncTelemetry | null = null;
+const _statusSubs = new Set<() => void>();
+let _lastStatus: PinDraftSyncStatus | null = null;
+let _inErrorState = false;
+let _errorSince = 0;
+
+/** Register telemetry hooks (registry layer). Pass null to detach. */
+export function setPinDraftSyncTelemetry(telemetry: PinDraftSyncTelemetry | null): void {
+  _telemetry = telemetry;
+}
+
+function computeStatus(): PinDraftSyncStatus {
+  const pendingCount = _outbox.size;
+  const inError = _failureCount >= ERROR_THRESHOLD;
+  const state: PinDraftSyncStatus["state"] =
+    inError ? "error" : pendingCount > 0 || !_ready ? "syncing" : "synced";
+  return { state, pendingCount, errorStores: inError ? [PIN_DRAFT_STORE_KEY] : [] };
+}
+
+function statusEqual(a: PinDraftSyncStatus, b: PinDraftSyncStatus): boolean {
+  return (
+    a.state === b.state &&
+    a.pendingCount === b.pendingCount &&
+    a.errorStores.length === b.errorStores.length &&
+    a.errorStores.every((s, i) => s === b.errorStores[i])
+  );
+}
+
+/** Recompute; notify subscribers ONLY when the value actually changed. */
+function notifyStatus(): void {
+  const next = computeStatus();
+  if (_lastStatus && statusEqual(_lastStatus, next)) return;
+  _lastStatus = next;
+  for (const cb of _statusSubs) {
+    try { cb(); } catch { /* a subscriber must never break the engine */ }
+  }
+}
+
+/** Current status. Reference-stable for useSyncExternalStore. */
+export function getPinDraftSyncStatus(): PinDraftSyncStatus {
+  if (!_lastStatus) _lastStatus = computeStatus();
+  return _lastStatus;
+}
+
+/** Subscribe to status changes (useSyncExternalStore). Returns unsubscribe. */
+export function subscribePinDraftSyncStatus(cb: () => void): () => void {
+  _statusSubs.add(cb);
+  return () => { _statusSubs.delete(cb); };
+}
+
+function maybeEnterError(): void {
+  if (_failureCount >= ERROR_THRESHOLD && !_inErrorState) {
+    _inErrorState = true;
+    _errorSince = Date.now();
+    _telemetry?.onErrorEntered?.(_failureCount);
+  }
+}
+
+function maybeRecover(): void {
+  if (_inErrorState) {
+    const downMs = Date.now() - _errorSince;
+    _inErrorState = false;
+    _errorSince = 0;
+    _telemetry?.onRecovered?.(downMs);
+  }
+}
 
 function fetcher(): typeof fetch {
   return _opts.fetchImpl ?? fetch;
@@ -144,11 +233,14 @@ async function startupPull(): Promise<void> {
     );
     _ready = true;
     _failureCount = 0;
-    diffNow();
+    maybeRecover();
+    diffNow(); // diffNow calls notifyStatus (covers the ready transition)
   } catch {
     // Server unreachable / table pending: retry the pull with backoff. Local
     // behaviour stays pure-localStorage until the pull succeeds (§8.3).
     _failureCount++;
+    maybeEnterError();
+    notifyStatus();
     scheduleRetry(() => void startupPull());
   }
 }
@@ -206,6 +298,7 @@ function diffNow(): void {
 
   _lastSeen = current;
   if (changed) scheduleFlush();
+  notifyStatus(); // outbox may have grown/shrunk → status may have changed
 }
 
 function scheduleFlush(): void {
@@ -256,6 +349,7 @@ async function flush(): Promise<void> {
       if (payloadBytes(draft) > _opts.maxPayloadBytes) {
         console.warn(`[pinDraftSync] draft ${id} exceeds ${_opts.maxPayloadBytes} bytes — skipped`);
         _outbox.delete(id);
+        _telemetry?.onOversizeSkipped?.(id);
         continue;
       }
       puts.push({ id, entry, draft });
@@ -289,10 +383,14 @@ async function flush(): Promise<void> {
     }
 
     _failureCount = 0;
+    maybeRecover();
+    notifyStatus(); // outbox drained + failure cleared → likely back to "synced"
   } catch {
     // Outbox entries stay put — exponential backoff (capped at backoffMaxMs), forever.
     // A 202 deferred (table not applied) backs off the same way.
     _failureCount++;
+    maybeEnterError();
+    notifyStatus();
     scheduleRetry(() => void flush());
   } finally {
     _flushing = false;
@@ -337,6 +435,11 @@ export function __resetPinDraftSyncForTests(): void {
   _flushQueued = false;
   _failureCount = 0;
   _unsubscribe = null;
+  _telemetry = null;
+  _statusSubs.clear();
+  _lastStatus = null;
+  _inErrorState = false;
+  _errorSince = 0;
 }
 
 export function __getPinDraftSyncDebug(): {

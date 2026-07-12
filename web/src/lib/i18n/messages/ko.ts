@@ -411,6 +411,10 @@ const ko: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "인터페이스 문구",
   "publishDestinations.footerConnected": "인터페이스 문구",
   "publishDestinations.footerNone": "인터페이스 문구",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default ko;

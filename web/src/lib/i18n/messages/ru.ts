@@ -411,6 +411,10 @@ const ru: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "Текст интерфейса",
   "publishDestinations.footerConnected": "Текст интерфейса",
   "publishDestinations.footerNone": "Текст интерфейса",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default ru;

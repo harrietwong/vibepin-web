@@ -411,6 +411,10 @@ const id: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "Teks antarmuka",
   "publishDestinations.footerConnected": "Teks antarmuka",
   "publishDestinations.footerNone": "Teks antarmuka",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default id;

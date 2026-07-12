@@ -112,6 +112,7 @@ function createMockServer(initial: Record<string, Row[]> = {}) {
   const log: Array<{ method: string; storeKey: string; body?: { docs?: Array<{ docId: string }>; docIds?: string[]; deletedAt?: string } }> = [];
   let failCount = 0;
   let deferWrites = false;
+  const rejectDocIds = new Set<string>(); // simulate server per-store quota refusal
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -139,13 +140,15 @@ function createMockServer(initial: Record<string, Row[]> = {}) {
     const rows = rowsFor(storeKey);
     if (method === "PUT") {
       let applied = 0, skippedStale = 0;
+      const rejected: string[] = [];
       for (const d of body.docs as Array<{ docId: string; updatedAt: string; payload: Record<string, unknown> }>) {
         const ex = rows.get(d.docId);
         if (ex && Date.parse(d.updatedAt) < Date.parse(ex.updatedAt)) { skippedStale++; continue; }
+        if (rejectDocIds.has(d.docId) && !ex) { rejected.push(d.docId); continue; } // over-quota new insert
         rows.set(d.docId, { docId: d.docId, updatedAt: d.updatedAt, payload: d.payload });
         applied++;
       }
-      return json({ applied, skippedStale });
+      return json({ applied, skippedStale, ...(rejected.length ? { rejected, code: "quota_exceeded" } : {}) });
     }
     if (method === "DELETE") {
       let applied = 0;
@@ -164,6 +167,7 @@ function createMockServer(initial: Record<string, Row[]> = {}) {
     log, fetchImpl,
     failNext: (n: number) => { failCount = n; },
     defer: (on: boolean) => { deferWrites = on; },
+    rejectNewInserts: (ids: string[]) => { rejectDocIds.clear(); ids.forEach(id => rejectDocIds.add(id)); },
     live: (k: string) => [...rowsFor(k).values()].filter(r => !r.deletedAt),
     row: (k: string, id: string) => rowsFor(k).get(id),
     putCalls: (k?: string) => log.filter(l => l.method === "PUT" && (!k || l.storeKey === k)),
@@ -438,6 +442,42 @@ async function main() {
     assert.equal(sync.__getUserStoreSyncDebug("big")!.outboxSize, 0, "oversized entry dropped, not stuck retrying");
   });
 
+  // ── Server quota rejection ──────────────────────────────────────────────────
+
+  await test("server rejects over-quota inserts → outbox drained, no infinite retry, later docs still sync", async () => {
+    reset();
+    const s = makeStore("evt:quota");
+    const srv = createMockServer();
+    sync.registerStoreSync(adapterFor(s, "quota"), { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("quota"));
+
+    // Server will refuse two specific new inserts (simulated quota_exceeded).
+    srv.rejectNewInserts(["over1", "over2"]);
+    s.put("ok1", { value: "a" });
+    s.put("over1", { value: "b" });
+    s.put("over2", { value: "c" });
+
+    // The accepted doc lands; the rejected ones never do.
+    await until(() => srv.live("quota").some(r => r.docId === "ok1"), 3_000);
+    // Outbox must drain (rejected entries are acked/dropped, not retried forever).
+    await until(() => sync.__getUserStoreSyncDebug("quota")!.outboxSize === 0, 3_000);
+    assert.ok(!srv.row("quota", "over1"), "rejected doc not stored");
+    assert.ok(!srv.row("quota", "over2"), "rejected doc not stored");
+    assert.equal(sync.__getUserStoreSyncDebug("quota")!.rejectedCount, 2, "rejectedCount accumulates");
+
+    // The PUT count must stabilize (proves no infinite retry of the rejected docs).
+    const putsAfterDrain = srv.putCalls("quota").length;
+    await sleep(80);
+    assert.equal(srv.putCalls("quota").length, putsAfterDrain, "no further PUT retries after drain");
+    assert.equal(sync.__getUserStoreSyncDebug("quota")!.failureCount, 0, "rejection is not a failure");
+
+    // A subsequent, non-rejected doc syncs normally.
+    s.put("ok2", { value: "d" });
+    await until(() => srv.live("quota").some(r => r.docId === "ok2"), 3_000);
+    assert.equal(sync.__getUserStoreSyncDebug("quota")!.outboxSize, 0);
+  });
+
   // ── Singleton (single doc_id) store round-trip ──────────────────────────────
 
   await test("singleton store: one doc_id round-trips (server → local → server)", async () => {
@@ -484,6 +524,69 @@ async function main() {
     s.put("i1", { value: "x" });
     await until(() => srv1.live("idem").some(r => r.docId === "i1"), 3_000);
     assert.equal(srv2.log.length, 0, "second register's fetch must never be used");
+  });
+
+  // ── WP-E: aggregate status + change-only notifications ──────────────────────
+
+  await test("aggregate status: synced → syncing → synced, ref-stable, notifies only on change", async () => {
+    reset();
+    const srv = createMockServer();
+    const s = makeStore("evt:agg1");
+
+    let notifications = 0;
+    const unsub = sync.subscribeSyncStatus(() => { notifications++; });
+
+    // No registered stores yet → synced.
+    assert.equal(sync.getAggregateSyncStatus().state, "synced");
+
+    // A registered-but-not-ready instance shifts the aggregate to "syncing".
+    sync.registerStoreSync(adapterFor(s, "agg1"), { ...FAST, fetchImpl: srv.fetchImpl });
+    assert.equal(sync.getAggregateSyncStatus().state, "syncing");
+    const snap = sync.getAggregateSyncStatus();
+    assert.strictEqual(sync.getAggregateSyncStatus(), snap, "snapshot ref stays identical between changes");
+
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("agg1"));
+    await until(() => sync.getAggregateSyncStatus().state === "synced", 3_000);
+    assert.equal(sync.getAggregateSyncStatus().pendingCount, 0);
+
+    // A local write is reflected synchronously as pending/syncing, then drains.
+    s.put("d1", { value: "x" });
+    assert.equal(sync.getAggregateSyncStatus().state, "syncing", "pending write → syncing immediately");
+    assert.ok(sync.getAggregateSyncStatus().pendingCount >= 1);
+    await until(() => sync.getAggregateSyncStatus().state === "synced", 3_000);
+    assert.equal(sync.getAggregateSyncStatus().pendingCount, 0);
+
+    // A no-op store event (nothing changed) must NOT notify subscribers.
+    const before = notifications;
+    dispatch("evt:agg1");
+    await sleep(25);
+    assert.equal(notifications, before, "no notification when the computed status is unchanged");
+    assert.ok(notifications > 0, "subscribers were notified on real transitions");
+    unsub();
+  });
+
+  await test("aggregate status: 3 consecutive failures enter error(errorStores), recovery returns to synced", async () => {
+    reset();
+    const srv = createMockServer();
+    const s = makeStore("evt:agg2");
+    sync.registerStoreSync(adapterFor(s, "agg2"), { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("agg2"));
+    await until(() => sync.getAggregateSyncStatus().state === "synced", 3_000);
+
+    // Server is down for many flush attempts → failureCount climbs past the threshold.
+    srv.failNext(10);
+    s.put("e1", { value: "x" });
+    await until(() => sync.getAggregateSyncStatus().state === "error", 6_000);
+    assert.deepEqual(sync.getAggregateSyncStatus().errorStores, ["agg2"], "error store listed");
+    assert.ok(sync.__getUserStoreSyncDebug("agg2")!.failureCount >= 3);
+
+    // Once the server heals the retry lands and the aggregate recovers.
+    await until(() => srv.live("agg2").some(r => r.docId === "e1"), 10_000);
+    await until(() => sync.getAggregateSyncStatus().state === "synced", 3_000);
+    assert.deepEqual(sync.getAggregateSyncStatus().errorStores, [], "errorStores cleared on recovery");
+    assert.equal(sync.getAggregateSyncStatus().pendingCount, 0);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

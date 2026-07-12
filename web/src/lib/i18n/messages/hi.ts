@@ -411,6 +411,10 @@ const hi: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "इंटरफ़ेस पाठ",
   "publishDestinations.footerConnected": "इंटरफ़ेस पाठ",
   "publishDestinations.footerNone": "इंटरफ़ेस पाठ",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default hi;

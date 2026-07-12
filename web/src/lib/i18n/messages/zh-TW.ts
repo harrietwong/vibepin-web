@@ -411,6 +411,10 @@ const zhTW: Record<MessageKey, string> = {
   "publishDestinations.tryAgain": "介面文字",
   "publishDestinations.footerConnected": "介面文字",
   "publishDestinations.footerNone": "介面文字",
+  // ── WP-E sync-status indicator ──
+  "sync.status.synced": "All changes synced",
+  "sync.status.syncing": "Syncing…",
+  "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 };
 
 export default zhTW;
