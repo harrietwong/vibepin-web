@@ -41,8 +41,17 @@ const DIGITAL_TYPES = [
   "preset","font","pattern","clipart","sticker","journal","calendar","spreadsheet",
   "notion","canva","svg","cricut","digital download",
 ];
+const CRAFT_TYPES = [
+  "yarn","fabric","bead","beads","crochet","knit","knitting","embroidery","clay",
+  "macrame","scrapbook","sticker sheet","washi","ribbon","felt","stencil","craft kit",
+  "diy kit","sewing","quilt","resin","candle making","soap making","paint set",
+];
+const TRAVEL_TYPES = [
+  "luggage","suitcase","backpack","carry on","carry-on","duffel","packing cube",
+  "passport","travel pillow","toiletry bag","travel kit","map","guidebook","itinerary",
+];
 
-const ALL_PRODUCT_TYPES = [...FASHION_TYPES, ...HOME_TYPES, ...BEAUTY_TYPES, ...DIGITAL_TYPES];
+const ALL_PRODUCT_TYPES = [...FASHION_TYPES, ...HOME_TYPES, ...BEAUTY_TYPES, ...DIGITAL_TYPES, ...CRAFT_TYPES, ...TRAVEL_TYPES];
 
 const COLOR_WORDS = [
   "white","black","grey","gray","beige","cream","nude","tan","brown","navy","blue",
@@ -93,20 +102,26 @@ function tokenize(text: string): string[] {
 }
 
 function detectCategory(allText: string, tokens: string[]): string | null {
-  let fashionScore = 0, homeScore = 0, beautyScore = 0, digitalScore = 0;
+  let fashionScore = 0, homeScore = 0, beautyScore = 0, digitalScore = 0, craftScore = 0, travelScore = 0;
 
   for (const t of tokens) {
     if (FASHION_TYPES.some(f => t === f || t.includes(f) || f.includes(t))) fashionScore += 2;
     if (HOME_TYPES.some(f => t === f || t.includes(f) || f.includes(t))) homeScore += 2;
     if (BEAUTY_TYPES.some(f => t === f || t.includes(f) || f.includes(t))) beautyScore += 2;
     if (DIGITAL_TYPES.some(f => t === f || t.includes(f) || f.includes(t))) digitalScore += 2;
+    if (CRAFT_TYPES.some(f => t === f || t.includes(f) || f.includes(t))) craftScore += 2;
+    if (TRAVEL_TYPES.some(f => t === f || t.includes(f) || f.includes(t))) travelScore += 2;
   }
 
   // Multi-word digital signals
   if (/digital|printable|template|planner|worksheet/i.test(allText)) digitalScore += 5;
+  if (/\b(diy|handmade|craft|crochet|knitting|how to make)\b/i.test(allText)) craftScore += 5;
+  if (/\b(travel|destination|wanderlust|itinerary|vacation|packing)\b/i.test(allText)) travelScore += 5;
 
-  const max = Math.max(fashionScore, homeScore, beautyScore, digitalScore);
+  const max = Math.max(fashionScore, homeScore, beautyScore, digitalScore, craftScore, travelScore);
   if (max === 0) return null;
+  if (max === craftScore  && craftScore  > 0) return "diy-crafts";
+  if (max === travelScore && travelScore > 0) return "travel";
   if (max === fashionScore  && fashionScore  > homeScore + beautyScore) return "fashion";
   if (max === homeScore     && homeScore     > fashionScore)            return "home-decor";
   if (max === beautyScore   && beautyScore   > fashionScore)            return "beauty";

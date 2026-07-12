@@ -13,12 +13,12 @@ import {
 } from "@/lib/productUrlImportClient";
 
 const UI = {
-  cardElev:     "#151F32",
-  border:       "rgba(255,255,255,0.09)",
-  borderStrong: "rgba(255,255,255,0.14)",
-  text:         "#E5E7EB",
-  textSec:      "#9CA3AF",
-  muted:        "#64748B",
+  cardElev:     "var(--app-surface-3, #151F32)",
+  border:       "var(--app-border, rgba(255,255,255,0.09))",
+  borderStrong: "var(--app-border-hi, rgba(255,255,255,0.14))",
+  text:         "var(--app-text, #E5E7EB)",
+  textSec:      "var(--app-text-sec, #9CA3AF)",
+  muted:        "var(--app-text-muted, #64748B)",
   purple:       "#8B5CF6",
   gradient:     "linear-gradient(135deg,#FF4D8D 0%,#D946EF 52%,#7C3AED 100%)",
 };
@@ -343,7 +343,7 @@ export function ProductUrlImportPanel({ role = "product", onSaveSelected, onCanc
               rows={5}
               style={{
                 width: "100%", boxSizing: "border-box", borderRadius: 10,
-                border: `1px solid ${UI.borderStrong}`, background: "#0D1423",
+                border: `1px solid ${UI.borderStrong}`, background: "var(--app-surface-2, #0D1423)",
                 color: UI.text, padding: "10px 12px", fontSize: 12, resize: "vertical",
                 outline: "none", fontFamily: "inherit",
               }}

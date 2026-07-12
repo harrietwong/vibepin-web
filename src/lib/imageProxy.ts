@@ -34,6 +34,21 @@ function publicStorageUrl(filename: string): string {
   return `${SUPABASE_URL}/storage/v1/object/public/generated/studio/${filename}`;
 }
 
+/**
+ * Display-only thumbnail URL. Resolves like {@link toProxyUrl}, then — for
+ * Pinterest-hosted images — swaps the multi-MB `originals/` asset for a
+ * pre-generated size variant (`236x`/`474x`/`736x`). Pinterest always renders
+ * these variants, and at tile/hover-card sizes they're visually identical while
+ * downloading ~10–50× faster.
+ *
+ * IMPORTANT: use this ONLY for on-screen previews, never for the stored
+ * `imageUrl` or the publish payload — the published Pin must keep full res.
+ */
+export function toThumbUrl(url: string, size: "236x" | "474x" | "736x" = "736x"): string {
+  const resolved = toProxyUrl(url);
+  return resolved.replace(/(\/\/i\.pinimg\.com\/)originals\//, `$1${size}/`);
+}
+
 export function toProxyUrl(url: string): string {
   if (!url) return url;
   if (url.startsWith("data:") || url.startsWith("blob:")) return url;

@@ -19,7 +19,7 @@ const ROUTES = [
   { name: "Weekly Plan",     path: "/app/plan",                  textCheck: /weekly plan/i           },
   { name: "Create Pins",     path: "/app/studio",                textCheck: /create pin/i            },
   { name: "Generated Pins",  path: "/app/history",               textCheck: /generated pins/i        },
-  { name: "Keyword Trends",  path: "/app/trends",                textCheck: /keyword tool/i          },
+  { name: "Keyword Trends",  path: "/app/trends",                textCheck: /pinterest keyword trends/i },
   { name: "Pin Opportunities", path: "/app/discover",            textCheck: /discover|opportunities/i},
   { name: "Product Signals", path: "/app/products",              textCheck: /product/i               },
 ];

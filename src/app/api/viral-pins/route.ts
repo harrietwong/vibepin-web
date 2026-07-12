@@ -5,7 +5,7 @@ import { classifySourcePin, shouldShowInPinIdeas } from "@/lib/assetClassificati
 const TABLE = "pin_samples";
 
 const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
+const MAX_LIMIT = 300;
 
 type PinSampleRow = {
   id: string;
@@ -96,6 +96,8 @@ export async function GET(request: Request) {
     };
   }).filter(pin => shouldShowInPinIdeas(pin));
 
+  // Use actual data freshness (max scraped_at from returned pins), not pipeline run time.
+  // Pipeline run time can be misleading when crawl completes but writes no new rows.
   const scrapedTimes = (enriched as { scraped_at?: string | null }[])
     .map(p => p.scraped_at)
     .filter((t): t is string => !!t);
@@ -103,22 +105,8 @@ export async function GET(request: Request) {
     ? scrapedTimes.reduce((a, b) => (a > b ? a : b))
     : null;
 
-  let lastPipelineAt: string | null = null;
-  try {
-    const { data: runs } = await db
-      .from("pipeline_runs")
-      .select("finished_at")
-      .eq("job_type", "crawl")
-      .eq("status", "completed")
-      .order("finished_at", { ascending: false })
-      .limit(1);
-    lastPipelineAt = runs?.[0]?.finished_at ?? null;
-  } catch {
-    /* pipeline_runs may not exist yet */
-  }
-
   const pins = enriched as ViralPin[];
-  const lastUpdatedAt = lastPipelineAt ?? lastScraped ?? new Date().toISOString();
+  const lastUpdatedAt = lastScraped ?? new Date().toISOString();
 
   return Response.json({
     items: pins,

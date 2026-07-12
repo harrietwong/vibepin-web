@@ -16,6 +16,9 @@ export type ProductSubtype =
   | "home_decor"
   | "beauty"
   | "jewelry"
+  | "craft_supply"
+  | "travel_gear"
+  | "food_drink"
   | "printable"
   | "template"
   | "digital_download"
@@ -142,8 +145,11 @@ export function inferProductSubtype(input: ClassificationInput): ProductSubtype 
   if (containsAny(text, ["software", "app", "plugin", "tool"])) return "software";
   if (containsAny(text, ["download", "digital file", "svg", "preset", "mockup"])) return "digital_download";
   if (containsAny(text, ["ring", "bracelet", "necklace", "jewelry", "jewellery"])) return "jewelry";
+  if (containsAny(text, ["yarn", "fabric", "bead", "craft", "crochet", "knit kit", "embroidery", "clay", "diy kit", "scrapbook"])) return "craft_supply";
+  if (containsAny(text, ["luggage", "suitcase", "backpack", "travel", "packing cube", "passport", "carry on", "duffel"])) return "travel_gear";
   if (containsAny(text, ["dress", "jeans", "shirt", "handbag", "outfit", "shoe"])) return "apparel";
   if (containsAny(text, ["skincare", "makeup", "beauty", "nail"])) return "beauty";
+  if (containsAny(text, ["snack", "coffee", "tea", "drink", "sauce", "spice", "granola", "chocolate", "beverage"])) return "food_drink";
   if (containsAny(text, ["decor", "wall art", "pillow", "candle", "vase", "lamp", "rug"])) return "home_decor";
   return "unknown";
 }
@@ -247,7 +253,10 @@ export function normalizeLegacyAssetRole(role?: string | null, assetRole?: strin
 }
 
 export function shouldShowInProductIdeas(item: Partial<ClassifiedAsset>): boolean {
-  return item.item_type === "product" || item.item_type === "product_collection";
+  if (item.item_type !== "product" && item.item_type !== "product_collection") return false;
+  if (item.risk_flags?.includes("ip_sensitive")) return false;
+  if (item.product_subtype === "game_asset" || item.product_subtype === "map_asset") return false;
+  return true;
 }
 
 export function shouldShowInPinIdeas(item: Partial<ClassifiedAsset>): boolean {

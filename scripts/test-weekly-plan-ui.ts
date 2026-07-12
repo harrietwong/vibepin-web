@@ -38,9 +38,9 @@ function draft(partial: Partial<PinDraft> & Pick<PinDraft, "id">): PinDraft {
     title: partial.title ?? "Cozy Bedroom",
     description: partial.description ?? "Save these ideas.",
     altText: "alt",
-    destinationUrl: "",
-    boardId: "",
-    boardName: "",
+    destinationUrl: partial.destinationUrl ?? "https://example.com/pin",
+    boardId: partial.boardId ?? "board_123",
+    boardName: partial.boardName ?? "Home Decor",
     weeklyPlanItemId: "",
     generationSessionId: "",
     scheduledDate: partial.scheduledDate ?? "",
@@ -63,7 +63,7 @@ test("unadded queue status is not Ready", () => {
   assert(st.label === "Not added to plan", "expected not added label");
 });
 
-test("computeWeeklyPlanStats counts unscheduled generated separately", () => {
+test("computeWeeklyPlanStats exposes scheduled, published, and unscheduled", () => {
   const mockDrafts: PinDraft[] = [
     draft({ id: "d1", addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "2026-06-08", status: "ready", title: "T", description: "D" }),
     draft({ id: "d2" }),
@@ -71,23 +71,48 @@ test("computeWeeklyPlanStats counts unscheduled generated separately", () => {
   ];
 
   const stats = computeWeeklyPlanStatsFromDrafts(mockDrafts, "2026-06-08");
-  assert(stats.plannedThisWeek === 1, `plannedThisWeek expected 1, got ${stats.plannedThisWeek}`);
-  assert(stats.unscheduledGenerated === 2, `unscheduled expected 2, got ${stats.unscheduledGenerated}`);
-  assert(stats.ready === 1, `ready expected 1, got ${stats.ready}`);
+  assert(stats.scheduled === 1, `scheduled expected 1, got ${stats.scheduled}`);
+  assert(stats.unscheduled === 2, `unscheduled expected 2, got ${stats.unscheduled}`);
+  assert(stats.published === 0, `published expected 0, got ${stats.published}`);
+  assert(stats.ready === 0, `ready should no longer be user-facing, got ${stats.ready}`);
 });
 
-test("needs details includes added pins without a calendar date", () => {
+test("added-but-dateless pins are NOT unscheduled (they own the added-needs-date section)", () => {
+  // The header "unscheduled" count must equal the Unscheduled Pins rail, whose
+  // tooltip reads "Generated Pins not placed on the calendar" (the generated tray).
+  // A pin added to the plan but still lacking a date lives in the added-needs-date
+  // section, so it must NOT be double-counted as unscheduled.
   const stats = computeWeeklyPlanStatsFromDrafts([
     draft({ id: "d6", addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "" }),
   ], "2026-06-08");
-  assert(stats.needsDetails === 1, "added without date should count as needs details");
+  assert(stats.unscheduled === 0, "added-but-dateless must not count as unscheduled");
+  assert(stats.needsDetails === 0, "needsDetails should not be a lifecycle state");
 });
 
-test("needs details increments when required fields are missing", () => {
+test("header unscheduled count uses the SAME selector as the Unscheduled rail", () => {
+  // Regression: header count, month-view toggle, rail badge and rail list must all
+  // agree. Rail badge/list both call getUnaddedGeneratedDrafts (→ isUnaddedGeneratedDraft),
+  // so header stats.unscheduled must equal drafts filtered by that same predicate.
+  const drafts: PinDraft[] = [
+    draft({ id: "dated",  addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "2026-06-08" }), // on calendar
+    draft({ id: "needsDate", addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "" }),          // added-needs-date section
+    { ...draft({ id: "board" }), source: "ai_generated_from_upload" },                              // Studio board, not the tray
+    draft({ id: "tray1", scheduledDate: "" }),                                                      // generated tray
+    draft({ id: "tray2", scheduledDate: "" }),                                                      // generated tray
+  ];
+  const stats = computeWeeklyPlanStatsFromDrafts(drafts, "2026-06-08");
+  const railCount = drafts.filter(d => pinDraftStore.isUnaddedGeneratedDraft(d)).length;
+  assert(railCount === 2, `rail selector should see 2 tray pins, got ${railCount}`);
+  assert(stats.unscheduled === railCount, `header (${stats.unscheduled}) must equal rail (${railCount})`);
+  assert(stats.unscheduledGenerated === railCount, `month toggle (${stats.unscheduledGenerated}) must equal rail (${railCount})`);
+});
+
+test("missing optional publish fields do not create a lifecycle status", () => {
   const stats = computeWeeklyPlanStatsFromDrafts([
     draft({ id: "d4", addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "2026-06-08", status: "needs_review", title: "", description: "" }),
   ], "2026-06-08");
-  assert(stats.needsDetails === 1, "needsDetails should be 1");
+  assert(stats.scheduled === 1, "scheduled should remain 1");
+  assert(stats.needsDetails === 0, "needsDetails should not be a lifecycle state");
 });
 
 test("Weekly Plan page shows added-needs-date section", () => {
@@ -95,11 +120,12 @@ test("Weekly Plan page shows added-needs-date section", () => {
   assert(planSource.includes("Added to plan · assign a date"), "added needs date header missing");
 });
 
-test("posted count uses postedAt", () => {
+test("published count uses postedAt", () => {
   const stats = computeWeeklyPlanStatsFromDrafts([
     draft({ id: "d5", addedToPlanAt: "2026-06-07T00:00:00Z", scheduledDate: "2026-06-08", status: "ready", postedAt: "2026-06-09T00:00:00Z" }),
   ], "2026-06-08");
-  assert(stats.posted === 1, "posted count should be 1");
+  assert(stats.published === 1, "published count should be 1");
+  assert(stats.posted === 1, "legacy posted alias should be 1");
 });
 
 test("isDraftAddedToWeeklyPlan uses addedToPlanAt", () => {
@@ -114,27 +140,29 @@ test("assignDraftToDate marks added and sets date", () => {
 
 test("Weekly Plan page shows compact summary bar not large KPI cards", () => {
   assert(planSource.includes('"weekly-plan-summary-bar"'), "compact summary bar testId missing");
-  assert(planSource.includes('"stat-planned"'),       "stat-planned segment missing");
-  assert(planSource.includes('"stat-ready"'),         "stat-ready segment missing");
-  assert(planSource.includes('"stat-needs-details"'), "stat-needs-details segment missing");
+  assert(planSource.includes('"stat-scheduled"'),     "stat-scheduled segment missing");
+  assert(planSource.includes('"stat-published"'),     "stat-published segment missing");
   assert(planSource.includes('"stat-unscheduled"'),   "stat-unscheduled segment missing");
-  assert(planSource.includes('"stat-posted"'),        "stat-posted segment missing");
+  assert(!planSource.includes('"stat-ready"'),         "stat-ready segment should be removed");
+  assert(!planSource.includes('"stat-needs-details"'), "stat-needs-details segment should be removed");
+  assert(!planSource.includes('"stat-posted"'),        "stat-posted segment should be removed");
   assert(!planSource.includes("MetricCard"),          "MetricCard large KPI cards must be removed");
   assert(!planSource.includes('"weekly-plan-stats"'), "old large KPI stats container must be removed");
-  assert(planSource.includes("Ready to post manually"),  "Ready to post manually must appear as tooltip");
-  assert(planSource.includes("Marked as posted manually"), "Marked as posted manually must appear as tooltip");
+  assert(!planSource.includes("Ready to post manually"), "Ready tooltip must be removed");
+  assert(!planSource.includes("Marked as posted manually"), "Posted tooltip must be removed");
   assert(planSource.includes("Generated Pins · Not added to plan"), "renamed queue header missing");
 });
 
 test("Weekly Plan calendar always renders 7 day columns", () => {
   assert(planSource.includes("weekly-plan-calendar"), "calendar test id missing");
   assert(planSource.includes("calendar-empty-slot"), "empty slot missing");
-  assert(planSource.includes("No Pins planned"), "empty slot copy missing");
+  // Empty future Smart Schedule slots are drop targets ("Drop pin here").
+  assert(planSource.includes("Drop pin here"), "empty slot drop affordance missing");
 });
 
-test("No Publish button on weekly plan page", () => {
-  assert(!/\bPublish\b/.test(planSource), "Publish button/text should not appear");
-  assert(!/Ready to publish/i.test(planSource), "Ready to publish must not appear");
+test("Weekly Plan delegates publish UI to shared Pin Details modal", () => {
+  assert(planSource.includes("DraftDetailsDrawer"), "shared details modal wrapper missing");
+  assert(!planSource.includes('data-testid="draft-publish-pinterest"'), "publish editor duplicated in Weekly Plan page");
 });
 
 test("Weekly Plan page has week navigation controls", () => {

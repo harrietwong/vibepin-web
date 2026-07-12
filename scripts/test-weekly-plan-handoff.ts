@@ -6,8 +6,11 @@ import {
   buildWeeklyPlanItemFromGeneratedPin,
   canAddGeneratedPinToPlan,
   sanitizeHandoffField,
+  localDateISO,
+  plannableDateISO,
 } from "../src/lib/weeklyPlanHandoff";
 import { EMPTY_TOUCHED } from "../src/lib/pinMetadata";
+import { dateInWeek } from "../src/lib/weeklyPlanStats";
 import * as pinDraftStore from "../src/lib/pinDraftStore";
 
 export {};
@@ -186,6 +189,36 @@ test("recomputeDraftStatus after clearing title", () => {
 test("sanitizeHandoffField strips nullish strings", () => {
   assert(sanitizeHandoffField("null") === "", "null string");
   assert(sanitizeHandoffField("  hello ") === "hello", "trim");
+});
+
+// ── Timezone regression (the Add-to-Plan invisibility P0) ─────────────────────
+// A Pin auto-scheduled for "today" must store TODAY's local date, and that date must
+// fall inside Weekly Plan's locally-computed current week. The old toISOString() path
+// stored the previous UTC day in UTC+ zones, hiding the Pin from the visible week.
+
+test("localDateISO returns the local calendar date (no UTC shift)", () => {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const y = today.getFullYear(), m = String(today.getMonth() + 1).padStart(2, "0"), d = String(today.getDate()).padStart(2, "0");
+  assert(localDateISO(today) === `${y}-${m}-${d}`, `got ${localDateISO(today)}`);
+});
+
+test("auto-scheduled 'today' lands inside the current local week", () => {
+  // Replicates studio's getRemainingDaysOfCurrentWeek (now local) + plan's week filter.
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const todayISO = localDateISO(today);
+
+  const dow = today.getDay();
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
+  const weekStart = localDateISO(monday);
+
+  assert(dateInWeek(todayISO, weekStart), `today ${todayISO} not in week starting ${weekStart}`);
+});
+
+test("plannableDateISO(1) is tomorrow local and is a valid YYYY-MM-DD", () => {
+  const t = new Date(); t.setHours(0, 0, 0, 0); t.setDate(t.getDate() + 1);
+  assert(plannableDateISO(1) === localDateISO(t), `got ${plannableDateISO(1)}`);
+  assert(/^\d{4}-\d{2}-\d{2}$/.test(plannableDateISO(1)), "bad format");
 });
 
 console.log(`\nWeekly Plan handoff: ${passed} passed, ${failed} failed`);

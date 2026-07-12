@@ -55,7 +55,7 @@ export default function Sidebar() {
       <div className="mb-8">
         <div className="text-xs text-gray-500 uppercase mb-3">Intelligence</div>
         <nav className="space-y-1">
-          <Link href="/keyword-trends" className={`flex items-center gap-3 px-3 py-2 rounded-lg ${isActive('/keyword-trends') ? 'bg-purple-50 text-purple-600' : 'hover:bg-gray-50'}`}>
+          <Link href="/app/trends" className={`flex items-center gap-3 px-3 py-2 rounded-lg ${isActive('/app/trends') ? 'bg-purple-50 text-purple-600' : 'hover:bg-gray-50'}`}>
             <span>📊</span>
             <div>
               <div className="font-medium">Keyword Trends</div>

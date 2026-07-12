@@ -46,6 +46,14 @@ export type ViralPin = {
   seed_keyword?: string | null;
   source_keyword?: string | null;
   source_type?: string | null;
+  trend_keyword_id?: string | null;
+  // Backend classifier's visual format (pin_samples.visual_format). Display uses
+  // THIS field only — the client-side inferPinFormat heuristic is never shown.
+  visual_format?: string | null;
+  // Backend-measured image ratio (width/height) + text-overlay level — used by
+  // the rule-based Why-it-works / optimization analysis (never fabricated).
+  image_ratio?: number | null;
+  text_overlay_level?: string | null;
   days_since_created?: number;
   item_type?: string;
   product_type?: string;
@@ -67,6 +75,33 @@ export type ProductScore = {
   scored_at:           string;
 };
 
+// Honest, accurately-named Pinterest product evidence. Distinguishes a genuine
+// individual product-Pin save count from the (much larger) source "Shop the look"
+// Pin's saves. Pinterest does NOT expose product clicks / outbound clicks /
+// impressions / reactions to third-party viewers, so those are intentionally
+// absent — never fabricated, never shown as 0. See /api/products/top.
+export type ProductMetrics = {
+  // Saves on THIS product's own Pinterest Pin (only when the product card is a
+  // Pin with its own pin_id). Small, genuine, product-level. null = no product Pin.
+  productPinSaveCount:      number | null;
+  // Saves on the source "Shop the look" Pin the product was discovered in.
+  // This is a SOURCE-PIN metric, NOT a product metric — label it as such.
+  sourcePinSaveCount:       number;
+  // Distinct source Pins across the deduped product identity (Pinterest sources).
+  productSourcePinCount:    number;
+  // Distinct product Pins mapped to the same product identity.
+  uniqueProductPinCount:    number;
+  // Sum of genuine product-Pin saves across distinct product Pins for this
+  // identity. null when no row in the group has a product Pin.
+  aggregateProductPinSaves: number | null;
+  // Which save number the card should headline: a real product-Pin save count,
+  // or (fallback) the source-Pin saves. Drives honest UI labelling.
+  primarySaveKind:          "product_pin" | "source_pin";
+  // Provenance + dedup identity used for aggregation.
+  metricSource:             "pinterest_stl";
+  dedupIdentity:            "product_url_hash" | "canonical_product_url" | "pin_product_id";
+};
+
 export type ProductWithScore = {
   id:                    string;
   product_name:          string;
@@ -78,6 +113,8 @@ export type ProductWithScore = {
   source_url:            string | null;
   save_count:            number;
   source_pin_save_count: number;
+  product_pin_id:        string | null;
+  product_metrics:       ProductMetrics;
   seed_keyword:          string | null;
   scraped_at:            string | null;
   opportunity_score:     number | null;
@@ -116,6 +153,13 @@ export type TrendOpportunity = {
   data_confidence:        "high" | "medium" | "low";
   confidence_reason:      string;
   top_product_ids:        string[] | null;
+  // MVP launch readiness (from opportunities.internal_reason_codes or computed)
+  primary_label?:           string | null;
+  trend_state?:             string | null;
+  readinessStatus?:         string | null;
+  readinessReasons?:        string[];
+  productAvailabilityTier?: string | null;
+  referenceAvailabilityTier?: string | null;
 };
 
 export type KeywordRef = {

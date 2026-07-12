@@ -11,7 +11,10 @@ export default defineConfig({
   reporter: "html",
   timeout: 60_000,
   use: {
-    baseURL: "http://localhost:3000",
+    // Overridable so a test run can target a dedicated dev server instance
+    // (e.g. PLAYWRIGHT_TEST_BASE_URL=http://localhost:3001) instead of the
+    // shared one on :3000. Default behaviour is unchanged.
+    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL ?? "http://localhost:3000",
     navigationTimeout: 45_000,
     actionTimeout: 15_000,
     trace: "on-first-retry",

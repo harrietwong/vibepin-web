@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { createBrowserClient } from "@supabase/ssr";
+import { useSessionUser } from "@/lib/useSessionUser";
+import { logPlanStep, logPlanTiming } from "@/lib/planLoadTiming";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -74,19 +76,47 @@ export type AddToWeeklyPlanInput = {
 
 export function useWeeklyPlan(category: string, targetCount: number = 7) {
   const weekStart = getWeekStart();
-  const supabase  = createClient();
+  // Create the Supabase client ONCE per hook mount, not on every render. This hook
+  // lives inside the Plan page, which re-renders many times during the OAuth-return
+  // sequence (hydrated / category / restoreNotice / calendarEditDraft all flip in
+  // quick succession) — `createBrowserClient()` on every render meant every one of
+  // those renders spun up an independent client instance, each with its own
+  // internal auth-session bookkeeping. Right after a full-page reload from OAuth
+  // (the exact moment the stored session token is most likely to need a refresh),
+  // that adds up to redundant, possibly-serialized session-refresh work across
+  // instances — a very plausible contributor to the multi-second "plan row ready"
+  // delay this file's [Plan timing] logs are instrumented to catch. One instance,
+  // reused for the hook's lifetime, is strictly correct and cannot be slower.
+  const [supabase] = useState(() => createClient());
+
+  // Dev-only: elapsed-time reference for the [Plan Load] instrumentation below.
+  // `useState`'s lazy initializer runs exactly once (on this hook instance's
+  // first render), which is the React-blessed way to capture a one-time
+  // impure value — unlike computing it inline during render.
+  const [mountedAt] = useState(() => performance.now());
+  const loggedRef = useRef({ session: false, plan: false, items: false });
 
   // ── Auth: resolve userId before any DB writes ─────────────────────────────
-  const [userId, setUserId]       = useState<string | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  // Shared SWR cache (web/src/lib/useSessionUser.ts) — the app shell
+  // (web/src/app/app/layout.tsx) already resolves this once per session, so
+  // navigating here normally reads it from cache instead of firing a second
+  // `auth.getUser()` round trip before the plan/items SWR keys can even start.
+  const { user: sessionUser, loading: authLoading } = useSessionUser();
+  const userId = sessionUser?.id ?? null;
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setUserId(data.user?.id ?? null);
-      setAuthLoading(false);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!authLoading && !loggedRef.current.session) {
+      loggedRef.current.session = true;
+      logPlanStep("session user ready", performance.now() - mountedAt, `userPresent=${!!userId}`);
+      logPlanTiming("auth ready", performance.now() - mountedAt, `userPresent=${!!userId}`);
+      // This codebase has no workspace partition — weekly_plans/weekly_plan_items
+      // are keyed by user_id only (see the "[Plan identity]" diagnostic in
+      // app/app/plan/page.tsx). Logged explicitly so "is workspace resolution
+      // fragile?" has a definitive, in-product answer: there is no separate
+      // workspace-resolution step to be fragile.
+      logPlanTiming("workspace ready", 0, "n/a — no workspace partition, plan is keyed by user_id only");
+    }
+  }, [authLoading, userId, mountedAt]);
 
   // ── Read current week's plan (wait for auth) ──────────────────────────────
   // Key includes userId so SWR caches per-user and never fetches before auth
@@ -97,21 +127,45 @@ export function useWeeklyPlan(category: string, targetCount: number = 7) {
   const {
     data: plan,
     mutate: mutatePlan,
+    isLoading: planLoading,
+    error: planError,
   } = useSWR<WeeklyPlan | null>(planKey, async () => {
-    const { data } = await supabase
+    // Isolates two very different possible bottlenecks: (a) how long it took for
+    // this fetcher to even START (auth wait / SWR scheduling — should be ~0 since
+    // planKey only goes non-null once auth already resolved) vs. (b) the raw
+    // Supabase PostgREST round trip itself. If "response received" 's queryMs is
+    // the big number, the delay is the DB/network round trip, not client logic.
+    logPlanTiming("weekly plan query started", performance.now() - mountedAt);
+    const tQuery0 = performance.now();
+    const { data, error } = await supabase
       .from("weekly_plans")
       .select("*")
+      .eq("user_id", userId)
       .eq("category", category)
       .eq("week_start", weekStart)
       .maybeSingle();
+    const queryMs = performance.now() - tQuery0;
+    logPlanTiming("weekly plan query response received", performance.now() - mountedAt, `queryMs=${Math.round(queryMs)} error=${!!error}`);
     return (data as WeeklyPlan | null) ?? null;
   }, { revalidateOnFocus: false });
+
+  useEffect(() => {
+    // planKey is only non-null once auth has resolved to a real user, so this
+    // never fires prematurely while session-user is still loading.
+    if (planKey && !planLoading && !loggedRef.current.plan) {
+      loggedRef.current.plan = true;
+      logPlanStep("plan row ready", performance.now() - mountedAt, `planId=${plan?.id ?? "none"}`);
+      logPlanTiming("planId resolved", performance.now() - mountedAt, `planId=${plan?.id ?? "none"}`);
+    }
+  }, [planKey, planLoading, plan, mountedAt]);
 
   // ── Read items (only when plan exists) ───────────────────────────────────
   const itemsKey = plan?.id ? `weekly-plan-items:${plan.id}` : null;
   const {
     data: items = [],
     mutate: mutateItems,
+    isLoading: itemsLoading,
+    error: itemsError,
   } = useSWR<WeeklyPlanItem[]>(itemsKey, async () => {
     const { data } = await supabase
       .from("weekly_plan_items")
@@ -120,6 +174,13 @@ export function useWeeklyPlan(category: string, targetCount: number = 7) {
       .order("sort_order", { ascending: true });
     return (data ?? []) as WeeklyPlanItem[];
   }, { revalidateOnFocus: false });
+
+  useEffect(() => {
+    if (itemsKey && !itemsLoading && !loggedRef.current.items) {
+      loggedRef.current.items = true;
+      logPlanStep("plan items ready", performance.now() - mountedAt, `count=${items.length}`);
+    }
+  }, [itemsKey, itemsLoading, items, mountedAt]);
 
   // Effective target: respect what was stored on the plan (e.g. if plan was
   // created with 14, honour that even if caller passes 7 again)
@@ -239,5 +300,13 @@ export function useWeeklyPlan(category: string, targetCount: number = 7) {
     weekLabel:      formatWeekLabel(weekStart),
     userId,
     authLoading,
+    // Load-health signals for the Plan page's stuck/error fallback.
+    // dataLoading collapses to `authLoading` while planKey/itemsKey are still
+    // null (paused SWR keys report isLoading=false), then picks up the plan
+    // and items fetches once each key goes live — so it's `true` for exactly
+    // as long as *something* in the waterfall hasn't settled yet.
+    dataLoading:    authLoading || planLoading || itemsLoading,
+    // A real SWR error (not just "still loading") on either fetch.
+    loadError:      planError ?? itemsError ?? null,
   };
 }

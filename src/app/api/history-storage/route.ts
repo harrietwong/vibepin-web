@@ -1,8 +1,8 @@
-/**
+﻿/**
  * GET /api/history-storage
  *
  * Lists generated image files from Supabase Storage using the service-role
- * key (server-side only — never exposed to the client).
+ * key (server-side only 鈥?never exposed to the client).
  * Groups files into sessions by timestamp proximity and returns HistoryEntry[].
  */
 
@@ -15,7 +15,7 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const SVC_KEY      = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const BUCKET       = "generated";
 const PREFIX       = "studio/";
-const SESSION_GAP  = 120; // seconds — files within this window = same session
+const SESSION_GAP  = 600; // seconds - files within this window are treated as one recovered session
 
 export async function GET() {
   if (!SUPABASE_URL || !SVC_KEY) {
@@ -43,7 +43,7 @@ export async function GET() {
 
     // Parse timestamp from filename: [unix_seconds]_[idx]_[uuid].png
     // Use the /api/storage-image proxy so images load even if the bucket isn't set
-    // to "Public" in Supabase — the proxy authenticates server-side with the SVC key.
+    // to "Public" in Supabase 鈥?the proxy authenticates server-side with the SVC key.
     const parsed = files
       .filter(f => f.name.endsWith(".png"))
       .map(f => {
@@ -81,3 +81,4 @@ export async function GET() {
     return NextResponse.json({ entries: [] });
   }
 }
+

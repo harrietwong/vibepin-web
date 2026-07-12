@@ -42,8 +42,8 @@ test.describe("Keyword Tool", () => {
     expect(url, "Still on login — ensure E2E_TEST_MODE=true in .env.local and restart dev server").not.toContain("/login");
   });
 
-  test("page title is Keyword Tool", async ({ page }) => {
-    await expect(page.locator("h1")).toContainText("Keyword Tool", { timeout: 5000 });
+  test("page title is Pinterest Keyword Trends", async ({ page }) => {
+    await expect(page.locator("h1")).toContainText("Pinterest Keyword Trends", { timeout: 5000 });
   });
 
   test("search bar and button are visible", async ({ page }) => {
@@ -77,11 +77,24 @@ test.describe("Keyword Tool", () => {
       expect(allText).toMatch(/OPPORTUNITY/);
     });
 
-    test("shows Search Trend chart labeled 'Search Trend · Past 12 months'", async ({ page }) => {
+    test("shows source-aware trend section — not a fake 12-month chart for estimated data", async ({ page }) => {
       await page.waitForSelector('[data-testid="search-trend-chart"]', { timeout: 15000 });
       const chart = page.getByTestId("search-trend-chart");
       await expect(chart).toBeVisible();
-      await expect(chart).toContainText("Search Trend · Past 12 months");
+
+      const hasOfficial = await chart.getByText("Search Trend · Past 12 months").isVisible().catch(() => false);
+      const hasEstimated = await chart.getByTestId("estimated-trend-signal").isVisible().catch(() => false);
+      const hasResource = await chart.getByTestId("resource-trend-insight").isVisible().catch(() => false);
+
+      expect(hasOfficial || hasEstimated || hasResource, "Expected official chart OR estimated/resource insight").toBe(true);
+
+      if (hasEstimated) {
+        await expect(chart).toContainText("Estimated trend signal");
+        await expect(chart).not.toContainText("Past 12 months");
+      }
+      if (hasOfficial) {
+        await expect(chart.getByTestId("trend-source-line")).toContainText("Pinterest Trends API");
+      }
     });
 
     test("shows related keywords table with at least 1 row", async ({ page }) => {
@@ -111,6 +124,27 @@ test.describe("Keyword Tool", () => {
       await assertNoFakeMetrics(page);
     });
 
+  });
+
+  test.describe("missing keyword: zzzzzztest", () => {
+
+    test.beforeEach(async ({ page }) => {
+      await searchKeyword(page, "zzzzzztest");
+      await Promise.race([
+        page.waitForSelector('[data-testid="keyword-summary-card"]',        { timeout: 15000 }),
+        page.waitForSelector('[data-testid="keyword-create-anyway-button"]', { timeout: 15000 }),
+        page.waitForSelector("text=No keyword data found yet",               { timeout: 15000 }),
+      ]).catch(() => {});
+    });
+
+    test("shows empty state — not closest match", async ({ page }) => {
+      const hasSummaryCards = (await page.getByTestId("keyword-summary-card").count()) > 0;
+      expect(hasSummaryCards, "Gibberish query must not return a forced closest match").toBe(false);
+      const hasEmpty =
+        (await page.getByTestId("keyword-create-anyway-button").isVisible().catch(() => false)) ||
+        (await page.locator("text=No keyword data found yet").isVisible().catch(() => false));
+      expect(hasEmpty, "Expected empty state for zzzzzztest").toBe(true);
+    });
   });
 
   test.describe("missing keyword: zzzz handmade alien pillow test", () => {

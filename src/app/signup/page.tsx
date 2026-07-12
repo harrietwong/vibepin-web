@@ -3,21 +3,18 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
+import BrandLogo from "@/components/BrandLogo";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
-const P_ICON = (
-  <svg viewBox="0 0 20 20" fill="none" className="w-4 h-4">
-    <path d="M4 5.5L10 15L16 5.5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-
 const PLAN_LABELS: Record<string, string> = {
-  free: "Free", creator: "Creator · $19/mo",
-  growth: "Growth · $49/mo", pro: "Pro · $99/mo",
+  free: "Free", starter: "Starter · $19/mo",
+  pro: "Pro · $49/mo", business: "Business · $99/mo",
+  // Legacy plan keys from links minted before the 2026-07 pricing revamp.
+  creator: "Starter · $19/mo", growth: "Pro · $49/mo",
 };
 
 function SignupContent() {
@@ -66,9 +63,7 @@ function SignupContent() {
 
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-8">
-          <div className="h-8 w-8 rounded-xl flex items-center justify-center" style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-            {P_ICON}
-          </div>
+          <BrandLogo size={32} style={{ filter: "invert(1)" }} />
           <span className="font-black text-gray-900 text-lg tracking-tight">VibePin</span>
         </div>
 

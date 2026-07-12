@@ -1,0 +1,17 @@
+﻿import { chromium } from "playwright";
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, baseURL: "http://127.0.0.1:3000" });
+page.setDefaultTimeout(45000);
+await page.goto("/app/studio", { waitUntil: "networkidle", timeout: 60000 });
+await page.getByTestId("composer-panel").waitFor();
+await page.getByTestId("add-product-images").click({ force: true });
+await page.getByTestId("product-picker").waitFor();
+await page.getByTestId("picker-tab-product_ideas").click();
+await page.getByTestId("product-ideas-grid").waitFor();
+await page.getByTestId("product-idea-skeleton").waitFor({ state: "detached" }).catch(() => {});
+await page.getByTestId("product-ideas-filter-amazon").click();
+await page.waitForTimeout(1000);
+const count = await page.getByTestId("product-ideas-grid").getByTestId("asset-card").count();
+await page.screenshot({ path: "artifacts/product-picker-audit/04-live-amazon-filter-results.png", fullPage: true });
+console.log(JSON.stringify({ liveAmazonVisibleCards: count }, null, 2));
+await browser.close();

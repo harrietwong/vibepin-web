@@ -5,10 +5,13 @@ import { NextResponse } from "next/server";
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/app/workspace/home-decor";
+  const cookieStore = await cookies();
+  const cookieNext = cookieStore.get("vp_next")?.value;
+  const decodedCookieNext = cookieNext ? decodeURIComponent(cookieNext) : null;
+  const requestedNext = searchParams.get("next") ?? decodedCookieNext;
+  const next = requestedNext?.startsWith("/app") ? requestedNext : "/app/workspace/home-decor";
 
   if (code) {
-    const cookieStore = await cookies();
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -25,7 +28,9 @@ export async function GET(request: Request) {
     );
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(`${origin}${next}`);
+      const response = NextResponse.redirect(`${origin}${next}`);
+      response.cookies.set("vp_next", "", { path: "/", maxAge: 0 });
+      return response;
     }
   }
 

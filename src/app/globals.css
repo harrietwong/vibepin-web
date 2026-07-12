@@ -41,6 +41,9 @@ body {
 
 *:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 /* ── Animations ──────────────────────────────────────────────────────────── */
 @keyframes marquee {
   from { transform: translateX(0); }
@@ -149,59 +152,93 @@ body {
 
 /* ── App shell theme (set data-theme on /app layout root) ───────────────── */
 [data-theme="light"] {
-  --app-bg:          #F8FAFC;
+  --app-bg:          #F7F7FB;
   --app-surface:     #FFFFFF;
-  --app-surface-2:   #F9FAFB;
-  --app-surface-3:   #F1F5F9;
+  --app-surface-2:   #F8FAFC;
+  --app-surface-3:   #EEF2F7;
   --app-border:      #E5E7EB;
   --app-border-hi:   #D1D5DB;
-  --app-text:        #0F172A;
-  --app-text-sec:    #64748B;
-  --app-text-muted:  #94A3B8;
+  --app-text:        #111827;
+  --app-text-sec:    #6B7280;
+  --app-text-muted:  #9CA3AF;
   --app-text-dim:    #CBD5E1;
-  --app-shell-bg:    #F7F8FA;
+  --app-shell-bg:    #F7F7FB;
   --app-sidebar-bg:  #FFFFFF;
   --app-topbar-bg:   #FFFFFF;
   --app-sidebar-border: #E5E7EB;
-  --app-nav-text:    #64748B;
-  --app-nav-text-active: #0F172A;
-  --app-nav-active-bg: rgba(192, 38, 211, 0.08);
+  --app-nav-text:    #5F6B7A;
+  --app-nav-text-active: #7C3AED;
+  --app-nav-active-bg: rgba(124, 58, 237, 0.10);
+  --app-nav-hover-bg: rgba(15, 23, 42, 0.04);
   --app-dropdown-bg: #FFFFFF;
   --app-dropdown-border: #E5E7EB;
   --app-dropdown-text: #374151;
   --app-dropdown-muted: #94A3B8;
   --app-dropdown-hover: #F9FAFB;
+  --app-brand:       #7C3AED;
+  --app-brand-2:     #8B5CF6;
+  --app-brand-soft:  rgba(124, 58, 237, 0.10);
+  --app-positive:    #22C55E;
+  --app-inset:       rgba(15, 23, 42, 0.04);
+  --app-inset-hi:    rgba(15, 23, 42, 0.07);
+  --app-overlay:     rgba(15, 23, 42, 0.45);
+  color-scheme: light;
+}
+
+[data-theme="light"] [data-brand-logo] {
+  filter: invert(1);
 }
 
 [data-theme="dark"] {
-  --app-bg:          #0B0E17;
-  --app-surface:     #161D2E;
-  --app-surface-2:   #111827;
-  --app-surface-3:   #1A2236;
-  --app-border:      rgba(255, 255, 255, 0.07);
+  --app-bg:          #080A12;
+  --app-surface:     #11131D;
+  --app-surface-2:   #151823;
+  --app-surface-3:   #181B27;
+  --app-border:      rgba(255, 255, 255, 0.08);
   --app-border-hi:   rgba(255, 255, 255, 0.12);
-  --app-text:        #E2E8F0;
-  --app-text-sec:    #8892A4;
-  --app-text-muted:  #4A5568;
-  --app-text-dim:    #374151;
-  --app-shell-bg:    #0B0E17;
-  --app-sidebar-bg:  #111827;
-  --app-topbar-bg:   #111827;
+  --app-text:        #F8FAFC;
+  --app-text-sec:    #A1A1AA;
+  --app-text-muted:  #71717A;
+  --app-text-dim:    #52525B;
+  --app-shell-bg:    #080A12;
+  --app-sidebar-bg:  #0D1019;
+  --app-topbar-bg:   #0D1019;
   --app-sidebar-border: rgba(255, 255, 255, 0.06);
-  --app-nav-text:    #6B7A96;
-  --app-nav-text-active: #E2E8F0;
-  --app-nav-active-bg: rgba(59, 130, 246, 0.12);
-  --app-dropdown-bg: #161D2E;
+  --app-nav-text:    #A1A1AA;
+  --app-nav-text-active: #F8FAFC;
+  --app-nav-active-bg: rgba(139, 92, 246, 0.16);
+  --app-nav-hover-bg: rgba(255, 255, 255, 0.045);
+  --app-dropdown-bg: #181B27;
   --app-dropdown-border: rgba(255, 255, 255, 0.08);
-  --app-dropdown-text: #C4CFDF;
-  --app-dropdown-muted: #6B7A96;
+  --app-dropdown-text: #E5E7EB;
+  --app-dropdown-muted: #A1A1AA;
   --app-dropdown-hover: rgba(255, 255, 255, 0.05);
+  --app-brand:       #8B5CF6;
+  --app-brand-2:     #A78BFA;
+  --app-brand-soft:  rgba(139, 92, 246, 0.14);
+  --app-positive:    #4ADE80;
+  --app-inset:       rgba(255, 255, 255, 0.04);
+  --app-inset-hi:    rgba(255, 255, 255, 0.07);
+  --app-overlay:     rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
 
 .app-page {
   background: var(--app-bg);
   color: var(--app-text);
+}
+
+/* Compact icon-only global sidebar (default at all widths). Text labels live in
+   [data-sidebar-label] and are surfaced on hover as tooltips by the nav component;
+   here they stay hidden so the rail is a narrow icon column and the main workspace
+   keeps the reclaimed horizontal space. */
+.app-sidebar [data-sidebar-label] {
+  display: none !important;
+}
+.app-sidebar [data-sidebar-nav-item] {
+  justify-content: center !important;
+  padding-left: 8px !important;
+  padding-right: 8px !important;
 }
 
 /* Tailwind utility overrides in dark mode */
@@ -228,6 +265,68 @@ body {
 [data-theme="dark"] .shadow-2xl           { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important; }
 [data-theme="dark"] ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); }
 
+/* ── Admin console theme (set data-admin-theme on <html> by /admin/layout.tsx
+   only) ──────────────────────────────────────────────────────────────────
+   Fully independent of the [data-theme] app-shell system above: separate
+   attribute, separate variable namespace, separate storage key
+   (vibepin-admin-theme). Never applied outside /admin/*. Only the admin
+   content column re-themes here — the AdminNav sidebar keeps its fixed dark
+   navy palette by design (like the fixed-dark rail pattern common to admin
+   dashboards), so this only needs to cover card/page surfaces. */
+[data-admin-theme="light"] {
+  --admin-bg:            #F8FAFC;
+  --admin-surface:       #FFFFFF;
+  --admin-surface-2:     #F9FAFB;
+  --admin-border:        #E5E7EB;
+  --admin-border-soft:   #EEF0F3;
+  --admin-text:          #111827;
+  --admin-text-secondary:#6B7280;
+  --admin-text-muted:    #9CA3AF;
+  --admin-accent:        #4338CA;
+  --admin-danger:        #B91C1C;
+  --admin-warn-bg:       #FFFBEB;
+  --admin-warn-border:   #FDE68A;
+  --admin-warn-text:     #92400E;
+  --admin-warn-text-strong: #78350F;
+}
+
+[data-admin-theme="dark"] {
+  --admin-bg:            #0B0F1A;
+  --admin-surface:       #131826;
+  --admin-surface-2:     #0F1420;
+  --admin-border:        rgba(255, 255, 255, 0.08);
+  --admin-border-soft:   rgba(255, 255, 255, 0.06);
+  --admin-text:          #F1F5F9;
+  --admin-text-secondary:#94A3B8;
+  --admin-text-muted:    #64748B;
+  --admin-accent:        #818CF8;
+  --admin-danger:        #F87171;
+  --admin-warn-bg:       rgba(245, 158, 11, 0.08);
+  --admin-warn-border:   rgba(245, 158, 11, 0.28);
+  --admin-warn-text:     #FBBF24;
+  --admin-warn-text-strong: #FCD34D;
+}
+
+/* Tailwind utility overrides for admin pages in dark mode (mirrors the
+   [data-theme="dark"] overrides above, same technique, admin-scoped). */
+[data-admin-theme="dark"] .text-gray-950,
+[data-admin-theme="dark"] .text-gray-900        { color: var(--admin-text) !important; }
+[data-admin-theme="dark"] .text-gray-700,
+[data-admin-theme="dark"] .text-gray-600        { color: var(--admin-text-secondary) !important; }
+[data-admin-theme="dark"] .text-gray-500,
+[data-admin-theme="dark"] .text-gray-400,
+[data-admin-theme="dark"] .text-gray-300        { color: var(--admin-text-muted) !important; }
+[data-admin-theme="dark"] .border-amber-200     { border-color: var(--admin-warn-border) !important; }
+[data-admin-theme="dark"] .bg-amber-50          { background-color: var(--admin-warn-bg) !important; }
+[data-admin-theme="dark"] .text-amber-900       { color: var(--admin-warn-text-strong) !important; }
+[data-admin-theme="dark"] .text-amber-800,
+[data-admin-theme="dark"] .text-amber-600       { color: var(--admin-warn-text) !important; }
+[data-admin-theme="dark"] .border-red-200       { border-color: rgba(239, 68, 68, 0.35) !important; }
+[data-admin-theme="dark"] .bg-red-50            { background-color: rgba(239, 68, 68, 0.08) !important; }
+[data-admin-theme="dark"] .text-red-600,
+[data-admin-theme="dark"] .text-red-700         { color: #F87171 !important; }
+[data-admin-theme="dark"] .hover\:bg-gray-50:hover { background-color: rgba(255, 255, 255, 0.05) !important; }
+
 /* ── Landing page dark theme (scoped to .lp wrapper) ────────────────────── */
 .lp {
   --bg:        #080E0B;
@@ -246,3 +345,34 @@ body {
   50%       { opacity: 0; }
 }
 .cursor-blink { animation: blink 1s step-start infinite; }
+
+/* ── Pin thumbnail skeleton (theme-aware shimmer) ─────────────────────────────
+   Used by <PinThumbnail> to reserve layout space and show a subtle placeholder
+   while a Pin image loads — never a blank white/black box. */
+@keyframes pin-thumb-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.pin-thumb-skeleton {
+  /* Dark fallbacks matter: the hover preview card is portaled to <body>, OUTSIDE the
+     [data-theme] wrapper, so the theme vars are undefined there. Without a fallback the
+     skeleton rendered as a white block inside the dark hover card. */
+  background-color: var(--app-surface-2, #111827);
+  background-image: linear-gradient(
+    90deg,
+    var(--app-surface-2, #111827) 0%,
+    var(--app-surface-3, #1f2937) 50%,
+    var(--app-surface-2, #111827) 100%
+  );
+  background-size: 200% 100%;
+  animation: pin-thumb-shimmer 1.4s ease-in-out infinite;
+}
+/* Always-dark variant — used inside the hardcoded-dark hover preview card so the
+   placeholder is never a white rectangle, even in light theme. */
+.pin-thumb-skeleton--dark {
+  background-color: #0f172a;
+  background-image: linear-gradient(90deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pin-thumb-skeleton { animation: none; }
+}

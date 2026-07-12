@@ -92,10 +92,62 @@ function mapApiRow(r: Record<string, unknown>): PinIdea {
   };
 }
 
+// Maps a clean /api/reference-candidates row (no backend labels) → PinIdea.
+function mapCandidateRow(r: Record<string, unknown>): PinIdea {
+  const keyword = (r.parentKeyword as string | null) ?? null;
+  const category = (r.category as string | null) ?? undefined;
+  const classified = classifySourcePin({
+    title: (r.title as string | null) ?? keyword,
+    description: null,
+    sourceUrl: (r.sourceUrl as string | null) ?? null,
+    destinationUrl: (r.sourceUrl as string | null) ?? null,
+    category: category ?? null,
+    isPinterestPin: true,
+  });
+  return {
+    id: r.id as string,
+    image_url: (r.imageUrl as string) ?? "",
+    title: (r.title as string | undefined) ?? keyword ?? undefined,
+    source_keyword: keyword,
+    save_count: (r.saveCount as number) ?? 0,
+    category,
+    visual_format: undefined,
+    source_url: (r.sourceUrl as string | null) ?? null,
+    outbound_link: null,
+    item_type: classified.item_type,
+    product_type: classified.product_type,
+    product_subtype: classified.product_subtype,
+    destination_type: classified.destination_type,
+    asset_role: classified.asset_role,
+    source_context: classified.source_context,
+    risk_flags: classified.risk_flags,
+  };
+}
+
 /** Shared fetch path for Pin Ideas / reference picker (API-first, same data family as discover). */
 export async function fetchPinIdeasWithMeta(): Promise<PinIdeasFetchResult> {
+  // Preferred: reference-eligible P0 candidates (classifier-gated, clean fields).
   try {
-    const resp = await fetchWithTimeout("/api/viral-pins?limit=160");
+    const resp = await fetchWithTimeout("/api/reference-candidates?limit=120");
+    if (resp.ok) {
+      const json = await resp.json() as Record<string, unknown>;
+      const rows = (json.items ?? json.data ?? []) as Record<string, unknown>[];
+      const pins = rows.map(mapCandidateRow).filter(p => !!p.image_url && shouldShowInPinIdeas(p));
+      if (pins.length) {
+        return {
+          pins,
+          lastUpdatedAt: (json.lastUpdatedAt as string | null) ?? null,
+          source: (json.source as string) ?? "reference_candidates_api",
+          itemCount: typeof json.itemCount === "number" ? json.itemCount : pins.length,
+        };
+      }
+    }
+  } catch {
+    /* fall through to viral-pins */
+  }
+
+  try {
+    const resp = await fetchWithTimeout("/api/viral-pins?limit=300");
     if (resp.ok) {
       const json = await resp.json() as Record<string, unknown>;
       const rows = (json.items ?? json.data ?? []) as Record<string, unknown>[];
@@ -118,7 +170,7 @@ export async function fetchPinIdeasWithMeta(): Promise<PinIdeasFetchResult> {
       .select("id,image_url,save_count,source_keyword,title,description,category,source_url,outbound_link,scraped_at")
       .not("image_url", "is", null)
       .order("save_count", { ascending: false })
-      .limit(160);
+      .limit(300);
 
     if (error) throw new Error(error.message);
 

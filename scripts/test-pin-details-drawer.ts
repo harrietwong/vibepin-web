@@ -1,10 +1,10 @@
 /**
- * Pin Details Drawer — source + logic tests
+ * Pin Details Drawer source + logic tests
  * Run: npx tsx scripts/test-pin-details-drawer.ts
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolvePinDetail, resolveStatusLabel } from "../src/components/studio/pinDetails";
+import { getGenerationSetupSnapshot, resolvePinDetail, resolveStatusLabel } from "../src/components/studio/pinDetails";
 import type { SetupSnapshot } from "../src/lib/studioPersistence";
 
 export {};
@@ -30,7 +30,9 @@ function assert(condition: boolean, message: string) {
 
 const studioSource = readFileSync(join(process.cwd(), "src/app/app/studio/page.tsx"), "utf8");
 const drawerSource = readFileSync(join(process.cwd(), "src/components/studio/PinDetailsDrawer.tsx"), "utf8");
+const sharedModalSource = readFileSync(join(process.cwd(), "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
 const pinDetailsSource = readFileSync(join(process.cwd(), "src/components/studio/pinDetails.ts"), "utf8");
+const persistenceSource = readFileSync(join(process.cwd(), "src/lib/studioPersistence.ts"), "utf8");
 
 const snap: SetupSnapshot = {
   mode: "keyword_led",
@@ -66,21 +68,25 @@ test("PinCard opens PinDetailsDrawer via onOpenDetails", () => {
   assert(studioSource.includes("<PinDetailsDrawer"), "PinDetailsDrawer not rendered in feed");
 });
 
-test("Clicking completed PinCard opens drawer (state wiring)", () => {
-  assert(studioSource.includes("pinDetailSelection"), "pinDetailSelection state missing");
-  assert(studioSource.includes("onOpenPinDetail"), "onOpenPinDetail handler missing");
+test("Clicking completed PinCard opens shared details modal", () => {
+  assert(studioSource.includes("detailsModalDraft"), "shared details modal state missing");
+  assert(studioSource.includes("openSharedPinDetails"), "shared details modal handler missing");
+  assert(studioSource.includes("<PinDetailsModal"), "shared PinDetailsModal not rendered");
   assert(studioSource.includes('"generated-pin-card"'), "generated-pin-card test id missing");
 });
 
-test("Clicking failed PinCard opens drawer (not blocked)", () => {
-  assert(studioSource.includes('placeholderVariant: "failed"'), "failed placeholder entries missing");
-  assert(studioSource.includes("onClick={onOpenDetails}"), "failed cards must share open-details click");
-  assert(!studioSource.includes("isPlaceholder") || !studioSource.match(/isPlaceholder[\s\S]{0,80}return null/), "failed cards should not early-return before click");
+test("Failed PinCard exposes retry and edit inputs, not publishing details", () => {
+  // The failed-card buttons live in the shared PinCardActions matrix.
+  const actionsSource = readFileSync("src/components/studio/PinCardActions.tsx", "utf8");
+  assert(actionsSource.includes('testId: "retry-failed-output"'), "failed retry action missing");
+  assert(actionsSource.includes('testId: "edit-failed-inputs"'), "failed edit inputs action missing");
+  // Studio still wires the failed-only retry/edit handlers.
+  assert(studioSource.includes("entry.status === \"failed\""), "failed status branch missing");
 });
 
 test("Clicking generating PinCard opens drawer", () => {
   assert(studioSource.includes("placeholderVariant: variant"), "generating placeholder missing");
-  assert(drawerSource.includes("Still generating"), "generating drawer label missing");
+  assert(drawerSource.includes("Generating") || drawerSource.includes("Queued"), "generating drawer label missing");
 });
 
 test("Drawer displays status badge", () => {
@@ -90,7 +96,7 @@ test("Drawer displays status badge", () => {
 
 test("Drawer displays prompt snapshot", () => {
   assert(drawerSource.includes('data-testid="pin-details-prompt"'), "prompt section test id missing");
-  assert(drawerSource.includes("Setup snapshot unavailable"), "prompt fallback missing");
+  assert(drawerSource.includes('data-testid="pin-details-remix-recovery-notice"'), "quality-aware recovery notice missing");
 });
 
 test("Drawer displays setup snapshot context", () => {
@@ -108,17 +114,23 @@ test("Failed drawer displays error reason or Unknown generation error fallback",
   assert(failed.statusLabel === "Failed", "failed status label wrong");
 });
 
-test("Completed drawer shows Save / Add to Plan / Download / Regenerate", () => {
-  assert(drawerSource.includes('data-testid="pin-details-save"'), "save action missing");
-  assert(drawerSource.includes('data-testid="pin-details-add-to-plan"'), "add to plan action missing");
-  assert(drawerSource.includes('data-testid="pin-details-download"'), "download action missing");
-  assert(drawerSource.includes('data-testid="pin-details-regenerate"'), "regenerate action missing");
-  assert(drawerSource.includes('data-testid="pin-details-editor"'), "pin details editor missing");
+test("Shared modal auto-saves + owns Schedule / Pin now / readiness", () => {
+  // Simplified composer: auto-save indicator + one Schedule CTA; Pin now in overflow.
+  assert(sharedModalSource.includes('data-testid="draft-save-state"'), "auto-save indicator missing");
+  assert(sharedModalSource.includes('data-testid="draft-cta-schedule"'), "single Schedule CTA missing");
+  assert(sharedModalSource.includes('data-testid="draft-overflow-pin-now"'), "Pin now (overflow) missing");
+  assert(!sharedModalSource.includes('data-testid="draft-edit-save"'), "manual Save button should be gone");
+  assert(!sharedModalSource.includes('data-testid="pin-details-add-to-plan"'), "Add to Plan should be gone");
+  assert(sharedModalSource.includes("getPinReadiness"), "shared readiness helper missing");
 });
 
-test("Failed drawer shows Retry this Pin", () => {
-  assert(drawerSource.includes('data-testid="pin-details-retry-pin"'), "retry pin action missing");
-  assert(drawerSource.includes("Retry this Pin"), "retry pin label missing");
+test("Failed drawer shows Try again / Edit and retry", () => {
+  assert(drawerSource.includes('data-testid="pin-details-retry-pin"'), "retry pin testId missing");
+  assert(drawerSource.includes('data-testid="pin-details-edit-and-retry"'), "edit-and-retry testId missing");
+  assert(drawerSource.includes("Try again"), "Try again label missing");
+  assert(drawerSource.includes("Edit and retry"), "Edit and retry label missing");
+  assert(!drawerSource.includes("Retry this Pin"), "Old 'Retry this Pin' label must be gone");
+  assert(!drawerSource.includes("Retry this group"), "Old 'Retry this group' label must be gone");
 });
 
 test("Drawer close button closes the drawer", () => {
@@ -141,6 +153,105 @@ test("resolvePinDetail uses real prompt from session", () => {
   });
   assert(detail.promptSnapshot === snap.promptSnapshot, "prompt snapshot not resolved from session");
   assert(detail.setupSnapshot?.opportunityTitle === "Cozy bedroom decor", "setup snapshot not attached");
+});
+
+test("Remix hydration Test A: new pin immediate open uses pin.setupSnapshot", () => {
+  const detail = resolvePinDetail(
+    { ...baseSession, setupSnapshot: undefined },
+    {
+      key: "pin-a", sessionId: "sess_001", groupIdx: 0, pinIdx: 0,
+      pin: {
+        id: "pin-a", url: "https://example.com/g.png", planningStatus: "not_added",
+        title: "", description: "", setupSnapshot: snap, batchId: "sess_001", requestId: "pin-a",
+      },
+      status: "completed", refLabel: "Reference 1", createdAt: baseSession.savedAt,
+    },
+    null,
+  );
+  const recovered = getGenerationSetupSnapshot(detail);
+  assert(detail.setupSnapshotSource === "pin.setupSnapshot", "pin.setupSnapshot must win");
+  assert(recovered.productImages.length === 1, "product image not recovered from pin snapshot");
+  assert(recovered.pinReferences.length === 1, "reference not recovered from pin snapshot");
+  assert(!detail.isLegacyRecovery, "new pin must not be legacy recovery");
+});
+
+test("Remix hydration Test B: refresh/reopen can use pin.generationSetup", () => {
+  const detail = resolvePinDetail(
+    { ...baseSession, setupSnapshot: undefined },
+    {
+      key: "pin-b", sessionId: "sess_001", groupIdx: 0, pinIdx: 0,
+      pin: {
+        id: "pin-b", url: "https://example.com/g.png", planningStatus: "not_added",
+        title: "", description: "", generationSetup: snap, batchId: "sess_001", requestId: "pin-b",
+      },
+      status: "completed", refLabel: "Reference 1", createdAt: baseSession.savedAt,
+    },
+    null,
+  );
+  assert(detail.setupSnapshotSource === "pin.generationSetup", "pin.generationSetup must be second priority");
+  assert(getGenerationSetupSnapshot(detail).productImages.length === 1, "product image not recovered from generationSetup");
+});
+
+test("Remix hydration Test C: add-to-plan path falls back to batch setupSnapshot", () => {
+  const detail = resolvePinDetail(baseSession, {
+    key: "pin-c", sessionId: "sess_001", groupIdx: 0, pinIdx: 0,
+    pin: { id: "pin-c", url: "https://example.com/g.png", planningStatus: "added_to_plan", title: "", description: "" },
+    status: "added", refLabel: "Reference 1", createdAt: baseSession.savedAt,
+  });
+  assert(detail.setupSnapshotSource === "batch.setupSnapshot", "batch setupSnapshot must be third priority");
+  assert(detail.statusLabel === "Added to Plan", "plan status should stay added");
+  assert(getGenerationSetupSnapshot(detail).pinReferences.length === 1, "reference not recovered from batch setup");
+});
+
+test("Remix hydration Test D: local history snapshot is used when pin and batch lack setup", () => {
+  const detail = resolvePinDetail(
+    { ...baseSession, setupSnapshot: undefined },
+    {
+      key: "pin-d", sessionId: "sess_001", groupIdx: 0, pinIdx: 0,
+      pin: { id: "pin-d", url: "https://example.com/g.png", planningStatus: "not_added", title: "", description: "" },
+      status: "completed", refLabel: "Reference 1", createdAt: baseSession.savedAt,
+    },
+    { id: "sess_001", savedAt: baseSession.savedAt, keyword: "cozy bedroom", category: "home-decor", source: "studio", groups: [{ refUrl: null, images: ["https://example.com/g.png"] }], refCount: 1, productCount: 1, totalPins: 1, setupSnapshot: snap },
+  );
+  assert(detail.setupSnapshotSource === "local_history", "local history setupSnapshot must be fourth priority");
+  assert(getGenerationSetupSnapshot(detail).productImages.length === 1, "product image not recovered from local history");
+});
+
+test("Remix hydration Test E: prompt-only recovers via session text (calm, not legacy)", () => {
+  const detail = resolvePinDetail(
+    { ...baseSession, promptFull: undefined, setupSnapshot: undefined, groups: [{ refUrl: null, refIndex: 0, status: "done" }] },
+    {
+      key: "pin-e", sessionId: "sess_001", groupIdx: 0, pinIdx: 0,
+      pin: { id: "pin-e", url: "https://example.com/g.png", planningStatus: "not_added", title: "", description: "" },
+      status: "completed", refLabel: "Reference 1", createdAt: baseSession.savedAt,
+    },
+    { id: "sess_001", savedAt: baseSession.savedAt, keyword: "cozy bedroom", category: "home-decor", source: "studio", groups: [{ refUrl: null, images: ["https://example.com/g.png"] }], refCount: 1, productCount: 0, totalPins: 1, promptFull: "Legacy prompt only" },
+  );
+  const recovered = getGenerationSetupSnapshot(detail);
+  // When a keyword/prompt is recoverable, we synthesise a minimal setup rather than
+  // showing the alarming legacy banner.
+  assert(detail.setupSnapshotSource === "session_text_fallback", "prompt-only must recover via session_text_fallback");
+  assert(!detail.isLegacyRecovery, "prompt-only must NOT be flagged legacy (no scary banner)");
+  assert(recovered.productImages.length === 0, "must not invent product images");
+  assert(recovered.pinReferences.length === 0, "must not invent references without group ref");
+  assert(recovered.prompt === "Legacy prompt only", "prompt must be recovered");
+  assert(recovered.recoveryQuality === "text_only", "quality must be text_only");
+});
+
+test("Remix hydration Test E2: truly empty setup is the only legacy/unavailable case", () => {
+  const detail = resolvePinDetail(
+    { ...baseSession, keyword: "", promptFull: undefined, setupSnapshot: undefined, groups: [{ refUrl: null, refIndex: 0, status: "done" }] },
+    {
+      key: "pin-e2", sessionId: "sess_001", groupIdx: 0, pinIdx: 0,
+      pin: { id: "pin-e2", url: "https://example.com/g.png", planningStatus: "not_added", title: "", description: "" },
+      status: "completed", refLabel: "Reference 1", createdAt: baseSession.savedAt,
+    },
+    { id: "sess_001", savedAt: baseSession.savedAt, keyword: "", category: "", source: "studio", groups: [{ refUrl: null, images: ["https://example.com/g.png"] }], refCount: 1, productCount: 0, totalPins: 1 },
+  );
+  const recovered = getGenerationSetupSnapshot(detail);
+  assert(detail.setupSnapshotSource === "legacy_prompt_fallback", "no keyword/prompt anywhere → legacy fallback");
+  assert(detail.isLegacyRecovery, "legacy flag true only when nothing recoverable");
+  assert(recovered.recoveryQuality === "unavailable", "quality must be unavailable when nothing recovered");
 });
 
 test("resolveStatusLabel covers all feed states", () => {
@@ -181,7 +292,8 @@ test("Save changes disabled until user edits", () => {
 
 test("Title candidates show source labels", () => {
   assert(drawerSource.includes("pin-details-title-source"), "title source label test id missing");
-  assert(drawerSource.includes("Suggested"), "suggested titles label missing");
+  assert(drawerSource.includes("sourceLabel"), "suggested title source labels missing");
+  assert(drawerSource.includes("View ${others.length} more"), "compact suggestion reveal missing");
 });
 
 test("Low confidence hint shown in drawer", () => {
@@ -199,10 +311,90 @@ test("Readiness badge shown in drawer header", () => {
   assert(drawerSource.includes('data-testid="pin-details-readiness-badge"'), "readiness badge missing");
 });
 
-// ── New 3-tab structure (Preview / Remix / Plan) ──────────────────────────────
+// Retry uses snapshot, not current UI state.
 
-test("DrawerTab type is exported with three values", () => {
-  assert(drawerSource.includes('export type DrawerTab = "preview" | "remix" | "plan"'), "DrawerTab type must be exported");
+test("handleRegenerateGroup reads prompt from setupSnapshot not current state", () => {
+  assert(studioSource.includes("snap?.promptSnapshot"), "retry must read prompt from snapshot");
+  assert(studioSource.includes("retryPrompt"), "retryPrompt variable must exist");
+  assert(studioSource.includes("retryProducts"), "retryProducts variable must exist");
+  assert(studioSource.includes("retryKeyword"), "retryKeyword variable must exist");
+  assert(studioSource.includes("retryCategory"), "retryCategory variable must exist");
+  assert(studioSource.includes("retryCount"), "retryCount variable must exist");
+  assert(studioSource.includes("snap?.imagesPerReference ?? count"), "retryCount falls back to count");
+});
+
+test("handleRegenerateGroup uses snapshot products not current products state", () => {
+  const retryBlock = studioSource.slice(studioSource.indexOf("handleRegenerateGroup"), studioSource.indexOf("handleRegenerateGroup") + 2500);
+  assert(retryBlock.includes("snap?.selectedProducts"), "retry must use snap.selectedProducts");
+  assert(retryBlock.includes("productImages: retryProducts"), "API call uses retryProducts");
+  assert(!retryBlock.includes("productImages: products"), "retry API must NOT use live products state");
+});
+
+test("Regenerate action opens Remix instead of mutating the original Pin", () => {
+  assert(studioSource.includes('onOpenPinDetail(session.id, entry.key, "remix")'), "Regenerate must open Remix drawer");
+  assert(studioSource.includes("handleGenerateFromRemix"), "Remix must create a new generation session");
+});
+
+test("SetupSnapshot includes format and model fields", () => {
+  assert(studioSource.includes("format,") && studioSource.includes("model,"), "snap creation includes format and model");
+  assert(persistenceSource.includes("format?:") && persistenceSource.includes("model?:"), "SetupSnapshot type has format and model fields");
+});
+
+test("handleReuseSetup no longer hard-fails on missing snapshot", () => {
+  const reuseBlock = studioSource.slice(studioSource.indexOf("function handleReuseSetup"), studioSource.indexOf("function handleReuseSetup") + 1800);
+  assert(!reuseBlock.includes("toast.error"), "handleReuseSetup must not toast.error for missing snapshot");
+  assert(reuseBlock.includes("if (snap)"), "handleReuseSetup guards snap-specific ops");
+  assert(reuseBlock.includes("Prompt loaded"), "handleReuseSetup always shows success with appropriate message");
+});
+
+test("onPinDetailRegenerateWithRemix calls handleGenerateFromRemix (no composer mutation)", () => {
+  assert(studioSource.includes("handleGenerateFromRemix"), "handleGenerateFromRemix function must exist");
+  assert(studioSource.includes("async function handleGenerateFromRemix"), "handleGenerateFromRemix must be async");
+  // Use lastIndexOf to find the call-site handler (not the prop type declaration)
+  const handlerStart = studioSource.lastIndexOf("onPinDetailRegenerateWithRemix");
+  const remixHandler = studioSource.slice(handlerStart, handlerStart + 200);
+  assert(remixHandler.includes("handleGenerateFromRemix"), "handler must call handleGenerateFromRemix");
+  assert(!remixHandler.includes("handleReuseSetup"), "handler must NOT call handleReuseSetup (would mutate composer)");
+});
+
+// Remix init uses detail context, not just snapshot.
+
+test("initRemixFromDetail helper exists and uses group refUrl fallback", () => {
+  assert(drawerSource.includes("initRemixFromDetail"), "initRemixFromDetail must exist");
+  assert(pinDetailsSource.includes("refFromGroup"), "group refUrl recovery must be present");
+  assert(pinDetailsSource.includes("detail.session.groups[detail.groupIdx]"), "reads group refUrl from session");
+  assert(drawerSource.includes("detail.promptSnapshot"), "falls back to detail.promptSnapshot for prompt");
+  assert(drawerSource.includes("detail.session.keyword"), "falls back to session keyword");
+});
+
+test("Remix lazy-init uses initRemixFromDetail not initRemixFromSnapshot", () => {
+  assert(drawerSource.includes("setRemixDraft(initRemixFromDetail(detail))"), "lazy-init uses initRemixFromDetail");
+});
+
+test("Remix prompt is never gated behind snapshot availability", () => {
+  assert(!drawerSource.includes("!hasSetupSnapshot && !promptText"), "prompt must not be gated by snapshot presence");
+  assert(drawerSource.includes("pin-details-remix-prompt"), "remix prompt textarea always rendered");
+});
+
+test("Recovery notice is calm and quality-aware (no alarming legacy banner)", () => {
+  assert(drawerSource.includes('data-testid="pin-details-remix-recovery-notice"'), "calm recovery notice present");
+  assert(drawerSource.includes("Some original inputs are unavailable"), "calm text_only copy present");
+  assert(!drawerSource.includes("Older generation"), "alarming 'Older generation' banner must be gone");
+  assert(!drawerSource.includes("Setup snapshot unavailable for this older"), "old blunt message removed from remix tab");
+});
+
+test("recoveryQuality drives the recovery notice", () => {
+  assert(drawerSource.includes("recoveryQuality"), "recoveryQuality consumed in drawer");
+  assert(pinDetailsSource.includes("recoveryQuality"), "recoveryQuality computed by normaliser");
+  assert(pinDetailsSource.includes("export type RecoveryQuality"), "RecoveryQuality type exported");
+  assert(drawerSource.includes('recoveryQuality === "text_only"'), "text_only branch present");
+  assert(drawerSource.includes('recoveryQuality === "visual_partial"'), "visual_partial branch present");
+  assert(drawerSource.includes('recoveryQuality === "unavailable"'), "unavailable branch present");
+});
+// Current drawer tab structure.
+
+test("DrawerTab supports Remix and gated Debug", () => {
+  assert(drawerSource.includes('export type DrawerTab = "plan" | "remix" | "debug"'), "DrawerTab type must be exported");
 });
 
 test("RemixDraftSetup type is exported with all fields", () => {
@@ -213,31 +405,31 @@ test("RemixDraftSetup type is exported with all fields", () => {
   assert(drawerSource.includes("noTextOverlay"), "noTextOverlay field missing");
 });
 
-test("Tab bar has Preview, Remix, Plan tabs", () => {
+test("Drawer tab bar shows Remix and conditionally Debug, never Plan", () => {
   assert(drawerSource.includes('"pin-details-tab-bar"'), "tab-bar testId missing");
-  assert(drawerSource.includes('"pin-details-tab-preview"'), "preview tab testId missing");
   assert(drawerSource.includes('"pin-details-tab-remix"'), "remix tab testId missing");
-  assert(drawerSource.includes('"pin-details-tab-plan"'), "plan tab testId missing");
+  assert(!drawerSource.includes('{ id: "plan",  label: "Plan"'), "plan tab must not be visible");
+  assert(drawerSource.includes("canViewDebug ?"), "Debug tab must be gated");
+  assert(!drawerSource.includes('"pin-details-tab-preview"'), "preview tab should not be present");
   assert(!drawerSource.includes('"Result"'), 'Old "Result" tab label must not appear');
-  assert(!drawerSource.includes('"Setup"'), 'Old "Setup" tab label must not appear');
+  assert(!drawerSource.includes('"pin-details-tab-setup"'), 'Old "Setup" tab testId must not appear');
 });
 
-test("Preview tab has image, meta, and action sections", () => {
-  assert(drawerSource.includes('"pin-details-preview"'), "pin-details-preview section missing");
-  assert(drawerSource.includes('"pin-details-preview-image"'), "preview image testId missing");
-  assert(drawerSource.includes('"pin-details-result-meta"'), "result meta section missing");
-  assert(drawerSource.includes('"pin-details-actions"'), "actions section missing");
-  assert(drawerSource.includes('"pin-details-reuse-in-remix"'), "Reuse in Remix button missing");
+test("Drawer keeps preview as content, not as a tab", () => {
+  assert(drawerSource.includes('"pin-details-preview"'), "pin preview content should exist");
+  assert(!drawerSource.includes('"pin-details-tab-preview"'), "preview tab must not be reintroduced");
+  assert(!drawerSource.includes('"pin-details-reuse-in-remix"'), "Old Reuse in Remix must be gone");
 });
 
-test("Remix tab has editable prompt, settings, and action buttons", () => {
+test("Remix tab has editable prompt, settings, and simplified action buttons", () => {
   assert(drawerSource.includes('"pin-details-remix-prompt"'), "remix prompt textarea testId missing");
   assert(drawerSource.includes('"pin-details-setup-settings"'), "settings section missing");
-  assert(drawerSource.includes('"pin-details-regenerate-with-remix"'), "Regenerate with changes button missing");
-  assert(drawerSource.includes('"pin-details-remix-reset"'), "Reset to original button missing");
-  assert(drawerSource.includes('"pin-details-remix-cancel"'), "Cancel button missing");
-  assert(drawerSource.includes("Reset to original"), "Reset to original label missing");
-  assert(drawerSource.includes("Regenerate with changes"), "Regenerate with changes label missing");
+  assert(drawerSource.includes('"pin-details-regenerate-with-remix"'), "Generate again button testId missing");
+  assert(drawerSource.includes('"pin-details-remix-reset"'), "Reset button testId missing");
+  assert(drawerSource.includes("Generate again"), "Generate again label missing");
+  assert(drawerSource.includes("Reset"), "Reset label missing");
+  assert(!drawerSource.includes("Regenerate with changes"), "Old label must be gone");
+  assert(!drawerSource.includes('"pin-details-remix-cancel"'), "Old Cancel button must be gone");
 });
 
 test("Remix draft never mutates original snapshot", () => {
@@ -268,11 +460,16 @@ test("MasonryPinFeed wires initialTab and onRegenerateWithRemix correctly", () =
   assert(studioSource.includes("onRegenerateWithRemix={onPinDetailRegenerateWithRemix}"), "onRegenerateWithRemix not wired in MasonryPinFeed");
 });
 
-test("Card View button opens Preview tab, Remix button opens Remix tab", () => {
-  assert(studioSource.includes('"pin-card-view-btn"'), "pin-card-view-btn testId missing");
-  assert(studioSource.includes('"pin-card-remix-btn"'), "pin-card-remix-btn testId missing");
-  assert(studioSource.includes('onOpenPinDetail(session.id, entry.key, "remix")'), "Remix must open remix tab");
-  assert(studioSource.includes('onOpenPinDetail(session.id, entry.key, "plan")'), "Add to Plan must open plan tab");
+test("Card Details opens shared modal, Regenerate opens generation drawer", () => {
+  // Card actions now live in the shared PinCardActions component.
+  const actionsSource = readFileSync("src/components/studio/PinCardActions.tsx", "utf8");
+  assert(actionsSource.includes('"pin-card-view-btn"'), "pin-card-view-btn testId missing");
+  // The card More menu was simplified — Remix is no longer a standalone item.
+  // Regenerate now opens the remix/generation flow.
+  assert(actionsSource.includes('"pin-card-regenerate-btn"'), "pin-card-regenerate-btn testId missing");
+  assert(!actionsSource.includes('"pin-card-remix-btn"'), "pin-card-remix-btn should not exist");
+  assert(studioSource.includes('onOpenPinDetail(session.id, entry.key, "remix")'), "Regenerate must open remix tab");
+  assert(studioSource.includes("openSharedPinDetails"), "Details must open shared modal");
 });
 
 console.log(`\nPin Details Drawer: ${passed} passed, ${failed} failed`);

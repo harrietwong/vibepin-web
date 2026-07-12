@@ -107,7 +107,7 @@ test("Sidebar nav items render once", () => {
     .map(m => m[1])
     .filter(id => ["home", "create-pins", "weekly-plan", "my-pins", "opportunities", "keyword-trends", "viral-pins", "product-ideas", "settings"].includes(id));
   assert(new Set(ids).size === ids.length, "duplicate nav ids in NAV_ITEMS");
-  assert((layoutSource.match(/label: "Keyword Trends"/g) ?? []).length === 1, "duplicate Keyword Trends nav label");
+  assert((layoutSource.match(/labelKey: "nav.keywordTrends"/g) ?? []).length === 1, "duplicate Keyword Trends nav label");
 });
 
 console.log(`\nMy Products + sidebar tests: ${passed} passed, ${failed} failed`);

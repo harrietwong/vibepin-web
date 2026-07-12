@@ -10,6 +10,7 @@ import {
   CATEGORIES, ACTIVE_CATEGORIES, SOON_CATEGORIES,
   getCategoryStatus, isCategoryReady, type CategoryDef,
 } from "@/lib/categories";
+import { useLocale }            from "@/lib/i18n/LocaleProvider";
 import { useWeeklyPlan }        from "@/lib/useWeeklyPlan";
 import { useUserTier }          from "@/lib/useUserTier";
 import { createBrowserClient }  from "@supabase/ssr";
@@ -217,6 +218,7 @@ function ComingSoonState({ catDef, category, userEmail }: {
 export default function WorkspaceCategoryPage() {
   const params   = useParams();
   const router   = useRouter();
+  const { t }    = useLocale();
   const category = (params.category as string) ?? "home-decor";
   const catDef   = CATEGORIES.find(c => c.id === category);
   const ready    = isCategoryReady(category);
@@ -374,7 +376,7 @@ export default function WorkspaceCategoryPage() {
   if (authLoading) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--app-text-muted)", background: "var(--app-bg)" }}>
-        <span style={{ fontSize: "13px" }}>Loading…</span>
+        <span style={{ fontSize: "13px" }}>{t("common.loading")}</span>
       </div>
     );
   }
@@ -434,7 +436,7 @@ export default function WorkspaceCategoryPage() {
         {!feedLoading && !feedError && allItems.length > 0 && (
           <div style={{ marginBottom: "14px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
             <p style={{ margin: 0, fontSize: "12px", color: "var(--app-text-muted)" }}>
-              Ranked weekly opportunities backed by trend, pin, and product signals.
+              {t("page.dashboard.tagline")}
             </p>
             <div style={{
               display: "flex", alignItems: "center", gap: "5px",
@@ -445,12 +447,12 @@ export default function WorkspaceCategoryPage() {
               flexShrink: 0,
             }}>
               <span style={{ fontSize: "9px", fontWeight: 700, color: "var(--app-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                Aim for
+                {t("page.dashboard.aimFor")}
               </span>
               {[
-                { icon: "↑", label: "Rising",   pct: "40%", color: "#059669" },
-                { icon: "∞", label: "Evergreen", pct: "40%", color: "#0284C7" },
-                { icon: "◎", label: "Seasonal",  pct: "20%", color: "#9333EA" },
+                { icon: "↑", label: t("page.dashboard.rising"),    pct: "40%", color: "#059669" },
+                { icon: "∞", label: t("page.dashboard.evergreen"), pct: "40%", color: "#0284C7" },
+                { icon: "◎", label: t("page.dashboard.seasonal"),  pct: "20%", color: "#9333EA" },
               ].map(({ icon, label, pct, color }) => (
                 <span key={label} style={{ fontSize: "9px", fontWeight: 600, color, whiteSpace: "nowrap" }}>
                   {icon} {label} {pct}
@@ -461,24 +463,24 @@ export default function WorkspaceCategoryPage() {
         )}
 
         {feedLoading ? (
-          <p style={{ color: "var(--app-text-sec)", fontSize: "13px" }}>Loading opportunities…</p>
+          <p style={{ color: "var(--app-text-sec)", fontSize: "13px" }}>{t("page.dashboard.loadingOpps")}</p>
         ) : feedError ? (
           <div style={{ color: "#DC2626", fontSize: "13px", padding: "12px", background: "rgba(220,38,38,0.06)", borderRadius: "8px", border: "1px solid rgba(220,38,38,0.2)" }}>
-            Something went wrong loading <strong>{catDef?.label ?? category}</strong>.
+            {t("page.dashboard.loadError")} <strong>{catDef?.label ?? category}</strong>
             <button
               onClick={() => window.location.reload()}
               style={{ marginLeft: "8px", color: "#C026D3", background: "none", border: "none", cursor: "pointer", fontSize: "12px", textDecoration: "underline" }}
             >
-              Retry
+              {t("page.dashboard.retry")}
             </button>
           </div>
         ) : allItems.length === 0 ? (
           <div style={{ padding: "32px 0", textAlign: "center" }}>
             <p style={{ margin: "0 0 8px", fontSize: "14px", color: "var(--app-text-sec)" }}>
-              No opportunities available for <strong style={{ color: "var(--app-text-sec)" }}>{catDef?.label ?? category}</strong> right now.
+              {t("page.dashboard.emptyTitle")}
             </p>
             <p style={{ margin: "0 0 20px", fontSize: "12px", color: "var(--app-text-muted)" }}>
-              We update the database weekly — check back soon, or try another category.
+              {t("page.dashboard.emptySub")}
             </p>
             <Link
               href="/app/workspace/home-decor"

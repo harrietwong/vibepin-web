@@ -91,4 +91,36 @@ test.describe("Studio → Weekly Plan handoff", () => {
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("scheduled-draft-card").filter({ hasText: "Persisted Title" }).first()).toBeVisible({ timeout: 15000 });
   });
+
+  // Regression for the P0 "Add to Plan → not visible in Weekly Plan" bug. The quick
+  // Add to Plan button auto-assigns a date via getRemainingDaysOfCurrentWeek(). That
+  // path used toISOString() and stored the previous UTC day in UTC+ zones, dropping the
+  // Pin out of Weekly Plan's locally-computed current week. With the local-date fix the
+  // Pin must appear on the calendar (in the current week) without any manual date entry.
+  test("quick Add to Plan auto-schedules into the visible current week", async ({ page }) => {
+    test.setTimeout(120000);
+    // Self-contained generate (the shared helper's prompt-textarea step is stale vs. the
+    // redesigned Create Pins UI; the prompt is now optional — creative direction auto-fills).
+    await prepareStudioPage(page, { clearStorage: false });
+    await gotoStudio(page);
+    await addProductViaUpload(page);
+    await page.getByTestId("generate-btn").click();
+    await expectGeneratedPins(page);
+
+    // Card action buttons are revealed on hover.
+    const card = page.getByTestId("generated-pin-card").first();
+    await card.hover();
+    await card.getByTestId("pin-card-add-to-plan").click();
+    await expect(page.getByText("Added to Weekly Plan").first()).toBeVisible({ timeout: 10000 });
+
+    // No category filter — the Pin must be findable on the default current-week calendar.
+    await page.goto("/app/plan", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("weekly-plan-page")).toBeVisible({ timeout: 15000 });
+
+    // It lands on the calendar in the current week (week view is the default scope).
+    await expect(page.getByTestId("scheduled-draft-card").first()).toBeVisible({ timeout: 15000 });
+
+    // And the planned summary counts it as in-week (≥1 planned), not lost.
+    await expect(page.getByTestId("stat-planned")).toContainText(/[1-9]/, { timeout: 15000 });
+  });
 });

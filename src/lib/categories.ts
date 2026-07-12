@@ -74,6 +74,12 @@ export const ACTIVE_CATEGORIES = CATEGORIES.filter(c => c.status === "ready" || 
 // Default category for new users / fallback
 export const DEFAULT_CATEGORY = CATEGORIES.find(c => c.default)?.id ?? "home-decor";
 
+/** Keyword Trends — "Content" opportunity focus (non-product intent). */
+export const CONTENT_OPPORTUNITY_CATEGORIES = [
+  "quotes", "entertainment", "education", "parenting",
+  "wedding", "event-planning", "health", "travel",
+] as const;
+
 export function getCategoryStatus(id: string): CategoryStatus {
   return CAT_MAP[id]?.status ?? "hidden";
 }

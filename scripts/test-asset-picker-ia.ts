@@ -36,8 +36,12 @@ function extractConstTabLabels(constName: string): string[] {
   return [...match[1].matchAll(/label:\s*"([^"]+)"/g)].map(m => m[1]);
 }
 
-test("Product picker renders exactly two top-level tabs", () => {
-  assertEqual(extractConstTabLabels("PRODUCT_PICKER_TABS"), ["My Products", "Product Ideas"], "product tabs");
+test("Product picker renders My Products / Product Ideas / From Shopify tabs", () => {
+  // "From Shopify" (WP5) is flag-gated at render time (isShopifyIntegrationEnabled()) —
+  // with the flag off it never appears in the DOM, but it is declared here so the tab
+  // id/type union covers it. See ProductPickerModal.tsx and StudioBoard.tsx for the
+  // matching flag-gated "Select product" entry points.
+  assertEqual(extractConstTabLabels("PRODUCT_PICKER_TABS"), ["My Products", "Product Ideas", "From Shopify"], "product tabs");
 });
 
 test("Product picker defaults to My Products", () => {
@@ -107,6 +111,12 @@ test("Legacy CreateAssetPicker export is only a wrapper around inline picker", (
 test("Product Ideas picker uses shared useProductIdeas data source", () => {
   assert(componentSource.includes("useProductIdeas"), "inline picker missing useProductIdeas");
   assert(componentSource.includes("ProductIdeasPickerGrid"), "inline picker missing ProductIdeasPickerGrid");
+  assert(componentSource.includes("PRODUCT_IDEA_SOURCE_FILTERS"), "Product Ideas source filters missing");
+  assert(componentSource.includes("PRODUCT_IDEA_PICKER_CATEGORIES"), "Product Ideas category filters missing");
+  assert(componentSource.includes("product-ideas-source-filters"), "Product Ideas source filter row missing");
+  assert(componentSource.includes("product-ideas-category-filters"), "Product Ideas category filter row missing");
+  assert(componentSource.includes("isAmazonProductIdea"), "Product Ideas Amazon inventory detection missing");
+  assert(!componentSource.includes('productTab === "amazon"'), "Amazon must not be a top-level product tab");
 });
 
 console.log(`\nAsset picker IA tests: ${passed} passed, ${failed} failed`);

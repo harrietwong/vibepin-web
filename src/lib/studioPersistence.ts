@@ -19,6 +19,8 @@
  */
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
+import type { SelectedCreativeAsset } from "./studio/creativeDirections";
+
 const DRAFT_KEY   = "vp:studio:draft";
 const HISTORY_KEY = "vp:studio:history";
 const MAX_HISTORY = 50;
@@ -30,6 +32,12 @@ export type PinGroup = {
   images:       string[];
   visualFormat?: string;    // "on_body" | "flat_lay" | "mirror_selfie" | "unknown" etc.
   humanPresence?: string;   // "visible_person" | "no_person" | "unknown"
+  productImages?: string[]; // legacy-DB recovery: product inputs carried inside groups_json
+  promptSnapshot?: string;  // legacy-DB recovery: prompt carried inside groups_json
+  category?: string;        // legacy-DB recovery
+  format?: string;          // legacy-DB recovery
+  model?: string;           // legacy-DB recovery
+  creativeDirectionSnapshot?: CreativeDirectionSnapshotV2; // legacy-DB recovery
 };
 
 export type DraftPlanPin = {
@@ -58,6 +66,61 @@ export type ReferenceSnapshot = {
   humanPresence?: string;       // visible_person | no_person | unknown
 };
 
+export type CreativeDirectionSnapshotV2 = {
+  version: 2;
+  selectedDirectionId: string | null;
+  selectedDirectionTitle: string;
+  selectedDirectionSummary: string;
+  systemRecommendations: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    category: string;
+    source: "category_playbook" | "creative_intelligence";
+    // Creative Intelligence fields — optional so older persisted records still parse.
+    kind?: "closest_to_reference" | "product_focused" | "alternative";
+    shortDescription?: string;
+    whyThisDirection?: string;
+    confidence?: "high" | "medium" | "low";
+    influencedBy?: Array<"products" | "references" | "category" | "opportunity">;
+  }>;
+  guidedControls: {
+    composition?: string;
+    lighting?: string;
+    mood?: string;
+    productTreatment?: string;
+    textTreatment?: string;
+    referenceStrength?: string;
+    goal?: string;
+    subject?: string;
+    productEmphasis?: string;
+    textOverlay?: string;
+  };
+  customInstructions: string;
+  manualBrief: string;
+  manualBriefEdited: boolean;
+  inputVersion: string;
+  briefStale: boolean;
+  // ── V1 Creative Intelligence snapshot (all optional → legacy records still parse) ──
+  hiddenPrompt?: string;
+  productAnalysis?: unknown;
+  referenceAnalysis?: unknown;
+  inferredIntent?: unknown;
+  creativeControls?: unknown;
+  opportunityContext: {
+    enabled: boolean;
+    removable: true;
+    title?: string;
+    keyword?: string;
+    category?: string;
+    evidenceSentence?: string;
+    source?: string;
+  };
+  selectedAssets: SelectedCreativeAsset[];
+  categoryPlaybookId: string;
+  fallbackUsed: "category_playbook" | "generic";
+};
+
 export type SetupSnapshot = {
   mode:               string;   // product_led | keyword_led | batch | plan | scratch
   keyword?:           string;
@@ -68,8 +131,27 @@ export type SetupSnapshot = {
   selectedProducts:   ProductSnapshot[];
   selectedReferences: ReferenceSnapshot[];
   promptSnapshot:     string;
+  creativeDirectionSnapshot?: CreativeDirectionSnapshotV2;
   userInstructions?:  string;
   createdFrom?:       string;   // studio | shop_signals | weekly_plan | trend_radar | viral_pins
+  format?:            string;   // generation format, e.g. "Pinterest 2:3"
+  model?:             string;   // display name, e.g. "GPT Image"
+  modelKey?:          string;   // internal key, e.g. "gpt_image" | "nano_banana"
+};
+
+export type CategoryAudit = {
+  frontendCategory:     string;
+  detectedCategory:     string;
+  effectiveCategory:    string;
+  inferredCategory:     string;
+  outputType:           string;
+  productImageCount:    number;
+  referenceImageCount:  number;
+  finalPrompt:          string;
+  homeDriftTerms:       string[];
+  fashionSafetyApplied: boolean;
+  enhancerFailed:       boolean;
+  categorySource:       "frontend" | "vlm_plan" | "generator_inference" | "fallback";
 };
 
 // ── Draft ─────────────────────────────────────────────────────────────────────
@@ -134,6 +216,9 @@ export type GenerationErrorType =
   | "api_auth_error"
   | "api_payload_error"
   | "api_server_error"
+  | "provider_busy"
+  | "user_generation_limit"
+  | "configuration_error"
   | "unknown_error";
 
 export type HistoryEntry = {
@@ -161,6 +246,8 @@ export type HistoryEntry = {
   errorMessage?:  string;               // human-readable detail
   // ── Structured setup snapshot (canonical source for History modal left panel) ──
   setupSnapshot?: SetupSnapshot;
+  // ── Generation prompt/category audit for Pin Details → Debug after reload ──
+  categoryAudit?: CategoryAudit;
 };
 
 // Convenience: derive status from entry fields (works for old entries too)
@@ -354,6 +441,35 @@ function rowToEntry(row: Record<string, unknown>): HistoryEntry {
       ?.map(p => p.productId)
       .filter((id): id is string => !!id);
 
+  const legacyProductImages = rawGroups
+    .flatMap(g => Array.isArray(g.productImages) ? g.productImages : [])
+    .filter((u): u is string => typeof u === "string" && u.trim().length > 0);
+  const legacyPrompt = rawGroups.find(g => typeof g.promptSnapshot === "string")?.promptSnapshot;
+  const legacyFormat = rawGroups.find(g => typeof g.format === "string")?.format;
+  const legacyModel = rawGroups.find(g => typeof g.model === "string")?.model;
+  const legacyCreativeDirection = rawGroups.find(g => g.creativeDirectionSnapshot?.version === 2)?.creativeDirectionSnapshot;
+  const legacyRefs = groups
+    .map(g => g.refUrl)
+    .filter((u): u is string => typeof u === "string" && u.trim().length > 0);
+  const syntheticSetup: SetupSnapshot | undefined = rawSetup ? undefined : (
+    legacyProductImages.length || legacyRefs.length || legacyPrompt
+      ? {
+          mode: "product_led",
+          keyword: String(row.keyword ?? ""),
+          category: String(row.category ?? ""),
+          noTextOverlay: true,
+          imagesPerReference: imagesPerRef ?? Math.max(1, actualPins || 1),
+          selectedProducts: legacyProductImages.map(imageUrl => ({ imageUrl, title: "" })),
+          selectedReferences: legacyRefs.map(imageUrl => ({ imageUrl })),
+          promptSnapshot: legacyPrompt ?? "",
+          ...(legacyCreativeDirection ? { creativeDirectionSnapshot: legacyCreativeDirection } : {}),
+          createdFrom: String(row.source ?? "studio"),
+          format: legacyFormat,
+          model: legacyModel,
+        }
+      : undefined
+  );
+
   return {
     id:            String(row.session_id ?? row.id),
     savedAt:       String(row.created_at),
@@ -374,7 +490,10 @@ function rowToEntry(row: Record<string, unknown>): HistoryEntry {
     productIds,
     promptExcerpt: row.prompt_excerpt != null ? String(row.prompt_excerpt) : undefined,
     promptFull:    row.prompt_full    != null ? String(row.prompt_full)    : undefined,
-    setupSnapshot: rawSetup ?? undefined,
+    errorType:     row.error_type     != null ? row.error_type as GenerationErrorType : undefined,
+    errorMessage:  row.error_message  != null ? String(row.error_message) : undefined,
+    setupSnapshot: rawSetup ?? syntheticSetup,
+    categoryAudit: row.category_audit as CategoryAudit | undefined,
   };
 }
 
@@ -392,7 +511,7 @@ export async function insertGenerationToDb(
     const allUrls = entry.groups.flatMap(g => g.images);
     const refUrls = entry.groups.map(g => g.refUrl).filter(Boolean) as string[];
 
-    await sb.from("pin_generations").insert({
+    const insertPayload = {
       user_id:        user.id,
       session_id:     entry.id,
       keyword:        entry.keyword,
@@ -415,9 +534,17 @@ export async function insertGenerationToDb(
       prompt_excerpt: entry.promptExcerpt,
       prompt_full:    entry.promptFull,
       setup_snapshot: entry.setupSnapshot ?? null,
+      category_audit: entry.categoryAudit ?? null,
       error_type:     entry.errorType,
       error_message:  entry.errorMessage,
-    });
+    };
+
+    const result = await sb.from("pin_generations").insert(insertPayload);
+    if (result?.error && entry.categoryAudit) {
+      const { category_audit: _audit, ...retryPayload } = insertPayload;
+      void _audit;
+      await sb.from("pin_generations").insert(retryPayload);
+    }
   } catch { /* table or columns may not exist yet — fail silently */ }
 }
 
@@ -431,12 +558,37 @@ export async function fetchGenerationsFromDb(
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return [];
 
-    const { data, error } = await sb
+    const minimalSelect = "id,session_id,created_at,keyword,category,source,groups_json,pin_urls,ref_urls,ref_count,product_count,total_pins";
+    const baseSelect = `${minimalSelect},status,expected_total,mode,opportunity,images_per_ref,product_names,product_ids,prompt_excerpt,prompt_full,error_type,error_message,setup_snapshot`;
+    let { data, error } = await sb
       .from("pin_generations")
-      .select("id,session_id,created_at,keyword,category,source,groups_json,pin_urls,ref_urls,ref_count,product_count,total_pins,status,expected_total,mode,opportunity,images_per_ref,product_names,product_ids,prompt_excerpt,prompt_full,setup_snapshot")
+      .select(`${baseSelect},category_audit`)
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(50);
+
+    // Older databases may not have category_audit yet. History must still load.
+    if (error) {
+      const retry = await sb
+        .from("pin_generations")
+        .select(baseSelect)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (error) {
+      const retry = await sb
+        .from("pin_generations")
+        .select(minimalSelect)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error || !data?.length) return [];
 
@@ -470,7 +622,24 @@ export async function createRunningSessionInDb(
       createdFrom:             entry.setupSnapshot?.createdFrom,
     });
 
-    await sb.from("pin_generations").insert({
+    // Strip data: URLs so the JSONB payload stays small enough for Supabase storage.
+    // Compact version retains all text metadata (keyword, prompt, product count) so
+    // the snapshot can be recovered after page reload without triggering the legacy banner.
+    const compactSetup: SetupSnapshot | null = entry.setupSnapshot ? {
+      ...entry.setupSnapshot,
+      selectedProducts: entry.setupSnapshot.selectedProducts.map(p => ({
+        ...p,
+        imageUrl: p.imageUrl?.startsWith("data:") ? null : p.imageUrl,
+      })),
+      selectedReferences: entry.setupSnapshot.selectedReferences.map(r => ({
+        ...r,
+        imageUrl: r.imageUrl?.startsWith("data:") ? "" : r.imageUrl,
+      })),
+    } : null;
+
+    // Keep initial session creation compatible with DBs that have not added
+    // category_audit yet. The audit is written during final update when available.
+    const insertPayload = {
       user_id:        user.id,
       session_id:     entry.id,
       keyword:        entry.keyword,
@@ -491,8 +660,32 @@ export async function createRunningSessionInDb(
       product_ids:    entry.productIds,
       prompt_excerpt: entry.promptExcerpt,
       prompt_full:    entry.promptFull,
-      setup_snapshot: entry.setupSnapshot ?? null,
-    });
+      setup_snapshot: compactSetup,
+    };
+
+    const result = await sb.from("pin_generations").insert(insertPayload);
+    if (result?.error) {
+      // Fallback for DBs missing newer columns — but STILL persist setup_snapshot,
+      // prompt_full and images_per_ref so the session can be recovered (and remixed)
+      // after a reload instead of falling back to image-only storage reconstruction
+      // (which loses the original products / references / prompt).
+      await sb.from("pin_generations").insert({
+        user_id:        user.id,
+        session_id:     entry.id,
+        keyword:        entry.keyword,
+        category:       entry.category,
+        source:         entry.source,
+        ref_urls:       [],
+        pin_urls:       [],
+        groups_json:    [],
+        ref_count:      entry.refCount,
+        product_count:  entry.productCount,
+        total_pins:     0,
+        prompt_full:    entry.promptFull,
+        images_per_ref: entry.imagesPerRef,
+        setup_snapshot: compactSetup,
+      });
+    }
 
     console.log("[SessionCreate] persisted session", entry.id);
   } catch { /* fail silently — DB may not have all columns yet */ }
@@ -516,7 +709,21 @@ export async function updateSessionInDb(
       sessionId,
       patchKeys: Object.keys(safePatch),
     });
-    await sb.from("pin_generations").update(safePatch).eq("session_id", sessionId);
+    let result = await sb.from("pin_generations").update(safePatch).eq("session_id", sessionId);
+    if (result?.error && "category_audit" in safePatch) {
+      const { category_audit: _audit, ...retryPatch } = safePatch;
+      void _audit;
+      result = await sb.from("pin_generations").update(retryPatch).eq("session_id", sessionId);
+    }
+    if (result?.error) {
+      const minimalPatch: Record<string, unknown> = {};
+      for (const key of ["groups_json", "pin_urls", "total_pins", "status"]) {
+        if (key in safePatch) minimalPatch[key] = safePatch[key];
+      }
+      if (Object.keys(minimalPatch).length > 0) {
+        await sb.from("pin_generations").update(minimalPatch).eq("session_id", sessionId);
+      }
+    }
   } catch { /* fail silently */ }
 }
 
@@ -524,13 +731,25 @@ export async function updateSessionInDb(
 
 export function mergeHistoryEntries(...lists: HistoryEntry[][]): HistoryEntry[] {
   const seen = new Set<string>();
+  const seenImageKeys = new Map<string, string>();
   const result: HistoryEntry[] = [];
+
+  const imageKey = (url: string) => {
+    const file = url.split("?path=studio/").pop()?.split("/studio/").pop()?.split("/").pop() ?? url;
+    return file.split("?")[0];
+  };
+
   for (const list of lists) {
     for (const entry of list) {
-      if (!seen.has(entry.id)) {
-        seen.add(entry.id);
-        result.push(entry);
-      }
+      if (seen.has(entry.id)) continue;
+
+      const keys = entry.groups.flatMap(g => g.images).map(imageKey).filter(Boolean);
+      const overlapsExisting = keys.some(k => seenImageKeys.has(k));
+      if (entry.source === "storage" && overlapsExisting) continue;
+
+      seen.add(entry.id);
+      result.push(entry);
+      keys.forEach(k => seenImageKeys.set(k, entry.id));
     }
   }
   return result

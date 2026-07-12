@@ -156,94 +156,6 @@ export const WORKFLOW_TABS: { id: WorkflowPersona; label: string }[] = [
   { id: "manager", label: "Managers" },
 ];
 
-export type PricingPlan = {
-  id: string;
-  name: string;
-  bestFor: string;
-  priceMonthly: number;
-  priceYearly: number;
-  valueStatement: string;
-  features: string[];
-  cta: string;
-  planKey: string;
-  highlighted?: boolean;
-  badge?: string;
-};
-
-export const PRICING_PLANS: PricingPlan[] = [
-  {
-    id: "free",
-    name: "Free",
-    bestFor: "Explore Pinterest opportunities.",
-    priceMonthly: 0,
-    priceYearly: 0,
-    valueStatement: "Discover how VibePin turns Pinterest signals into content decisions.",
-    features: [
-      "Limited opportunity discovery",
-      "Basic Pin and product evidence",
-      "Limited Pin generations",
-      "Basic weekly planning",
-    ],
-    cta: "Get started free",
-    planKey: "free",
-  },
-  {
-    id: "creator",
-    name: "Creator",
-    bestFor: "Creators building a consistent content system.",
-    priceMonthly: 19,
-    priceYearly: 15,
-    valueStatement: "Research, create, schedule, and publish Pinterest content as a solo creator.",
-    features: [
-      "Full opportunity intelligence",
-      "Pin Ideas and creative references",
-      "AI Pin generation",
-      "Weekly planning and scheduling",
-      "Pinterest auto-publishing",
-    ],
-    cta: "Start Creator",
-    planKey: "creator",
-  },
-  {
-    id: "growth",
-    name: "Growth",
-    bestFor: "Sellers and marketers turning Pinterest into growth.",
-    priceMonthly: 49,
-    priceYearly: 39,
-    valueStatement:
-      "Connect product opportunities, creative production, campaign planning, and auto-publishing.",
-    features: [
-      "Everything in Creator",
-      "Product opportunity intelligence",
-      "Higher generation limits",
-      "Advanced campaign planning",
-      "Automated publishing workflows",
-    ],
-    cta: "Start Growth",
-    planKey: "growth",
-    highlighted: true,
-    badge: "MOST POPULAR",
-  },
-  {
-    id: "agency",
-    name: "Agency",
-    bestFor: "Teams managing multiple Pinterest workflows.",
-    priceMonthly: 99,
-    priceYearly: 79,
-    valueStatement:
-      "Plan, review, schedule, and publish Pinterest content across accounts or clients.",
-    features: [
-      "Everything in Growth",
-      "Higher usage limits",
-      "Built for higher-volume workflows",
-      "Campaign organization at scale",
-      "Priority support",
-    ],
-    cta: "Choose Agency",
-    planKey: "pro",
-  },
-];
-
 export type FaqItem = {
   question: string;
   answer: string;
@@ -293,13 +205,6 @@ export const FAQ_ITEMS: FaqItem[] = [
     answer:
       "No. VibePin is also designed for creators, bloggers, affiliate marketers, and Pinterest managers who need a repeatable research-to-content workflow.",
   },
-];
-
-export const PRICING_REASSURANCE = [
-  "No credit card required",
-  "Cancel anytime",
-  "Review every Pin before publishing",
-  "Schedule and auto-publish when ready",
 ];
 
 export const FINAL_CTA_TRUST = [

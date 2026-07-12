@@ -137,11 +137,6 @@ export function assessProduct(signals: ProductRawSignals): OpportunityAssessment
   return { marketTag, estMonthlyVolume, commercialRatio, momentum, insight };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MOCK DATA — three canonical test scenarios
-// ─────────────────────────────────────────────────────────────────────────────
-export const MOCK_OPPORTUNITIES = {
-  scenarioA_hiddenSupply:       assessKeyword({ saves: 82_000,  pin_count: 18,  linked_products: 4,  yoy_growth: 340, weekly_change: 62 }),
-  scenarioB_oversaturated:      assessKeyword({ saves: 420_000, pin_count: 280, linked_products: 95, yoy_growth: 12,  weekly_change: 3  }),
-  scenarioC_newAccountFriendly: assessKeyword({ saves: 3_200,   pin_count: 11,  linked_products: 2,  yoy_growth: 180, weekly_change: 90 }),
-} as const;
+// NOTE (v2.0 final direction): assessPin/assessKeyword remain ONLY for the
+// marketing demo rows (?demo=true). Production Pin Ideas surfaces no derived
+// market judgments — no Demand/Competition bands, no estimated volume.

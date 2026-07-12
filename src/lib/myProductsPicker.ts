@@ -1,7 +1,9 @@
 import type { AssetItem } from "@/lib/assetStore";
+import { looksLikeAmazon } from "@/lib/affiliate/amazon";
 
 export type MyProductsFilter =
   | "all"
+  | "amazon"
   | "uploaded"
   | "url_imported"
   | "product_ideas"
@@ -10,11 +12,23 @@ export type MyProductsFilter =
 
 export const MY_PRODUCTS_FILTERS: { id: MyProductsFilter; label: string }[] = [
   { id: "all",           label: "All" },
+  { id: "amazon",        label: "Amazon" },
   { id: "uploaded",      label: "Uploaded" },
   { id: "url_imported",  label: "URL Imported" },
   { id: "product_ideas", label: "Product Ideas" },
   { id: "recent",        label: "Recent" },
 ];
+
+/** True when a saved product asset points at an Amazon product. */
+export function isAmazonProductAsset(item: AssetItem): boolean {
+  return looksLikeAmazon({
+    productUrl:   item.productUrl,
+    sourceUrl:    item.sourceUrl,
+    canonicalUrl: item.canonicalUrl,
+    sourceDomain: item.sourceDomain,
+    store:        item.store,
+  });
+}
 
 export function isValidProductImageUrl(imageUrl?: string): boolean {
   const url = imageUrl?.trim();
@@ -42,6 +56,7 @@ export function productSourceLabel(item: AssetItem): string {
   if (item.source === "upload") return "Uploaded";
   if (item.source === "url") return "URL Imported";
   if (item.source === "product_signal" || item.source === "product_ideas") return "Product Ideas";
+  if (item.source === "shopify") return "Shopify";
   return "Recent";
 }
 
@@ -82,7 +97,9 @@ export function filterMyProducts(
   });
 
   let list = healthy;
-  if (filter === "uploaded") {
+  if (filter === "amazon") {
+    list = list.filter(isAmazonProductAsset);
+  } else if (filter === "uploaded") {
     list = list.filter(i => i.source === "upload");
   } else if (filter === "url_imported") {
     list = list.filter(i => i.source === "url" && isValidProductImageUrl(i.imageUrl));

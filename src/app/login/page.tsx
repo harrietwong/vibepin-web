@@ -3,22 +3,21 @@ import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
+import BrandLogo from "@/components/BrandLogo";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
-const P_ICON = (
-  <svg viewBox="0 0 20 20" fill="none" className="w-4 h-4">
-    <path d="M4 5.5L10 15L16 5.5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
+function safeNextPath(value: string | null): string {
+  return value?.startsWith("/app") ? value : "/app/workspace/home-decor";
+}
 
 function LoginContent() {
   const router = useRouter();
   const params = useSearchParams();
-  const next   = params.get("next") ?? "/app/workspace/home-decor";
+  const next   = safeNextPath(params.get("next"));
 
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
@@ -33,6 +32,7 @@ function LoginContent() {
     e.preventDefault();
     setLoading(true);
     setError("");
+    document.cookie = `vp_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       setError(error.message);
@@ -46,6 +46,7 @@ function LoginContent() {
   async function handleGoogle() {
     setLoading(true);
     setError("");
+    document.cookie = `vp_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
@@ -58,9 +59,7 @@ function LoginContent() {
 
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-8">
-          <div className="h-8 w-8 rounded-xl flex items-center justify-center" style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-            {P_ICON}
-          </div>
+          <BrandLogo size={32} style={{ filter: "invert(1)" }} />
           <span className="font-black text-gray-900 text-lg tracking-tight">VibePin</span>
         </div>
 

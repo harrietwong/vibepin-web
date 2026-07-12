@@ -348,9 +348,10 @@ test.describe("Studio workflow — 18 cases", () => {
     await page.getByTestId("generate-btn").click();
     await page.waitForSelector('[data-testid="generated-pin-card"]', { timeout: 15000 });
 
-    // Click first Add to Plan button (inside a generated card)
+    // Click first Schedule button (inside a generated card). Uses the stable
+    // testid — the visible label is "Schedule" (consistent with Batch Edit).
     await page.locator('[data-testid="generated-pin-card"]').first().hover();
-    const addToPlanBtn = page.locator('[data-testid="generated-pin-card"]').first().getByRole("button", { name: /Add to Plan/i });
+    const addToPlanBtn = page.locator('[data-testid="generated-pin-card"]').first().getByTestId("pin-card-add-to-plan");
     if (await addToPlanBtn.isVisible()) {
       await addToPlanBtn.click();
 

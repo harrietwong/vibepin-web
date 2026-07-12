@@ -6,11 +6,13 @@ import { useSearchParams, useRouter } from "next/navigation";
 import {
   Sparkles, X, ChevronDown, Plus, Clock,
   Search, AlertCircle, Target,
-  CheckCircle2,
-  Play, MoreVertical,
+  CheckCircle2, Calendar,
+  Play,
 } from "lucide-react";
 import { toast } from "sonner";
-import { InlineCreateAssetPicker } from "@/components/studio/InlineCreateAssetPicker";
+import dynamic from "next/dynamic";
+import { SelectedAssetPreview, type SelectedAssetPreviewItem } from "@/components/studio/SelectedAssetPreview";
+import { CreativeDirectionPanel } from "@/components/studio/CreativeDirectionPanel";
 import * as assetStore from "@/lib/assetStore";
 import { supabase } from "@/lib/supabase";
 import {
@@ -18,39 +20,121 @@ import {
   type CreatePinsPrefill,
 } from "@/lib/createPinsPrefill";
 import * as pinDraftStore from "@/lib/pinDraftStore";
+import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
+import { isPlanDebugEnabled } from "@/lib/planDebug";
 import { toProxyUrl } from "@/lib/imageProxy";
 import {
   addHistory, loadHistory, createRunningSessionInDb, updateSessionInDb,
   mergeHistoryEntries, fetchGenerationsFromDb, deriveEntryStatus, resolveStaleRunningEntries,
-  type SetupSnapshot, type HistoryEntry, type GenerationStatus, type GenerationErrorType,
-  type PinGroup as HistoryPinGroup,
+  type SetupSnapshot, type HistoryEntry, type GenerationStatus, type GenerationErrorType, type CategoryAudit,
+  type CreativeDirectionSnapshotV2,
+  type PinGroup as HistoryPinGroup, type ProductSnapshot,
 } from "@/lib/studioPersistence";
-import { PinDetailsDrawer, type PinMetadataFormState, type PinDetailsGenStatus, type DrawerTab, type RemixDraftSetup } from "@/components/studio/PinDetailsDrawer";
-import { BatchEditDrawer, type BatchPinRow, type BatchEditDrawerProps } from "@/components/studio/BatchEditDrawer";
+import {
+  saveSetupSnapshot as saveRemixSetup,
+  loadAllSetupSnapshots as loadAllRemixSetups,
+  pruneSetupSnapshots as pruneRemixSetups,
+} from "@/lib/remixRecoveryStore";
+import type { PinMetadataFormState, PinDetailsGenStatus, DrawerTab, RemixDraftSetup } from "@/components/studio/PinDetailsDrawer";
+import type { BatchPinRow, BatchApplyOpts } from "@/components/studio/BatchEditDrawer";
+import { StudioBoard } from "@/components/studio/StudioBoard";
+import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
+import {
+  resolveStudioExperienceFromEnv,
+  resolveStudioExperienceFromClient,
+  type StudioExperience,
+} from "@/lib/studioBoardFlag";
+import { PinCardActions, type PinCardStatus } from "@/components/studio/PinCardActions";
 import { resolvePinDetail, type PinDetailView } from "@/components/studio/pinDetails";
+import { analyzeProductSet } from "@/lib/studio/productAnalysis";
+import { analyzeReferences } from "@/lib/studio/referenceAnalysis";
+import { inferCreativeIntent } from "@/lib/studio/creativeIntent";
+import { getCategoryPlaybook } from "@/lib/studio/categoryPlaybooks";
+import { buildHiddenPrompt, inferReferenceInfluenceMode } from "@/lib/studio/hiddenPromptBuilder";
+import { AiUnderstandingPanel } from "@/components/studio/AiUnderstandingPanel";
+import { CreativeChips } from "@/components/studio/CreativeChips";
+import {
+  rankOpportunities, buildCreativeTags, buildDirectionBrief, defaultSelectedTagIds,
+  toggleTagSelection, cleanProductTitle, buildOutputVariants,
+  type CreativeTag, type TagGroup, type OutputVariant,
+} from "@/lib/studio/creativeControls";
+import {
+  markOutputRetrying, applyRetrySuccess, applyRetryFailure,
+  planSingleOutputRetry, outputSlotId, SINGLE_OUTPUT_RETRY_COUNT,
+} from "@/lib/studio/retryScope";
+import { buildRegeneratePayload, regenerateErrorCopy, shouldBlockImagelessRetry } from "@/lib/studio/regeneratePayload";
+import {
+  findDraftForStudioOutput, deriveCardStatusFromDraft,
+  type StudioPlanMatchReason,
+} from "@/lib/studioPlanMatch";
+
+// Developer-only: show the verbose AI Understanding / Creative Direction panels.
+// Normal users see lightweight direction chips instead.
 import {
   generatePinMetadataDraft, generateBatchMetadataDraft, applyDraftToPinFields,
   computePlanningStatusFromFields, metadataReadinessLabel, pinNeedsDetailsGeneration, EMPTY_TOUCHED,
+  writePinProducts,
   type PinMetadataDraft, type MetadataTouchedFlags,
 } from "@/lib/pinMetadata";
+import { resolveCanonicalPinProducts } from "@/lib/studio/pinProducts";
+import { usePublishAssistantContext } from "@/lib/assistant/useAssistant";
+import { detectCreatePins } from "@/lib/assistant/detectors/createPins";
+import { detectSinglePin } from "@/lib/assistant/detectors/singlePin";
+import type { AssistantContext } from "@/lib/assistant/types";
+import { MODEL_KEY_TO_LABEL, resolveModelLabel } from "@/lib/studio/modelLabel";
 import * as pinMetadataStore from "@/lib/pinMetadataStore";
+import { preserveAffiliateContextOnRegenerate, applyCreatorProductLinkToPinDraft } from "@/lib/affiliate/pinAffiliateInheritance";
+import { getAmazonAffiliateSettings, type AmazonAffiliateSettings } from "@/lib/affiliate/amazonAffiliateSettings";
+import { resolveStudioAffiliateContext, type StudioAffiliateContext } from "@/lib/studio/affiliateContext";
+import { canViewGenerationDebug } from "@/lib/generationDebugAccess";
+import type { PinDraft } from "@/lib/pinDraftStore";
+import { readResolvedContentLanguage, type LanguageCode } from "@/lib/i18n/config";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import {
   buildWeeklyPlanItemFromGeneratedPin,
   canAddGeneratedPinToPlan,
+  localDateISO,
 } from "@/lib/weeklyPlanHandoff";
+import {
+  buildManualBrief,
+  buildSelectedCreativeAssets,
+  getRecommendedCreativeDirections,
+  inferCreativeCategory,
+  type CreativeDirectionRecommendation,
+  type CreativeOpportunityContext,
+  type GuidedControls,
+  type SelectedCreativeAsset,
+} from "@/lib/studio/creativeDirections";
+import { markDataReady } from "@/lib/navTiming";
 
-// ── Dark theme palette ────────────────────────────────────────────────────────
+// ── Lazily loaded components ─────────────────────────────────────────────────
+// Heavy drawers/pickers deferred out of the main route chunk so the Create
+// Pins page shell mounts faster after a sidebar nav. Behavior is unchanged —
+// each of these already renders nothing when closed / not selected.
+const PinDetailsDrawer = dynamic(() =>
+  import("@/components/studio/PinDetailsDrawer").then(m => m.PinDetailsDrawer), { ssr: false });
+const BatchEditDrawer = dynamic(() =>
+  import("@/components/studio/BatchEditDrawer").then(m => m.BatchEditDrawer), { ssr: false });
+const PinDetailsModal = dynamic(() =>
+  import("@/components/pin-details/PinDetailsModal").then(m => m.PinDetailsModal), { ssr: false });
+const InlineCreateAssetPicker = dynamic(() =>
+  import("@/components/studio/InlineCreateAssetPicker").then(m => m.InlineCreateAssetPicker), { ssr: false });
+
+// ── Theme palette ─────────────────────────────────────────────────────────────
+// Surfaces/text/borders resolve from the app-shell theme tokens (--app-*) so the
+// whole studio follows the global light/dark setting. Brand + semantic colors are
+// theme-independent. Dark hex literals are kept as fallbacks.
 
 const D = {
-  bg:          "#0B0E17",
-  surface:     "#111827",
-  card:        "#161D2E",
-  cardElev:    "#1A2236",
-  border:      "rgba(255,255,255,0.07)",
-  borderStr:   "rgba(255,255,255,0.12)",
-  text:        "#E2E8F0",
-  textSec:     "#8892A4",
-  textMuted:   "#4A5568",
+  bg:          "var(--app-bg, #0B0E17)",
+  surface:     "var(--app-surface-2, #111827)",
+  card:        "var(--app-surface, #161D2E)",
+  cardElev:    "var(--app-surface-3, #1A2236)",
+  border:      "var(--app-border, rgba(255,255,255,0.07))",
+  borderStr:   "var(--app-border-hi, rgba(255,255,255,0.12))",
+  text:        "var(--app-text, #E2E8F0)",
+  textSec:     "var(--app-text-sec, #8892A4)",
+  textMuted:   "var(--app-text-muted, #4A5568)",
   accent:      "#3B82F6",
   accentBg:    "rgba(59,130,246,0.12)",
   success:     "#10B981",
@@ -75,17 +159,33 @@ type StudioPin = {
   altText:          string;
   destinationUrl:   string;
   plannedDate:      string;
+  plannedTime?:     string;
+  plannedAt?:       string;
   weeklyPlanItemId?: string | null;
   metadataDraft?:   PinMetadataDraft;
   metadataTouched:  MetadataTouchedFlags;
+  setupSnapshot?:   SetupSnapshot | null;
+  generationSetup?: SetupSnapshot | null;
+  batchId?:         string | null;
+  requestId?:       string | null;
+  createdAt?:       string;
+  // ── Amazon affiliate product link context (creator-owned) ──────────────────
+  productId?:            string;
+  creatorProductLinkId?: string;
+  sourceProductImageUrl?: string;
+  destinationUrlSource?:  string;
 };
 
 type RefGroup = {
   refUrl:        string | null;
   refIndex:      number;
   items:         StudioPin[];
-  status:        "generating" | "done" | "failed";
+  status:        "generating" | "done" | "partial" | "failed";
   expectedCount: number;
+  retrying?:     boolean;
+  // Output indices currently being retried (per-slot). A retrying slot never flips
+  // the group/sibling to "generating".
+  retryingSlots?: number[];
 };
 
 type OppRow = { id: string; keyword: string; category: string; priority_score: number | null; yearly_change: number | null };
@@ -108,6 +208,7 @@ type GenerationSession = {
   collapsed:          boolean;
   generatingGroupIdx: number | null;
   promptFull?:        string;
+  generationFinalPrompt?: string;
   setupSnapshot?:     SetupSnapshot;
   errorType?:         GenerationErrorType;
   errorMessage?:      string;
@@ -115,7 +216,30 @@ type GenerationSession = {
   format?:            string;
   textOverlay?:       string;
   groupErrors?:       Record<number, { message?: string; errorType?: GenerationErrorType }>;
+  categoryAudit?:     CategoryAudit;
+  /** Amazon affiliate context resolved at generate time (selected product + link). */
+  affiliate?:         StudioAffiliateContext | null;
 };
+
+/**
+ * Stamp a freshly generated Studio pin with its creator-owned Amazon affiliate
+ * context. Fresh pins have no manual edits yet, so we start from an empty
+ * destination and let the canonical helper fill the affiliate URL + source marker.
+ * A pin already marked "manual" is never overwritten.
+ */
+function applyAffiliateToFreshPin(pin: StudioPin, ctx: StudioAffiliateContext | null | undefined): StudioPin {
+  if (!ctx || ctx.link.status !== "ready") return pin;
+  const base: StudioPin = pin.destinationUrlSource === "manual" ? pin : { ...pin, destinationUrl: "" };
+  const stamped = applyCreatorProductLinkToPinDraft(base, ctx.product, ctx.link);
+  // Keep the metadata draft's destination in sync so Pin Details / Batch Edit and
+  // the publish path all read the same affiliate URL.
+  const metadataDraft = stamped.metadataDraft
+    ? { ...stamped.metadataDraft, destinationUrl: stamped.destinationUrl, destinationUrlSource: stamped.destinationUrlSource }
+    : stamped.metadataDraft;
+  const synced: StudioPin = { ...stamped, metadataDraft };
+  persistStudioPinMetadata(synced, synced.batchId ?? "");
+  return synced;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -135,7 +259,7 @@ function persistStudioPinMetadata(pin: StudioPin, sessionId: string): void {
     metadataDraft: pin.metadataDraft,
     title: pin.title, description: pin.description,
     altText: pin.altText, destinationUrl: pin.destinationUrl,
-    plannedDate: pin.plannedDate, planningStatus: pin.planningStatus,
+    plannedDate: pin.plannedDate, plannedTime: pin.plannedTime, plannedAt: pin.plannedAt, planningStatus: pin.planningStatus,
     touched: pin.metadataTouched,
   });
 }
@@ -151,29 +275,80 @@ function hydratePinFromStore(pin: StudioPin, sessionId: string): StudioPin {
     altText: stored.altText || pin.altText,
     destinationUrl: stored.destinationUrl || pin.destinationUrl,
     plannedDate: stored.plannedDate || pin.plannedDate,
+    plannedTime: stored.plannedTime ?? draft?.scheduledTime ?? pin.plannedTime,
+    plannedAt: stored.plannedAt ?? draft?.plannedAt ?? pin.plannedAt,
     planningStatus: (stored.planningStatus as PlanStatus) || pin.planningStatus,
     metadataDraft: stored.metadataDraft,
     metadataTouched: stored.touched,
     weeklyPlanItemId: draft?.id ?? pin.weeklyPlanItemId,
+    setupSnapshot: pin.setupSnapshot,
+    generationSetup: pin.generationSetup,
+    batchId: pin.batchId,
+    requestId: pin.requestId,
+    createdAt: pin.createdAt,
   };
+}
+
+function devLogSnapshot(event: string, payload: Record<string, unknown>): void {
+  if (process.env.NODE_ENV === "production") return;
+  console.log(event, payload);
+}
+
+// Enrich a product image URL with metadata from the asset store.
+// Used when building SetupSnapshot.selectedProducts at generation time.
+// Falls back to minimal { imageUrl, title: "", source: "uploaded" } when no asset record exists
+// (e.g. raw data-URL uploads that were never passed through the picker).
+function productUrlToSnapshot(imageUrl: string): ProductSnapshot {
+  const asset = assetStore.getAssets().find(a => a.imageUrl === imageUrl && a.role === "product");
+  return {
+    imageUrl,
+    title:        asset?.title?.trim()    ?? "",
+    source:       asset?.source           ?? "uploaded",
+    productUrl:   asset?.productUrl?.trim() || asset?.sourceUrl?.trim() || undefined,
+    productId:    asset?.id,
+    sourceDomain: asset?.sourceDomain,
+  };
+}
+
+// Detects whether the user's creative-direction prompt explicitly requests
+// rendered text inside the image (e.g. "add text: Spring Sale").
+// Only returns true for unambiguous requests — errs on the side of no text.
+function detectTextOverlayIntent(prompt: string): boolean {
+  const p = prompt.toLowerCase();
+  return /\b(add text|with text|include text|overlay text|text overlay|the words?\s|headline|typography|text that says|words on the image|add label|put.*words?|title that says|overlay.*saying|add.*saying|text:\s)/i.test(p);
 }
 
 function createCompletedPin(
   sessionId: string, gi: number, ii: number, url: string,
-  session: Pick<GenerationSession, "keyword" | "category" | "setupSnapshot" | "promptFull">,
+  session: Pick<GenerationSession, "keyword" | "category" | "setupSnapshot" | "promptFull" | "generationFinalPrompt">,
   refLabel: string,
 ): StudioPin {
   const id = `${sessionId}_g${gi}_p${ii}`;
+  const createdAt = new Date().toISOString();
   const existing = pinMetadataStore.getPinMetadata(id);
   if (existing) {
     const draft = pinDraftStore.getDraftByImageUrl(url);
-    return hydratePinFromStore({
+    const hydrated = hydratePinFromStore({
       id, url, planningStatus: (existing.planningStatus as PlanStatus) || "not_added",
       title: existing.title, description: existing.description,
       altText: existing.altText, destinationUrl: existing.destinationUrl,
-      plannedDate: existing.plannedDate, weeklyPlanItemId: draft?.id ?? null,
+      plannedDate: existing.plannedDate, plannedTime: existing.plannedTime, plannedAt: existing.plannedAt, weeklyPlanItemId: draft?.id ?? null,
       metadataDraft: existing.metadataDraft, metadataTouched: existing.touched,
+      setupSnapshot: session.setupSnapshot ?? null,
+      generationSetup: session.setupSnapshot ?? null,
+      batchId: sessionId,
+      requestId: id,
+      createdAt,
     }, sessionId);
+    devLogSnapshot("[GenerateSetup] output pin hydrated from metadata store", {
+      pinId: id,
+      batchId: sessionId,
+      requestId: id,
+      hasPinSetupSnapshot: !!hydrated.setupSnapshot,
+      hasPinGenerationSetup: !!hydrated.generationSetup,
+      onlyBatchPointer: !hydrated.setupSnapshot && !!hydrated.batchId,
+    });
+    return hydrated;
   }
   const metaDraft = generatePinMetadataDraft({
     pinIndex: ii, groupIndex: gi,
@@ -183,14 +358,30 @@ function createCompletedPin(
     setupSnapshot: session.setupSnapshot,
     referenceLabel: refLabel,
     referenceVisualFormat: session.setupSnapshot?.selectedReferences?.[gi]?.visualFormat,
+    generationFinalPrompt: session.generationFinalPrompt,
+    contentLanguage: readResolvedContentLanguage(),
   });
   const fields = applyDraftToPinFields(metaDraft);
   const pin: StudioPin = {
     id, url, planningStatus: "not_added",
     ...fields, metadataDraft: metaDraft, metadataTouched: EMPTY_TOUCHED,
     weeklyPlanItemId: null,
+    setupSnapshot: session.setupSnapshot ?? null,
+    generationSetup: session.setupSnapshot ?? null,
+    batchId: sessionId,
+    requestId: id,
+    createdAt,
   };
   persistStudioPinMetadata(pin, sessionId);
+  devLogSnapshot("[GenerateSetup] output pin saved", {
+    pinId: id,
+    batchId: sessionId,
+    requestId: id,
+    setupSnapshotEmbedded: !!pin.setupSnapshot,
+    onlyBatchPointer: !pin.setupSnapshot && !!pin.batchId,
+    productImagesCount: pin.setupSnapshot?.selectedProducts?.length ?? 0,
+    pinReferencesCount: pin.setupSnapshot?.selectedReferences?.length ?? 0,
+  });
   return pin;
 }
 
@@ -200,8 +391,13 @@ function newPin(sessionId: string, gi: number, ii: number, url: string, session?
   }
   return {
     id: `${sessionId}_g${gi}_p${ii}`, url, planningStatus: "not_added",
-    title: "", description: "", altText: "", destinationUrl: "", plannedDate: "",
+    title: "", description: "", altText: "", destinationUrl: "", plannedDate: "", plannedTime: "", plannedAt: "",
     metadataTouched: EMPTY_TOUCHED,
+    setupSnapshot: null,
+    generationSetup: null,
+    batchId: sessionId,
+    requestId: `${sessionId}_g${gi}_p${ii}`,
+    createdAt: new Date().toISOString(),
   };
 }
 
@@ -219,15 +415,6 @@ const TIER_COLOR:  Record<string, string> = { best_bet: "#10B981", steady: "#3B8
 const TIER_LABEL:  Record<string, string> = { best_bet: "Best Bet", steady: "Steady", competitive: "Competitive" };
 const TREND_COLOR: Record<string, string> = { rising: "#10B981", evergreen: "#3B82F6", seasonal: "#F59E0B" };
 
-const PROMPT_STARTERS = [
-  "Cozy bedroom scene",
-  "Product flat lay",
-  "Mirror outfit shot",
-  "Room decor moodboard",
-  "Digital product mockup",
-  "No text overlay",
-] as const;
-
 type FeedFilter = "all" | "generating" | "completed" | "failed" | "added";
 type RightPanelMode = "feed" | "product_picker" | "reference_picker";
 type FeedPinStatus = "completed" | "generating" | "failed" | "added";
@@ -242,13 +429,316 @@ type MasonryPinEntry = {
   refLabel:            string;
   createdAt:           string;
   placeholderVariant?: "generating" | "queued" | "failed";
+  errorType?:          GenerationErrorType;
+  errorMessage?:       string;
+  retrying?:           boolean;
+  outputIndex?:        number;
+  // ── Live Weekly Plan reconciliation (the real plan source of truth) ──────────
+  planState?:          CardWorkflowState;
+  planDate?:           string;
+  planTime?:           string;
+  planDraftId?:        string;
+  planMatchReason?:    StudioPlanMatchReason;
 };
 
 type FeedItem = { entry: MasonryPinEntry; session: GenerationSession };
 
+type PromptSnapshot = {
+  user_raw_text?: string;
+  final_prompt?: string;
+  prompt_mode?: string;
+  prompt_version?: string;
+  creative_direction_meta?: CreativeDirectionSnapshotV2;
+  enhancer_failed?: boolean;
+  detected_category?: string;
+  effective_category?: string;
+  category_passed?: string;
+  inferred_category?: string;
+  output_type?: string;
+  product_image_count?: number;
+  reference_image_count?: number;
+  provider_endpoint?: string;
+  image_ordering?: Array<{ position: number; role: "product" | "reference" }>;
+  products_loaded?: number;
+  references_loaded?: number;
+  home_decor_check?: Record<string, boolean>;
+  fashion_safety_applied?: boolean;
+  plan?: {
+    summary_for_ui?: {
+      scene?: string;
+      style?: string;
+      layout?: string;
+      products?: string;
+    };
+  };
+};
+
+function categoryAuditFromSnapshot(snap: PromptSnapshot, frontendCategory: string): CategoryAudit {
+  const detected  = String(snap.detected_category  ?? "");
+  const effective = String(snap.effective_category  ?? "");
+  const inferred  = String(snap.inferred_category   ?? "");
+  const src: CategoryAudit["categorySource"] =
+    frontendCategory && !["", "generic"].includes(frontendCategory) ? "frontend"
+    : detected  ? "vlm_plan"
+    : inferred  ? "generator_inference"
+    : "fallback";
+  const hdCheck = snap.home_decor_check ?? {};
+  return {
+    frontendCategory,
+    detectedCategory:    detected,
+    effectiveCategory:   effective,
+    inferredCategory:    inferred,
+    outputType:          String(snap.output_type ?? ""),
+    productImageCount:   Number(snap.product_image_count  ?? 0),
+    referenceImageCount: Number(snap.reference_image_count ?? 0),
+    finalPrompt:         String(snap.final_prompt ?? ""),
+    homeDriftTerms:      Object.entries(hdCheck).filter(([, v]) => v).map(([k]) => k),
+    fashionSafetyApplied: Boolean(snap.fashion_safety_applied),
+    enhancerFailed:      Boolean(snap.enhancer_failed),
+    categorySource:      src,
+  };
+}
+
+type GenerateApiResult = {
+  urls?: string[];
+  error?: string;
+  error_type?: GenerationErrorType;
+  prompt_snapshot?: PromptSnapshot;
+  requested_image_count?: number;
+  actual_image_count?: number;
+  count_clamped?: boolean;
+  generation_request_id?: string;
+};
+
+type GenerateRecoveryInput = {
+  keyword: string;
+  category: string;
+  prompt: string;
+  count: number;
+  styleRef: string | null;
+  productImages: string[];
+  // Prompt-enhancer extras (optional — defaults applied in route.ts / generator.py)
+  textOverlay?: boolean;
+  referenceStrength?: string;
+  outputType?: string;
+  pinFormat?: string;
+  productMetadata?: Array<{ title?: string; productUrl?: string }>;
+  modelKey?: string;
+  contentLanguage?: LanguageCode;
+  promptMode?: "legacy" | "creative_direction_v2";
+  promptVersion?: 1 | 2;
+  creativeDirectionMeta?: CreativeDirectionSnapshotV2;
+  selectedTags?: Array<{ id: string; label: string; group: TagGroup }>;
+  primaryFormatTag?: string;
+  directionBrief?: string;
+  briefManuallyEdited?: boolean;
+  inferredCategory?: string;
+  selectedOpportunity?: Opportunity | null;
+  productImageCountRequested?: number;
+  referenceImageCountRequested?: number;
+  outputCount?: number;
+  variationMode?: "distinct" | "similar";
+  outputVariants?: OutputVariant[];
+  generationRequestId?: string;
+  studioClientId?: string;
+  retrySingleOutput?: boolean;
+  retryOfOutputId?: string;
+  retryOutputIndex?: number;
+};
+
+type GenerateRecoveryResult = {
+  urls: string[];
+  error?: string;
+  errorType?: GenerationErrorType;
+  usedFallback: boolean;
+  promptSnapshot?: PromptSnapshot;
+  countClamped?: boolean;
+  actualImageCount?: number;
+};
+
+function getStudioClientId(): string {
+  const key = "vbp:studio:client_id";
+  try {
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const id = `studio_client_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(key, id);
+    return id;
+  } catch {
+    return `studio_client_memory_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+function inferOutputType(category: string | undefined): string {
+  const cat = (category ?? "").toLowerCase().trim();
+  if (["fashion", "womens-fashion", "mens-fashion", "kids-fashion"].includes(cat)) return "editorial";
+  if (cat === "beauty") return "beauty-lifestyle";
+  if (cat === "food-and-drink") return "food-lifestyle";
+  if (cat === "digital-products") return "digital-mockup";
+  if (cat === "diy-crafts") return "tutorial";
+  if (cat === "travel") return "lifestyle";
+  if (cat === "home-decor") return "lifestyle";
+  return "";
+}
+
+async function requestGenerate(input: GenerateRecoveryInput, count: number, styleRef: string | null, promptOverride?: string): Promise<GenerateApiResult> {
+  const contentLang = input.contentLanguage ?? readResolvedContentLanguage();
+  const basePrompt = promptOverride ?? input.prompt;
+  const resp = await fetch("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      keyword:  input.keyword,
+      style:    "editorial",
+      count,
+      prompt:   basePrompt,
+      category: input.category,
+      content_language: contentLang,
+      prompt_mode: input.promptMode ?? "legacy",
+      prompt_version: input.promptVersion ?? 1,
+      ...(input.creativeDirectionMeta ? { creative_direction_meta: input.creativeDirectionMeta } : {}),
+      ...(input.selectedTags ? { selectedTags: input.selectedTags } : {}),
+      ...(input.primaryFormatTag !== undefined ? { primaryFormatTag: input.primaryFormatTag } : {}),
+      ...(input.directionBrief !== undefined ? { directionBrief: input.directionBrief } : {}),
+      ...(input.briefManuallyEdited !== undefined ? { briefManuallyEdited: input.briefManuallyEdited } : {}),
+      ...(input.inferredCategory !== undefined ? { inferredCategory: input.inferredCategory } : {}),
+      ...(input.selectedOpportunity !== undefined ? { selectedOpportunity: input.selectedOpportunity } : {}),
+      ...(input.productImageCountRequested !== undefined ? { productImageCountRequested: input.productImageCountRequested } : {}),
+      ...(input.referenceImageCountRequested !== undefined ? { referenceImageCountRequested: input.referenceImageCountRequested } : {}),
+      ...(input.outputCount !== undefined ? { outputCount: input.outputCount } : {}),
+      ...(input.variationMode ? { variationMode: input.variationMode } : {}),
+      ...(input.outputVariants ? { outputVariants: input.outputVariants } : {}),
+      ...(input.generationRequestId ? { generationRequestId: input.generationRequestId } : {}),
+      ...(input.studioClientId ? { studioClientId: input.studioClientId } : {}),
+      ...(input.retrySingleOutput ? { mode: "retry_single_output", retryOfOutputId: input.retryOfOutputId, retryOutputIndex: input.retryOutputIndex } : {}),
+      ...(styleRef                    ? { style_ref:           styleRef                   } : {}),
+      ...(input.productImages.length  ? { product_images:      input.productImages        } : {}),
+      // Prompt-enhancer fields
+      text_overlay:        input.textOverlay       ?? false,
+      reference_strength:  input.referenceStrength ?? "moderate",
+      output_type:         input.outputType        ?? "",
+      format:              input.pinFormat          ?? "2:3",
+      model_key:           input.modelKey           ?? "gemini_image",
+      ...(input.productMetadata?.length ? { product_metadata: input.productMetadata } : {}),
+    }),
+  });
+  return await resp.json() as GenerateApiResult;
+}
+
+// Hard errors that won't resolve by retrying — stop immediately.
+const HARD_STOP_ERRORS: GenerationErrorType[] = ["api_auth_error", "safety_blocked", "api_payload_error", "provider_busy", "user_generation_limit", "configuration_error"];
+
+async function generateWithRecovery(input: GenerateRecoveryInput): Promise<GenerateRecoveryResult> {
+  const urls: string[] = [];
+  let lastError: string | undefined;
+  let lastErrorType: GenerationErrorType | undefined;
+  let firstSnapshot: PromptSnapshot | undefined;
+  let targetCount = input.count;
+  let countClamped = false;
+  let actualImageCount: number | undefined;
+
+  // The backend generates ALL `count` variations in parallel inside ONE call, so we
+  // request the full remaining count each round rather than one image at a time.
+  // The previous one-at-a-time loop made N slow sequential calls; if the 2nd call
+  // transiently failed (timeout / 5xx) a 2-image batch ended up with only 1 image
+  // and a false "failed" state — even though the image had usually already uploaded
+  // (hence it reappeared on refresh). Requesting the batch in one call fixes that
+  // and is faster; we still round-retry to top up any genuine shortfall.
+  const MAX_ROUNDS = 3;
+  for (let round = 0; round < MAX_ROUNDS && urls.length < targetCount; round++) {
+    const need = targetCount - urls.length;
+    const data = await requestGenerate(input, need, input.styleRef);
+    if (data.count_clamped && data.actual_image_count) {
+      countClamped = true;
+      actualImageCount = data.actual_image_count;
+      targetCount = Math.min(targetCount, data.actual_image_count);
+    }
+    if (!firstSnapshot && data.prompt_snapshot) firstSnapshot = data.prompt_snapshot;
+    if (data.urls?.length) {
+      for (const u of data.urls) {
+        if (u && !urls.includes(u) && urls.length < targetCount) urls.push(u);
+      }
+    }
+    if (urls.length >= targetCount) break;
+    lastError     = data.error      ?? lastError;
+    lastErrorType = data.error_type ?? lastErrorType;
+    if (data.error_type && HARD_STOP_ERRORS.includes(data.error_type)) break;
+  }
+
+  // Clear the carried error once we ultimately got everything we asked for.
+  const complete = urls.length >= targetCount;
+  return {
+    urls,
+    error: complete ? undefined : lastError,
+    errorType: complete ? undefined : lastErrorType,
+    usedFallback: false,
+    promptSnapshot: firstSnapshot,
+    countClamped,
+    actualImageCount,
+  };
+}
+
+// Maps a raw generation error (type + upstream message) to safe, user-facing copy.
+// The raw provider JSON (e.g. "Invalid value at contents[0].parts[4].inline_data.data")
+// is NEVER returned here — it stays in dev/server logs only.
+function getReadableGenerationError(
+  errorType: GenerationErrorType | undefined,
+  rawMessage: string | undefined,
+): { title: string; body: string } {
+  const raw = (rawMessage ?? "").toLowerCase();
+  const looksLikeImage =
+    errorType === "image_load_failed" ||
+    /base64|inline_data|inline data|input image|decoding failed|parts\[\d+\]/.test(raw);
+  if (looksLikeImage) {
+    return {
+      title: "Couldn’t process an input image",
+      body: "Try generating this Pin again. If it continues, remove and re-upload the affected product or reference image.",
+    };
+  }
+  switch (errorType) {
+    case "provider_busy":
+      return { title: "Generation is busy", body: "Please try again shortly." };
+    case "user_generation_limit":
+      return { title: "A generation is already running", body: "You already have a generation running. Please wait for it to finish." };
+    case "configuration_error":
+      return { title: "Generation is not configured correctly", body: "Please check server settings." };
+    case "safety_blocked":
+      return { title: "Blocked by safety filters", body: "Adjust the products, reference, or direction and try again." };
+    case "rate_limited":
+      return { title: "The image service is busy", body: "Wait a moment, then try this Pin again." };
+    case "api_auth_error":
+      return { title: "Image service unavailable", body: "This is a configuration issue on our side — please try again later." };
+    default:
+      return { title: "Couldn’t generate this Pin", body: "Try again. If it continues, edit the inputs and regenerate." };
+  }
+}
+
+// Toast helper: maps an error_type to the P0 user-facing copy (never raw provider JSON).
+function toastGenerationError(errorType: GenerationErrorType | undefined, rawMessage?: string): void {
+  const { title, body } = getReadableGenerationError(errorType, rawMessage);
+  if (errorType === "user_generation_limit" || errorType === "provider_busy") toast.message(title, { description: body });
+  else toast.error(title, { description: body });
+}
+
 function formatPinDate(isoDate: string): string {
   const d = new Date(isoDate);
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function formatShortDate(iso: string): string {
+  if (!iso?.trim()) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+type CardWorkflowState = "not_planned" | "needs_date" | "scheduled" | "posted";
+
+function getCardWorkflowState(pin: StudioPin | null | undefined): CardWorkflowState {
+  if (!pin || pin.planningStatus === "not_added") return "not_planned";
+  if (pin.planningStatus === "posted" || pin.planningStatus === "skipped") return "posted";
+  if (pin.plannedDate?.trim()) return "scheduled";
+  return "needs_date";
 }
 
 function refLabelForGroup(session: GenerationSession, group: RefGroup): string {
@@ -256,20 +746,31 @@ function refLabelForGroup(session: GenerationSession, group: RefGroup): string {
   return session.productCount > 0 ? "Product" : "No product";
 }
 
-function collectSessionPins(session: GenerationSession): MasonryPinEntry[] {
+function collectSessionPins(session: GenerationSession, planDrafts: PinDraft[] = []): MasonryPinEntry[] {
   const entries: MasonryPinEntry[] = [];
   session.groups.forEach((group, gi) => {
     const refLabel = refLabelForGroup(session, group);
     group.items.forEach((pin, pi) => {
+      // Reconcile against the live Weekly Plan draft (the source of truth). When a
+      // matching draft exists, plan state + dates come from it; otherwise fall back
+      // to the in-memory pin's own state.
+      const { draft, reason } = findDraftForStudioOutput({ id: pin.id, url: pin.url }, planDrafts);
+      const planState: CardWorkflowState = draft ? deriveCardStatusFromDraft(draft) : getCardWorkflowState(pin);
+      const inPlan = planState !== "not_planned";
       entries.push({
         key:       pin.id,
         sessionId: session.id,
         groupIdx:  gi,
         pinIdx:      pi,
         pin,
-        status:    pin.planningStatus !== "not_added" ? "added" : "completed",
+        status:    inPlan ? "added" : "completed",
         refLabel,
         createdAt: session.savedAt,
+        planState,
+        planDate:  draft?.scheduledDate ?? pin.plannedDate ?? "",
+        planTime:  draft?.scheduledTime ?? pin.plannedTime ?? "",
+        planDraftId: draft?.id,
+        planMatchReason: reason,
       });
     });
 
@@ -285,37 +786,40 @@ function collectSessionPins(session: GenerationSession): MasonryPinEntry[] {
           refLabel,
           createdAt: session.savedAt,
           placeholderVariant: variant,
+          retrying: group.retrying,
         });
       }
     }
 
+    // Each missing/failed slot gets a STABLE outputIndex (= its position after the
+    // completed items). A slot that is currently retrying renders as "retrying" — this
+    // is per-slot, so a completed sibling never flips to generating.
+    const retryingSlots = group.retryingSlots ?? [];
+    const pushFailedSlot = (outputIndex: number, keySuffix: string) => {
+      const err = session.groupErrors?.[gi];
+      const isRetrying = retryingSlots.includes(outputIndex);
+      entries.push({
+        key: `${session.id}-${gi}-${keySuffix}`,
+        sessionId: session.id,
+        groupIdx: gi,
+        outputIndex,
+        status: isRetrying ? "generating" : "failed",
+        refLabel,
+        createdAt: session.savedAt,
+        placeholderVariant: isRetrying ? "generating" : "failed",
+        retrying: isRetrying,
+        errorType: isRetrying ? undefined : err?.errorType,
+        errorMessage: isRetrying ? undefined : err?.message,
+      });
+    };
+
     if (group.status === "failed" && group.items.length === 0) {
-      for (let i = 0; i < group.expectedCount; i++) {
-        entries.push({
-          key: `${session.id}-${gi}-fail-${i}`,
-          sessionId: session.id,
-          groupIdx: gi,
-          status: "failed",
-          refLabel,
-          createdAt: session.savedAt,
-          placeholderVariant: "failed",
-        });
-      }
+      for (let i = 0; i < group.expectedCount; i++) pushFailedSlot(i, `fail-${i}`);
     }
 
     const missing = Math.max(0, group.expectedCount - group.items.length);
-    if (group.status === "failed" && group.items.length > 0 && missing > 0) {
-      for (let i = 0; i < missing; i++) {
-        entries.push({
-          key: `${session.id}-${gi}-fail-partial-${i}`,
-          sessionId: session.id,
-          groupIdx: gi,
-          status: "failed",
-          refLabel,
-          createdAt: session.savedAt,
-          placeholderVariant: "failed",
-        });
-      }
+    if ((group.status === "failed" || group.status === "partial") && group.items.length > 0 && missing > 0) {
+      for (let i = 0; i < missing; i++) pushFailedSlot(group.items.length + i, `fail-partial-${i}`);
     }
   });
   return entries;
@@ -334,19 +838,15 @@ function filterMasonryPins(pins: MasonryPinEntry[], filter: FeedFilter): Masonry
   });
 }
 
-function flattenFeedItems(sessions: GenerationSession[], filter: FeedFilter): FeedItem[] {
+function flattenFeedItems(sessions: GenerationSession[], filter: FeedFilter, planDrafts: PinDraft[] = []): FeedItem[] {
   const sorted = [...sessions].sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
   const items: FeedItem[] = [];
   for (const session of sorted) {
-    for (const entry of filterMasonryPins(collectSessionPins(session), filter)) {
+    for (const entry of filterMasonryPins(collectSessionPins(session, planDrafts), filter)) {
       items.push({ entry, session });
     }
   }
   return items;
-}
-
-function sessionHasAddablePins(session: GenerationSession): boolean {
-  return session.groups.some(g => g.items.some(p => p.planningStatus === "not_added"));
 }
 
 function entryStatusToSessionStatus(entry: HistoryEntry): SessionStatus {
@@ -373,24 +873,28 @@ function historyEntryToSession(entry: HistoryEntry, collapsed: boolean): Generat
     keyword:            entry.keyword,
     category:           entry.category,
     source:             entry.source,
-    groups:             entry.groups.map((g, gi) => ({
-      refUrl:        g.refUrl,
-      refIndex:      gi,
-      items:         g.images.map((url, ii) => {
-        const sessCtx = {
-          keyword: entry.keyword, category: entry.category,
-          setupSnapshot: entry.setupSnapshot,
-          promptFull: entry.promptFull ?? entry.promptExcerpt ?? "",
-        };
-        const refLabel = g.refUrl ? `Reference ${gi + 1}` : "Default";
-        const pin = createCompletedPin(entry.id, gi, ii, toProxyUrl(url), sessCtx, refLabel);
-        return hydratePinFromStore(pin, entry.id);
-      }),
-      status:        g.images.length > 0
-        ? "done"
-        : sessionStatus === "generating" || sessionStatus === "queued" ? "generating" : "failed",
-      expectedCount: entry.imagesPerRef ?? Math.max(g.images.length, 1),
-    })),
+    groups:             entry.groups.map((g, gi) => {
+      const grpImagesPerRef = entry.imagesPerRef ?? 0;
+      const grpStatus: RefGroup["status"] = g.images.length === 0
+        ? (sessionStatus === "generating" || sessionStatus === "queued" ? "generating" : "failed")
+        : (grpImagesPerRef > 0 && g.images.length < grpImagesPerRef ? "partial" : "done");
+      return {
+        refUrl:        g.refUrl,
+        refIndex:      gi,
+        items:         g.images.map((url, ii) => {
+          const sessCtx = {
+            keyword: entry.keyword, category: entry.category,
+            setupSnapshot: entry.setupSnapshot,
+            promptFull: entry.promptFull ?? entry.promptExcerpt ?? "",
+          };
+          const refLabel = g.refUrl ? `Reference ${gi + 1}` : "Default";
+          const pin = createCompletedPin(entry.id, gi, ii, toProxyUrl(url), sessCtx, refLabel);
+          return hydratePinFromStore(pin, entry.id);
+        }),
+        status:        grpStatus,
+        expectedCount: entry.imagesPerRef ?? Math.max(g.images.length, 1),
+      };
+    }),
     status:             sessionStatus,
     expectedTotal:      entry.expectedTotal ?? entry.totalPins,
     promptExcerpt:      entry.promptExcerpt ?? "",
@@ -403,10 +907,13 @@ function historyEntryToSession(entry: HistoryEntry, collapsed: boolean): Generat
     setupSnapshot:      entry.setupSnapshot,
     errorType:          entry.errorType,
     errorMessage:       entry.errorMessage,
-    model:              "GPT Image 2",
-    format:             "Pinterest 2:3",
+    // Real generation metadata — never a hardcoded model. Falls back through the
+    // snapshot's modelKey to the MVP default; the stale legacy label is ignored.
+    model:              resolveModelLabel(entry.setupSnapshot?.model, entry.setupSnapshot?.modelKey),
+    format:             entry.setupSnapshot?.format ?? "2:3",
     textOverlay:        entry.setupSnapshot?.noTextOverlay === false ? "On" : "Off",
     groupErrors:        Object.keys(groupErrors).length > 0 ? groupErrors : undefined,
+    categoryAudit:      entry.categoryAudit,
   };
 }
 
@@ -440,7 +947,7 @@ function buildComposerPrompt(kw: string, cat: string, hasProducts: boolean): str
       "Use the uploaded product images as the main items to feature. Keep their color, shape, material, and key details recognizable.",
       refGuide,
       `Place the products naturally in ${baseScene}.`,
-      "No text overlay. No typography. No watermark. Vertical 2:3 format.",
+      "No text overlay. No typography. No watermark.",
     ].join("\n\n");
   }
   if (kw) {
@@ -448,11 +955,19 @@ function buildComposerPrompt(kw: string, cat: string, hasProducts: boolean): str
       `Create a Pinterest-native ${style} Pin for "${kw}".`,
       refGuide,
       `Create ${baseScene}.`,
-      "No text overlay. No typography. No watermark. Vertical 2:3 format.",
+      "No text overlay. No typography. No watermark.",
     ].join("\n\n");
   }
   return "";
 }
+
+// ── Model options ─────────────────────────────────────────────────────────────
+
+const MODEL_OPTIONS = [
+  { value: "gpt_image",    label: "GPT Image"    },
+  { value: "gemini_image", label: "Gemini Image" },
+] as const;
+const SHOW_GENERATION_DEBUG = process.env.NEXT_PUBLIC_STUDIO_DEBUG_GENERATION === "true";
 
 // ── Inline Dropdown ───────────────────────────────────────────────────────────
 
@@ -491,62 +1006,79 @@ function CompactAssetEntry({
   onToggleUrl:  (url: string) => void;
   onOpenPicker: () => void;
 }) {
+  const { t: tr }   = useLocale();
   const isProduct   = role === "product";
   const testSection = isProduct ? "products-asset-section" : "refs-asset-section";
   const testAddBtn  = isProduct ? "add-product-images" : "add-pin-references";
   const testSelected = isProduct ? "selected-products" : "selected-refs";
-  const title    = isProduct ? "Products" : "References";
-  const addLabel = isProduct ? "Add product images" : "Add pin references";
-  const thumbW   = isProduct ? 28 : 22;
-  const thumbH   = isProduct ? 28 : 30;
+  const title    = isProduct ? tr("page.studio.products") : tr("page.studio.references");
+  const helper   = isProduct
+    ? tr("page.studio.productsHelper")
+    : tr("page.studio.referencesHelper");
+  const addLabel = isProduct ? tr("page.studio.addProductImages") : tr("page.studio.addPinReferences");
+  const selectedItems: SelectedAssetPreviewItem[] = selectedUrls.map(url => {
+    const asset = assetStore.getAssets().find(a => a.imageUrl === url && a.role === role);
+    return {
+      imageUrl: url,
+      title: asset?.title,
+      source: asset?.source,
+      sourceDomain: asset?.sourceDomain || asset?.store,
+    };
+  });
 
   return (
     <div
       data-testid={testSection}
-      style={{
+                  style={{
         flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
-        padding: "10px 10px 8px", borderRadius: 10,
+        padding: "7px 8px 6px", borderRadius: 8,
         border: `1.5px dashed ${D.borderStr}`, background: D.cardElev,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
         <span style={{ fontSize: "11px", fontWeight: 700, color: D.text }}>{title}</span>
         <span data-testid={`${testSection}-count`} style={{ fontSize: "10px", fontWeight: 600, color: D.textSec }}>
           ({selectedUrls.length})
         </span>
-      </div>
+                  </div>
+      <p style={{ margin: "0 0 5px", fontSize: "9.5px", lineHeight: 1.35, color: D.textMuted }}>{helper}</p>
 
       {selectedUrls.length > 0 && (
-        <div data-testid={testSelected} style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
-          {selectedUrls.map((url, i) => (
-            <div key={i} style={{ position: "relative", flexShrink: 0, width: thumbW, height: thumbH }}>
-              <div style={{ width: "100%", height: "100%", borderRadius: 5, overflow: "hidden", border: `1px solid ${D.borderStr}`, position: "absolute", inset: 0 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={toProxyUrl(url)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-              </div>
-              <button
-                type="button"
-                onClick={() => onToggleUrl(url)}
-                style={{
-                  position: "absolute", top: 1, right: 1, width: 12, height: 12, borderRadius: "50%",
+        <div data-testid={testSelected} style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+            {selectedItems.map((item, i) => (
+            <div key={`${item.imageUrl}-${i}`} style={{ position: "relative", flexShrink: 0, width: 42, height: 42 }}>
+              <SelectedAssetPreview
+                item={item}
+                items={selectedItems}
+                index={i}
+                kind={isProduct ? "product" : "reference"}
+                thumbnailSize={42}
+                testId={isProduct ? "selected-product-thumbnail" : "selected-reference-thumbnail"}
+              />
+                <button
+                  type="button"
+                  aria-label={`Remove ${isProduct ? "product" : "reference"} ${i + 1}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleUrl(item.imageUrl); }}
+                  style={{
+                  position: "absolute", top: -4, right: -4, width: 16, height: 16, borderRadius: "50%",
                   background: "rgba(0,0,0,0.75)", border: "none", cursor: "pointer",
-                  display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1,
+                  display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2,
                 }}
               >
-                <X style={{ width: 7, height: 7, color: "#fff" }} />
-              </button>
-            </div>
-          ))}
+                <X style={{ width: 9, height: 9, color: "#fff" }} />
+                </button>
+              </div>
+            ))}
         </div>
       )}
 
-      <button
-        type="button"
+        <button
+          type="button"
         data-testid={testAddBtn}
-        onClick={onOpenPicker}
-        style={{
+          onClick={onOpenPicker}
+          style={{
           display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-          width: "100%", padding: "6px 8px", borderRadius: 7,
+          width: "100%", padding: "5px 8px", borderRadius: 6,
           border: `1px solid ${D.border}`, background: D.card,
           cursor: "pointer", fontSize: "11px", fontWeight: 600, color: D.textSec,
         }}
@@ -554,7 +1086,7 @@ function CompactAssetEntry({
         onMouseLeave={e => { e.currentTarget.style.borderColor = D.border; e.currentTarget.style.color = D.textSec; }}
       >
         <Plus style={{ width: 10, height: 10 }} /> {addLabel}
-      </button>
+        </button>
     </div>
   );
 }
@@ -563,8 +1095,8 @@ function CompactAssetEntry({
 
 type OppDrawerTab = "recommended" | "recent";
 
-function OpportunityDrawer({ open, onClose, onSelect }: {
-  open: boolean; onClose: () => void; onSelect: (o: Opportunity) => void;
+function OpportunityDrawer({ open, inferredCategory, onClose, onSelect }: {
+  open: boolean; inferredCategory?: string; onClose: () => void; onSelect: (o: Opportunity) => void;
 }) {
   const [opps,       setOpps]       = useState<OppRow[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -609,9 +1141,15 @@ function OpportunityDrawer({ open, onClose, onSelect }: {
   const baseRows: OppRow[] = tab === "recent"
     ? recentOpps.map(r => ({ id: r.keyword, keyword: r.keyword, category: r.category, priority_score: r.tier === "best_bet" ? 80 : 50, yearly_change: null }))
     : opps;
+  // Searching hits ALL opportunities; the default recommended list is filtered to
+  // the inferred category (fashion upload → only fashion/outfit/style, never Nails).
+  const contextMatched = (tab === "recommended" && inferredCategory)
+    ? (rankOpportunities(baseRows, inferredCategory) as OppRow[])
+    : baseRows;
   const filtered = q.trim()
     ? baseRows.filter(o => o.keyword.toLowerCase().includes(q.toLowerCase()) || o.category.toLowerCase().includes(q.toLowerCase()))
-    : baseRows;
+    : contextMatched;
+  const showContextEmpty = !q.trim() && tab === "recommended" && !!inferredCategory && !loading && contextMatched.length === 0 && baseRows.length > 0;
 
   if (!open) return null;
 
@@ -662,6 +1200,10 @@ function OpportunityDrawer({ open, onClose, onSelect }: {
             <p style={{ textAlign: "center", padding: "30px 0", fontSize: "13px", color: D.textSec }}>No recent opportunities yet</p>
           ) : (loading && tab !== "recent") ? (
             [1,2,3,4,5].map(i => <div key={i} style={{ height: 78, borderRadius: 10, background: D.cardElev, marginBottom: 6, animation: "pulse 1.5s ease-in-out infinite" }} />)
+          ) : showContextEmpty ? (
+            <p style={{ textAlign: "center", padding: "30px 16px", fontSize: "12px", lineHeight: 1.55, color: D.textSec }}>
+              No matching opportunities found for this upload. You can search all opportunities or generate without one.
+            </p>
           ) : filtered.length === 0 ? (
             <p style={{ textAlign: "center", padding: "30px 0", fontSize: "13px", color: D.textSec }}>No results</p>
           ) : filtered.map(row => {
@@ -698,23 +1240,29 @@ function OpportunityDrawer({ open, onClose, onSelect }: {
 function MasonryPinFeed({
   sessions, filter,
   onFilterChange,
-  onAddToPlan, onAddAllToPlan, onRegeneratePin, onRegenerateGroup,
+  onAddToPlan, onAddAllToPlan, onRegeneratePin, onRegenerateGroup, onRetryOutput, onEditInputs,
   pinDetailOpen, pinDetailInitialTab, pinDetail, metadataForm, pinDetailsGenStatus, readinessLabel, isDirty, showSaved,
   onOpenPinDetail, onClosePinDetail, onRetryGenerateDetails,
   onMetadataChange, onSelectTitleCandidate, onRegenerateTitles, onRegenerateDescription, onSavePinMetadata,
   onPinDetailAddToPlan, onPinDetailRegenerate, onPinDetailSaveAsReference,
   onPinDetailRetryPin, onPinDetailRetryGroup, onPinDetailReuseSetup, onPinDetailViewSetup,
   onPinDetailRegenerateWithRemix,
+  canViewDebug,
   selectedPinKeys, onTogglePinSelect, onClearSelection, onOpenBatchEdit, onBatchGenerateMetadata, onAddSelectedToPlan,
   batchEditOpen, batchPins, onCloseBatchEdit, onBatchApply, onBatchGenerateFromDrawer,
+  onBatchScheduleSelected, onBatchPublishComplete,
+  planDrafts,
 }: {
   sessions:            GenerationSession[];
   filter:              FeedFilter;
+  planDrafts:          PinDraft[];
   onFilterChange:      (f: FeedFilter) => void;
   onAddToPlan:         (sessionId: string, gi: number, pi: number) => void;
   onAddAllToPlan:      (sessionId: string) => void;
   onRegeneratePin:     (sessionId: string, gi: number, pi: number) => void;
   onRegenerateGroup:   (sessionId: string, gi: number) => void;
+  onRetryOutput:       (sessionId: string, gi: number, outputIndex: number) => void;
+  onEditInputs:        (sessionId: string) => void;
   pinDetailOpen:       boolean;
   pinDetailInitialTab: DrawerTab;
   pinDetail:           PinDetailView | null;
@@ -739,6 +1287,7 @@ function MasonryPinFeed({
   onPinDetailReuseSetup: () => void;
   onPinDetailViewSetup: () => void;
   onPinDetailRegenerateWithRemix: (remixSetup: RemixDraftSetup) => void;
+  canViewDebug:         boolean;
   selectedPinKeys:     Set<string>;
   onTogglePinSelect:   (entryKey: string) => void;
   onClearSelection:    () => void;
@@ -748,17 +1297,20 @@ function MasonryPinFeed({
   batchEditOpen:       boolean;
   batchPins:           BatchPinRow[];
   onCloseBatchEdit:    () => void;
-  onBatchApply:        (opts: Parameters<BatchEditDrawerProps["onApply"]>[0]) => void;
+  onBatchApply:        (opts: BatchApplyOpts) => void;
   onBatchGenerateFromDrawer: (overwriteEdited: boolean) => void;
+  onBatchScheduleSelected: (pinIds: string[]) => void;
+  onBatchPublishComplete: (pinIds: string[]) => void;
 }) {
+  const { t: tr } = useLocale();
   const tabs: { id: FeedFilter; label: string }[] = [
-    { id: "all",        label: "All" },
-    { id: "generating", label: "Generating" },
-    { id: "completed",  label: "Completed" },
-    { id: "failed",     label: "Failed" },
-    { id: "added",      label: "Added to Plan" },
+    { id: "all",        label: tr("page.studio.filterAll") },
+    { id: "generating", label: tr("page.studio.filterGenerating") },
+    { id: "completed",  label: tr("page.studio.filterCompleted") },
+    { id: "failed",     label: tr("page.studio.filterFailed") },
+    { id: "added",      label: tr("page.studio.filterAdded") },
   ];
-  const feedItems = flattenFeedItems(sessions, filter);
+  const feedItems = flattenFeedItems(sessions, filter, planDrafts);
   const isEmpty   = sessions.length === 0;
   const hasPins   = feedItems.length > 0;
 
@@ -786,9 +1338,9 @@ function MasonryPinFeed({
               }}
             >
               {t.label}
-            </button>
+          </button>
           ))}
-        </div>
+      </div>
         {selectedPinKeys.size > 0 && (
           <div data-testid="batch-toolbar" style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderBottom: `1px solid ${D.border}`, background: D.cardElev, flexShrink: 0, flexWrap: "wrap" }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: D.text }}>{selectedPinKeys.size} selected</span>
@@ -796,7 +1348,7 @@ function MasonryPinFeed({
             <button type="button" data-testid="batch-edit-details-button" onClick={onOpenBatchEdit} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textSec, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Batch Edit Details</button>
             <button type="button" data-testid="batch-add-selected" onClick={onAddSelectedToPlan} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: D.gradient, color: "#fff", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Add selected to Plan</button>
             <button type="button" data-testid="batch-clear-selection" onClick={onClearSelection} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textMuted, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>Clear selection</button>
-          </div>
+            </div>
         )}
       </div>
 
@@ -815,12 +1367,12 @@ function MasonryPinFeed({
               border: `1px solid ${D.border}`, display: "flex", alignItems: "center", justifyContent: "center",
             }}>
               <Sparkles style={{ width: 44, height: 44, color: D.purple }} />
-            </div>
+        </div>
             <p style={{ margin: "0 0 8px", fontSize: "16px", fontWeight: 800, color: D.text }}>
-              Your generated Pins will appear here
+              {tr("page.studio.emptyTitle")}
             </p>
             <p style={{ margin: "0 0 20px", fontSize: "13px", color: D.textSec, lineHeight: 1.6, maxWidth: 360 }}>
-              Add product images, Pin references, and a prompt to create your first Pin set.
+              {tr("page.studio.emptySub")}
             </p>
             <button
               type="button"
@@ -832,9 +1384,9 @@ function MasonryPinFeed({
                 fontSize: "12px", fontWeight: 600, color: D.textSec, cursor: "pointer",
               }}
             >
-              <Play style={{ width: 12, height: 12 }} /> How it works
+              <Play style={{ width: 12, height: 12 }} /> {tr("page.studio.howItWorks")}
             </button>
-          </div>
+              </div>
         ) : !hasPins ? (
           <div style={{ padding: "48px 20px", textAlign: "center" }}>
             <p style={{ margin: 0, fontSize: "13px", color: D.textSec }}>No generations in this tab yet.</p>
@@ -848,15 +1400,25 @@ function MasonryPinFeed({
                 session={session}
                 isSelected={selectedPinKeys.has(entry.key)}
                 onToggleSelect={(e) => { e.stopPropagation(); onTogglePinSelect(entry.key); }}
-                onOpenDetails={() => onOpenPinDetail(session.id, entry.key, "preview")}
+                onOpenDetails={() => onOpenPinDetail(session.id, entry.key, "plan")}
                 onAddToPlan={(e) => {
                   e.stopPropagation();
                   if (entry.status === "failed" || entry.status === "generating") return;
-                  onOpenPinDetail(session.id, entry.key, "plan");
+                  if (entry.pinIdx !== undefined) onAddToPlan(session.id, entry.groupIdx, entry.pinIdx);
                 }}
                 onView={(e) => {
                   e.stopPropagation();
-                  onOpenPinDetail(session.id, entry.key, "preview");
+                  onOpenPinDetail(session.id, entry.key, "plan");
+                }}
+                onViewPlan={(e) => {
+                  e.stopPropagation();
+                  window.location.assign("/app/plan");
+                }}
+                onViewPin={(e) => {
+                  e.stopPropagation();
+                  const url = entry.pin?.url;
+                  if (url) window.open(url, "_blank", "noopener,noreferrer");
+                  else onOpenPinDetail(session.id, entry.key, "plan");
                 }}
                 onRemix={(e) => {
                   e.stopPropagation();
@@ -864,10 +1426,13 @@ function MasonryPinFeed({
                 }}
                 onRegenerate={(e) => {
                   e.stopPropagation();
-                  if (entry.pinIdx === undefined) return;
-                  onRegeneratePin(session.id, entry.groupIdx, entry.pinIdx);
+                  // Failed outputs have no Pin to remix — regenerate = retry that output.
+                  if (entry.status === "failed") { onRetryOutput(session.id, entry.groupIdx, entry.outputIndex ?? entry.pinIdx ?? 0); return; }
+                  onOpenPinDetail(session.id, entry.key, "remix");
                 }}
-                onRetry={entry.status === "failed" ? (e) => { e.stopPropagation(); onRegenerateGroup(session.id, entry.groupIdx); } : undefined}
+                onDiagnostics={canViewDebug ? (e) => { e.stopPropagation(); onOpenPinDetail(session.id, entry.key, "debug"); } : undefined}
+                onRetry={entry.status === "failed" ? (e) => { e.stopPropagation(); onRetryOutput(session.id, entry.groupIdx, entry.outputIndex ?? entry.pinIdx ?? 0); } : undefined}
+                onEditInputs={entry.status === "failed" ? (e) => { e.stopPropagation(); onEditInputs(session.id); } : undefined}
                 onAddAllToPlan={() => onAddAllToPlan(session.id)}
                 onRegenerateSet={() => session.groups.forEach((_, gi) => onRegenerateGroup(session.id, gi))}
               />
@@ -900,6 +1465,7 @@ function MasonryPinFeed({
         onReuseSetup={onPinDetailReuseSetup}
         onViewSetup={onPinDetailViewSetup}
         onRegenerateWithRemix={onPinDetailRegenerateWithRemix}
+        canViewDebug={canViewDebug}
       />
       <BatchEditDrawer
         open={batchEditOpen}
@@ -907,6 +1473,8 @@ function MasonryPinFeed({
         onClose={onCloseBatchEdit}
         onApply={onBatchApply}
         onGenerateMetadata={onBatchGenerateFromDrawer}
+        onScheduleSelected={onBatchScheduleSelected}
+        onPublishComplete={onBatchPublishComplete}
       />
     </div>
   );
@@ -1039,7 +1607,10 @@ function EditDetailsDrawer({ pin, open, onClose, onSave }: {
 // ── Pin Card (completed / failed / generating / queued) ───────────────────────
 
 function PinCard({
-  entry, session, isSelected, onToggleSelect, onOpenDetails, onAddToPlan, onView, onRemix, onRegenerate, onRetry, onAddAllToPlan, onRegenerateSet,
+  // onAddToPlan / onRemix / onAddAllToPlan / onRegenerateSet / onDiagnostics remain on
+  // the prop contract (callers still pass them) but are no longer surfaced on the card —
+  // all actions now flow through the shared PinCardActions component.
+  entry, session, isSelected, onToggleSelect, onOpenDetails, onView, onViewPlan, onViewPin, onRegenerate, onRetry, onEditInputs,
 }: {
   entry: MasonryPinEntry;
   session: GenerationSession;
@@ -1048,46 +1619,144 @@ function PinCard({
   onOpenDetails: () => void;
   onAddToPlan: (e: React.MouseEvent) => void;
   onView: (e: React.MouseEvent) => void;
+  onViewPlan: (e: React.MouseEvent) => void;
+  onViewPin: (e: React.MouseEvent) => void;
   onRemix: (e: React.MouseEvent) => void;
   onRegenerate?: (e: React.MouseEvent) => void;
   onRetry?: (e: React.MouseEvent) => void;
+  onEditInputs?: (e: React.MouseEvent) => void;
+  onDiagnostics?: (e: React.MouseEvent) => void;
   onAddAllToPlan: () => void;
   onRegenerateSet: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const isPlaceholder = entry.status === "generating" || entry.status === "failed";
   const variant = entry.placeholderVariant ?? (entry.status === "failed" ? "failed" : "generating");
   const pin = entry.pin;
-  const isAdded = pin ? pin.planningStatus !== "not_added" : false;
   const dlName = pin ? `vibepin-${session.id.slice(-8)}-${pin.id.slice(-6)}.png` : "";
-  const metaLabel = pin && !isPlaceholder ? metadataReadinessLabel(pin) : null;
-  const badgeLabel = isPlaceholder
-    ? (variant === "failed" ? "Failed" : "Generating")
-    : (metaLabel ?? "Completed");
-  const badgeColor = isPlaceholder
-    ? (variant === "failed" ? D.error : D.purple)
-    : (metaLabel === "Ready" || metaLabel === "Added to Plan" ? D.success : metaLabel?.startsWith("Missing") ? D.warning : D.purple);
-  const canAddSet = sessionHasAddablePins(session);
-  const actionBtn: React.CSSProperties = {
-    padding: "5px 8px", borderRadius: 7, border: "none",
-    background: "rgba(8,13,25,0.82)", color: "#E2E8F0",
-    fontSize: "9px", fontWeight: 700, cursor: "pointer", backdropFilter: "blur(8px)",
-  };
+
+  // ── Workflow state (plan + publish) ────────────────────────────────────────
+  // Prefer the live plan state reconciled against the Weekly Plan draft store
+  // (entry.planState); fall back to the in-memory pin only when no reconciliation ran.
+  const workflowState: CardWorkflowState | null = isPlaceholder
+    ? null
+    : (entry.planState ?? getCardWorkflowState(pin));
+  // Date for the "Scheduled <date>" badge comes from the matched draft when present.
+  const resolvedPlanDate = entry.planDate?.trim() || pin?.plannedDate || "";
+
+  // ── Normalized card status ─────────────────────────────────────────────────
+  // The ONLY status model the UI shows: Unscheduled / Scheduled / Failed / Posted /
+  // Generating. There is no "needs details" / "not planned" state — a pin in the
+  // plan is Scheduled (the shared modal resolves any missing date/fields); an
+  // un-added generated pin is Unscheduled (generated but not yet scheduled).
+  const cardStatus: PinCardStatus = isPlaceholder
+    ? (variant === "failed" ? "failed" : "generating")
+    : workflowState === "posted" ? "posted"
+    : (workflowState === "scheduled" || workflowState === "needs_date") ? "scheduled"
+    : "unscheduled";
+
+  // ── Badge (left-top) ───────────────────────────────────────────────────────
+  const badgeLabel =
+      cardStatus === "failed"     ? "Failed"
+    : cardStatus === "generating" ? (variant === "queued" ? "Queued" : "Generating")
+    : cardStatus === "posted"     ? "Posted"
+    : cardStatus === "scheduled"  ? (resolvedPlanDate ? `Scheduled ${formatShortDate(resolvedPlanDate)}` : "Scheduled")
+    : "Unscheduled";
+
+  const badgeColor =
+      cardStatus === "failed"     ? D.error
+    : cardStatus === "generating" ? (variant === "queued" ? D.textMuted : D.purple)
+    : cardStatus === "posted"     ? D.success
+    : cardStatus === "scheduled"  ? "#60A5FA"
+    : "#34D399"; // unscheduled — positive emerald
+
+  const badgeIcon = (() => {
+    if (cardStatus === "generating") {
+      if (variant === "queued") return <Clock style={{ width: 9, height: 9, color: D.textMuted }} />;
+      return <div style={{ width: 8, height: 8, border: `1.5px solid ${D.purple}40`, borderTopColor: D.purple, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />;
+    }
+    if (cardStatus === "failed")    return <AlertCircle style={{ width: 9, height: 9, color: D.error }} />;
+    if (cardStatus === "posted")    return <CheckCircle2 style={{ width: 9, height: 9, color: D.success }} />;
+    if (cardStatus === "scheduled") return <Calendar style={{ width: 9, height: 9, color: "#60A5FA" }} />;
+    return <Sparkles style={{ width: 9, height: 9, color: "#34D399" }} />; // unscheduled
+  })();
+
+  // ── Output position + batch context ───────────────────────────────────────
+  const globalPinIdx = entry.pinIdx !== undefined
+    ? session.groups.slice(0, entry.groupIdx).reduce((sum, g) => sum + g.items.length, 0) + entry.pinIdx + 1
+    : null;
+  const productCount = session.setupSnapshot?.selectedProducts?.length ?? session.productCount ?? 0;
+  const refCount = session.setupSnapshot?.selectedReferences?.length ?? session.refCount ?? 0;
+  const batchMeta = [
+    productCount > 0 ? `${productCount} product${productCount !== 1 ? "s" : ""}` : null,
+    refCount > 0 ? `${refCount} ref${refCount !== 1 ? "s" : ""}` : null,
+  ].filter(Boolean).join(" · ");
+
+  // ── Footer second line (workflow-aware) ───────────────────────────────────
+  const catLabel = session.category
+    ? session.category.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+    : "";
+  const footerLine2 = (() => {
+    if (isPlaceholder || !pin) return `${batchMeta ? `${batchMeta} · ` : ""}${session.format ?? "2:3"}`;
+    if (cardStatus === "posted") {
+      const d = pin.plannedDate?.trim() ? `Posted ${formatShortDate(pin.plannedDate)}` : "Posted";
+      return `${d} · Pinterest`;
+    }
+    if (cardStatus === "scheduled") {
+      const d = formatShortDate(pin.plannedDate);
+      return d ? `Scheduled ${d}${catLabel ? ` · ${catLabel}` : ""}` : (catLabel || "Scheduled");
+    }
+    // unscheduled — show generation context
+    const modelLabel = session.model ?? "";
+    return `${batchMeta ? `${batchMeta} · ` : ""}${session.format ?? "2:3"}${modelLabel ? ` · ${modelLabel}` : ""}`;
+  })();
+
+  // Field-level readiness (missing product / destination URL) is deliberately
+  // NOT surfaced on the card image. Product is optional and a missing URL never
+  // blocks scheduling — those details live in Pin Details / Batch Edit / Publish
+  // readiness, not as noisy public card text.
+
+  // Card action buttons (labels + layout) live in the shared PinCardActions component.
+
   const placeholderCfg = {
     generating: { bg: "linear-gradient(145deg, rgba(124,58,237,0.16), rgba(11,16,32,0.98))", color: D.purple, text: "Still generating" },
     queued:     { bg: "linear-gradient(145deg, rgba(74,85,104,0.22), rgba(11,16,32,0.98))", color: D.textMuted, text: "Queued" },
     failed:     { bg: "linear-gradient(145deg, rgba(239,68,68,0.2), rgba(11,16,32,0.98))", color: D.error, text: "Failed to generate" },
   }[variant];
+  // Safe, human copy — never surfaces the raw upstream JSON to the user.
+  const readableError = getReadableGenerationError(entry.errorType, entry.errorMessage);
+
+  // ── Dev/test-only plan-state diagnostics ───────────────────────────────────
+  // Surfaces the matching internals so state mismatches between Create Pins and
+  // Weekly Plan are inspectable. Absent from production UI; only data-* attributes
+  // (invisible) and a small collapsible block render, and only when not production.
+  const showDiag = isPlanDebugEnabled() && !isPlaceholder && !!pin;
+  const diagAttrs: Record<string, string> = showDiag ? {
+    "data-vp-pin-id":          pin!.id,
+    "data-vp-session-id":      entry.sessionId,
+    "data-vp-draft-id":        entry.planDraftId ?? "",
+    "data-vp-match-reason":    entry.planMatchReason ?? "none",
+    "data-vp-matched":         String(!!entry.planDraftId),
+    "data-vp-planning-status": pin!.planningStatus,
+    "data-vp-plan-state":      workflowState ?? "",
+    "data-vp-card-status":     entry.status,
+    "data-vp-planned-date":    resolvedPlanDate,
+    "data-vp-planned-time":    entry.planTime ?? pin!.plannedTime ?? "",
+    "data-vp-planned-at":      pin!.plannedAt ?? "",
+  } : {};
 
   return (
     <article
+      {...diagAttrs}
       data-testid={isPlaceholder ? "placeholder-card" : "generated-pin-card"}
       title={`Generated Set ${session.id.slice(-8)}`}
       onClick={onOpenDetails}
       onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => { setHover(false); setMoreOpen(false); }}
-      style={{
+      // Keep an open More menu open when the cursor leaves the card body — closing
+      // it here made the three-dot menu impossible to reach. Outside-click (the
+      // fixed overlay below) and Escape still dismiss it.
+      onMouseLeave={() => setHover(false)}
+        style={{
         position: "relative", borderRadius: 12, overflow: "hidden", cursor: "pointer",
         border: `1px solid ${hover ? "rgba(124,58,237,0.45)" : D.border}`,
         background: D.cardElev, minWidth: 0, width: "100%",
@@ -1095,8 +1764,22 @@ function PinCard({
         transition: "box-shadow 0.15s ease, border-color 0.15s ease",
       }}
     >
-      <div style={{ position: "relative", width: "100%", aspectRatio: "2/3", background: "#0B1020", overflow: "hidden" }}>
-        {!isPlaceholder && pin && (
+      <div style={{ position: "relative", width: "100%", aspectRatio: "2/3", background: "var(--app-surface-3, #0B1020)", overflow: "hidden" }}>
+        {/* Dev/test-only plan-state diagnostics — collapsible, absent in production. */}
+        {showDiag && (
+          <details data-testid="pin-card-plan-debug" onClick={e => e.stopPropagation()}
+            style={{ position: "absolute", top: 30, left: 8, zIndex: 4, maxWidth: "82%", background: "rgba(8,13,25,0.92)", border: "1px solid rgba(255,255,255,0.18)", borderRadius: 6, padding: "2px 6px", fontSize: 8.5, lineHeight: 1.45, color: "#9FB3C8", fontFamily: "monospace" }}>
+            <summary style={{ cursor: "pointer", color: "#C4B5FD", fontWeight: 700 }}>plan debug</summary>
+            <div>state: <b style={{ color: "#E2E8F0" }}>{workflowState}</b> · card: {entry.status}</div>
+            <div>match: {entry.planMatchReason ?? "none"} · draft: {entry.planDraftId ? entry.planDraftId.slice(-8) : "—"}</div>
+            <div>planningStatus: {pin!.planningStatus}</div>
+            <div>date: {resolvedPlanDate || "—"} · time: {entry.planTime || pin!.plannedTime || "—"}</div>
+            <div>plannedAt: {pin!.plannedAt || "—"}</div>
+            <div>pinId: {pin!.id.slice(-12)}</div>
+          </details>
+        )}
+        {/* Checkbox — only on hover or when selected (multi-select mode) */}
+        {!isPlaceholder && pin && (hover || isSelected) && (
           <button type="button" data-testid="pin-select-checkbox" onClick={onToggleSelect}
             style={{
               position: "absolute", top: 8, right: 8, zIndex: 3, width: 18, height: 18, borderRadius: 4,
@@ -1105,8 +1788,10 @@ function PinCard({
               display: "flex", alignItems: "center", justifyContent: "center",
             }}>
             {isSelected && <CheckCircle2 style={{ width: 12, height: 12, color: "#fff" }} />}
-          </button>
+              </button>
         )}
+
+        {/* Image or placeholder */}
         {isPlaceholder ? (
           <div style={{
             position: "absolute", inset: 0, background: placeholderCfg.bg,
@@ -1121,9 +1806,15 @@ function PinCard({
               <div style={{ width: 32, height: 32, border: `3px solid ${placeholderCfg.color}40`, borderTopColor: placeholderCfg.color, borderRadius: "50%", animation: "spin 0.8s linear infinite", position: "relative" }} />
             )}
             <p style={{ margin: 0, fontSize: "11px", color: variant === "failed" ? D.error : D.text, fontWeight: 800, position: "relative", textAlign: "center", padding: "0 10px" }}>
-              {placeholderCfg.text}
+              {variant === "failed" ? readableError.title : (entry.retrying ? "Retrying…" : placeholderCfg.text)}
             </p>
-          </div>
+            {/* User-facing copy only — the raw provider error stays in dev/server logs. */}
+            {variant === "failed" && (
+              <p style={{ margin: 0, maxWidth: "84%", fontSize: "9px", lineHeight: 1.4, color: "rgba(226,232,240,0.78)", textAlign: "center", position: "relative" }}>
+                {readableError.body}
+              </p>
+            )}
+                    </div>
         ) : (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
@@ -1141,87 +1832,54 @@ function PinCard({
             }}
           />
         )}
-        <span style={{
+
+        {/* Workflow status badge — top-left */}
+        <span data-testid="pin-card-status-badge" style={{
           position: "absolute", top: 8, left: 8, display: "inline-flex", alignItems: "center", gap: 4,
           padding: "3px 7px", borderRadius: 999, fontSize: "9px", fontWeight: 800,
           color: "#EAFDF5", background: "rgba(8,13,25,0.78)", backdropFilter: "blur(8px)",
           border: `1px solid ${badgeColor}55`,
         }}>
-          {!isPlaceholder && <CheckCircle2 style={{ width: 10, height: 10, color: badgeColor }} />}
+          {badgeIcon}
           {badgeLabel}
-        </span>
+                  </span>
+
+        {/* Footer gradient overlay — meta + always-visible action area */}
         <div style={{
-          position: "absolute", left: 0, right: 0, bottom: 0, padding: hover && !isPlaceholder ? "36px 8px 8px" : "8px",
-          background: "linear-gradient(180deg, transparent 0%, rgba(8,13,25,0.88) 72%)",
-          transition: "padding 0.15s ease",
+          position: "absolute", left: 0, right: 0, bottom: 0,
+          padding: (isPlaceholder && variant !== "failed") ? "8px" : "48px 8px 8px",
+          background: "linear-gradient(180deg, transparent 0%, rgba(8,13,25,0.55) 38%, rgba(8,13,25,0.95) 100%)",
+          display: "flex", flexDirection: "column", gap: 7,
         }}>
-          <p style={{ margin: "0 0 1px", fontSize: "10px", fontWeight: 700, color: "#F1F5F9" }}>{entry.refLabel}</p>
-          <p style={{ margin: 0, fontSize: "9px", fontWeight: 500, color: "rgba(226,232,240,0.72)" }}>
-            Pinterest 2:3 · {formatPinDate(entry.createdAt)}
-          </p>
-          {variant === "failed" && onRetry && (
-            <button type="button" onClick={e => { e.stopPropagation(); onRetry?.(e); }}
-              style={{ marginTop: 6, padding: "4px 8px", borderRadius: 6, border: `1px solid rgba(239,68,68,0.45)`, background: "rgba(239,68,68,0.18)", color: "#FCA5A5", fontSize: "9px", fontWeight: 800, cursor: "pointer" }}>
-              Retry this Pin
-            </button>
-          )}
-        </div>
-        {hover && !isPlaceholder && pin && (
-          <div style={{
-            position: "absolute", left: 8, right: 8, bottom: 8,
-            display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap",
-          }}>
-            <button type="button" onClick={onAddToPlan} disabled={isAdded} style={{ ...actionBtn, opacity: isAdded ? 0.65 : 1 }}>
-              {isAdded ? "Added" : "Add to Plan"}
-            </button>
-            <button type="button" title="View" data-testid="pin-card-view-btn" onClick={onView} style={actionBtn}>View</button>
-            <a href={toProxyUrl(pin.url)} download={dlName} title="Download" style={{ ...actionBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
-              ↓
-            </a>
-            <div style={{ position: "relative", marginLeft: "auto" }}>
-              <button type="button" title="More" onClick={e => { e.stopPropagation(); setMoreOpen(v => !v); }} style={{ ...actionBtn, width: 28, height: 28, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-                <MoreVertical style={{ width: 12, height: 12 }} />
-              </button>
-              {moreOpen && (
-                <>
-                  <div style={{ position: "fixed", inset: 0, zIndex: 30 }} onClick={() => setMoreOpen(false)} />
-                  <div style={{
-                    position: "absolute", right: 0, bottom: "calc(100% + 4px)", zIndex: 31,
-                    minWidth: 168, background: D.cardElev, border: `1px solid ${D.borderStr}`,
-                    borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", overflow: "hidden",
-                  }}>
-                    <p style={{ margin: 0, padding: "7px 10px 4px", fontSize: "9px", fontWeight: 600, color: D.textMuted, borderBottom: `1px solid ${D.border}` }}>
-                      Set {session.id.slice(-8)}
-                    </p>
-                    {canAddSet && (
-                      <button type="button" onClick={() => { onAddAllToPlan(); setMoreOpen(false); }}
-                        style={{ display: "block", width: "100%", padding: "7px 10px", border: "none", background: "none", textAlign: "left", fontSize: "10px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
-                        Add completed to Plan
-                      </button>
-                    )}
-                    <button type="button" data-testid="pin-card-remix-btn" onClick={e => { onRemix(e); setMoreOpen(false); }}
-                      style={{ display: "block", width: "100%", padding: "7px 10px", border: "none", background: "none", textAlign: "left", fontSize: "10px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
-                      Remix
-                    </button>
-                    <button type="button" onClick={e => { onRegenerate?.(e); setMoreOpen(false); }}
-                      style={{ display: "block", width: "100%", padding: "7px 10px", border: "none", background: "none", textAlign: "left", fontSize: "10px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
-                      Regenerate
-                    </button>
-                    <button type="button" onClick={() => { onRegenerateSet(); setMoreOpen(false); }}
-                      style={{ display: "block", width: "100%", padding: "7px 10px", border: "none", background: "none", textAlign: "left", fontSize: "10px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
-                      Regenerate set
-                    </button>
-                    <button type="button" onClick={() => { toast.success("Saved as reference."); setMoreOpen(false); }}
-                      style={{ display: "block", width: "100%", padding: "7px 10px", border: "none", background: "none", textAlign: "left", fontSize: "10px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
-                      Save as Reference
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
+          <div>
+            <p style={{ margin: "0 0 1px", fontSize: "10px", fontWeight: 700, color: "#F1F5F9" }}>
+              {globalPinIdx !== null ? `Output ${globalPinIdx} of ${session.expectedTotal}` : `Batch · ${session.expectedTotal} pin${session.expectedTotal !== 1 ? "s" : ""}`}
+            </p>
+            <p style={{ margin: 0, fontSize: "9px", fontWeight: 500, color: "rgba(226,232,240,0.72)" }}>
+              {footerLine2}
+            </p>
           </div>
-        )}
-      </div>
+
+          {/* Card actions — ONE shared, status-driven component for every Create Pins
+              card. Labels and the More menu are derived only from cardStatus inside
+              PinCardActions; nothing is hardcoded per card. Schedule / Edit / Details
+              all open the shared edit/schedule modal where any missing fields are
+              validated — there is no separate "needs details" card state. */}
+          <PinCardActions
+            status={cardStatus}
+            onOpenModal={onView}
+            onViewPlan={onViewPlan}
+            onViewPin={onViewPin}
+            onTryAgain={(e) => onRetry?.(e)}
+            onEditPrompt={(e) => onEditInputs?.(e)}
+            onRegenerate={(e) => onRegenerate?.(e)}
+            onSaveReference={() => toast.success("Saved as reference.")}
+            downloadHref={pin ? toProxyUrl(pin.url) : ""}
+            downloadName={dlName}
+          />
+
+        </div>
+    </div>
     </article>
   );
 }
@@ -1231,44 +1889,233 @@ function PinCard({
 function CreatePinsContent() {
   const searchParams = useSearchParams();
   const router       = useRouter();
+  const { t: tr }    = useLocale();
 
   const [products,        setProducts]        = useState<string[]>([]);
   const [refs,            setRefs]            = useState<string[]>([]);
   const [prompt,          setPrompt]          = useState("");
+  const [systemRecommendations, setSystemRecommendations] = useState<CreativeDirectionRecommendation[]>([]);
+  const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
+  const [guidedControls, setGuidedControls] = useState<GuidedControls>({});
+  const [customInstructions, setCustomInstructions] = useState("");
+  const [manualBrief, setManualBrief] = useState("");
+  const [manualBriefEdited, setManualBriefEdited] = useState(false);
+  // ── Lightweight creative controls (tags + auto-filled Direction brief) ──────
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [briefManuallyEdited, setBriefManuallyEdited] = useState(false);
+  const [briefStaleFromTags, setBriefStaleFromTags] = useState(false);
+  const [inputVersion, setInputVersion] = useState("init");
+  const [lastBriefInputVersion, setLastBriefInputVersion] = useState("init");
+  const [briefStale, setBriefStale] = useState(false);
+  const [opportunityContext, setOpportunityContext] = useState<CreativeOpportunityContext>({ enabled: false, removable: true });
+  const [lastPrefill, setLastPrefill] = useState<CreatePinsPrefill | null>(null);
   const [count,           setCount]           = useState(2);
-  const [textOverlay,     setTextOverlay]     = useState<"off" | "on">("off");
-  const [format,          setFormat]          = useState("Pinterest 2:3");
-  const [model,           setModel]           = useState("GPT Image 2");
+  const [variationMode,   setVariationMode]   = useState<"distinct" | "similar">("distinct");
+  const [format,          setFormat]          = useState("2:3");
+  // Create Pins MVP default provider is Gemini Image. GPT Image stays selectable.
+  // Remix preserves a saved snapshot.modelKey (incl. gpt_image); only missing/legacy
+  // values fall back to this default.
+  const [model,           setModel]           = useState("gemini_image");
   const [opportunity,     setOpportunity]     = useState<Opportunity | null>(null);
   const [rightPanelMode,  setRightPanelMode]  = useState<RightPanelMode>("feed");
   const [oppDrawerOpen,   setOppDrawerOpen]   = useState(false);
-  const [generating,      setGenerating]      = useState(false);
+  const [isSubmitting,    setIsSubmitting]    = useState(false);
+  const [enhancerSummary, setEnhancerSummary] = useState<{ scene?: string; style?: string; layout?: string; products?: string } | null>(null);
   const [sessions,        setSessions]        = useState<GenerationSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
+  // ── Amazon affiliate product context ────────────────────────────────────────
+  const [amazonSettings,  setAmazonSettings]  = useState<AmazonAffiliateSettings | null>(null);
   const [wsEntry,         setWsEntry]         = useState(false);
   const [wsPrimLabel,     setWsPrimLabel]     = useState("");
   const [wsTrendLabel,    setWsTrendLabel]    = useState("");
   const [feedFilter,      setFeedFilter]      = useState<FeedFilter>("all");
   const [pinDetailSelection, setPinDetailSelection] = useState<{ sessionId: string; entryKey: string; initialTab?: DrawerTab } | null>(null);
+  const [detailsModalDraft, setDetailsModalDraft] = useState<PinDraft | null>(null);
+  const [canViewDebug, setCanViewDebug] = useState(false);
   const [metadataForm,    setMetadataForm]    = useState<PinMetadataFormState | null>(null);
   const [metadataFormTouched, setMetadataFormTouched] = useState<Partial<MetadataTouchedFlags>>({});
   const [selectedPinKeys, setSelectedPinKeys] = useState<Set<string>>(new Set());
   const [batchEditOpen,   setBatchEditOpen]   = useState(false);
+  // Live Weekly Plan drafts — the source of truth for a card's plan state. Kept in
+  // sync so a pin scheduled in Weekly Plan immediately reflects in Create Pins.
+  const [planDrafts,      setPlanDrafts]      = useState<PinDraft[]>([]);
   const [pinDetailsGenStatus, setPinDetailsGenStatus] = useState<PinDetailsGenStatus>("idle");
   const [formBaseline,    setFormBaseline]    = useState<PinMetadataFormState | null>(null);
   const [showSaved,       setShowSaved]       = useState(false);
 
-  const promptManuallyEdited = useRef(false);
-  const pinDetailsGenRef     = useRef<string | null>(null);
-  const sessionRestoredRef   = useRef(false);
+  const promptManuallyEdited    = useRef(false);
+  const pinDetailsGenRef        = useRef<string | null>(null);
+  const sessionRestoredRef      = useRef(false);
+  // Immutable registry: keyed by sessionId, set once at generate time, never cleared by applySessions.
+  // This is the authoritative source for Remix recovery in the current tab session.
+  const snapshotRegistry        = useRef(new Map<string, SetupSnapshot>());
+  // Durable recovery store hydrated from IndexedDB on mount — holds FULL snapshots
+  // (incl. data-URL images) from previous page loads, so Remix can restore uploaded
+  // product/reference images after a refresh or browser restart. The version counter
+  // bumps after hydration so the pinDetailView memo recomputes with the loaded data.
+  const recoveryStore           = useRef(new Map<string, SetupSnapshot>());
+  const [recoveryStoreVersion, setRecoveryStoreVersion] = useState(0);
+  // Sync guard: prevents double-click duplicate submissions before React re-renders.
+  const submitGuard             = useRef(false);
+  // Per-(session,group) guard so a double-click on "Try again" fires exactly one retry request.
+  const retryGuard              = useRef<Set<string>>(new Set());
+  // Prevents the auto-save effect from firing on the very first render — before
+  // the restore effect has had a chance to set state from localStorage.
+  const skipFirstComposerSave   = useRef(true);
   const [interactive, setInteractive] = useState(false);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setInteractive(true); }, []);
 
+  // ── VibePin assistant: publish the Create Pins context ──────────────────────────
+  // Honest, data-driven findings from the live setup. The effective "creative
+  // direction" is the longest of the brief fields so we don't false-flag when the
+  // user wrote the direction in a different input. Product-link/reference-size
+  // detection lives in Batch Edit / Single Pin, where that data is available.
+  const assistantDirection = useMemo(
+    () => [manualBrief, prompt, customInstructions]
+      .map((s) => (s ?? "").trim())
+      .sort((a, b) => b.length - a.length)[0] ?? "",
+    [manualBrief, prompt, customInstructions],
+  );
+  const createPinsContext = useMemo<AssistantContext>(() => {
+    const findings = detectCreatePins({
+      creativeDirection: assistantDirection,
+      productCount: products.length,
+      productsMissingLink: 0,
+      referenceCount: refs.length,
+    });
+    return {
+      id: "studio-create-pins",
+      source: "page",
+      kind: "create-pins",
+      label: "Create Pins",
+      summary: products.length || refs.length
+        ? `${products.length} product${products.length === 1 ? "" : "s"} · ${refs.length} reference${refs.length === 1 ? "" : "s"} in setup`
+        : undefined,
+      greeting: "Hi, I'm VibePin Assistant. Ask me anything about your creative setup, products, references, or how to get stronger Pins.",
+      examplePrompts: ["Check my setup", "Suggest Pinterest angles", "Review my creative direction"],
+      tone: findings.some((f) => f.severity === "issue") ? "detected" : "suggested",
+      findings,
+    };
+  }, [assistantDirection, products.length, refs.length]);
+  usePublishAssistantContext(createPinsContext, true, [createPinsContext]);
+
+  // Load Amazon affiliate settings (localStorage) on mount.
+  useEffect(() => { setAmazonSettings(getAmazonAffiliateSettings()); }, []);
+
+  // Keep the live Weekly Plan drafts in sync. pinDraftStore emits DRAFT_STORE_EVENT
+  // after every write, and `storage` fires for cross-tab edits — both re-read so a
+  // pin scheduled in Weekly Plan immediately re-renders the matching Create Pins card.
+  useEffect(() => {
+    const read = () => setPlanDrafts(pinDraftStore.getAllDrafts());
+    read();
+    window.addEventListener(pinDraftStore.DRAFT_STORE_EVENT, read);
+    window.addEventListener("storage", read);
+    return () => {
+      window.removeEventListener(pinDraftStore.DRAFT_STORE_EVENT, read);
+      window.removeEventListener("storage", read);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    supabase.auth.getUser().then(({ data }) => {
+      if (active) setCanViewDebug(canViewGenerationDebug(data.user));
+    }).catch(() => { if (active) setCanViewDebug(false); });
+    return () => { active = false; };
+  }, []);
+
   // Pre-warm Product Ideas cache the moment the studio page mounts, so data is
   // ready (or in-flight) before the user opens the picker.
   useEffect(() => { void preload(PRODUCT_IDEAS_SWR_KEY, fetchProductIdeasWithMeta); }, []);
+
+  // ── Composer state persistence ────────────────────────────────────────────────
+  // Save whenever the user changes the composer inputs. Defined BEFORE the restore
+  // effect so it runs first on mount — the first-run guard skips that call.
+  useEffect(() => {
+    if (skipFirstComposerSave.current) {
+      skipFirstComposerSave.current = false;
+      return;
+    }
+    try {
+      localStorage.setItem(
+        "vibepin_composer_v1",
+        JSON.stringify({
+          products, refs, prompt, count, variationMode, opportunity,
+          creativeDirection: {
+            selectedDirectionId,
+            guidedControls,
+            customInstructions,
+            manualBrief,
+            manualBriefEdited,
+            inputVersion,
+            lastBriefInputVersion,
+            briefStale,
+            opportunityContext,
+          },
+        }),
+      );
+    } catch { /* storage quota — non-fatal */ }
+  }, [products, refs, prompt, count, variationMode, opportunity, selectedDirectionId, guidedControls, customInstructions, manualBrief, manualBriefEdited, inputVersion, lastBriefInputVersion, briefStale, opportunityContext]);
+
+  // Restore composer state on mount (runs after save on first render, so the
+  // skip-first guard above means save never clobbers the restored state).
+  useEffect(() => {
+    const hasUrlPrefill =
+      searchParams.get("prefillKey")    ||
+      searchParams.get("draft_id")      ||
+      searchParams.get("image_url")     ||
+      searchParams.get("product_image_url") ||
+      searchParams.get("keyword");
+    if (hasUrlPrefill) return; // URL-based prefill takes precedence
+    try {
+      const raw =
+        localStorage.getItem("vibepin_composer_v1") ??
+        localStorage.getItem("vibepin_studio_draft"); // legacy fallback
+      if (!raw) return;
+      const saved = JSON.parse(raw) as Record<string, unknown>;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (Array.isArray(saved.products) && (saved.products as string[]).length) setProducts(saved.products as string[]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (Array.isArray(saved.refs)     && (saved.refs     as string[]).length) setRefs(saved.refs     as string[]);
+      if (typeof saved.prompt === "string" && saved.prompt) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setPrompt(saved.prompt);
+        setManualBrief(saved.prompt);
+        setManualBriefEdited(true);
+        promptManuallyEdited.current = true;
+      }
+      const cd = saved.creativeDirection as Partial<{
+        selectedDirectionId: string | null;
+        guidedControls: GuidedControls;
+        customInstructions: string;
+        manualBrief: string;
+        manualBriefEdited: boolean;
+        inputVersion: string;
+        lastBriefInputVersion: string;
+        briefStale: boolean;
+        opportunityContext: CreativeOpportunityContext;
+      }> | undefined;
+      if (cd && typeof cd === "object") {
+        if ("selectedDirectionId" in cd) setSelectedDirectionId(cd.selectedDirectionId ?? null);
+        if (cd.guidedControls) setGuidedControls(cd.guidedControls);
+        if (typeof cd.customInstructions === "string") setCustomInstructions(cd.customInstructions);
+        if (typeof cd.manualBrief === "string") setManualBrief(cd.manualBrief);
+        if (typeof cd.manualBriefEdited === "boolean") setManualBriefEdited(cd.manualBriefEdited);
+        if (typeof cd.inputVersion === "string") setInputVersion(cd.inputVersion);
+        if (typeof cd.lastBriefInputVersion === "string") setLastBriefInputVersion(cd.lastBriefInputVersion);
+        if (typeof cd.briefStale === "boolean") setBriefStale(cd.briefStale);
+        if (cd.opportunityContext) setOpportunityContext(cd.opportunityContext);
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (typeof saved.count === "number") setCount(saved.count);
+      if (saved.variationMode === "distinct" || saved.variationMode === "similar") setVariationMode(saved.variationMode);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (saved.opportunity && typeof saved.opportunity === "object") setOpportunity(saved.opportunity as Opportunity);
+    } catch { /* noop — corrupted data is silently ignored */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Auto-scheduling ───────────────────────────────────────────────────────────
 
@@ -1279,7 +2126,10 @@ function CreatePinsContent() {
     const days: string[] = [];
     for (let i = 0; i <= daysUntilEnd; i++) {
       const d = new Date(today); d.setDate(today.getDate() + i);
-      days.push(d.toISOString().split("T")[0]);
+      // Local date — must match Weekly Plan's local-time week filter. Using
+      // toISOString() here shifts the date a day earlier in UTC+ zones and hides
+      // the Pin from the visible week (the original Add-to-Plan invisibility bug).
+      days.push(localDateISO(d));
     }
     return days;
   }
@@ -1296,21 +2146,36 @@ function CreatePinsContent() {
   // ── Hydrate from prefill ──────────────────────────────────────────────────────
 
   function hydrate(prefill: CreatePinsPrefill) {
+    setLastPrefill(prefill);
     const isRich = ["workspace","weekly_plan","keyword_trends","pin_opportunities"].includes(prefill.source);
     if (prefill.opportunity) {
       const o = prefill.opportunity;
       const tierCode  = o.primaryLabel === "Best Bet" ? "best_bet" : o.primaryLabel === "Competitive" ? "competitive" : "steady";
       const trendCode = (o.trendState?.toLowerCase() ?? "evergreen") as "rising" | "evergreen" | "seasonal";
-      setOpportunity({ keyword: o.keyword ?? o.title, category: o.category ?? "home-decor", tier: tierCode, trend: trendCode });
+      setOpportunity({ keyword: o.keyword ?? o.title, category: o.category ?? "", tier: tierCode, trend: trendCode });
       if (isRich) {
         setWsEntry(true);
         setWsPrimLabel(o.primaryLabel ?? "Steady");
         setWsTrendLabel(o.trendState ?? "Evergreen");
       }
+      setOpportunityContext({
+        enabled: true,
+        removable: true,
+        title: o.title,
+        keyword: o.keyword ?? o.title,
+        category: o.category,
+        evidenceSentence: o.evidenceSentence,
+        source: prefill.source,
+      });
     }
     if (prefill.productImages?.length) {
       const urls = prefill.productImages.map(p => p.imageUrl);
-      prefill.productImages.forEach(p => assetStore.saveAsset({ role: "product", source: "product_signal", imageUrl: p.imageUrl, title: p.title, keyword: p.category }));
+      // Preserve productUrl/sourceDomain so Amazon affiliate detection works downstream
+      // (productUrlToSnapshot reads these back from the asset store at resolve time).
+      prefill.productImages.forEach(p => assetStore.saveAsset({
+        role: "product", source: "product_signal", imageUrl: p.imageUrl, title: p.title, keyword: p.category,
+        productUrl: p.productUrl, sourceUrl: p.productUrl, sourceDomain: p.sourceDomain,
+      }));
       setProducts(urls);
     }
     if (prefill.pinReferences?.length) {
@@ -1318,8 +2183,16 @@ function CreatePinsContent() {
       prefill.pinReferences.forEach(r => assetStore.saveAsset({ role: "style_reference", source: "viral_pin", imageUrl: r.imageUrl, keyword: r.keyword, category: r.category }));
       setRefs(urls);
     }
-    const p = prefill.promptSeed || buildPromptFromPrefill(prefill);
-    if (p) { setPrompt(p); promptManuallyEdited.current = false; }
+    const p = prefill.creativeDirectionSeed || prefill.promptSeed || buildPromptFromPrefill(prefill);
+    if (p) {
+      setPrompt(p);
+      setManualBrief(p);
+      setManualBriefEdited(Boolean(prefill.promptSeed || prefill.creativeDirectionSeed));
+      setLastBriefInputVersion("prefill");
+      setInputVersion("prefill");
+      setBriefStale(false);
+      promptManuallyEdited.current = Boolean(prefill.promptSeed || prefill.creativeDirectionSeed);
+    }
   }
 
   useEffect(() => {
@@ -1346,7 +2219,7 @@ function CreatePinsContent() {
     const sourceType = searchParams.get("sourceType") ?? "";
     const kwRaw      = [searchParams.get("keyword"), searchParams.get("opportunity"), (searchParams.get("keywords") ?? "").split(",")[0].trim() || null].find(Boolean) ?? "";
     const kw         = kwRaw ? decodeURIComponent(kwRaw) : "";
-    const cat        = decodeURIComponent(searchParams.get("category") ?? "home-decor");
+    const cat        = searchParams.get("category") ? decodeURIComponent(searchParams.get("category") ?? "") : "";
     const primLabel  = searchParams.get("primaryLabel") ?? searchParams.get("tier") ?? "";
     const trendSt    = searchParams.get("trendState") ?? "";
     const imageUrlRaw = searchParams.get("image_url") ?? "";
@@ -1391,22 +2264,204 @@ function CreatePinsContent() {
   // the effect re-runs triggered by a products/refs change in the same flush.
   const productsKey = products.join("\u001f");
   const refsKey = refs.join("\u001f");
+  const selectedCreativeAssets = useMemo<SelectedCreativeAsset[]>(() => (
+    buildSelectedCreativeAssets({
+      productUrls: products,
+      referenceUrls: refs,
+      storedAssets: assetStore.getAssets(),
+      prefill: lastPrefill,
+    })
+  ), [products, refs, lastPrefill]);
+
+  const creativeCategory = useMemo(() => (
+    inferCreativeCategory({ explicitCategory: opportunity?.category, assets: selectedCreativeAssets })
+  ), [opportunity?.category, selectedCreativeAssets]);
+
+  const derivedRecommendations = useMemo(() => (
+    getRecommendedCreativeDirections({
+      category: opportunity?.category,
+      assets: selectedCreativeAssets,
+      hasOpportunity: !!opportunity,
+    })
+  ), [opportunity?.category, selectedCreativeAssets, opportunity]);
+
+  const selectedDirection = useMemo(() => (
+    derivedRecommendations.find(r => r.id === selectedDirectionId) ?? derivedRecommendations[0] ?? null
+  ), [derivedRecommendations, selectedDirectionId]);
+
+  // ── Creative Intelligence V1: product/reference analysis + intent inference ──
+  const productSetAnalysis = useMemo(() => analyzeProductSet(selectedCreativeAssets), [selectedCreativeAssets]);
+  const referenceContext   = useMemo(() => analyzeReferences(selectedCreativeAssets, {
+    productCategory: creativeCategory,
+    isCompleteOutfit: productSetAnalysis.category === "fashion" && productSetAnalysis.isCoherentSet,
+  }), [selectedCreativeAssets, creativeCategory, productSetAnalysis]);
+  const inferredIntent = useMemo(() => inferCreativeIntent({
+    category: creativeCategory,
+    references: referenceContext,
+    hasProducts: productSetAnalysis.hasProducts,
+    hasOpportunity: !!opportunity,
+    productSetSummary: productSetAnalysis.setSummary,
+    primaryProductTitle: productSetAnalysis.products[0]?.title,
+    keyword: opportunity?.keyword,
+    refinement: customInstructions,
+  }), [creativeCategory, referenceContext, productSetAnalysis, opportunity, customInstructions]);
+
+  const cleanedProductTitles = useMemo(() => (
+    productSetAnalysis.products.map(p => cleanProductTitle(p.title))
+  ), [productSetAnalysis]);
+
+  // ── Lightweight creative controls: diverse tags + auto-filled Direction brief ──
+  const creativeTags = useMemo<CreativeTag[]>(() => buildCreativeTags({
+    category: creativeCategory,
+    productTitles: cleanedProductTitles,
+    referenceType: referenceContext.dominant?.referenceType ?? null,
+    referenceSceneType: referenceContext.dominant?.sceneType,
+    hasReference: referenceContext.hasReferences,
+    opportunityKeyword: opportunity?.keyword,
+    format,
+  }), [creativeCategory, cleanedProductTitles, referenceContext, opportunity, format]);
+
+  // Reset tag selection to category defaults whenever the available tag set changes.
+  const tagSetKey = creativeTags.map(t => t.id).join(",");
   useEffect(() => {
-    if (promptManuallyEdited.current) return;
-    const kw  = opportunity?.keyword  ?? "";
-    const cat = opportunity?.category ?? "";
-    if (!products.length && !refs.length && !kw) return;
-    const prefill: CreatePinsPrefill = {
-      source: "manual",
-      ...(kw ? { opportunity: { title: kw, keyword: kw, category: cat } } : {}),
-      ...(products.length > 0 ? { productImages: products.map(url => ({ imageUrl: url, source: "uploaded" as const })) } : {}),
-      ...(refs.length    > 0 ? { pinReferences: refs.map(url => ({ imageUrl: url, source: "uploaded" as const })) }     : {}),
-    };
-    const p = buildPromptFromPrefill(prefill);
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (p) setPrompt(p);
+    setSelectedTagIds(defaultSelectedTagIds(creativeTags));
+    setBriefStaleFromTags(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productsKey, refsKey, opportunity?.keyword, opportunity?.category]);
+  }, [tagSetKey]);
+
+  const selectedCreativeTags = useMemo(() => (
+    creativeTags.filter(t => selectedTagIds.includes(t.id))
+  ), [creativeTags, selectedTagIds]);
+  const selectedTagPayload = useMemo(() => (
+    selectedCreativeTags.map(t => ({ id: t.id, label: t.label, group: t.group }))
+  ), [selectedCreativeTags]);
+  const primaryFormatTag = selectedCreativeTags.find(t => t.group === "format")?.label ?? "";
+
+  const derivedBrief = useMemo(() => buildDirectionBrief({
+    category: creativeCategory,
+    productTitles: cleanedProductTitles,
+    referenceType: referenceContext.dominant?.referenceType ?? null,
+    referenceSceneType: referenceContext.dominant?.sceneType,
+    hasReference: referenceContext.hasReferences,
+    opportunityKeyword: opportunity?.keyword,
+    format,
+  }, selectedTagPayload),
+  [creativeCategory, cleanedProductTitles, referenceContext, opportunity, format, selectedTagPayload]);
+
+  // Auto-fill the Direction brief from the derived brief — but never overwrite the
+  // user once they've typed (briefManuallyEdited). The brief is the user-facing
+  // refinement; the hidden prompt builder stays responsible for the technical prompt.
+  useEffect(() => {
+    if (briefManuallyEdited) {
+      if (products.length > 0 || refs.length > 0) setBriefStaleFromTags(true);
+      return;
+    }
+    if (products.length === 0 && refs.length === 0) return; // keep empty until an upload exists
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCustomInstructions(derivedBrief);
+    if (!manualBriefEdited) setManualBrief(derivedBrief);
+    setPrompt(derivedBrief);
+    setBriefStaleFromTags(false);
+  }, [derivedBrief, briefManuallyEdited, manualBriefEdited, products.length, refs.length]);
+
+  function handleToggleCreativeTag(id: string) {
+    setSelectedTagIds(prev => toggleTagSelection(creativeTags, prev, id));
+    if (briefManuallyEdited) setBriefStaleFromTags(true);
+  }
+  function handleBriefChange(value: string) {
+    setBriefManuallyEdited(true);
+    setBriefStaleFromTags(false);
+    setCustomInstructions(value);
+    setManualBrief(value);
+    setManualBriefEdited(true);
+    setPrompt(value);
+  }
+  function handleUpdateBriefFromTags() {
+    setBriefManuallyEdited(false);
+    setBriefStaleFromTags(false);
+    setCustomInstructions(derivedBrief);
+    setManualBrief(derivedBrief);
+    setManualBriefEdited(false);
+    setPrompt(derivedBrief);
+  }
+
+  const composeCreativeBrief = useCallback((
+    direction = selectedDirection,
+    controls = guidedControls,
+    custom = customInstructions,
+    context = opportunityContext,
+  ): string => buildManualBrief({
+    selected: direction,
+    guidedControls: controls,
+    customInstructions: custom,
+    opportunityContext: context,
+  }), [selectedDirection, guidedControls, customInstructions, opportunityContext]);
+
+  const buildCreativeDirectionSnapshot = useCallback((brief = manualBrief): CreativeDirectionSnapshotV2 => ({
+    version: 2,
+    selectedDirectionId: selectedDirection?.id ?? null,
+    selectedDirectionTitle: selectedDirection?.title ?? "",
+    selectedDirectionSummary: selectedDirection?.summary ?? "",
+    systemRecommendations: derivedRecommendations,
+    guidedControls,
+    customInstructions,
+    manualBrief: brief,
+    manualBriefEdited,
+    inputVersion,
+    briefStale,
+    opportunityContext,
+    selectedAssets: selectedCreativeAssets,
+    categoryPlaybookId: creativeCategory,
+    fallbackUsed: creativeCategory === "generic" ? "generic" : "category_playbook",
+  }), [
+    selectedDirection, derivedRecommendations, guidedControls, customInstructions,
+    manualBrief, manualBriefEdited, inputVersion, briefStale, opportunityContext,
+    selectedCreativeAssets, creativeCategory,
+  ]);
+
+  useEffect(() => {
+    setSystemRecommendations(derivedRecommendations);
+    if (!selectedDirectionId || !derivedRecommendations.some(r => r.id === selectedDirectionId)) {
+      // Default-select the highest-confidence direction (never a LOW one when a
+      // higher-confidence option exists); ties keep recommendation order.
+      const rank = { high: 3, medium: 2, low: 1 } as const;
+      const best = derivedRecommendations.reduce<typeof derivedRecommendations[number] | null>(
+        (acc, cur) => (!acc || (rank[cur.confidence ?? "low"]) > (rank[acc.confidence ?? "low"]) ? cur : acc),
+        null,
+      );
+      setSelectedDirectionId(best?.id ?? derivedRecommendations[0]?.id ?? null);
+    }
+  }, [derivedRecommendations, selectedDirectionId]);
+
+  useEffect(() => {
+    const nextVersion = JSON.stringify({
+      products,
+      refs,
+      opportunityKeyword: opportunity?.keyword ?? "",
+      opportunityCategory: opportunity?.category ?? "",
+      opportunityEnabled: opportunityContext.enabled,
+      recommendationIds: derivedRecommendations.map(r => r.id),
+    });
+    if (nextVersion === inputVersion) return;
+    setInputVersion(nextVersion);
+    if (manualBriefEdited && manualBrief.trim()) {
+      setBriefStale(true);
+      return;
+    }
+    const nextBrief = composeCreativeBrief();
+    setManualBrief(nextBrief);
+    setPrompt(nextBrief);
+    setLastBriefInputVersion(nextVersion);
+    setBriefStale(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productsKey, refsKey, opportunity?.keyword, opportunity?.category, opportunityContext.enabled, derivedRecommendations, composeCreativeBrief]);
+
+  // Clear stale AI Direction summary when the user's input set changes
+  useEffect(() => {
+    setEnhancerSummary(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productsKey, refsKey]);
 
   // Restore generation history into the right-side feed (local + DB + storage)
   useEffect(() => {
@@ -1420,9 +2475,31 @@ function CreatePinsContent() {
       const allowed = entries.filter(allowHistoryEntry);
       if (!allowed.length) return;
       const restored = sessionsFromHistory(allowed);
-      setSessions(restored);
-      setActiveSessionId(restored[0].id);
-      try { sessionStorage.setItem("vbp:studio:last_session_id", restored[0].id); } catch { /* noop */ }
+      setSessions(prev => {
+        const restoredById = new Map(restored.map(s => [s.id, s]));
+        const prevById     = new Map(prev.map(s => [s.id, s]));
+
+        // Merge restored sessions, carrying over setupSnapshot when the storage copy lost it
+        // (e.g. localStorage quota exceeded for data-URL product images).
+        const mergedRestored = restored.map(s => {
+          const live = prevById.get(s.id);
+          if (live?.setupSnapshot && !s.setupSnapshot) {
+            return { ...s, setupSnapshot: live.setupSnapshot };
+          }
+          return s;
+        });
+
+        // Keep any live sessions that aren't in restored yet — typically sessions that
+        // were generated after the mount-time DB query ran, whose localStorage save also
+        // failed (large data-URL products hit quota). Without this, the async merge would
+        // silently drop them, clearing the feed and closing any open drawer.
+        const liveOnly = prev.filter(s => !restoredById.has(s.id));
+
+        // Live sessions are newer, so they come first.
+        return [...liveOnly, ...mergedRestored];
+      });
+    setActiveSessionId(restored[0].id);
+    try { sessionStorage.setItem("vbp:studio:last_session_id", restored[0].id); } catch { /* noop */ }
     };
 
     // Instant: localStorage history
@@ -1438,15 +2515,49 @@ function CreatePinsContent() {
     ]).then(([db, storage]) => {
       const merged = mergeHistoryEntries(db, loadHistory(), storage);
       applySessions(merged);
-    }).catch(() => { /* keep local-only results */ });
+      markDataReady("/app/studio");
+    }).catch(() => { markDataReady("/app/studio"); });
+
+    // Durable Remix recovery: hydrate full snapshots (incl. data-URL images) from
+    // IndexedDB so uploaded product/reference images survive refresh + browser restart.
+    loadAllRemixSetups()
+      .then(map => {
+        if (map.size === 0) return;
+        recoveryStore.current = map;
+        setRecoveryStoreVersion(v => v + 1);
+        // Bound IndexedDB growth; never drop sessions still present in local history.
+        pruneRemixSetups(new Set(loadHistory().map(h => h.id))).catch(() => {});
+      })
+      .catch(() => { /* IndexedDB unavailable — fall through to other tiers */ });
   }, []);
 
   // ── Derived ───────────────────────────────────────────────────────────────────
 
   const totalPins = (refs.length > 0 ? refs.length : 1) * count;
   const overLimit = totalPins > 12;
-  const hasInput  = prompt.trim().length > 0 || products.length > 0 || refs.length > 0 || !!opportunity;
-  const genLabel  = `Generate ${totalPins} Pin${totalPins !== 1 ? "s" : ""}`;
+  const hasInput  = (manualBrief || prompt).trim().length > 0 || products.length > 0 || refs.length > 0 || !!opportunity;
+  const genLabel  = totalPins === 1 ? tr("page.studio.generateOnePin") : tr("page.studio.generatePins").replace("{n}", String(totalPins));
+  const referenceInfluenceMode = inferReferenceInfluenceMode({
+    direction: selectedDirection,
+    productSet: productSetAnalysis,
+    references: referenceContext,
+    intent: inferredIntent,
+    playbook: getCategoryPlaybook(creativeCategory),
+    controls: {
+      goal: guidedControls.goal,
+      subject: guidedControls.subject,
+      productEmphasis: guidedControls.productEmphasis ?? guidedControls.productTreatment,
+      referenceStrength: guidedControls.referenceStrength,
+      textOverlay: guidedControls.textOverlay,
+    },
+    refinement: customInstructions,
+    opportunityKeyword: opportunity?.keyword,
+    format,
+  });
+  const referenceWeight = refs.length > 0
+    ? referenceInfluenceMode === "layout_scene_strong" ? 70 : referenceInfluenceMode === "style_mood_balanced" ? 50 : 20
+    : 0;
+  const productWeight = products.length > 0 ? Math.max(35, 100 - referenceWeight) : 0;
 
   void activeSessionId;
 
@@ -1462,33 +2573,168 @@ function CreatePinsContent() {
 
   const handleGenerate = useCallback(async () => {
     if (!hasInput) { toast.error("Add a prompt, product image, or reference first."); return; }
-    if (generating) return;
-
-    setGenerating(true);
+    if (submitGuard.current) return;
+    submitGuard.current = true;
+    setIsSubmitting(true);
     setRightPanelMode("feed");
     const refsToProcess: Array<string | null> = refs.length > 0 ? refs : [null];
     const sessionId = `studio_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const studioClientId = getStudioClientId();
     const mode = products.length > 0 ? "product_led" : refs.length > 0 ? "keyword_led" : "scratch";
+    const outputVariants = buildOutputVariants(count, variationMode, creativeCategory);
+    const directionBriefForGeneration = (customInstructions || derivedBrief).trim();
+    const briefForGeneration = (directionBriefForGeneration || manualBrief || prompt).trim();
+    // Compile the hidden technical prompt (creative_direction_v2). This is what the
+    // image model receives; the backend passes it through without re-enhancing.
+    const hiddenPrompt = buildHiddenPrompt({
+      direction: selectedDirection,
+      productSet: productSetAnalysis,
+      references: referenceContext,
+      intent: inferredIntent,
+      playbook: getCategoryPlaybook(creativeCategory),
+      controls: {
+        goal: guidedControls.goal,
+        subject: guidedControls.subject,
+        productEmphasis: guidedControls.productEmphasis ?? guidedControls.productTreatment,
+        referenceStrength: guidedControls.referenceStrength,
+        textOverlay: guidedControls.textOverlay,
+      },
+      refinement: directionBriefForGeneration,
+      directionBrief: directionBriefForGeneration,
+      selectedTags: selectedTagPayload,
+      primaryFormatTag,
+      opportunityKeyword: opportunity?.keyword,
+      format,
+    });
+    const promptForGeneration = hiddenPrompt.trim() || briefForGeneration;
+    if (SHOW_GENERATION_DEBUG) {
+      console.debug("[Studio generation payload]", {
+        prompt_mode: "creative_direction_v2",
+        selectedDirection: selectedDirection?.title,
+        referenceInfluenceMode,
+        productImageCount: products.length,
+        referenceImageCount: refs.length,
+        finalProviderEndpoint: model === "gpt_image" && (products.length > 0 || refs.length > 0) ? "/images/edits" : model,
+        finalPromptReferenceExcerpt: hiddenPrompt.match(/REFERENCE REQUIREMENTS:[\s\S]*?(?:\n\n[A-Z ]+:|$)/)?.[0]?.slice(0, 1200) ?? "",
+        fastapiPathSkipped: true,
+        promptEnhancerMayAnalyzeButNotRewriteV2: true,
+      });
+    }
+    // ── Structured creative-control metadata for the generate payload ──────────
+    const tagGroups: Record<TagGroup, string[]> = { format: [], scene: [], mood: [], composition: [] };
+    selectedCreativeTags.forEach(t => tagGroups[t.group].push(t.label));
+    const creativeControls = {
+      selectedTags: selectedTagPayload,
+      primaryFormatTag,
+      directionBrief: directionBriefForGeneration,
+      tagGroups,
+      derivedBrief,
+      briefManuallyEdited,
+      selectedOpportunity: opportunity ?? null,
+      inferredCategory: creativeCategory,
+      productImageCountRequested: products.length,
+      referenceImageCountRequested: refs.length,
+    };
+
+    const baseSnapshot = buildCreativeDirectionSnapshot(briefForGeneration);
+    const creativeDirectionSnapshot = {
+      ...baseSnapshot,
+      hiddenPrompt,
+      productAnalysis: productSetAnalysis,
+      referenceAnalysis: referenceContext.analyses,
+      inferredIntent,
+      creativeControls,
+      outputCount: count,
+      variationMode,
+      outputVariants,
+    };
+
+    if (SHOW_GENERATION_DEBUG) {
+      console.log("[StudioDebug] creative controls", {
+        inferredCategory: creativeCategory,
+        productRoles: productSetAnalysis.products.map(p => p.role),
+        referenceType: referenceContext.dominant?.referenceType ?? null,
+        selectedTags: creativeControls.selectedTags,
+        derivedBrief,
+        briefManuallyEdited,
+        selectedOpportunity: opportunity ?? null,
+        productImageCountRequested: products.length,
+        referenceImageCountRequested: refs.length,
+      });
+    }
+
+    const effectiveCategory = opportunity?.category || (creativeCategory !== "generic" ? creativeCategory : "");
 
     const snap: SetupSnapshot = {
-      mode, keyword: opportunity?.keyword, category: opportunity?.category,
-      opportunityTitle: opportunity?.keyword, noTextOverlay: textOverlay === "off",
+      mode, keyword: opportunity?.keyword, category: effectiveCategory,
+      opportunityTitle: opportunity?.keyword, noTextOverlay: !detectTextOverlayIntent(briefForGeneration),
       imagesPerReference: count,
-      selectedProducts:   products.map(url => ({ imageUrl: url, title: "", source: "uploaded" })),
+      selectedProducts:   products.map(url => productUrlToSnapshot(url)),
       selectedReferences: refs.map(url => ({ imageUrl: url })),
-      promptSnapshot:     prompt,
+      promptSnapshot:     briefForGeneration,
+      creativeDirectionSnapshot,
       createdFrom:        wsEntry ? "workspace" : "studio",
+      format,
+      model:    MODEL_KEY_TO_LABEL[model] ?? model,
+      modelKey: model,
     };
+    devLogSnapshot("[GenerateSetup] click", {
+      batchId: sessionId,
+      requestId: sessionId,
+      setupSnapshot: {
+        productImagesCount: snap.selectedProducts.length,
+        pinReferencesCount: snap.selectedReferences.length,
+        prompt: snap.promptSnapshot,
+        category: snap.category,
+        aspectRatio: snap.format,
+        model: snap.model,
+      },
+    });
+    // Resolve the creator-owned Amazon affiliate context for this generation, so
+    // every pin produced here inherits the same product + affiliate destination.
+    const affiliateCtx = resolveStudioAffiliateContext(snap.selectedProducts, amazonSettings);
+
+    // Register immutably — this survives any applySessions or setSessions call for the tab session.
+    snapshotRegistry.current.set(sessionId, snap);
+    // Durable: persist the FULL snapshot (incl. data-URL images) to IndexedDB so it
+    // survives refresh + browser restart — this is what makes uploaded product/reference
+    // images recoverable in Remix later. Fire-and-forget; fails soft.
+    recoveryStore.current.set(sessionId, snap);
+    saveRemixSetup(sessionId, snap).catch(() => {});
+    // Persist setup to sessionStorage so it survives an applySessions clobber.
+    // Full snap first; if it fails (data-URL quota), store a compact version that strips
+    // large data-URL imageUrls. The compact version still carries metadata (productCount via
+    // selectedProducts.length) so the hydration guard in pinDetailView can detect "products
+    // were selected" and fall back gracefully.
+    const snapKey = `vibepin_setup_${sessionId}`;
+    try {
+      sessionStorage.setItem(snapKey, JSON.stringify(snap));
+    } catch {
+      try {
+        const compact: SetupSnapshot = {
+          ...snap,
+          selectedProducts:   snap.selectedProducts.map(p => ({ ...p, imageUrl: p.imageUrl?.startsWith("data:") ? null : p.imageUrl })),
+          selectedReferences: snap.selectedReferences.map(r => ({ ...r, imageUrl: r.imageUrl.startsWith("data:") ? "" : r.imageUrl })),
+        };
+        sessionStorage.setItem(snapKey, JSON.stringify(compact));
+      } catch { /* noop */ }
+    }
     const runningEntry: HistoryEntry = {
       id: sessionId, savedAt: new Date().toISOString(),
-      keyword: opportunity?.keyword ?? "", category: opportunity?.category ?? "",
+      keyword: opportunity?.keyword ?? "", category: effectiveCategory,
       source: wsEntry ? "workspace" : "studio",
       groups: [], refCount: refs.length, productCount: products.length, totalPins: 0,
       status: "running", expectedTotal: totalPins, mode,
       opportunity: opportunity?.keyword, imagesPerRef: count,
-      promptExcerpt: prompt.slice(0, 120), promptFull: prompt, setupSnapshot: snap,
+      promptExcerpt: briefForGeneration.slice(0, 120), promptFull: briefForGeneration, setupSnapshot: snap,
     };
     addHistory(runningEntry);
+    devLogSnapshot("[GenerateSetup] persisted local history", {
+      batchId: sessionId,
+      where: "localStorage vp:studio:history",
+      success: true,
+      setupSnapshotStored: !!runningEntry.setupSnapshot,
+    });
     createRunningSessionInDb(supabase, runningEntry).catch(() => {});
 
     setActiveSessionId(sessionId);
@@ -1496,54 +2742,132 @@ function CreatePinsContent() {
 
     const newSession: GenerationSession = {
       id: sessionId, savedAt: new Date().toISOString(),
-      keyword: opportunity?.keyword ?? "", category: opportunity?.category ?? "",
+      keyword: opportunity?.keyword ?? "", category: effectiveCategory,
       source: wsEntry ? "workspace" : "studio",
       groups: refsToProcess.map((refUrl, idx) => ({
         refUrl, refIndex: idx, items: [], status: "generating" as const, expectedCount: count,
       })),
       status: "generating", expectedTotal: totalPins,
-      promptExcerpt: prompt.slice(0, 120), productCount: products.length, refCount: refs.length,
+      promptExcerpt: briefForGeneration.slice(0, 120), productCount: products.length, refCount: refs.length,
       isNew: true, collapsed: false, generatingGroupIdx: 0,
-      promptFull: prompt, setupSnapshot: snap, model, format,
-      textOverlay: textOverlay === "on" ? "On" : "Off",
+      promptFull: briefForGeneration, setupSnapshot: snap, model: MODEL_KEY_TO_LABEL[model] ?? model, format,
+      textOverlay: detectTextOverlayIntent(briefForGeneration) ? "On" : "Off",
       groupErrors: {},
+      affiliate: affiliateCtx,
     };
     // Prepend new session, collapse old ones. Do NOT clear products/refs/prompt.
     setSessions(prev => [newSession, ...prev.map(s => ({ ...s, isNew: false, collapsed: false }))]);
+    // Unlock the button immediately — the session card is now in the feed.
+    // The generation loop below runs concurrently; new batches can be started independently.
+    submitGuard.current = false;
+    setIsSubmitting(false);
 
     const finalGroups: RefGroup[] = refsToProcess.map((refUrl, idx) => ({
       refUrl, refIndex: idx, items: [], status: "generating" as const, expectedCount: count,
     }));
-    const dbGroups: HistoryPinGroup[] = refsToProcess.map(r => ({ refUrl: r, images: [] }));
+    const recoverableProductImages = snap.selectedProducts
+      .map(p => p.imageUrl)
+      .filter((u): u is string => !!u && !u.startsWith("data:"));
+    const dbGroups: HistoryPinGroup[] = refsToProcess.map(r => ({
+      refUrl: r,
+      images: [],
+      productImages: recoverableProductImages,
+      promptSnapshot: briefForGeneration,
+      category: effectiveCategory,
+      format: snap.format,
+      model: snap.model,
+      creativeDirectionSnapshot,
+    }));
     const groupErrors: Record<number, { message?: string; errorType?: GenerationErrorType }> = {};
     let totalGenerated = 0;
     let sessionErrorMessage: string | undefined;
+    let sessionFinalPrompt: string | undefined;
+    let sessionCategoryAudit: CategoryAudit | undefined;
 
     for (let i = 0; i < refsToProcess.length; i++) {
       setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: "generating", generatingGroupIdx: i } : s));
       const ref = refsToProcess[i];
       try {
-        const resp = await fetch("/api/generate", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            keyword:  opportunity?.keyword ?? "Pinterest content",
-            style:    "editorial", count, prompt,
-            category: opportunity?.category ?? "home-decor",
-            ...(ref             ? { style_ref: ref }           : {}),
-            ...(products.length ? { product_images: products } : {}),
-          }),
+        const data = await generateWithRecovery({
+          keyword:  opportunity?.keyword ?? "Pinterest content",
+          category: effectiveCategory,
+          prompt: promptForGeneration,
+          count,
+          styleRef: ref,
+          productImages: products,
+          textOverlay:       snap.noTextOverlay === false,
+          referenceStrength: creativeDirectionSnapshot.guidedControls.referenceStrength ?? "moderate",
+          outputType:        inferOutputType(effectiveCategory),
+          pinFormat:         snap.format ?? "vertical 2:3",
+          productMetadata:   snap.selectedProducts.map(p => ({ title: p.title, productUrl: p.productUrl })),
+          modelKey:          snap.modelKey ?? "gemini_image",
+          promptMode:        "creative_direction_v2",
+          promptVersion:     2,
+          creativeDirectionMeta: creativeDirectionSnapshot,
+          selectedTags: selectedTagPayload,
+          primaryFormatTag,
+          directionBrief: directionBriefForGeneration,
+          briefManuallyEdited,
+          inferredCategory: creativeCategory,
+          selectedOpportunity: opportunity ?? null,
+          productImageCountRequested: products.length,
+          referenceImageCountRequested: ref ? 1 : 0,
+          outputCount: count,
+          variationMode,
+          outputVariants,
+          generationRequestId: sessionId,
+          studioClientId,
         });
-        const data = await resp.json() as { urls?: string[]; error?: string };
-        if (data.urls?.length) {
-          const sessCtx = { keyword: opportunity?.keyword ?? "", category: opportunity?.category ?? "", setupSnapshot: snap, promptFull: prompt };
+        if (data.countClamped && data.actualImageCount) {
+          toast.message(`Limited to ${data.actualImageCount} image${data.actualImageCount === 1 ? "" : "s"} for this request`, {
+            description: "Provider protection is active for this batch.",
+          });
+        }
+        if (data.promptSnapshot?.plan?.summary_for_ui) {
+          setEnhancerSummary(data.promptSnapshot.plan.summary_for_ui);
+        }
+        if (data.promptSnapshot?.final_prompt && !sessionFinalPrompt) {
+          sessionFinalPrompt = data.promptSnapshot.final_prompt;
+        }
+        if (!sessionCategoryAudit && data.promptSnapshot?.effective_category !== undefined) {
+          sessionCategoryAudit = categoryAuditFromSnapshot(data.promptSnapshot, opportunity?.category ?? "");
+        }
+        if (data.urls.length) {
+          const expectedForResult = data.countClamped && data.actualImageCount ? data.actualImageCount : count;
+          const isPartial = data.urls.length < expectedForResult;
+          const sessCtx = {
+            keyword: opportunity?.keyword ?? "",
+            category: effectiveCategory,
+            setupSnapshot: snap,
+            promptFull: briefForGeneration,
+            generationFinalPrompt: data.promptSnapshot?.final_prompt,
+          };
           const refLabel = ref ? `Reference ${i + 1}` : products.length > 0 ? "Product" : "No product";
-          finalGroups[i] = { ...finalGroups[i], items: data.urls.map((url, ii) => createCompletedPin(sessionId, i, ii, url, sessCtx, refLabel)), status: "done" };
-          dbGroups[i]    = { refUrl: ref, images: data.urls };
+          finalGroups[i] = {
+            ...finalGroups[i],
+            items: data.urls.map((url, ii) => applyAffiliateToFreshPin(createCompletedPin(sessionId, i, ii, url, sessCtx, refLabel), affiliateCtx)),
+            expectedCount: expectedForResult,
+            // "partial" when fewer images returned than requested — keeps the missing
+            // slots visible as failed/retryable in the feed without a hard red error.
+            status: isPartial ? "partial" : "done",
+          };
+          dbGroups[i]    = {
+            ...dbGroups[i],
+            refUrl: ref,
+            images: data.urls,
+          };
           totalGenerated += data.urls.length;
+          if (isPartial) {
+            const shortfall = expectedForResult - data.urls.length;
+            const errMsg = data.error ?? `${shortfall} image${shortfall === 1 ? "" : "s"} didn't generate — tap retry to top up.`;
+            groupErrors[i] = { message: errMsg, errorType: data.errorType ?? "unknown_error" };
+            // Informational toast — we still produced usable Pins.
+            toast.message(`${data.urls.length} of ${count} generated`, { description: errMsg });
+          }
         } else {
           const errMsg = data.error ?? "No images returned";
           finalGroups[i] = { ...finalGroups[i], status: "failed" };
-          groupErrors[i] = { message: errMsg, errorType: "unknown_error" };
+          groupErrors[i] = { message: errMsg, errorType: data.errorType ?? "unknown_error" };
           sessionErrorMessage = errMsg;
           toast.error(`Reference ${i + 1} failed`, { description: errMsg });
         }
@@ -1560,10 +2884,17 @@ function CreatePinsContent() {
         errorMessage: sessionErrorMessage,
       } : s));
       addHistory({ ...runningEntry, groups: dbGroups, totalPins: totalGenerated, status: totalGenerated > 0 ? "partial" : "running" });
-      updateSessionInDb(supabase, sessionId, { groups_json: dbGroups, total_pins: totalGenerated, status: totalGenerated > 0 ? "partial" : "running", updated_at: new Date().toISOString() }).catch(() => {});
+      updateSessionInDb(supabase, sessionId, {
+        groups_json: dbGroups,
+        pin_urls: dbGroups.flatMap(g => g.images),
+        total_pins: totalGenerated,
+        status: totalGenerated > 0 ? "partial" : "running",
+        error_type: sessionErrorMessage ? groupErrors[i]?.errorType : undefined,
+        error_message: sessionErrorMessage,
+        updated_at: new Date().toISOString(),
+      }).catch(() => {});
     }
 
-    setGenerating(false);
     const doneCount   = finalGroups.flatMap(g => g.items).length;
     const finalStatus: GenerationStatus = doneCount === 0 ? "failed" : doneCount < totalPins ? "partial" : "completed";
     setSessions(prev => prev.map(s => s.id === sessionId ? {
@@ -1571,14 +2902,56 @@ function CreatePinsContent() {
       groupErrors: Object.keys(groupErrors).length > 0 ? groupErrors : s.groupErrors,
       errorMessage: sessionErrorMessage ?? s.errorMessage,
       errorType: doneCount === 0 ? "unknown_error" : s.errorType,
+      ...(sessionFinalPrompt    ? { generationFinalPrompt: sessionFinalPrompt }    : {}),
+      ...(sessionCategoryAudit  ? { categoryAudit: sessionCategoryAudit }          : {}),
     } : s));
     addHistory({
       ...runningEntry, groups: dbGroups, totalPins: doneCount, status: finalStatus,
       errorMessage: sessionErrorMessage, errorType: doneCount === 0 ? "unknown_error" : undefined,
+      ...(sessionCategoryAudit ? { categoryAudit: sessionCategoryAudit } : {}),
     });
-    updateSessionInDb(supabase, sessionId, { groups_json: dbGroups, total_pins: doneCount, status: finalStatus, updated_at: new Date().toISOString() }).catch(() => {});
+    updateSessionInDb(supabase, sessionId, {
+      groups_json: dbGroups,
+      pin_urls: dbGroups.flatMap(g => g.images),
+      total_pins: doneCount,
+      status: finalStatus,
+      ...(sessionCategoryAudit ? { category_audit: sessionCategoryAudit } : {}),
+      error_type: doneCount === 0 ? "unknown_error" : Object.values(groupErrors)[0]?.errorType,
+      error_message: sessionErrorMessage,
+      updated_at: new Date().toISOString(),
+    }).catch(() => {});
+    if (SHOW_GENERATION_DEBUG) {
+      console.debug("[Studio] generation session complete", {
+        generationSessionId:    sessionId,
+        requestedImageCount:    totalPins,
+        plannedVariantCount:    count * refsToProcess.length,
+        completedImageCount:    doneCount,
+        failedImageCount:       totalPins - doneCount,
+        status:                 finalStatus,
+        providerExecutionMode:  "backend_fan_out",
+        persistedImageCount:    doneCount,
+        failedOutputIndexes:    Object.keys(groupErrors).map(Number),
+        outputs: finalGroups.flatMap((g, gi) => [
+          ...g.items.map((p, pi) => ({
+            groupIdx: gi, outputIndex: pi, variantRole: pi === 0 ? "anchor" : "variant",
+            status: "completed", imageUrl: p.url, persisted: true,
+          })),
+          ...(g.status !== "done"
+            ? Array.from({ length: Math.max(0, g.expectedCount - g.items.length) }, (_, k) => ({
+                groupIdx: gi, outputIndex: g.items.length + k, variantRole: "variant",
+                status: g.status, imageUrl: null, persisted: false,
+              }))
+            : []),
+        ]),
+      });
+    }
     if (doneCount) toast.success(`${doneCount} pin${doneCount !== 1 ? "s" : ""} generated`);
-  }, [hasInput, generating, refs, count, prompt, opportunity, products, totalPins, wsEntry, textOverlay, model, format]);
+  }, [
+    hasInput, refs, count, variationMode, prompt, manualBrief, derivedBrief, briefManuallyEdited, opportunity, products, totalPins,
+    wsEntry, model, format, buildCreativeDirectionSnapshot, creativeCategory,
+    customInstructions, selectedCreativeTags, selectedTagPayload, primaryFormatTag, inferredIntent, productSetAnalysis,
+    referenceContext, referenceContext.analyses, referenceInfluenceMode, guidedControls, selectedDirection,
+  ]);
 
   const pinDetailView = useMemo((): PinDetailView | null => {
     if (!pinDetailSelection) return null;
@@ -1588,8 +2961,54 @@ function CreatePinsContent() {
     const item = allItems.find(i => i.entry.key === pinDetailSelection.entryKey && i.entry.sessionId === pinDetailSelection.sessionId);
     if (!item) return null;
     const historyEntry = loadHistory().find(h => h.id === session.id) ?? null;
-    return resolvePinDetail(session, item.entry, historyEntry);
-  }, [pinDetailSelection, sessions]);
+
+    // Recovery sources, richest first. Each candidate is scored by how many live
+    // (non-empty) product/reference imageUrls it carries; we pick the richest so a
+    // full snapshot with images always beats a compact one whose imageUrls were
+    // stripped. This is what restores uploaded images after refresh/browser restart.
+    //   1. snapshotRegistry — in-memory, set at generate time (current tab)
+    //   2. recoveryStore    — IndexedDB, FULL snapshot incl. data-URL images (durable)
+    //   3. sessionStorage/localStorage — tab-local (may be compacted)
+    //   4. session.setupSnapshot       — DB/storage-restored (compact)
+    //   5. historyEntry.setupSnapshot  — localStorage history (compact)
+    const sessionStorageSnap = (() => {
+      try {
+        const raw = sessionStorage.getItem(`vibepin_setup_${session.id}`)
+          ?? localStorage.getItem(`vibepin_setup_${session.id}`);
+        return raw ? (JSON.parse(raw) as SetupSnapshot) : null;
+      } catch { return null; }
+    })();
+
+    const liveImageScore = (snap: SetupSnapshot | null): number => {
+      if (!snap) return -1;
+      const prod = (snap.selectedProducts   ?? []).filter(p => !!p.imageUrl).length;
+      const refs = (snap.selectedReferences ?? []).filter(r => !!r.imageUrl).length;
+      return prod + refs;
+    };
+
+    const candidates = [
+      snapshotRegistry.current.get(session.id) ?? null,
+      recoveryStore.current.get(session.id) ?? null,
+      sessionStorageSnap,
+      session.setupSnapshot ?? null,
+      historyEntry?.setupSnapshot ?? null,
+    ].filter((s): s is SetupSnapshot => !!s);
+
+    // Pick the candidate with the most recovered images; ties keep the
+    // higher-priority (earlier) one because we only replace on a strict win.
+    const bestSnap = candidates.reduce<SetupSnapshot | null>(
+      (best, cur) => (!best || liveImageScore(cur) > liveImageScore(best) ? cur : best),
+      null,
+    );
+
+    const hydratedSession: typeof session = bestSnap
+      ? { ...session, setupSnapshot: bestSnap }
+      : session;
+
+    return resolvePinDetail(hydratedSession, item.entry, historyEntry);
+    // recoveryStoreVersion is referenced so the memo recomputes once IndexedDB hydrates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinDetailSelection, sessions, recoveryStoreVersion]);
 
   const pinDetailPin = useMemo((): StudioPin | null => {
     if (!pinDetailSelection) return null;
@@ -1620,6 +3039,45 @@ function CreatePinsContent() {
     });
   }, [metadataForm, pinDetailPin]);
 
+  // ── VibePin assistant: publish the Single Pin Edit context (lightweight) ────────
+  // Highest-priority "modal" source so it overrides the Create Pins page context while
+  // a pin detail is open. Studio pins don't carry a board (that's applied in Weekly
+  // Plan), so board is not treated as a required field here.
+  const singlePinAssistantActive = !!(pinDetailSelection && metadataForm && pinDetailPin);
+  const singlePinAssistantContext = useMemo<AssistantContext>(() => {
+    const form = metadataForm;
+    const pin = pinDetailPin;
+    if (!form || !pin) {
+      return { id: "studio-single-pin", source: "modal", kind: "single-pin", label: "Pin Edit", tone: "detected", findings: [] };
+    }
+    const planned = pin.planningStatus === "added_to_plan" || pin.planningStatus === "needs_review" || pin.planningStatus === "ready";
+    const hasTime = !!((form.plannedDate ?? "").trim() || pin.plannedAt);
+    const findings = detectSinglePin({
+      imageUrl:       pin.url,
+      title:          form.title,
+      description:    form.description,
+      altText:        form.altText,
+      destinationUrl: form.destinationUrl,
+      plannedDate:    form.plannedDate,
+      plannedAt:      pin.plannedAt,
+      planningStatus: pin.planningStatus,
+      boardManaged:   false,
+      scheduleTimeMissing: planned && !hasTime,
+    });
+    return {
+      id: "studio-single-pin",
+      source: "modal",
+      kind: "single-pin",
+      label: "Pin Edit",
+      summary: form.title?.trim() ? `Editing “${form.title.trim().slice(0, 40)}”` : undefined,
+      greeting: "Ask me anything about this Pin — title, description, destination URL, or schedule readiness.",
+      examplePrompts: ["Is this ready to schedule?", "Improve the description"],
+      tone: "detected",
+      findings,
+    };
+  }, [metadataForm, pinDetailPin]);
+  usePublishAssistantContext(singlePinAssistantContext, singlePinAssistantActive, [singlePinAssistantContext, singlePinAssistantActive]);
+
   function buildPinDetailsForm(pin: StudioPin): PinMetadataFormState {
     return {
       title: pin.title,
@@ -1645,6 +3103,7 @@ function CreatePinsContent() {
       setupSnapshot: session.setupSnapshot,
       referenceLabel: pinDetailView.refLabel,
       referenceVisualFormat: session.setupSnapshot?.selectedReferences?.[pinDetailView.groupIdx]?.visualFormat,
+      contentLanguage: readResolvedContentLanguage(),
     });
     const fields = applyDraftToPinFields(fresh);
     const newForm: PinMetadataFormState = {
@@ -1782,6 +3241,12 @@ function CreatePinsContent() {
   function handleMetadataChange(patch: Partial<PinMetadataFormState>) {
     setShowSaved(false);
     setMetadataForm(prev => prev ? { ...prev, ...patch } : prev);
+    // Product / board changes ride on metadataDraft — persist them immediately so they
+    // survive closing & reopening the drawer without requiring an explicit Save (Test F).
+    if ("metadataDraft" in patch && patch.metadataDraft && pinDetailView && pinDetailView.pinIdx !== undefined) {
+      const draft = patch.metadataDraft;
+      updatePinMetadata(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx, p => ({ ...p, metadataDraft: draft }));
+    }
     const touched: Partial<MetadataTouchedFlags> = {};
     if ("title" in patch) touched.titleTouched = true;
     if ("description" in patch) touched.descriptionTouched = true;
@@ -1812,6 +3277,7 @@ function CreatePinsContent() {
       promptSnapshot: session.promptFull ?? session.setupSnapshot?.promptSnapshot,
       setupSnapshot: session.setupSnapshot,
       referenceLabel: pinDetailView.refLabel,
+      contentLanguage: readResolvedContentLanguage(),
     });
     if (!metadataFormTouched.titleTouched || window.confirm("Overwrite edited title?")) {
       handleMetadataChange({ title: fresh.selectedTitle, metadataDraft: fresh });
@@ -1831,6 +3297,7 @@ function CreatePinsContent() {
       setupSnapshot: session.setupSnapshot,
       promptSnapshot: session.promptFull,
       referenceLabel: pinDetailView.refLabel,
+      contentLanguage: readResolvedContentLanguage(),
     });
     if (!metadataFormTouched.descriptionTouched || window.confirm("Overwrite edited description?")) {
       handleMetadataChange({ description: fresh.selectedDescription, metadataDraft: fresh });
@@ -1838,17 +3305,51 @@ function CreatePinsContent() {
   }
 
   const selectedCompletedPins = useMemo(() => {
-    const items = flattenFeedItems(sessions, "all");
-    return items.filter(i => selectedPinKeys.has(i.entry.key) && i.entry.pin && i.entry.status === "completed" && i.entry.pinIdx !== undefined);
-  }, [selectedPinKeys, sessions]);
+    const items = flattenFeedItems(sessions, "all", planDrafts);
+    // A real, editable output is any with an image and a pin index — whether it is
+    // still "completed" (not yet planned) OR already "added" to the plan. The old
+    // `status === "completed"` filter silently dropped every already-planned Pin, so
+    // selecting a scheduled/added card produced an empty Batch Edit ("0 selected").
+    return items.filter(i =>
+      selectedPinKeys.has(i.entry.key)
+      && i.entry.pin
+      && (i.entry.status === "completed" || i.entry.status === "added")
+      && i.entry.pinIdx !== undefined,
+    );
+  }, [selectedPinKeys, sessions, planDrafts]);
 
-  const batchPins: BatchPinRow[] = useMemo(() => selectedCompletedPins.map(({ entry, session }) => {
+  const batchPins: BatchPinRow[] = useMemo(() => selectedCompletedPins.map(({ entry, session: sess }) => {
     const pin = entry.pin!;
+    // Canonical product resolution — same sources the single-Pin edit modal reads,
+    // so linked products never disappear when a generated Pin enters Batch Edit.
+    const { primary, tagged } = resolveCanonicalPinProducts({
+      metadataDraft:         pin.metadataDraft,
+      setupProducts:         sess.setupSnapshot?.selectedProducts,
+      productId:             pin.productId,
+      creatorProductLinkId:  pin.creatorProductLinkId,
+      sourceProductImageUrl: pin.sourceProductImageUrl,
+    });
     return {
-      pinId: pin.id, sessionId: session.id, groupIdx: entry.groupIdx, pinIdx: entry.pinIdx!,
+      pinId: pin.id, sessionId: sess.id, groupIdx: entry.groupIdx, pinIdx: entry.pinIdx!,
       imageUrl: pin.url, title: pin.title, description: pin.description,
-      destinationUrl: pin.destinationUrl, plannedDate: pin.plannedDate,
+      altText: pin.altText, boardSuggestion: pin.metadataDraft?.boardSuggestion ?? "",
+      boardId: pin.metadataDraft?.boardId ?? "", boardName: pin.metadataDraft?.boardName ?? "",
+      destinationUrl: pin.destinationUrl, plannedDate: pin.plannedDate, plannedTime: pin.plannedTime, plannedAt: pin.plannedAt,
+      addedToPlanAt: pin.planningStatus !== "not_added" ? "added" : undefined,
       planningStatus: pin.planningStatus, metadataDraft: pin.metadataDraft,
+      // Fall back to the affiliate product context so an Amazon-affiliate Pin always
+      // shows its product thumbnail + label in Batch Edit (never "missing").
+      linkedProductId: primary?.productId ?? pin.productId,
+      linkedProductTitle: primary?.title ?? (pin.creatorProductLinkId ? "Amazon product" : undefined),
+      linkedProductImageUrl: primary?.imageUrl ?? pin.sourceProductImageUrl,
+      linkedProductUrl: primary?.productUrl,
+      linkedProductSource: primary?.source,
+      isAutoLinked: primary?.linkType === "auto",
+      taggedCount: tagged.length,
+      primaryProduct: primary,
+      taggedProducts: tagged,
+      category: sess.setupSnapshot?.category ?? sess.category ?? "",
+      setupProducts: sess.setupSnapshot?.selectedProducts ?? [],
     };
   }), [selectedCompletedPins]);
 
@@ -1863,6 +3364,7 @@ function CreatePinsContent() {
       promptSnapshot: session.promptFull,
       opportunityTitle: session.setupSnapshot?.opportunityTitle,
       referenceLabel: entry.refLabel,
+      contentLanguage: readResolvedContentLanguage(),
       touched: entry.pin!.metadataTouched,
       existingDraft: entry.pin!.metadataDraft,
     }));
@@ -1895,81 +3397,321 @@ function CreatePinsContent() {
     setSelectedPinKeys(new Set());
   }
 
-  function handleBatchApply(opts: Parameters<BatchEditDrawerProps["onApply"]>[0]) {
-    const dates: string[] = [];
-    if (opts.autoAssignDates) {
-      let drafts = pinDraftStore.getAllDrafts();
-      for (let i = 0; i < selectedCompletedPins.length; i++) {
-        const d = assignNextAvailablePlanDate(drafts) ?? "";
-        dates.push(d);
-        if (d) {
-          const placeholder: pinDraftStore.PinDraft = {
-            id: `tmp_${i}`, imageUrl: `tmp://batch/${i}`, keyword: "", category: "",
-            title: "", description: "", altText: "", destinationUrl: "",
-            boardId: "", boardName: "", weeklyPlanItemId: "", generationSessionId: "",
-            scheduledDate: d, status: "needs_review", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-          };
-          drafts = [...drafts, placeholder];
-        }
-      }
+  // Batch Edit → Schedule selected. Adds the given pins to the Weekly Plan (no publish
+  // readiness gate; missing details are allowed). Selection is preserved (drawer stays open).
+  function handleBatchScheduleSelected(pinIds: string[]) {
+    const ids = new Set(pinIds);
+    let added = 0, already = 0;
+    for (const { entry, session } of selectedCompletedPins) {
+      if (!ids.has(entry.key) || entry.pinIdx === undefined || !entry.pin) continue;
+      if (entry.pin.planningStatus !== "not_added") { already++; continue; }
+      const group = session.groups[entry.groupIdx];
+      if (!group || group.status !== "done") { already++; continue; }
+      addPinToWeeklyPlan(session, entry.pin, session.id, entry.groupIdx, entry.pinIdx, group.status);
+      added++;
     }
-    selectedCompletedPins.forEach(({ entry, session }, i) => {
+    if (added === 0) {
+      toast.info(`${already} Pin${already === 1 ? " is" : "s are"} already scheduled`);
+      return;
+    }
+    toast.success(`Scheduled ${added} Pin${added === 1 ? "" : "s"}${already ? ` · ${already} already scheduled` : ""}`);
+  }
+
+  // Batch Edit → Publish now (from Studio). Mark published pins Posted through the
+  // canonical path: markDraftPosted for pins with a draft + in-memory planningStatus.
+  // Card plan state derives Posted from these — no new Studio-only status path.
+  function handleBatchPublishComplete(pinIds: string[]) {
+    const ids = new Set(pinIds);
+    for (const { entry, session } of selectedCompletedPins) {
+      if (!ids.has(entry.key) || entry.pinIdx === undefined || !entry.pin) continue;
+      const draft = pinDraftStore.getDraftByImageUrl(entry.pin.url);
+      if (draft) pinDraftStore.markDraftPosted(draft.id);
+      updatePinMetadata(session.id, entry.groupIdx, entry.pinIdx, p => ({ ...p, planningStatus: "posted" }));
+    }
+    // Outcome toast is owned by the Batch Edit drawer (partial-failure aware), so we
+    // don't emit a second toast here — just sync canonical posted state.
+  }
+
+  function handleBatchApply(opts: BatchApplyOpts) {
+    selectedCompletedPins.forEach(({ entry, session }) => {
       if (entry.pinIdx === undefined || !entry.pin) return;
+      const rowEdit = opts.rowEdits[entry.pin.id];
+      if (!rowEdit) return;
       updatePinMetadata(session.id, entry.groupIdx, entry.pinIdx, p => {
         let next = { ...p };
-        if (opts.applyDestinationToAll && opts.sharedDestinationUrl && (!p.metadataTouched.destinationUrlTouched || opts.overwriteEdited)) {
-          next = { ...next, destinationUrl: opts.sharedDestinationUrl, metadataTouched: { ...next.metadataTouched, destinationUrlTouched: true } };
+        if (rowEdit.title          !== undefined) next = { ...next, title:          rowEdit.title,          metadataTouched: { ...next.metadataTouched, titleTouched:          true } };
+        if (rowEdit.description    !== undefined) next = { ...next, description:    rowEdit.description,    metadataTouched: { ...next.metadataTouched, descriptionTouched:    true } };
+        if (rowEdit.altText        !== undefined) next = { ...next, altText:        rowEdit.altText,        metadataTouched: { ...next.metadataTouched, altTextTouched:        true } };
+        if (rowEdit.destinationUrl !== undefined) next = { ...next, destinationUrl: rowEdit.destinationUrl, metadataTouched: { ...next.metadataTouched, destinationUrlTouched: true } };
+        if (rowEdit.plannedDate    !== undefined) next = { ...next, plannedDate:    rowEdit.plannedDate };
+        if (rowEdit.plannedTime    !== undefined) next = { ...next, plannedTime:    rowEdit.plannedTime };
+        if (rowEdit.plannedAt      !== undefined) next = { ...next, plannedAt:      rowEdit.plannedAt };
+        if ((rowEdit.plannedDate !== undefined || rowEdit.plannedTime !== undefined || rowEdit.plannedAt !== undefined) && next.metadataDraft) {
+          next = { ...next, metadataDraft: {
+            ...next.metadataDraft,
+            plannedDate: rowEdit.plannedDate ?? next.plannedDate,
+            plannedTime: rowEdit.plannedTime ?? next.plannedTime,
+            plannedAt: rowEdit.plannedAt ?? next.plannedAt,
+          }};
         }
-        if (opts.sharedPlannedDate && (!p.metadataTouched.plannedDateTouched || opts.overwriteEdited)) {
-          next = { ...next, plannedDate: opts.sharedPlannedDate };
-        } else if (opts.autoAssignDates && dates[i] && (!p.metadataTouched.plannedDateTouched || opts.overwriteEdited)) {
-          next = { ...next, plannedDate: dates[i] };
+        if (rowEdit.boardSuggestion !== undefined && next.metadataDraft) {
+          next = { ...next, metadataDraft: { ...next.metadataDraft, boardSuggestion: rowEdit.boardSuggestion } };
         }
-        if (opts.uniqueTitles || opts.uniqueDescriptions) {
-          const fresh = generatePinMetadataDraft({
-            pinIndex: i, groupIndex: entry.groupIdx,
-            keyword: session.keyword, category: session.category,
-            setupSnapshot: session.setupSnapshot, promptSnapshot: session.promptFull,
-          });
-          if (opts.uniqueTitles && (!p.metadataTouched.titleTouched || opts.overwriteEdited)) {
-            next = { ...next, title: fresh.selectedTitle, metadataDraft: { ...(next.metadataDraft ?? fresh), ...fresh, selectedTitle: fresh.selectedTitle } };
-          }
-          if (opts.uniqueDescriptions && (!p.metadataTouched.descriptionTouched || opts.overwriteEdited)) {
-            next = { ...next, description: fresh.selectedDescription };
-          }
-          if (opts.uniqueAltText && (!p.metadataTouched.altTextTouched || opts.overwriteEdited)) {
-            next = { ...next, altText: fresh.altText };
-          }
+        // Real Pinterest board selection (canonical boardId/boardName). Only ever set
+        // from a real board chosen in the picker — never from category/topic.
+        if (rowEdit.boardId !== undefined && next.metadataDraft) {
+          next = { ...next, metadataDraft: {
+            ...next.metadataDraft,
+            boardId:   rowEdit.boardId   || undefined,
+            boardName: rowEdit.boardName || undefined,
+          }};
+        }
+        if (rowEdit.products !== undefined && next.metadataDraft) {
+          next = { ...next, metadataDraft: writePinProducts(
+            next.metadataDraft,
+            rowEdit.products.primary,
+            rowEdit.products.tagged,
+          )};
+        } else if (rowEdit.linkedProductTitle !== undefined && next.metadataDraft) {
+          next = { ...next, metadataDraft: {
+            ...next.metadataDraft,
+            linkedProductId:       rowEdit.linkedProductId       ?? undefined,
+            linkedProductTitle:    rowEdit.linkedProductTitle     ?? undefined,
+            linkedProductUrl:      rowEdit.linkedProductUrl       ?? undefined,
+            linkedProductImageUrl: rowEdit.linkedProductImageUrl  ?? undefined,
+            linkedProductSource:   rowEdit.linkedProductSource    ?? undefined,
+            isAutoLinked:          rowEdit.isAutoLinked           ?? false,
+          }};
+        }
+        if (rowEdit.planningStatus !== undefined) {
+          next = { ...next, planningStatus: rowEdit.planningStatus as PlanStatus };
         }
         return next;
       });
+      const draft = pinDraftStore.getDraftByImageUrl(entry.pin.url);
+      if (draft && (rowEdit.plannedDate !== undefined || rowEdit.plannedTime !== undefined || rowEdit.plannedAt !== undefined)) {
+        pinDraftStore.updateDraft(draft.id, {
+          scheduledDate: rowEdit.plannedDate ?? draft.scheduledDate,
+          scheduledTime: rowEdit.plannedTime ?? draft.scheduledTime,
+          plannedAt: rowEdit.plannedAt ?? draft.plannedAt,
+        });
+      }
     });
-    toast.success("Batch changes applied");
-    setBatchEditOpen(false);
+    // Autosave: persist silently. The drawer owns per-action feedback and stays open.
   }
 
   function handleReuseSetup(source: { setupSnapshot?: SetupSnapshot; promptFull?: string }) {
     const snap = source.setupSnapshot;
-    if (!snap) { toast.error("Setup snapshot unavailable"); return; }
-    const prodUrls = snap.selectedProducts.map(p => p.imageUrl).filter((u): u is string => !!u);
-    const refUrls  = snap.selectedReferences.map(r => r.imageUrl).filter(Boolean);
-    if (prodUrls.length) setProducts(prodUrls);
-    if (refUrls.length) setRefs(refUrls);
-    const promptText = source.promptFull ?? snap.promptSnapshot;
-    if (promptText?.trim()) { setPrompt(promptText); promptManuallyEdited.current = true; }
-    if (snap.imagesPerReference) setCount(snap.imagesPerReference);
-    if (snap.keyword) {
-      setOpportunity({ keyword: snap.keyword, category: snap.category ?? "home-decor", tier: "steady" });
+    const promptText = source.promptFull ?? snap?.promptSnapshot ?? "";
+    const legacyReuseMessage = "Prompt loaded — original assets unavailable for this older generation";
+    if (snap) {
+      const prodUrls = snap.selectedProducts.map(p => p.imageUrl).filter((u): u is string => !!u);
+      const refUrls  = snap.selectedReferences.map(r => r.imageUrl).filter(Boolean);
+      // Sync product metadata back to asset store so productUrlToSnapshot() can look it up
+      // next time the user clicks Generate (handles Reuse Setup from old/remote sessions).
+      snap.selectedProducts.forEach(p => {
+        if (!p.imageUrl) return;
+        assetStore.saveAsset({
+          role: "product",
+          source: (p.source as assetStore.AssetSource) ?? "upload",
+          imageUrl: p.imageUrl,
+          title:       p.title       ?? undefined,
+          productUrl:  p.productUrl  ?? undefined,
+          sourceDomain: p.sourceDomain ?? undefined,
+        });
+      });
+      if (prodUrls.length) setProducts(prodUrls);
+      if (refUrls.length)  setRefs(refUrls);
+      if (snap.imagesPerReference) setCount(snap.imagesPerReference);
+      if (snap.modelKey && MODEL_KEY_TO_LABEL[snap.modelKey]) setModel(snap.modelKey);
+      if (snap.keyword) {
+        setOpportunity({ keyword: snap.keyword, category: snap.category ?? "", tier: "steady" });
+      }
+      if (snap.creativeDirectionSnapshot?.version === 2) {
+        const cd = snap.creativeDirectionSnapshot;
+        setSystemRecommendations(cd.systemRecommendations);
+        setSelectedDirectionId(cd.selectedDirectionId);
+        setGuidedControls(cd.guidedControls);
+        setCustomInstructions(cd.customInstructions);
+        setManualBrief(cd.manualBrief || promptText);
+        setManualBriefEdited(cd.manualBriefEdited);
+        setInputVersion(cd.inputVersion);
+        setLastBriefInputVersion(cd.inputVersion);
+        setBriefStale(false);
+        setOpportunityContext(cd.opportunityContext);
+      }
+    }
+    if (promptText.trim()) {
+      setPrompt(promptText);
+      if (!snap?.creativeDirectionSnapshot) {
+        setManualBrief(promptText);
+        setManualBriefEdited(true);
+      }
+      promptManuallyEdited.current = true;
     }
     setPinDetailSelection(null);
-    toast.success("Setup loaded into composer");
+    toast.success(snap ? "Setup loaded into composer" : legacyReuseMessage);
+  }
+
+  // ── Generate again from Remix tab (does NOT touch composer state) ────────────
+
+  async function handleGenerateFromRemix(remixSetup: RemixDraftSetup) {
+    const remixRefs  = remixSetup.selectedReferences.map(r => r.imageUrl).filter(Boolean) as string[];
+    const remixProds = remixSetup.selectedProducts.map(p => p.imageUrl).filter((u): u is string => !!u);
+    const refsToUse  = remixRefs.length > 0 ? remixRefs : [null as null];
+    const remixCount = remixSetup.imagesPerReference;
+    const kw         = remixSetup.keyword  || opportunity?.keyword  || "Pinterest content";
+    const cat        = remixSetup.category || opportunity?.category || "";
+    const sessionId  = `studio_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const remixFormat = remixSetup.format ?? format ?? "2:3";
+    const snap: SetupSnapshot = {
+      mode: "keyword_led", keyword: kw, category: cat,
+      opportunityTitle: remixSetup.opportunityTitle,
+      noTextOverlay: remixSetup.noTextOverlay,
+      format: remixFormat,
+      imagesPerReference: remixCount,
+      selectedProducts: remixSetup.selectedProducts,
+      selectedReferences: remixSetup.selectedReferences,
+      promptSnapshot: remixSetup.prompt, createdFrom: "studio",
+      // Preserve the snapshot's saved model (incl. gpt_image); missing/legacy → gemini_image.
+      modelKey: remixSetup.modelKey ?? "gemini_image",
+      model:    MODEL_KEY_TO_LABEL[remixSetup.modelKey ?? "gemini_image"] ?? "Gemini Image",
+    };
+    snapshotRegistry.current.set(sessionId, snap);
+    recoveryStore.current.set(sessionId, snap);
+    saveRemixSetup(sessionId, snap).catch(() => {});
+    try { sessionStorage.setItem(`vibepin_setup_${sessionId}`, JSON.stringify(snap)); } catch { /* noop */ }
+    const runningEntry: HistoryEntry = {
+      id: sessionId, savedAt: new Date().toISOString(),
+      keyword: kw, category: cat, source: "studio",
+      groups: [], refCount: remixRefs.length, productCount: remixProds.length,
+      totalPins: 0, status: "running",
+      expectedTotal: refsToUse.length * remixCount,
+      promptExcerpt: remixSetup.prompt.slice(0, 120),
+      promptFull: remixSetup.prompt, setupSnapshot: snap,
+    };
+    addHistory(runningEntry);
+
+    const newSession: GenerationSession = {
+      id: sessionId, savedAt: new Date().toISOString(),
+      keyword: kw, category: cat, source: "studio",
+      groups: refsToUse.map((refUrl, idx) => ({
+        refUrl, refIndex: idx, items: [], status: "generating" as const, expectedCount: remixCount,
+      })),
+      status: "generating" as SessionStatus,
+      expectedTotal: refsToUse.length * remixCount,
+      promptExcerpt: remixSetup.prompt.slice(0, 120),
+      productCount: remixProds.length, refCount: remixRefs.length,
+      isNew: true, collapsed: false, generatingGroupIdx: 0,
+      promptFull: remixSetup.prompt, setupSnapshot: snap,
+      model: MODEL_KEY_TO_LABEL[remixSetup.modelKey ?? "gemini_image"] ?? "Gemini Image", format: remixFormat,
+      textOverlay: remixSetup.noTextOverlay ? "Off" : "On",
+      groupErrors: {},
+    };
+    setPinDetailSelection(null);
+    setSessions(prev => [newSession, ...prev.map(s => ({ ...s, isNew: false, collapsed: false }))]);
+    setActiveSessionId(sessionId);
+
+    const finalGroups: RefGroup[] = refsToUse.map((refUrl, idx) => ({
+      refUrl, refIndex: idx, items: [], status: "generating" as const, expectedCount: remixCount,
+    }));
+    const recoverableProductImages = snap.selectedProducts
+      .map(p => p.imageUrl)
+      .filter((u): u is string => !!u && !u.startsWith("data:"));
+    const dbGroups: HistoryPinGroup[] = refsToUse.map(r => ({
+      refUrl: r ?? null,
+      images: [],
+      productImages: recoverableProductImages,
+      promptSnapshot: remixSetup.prompt,
+      category: cat,
+      format: snap.format,
+      model: snap.model,
+    }));
+    let totalGenerated = 0;
+    let remixCategoryAudit: CategoryAudit | undefined;
+
+    for (let i = 0; i < refsToUse.length; i++) {
+      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, generatingGroupIdx: i } : s));
+      const ref = refsToUse[i];
+      try {
+        const resp = await fetch("/api/generate", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            keyword: kw, style: "editorial", count: remixCount,
+            prompt: remixSetup.prompt, category: cat,
+            ...(ref               ? { style_ref: ref }             : {}),
+            ...(remixProds.length ? { product_images: remixProds } : {}),
+            text_overlay:       !remixSetup.noTextOverlay,
+            reference_strength: "moderate",
+            output_type:        inferOutputType(cat),
+            format:             snap.format ?? "2:3",
+            model_key:          snap.modelKey ?? "gemini_image",
+            ...(remixSetup.selectedProducts.length ? {
+              product_metadata: remixSetup.selectedProducts.map(p => ({ title: p.title, productUrl: p.productUrl })),
+            } : {}),
+          }),
+        });
+        const data = await resp.json() as { urls?: string[]; error?: string; prompt_snapshot?: PromptSnapshot };
+        if (!remixCategoryAudit && data.prompt_snapshot?.effective_category !== undefined) {
+          remixCategoryAudit = categoryAuditFromSnapshot(data.prompt_snapshot, cat);
+        }
+        if (data.urls?.length) {
+          const sessCtx = { keyword: kw, category: cat, setupSnapshot: snap, promptFull: remixSetup.prompt, generationFinalPrompt: data.prompt_snapshot?.final_prompt };
+          const refLabel = ref ? `Reference ${i + 1}` : remixProds.length > 0 ? "Product" : "No product";
+          finalGroups[i] = { ...finalGroups[i], items: data.urls.map((url, ii) => createCompletedPin(sessionId, i, ii, url, sessCtx, refLabel)), status: "done" };
+          dbGroups[i] = { ...dbGroups[i], refUrl: ref ?? null, images: data.urls };
+          totalGenerated += data.urls.length;
+        } else {
+          finalGroups[i] = { ...finalGroups[i], status: "failed" };
+          toast.error(`Reference ${i + 1} failed`, { description: data.error ?? "No images returned" });
+        }
+      } catch (err) {
+        finalGroups[i] = { ...finalGroups[i], status: "failed" };
+        toast.error("Network error", { description: String(err) });
+      }
+      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, groups: [...finalGroups] } : s));
+      addHistory({ ...runningEntry, groups: dbGroups, totalPins: totalGenerated });
+    }
+
+    const finalStatus: GenerationStatus = totalGenerated === 0 ? "failed" : totalGenerated < refsToUse.length * remixCount ? "partial" : "completed";
+    setSessions(prev => prev.map(s => s.id === sessionId ? {
+      ...s, status: finalStatus as SessionStatus, generatingGroupIdx: null,
+      ...(remixCategoryAudit ? { categoryAudit: remixCategoryAudit } : {}),
+    } : s));
+    addHistory({
+      ...runningEntry, groups: dbGroups, totalPins: totalGenerated, status: finalStatus,
+      ...(remixCategoryAudit ? { categoryAudit: remixCategoryAudit } : {}),
+    });
+    updateSessionInDb(supabase, sessionId, {
+      groups_json: dbGroups,
+      pin_urls: dbGroups.flatMap(g => g.images),
+      total_pins: totalGenerated,
+      status: finalStatus,
+      ...(remixCategoryAudit ? { category_audit: remixCategoryAudit } : {}),
+      updated_at: new Date().toISOString(),
+    }).catch(() => {});
+    if (totalGenerated) toast.success(`${totalGenerated} new pin${totalGenerated !== 1 ? "s" : ""} generated`);
   }
 
   // ── Picker confirm ────────────────────────────────────────────────────────────
 
-  function onPickerConfirm(items: { id: string; imageUrl: string; source: string }[]) {
+  function onPickerConfirm(items: { id: string; imageUrl: string; source: string; title?: string; productUrl?: string; sourceUrl?: string }[]) {
     const urls = items.map(i => i.imageUrl);
     if (rightPanelMode === "product_picker") {
+      // Ensure each product asset is in the store with its full metadata so
+      // productUrlToSnapshot() can look it up at generation time.
+      items.forEach(item => {
+        if (item.productUrl || item.title) {
+          assetStore.saveAsset({
+            role: "product",
+            source: (item.source as assetStore.AssetSource) ?? "upload",
+            imageUrl: item.imageUrl,
+            title:      item.title      ?? undefined,
+            productUrl: item.productUrl ?? item.sourceUrl ?? undefined,
+          });
+        }
+      });
       setProducts(p => { const s = new Set(p); return [...p, ...urls.filter(u => !s.has(u))]; });
     } else {
       setRefs(r => { const s = new Set(r); return [...r, ...urls.filter(u => !s.has(u))]; });
@@ -1978,6 +3720,80 @@ function CreatePinsContent() {
   }
 
   // ── Add to plan ───────────────────────────────────────────────────────────────
+
+  function openSharedPinDetails(sessionId: string, groupIdx: number, pinIdx: number) {
+    const session = sessions.find(s => s.id === sessionId);
+    const pin = session?.groups[groupIdx]?.items[pinIdx];
+    if (!session || !pin?.url) return;
+    const existing = pinDraftStore.getDraftByImageUrl(pin.url);
+    if (existing) {
+      setDetailsModalDraft(existing);
+      return;
+    }
+    const payload = buildWeeklyPlanItemFromGeneratedPin({
+      pin: { ...pin, planningStatus: "not_added" },
+      session: {
+        id: sessionId,
+        keyword: session.keyword,
+        category: session.category,
+        source: session.source,
+        status: session.status,
+        savedAt: session.savedAt,
+        setupSnapshot: pin.setupSnapshot ?? session.setupSnapshot,
+        promptFull: session.promptFull,
+        model: session.model,
+        format: session.format,
+      },
+      groupStatus: "done",
+      keywordFallback: opportunity?.keyword || "Pinterest content",
+      categoryFallback: opportunity?.category || "home-decor",
+    });
+    const draft = payload ? pinDraftStore.createDetailsDraftFromHandoff(payload) : null;
+    if (draft) setDetailsModalDraft(draft);
+  }
+
+  function syncDetailsDraftToStudio(updated: PinDraft) {
+    setDetailsModalDraft(updated);
+    setSessions(prev => prev.map(session => ({
+      ...session,
+      groups: session.groups.map(group => ({
+        ...group,
+        items: group.items.map(pin => pin.id !== updated.pinId ? pin : ({
+          ...pin,
+          title: updated.title,
+          description: updated.description,
+          altText: updated.altText,
+          destinationUrl: updated.destinationUrl,
+          plannedDate: updated.scheduledDate,
+          metadataDraft: updated.metadataDraft ?? pin.metadataDraft,
+          weeklyPlanItemId: updated.addedToPlanAt ? updated.id : pin.weeklyPlanItemId,
+        })),
+      })),
+    })));
+  }
+
+  function addDetailsDraftToPlan(updated: PinDraft) {
+    const session = sessions.find(s => s.groups.some(g => g.items.some(p => p.id === updated.pinId)));
+    if (!session) return;
+    const groupIdx = session.groups.findIndex(g => g.items.some(p => p.id === updated.pinId));
+    const pinIdx = session.groups[groupIdx]?.items.findIndex(p => p.id === updated.pinId) ?? -1;
+    const pin = session.groups[groupIdx]?.items[pinIdx];
+    if (!pin || groupIdx < 0 || pinIdx < 0) return;
+    const merged: StudioPin = {
+      ...pin,
+      title: updated.title,
+      description: updated.description,
+      altText: updated.altText,
+      destinationUrl: updated.destinationUrl,
+      plannedDate: updated.scheduledDate,
+      metadataDraft: updated.metadataDraft ?? pin.metadataDraft,
+    };
+    const result = addPinToWeeklyPlan(session, merged, session.id, groupIdx, pinIdx, session.groups[groupIdx].status);
+    if (!result) return;
+    const persisted = pinDraftStore.getDraftByImageUrl(updated.imageUrl);
+    if (persisted) syncDetailsDraftToStudio(persisted);
+    toast.success("Added to Weekly Plan");
+  }
 
   function addPinToWeeklyPlan(
     session: GenerationSession,
@@ -2015,8 +3831,41 @@ function CreatePinsContent() {
     const draft = pinDraftStore.createFromHandoff(payload);
     if (!draft) return null;
 
+    // Canonical scheduling: every Add-to-Plan Pin gets a real Smart Schedule slot
+    // (plannedDate + plannedTime + plannedAt) — never a date-only / time-less state.
+    const scheduled = ensureScheduledPlanTime(draft.id, { date: payload.plannedDate || undefined });
+    const finalDraft = scheduled.ok ? scheduled.draft : draft;
+
+    // Debug trace — only for internal/debug users with the flag on. Proves the Pin
+    // lands where Weekly Plan can read it (same store, local date inside the week).
+    if (SHOW_GENERATION_DEBUG && canViewDebug) {
+      const today = new Date();
+      const dow = today.getDay();
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
+      const weekStart = localDateISO(monday);
+      const inWeek = !!draft.scheduledDate && draft.scheduledDate >= weekStart;
+      console.debug("[add-to-plan]", {
+        sourcePage: "studio",
+        generatedOutputId: pin.id,
+        pinAssetId: draft.pinId ?? draft.id,
+        planItemId: draft.id,
+        imageUrlPresent: !!draft.imageUrl,
+        plannedAt: draft.scheduledDate || "(unscheduled)",
+        planStatus: draft.scheduledDate ? "scheduled" : "needs_date",
+        detailsStatus: draft.status,
+        sessionId, category: draft.category,
+        weeklyPlanWeekStart: weekStart,
+        includedInVisibleWeek: inWeek,
+        reason: !draft.scheduledDate
+          ? "no date → Unscheduled / needs-date area"
+          : inWeek ? "dated within current week → calendar"
+          : "dated outside current week → month view / nav required",
+      });
+    }
+
     const planningStatus = payload.planningStatus as PlanStatus;
-    const plannedDate = payload.plannedDate;
+    const plannedDate = finalDraft.scheduledDate || payload.plannedDate;
     const updated: StudioPin = {
       ...pin,
       title: payload.title,
@@ -2026,6 +3875,8 @@ function CreatePinsContent() {
       planningStatus,
       weeklyPlanItemId: draft.id,
       plannedDate,
+      plannedTime: finalDraft.scheduledTime || pin.plannedTime,
+      plannedAt: finalDraft.plannedAt || pin.plannedAt,
       metadataDraft: payload.metadataDraft ?? pin.metadataDraft,
       metadataTouched: payload.metadataTouched,
     };
@@ -2043,18 +3894,59 @@ function CreatePinsContent() {
     const session = sessions.find(s => s.id === sessionId);
     const group   = session?.groups[groupIdx];
     const pin     = group?.items[pinIdx];
-    if (!pin || !pin.url || group?.status !== "done") return;
+    if (!pin || !pin.url || (group?.status !== "done" && group?.status !== "partial")) return;
     if (pin.planningStatus !== "not_added") { toast.info("Already added to plan"); return; }
     const result = addPinToWeeklyPlan(session!, pin, sessionId, groupIdx, pinIdx, group.status);
     if (!result) return;
     const { planningStatus, plannedDate } = result;
-    toast.success("Added to Weekly Plan", {
+    toast.success(plannedDate ? "Added to Weekly Plan" : "Added to Weekly Plan · Needs date", {
       description: planningStatus === "ready"
         ? `Ready for publish${plannedDate ? ` · ${plannedDate}` : ""}.`
         : plannedDate
           ? `Needs review · scheduled ${plannedDate}.`
-          : "Needs review · not scheduled.",
+          : "Assign a date in Weekly Plan to schedule it.",
+      action: { label: "View in Weekly Plan", onClick: () => { window.location.assign("/app/plan"); } },
     });
+  }
+
+  // Resolve the RICHEST setup snapshot for a session — the same recovery the detail
+  // drawer uses. A history-restored session.setupSnapshot is COMPACT (image URLs
+  // stripped for storage), so retry/regenerate must prefer the in-memory registry,
+  // the durable IndexedDB recovery store, and sessionStorage, which still carry the
+  // real product/reference image URLs. Without this, retry sends a request with NO
+  // images and fails again (the "Try again flashes then nothing" bug).
+  function resolveRichestSnapshot(session: GenerationSession): {
+    snapshot?: SetupSnapshot; source: string;
+    productImagesRecovered: number; referenceImagesRecovered: number;
+  } {
+    const sessionStorageSnap = (() => {
+      try {
+        const raw = sessionStorage.getItem(`vibepin_setup_${session.id}`)
+          ?? localStorage.getItem(`vibepin_setup_${session.id}`);
+        return raw ? (JSON.parse(raw) as SetupSnapshot) : null;
+      } catch { return null; }
+    })();
+    const historyEntry = loadHistory().find(h => h.id === session.id) ?? null;
+    const score = (s: SetupSnapshot | null): number => s
+      ? (s.selectedProducts ?? []).filter(p => !!p.imageUrl).length + (s.selectedReferences ?? []).filter(r => !!r.imageUrl).length
+      : -1;
+    const labeled: Array<{ source: string; snap: SetupSnapshot | null }> = [
+      { source: "snapshotRegistry", snap: snapshotRegistry.current.get(session.id) ?? null },
+      { source: "recoveryStore",    snap: recoveryStore.current.get(session.id) ?? null },
+      { source: "sessionStorage",   snap: sessionStorageSnap },
+      { source: "session",          snap: session.setupSnapshot ?? null },
+      { source: "history",          snap: historyEntry?.setupSnapshot ?? null },
+    ].filter(c => !!c.snap);
+    const best = labeled.reduce<{ source: string; snap: SetupSnapshot } | undefined>(
+      (acc, cur) => (acc === undefined || score(cur.snap) > score(acc.snap) ? { source: cur.source, snap: cur.snap! } : acc),
+      undefined,
+    );
+    return {
+      snapshot: best?.snap,
+      source: best?.source ?? "none",
+      productImagesRecovered: (best?.snap?.selectedProducts ?? []).filter(p => !!p.imageUrl).length,
+      referenceImagesRecovered: (best?.snap?.selectedReferences ?? []).filter(r => !!r.imageUrl).length,
+    };
   }
 
   // ── Regenerate group ──────────────────────────────────────────────────────────
@@ -2063,75 +3955,309 @@ function CreatePinsContent() {
     const session = sessions.find(s => s.id === sessionId);
     const group   = session?.groups[groupIdx];
     if (!group) return;
+
+    // Reconstruct the original generation inputs from the stored snapshot.
+    // Fall back to current UI state only when the session has no snapshot (legacy).
+    const snap          = session?.setupSnapshot;
+    const retryPrompt   = snap?.promptSnapshot   ?? session?.promptFull ?? prompt;
+    const retryKeyword  = snap?.keyword  ?? session?.keyword  ?? opportunity?.keyword  ?? "Pinterest content";
+    const retryCategory = snap?.category ?? session?.category ?? opportunity?.category ?? "";
+    const retryCount    = snap?.imagesPerReference ?? count;
+    const retryProducts = (snap?.selectedProducts ?? [])
+      .map(p => p.imageUrl)
+      .filter((u): u is string => u !== null && u !== undefined && u.length > 0);
+
     setSessions(prev => prev.map(s => {
       if (s.id !== sessionId) return s;
-      return { ...s, groups: s.groups.map((g, i) => i !== groupIdx ? g : { ...g, status: "generating" as const, items: [], expectedCount: count }) };
+      return { ...s, groups: s.groups.map((g, i) => i !== groupIdx ? g : { ...g, status: "generating" as const, items: [], expectedCount: retryCount }) };
     }));
     try {
-      const resp = await fetch("/api/generate", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          keyword: opportunity?.keyword ?? "Pinterest content",
-          style: "editorial", count, prompt,
-          category: opportunity?.category ?? "home-decor",
-          ...(group.refUrl    ? { style_ref: group.refUrl }  : {}),
-          ...(products.length ? { product_images: products } : {}),
-        }),
+      const retryRequestId = `${sessionId}_retry_g${groupIdx}_${Date.now()}`;
+      const data = await generateWithRecovery({
+        keyword: retryKeyword,
+        category: retryCategory,
+        prompt: retryPrompt,
+        count: retryCount,
+        styleRef: group.refUrl,
+        productImages: retryProducts,
+        outputType: inferOutputType(retryCategory),
+        promptMode: snap?.creativeDirectionSnapshot ? "creative_direction_v2" : "legacy",
+        promptVersion: snap?.creativeDirectionSnapshot ? 2 : 1,
+        creativeDirectionMeta: snap?.creativeDirectionSnapshot,
+        // Preserve the session's model on retry (incl. gpt_image); missing → gemini_image.
+        modelKey: snap?.modelKey ?? "gemini_image",
+        generationRequestId: retryRequestId,
+        studioClientId: getStudioClientId(),
       });
-      const data = await resp.json() as { urls?: string[] };
       setSessions(prev => prev.map(s => {
         if (s.id !== sessionId) return s;
+        const nextGroupErrors = { ...(s.groupErrors ?? {}) };
+        if (data.urls.length >= retryCount) {
+          delete nextGroupErrors[groupIdx];
+        } else {
+          nextGroupErrors[groupIdx] = {
+            message: data.error ?? "No images returned after automatic retries",
+            errorType: data.errorType ?? "unknown_error",
+          };
+        }
         return { ...s, groups: s.groups.map((g, i) => {
           if (i !== groupIdx) return g;
           const refLabel = refLabelForGroup(s, g);
-          const sessCtx = { keyword: s.keyword, category: s.category, setupSnapshot: s.setupSnapshot, promptFull: s.promptFull };
+          const sessCtx = { keyword: s.keyword, category: s.category, setupSnapshot: s.setupSnapshot, promptFull: s.promptFull, generationFinalPrompt: data.promptSnapshot?.final_prompt ?? s.generationFinalPrompt };
+          const retryStatus: RefGroup["status"] =
+            data.urls.length >= retryCount ? "done" : data.urls.length > 0 ? "partial" : "failed";
           return {
-            ...g, items: (data.urls ?? []).map((url, ii) => createCompletedPin(sessionId, groupIdx, ii, url, sessCtx, refLabel)),
-            status: data.urls?.length ? "done" as const : "failed" as const,
+            ...g, items: data.urls.map((url, ii) =>
+              // Carry product / affiliate context from the prior Pin at this slot so a
+              // group regenerate never loses productId, creatorProductLinkId, or destinationUrl.
+              preserveAffiliateContextOnRegenerate(
+                group.items[ii] ?? group.items[0],
+                createCompletedPin(sessionId, groupIdx, ii, url, sessCtx, refLabel),
+              )),
+            status: retryStatus,
           };
-        })};
+        }), groupErrors: nextGroupErrors };
       }));
-    } catch {
+    } catch (err) {
       setSessions(prev => prev.map(s => {
         if (s.id !== sessionId) return s;
-        return { ...s, groups: s.groups.map((g, i) => i !== groupIdx ? g : { ...g, status: "failed" as const }) };
+        return {
+          ...s,
+          groups: s.groups.map((g, i) => i !== groupIdx ? g : { ...g, status: "failed" as const }),
+          groupErrors: {
+            ...(s.groupErrors ?? {}),
+            [groupIdx]: { message: String(err), errorType: "unknown_error" as const },
+          },
+        };
       }));
     }
   }
 
-  // ── Regenerate single pin ─────────────────────────────────────────────────────
+  // ── Retry EXACTLY ONE failed output ──────────────────────────────────────────
+  // Scope = a single output slot (sessionId, groupIdx, outputIndex). It:
+  //   • generates exactly ONE image (outputCount = 1), never the original batch count
+  //   • never sets the group/sibling to "generating" — only the target slot enters a
+  //     per-slot retrying state (group.retryingSlots), so a completed sibling's image,
+  //     metadata, and plan state stay byte-for-byte untouched
+  //   • keeps the failed output's variantRole/variantInstruction (re-indexed to 1)
+  //   • rebuilds image inputs from the snapshot's SOURCE urls/data-urls, so the broken
+  //     provider inline_data.data is never reused (backend re-fetches + re-encodes)
+  async function handleRetryFailedOutput(sessionId: string, groupIdx: number, outputIndex: number) {
+    const session = sessions.find(s => s.id === sessionId);
+    const group   = session?.groups[groupIdx];
+    if (!group || !session) return;
+    // Use the richest recovered snapshot (real image URLs), NOT the compact session copy.
+    const recovery = resolveRichestSnapshot(session);
+    const snap     = recovery.snapshot;
+    const slotId   = outputSlotId(sessionId, groupIdx, outputIndex);
+    const plan      = planSingleOutputRetry(outputIndex);
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async function handleRegeneratePin(sessionId: string, groupIdx: number, _pinIdx: number) {
+    if (retryGuard.current.has(slotId)) return;         // Part J: duplicate-click guard, per OUTPUT
+
+    const retryPrompt   = snap?.promptSnapshot   ?? session?.promptFull ?? prompt;
+    const retryKeyword  = snap?.keyword  ?? session?.keyword  ?? opportunity?.keyword  ?? "Pinterest content";
+    const retryCategory = snap?.category ?? session?.category ?? opportunity?.category ?? "";
+    const retryProducts = (snap?.selectedProducts ?? [])
+      .map(p => p.imageUrl)
+      .filter((u): u is string => !!u && u.length > 0);
+    const sentRefCount = group.refUrl ? 1 : 0;
+
+    // Step 1 guard: if the original used images but recovery yielded none (and no group
+    // ref), we'd send an imageless request that just fails again → show missing-setup,
+    // do NOT call /api/generate / LinAPI. Also covers "no setup at all".
+    const imageless = shouldBlockImagelessRetry(session.productCount, session.refCount, retryProducts.length, sentRefCount);
+    const nothingToSend = retryProducts.length === 0 && sentRefCount === 0 && !retryPrompt.trim();
+    if (imageless || nothingToSend) {
+      const { title, body } = regenerateErrorCopy("missing_setup");
+      toast.error(title, { description: body });
+      return;
+    }
+
+    retryGuard.current.add(slotId);
+    const snapVariationMode =
+      ((snap?.creativeDirectionSnapshot as { variationMode?: string } | undefined)?.variationMode === "similar" ? "similar"
+        : (snap?.creativeDirectionSnapshot as { variationMode?: string } | undefined)?.variationMode === "distinct" ? "distinct"
+        : variationMode) as "distinct" | "similar";
+    // Preserve THIS output's variant role/instruction; re-index to 1 since we generate one image.
+    const fullVariants = buildOutputVariants(group.expectedCount, snapVariationMode, retryCategory);
+    const targetVariant = fullVariants[outputIndex] ?? fullVariants[0];
+    const retryVariant: OutputVariant = { ...targetVariant, index: plan.variantIndex };
+
+    const retryModel = snap?.modelKey ?? "gemini_image";
+    // Dev-only trace (behind NEXT_PUBLIC_STUDIO_DEBUG_GENERATION) — proves the retry
+    // recovered real images and what it is about to send. Never shown in production UI.
+    if (SHOW_GENERATION_DEBUG) {
+      console.debug("[retry-single-output]", {
+        retryOutputId: slotId,
+        retrySessionId: sessionId,
+        outputIndex,
+        variantRole: outputIndex === 0 ? "anchor" : "distinct_variant",
+        richestSnapshotSource: recovery.source,
+        productImageCountRecovered: recovery.productImagesRecovered,
+        referenceImageCountRecovered: recovery.referenceImagesRecovered,
+        productImageCountSent: retryProducts.length,
+        referenceImageCountSent: sentRefCount,
+        model: retryModel,
+        siblingStatuses: group.items.map((p, pi) => ({ outputId: p.id, outputIndex: pi, status: "completed" })),
+      });
+    }
+
+    // Immediate feedback: mark ONLY this slot retrying. items + sibling status unchanged.
+    setSessions(prev => prev.map(s => s.id !== sessionId ? s : {
+      ...s,
+      groups: s.groups.map((g, i) => i !== groupIdx ? g : markOutputRetrying(g, outputIndex)),
+    }));
+
+    try {
+      const retryRequestId = `${sessionId}_retry_${slotId}_${Date.now()}`;
+      const data = await generateWithRecovery({
+        keyword: retryKeyword,
+        category: retryCategory,
+        prompt: retryPrompt,
+        count: SINGLE_OUTPUT_RETRY_COUNT,           // Part B: exactly one image, never batch count
+        styleRef: group.refUrl,
+        productImages: retryProducts,
+        outputType: inferOutputType(retryCategory),
+        pinFormat: snap?.format ?? "2:3",
+        productMetadata: (snap?.selectedProducts ?? []).map(p => ({ title: p.title, productUrl: p.productUrl })),
+        promptMode: snap?.creativeDirectionSnapshot ? "creative_direction_v2" : "legacy",
+        promptVersion: snap?.creativeDirectionSnapshot ? 2 : 1,
+        creativeDirectionMeta: snap?.creativeDirectionSnapshot,
+        modelKey: snap?.modelKey ?? "gemini_image",
+        outputCount: SINGLE_OUTPUT_RETRY_COUNT,
+        variationMode: snapVariationMode,
+        outputVariants: [retryVariant],
+        retrySingleOutput: true,                     // Part B: backend forces count=1
+        retryOfOutputId: slotId,
+        retryOutputIndex: outputIndex,
+        generationRequestId: retryRequestId,
+        studioClientId: getStudioClientId(),
+      });
+      const newUrl = data.urls[0];
+      setSessions(prev => prev.map(s => {
+        if (s.id !== sessionId) return s;
+        const nextErrors = { ...(s.groupErrors ?? {}) };
+        return {
+          ...s,
+          groups: s.groups.map((g, i) => {
+            if (i !== groupIdx) return g;
+            if (newUrl) {
+              const refLabel = refLabelForGroup(s, g);
+              const sessCtx = { keyword: s.keyword, category: s.category, setupSnapshot: s.setupSnapshot, promptFull: s.promptFull, generationFinalPrompt: data.promptSnapshot?.final_prompt ?? s.generationFinalPrompt };
+              const appendedPin = createCompletedPin(sessionId, groupIdx, g.items.length, newUrl, sessCtx, refLabel);
+              const merged = applyRetrySuccess(g, outputIndex, [appendedPin]);  // appends; sibling untouched
+              if (merged.status === "done") delete nextErrors[groupIdx];
+              return merged;
+            }
+            // No image came back → revert just this slot to failed; siblings untouched.
+            nextErrors[groupIdx] = { message: data.error ?? "This Pin didn't generate — try again.", errorType: data.errorType ?? "unknown_error" };
+            return applyRetryFailure(g, outputIndex);
+          }),
+          groupErrors: nextErrors,
+        };
+      }));
+      if (SHOW_GENERATION_DEBUG) {
+        console.debug("[retry-single-output] result", {
+          retryOutputId: slotId, retrySessionId: sessionId, model: retryModel,
+          status: newUrl ? "completed" : "failed",
+          errorType: newUrl ? undefined : data.errorType,
+        });
+      }
+      // Always give visible feedback — never a silent "flash then nothing".
+      if (newUrl) toast.success("Retried successfully — added to this set");
+      else toastGenerationError(data.errorType, data.error);
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") console.error("[retry-single-output] failed", err);
+      setSessions(prev => prev.map(s => s.id !== sessionId ? s : {
+        ...s,
+        groups: s.groups.map((g, i) => i !== groupIdx ? g : applyRetryFailure(g, outputIndex)),
+        groupErrors: { ...(s.groupErrors ?? {}), [groupIdx]: { message: String(err), errorType: "unknown_error" as const } },
+      }));
+      toast.error("Network error during retry", { description: "Please try again shortly." });
+    } finally {
+      retryGuard.current.delete(slotId);
+    }
+  }
+
+  // ── Regenerate single pin → add ONE new variation ────────────────────────────
+  // Goes through the SAME safe path as Generate (generateWithRecovery): reconstructs
+  // the full payload from the setup snapshot (products, references, direction brief,
+  // selected tags, model, creative-direction meta), sends studioClientId +
+  // generationRequestId so the P0 per-user lock keys consistently, never falls back to
+  // text-only when images exist, preserves the original Pin (APPENDS a new output), and
+  // maps P0 errors (provider_busy / user_generation_limit / configuration_error) to
+  // friendly copy. Missing setup → clear message, NO provider call.
+  async function handleRegeneratePin(sessionId: string, groupIdx: number, pinIdx: number) {
     const session = sessions.find(s => s.id === sessionId);
     const group   = session?.groups[groupIdx];
     if (!group) return;
+
+    // Richest recovered snapshot (real image URLs), not the compact session copy.
+    const snap = session ? resolveRichestSnapshot(session).snapshot : undefined;
+    const rp = buildRegeneratePayload(snap, {
+      refUrl: group.refUrl,
+      fallbackPrompt: session?.promptFull,
+      fallbackKeyword: opportunity?.keyword,
+      fallbackCategory: opportunity?.category,
+    });
+
+    // Step 2 guard: without a usable setup we cannot rebuild a real request → don't call the provider.
+    if (!rp.hasSetup) {
+      const { title, body } = regenerateErrorCopy("missing_setup");
+      toast.error(title, { description: body });
+      return;
+    }
+
     try {
-      const resp = await fetch("/api/generate", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          keyword: opportunity?.keyword ?? "Pinterest content",
-          style: "editorial", count: 1, prompt,
-          category: opportunity?.category ?? "home-decor",
-          ...(group.refUrl    ? { style_ref: group.refUrl }  : {}),
-          ...(products.length ? { product_images: products } : {}),
-        }),
+      const data = await generateWithRecovery({
+        keyword: rp.keyword,
+        category: rp.category,
+        prompt: rp.prompt,
+        count: rp.count,                           // one new variation; obeys MAX_IMAGES_PER_REQUEST
+        styleRef: rp.styleRef,
+        productImages: rp.productImages,
+        textOverlay: rp.textOverlay,
+        referenceStrength: "moderate",
+        outputType: inferOutputType(rp.category),
+        pinFormat: snap?.format ?? "2:3",
+        productMetadata: rp.productMetadata,
+        modelKey: rp.modelKey,
+        promptMode: rp.promptMode,
+        promptVersion: rp.promptVersion,
+        creativeDirectionMeta: snap?.creativeDirectionSnapshot,
+        ...(rp.selectedTags ? { selectedTags: rp.selectedTags } : {}),
+        ...(rp.directionBrief ? { directionBrief: rp.directionBrief } : {}),
+        productImageCountRequested: rp.productImageCountRequested,
+        referenceImageCountRequested: rp.referenceImageCountRequested,
+        generationRequestId: `${sessionId}_regen_g${groupIdx}_${Date.now()}`,
+        studioClientId: getStudioClientId(),
       });
-      const data = await resp.json() as { urls?: string[] };
-      if (data.urls?.length) {
+      const newUrl = data.urls[0];
+      if (newUrl) {
         setSessions(prev => prev.map(s => {
           if (s.id !== sessionId) return s;
           return { ...s, groups: s.groups.map((g, i) => {
             if (i !== groupIdx) return g;
             const newIdx = g.items.length;
             const refLabel = refLabelForGroup(s, g);
-            const sessCtx = { keyword: s.keyword, category: s.category, setupSnapshot: s.setupSnapshot, promptFull: s.promptFull };
-            return { ...g, items: [...g.items, createCompletedPin(sessionId, groupIdx, newIdx, data.urls![0], sessCtx, refLabel)] };
+            const sessCtx = { keyword: s.keyword, category: s.category, setupSnapshot: s.setupSnapshot, promptFull: s.promptFull, generationFinalPrompt: data.promptSnapshot?.final_prompt ?? s.generationFinalPrompt };
+            // APPEND — the original Pin is preserved; the regenerated Pin is a new output
+            // carrying the same setup snapshot (so Remix works on it too). Affiliate /
+            // product context (productId, creatorProductLinkId, destinationUrl) is carried
+            // over from the source Pin so Regenerate never loses the product link.
+            const sourcePin = g.items[pinIdx] ?? g.items[0];
+            const fresh = createCompletedPin(sessionId, groupIdx, newIdx, newUrl, sessCtx, refLabel);
+            return { ...g, items: [...g.items, preserveAffiliateContextOnRegenerate(sourcePin, fresh)] };
           })};
         }));
         toast.success("New variation added");
-      } else { toast.error("Variation failed — try again"); }
-    } catch { toast.error("Network error during regeneration"); }
+      } else {
+        toastGenerationError(data.errorType, data.error);
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") console.error("[regenerate-pin] failed", err);
+      toast.error("Network error during regeneration", { description: "Please try again shortly." });
+    }
   }
 
   // ── Add all to plan ───────────────────────────────────────────────────────────
@@ -2143,7 +4269,7 @@ function CreatePinsContent() {
     let skipped = 0;
     for (let gi = 0; gi < session.groups.length; gi++) {
       const group = session.groups[gi];
-      if (group.status !== "done") { skipped += group.items.length; continue; }
+      if (group.status !== "done" && group.status !== "partial") { skipped += group.items.length; continue; }
       for (let pi = 0; pi < group.items.length; pi++) {
         const pin = group.items[pi];
         if (!canAddGeneratedPinToPlan(group.status, pin)) { skipped++; continue; }
@@ -2160,18 +4286,86 @@ function CreatePinsContent() {
   // ── Save draft ────────────────────────────────────────────────────────────────
 
   function handleSaveDraft() {
-    localStorage.setItem("vibepin_studio_draft", JSON.stringify({ products, refs, prompt, count, opportunity, savedAt: new Date().toISOString() }));
+    localStorage.setItem("vibepin_studio_draft", JSON.stringify({
+      products, refs, prompt: manualBrief || prompt, count, variationMode, opportunity,
+      creativeDirection: buildCreativeDirectionSnapshot(manualBrief || prompt),
+      savedAt: new Date().toISOString(),
+    }));
     toast.success("Draft saved");
   }
 
-  function appendPromptStarter(starter: string) {
-    setPrompt(prev => {
-      const trimmed = prev.trim();
-      if (!trimmed) return starter;
-      if (trimmed.toLowerCase().includes(starter.toLowerCase())) return prev;
-      return `${trimmed}. ${starter}`;
-    });
+  function handleSelectCreativeDirection(id: string) {
+    const direction = derivedRecommendations.find(r => r.id === id);
+    setSelectedDirectionId(id);
+    const nextBrief = composeCreativeBrief(direction);
+    setManualBrief(nextBrief);
+    setPrompt(nextBrief);
+    setManualBriefEdited(false);
+    setLastBriefInputVersion(inputVersion);
+    setBriefStale(false);
+    promptManuallyEdited.current = false;
+  }
+
+  function handleGuidedControlsChange(patch: Partial<GuidedControls>) {
+    const next = { ...guidedControls, ...patch };
+    setGuidedControls(next);
+    if (!manualBriefEdited) {
+      const nextBrief = composeCreativeBrief(selectedDirection, next);
+      setManualBrief(nextBrief);
+      setPrompt(nextBrief);
+      setLastBriefInputVersion(inputVersion);
+      setBriefStale(false);
+    } else {
+      setBriefStale(true);
+    }
+  }
+
+  function handleCustomInstructionsChange(value: string) {
+    setCustomInstructions(value);
+    if (!manualBriefEdited) {
+      const nextBrief = composeCreativeBrief(selectedDirection, guidedControls, value);
+      setManualBrief(nextBrief);
+      setPrompt(nextBrief);
+      setLastBriefInputVersion(inputVersion);
+      setBriefStale(false);
+    } else {
+      setBriefStale(true);
+    }
+  }
+
+  function handleManualBriefChange(value: string) {
+    setManualBrief(value);
+    setPrompt(value);
+    setManualBriefEdited(true);
+    setBriefStale(false);
     promptManuallyEdited.current = true;
+  }
+
+  function handleUpdateDirection() {
+    const nextBrief = composeCreativeBrief();
+    setManualBrief(nextBrief);
+    setPrompt(nextBrief);
+    setManualBriefEdited(false);
+    setLastBriefInputVersion(inputVersion);
+    setBriefStale(false);
+    promptManuallyEdited.current = false;
+  }
+
+  function handleKeepCreativeEdits() {
+    setLastBriefInputVersion(inputVersion);
+    setBriefStale(false);
+  }
+
+  function handleRemoveOpportunityContext() {
+    const next = { ...opportunityContext, enabled: false, removable: true as const };
+    setOpportunityContext(next);
+    if (!manualBriefEdited) {
+      const nextBrief = composeCreativeBrief(selectedDirection, guidedControls, customInstructions, next);
+      setManualBrief(nextBrief);
+      setPrompt(nextBrief);
+    } else {
+      setBriefStale(true);
+    }
   }
 
   const tc = opportunity ? (TIER_COLOR[opportunity.tier] ?? D.purple) : "";
@@ -2189,23 +4383,18 @@ function CreatePinsContent() {
 
       {/* Page header */}
       <div style={{
-        padding: "12px 20px", background: D.surface,
+        padding: "0 16px", height: 44, background: D.surface,
         borderBottom: `1px solid ${D.border}`,
         flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
-        <div>
-          <p data-testid="page-header-title" style={{ margin: 0, fontSize: "18px", fontWeight: 800, color: D.text, lineHeight: 1.2 }}>Create Pins</p>
-          <p style={{ margin: "4px 0 0", fontSize: "12px", color: D.textSec }}>
-            Turn product images, Pin references, or ideas into Pinterest-native visuals.
-          </p>
-        </div>
+        <p data-testid="page-header-title" style={{ margin: 0, fontSize: "14px", fontWeight: 800, color: D.text }}>Create Pins</p>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button type="button" onClick={handleSaveDraft}
-            style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 14px", borderRadius: 20, border: `1px solid ${D.border}`, background: "none", fontSize: "11px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
+            style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, border: `1px solid ${D.border}`, background: "none", fontSize: "11px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
             Save draft
           </button>
           <button type="button" onClick={() => router.push("/app/history")}
-            style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 14px", borderRadius: 20, border: `1px solid ${D.border}`, background: D.cardElev, fontSize: "11px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
+            style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, border: `1px solid ${D.border}`, background: D.cardElev, fontSize: "11px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
             <Clock style={{ width: 11, height: 11 }} /> History
           </button>
         </div>
@@ -2218,148 +4407,267 @@ function CreatePinsContent() {
         <div
           data-testid="composer-panel"
           style={{
-            width: "36%", minWidth: 280, maxWidth: 400, flexShrink: 0,
+            width: "32%", minWidth: 264, maxWidth: 360, flexShrink: 0,
             display: "flex", flexDirection: "column", minHeight: 0,
             borderRight: "none", background: D.card, overflow: "hidden",
           }}
         >
-          <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+          <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             {/* Compact side-by-side asset entries */}
-            <div style={{ padding: "12px 14px", borderBottom: `1px solid ${D.border}`, display: "flex", gap: 8 }}>
+            <div style={{ padding: "8px 12px", borderBottom: `1px solid ${D.border}`, display: "flex", gap: 8 }}>
               <CompactAssetEntry
-                role="product"
-                selectedUrls={products}
-                onToggleUrl={toggleProductUrl}
+                  role="product"
+                  selectedUrls={products}
+                  onToggleUrl={toggleProductUrl}
                 onOpenPicker={() => setRightPanelMode("product_picker")}
-              />
+                />
               <CompactAssetEntry
-                role="style_reference"
-                selectedUrls={refs}
-                onToggleUrl={toggleRefUrl}
+                  role="style_reference"
+                  selectedUrls={refs}
+                  onToggleUrl={toggleRefUrl}
                 onOpenPicker={() => setRightPanelMode("reference_picker")}
-              />
-            </div>
+                />
+              </div>
 
-            {/* Prompt */}
-            <div style={{ padding: "12px 14px", borderBottom: `1px solid ${D.border}` }}>
-              <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 700, color: D.text }}>Prompt</p>
-              <textarea
-                data-testid="prompt-textarea"
-                value={prompt}
-                onChange={e => { setPrompt(e.target.value.slice(0, 1200)); promptManuallyEdited.current = true; }}
-                placeholder="Describe the scene, mood, lighting, composition, and any text or branding you want."
-                style={{
-                  width: "100%", boxSizing: "border-box", display: "block",
-                  border: `1.5px solid ${D.border}`, borderRadius: 9, outline: "none", resize: "vertical",
-                  padding: "10px 12px", fontSize: "12px", lineHeight: 1.7, color: D.text,
-                  fontFamily: "inherit", background: D.cardElev, minHeight: 88, maxHeight: 200,
-                  transition: "border-color 0.15s",
-                }}
-                rows={3}
-                onFocus={e => (e.currentTarget.style.borderColor = D.accent)}
-                onBlur={e => (e.currentTarget.style.borderColor = D.border)}
+            {canViewDebug ? (
+              <>
+                <AiUnderstandingPanel
+                  productSet={productSetAnalysis}
+                  references={referenceContext}
+                  intent={inferredIntent}
+                />
+                <CreativeDirectionPanel
+                  recommendations={systemRecommendations.length ? systemRecommendations : derivedRecommendations}
+                  selectedDirectionId={selectedDirectionId}
+                  subjectOptions={getCategoryPlaybook(creativeCategory).subjectOptions}
+                  guidedControls={guidedControls}
+                  customInstructions={customInstructions}
+                  manualBrief={manualBrief}
+                  manualBriefEdited={manualBriefEdited}
+                  briefStale={briefStale}
+                  opportunityContext={opportunityContext}
+                  onSelectDirection={handleSelectCreativeDirection}
+                  onGuidedControlsChange={handleGuidedControlsChange}
+                  onCustomInstructionsChange={handleCustomInstructionsChange}
+                  onManualBriefChange={handleManualBriefChange}
+                  onUpdateDirection={handleUpdateDirection}
+                  onKeepEdits={handleKeepCreativeEdits}
+                  onRemoveOpportunityContext={handleRemoveOpportunityContext}
+                />
+              </>
+            ) : (
+              // Normal users: lightweight creative tags + editable Direction brief.
+              <CreativeChips
+                tags={creativeTags}
+                selectedTagIds={selectedTagIds}
+                briefValue={customInstructions}
+                briefStale={briefStaleFromTags}
+                onToggleTag={handleToggleCreativeTag}
+                onBriefChange={handleBriefChange}
+                onUpdateBriefFromTags={handleUpdateBriefFromTags}
               />
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
-                <span style={{ fontSize: "10px", color: D.textMuted }}>{prompt.length} / 1200</span>
-              </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-                {PROMPT_STARTERS.map(starter => (
-                  <button
-                    key={starter}
-                    type="button"
-                    data-testid={`prompt-starter-${starter.replace(/\s+/g, "-").toLowerCase()}`}
-                    onClick={() => appendPromptStarter(starter)}
-                    style={{
-                      padding: "4px 10px", borderRadius: 20,
-                      border: `1px solid ${D.border}`, background: D.cardElev,
-                      fontSize: "10px", fontWeight: 500, color: D.textSec, cursor: "pointer",
-                    }}
-                  >
-                    {starter}
-                  </button>
-                ))}
-              </div>
-            </div>
+            )}
 
             {/* Lightweight controls */}
             <div style={{ padding: "12px 14px 16px" }}>
-              <p style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: 700, color: D.text }}>Lightweight Controls</p>
-              {opportunity ? (
+              <p style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: 700, color: D.text }}>{tr("page.studio.pinSettings")}</p>
+                {opportunity ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px 4px 10px", borderRadius: 20, background: D.cardElev, border: `1px solid ${D.border}`, marginBottom: 8, width: "fit-content" }}>
                   <span style={{ fontSize: "10px", fontWeight: 700, color: D.text, textTransform: "capitalize" }}>{opportunity.keyword}</span>
-                  {tc && <span style={{ fontSize: "9px", fontWeight: 700, color: tc, background: `${tc}20`, padding: "1px 6px", borderRadius: 20 }}>{wsPrimLabel || tl}</span>}
-                  {vc && (wsTrendLabel || vl) && <span style={{ fontSize: "9px", fontWeight: 700, color: vc, background: `${vc}20`, padding: "1px 6px", borderRadius: 20 }}>{wsTrendLabel || vl}</span>}
-                  <button type="button" onClick={() => { setOpportunity(null); setWsEntry(false); }}
+                    {tc && <span style={{ fontSize: "9px", fontWeight: 700, color: tc, background: `${tc}20`, padding: "1px 6px", borderRadius: 20 }}>{wsPrimLabel || tl}</span>}
+                    {vc && (wsTrendLabel || vl) && <span style={{ fontSize: "9px", fontWeight: 700, color: vc, background: `${vc}20`, padding: "1px 6px", borderRadius: 20 }}>{wsTrendLabel || vl}</span>}
+                  <button type="button" onClick={() => { setOpportunity(null); setWsEntry(false); setOpportunityContext({ enabled: false, removable: true }); }}
                     style={{ background: "none", border: "none", cursor: "pointer", color: D.textSec, display: "flex", padding: "0 2px" }}>
-                    <X style={{ width: 10, height: 10 }} />
+                      <X style={{ width: 10, height: 10 }} />
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setOppDrawerOpen(true)}
+                  style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 20, border: `1px solid ${D.border}`, background: D.cardElev, fontSize: "11px", fontWeight: 500, color: D.textSec, cursor: "pointer", marginBottom: 8 }}>
+                  <Target style={{ width: 10, height: 10 }} /> {tr("page.studio.addOpportunity")}
                   </button>
+                )}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <Dropdown label={tr("page.studio.numberOfPins")} value={count} options={[1,2,3,4].map(n => ({ value: n, label: String(n) }))} onChange={setCount} />
+                <Dropdown label="Model:" value={model} options={MODEL_OPTIONS as unknown as { value: string; label: string }[]} onChange={setModel} />
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <Dropdown
+                  label="Results:"
+                  value={variationMode}
+                  options={[
+                    { value: "similar",  label: "Similar options" },
+                    { value: "distinct", label: "More variety" },
+                  ]}
+                  onChange={setVariationMode}
+                />
+                {variationMode === "distinct" && (
+                  <p data-testid="results-variety-helper" style={{ margin: "5px 0 0", fontSize: "10px", lineHeight: 1.4, color: D.textMuted }}>
+                    Keeps the same products and direction, but changes pose and composition.
+                  </p>
+                )}
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: D.textSec }}>
+                  {tr("page.studio.aspectRatio")}
+                  <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 500, color: D.textMuted }}>Recommended: 2:3</span>
+                </p>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {(["2:3","4:5","3:4","1:1","9:16","16:9"] as const).map(r => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setFormat(r)}
+                      style={{
+                        padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                        border: `1px solid ${format === r ? D.purple : D.border}`,
+                        background: format === r ? "rgba(124,58,237,0.18)" : D.cardElev,
+                        color: format === r ? "#C4B5FD" : D.textSec,
+                        transition: "all 0.1s",
+                      }}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                    </div>
+              </div>
+                      {overLimit && (
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 10 }}>
+                          <AlertCircle style={{ width: 11, height: 11, color: D.warning }} />
+                          <span style={{ fontSize: "10px", color: D.warning, fontWeight: 600 }}>
+                            {totalPins} Pins. Consider reducing references or count.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+          </div>
+
+          {/* Developer-only AI Direction Summary */}
+          {canViewDebug && (
+          <div style={{ padding: "0 14px 12px", flexShrink: 0 }}>
+            <div style={{
+              padding: "8px 10px", borderRadius: 8,
+              background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.2)",
+            }}>
+              <p style={{ margin: "0 0 6px", fontSize: 10, fontWeight: 700, color: "#A78BFA", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                AI Direction
+              </p>
+              {enhancerSummary ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {([
+                    ["Scene",    enhancerSummary.scene],
+                    ["Style",    enhancerSummary.style],
+                    ["Layout",   enhancerSummary.layout],
+                    ["Products", enhancerSummary.products],
+                  ] as [string, string | undefined][]).filter(([, v]) => v).map(([label, value]) => (
+                    <div key={label} style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", minWidth: 44 }}>{label}</span>
+                      <span style={{ fontSize: 10, color: D.textSec }}>{value}</span>
+                    </div>
+                  ))}
                 </div>
               ) : (
-                <button type="button" onClick={() => setOppDrawerOpen(true)}
-                  style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 20, border: `1px solid ${D.border}`, background: D.cardElev, fontSize: "11px", fontWeight: 500, color: D.textSec, cursor: "pointer", marginBottom: 8 }}>
-                  <Target style={{ width: 10, height: 10 }} /> Add opportunity
-                </button>
-              )}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <Dropdown label="Images:" value={count} options={[1,2,3,4].map(n => ({ value: n, label: String(n) }))} onChange={setCount} />
-                <Dropdown label="Text overlay:" value={textOverlay} options={[{ value: "off" as const, label: "Off" }, { value: "on" as const, label: "On" }]} onChange={setTextOverlay} />
-                <Dropdown label="Format:" value={format} options={[{ value: "Pinterest 2:3", label: "Pinterest 2:3" }]} onChange={setFormat} />
-                <Dropdown label="Model:" value={model} options={[{ value: "GPT Image 2", label: "GPT Image 2" }]} onChange={setModel} />
-              </div>
-              {overLimit && (
-                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 10 }}>
-                  <AlertCircle style={{ width: 11, height: 11, color: D.warning }} />
-                  <span style={{ fontSize: "10px", color: D.warning, fontWeight: 600 }}>
-                    {totalPins} Pins. Consider reducing references or count.
-                  </span>
-                </div>
+                <p style={{ margin: 0, fontSize: 10, color: D.textMuted, fontStyle: "italic" }}>
+                  AI will analyze your products and references when generating.
+                </p>
               )}
             </div>
           </div>
+          )}
+
+          {canViewDebug && (
+          <div data-testid="generation-debug-overlay" style={{ padding: "0 14px 12px", flexShrink: 0 }}>
+            <div style={{
+              padding: "8px 10px", borderRadius: 8,
+              background: "rgba(15,23,42,0.82)", border: "1px solid rgba(148,163,184,0.22)",
+              boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
+            }}>
+              <p style={{ margin: "0 0 6px", fontSize: 10, fontWeight: 800, color: "#C4B5FD", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                Developer Debug
+              </p>
+              <p style={{ margin: "0 0 6px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>
+                Reference mode: {referenceInfluenceMode}
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <div>
+                  <p style={{ margin: 0, fontSize: 9, color: D.textMuted, fontWeight: 700 }}>Products</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 14, color: D.text, fontWeight: 900 }}>{products.length} images</p>
+                </div>
+                <div>
+                  <p style={{ margin: 0, fontSize: 9, color: D.textMuted, fontWeight: 700 }}>References</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 14, color: D.text, fontWeight: 900 }}>{refs.length} images</p>
+                </div>
+              </div>
+              <div style={{ marginTop: 7, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <div>
+                  <p style={{ margin: "0 0 3px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>Products weight</p>
+                  <div style={{ height: 5, borderRadius: 99, background: "rgba(148,163,184,0.16)", overflow: "hidden" }}>
+                    <div style={{ width: `${productWeight}%`, height: "100%", background: "#38BDF8" }} />
+                  </div>
+                  <p style={{ margin: "3px 0 0", fontSize: 10, color: D.textSec, fontWeight: 800 }}>{productWeight}%</p>
+                </div>
+                <div>
+                  <p style={{ margin: "0 0 3px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>References weight</p>
+                  <div style={{ height: 5, borderRadius: 99, background: "rgba(148,163,184,0.16)", overflow: "hidden" }}>
+                    <div style={{ width: `${referenceWeight}%`, height: "100%", background: "#A855F7" }} />
+                  </div>
+                  <p style={{ margin: "3px 0 0", fontSize: 10, color: D.textSec, fontWeight: 800 }}>{referenceWeight}%</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* Product selection lives only in the top Products section — the duplicated
+              lower locked product card was removed. Pin Settings holds only actual
+              Pin configuration fields. */}
 
           {/* Primary CTA */}
           <div style={{ padding: "12px 16px 16px", borderTop: `1px solid ${D.border}`, flexShrink: 0, background: D.card }}>
-            <button
-              type="button"
-              data-testid="generate-btn"
-              disabled={!hasInput || generating}
-              onClick={handleGenerate}
-              style={{
+                <button
+                  type="button"
+                  data-testid="generate-btn"
+              disabled={!hasInput || isSubmitting}
+                  onClick={handleGenerate}
+                  style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                 width: "100%", padding: "12px 20px", borderRadius: 12, border: "none",
                 fontSize: "13px", fontWeight: 800,
-                background: hasInput && !generating ? D.gradient : "rgba(124,58,237,0.25)",
-                color: "#fff",
-                cursor: hasInput && !generating ? "pointer" : "not-allowed",
-                boxShadow: hasInput && !generating ? "0 4px 16px rgba(124,58,237,0.3)" : "none",
+                background: hasInput && !isSubmitting ? D.gradient : "rgba(124,58,237,0.25)",
+                    color: "#fff",
+                cursor: hasInput && !isSubmitting ? "pointer" : "not-allowed",
+                boxShadow: hasInput && !isSubmitting ? "0 4px 16px rgba(124,58,237,0.3)" : "none",
               }}
             >
-              {generating ? (
+              {isSubmitting ? (
                 <>
                   <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
-                  Generating…
+                  Submitting…
                 </>
               ) : (
                 <>
                   <Sparkles style={{ width: 14, height: 14 }} />
                   {genLabel}
                 </>
-              )}
-            </button>
-          </div>
-        </div>
+                  )}
+                </button>
+              </div>
+            </div>
 
         {rightPanelMode === "feed" ? (
           <MasonryPinFeed
             sessions={sessions}
+            planDrafts={planDrafts}
             filter={feedFilter}
             onFilterChange={setFeedFilter}
             onAddToPlan={handleAddToPlan}
             onAddAllToPlan={handleAddAllToPlan}
             onRegeneratePin={handleRegeneratePin}
             onRegenerateGroup={handleRegenerateGroup}
+            onRetryOutput={handleRetryFailedOutput}
+            onEditInputs={(sessionId) => { const s = sessions.find(x => x.id === sessionId); if (s) handleReuseSetup(s); }}
             pinDetailOpen={pinDetailSelection !== null && pinDetailView !== null}
-            pinDetailInitialTab={pinDetailSelection?.initialTab ?? "preview"}
+            pinDetailInitialTab={pinDetailSelection?.initialTab ?? "remix"}
             pinDetail={pinDetailView}
             metadataForm={metadataForm}
             pinDetailsGenStatus={pinDetailsGenStatus}
@@ -2367,7 +4675,14 @@ function CreatePinsContent() {
             isDirty={isFormDirty}
             showSaved={showSaved}
             onRetryGenerateDetails={handleRetryGenerateDetails}
-            onOpenPinDetail={(sessionId, entryKey, tab) => setPinDetailSelection({ sessionId, entryKey, initialTab: tab ?? "preview" })}
+            onOpenPinDetail={(sessionId, entryKey, tab) => {
+              if (tab === "plan") {
+                const item = flattenFeedItems(sessions, "all").find(x => x.entry.sessionId === sessionId && x.entry.key === entryKey);
+                if (item?.entry.pinIdx !== undefined) openSharedPinDetails(sessionId, item.entry.groupIdx, item.entry.pinIdx);
+                return;
+              }
+              setPinDetailSelection({ sessionId, entryKey, initialTab: tab ?? "remix" });
+            }}
             onClosePinDetail={() => setPinDetailSelection(null)}
             onMetadataChange={handleMetadataChange}
             onSelectTitleCandidate={handleSelectTitleCandidate}
@@ -2419,22 +4734,9 @@ function CreatePinsContent() {
             }}
             onPinDetailRegenerateWithRemix={(remixSetup: RemixDraftSetup) => {
               if (!pinDetailView) return;
-              const snap = pinDetailView.setupSnapshot;
-              if (!snap) { toast.error("Setup snapshot unavailable"); return; }
-              const merged = {
-                ...snap,
-                selectedProducts:   remixSetup.selectedProducts,
-                selectedReferences: remixSetup.selectedReferences,
-                promptSnapshot:     remixSetup.prompt || snap.promptSnapshot,
-                imagesPerReference: remixSetup.imagesPerReference,
-                noTextOverlay:      remixSetup.noTextOverlay,
-                opportunityTitle:   remixSetup.opportunityTitle || snap.opportunityTitle,
-                keyword:            remixSetup.keyword || snap.keyword,
-                category:           remixSetup.category || snap.category,
-              };
-              handleReuseSetup({ setupSnapshot: merged, promptFull: remixSetup.prompt || snap.promptSnapshot });
-              toast.success("Remix loaded into composer — click Generate to create a new variation");
+              handleGenerateFromRemix(remixSetup);
             }}
+            canViewDebug={canViewDebug}
             selectedPinKeys={selectedPinKeys}
             onTogglePinSelect={(key) => setSelectedPinKeys(prev => {
               const next = new Set(prev);
@@ -2450,6 +4752,8 @@ function CreatePinsContent() {
             onCloseBatchEdit={() => setBatchEditOpen(false)}
             onBatchApply={handleBatchApply}
             onBatchGenerateFromDrawer={handleBatchGenerateMetadata}
+            onBatchScheduleSelected={handleBatchScheduleSelected}
+            onBatchPublishComplete={handleBatchPublishComplete}
           />
         ) : (
           <InlineCreateAssetPicker
@@ -2459,14 +4763,39 @@ function CreatePinsContent() {
             currentSelectedUrls={rightPanelMode === "product_picker" ? products : refs}
           />
         )}
-      </div>
+        </div>
+
+      <PinDetailsModal
+        draft={detailsModalDraft}
+        open={detailsModalDraft !== null}
+        source="create_pins"
+        mode="details"
+        onClose={() => setDetailsModalDraft(null)}
+        onSaved={syncDetailsDraftToStudio}
+        onAddToPlan={addDetailsDraftToPlan}
+      />
 
       <OpportunityDrawer
         open={oppDrawerOpen}
+        inferredCategory={creativeCategory}
         onClose={() => setOppDrawerOpen(false)}
         onSelect={o => {
           setOpportunity(o);
-          if (!promptManuallyEdited.current) setPrompt(buildComposerPrompt(o.keyword, o.category, products.length > 0));
+          setOpportunityContext({
+            enabled: true,
+            removable: true,
+            title: o.keyword,
+            keyword: o.keyword,
+            category: o.category,
+            source: "studio",
+          });
+          if (!manualBriefEdited) {
+            const nextBrief = buildComposerPrompt(o.keyword, o.category, products.length > 0);
+            setManualBrief(nextBrief);
+            setPrompt(nextBrief);
+          } else {
+            setBriefStale(true);
+          }
         }}
       />
       <style>{`
@@ -2485,10 +4814,15 @@ function CreatePinsContent() {
         }
         .pin-feed-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
           gap: 16px;
           align-items: start;
           width: 100%;
+        }
+        @media (min-width: 1400px) {
+          .pin-feed-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+          }
         }
         .feed-shimmer {
           background: linear-gradient(100deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.12) 45%, rgba(255,255,255,0.02) 90%);
@@ -2505,8 +4839,45 @@ function CreatePinsContent() {
 }
 
 export default function CreatePinsPage() {
+  // Resolve WHICH Studio experience to render as one atomic decision, so the legacy
+  // Studio (and its heavy history/DB/generation-feed effects) never mounts when V2
+  // is intended — no legacy flash, no wasted network calls.
+  //
+  // The env decision (NEXT_PUBLIC_STUDIO_BOARD_V2) is build-time inlined, so it is
+  // identical on the server render and the first client render → used as the INITIAL
+  // state (not resolved in an effect). That means when the env flag is set, the very
+  // first paint is already the correct experience with no hydration mismatch.
+  //
+  // Only when the env var is UNSET do we defer to the client-only localStorage
+  // override. In that (dev/local) window the initial state is "resolving" and we show
+  // a neutral, board-shaped skeleton — never the legacy Studio.
+  const envDecision = resolveStudioExperienceFromEnv();
+  const [experience, setExperience] = useState<StudioExperience>(envDecision ?? "resolving");
+
+  useEffect(() => {
+    if (envDecision === null) setExperience(resolveStudioExperienceFromClient());
+  }, [envDecision]);
+
+  if (experience === "board-v2") {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "var(--app-bg, #F8FAFC)", overflow: "hidden", minHeight: 0 }}>
+        <StudioBoard />
+      </div>
+    );
+  }
+
+  if (experience === "resolving") {
+    // Env unset → waiting one tick to read the localStorage override. Neutral shell,
+    // never legacy. Board-shaped so switching to V2 causes no layout shift.
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "var(--app-bg, #F8FAFC)", overflow: "hidden", minHeight: 0 }}>
+        <StudioBoardSkeleton />
+      </div>
+    );
+  }
+
   return (
-    <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#8892A4", fontSize: "13px", background: "#0B0E17" }}>Loading…</div>}>
+    <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--app-text-sec, #8892A4)", fontSize: "13px", background: "var(--app-bg, #0B0E17)" }}>Loading…</div>}>
       <CreatePinsContent />
     </Suspense>
   );

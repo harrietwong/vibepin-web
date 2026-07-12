@@ -1,9 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import useSWR from "swr";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { CheckCircle2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { markDataReady } from "@/lib/navTiming";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import {
   loadHistory, mergeHistoryEntries,
   fetchGenerationsFromDb,
@@ -14,8 +18,16 @@ import {
 } from "@/lib/studioPersistence";
 import * as pinStore      from "@/lib/pinStore";
 import * as pinDraftStore from "@/lib/pinDraftStore";
+import type { PinDraft } from "@/lib/pinDraftStore";
 // Canonical status types — generation and planning are independent dimensions.
 import type { GenerationStatus } from "@/lib/status/pinStatuses";
+
+// Lazily loaded — a heavy drawer not needed for the initial paint, so keeping
+// it out of the main route chunk lets the My Pins page shell mount faster
+// after a sidebar nav. Behavior is unchanged: it already renders nothing when
+// no draft is open.
+const PinDetailsModal = dynamic(() =>
+  import("@/components/pin-details/PinDetailsModal").then(m => m.PinDetailsModal), { ssr: false });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function toProxyUrl(url: string): string {
@@ -186,6 +198,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
   });
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
   const [preview,      setPreview]      = useState<string | null>(null);
+  const [detailsDraft, setDetailsDraft] = useState<PinDraft | null>(null);
 
   const allPins       = entry.groups.flatMap((g: PinGroup) => g.images);
   const title         = entry.keyword ? capWords(entry.keyword) : "Generated Session";
@@ -213,6 +226,27 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
       const a = document.createElement("a"); a.href = toProxyUrl(u); a.download = `pin-${i+1}.jpg`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
     });
+  }
+  function openPinDetails(url: string, groupIdx: number, pinIdx: number) {
+    const existing = pinDraftStore.getDraftByImageUrl(url);
+    if (existing) { setDetailsDraft(existing); return; }
+    const created = pinDraftStore.createDraft({
+      imageUrl: url,
+      keyword: entry.keyword || "Pinterest content",
+      category: entry.category || "home-decor",
+      generationSessionId: entry.id,
+    });
+    const hydrated = pinDraftStore.updateDraft(created.id, {
+      pinId: `${entry.id}_g${groupIdx}_p${pinIdx}`,
+      setupSnapshot: entry.setupSnapshot,
+      promptSnapshot: entry.promptFull ?? entry.promptExcerpt,
+      source: "history",
+      format: entry.setupSnapshot?.format,
+      model: entry.setupSnapshot?.model,
+      addedToPlanAt: "",
+      scheduledDate: "",
+    });
+    setDetailsDraft(hydrated ?? created);
   }
 
   // ── Normalise session data — prefer setup_snapshot, fall back to flat fields ──
@@ -685,6 +719,10 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                               </span>
                             </div>
                             <div style={{ display:"flex",gap:1,padding:"3px 2px",borderTop:"1px solid var(--app-surface-3)",justifyContent:"space-around" }}>
+                              <button type="button" onClick={e => { e.stopPropagation(); openPinDetails(orig, gi, imgIdx); }}
+                                style={{ flex:1,background:"none",border:"none",cursor:"pointer",fontSize:"9px",color:"#A78BFA",fontWeight:700,padding:"2px 0" }}>
+                                Details
+                              </button>
                               <button type="button" onClick={e => { e.stopPropagation(); setPreview(src); }}
                                 style={{ flex:1,background:"none",border:"none",cursor:"pointer",fontSize:"9px",color:"#9CA3AF",fontWeight:600,padding:"2px 0" }}>
                                 View
@@ -742,6 +780,14 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
           </button>
         </div>
       )}
+      <PinDetailsModal
+        draft={detailsDraft}
+        open={detailsDraft !== null}
+        source="my_pins"
+        mode="details"
+        onClose={() => setDetailsDraft(null)}
+        onSaved={setDetailsDraft}
+      />
     </>
   );
 }
@@ -980,10 +1026,40 @@ function SessionCard({
 type GenTab = "all" | "in_progress" | "pending" | "completed" | "partial" | "failed" | "interrupted" | "added";
 void (undefined as unknown as GenerationStatus); // ensure canonical type is imported + used
 
+// Running/interrupted sessions may have 0 images — include them anyway.
+function allowHistoryEntry(e: HistoryEntry): boolean {
+  const st = deriveEntryStatus(e);
+  return e.groups.some((g: PinGroup) => g.images.length > 0) || st === "running" || st === "interrupted";
+}
+
+// SWR-cached merge of DB + storage generation history. Keyed globally (one
+// signed-in user's history per session) so navigating away from My Pins and
+// back reuses the cached result instead of re-hitting Supabase + the
+// history-storage API on every remount.
+const HISTORY_ENTRIES_SWR_KEY = "history:generations";
+
+async function fetchMergedHistoryEntries(): Promise<HistoryEntry[]> {
+  const [db, storage] = await Promise.all([
+    fetchGenerationsFromDb(supabase).catch((): HistoryEntry[] => []),
+    fetch("/api/history-storage")
+      .then(r => r.json())
+      .then((d: { entries: HistoryEntry[] }) => d.entries ?? [])
+      .catch((): HistoryEntry[] => []),
+  ]);
+  return mergeHistoryEntries(db, loadHistory(), storage).filter(allowHistoryEntry);
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function GeneratedPinsPage() {
-  const [entries,   setEntries]   = useState<HistoryEntry[]>([]);
-  const [loaded,    setLoaded]    = useState(false);
+  const { t: tr } = useLocale();
+  // Instant local snapshot (localStorage-backed) shown immediately on mount and
+  // while the SWR cache above is cold; superseded by `mergedEntries` once ready.
+  const [localEntries, setLocalEntries] = useState<HistoryEntry[]>([]);
+  const { data: mergedEntries } = useSWR<HistoryEntry[]>(HISTORY_ENTRIES_SWR_KEY, fetchMergedHistoryEntries, {
+    revalidateOnFocus: false,
+  });
+  const entries = mergedEntries ?? localEntries;
+  const loaded  = mergedEntries !== undefined;
   const [search,    setSearch]    = useState("");
   const [tab,       setTab]       = useState<GenTab>("all");
   const [openEntry, setOpenEntry] = useState<HistoryEntry | null>(null);
@@ -1002,35 +1078,22 @@ export default function GeneratedPinsPage() {
   }, [reload]);
 
   useEffect(() => {
-    // 1. Resolve stale running sessions (older than 15 min → interrupted)
+    // Resolve stale running sessions (older than 15 min → interrupted). This is a
+    // local safety-net check (localStorage-backed), so it still runs fresh on
+    // every mount — it's not part of the cached remote fetch above.
     const { staleSessions } = resolveStaleRunningEntries();
     if (staleSessions.length > 0) {
       staleSessions.forEach(sid =>
         updateSessionInDb(supabase, sid, { status: "interrupted", updated_at: new Date().toISOString() }).catch(() => {})
       );
     }
-
-    // Running/interrupted sessions may have 0 images — include them
-    const allowEntry = (e: HistoryEntry) => {
-      const st = deriveEntryStatus(e);
-      return e.groups.some((g: PinGroup) => g.images.length > 0) || st === "running" || st === "interrupted";
-    };
-
-    const local = loadHistory().filter(allowEntry);
-    setEntries(local);
-
-    Promise.all([
-      fetchGenerationsFromDb(supabase).catch((): HistoryEntry[] => []),
-      fetch("/api/history-storage")
-        .then(r => r.json())
-        .then((d: { entries: HistoryEntry[] }) => d.entries ?? [])
-        .catch((): HistoryEntry[] => []),
-    ]).then(([db, storage]) => {
-      const merged = mergeHistoryEntries(db, loadHistory(), storage).filter(allowEntry);
-      setEntries(merged);
-      setLoaded(true);
-    }).catch(() => setLoaded(true));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- instant localStorage snapshot before the SWR cache resolves
+    setLocalEntries(loadHistory().filter(allowHistoryEntry));
   }, []);
+
+  useEffect(() => {
+    if (mergedEntries) markDataReady("/app/history");
+  }, [mergedEntries]);
 
   void storeVer;
 
@@ -1096,10 +1159,10 @@ export default function GeneratedPinsPage() {
       <div style={{ padding:"18px 28px 0",borderBottom:"1px solid var(--app-border)",background:"var(--app-surface)",flexShrink:0 }}>
         <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,marginBottom:14 }}>
           <div>
-            <p style={{ margin:0,fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.1em",color:"var(--app-text-muted)",marginBottom:4 }}>Generated Pins</p>
-            <h1 style={{ margin:0,fontSize:"19px",fontWeight:800,color:"var(--app-text)" }}>Generated Pins</h1>
+            <p style={{ margin:0,fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.1em",color:"var(--app-text-muted)",marginBottom:4 }}>{tr("page.my.title")}</p>
+            <h1 style={{ margin:0,fontSize:"19px",fontWeight:800,color:"var(--app-text)" }}>{tr("page.my.title")}</h1>
             <p style={{ margin:"3px 0 0",fontSize:"12px",color:"var(--app-text-sec)" }}>
-              Manage recent AI-generated Pins and add them to your weekly plan.
+              {tr("page.my.subtitle")}
             </p>
           </div>
           <Link href="/app/studio"

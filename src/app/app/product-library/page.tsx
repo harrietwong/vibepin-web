@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import * as lib from "@/lib/productLibraryStore";
 import * as basket from "@/lib/basketStore";
+import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { toast } from "sonner";
 
 // ── useBasket hook ─────────────────────────────────────────────────────────────
@@ -67,10 +68,17 @@ function UploadProductDialog({
   const [tags,       setTags]       = useState("");
   const [imageUrl,   setImageUrl]   = useState<string | null>(null);
 
-  function pickFile(file: File) {
+  async function pickFile(file: File) {
+    // Show an instant local preview, then externalize to a stable hosted URL so the
+    // saved product syncs across devices. If the upload fails we keep the data URL —
+    // the background media-offload sweep will replace it later.
     const r = new FileReader();
     r.onload = e => setImageUrl(e.target?.result as string ?? null);
     r.readAsDataURL(file);
+    try {
+      const { publicUrl } = await uploadPinImage(file);
+      setImageUrl(publicUrl);
+    } catch { /* keep the data URL preview; sweep will fix it up */ }
   }
 
   return (
@@ -105,7 +113,7 @@ function UploadProductDialog({
           )}
         </div>
         <input ref={fileRef} type="file" accept="image/*" className="hidden"
-          onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); }}/>
+          onChange={e => { const f = e.target.files?.[0]; if (f) void pickFile(f); }}/>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Product title *"
@@ -454,7 +462,15 @@ function ProductLibraryContent() {
     setSelectedIds(new Set());
   }
 
-  function uploadReference(file: File) {
+  async function uploadReference(file: File) {
+    // Externalize to a stable hosted URL first; fall back to a data URL on failure
+    // (the background media-offload sweep replaces it once uploads succeed).
+    try {
+      const { publicUrl } = await uploadPinImage(file);
+      lib.saveReference({ imageUrl: publicUrl, source: "uploaded" });
+      toast.success("Reference saved to library");
+      return;
+    } catch { /* fall through to local data URL */ }
     const r = new FileReader();
     r.onload = e => {
       lib.saveReference({ imageUrl: e.target?.result as string, source: "uploaded" });
@@ -603,7 +619,7 @@ function ProductLibraryContent() {
                   <Upload style={{ width: 13, height: 13, color: "#7C3AED" }}/> Upload reference
                 </button>
                 <input ref={refFileRef} type="file" accept="image/*" className="hidden"
-                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadReference(f); }}/>
+                  onChange={e => { const f = e.target.files?.[0]; if (f) void uploadReference(f); }}/>
               </div>
             )}
           </div>
@@ -760,7 +776,7 @@ function ProductLibraryContent() {
                   </button>
                 </div>
                 <input ref={refFileRef} type="file" accept="image/*" className="hidden"
-                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadReference(f); }}/>
+                  onChange={e => { const f = e.target.files?.[0]; if (f) void uploadReference(f); }}/>
               </div>
 
               {/* Multi-select action bar */}
@@ -803,7 +819,7 @@ function ProductLibraryContent() {
                       </button>
                     </div>
                     <input ref={refFileRef} type="file" accept="image/*" className="hidden"
-                      onChange={e => { const f = e.target.files?.[0]; if (f) uploadReference(f); }}/>
+                      onChange={e => { const f = e.target.files?.[0]; if (f) void uploadReference(f); }}/>
                   </div>
                 ) : (
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 12 }}>

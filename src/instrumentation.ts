@@ -1,7 +1,4 @@
+/** Server instrumentation hook (reserved). Proxy via undici was removed — it breaks webpack dev when HTTP_PROXY is set. */
 export async function register() {
-  const proxy = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
-  if (proxy) {
-    const { ProxyAgent, setGlobalDispatcher } = await import("undici");
-    setGlobalDispatcher(new ProxyAgent(proxy));
-  }
+  // no-op
 }

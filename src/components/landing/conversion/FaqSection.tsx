@@ -6,7 +6,7 @@ import { ArrowRight } from "lucide-react";
 import { FAQ_ITEMS } from "@/lib/landing/conversionData";
 import { CONTAINER, GradientText, SECTION, SectionLabel } from "./shared";
 
-function FaqAccordionItem({
+export function FaqAccordionItem({
   question,
   answer,
   note,

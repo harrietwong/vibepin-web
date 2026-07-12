@@ -63,25 +63,33 @@ export default function SettingsPage() {
       <main className="max-w-2xl mx-auto px-6 py-8 space-y-6">
         <h1 className="text-xl font-bold text-neutral-900">Settings</h1>
 
-        {/* Platform connections */}
+        {/* Platform connections — Pinterest moved to dark-app Integrations */}
         <div className="rounded-2xl border border-neutral-200 bg-white p-6">
           <h2 className="font-semibold text-neutral-800 mb-5">Platform connections</h2>
           <div className="space-y-3">
+            <div className="rounded-xl border border-neutral-200 p-4">
+              <p className="text-sm font-semibold text-neutral-800">Pinterest</p>
+              <p className="text-xs mt-0.5 text-neutral-400 mb-3">
+                Connect and manage your Pinterest account in the app Integrations settings.
+              </p>
+              <NextLink
+                href="/app/settings/pinterest"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-700"
+              >
+                Open Integrations
+              </NextLink>
+            </div>
+
+            {/* Instagram — legacy connection (unchanged). */}
             {[
-              { label: "Pinterest", connected: settings.pinterest_connected, username: settings.pinterest_username, href: `${API}/api/auth/pinterest` },
               { label: "Instagram", connected: settings.instagram_connected, href: `${API}/api/auth/instagram` },
             ].map(p => (
               <div key={p.label} className={`rounded-xl border p-4 flex items-center justify-between ${p.connected ? "border-[#00B08A]/30 bg-[#E6F7F4]/50" : "border-neutral-200"}`}>
                 <div>
                   <p className="text-sm font-semibold text-neutral-800">{p.label}</p>
                   <p className={`text-xs mt-0.5 ${p.connected ? "text-[#00B08A]" : "text-neutral-400"}`}>
-                    {p.connected ? (p.username ? `@${p.username}` : "Connected") : "Not connected"}
+                    {p.connected ? "Connected" : "Not connected"}
                   </p>
-                  {p.label === "Pinterest" && (
-                    <NextLink href="/pinterest-app" className="text-[10px] text-neutral-400 hover:text-neutral-600 mt-1 inline-block">
-                      How VibePin uses Pinterest →
-                    </NextLink>
-                  )}
                 </div>
                 {p.connected
                   ? <Check className="h-5 w-5 text-[#00B08A]" />

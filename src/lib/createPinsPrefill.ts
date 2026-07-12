@@ -1,6 +1,8 @@
 // Unified prefill adapter for Create Pins
 // All source pages (Workspace, Product Signals, Viral Pins, etc.) route through here.
 
+import type { CreativeDirectionSnapshotV2 } from "./studioPersistence";
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type PrefillSource =
@@ -44,6 +46,8 @@ export type CreatePinsPrefill = {
     trendState?: "Rising" | "Evergreen" | "Seasonal";
   }>;
   promptSeed?: string;
+  creativeDirectionSeed?: string;
+  creativeDirectionSnapshot?: Partial<CreativeDirectionSnapshotV2>;
 };
 
 // ── SessionStorage helpers ─────────────────────────────────────────────────────

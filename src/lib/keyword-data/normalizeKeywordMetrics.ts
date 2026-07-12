@@ -12,9 +12,27 @@ import type {
   DataProvenance,
 } from "./types";
 
+function volumeLabelToBand(level?: string | null): Band {
+  const v = (level ?? "").toLowerCase();
+  if (v === "very_high" || v === "high") return "High";
+  if (v === "medium") return "Medium";
+  if (v === "low") return "Low";
+  return "Medium";
+}
+
+function volumeScoreToBand(score?: number | null): Band | null {
+  if (score == null || Number.isNaN(score)) return null;
+  if (score >= 3.5) return "High";
+  if (score >= 2.2) return "Medium";
+  if (score >= 1) return "Low";
+  return null;
+}
+
 export function getPinterestInterestBand(
   searchVolumeLevel?: string | null,
   timeSeries?: TrendPoint[],
+  volumeSignal?: string | null,
+  volumeScore?: number | null,
 ): Band {
   // Prefer time-series: use average of the last 4 data points
   if (timeSeries && timeSeries.length >= 4) {
@@ -23,10 +41,10 @@ export function getPinterestInterestBand(
     if (recentMax >= 35) return "Medium";
     return "Low";
   }
-  const level = (searchVolumeLevel ?? "").toLowerCase();
-  if (level === "very_high" || level === "high") return "High";
-  if (level === "medium") return "Medium";
-  return "Low";
+  const fromScore = volumeScoreToBand(volumeScore);
+  if (fromScore) return fromScore;
+  if (volumeSignal) return volumeLabelToBand(volumeSignal);
+  return volumeLabelToBand(searchVolumeLevel);
 }
 
 export function getTrendState(
@@ -53,23 +71,36 @@ export function getTrendState(
   }
 
   // Fallback to growth metrics when no time series
-  if ((yoyGrowth ?? 0) >= 50 || (weeklyChange ?? 0) >= 20) return "Rising";
+  if ((yoyGrowth ?? 0) >= 80 || (weeklyChange ?? 0) >= 25) return "Rising";
+  if ((yoyGrowth ?? 0) >= 35 || (weeklyChange ?? 0) >= 12) return "Rising";
+  if ((yoyGrowth ?? 0) <= -15 && (weeklyChange ?? 0) < 0) return "Seasonal";
   return "Evergreen";
 }
 
 export function getCompetitionBand(
   competitionLevel?: string | null,
   searchVolumeLevel?: string | null,
+  volumeSignal?: string | null,
+  volumeScore?: number | null,
+  priorityScore?: number | null,
 ): CompetitionBand {
   const cl = (competitionLevel ?? "").toLowerCase();
   if (cl === "low") return "Low";
   if (cl === "high") return "High";
   if (cl === "medium") return "Medium";
 
-  // Fallback: high volume ≈ more competition
-  const vl = (searchVolumeLevel ?? "").toLowerCase();
+  if (volumeScore != null) {
+    if (volumeScore >= 3.8) return "High";
+    if (volumeScore >= 2.5) return "Medium";
+    return "Low";
+  }
+
+  const vl = (volumeSignal ?? searchVolumeLevel ?? "").toLowerCase();
   if (vl === "very_high") return "High";
   if (vl === "high") return "Medium";
+  if (vl === "low") return "Low";
+
+  if ((priorityScore ?? 0) >= 75) return "Medium";
   return "Low";
 }
 
@@ -77,10 +108,11 @@ export function getSaveSignalBand(
   totalSaves?: number | null,
   linkedPins?: number | null,
 ): SaveSignalBand {
-  if (!totalSaves) return "Weak";
+  if (!totalSaves || totalSaves <= 0) return "Weak";
   const savesPerPin = linkedPins && linkedPins > 0 ? totalSaves / linkedPins : 0;
-  if (totalSaves > 20_000 || savesPerPin > 300) return "Strong";
-  if (totalSaves > 5_000) return "Medium";
+  if (totalSaves > 15_000 || savesPerPin > 250) return "Strong";
+  if (totalSaves > 3_000 || savesPerPin > 80) return "Medium";
+  if (totalSaves > 400) return "Medium";
   return "Weak";
 }
 
@@ -94,22 +126,39 @@ export function buildProvenance(params: {
   competitionConfidence?: string | null;
   lastFetchedAt?:       string | null;
   sampleSize?:          number | null;
+  sourceLabel?:         string | null;
+  sourceLayer?:         string | null;
+  dataQuality?:         string | null;
+  dbConfidence?:        string | null;
 }): DataProvenance {
   const {
     hasTrendHistory, hasCompetitionSample, hasOppEvidence,
     competitionSource, competitionConfidence, lastFetchedAt, sampleSize,
+    sourceLabel, sourceLayer, dataQuality, dbConfidence,
   } = params;
+
+  const isL3Estimated =
+    sourceLayer === "L3" ||
+    dataQuality === "estimated" ||
+    sourceLabel === "pinterest_typeahead_estimated";
 
   const sources: DataSource[] = ["pinterest_trends"];
   if (hasCompetitionSample || competitionSource === "pinterest_search_sample") {
     sources.push("pinterest_search_sample");
   }
-  if (!hasTrendHistory) {
-    sources.push("derived"); // trend curve reconstructed from growth metrics
+  if (!hasTrendHistory || isL3Estimated) {
+    sources.push("derived"); // band reconstructed from signals, not measured volume
   }
 
   let confidence: DataConfidence;
-  if (competitionConfidence === "High") {
+  const dbConf = (dbConfidence ?? "").toLowerCase();
+  if (dbConf === "high") {
+    confidence = "High";
+  } else if (dbConf === "medium") {
+    confidence = "Medium";
+  } else if (dbConf === "low" || isL3Estimated) {
+    confidence = "Low";
+  } else if (competitionConfidence === "High") {
     confidence = hasTrendHistory ? "High" : "Medium";
   } else if (hasTrendHistory && hasOppEvidence) {
     confidence = "High";
@@ -122,9 +171,12 @@ export function buildProvenance(params: {
   return {
     sources,
     confidence,
-    isEstimated: !hasTrendHistory,
+    isEstimated: !hasTrendHistory || isL3Estimated,
     lastFetchedAt: lastFetchedAt ?? undefined,
     sampleSize: sampleSize ?? undefined,
+    sourceLabel: sourceLabel ?? undefined,
+    sourceLayer: sourceLayer ?? undefined,
+    dataQuality: dataQuality ?? undefined,
   };
 }
 
@@ -166,7 +218,7 @@ export function getKeywordInsightBullets(params: {
     );
   } else {
     bullets.push(
-      "Competitive space — differentiate with a strong visual signature and niche angle.",
+      "High content saturation — many similar pins exist; differentiate with a strong visual signature and niche angle.",
     );
   }
 

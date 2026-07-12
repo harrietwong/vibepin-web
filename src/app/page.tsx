@@ -502,7 +502,7 @@ export default function HomePage() {
             <a href="#create" className="hover:text-white transition-colors">How it works</a>
             <Link href="/app/products?demo=true" className="hover:text-white transition-colors">Product Opportunities</Link>
             <a href="#create" className="hover:text-white transition-colors">Create Pins</a>
-            <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
+            <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
           </div>
           <div className="flex items-center gap-2.5">
             <Link href="/login" className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}>Log in</Link>

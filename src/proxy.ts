@@ -40,9 +40,12 @@ export async function proxy(request: NextRequest) {
       },
     );
 
-    const { data: { user } } = await supabase.auth.getUser();
+    // getSession reads the JWT from cookies without a network call, making
+    // every client-side navigation instant. Supabase RLS still validates on
+    // each data request, so this is safe for a nav guard.
+    const { data: { session } } = await supabase.auth.getSession();
 
-    if (!user && request.nextUrl.pathname.startsWith("/app")) {
+    if (!session && request.nextUrl.pathname.startsWith("/app")) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
       url.searchParams.set("next", request.nextUrl.pathname);

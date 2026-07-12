@@ -11,7 +11,7 @@ const FOOTER_COLUMNS = [
       { label: "Product Opportunities", href: "/app/products?demo=true" },
       { label: "Create Pins", href: "/app/studio?demo=true" },
       { label: "Weekly Plan", href: "/app/plan?demo=true" },
-      { label: "Pricing", href: "#pricing" },
+      { label: "Pricing", href: "/pricing" },
     ],
   },
   {
