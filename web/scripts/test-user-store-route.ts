@@ -16,6 +16,7 @@ import {
   DEFAULT_COLLECTION_QUOTA,
   DEFAULT_LIMIT,
   encodeCursor,
+  isKnownStoreKey,
   isMissingTableError,
   isStalePut,
   isTombstoneEligible,
@@ -52,6 +53,31 @@ test("isValidStoreKey rejects empty, too long, uppercase, spaces, symbols, non-s
   assert.ok(!isValidStoreKey("slash/key"));
   assert.ok(!isValidStoreKey(null));
   assert.ok(!isValidStoreKey(123));
+});
+
+// ── known-storeKey whitelist (abuse-surface guard) ──────────────────────────────
+test("isKnownStoreKey accepts exactly the 15 quota-table stores", () => {
+  const known = [
+    "smart_schedule", "notification_prefs", "publishing_prefs", "brand_profile",
+    "amazon_affiliate_settings", "niches", "basket",
+    "pin_metadata", "pin_records", "pin_sessions", "bookmarks",
+    "creator_product_links", "product_library", "reference_library", "assets",
+  ];
+  for (const k of known) assert.ok(isKnownStoreKey(k), `${k} must be known`);
+  assert.equal(known.length, 15, "the whitelist is exactly the 15 registered stores");
+});
+test("isKnownStoreKey rejects well-formed-but-unknown keys (no unbounded storeKey × 500 abuse)", () => {
+  // Passes the shape regex but is NOT a registered store → must be refused.
+  assert.ok(isValidStoreKey("shopify_connections"), "sanity: well-formed shape");
+  assert.ok(!isKnownStoreKey("shopify_connections"), "unknown store rejected");
+  assert.ok(!isKnownStoreKey("evil_key"));
+  assert.ok(!isKnownStoreKey("a-b_c9"));
+  assert.ok(!isKnownStoreKey("x".repeat(64)));
+  // Malformed keys are rejected too.
+  assert.ok(!isKnownStoreKey("HasUpper"));
+  assert.ok(!isKnownStoreKey(""));
+  assert.ok(!isKnownStoreKey(null));
+  assert.ok(!isKnownStoreKey(123));
 });
 
 // ── parseMs ────────────────────────────────────────────────────────────────────

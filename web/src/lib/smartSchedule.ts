@@ -177,11 +177,14 @@ export function classifyDayDropBlock(
   if (configuredSlotCountForDate(dateISO, opts?.config) === 0) {
     return { reason: "no_slots", scheduledCount };
   }
-  // A free-but-past configured slot means the day HAS capacity, just not in the
-  // future — so it is "all_past", not "full".
-  const hasEmptyPastSlot = rows.some(r => !r.draft && !r.offGrid && r.isPast);
-  if (hasEmptyPastSlot) return { reason: "all_past", scheduledCount };
-  return { reason: "full", scheduledCount };
+  // Discriminate purely on whether any configured (grid) slot is still in the future.
+  // Under this function's precondition (no free FUTURE slot) such a slot must be
+  // occupied — so if one exists the day is genuinely "full". Only when EVERY
+  // configured slot has already passed is the block truly "all_past". A free-but-past
+  // morning slot must NOT mask a full evening: that's the bug this fixes.
+  const hasFutureConfiguredSlot = rows.some(r => !r.offGrid && !r.isPast);
+  if (hasFutureConfiguredSlot) return { reason: "full", scheduledCount };
+  return { reason: "all_past", scheduledCount };
 }
 
 /** Canonical "next available slot" entry point: always reads the shared Smart

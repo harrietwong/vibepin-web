@@ -160,6 +160,58 @@ test("today with only past slots → all_past, scheduledCount 0 (not a false 'fu
   assert(configuredSlotCountForDate(dateISO, cfg) === 4, "configured count sanity");
 });
 
+// P2c root-cause: a day that HAS a future configured slot (occupied) must be "full",
+// even if an earlier slot is empty-but-past. The old logic returned "all_past" the
+// moment any empty past slot existed — masking a genuinely-full evening.
+test("P2c: free PAST morning slot + occupied FUTURE evening slot → 'full' (not a false all_past)", () => {
+  const now = new Date(2026, 5, 15, 12, 0, 0, 0); // fixed noon so the test is deterministic
+  const wd = weekdayIdx(now);
+  const dateISO = isoOf(now);
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [wd]: ["09:00", "18:00"] } as Partial<Record<WeekdayIndex, string[]>> };
+  const drafts = [draftAt("E", dateISO, "18:00")]; // the only FUTURE slot is occupied; 09:00 is empty+past
+  assert(!dayHasFreeFutureSlot(dateISO, drafts, { config: cfg, now }), "precondition: no free future slot");
+  const res = classifyDayDropBlock(dateISO, drafts, { config: cfg, now });
+  assert(res.reason === "full", `expected full, got ${res.reason}`);
+  assert(res.scheduledCount === 1, `expected 1 scheduled Pin, got ${res.scheduledCount}`);
+});
+
+// P2c: only when EVERY configured slot has passed is the block "all_past" — even if a
+// past slot is occupied (there is simply no future capacity to drop into).
+test("P2c: all configured slots in the past (one occupied) → all_past", () => {
+  const now = new Date(2026, 5, 15, 12, 0, 0, 0);
+  const wd = weekdayIdx(now);
+  const dateISO = isoOf(now);
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [wd]: ["08:00", "09:00"] } as Partial<Record<WeekdayIndex, string[]>> };
+  const drafts = [draftAt("P", dateISO, "08:00")]; // one past slot occupied, the other past+empty
+  assert(!dayHasFreeFutureSlot(dateISO, drafts, { config: cfg, now }), "precondition: no free future slot");
+  const res = classifyDayDropBlock(dateISO, drafts, { config: cfg, now });
+  assert(res.reason === "all_past", `expected all_past, got ${res.reason}`);
+  assert(res.scheduledCount === 1, `expected scheduledCount 1, got ${res.scheduledCount}`);
+});
+
+// P2c boundary: a slot whose time exactly equals `now` counts as PAST.
+test("P2c boundary: slot exactly at 'now' is past → future-occupied day is 'full'", () => {
+  const now = new Date(2026, 5, 15, 12, 0, 0, 0);
+  const wd = weekdayIdx(now);
+  const dateISO = isoOf(now);
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [wd]: ["12:00", "18:00"] } as Partial<Record<WeekdayIndex, string[]>> };
+  const drafts = [draftAt("E", dateISO, "18:00")];
+  const rows = buildDaySlotRows(dateISO, drafts, { config: cfg, now });
+  assert(rows.find(r => r.time === "12:00")!.isPast, "slot exactly at now must be flagged past");
+  const res = classifyDayDropBlock(dateISO, drafts, { config: cfg, now });
+  assert(res.reason === "full", `expected full (only future slot 18:00 occupied), got ${res.reason}`);
+});
+
+// P2c boundary: a lone slot exactly at 'now', empty → every slot has passed → all_past.
+test("P2c boundary: lone slot exactly at 'now' (empty) → all_past", () => {
+  const now = new Date(2026, 5, 15, 12, 0, 0, 0);
+  const wd = weekdayIdx(now);
+  const dateISO = isoOf(now);
+  const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [wd]: ["12:00"] } as Partial<Record<WeekdayIndex, string[]>> };
+  const res = classifyDayDropBlock(dateISO, [], { config: cfg, now });
+  assert(res.reason === "all_past", `expected all_past, got ${res.reason}`);
+});
+
 // A genuinely full FUTURE day → "full" with the REAL scheduled-Pin count (target day).
 test("full future day → reason 'full' with real scheduledCount", () => {
   const cfg: SmartScheduleConfig = { ...defaultSmartScheduleConfig(), weeklySlots: { [WED]: SLOTS } as Partial<Record<WeekdayIndex, string[]>> };

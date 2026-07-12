@@ -24,10 +24,10 @@ import {
   clampLimit,
   decodeCursor,
   encodeCursor,
+  isKnownStoreKey,
   isMissingTableError,
   isStalePut,
   isTombstoneEligible,
-  isValidStoreKey,
   parseMs,
   pgQuote,
   quotaFor,
@@ -51,7 +51,7 @@ function unauthorized(): Response {
 }
 
 function badStoreKey(): Response {
-  return jsonError(400, "bad_request", "storeKey is required and must match /^[a-z0-9_-]{1,64}$/");
+  return jsonError(400, "bad_request", "storeKey is required and must be a known store key");
 }
 
 function deferred(): Response {
@@ -66,7 +66,7 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const storeKey = url.searchParams.get("storeKey");
-  if (!isValidStoreKey(storeKey)) return badStoreKey();
+  if (!isKnownStoreKey(storeKey)) return badStoreKey();
 
   const limit = clampLimit(url.searchParams.get("limit"));
 
@@ -130,7 +130,7 @@ export async function PUT(req: Request) {
     return jsonError(400, "bad_request", "Invalid JSON body");
   }
 
-  if (!isValidStoreKey(body.storeKey)) return badStoreKey();
+  if (!isKnownStoreKey(body.storeKey)) return badStoreKey();
   const storeKey = body.storeKey;
 
   const validated = validateDocs(body.docs);
@@ -240,7 +240,7 @@ export async function DELETE(req: Request) {
     return jsonError(400, "bad_request", "Invalid JSON body");
   }
 
-  if (!isValidStoreKey(body.storeKey)) return badStoreKey();
+  if (!isKnownStoreKey(body.storeKey)) return badStoreKey();
   const storeKey = body.storeKey;
 
   const validated = validateDocIds(body.docIds);

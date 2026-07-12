@@ -40,6 +40,16 @@ function fmtPrice(price: number | null | undefined, currency: string | null | un
 }
 function keyOf(s: PickerSelection): string { return s.id ?? s.imageUrl; }
 
+/** Read a File into a persistent data: URL (survives refresh, unlike a blob: URL). */
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 // Build an HONEST product-evidence label. Pinterest exposes a genuine save count
 // only for a product's own Pin; otherwise the only number available is the source
 // "Shop the look" Pin's saves, which is NOT a product metric and is labelled as
@@ -208,14 +218,14 @@ export function ProductOpportunityPicker({
     const added: PickerSelection[] = [];
     for (const file of Array.from(files)) {
       const title = cleanProductTitle(file.name.replace(/\.[a-z0-9]+$/i, ""));
-      // Externalize to a stable hosted URL (fixes the old blob: URL that died on
-      // refresh). Fall back to an object URL on failure; the media-offload sweep
-      // will try to externalize it while it is still resolvable this session.
+      // Externalize to a stable hosted URL. Fall back to a data: URL on failure (NOT
+      // a blob: URL, which dies on refresh and can never sync) — the media-offload
+      // sweep externalizes it later, matching InlineCreateAssetPicker.
       let imageUrl: string;
       try {
         imageUrl = (await uploadPinImage(file)).publicUrl;
       } catch {
-        imageUrl = URL.createObjectURL(file);
+        imageUrl = await readFileAsDataUrl(file);
       }
       const saved = assetStore.saveAsset({ role: "product", source: "upload", imageUrl, title });
       added.push({ id: saved.id, imageUrl, title, source: "uploaded" });

@@ -44,8 +44,18 @@ export interface StoreSyncAdapter<T> {
   storeKey: string;
   /** window custom-event name the store dispatches after every persist. */
   eventName: string;
-  /** Current local full state. */
-  getAll(): Array<{ id: string; updatedAt: string; doc: T }>;
+  /**
+   * Current local full state.
+   *
+   * `hold: true` marks a doc that EXISTS locally but is temporarily NOT uploadable
+   * (e.g. an image still embedded as a data:/blob: URL awaiting the media-offload
+   * sweep). A held doc is never PUT and never tombstoned; its baseline value is
+   * frozen so that when the hold releases the diff still fires a PUT — regardless of
+   * whether its updatedAt changed while held. Returning a doc with `hold: true` is
+   * how a media adapter says "keep this, but don't sync it yet" WITHOUT dropping it
+   * from getAll() (dropping it would look like a delete and tombstone the doc).
+   */
+  getAll(): Array<{ id: string; updatedAt: string; doc: T; hold?: boolean }>;
   /** LWW-merge server state into the local store (single persist + emit). */
   mergeServer(live: T[], deleted: Array<{ id: string; deletedAt: string }>): void;
 }
@@ -371,9 +381,15 @@ async function startupPull(inst: Instance): Promise<void> {
     // client payload never cause a spurious re-upload. A doc the local store kept
     // because it is strictly newer than the server is deliberately LEFT OUT of the
     // baseline, so the first diff re-uploads it — this IS the first-load migration.
-    const localAfter = new Map(inst.adapter.getAll().map(x => [x.id, x.updatedAt]));
+    const localAll = inst.adapter.getAll();
+    const localAfter = new Map(localAll.map(x => [x.id, x.updatedAt]));
+    const heldIds = new Set(localAll.filter(x => x.hold).map(x => x.id));
     const baseline = new Map<string, string>();
     for (const rec of live) {
+      // A doc that is locally held (e.g. still an inline image) is deliberately left
+      // OUT of the baseline: with no baseline value, the first post-release diff always
+      // re-uploads it, even if the release path did not bump updatedAt.
+      if (heldIds.has(rec.docId)) continue;
       const after = localAfter.get(rec.docId);
       if (after === undefined) continue;
       if (tsMs(after) > tsMs(rec.updatedAt)) continue; // local strictly newer → re-upload
@@ -428,25 +444,44 @@ async function pullAllPages(inst: Instance): Promise<{
 // ── Diff → outbox ─────────────────────────────────────────────────────────────
 
 function diffNow(inst: Instance): void {
-  const current = new Map<string, string>();
-  for (const x of inst.adapter.getAll()) current.set(x.id, x.updatedAt);
+  const all = inst.adapter.getAll();
+  const currentIds = new Set<string>();
+  // The next baseline. Held docs are excluded from the current PUT/tombstone logic
+  // AND keep their PRIOR baseline value (or stay absent) so a later release re-diffs.
+  const nextSeen = new Map<string, string>();
 
   let changed = false;
 
-  for (const [id, updatedAt] of current) {
-    if (inst.lastSeen.get(id) !== updatedAt) {
-      inst.outbox.set(id, { kind: "put", updatedAt });
+  for (const x of all) {
+    currentIds.add(x.id);
+    if (x.hold) {
+      // Held: exists locally but not yet uploadable. Never PUT, never tombstone.
+      // Freeze the baseline at whatever it was before this diff so that when the hold
+      // releases the (id, updatedAt) comparison still detects a change and enqueues a
+      // PUT — whether or not updatedAt moved during the hold.
+      const prev = inst.lastSeen.get(x.id);
+      if (prev !== undefined) nextSeen.set(x.id, prev);
+      // Drop any PUT that was queued before the doc became held so we never upload the
+      // un-offloaded (data:/blob:) payload. (A delete is never queued for a held id.)
+      const pending = inst.outbox.get(x.id);
+      if (pending && pending.kind === "put") inst.outbox.delete(x.id);
+      continue;
+    }
+    if (inst.lastSeen.get(x.id) !== x.updatedAt) {
+      inst.outbox.set(x.id, { kind: "put", updatedAt: x.updatedAt });
       changed = true;
     }
+    nextSeen.set(x.id, x.updatedAt);
   }
   for (const id of inst.lastSeen.keys()) {
-    if (!current.has(id)) {
+    // A held id is still present in currentIds, so it is never treated as gone here.
+    if (!currentIds.has(id)) {
       inst.outbox.set(id, { kind: "delete", deletedAt: new Date().toISOString() });
       changed = true;
     }
   }
 
-  inst.lastSeen = current;
+  inst.lastSeen = nextSeen;
   if (changed) scheduleFlush(inst);
   notifyStatus(); // outbox may have grown/shrunk → aggregate may have changed
 }

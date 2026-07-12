@@ -102,9 +102,19 @@ function persist(data: StoreData): void {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(trimmed));
   } catch {
-    // Quota exceeded — drop to newest 50
+    // Quota exceeded — drop to newest 50. The sessions/pins dropped by this emergency
+    // halving MUST land in the shadows too (exactly like the normal MAX_SESSIONS trim
+    // above), otherwise the sync adapters' getAll() would under-report them and the
+    // engine would tombstone the missing docs → cross-device wipe.
     const half = sorted.slice(0, 50);
+    const halfSessionIds = new Set(half.map(s => s.id));
     const halfPinIds = new Set(half.flatMap(s => s.pinIds));
+    for (const s of sorted.slice(50)) _evictedSessions.set(s.id, s);
+    for (const id of halfSessionIds) _evictedSessions.delete(id);
+    for (const [id, p] of Object.entries(trimmed.pins)) {
+      if (!halfPinIds.has(p.id)) _evictedPins.set(id, p);
+    }
+    for (const id of halfPinIds) _evictedPins.delete(id);
     const halved: StoreData = {
       sessions: Object.fromEntries(half.map(s => [s.id, s])),
       pins:     Object.fromEntries(Object.entries(trimmed.pins).filter(([, p]) => halfPinIds.has(p.id))),

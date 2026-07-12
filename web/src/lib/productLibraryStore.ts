@@ -216,9 +216,11 @@ export function getFullState(): LibraryState {
 //   • `product_library` — products (doc_id `product:<id>`), sets (`set:<id>`) and
 //     collections (`collection:<encoded name>`); each payload carries `kind`.
 //   • `reference_library` — references (doc_id = reference id).
-// Both share PRODUCT_LIBRARY_EVENT. getAll() EXCLUDES any doc still holding a
-// local (data:/blob:) image so oversized/meaningless payloads never sync — the
-// media-offload sweep replaces those with stable URLs, which re-enters the diff.
+// Both share PRODUCT_LIBRARY_EVENT. getAll() marks any doc still holding a local
+// (data:/blob:) image with `hold: true` — the engine keeps a held doc (never PUTs
+// or tombstones it) until the media-offload sweep replaces the image with a stable
+// URL and re-enters the diff. Held docs are RETURNED, not dropped: dropping an
+// already-synced doc would look like a delete and tombstone it across devices.
 
 const EPOCH = "1970-01-01T00:00:00.000Z";
 
@@ -236,8 +238,8 @@ function hasLocalImage(doc: unknown): boolean {
   return typeof url === "string" && isLocalMediaUrl(url);
 }
 
-let _excludedProducts = 0;
-let _excludedReferences = 0;
+let _heldProducts = 0;
+let _heldReferences = 0;
 
 type ProductLibraryDoc =
   | ({ kind: "product" } & LibraryProduct)
@@ -255,14 +257,16 @@ export const productLibrarySyncAdapter: StoreSyncAdapter<ProductLibraryDoc> = {
       s.collections.length === SEED_COLLECTIONS_SNAPSHOT.length &&
       s.collections.every((c, i) => c === SEED_COLLECTIONS_SNAPSHOT[i]);
     if (s.products.length === 0 && s.sets.length === 0 && collectionsAreSeed) {
-      _excludedProducts = 0;
+      _heldProducts = 0;
       return [];
     }
-    const out: Array<{ id: string; updatedAt: string; doc: ProductLibraryDoc }> = [];
-    let excluded = 0;
+    const out: Array<{ id: string; updatedAt: string; doc: ProductLibraryDoc; hold?: boolean }> = [];
+    let held = 0;
     for (const p of s.products) {
-      if (hasLocalImage(p)) { excluded++; continue; } // wait for the sweep
-      out.push({ id: `product:${p.id}`, updatedAt: productTs(p), doc: { kind: "product", ...p } });
+      // Still a local (data:/blob:) image → return it but HOLD until the sweep runs.
+      const hold = hasLocalImage(p);
+      if (hold) held++;
+      out.push({ id: `product:${p.id}`, updatedAt: productTs(p), doc: { kind: "product", ...p }, ...(hold ? { hold: true } : {}) });
     }
     for (const set of s.sets) {
       out.push({ id: `set:${set.id}`, updatedAt: set.updatedAt || EPOCH, doc: { kind: "set", ...set } });
@@ -270,7 +274,7 @@ export const productLibrarySyncAdapter: StoreSyncAdapter<ProductLibraryDoc> = {
     for (const name of s.collections) {
       out.push({ id: `collection:${encodeURIComponent(name)}`, updatedAt: EPOCH, doc: { kind: "collection", name } });
     }
-    _excludedProducts = excluded;
+    _heldProducts = held;
     return out;
   },
   mergeServer(live, deleted) {
@@ -332,13 +336,15 @@ export const referenceLibrarySyncAdapter: StoreSyncAdapter<ReferencePin> = {
   eventName: PRODUCT_LIBRARY_EVENT,
   getAll() {
     const s = read();
-    const out: Array<{ id: string; updatedAt: string; doc: ReferencePin }> = [];
-    let excluded = 0;
+    const out: Array<{ id: string; updatedAt: string; doc: ReferencePin; hold?: boolean }> = [];
+    let held = 0;
     for (const r of s.references) {
-      if (hasLocalImage(r)) { excluded++; continue; }
-      out.push({ id: r.id, updatedAt: referenceTs(r), doc: r });
+      // Still a local (data:/blob:) image → return it but HOLD until the sweep runs.
+      const hold = hasLocalImage(r);
+      if (hold) held++;
+      out.push({ id: r.id, updatedAt: referenceTs(r), doc: r, ...(hold ? { hold: true } : {}) });
     }
-    _excludedReferences = excluded;
+    _heldReferences = held;
     return out;
   },
   mergeServer(live, deleted) {
@@ -394,11 +400,17 @@ export function collectMediaOffloadCandidates(): MediaOffloadCandidate[] {
 }
 
 // ── Test-only debug hooks ─────────────────────────────────────────────────────
-export function __getProductLibrarySyncDebug(): { excludedProducts: number; excludedReferences: number } {
-  return { excludedProducts: _excludedProducts, excludedReferences: _excludedReferences };
+// `excluded*` keys kept for back-compat; they now report counts of HELD docs.
+export function __getProductLibrarySyncDebug(): {
+  excludedProducts: number; excludedReferences: number; heldProducts: number; heldReferences: number;
+} {
+  return {
+    excludedProducts: _heldProducts, excludedReferences: _heldReferences,
+    heldProducts: _heldProducts, heldReferences: _heldReferences,
+  };
 }
 export function __resetProductLibraryForTests(): void {
   _cache = null;
-  _excludedProducts = 0;
-  _excludedReferences = 0;
+  _heldProducts = 0;
+  _heldReferences = 0;
 }

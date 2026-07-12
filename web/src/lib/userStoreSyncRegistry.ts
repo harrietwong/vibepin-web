@@ -47,8 +47,9 @@ function registerAll(): void {
   registerStoreSync(pinMetadataSyncAdapter);
   registerStoreSync(pinSessionsSyncAdapter);
   registerStoreSync(pinRecordsSyncAdapter);
-  // WP-C: image-bearing stores. getAll() excludes docs still holding a local
-  // (data:/blob:) image; the media-offload sweep (below) externalizes those.
+  // WP-C: image-bearing stores. getAll() HOLDS (returns with hold:true, never
+  // dropping) docs still carrying a local (data:/blob:) image so the engine neither
+  // uploads nor tombstones them; the media-offload sweep (below) externalizes those.
   registerStoreSync(productLibrarySyncAdapter);
   registerStoreSync(referenceLibrarySyncAdapter);
   registerStoreSync(assetsSyncAdapter);

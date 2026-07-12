@@ -105,6 +105,17 @@ export function isValidStoreKey(value: unknown): value is string {
   return typeof value === "string" && STORE_KEY_RE.test(value);
 }
 
+/**
+ * A storeKey is only accepted when it is BOTH well-formed AND one of the known keys
+ * in STORE_QUOTAS. Without this, any /^[a-z0-9_-]{1,64}$/ string would be treated as
+ * a fresh collection with the 500-doc DEFAULT_COLLECTION_QUOTA, letting a caller mint
+ * unlimited storeKeys × 500 docs × 200KB — an unbounded abuse surface. Unknown keys
+ * are rejected with 400 bad_request across GET/PUT/DELETE.
+ */
+export function isKnownStoreKey(value: unknown): value is string {
+  return isValidStoreKey(value) && Object.prototype.hasOwnProperty.call(STORE_QUOTAS, value);
+}
+
 /** Parse an ISO timestamp to epoch ms, or null when absent/invalid. */
 export function parseMs(value: unknown): number | null {
   if (typeof value !== "string" || !value) return null;

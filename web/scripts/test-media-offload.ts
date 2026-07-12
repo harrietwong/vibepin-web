@@ -96,8 +96,9 @@ async function main() {
     reset();
     const p = lib.addProduct({ title: "T", imageUrl: PNG_1x1, category: "c", collection: "", tags: [] });
     const beforeUpdated = lib.getProducts()[0].updatedAt;
-    // Excluded from sync while it holds a data URL.
-    assert.equal(lib.productLibrarySyncAdapter.getAll().find(d => d.id === `product:${p.id}`), undefined);
+    // Held (returned but not synced) while it holds a data URL.
+    const heldEntry = lib.productLibrarySyncAdapter.getAll().find(d => d.id === `product:${p.id}`);
+    assert.ok(heldEntry && heldEntry.hold === true, "product held while it carries a data URL");
     assert.equal(lib.__getProductLibrarySyncDebug().excludedProducts, 1);
 
     const srv = makeFetch();
@@ -134,10 +135,10 @@ async function main() {
     const deadAsset = assets.getAssets().find(a => a.id === dead.id)!;
     assert.ok(okAsset.imageUrl.startsWith("https://"), "fetchable blob externalized");
     assert.equal(deadAsset.imageUrl, "blob:dead", "dead blob left local");
-    // Dead blob is excluded from the sync set; the ok one is now included.
-    const ids = new Set(assets.assetsSyncAdapter.getAll().map(d => d.id));
-    assert.ok(ids.has(ok.id), "externalized asset syncs");
-    assert.ok(!ids.has(dead.id), "dead-blob asset excluded from sync");
+    // Dead blob stays HELD (returned, never dropped/tombstoned); the ok one now syncs.
+    const byId = new Map(assets.assetsSyncAdapter.getAll().map(d => [d.id, d]));
+    assert.ok(byId.has(ok.id) && !byId.get(ok.id)!.hold, "externalized asset syncs (not held)");
+    assert.ok(byId.has(dead.id) && byId.get(dead.id)!.hold === true, "dead-blob asset held (still local), not dropped");
   });
 
   // ── malformed data URL is skipped permanently ──────────────────────────────
@@ -186,8 +187,10 @@ async function main() {
     assets.saveAsset({ role: "style_reference", source: "upload", imageUrl: PNG_1x1, title: "A" });
     basket.addProducts([{ id: "b1", title: "B", imageUrl: PNG_1x1 }]);
     const beforeBasketUpdated = basket.getBasket().updatedAt;
-    // Basket excluded while it holds a data URL.
-    assert.deepEqual(basket.basketSyncAdapter.getAll(), []);
+    // Basket HELD while it holds a data URL (returned with hold, never dropped).
+    const heldBasket = basket.basketSyncAdapter.getAll();
+    assert.equal(heldBasket.length, 1, "held basket returned, not dropped");
+    assert.equal(heldBasket[0].hold, true, "basket held while it carries a data URL");
     assert.equal(basket.__getBasketSyncDebug().excluded, true);
 
     const srv = makeFetch();

@@ -17,9 +17,15 @@ import assert from "node:assert";
 // ── window + localStorage shim (events routed by TYPE, like test-user-store-sync) ──
 const _ls = new Map<string, string>();
 const listenersByType = new Map<string, Set<() => void>>();
+// One-shot quota simulation: when > 0, the next setItem throws (and decrements),
+// mimicking a QuotaExceededError so pinStore's emergency-halving path is exercised.
+let _throwNextSet = 0;
 const localStorageShim = {
   getItem: (k: string) => (_ls.has(k) ? _ls.get(k)! : null),
-  setItem: (k: string, v: string) => { _ls.set(k, String(v)); },
+  setItem: (k: string, v: string) => {
+    if (_throwNextSet > 0) { _throwNextSet--; throw new Error("QuotaExceededError (simulated)"); }
+    _ls.set(k, String(v));
+  },
   removeItem: (k: string) => { _ls.delete(k); },
   clear: () => { _ls.clear(); },
 };
@@ -376,6 +382,39 @@ async function main() {
       pins.pinRecordsSyncAdapter.mergeServer([{ ...rec.doc, keyword: "srv", updatedAt: iso(60_000) } as never], []);
       assert.equal(pins.getSessionPins("sess1").length >= 0, true);
     }
+  });
+
+  await test("pin_store emergency-halving (quota) fills the shadows → getAll still full, engine emits no DELETE", async () => {
+    reset();
+    const srv = createMockServer();
+    sync.registerStoreSync(pins.pinSessionsSyncAdapter, { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.registerStoreSync(pins.pinRecordsSyncAdapter, { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("pin_sessions"));
+    assert.ok(await sync.__waitForUserStoreSyncReady("pin_records"));
+
+    // 60 sessions (>50) so the halving genuinely drops some to the shadow.
+    for (let i = 0; i < 60; i++) {
+      pins.createSession(`s${String(i).padStart(2, "0")}`, "kw", "cat", "manual", [{ refUrl: null, images: ["u"] }]);
+    }
+    await until(() => srv.live("pin_sessions").length === 60, 6_000);
+    await until(() => srv.live("pin_records").length === 60, 6_000);
+    const deletesBefore = srv.deleteCalls().length;
+
+    // Force the NEXT localStorage write to throw → persist() falls into the emergency
+    // halving path. The fix must push the dropped sessions/pins into the shadows.
+    _throwNextSet = 1;
+    pins.markPinsByImageUrls([]); // triggers a persist() over the loaded 60 sessions
+
+    // The hot cache now holds only 50, but getAll must still report all 60 (50 + shadow).
+    assert.equal(pins.pinSessionsSyncAdapter.getAll().length, 60, "all sessions still reported after halving");
+    assert.equal(pins.pinRecordsSyncAdapter.getAll().length, 60, "all pins still reported after halving");
+
+    // The persist emitted a store event → the engine re-diffed. It must NOT tombstone.
+    await sleep(60);
+    assert.equal(srv.deleteCalls().length, deletesBefore, "emergency halving must never trigger a DELETE");
+    assert.equal(srv.live("pin_sessions").length, 60, "no session tombstoned on the server");
+    assert.equal(srv.live("pin_records").length, 60, "no pin tombstoned on the server");
   });
 
   await test("pin_sessions prune keeps evicted sessions in the sync set (no tombstone)", () => {

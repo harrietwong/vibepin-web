@@ -120,20 +120,22 @@ async function main() {
     basket.__resetBasketForTests();
   }
 
-  // ── product_library: getAll shape + data-URL exclusion ─────────────────────
-  await test("product_library getAll: kind-tagged docs, prefixed ids, excludes data-URL products", () => {
+  // ── product_library: getAll shape + data-URL HOLD (returned, not dropped) ──
+  await test("product_library getAll: kind-tagged docs, prefixed ids, HOLDS data-URL products", () => {
     reset();
     const good = lib.addProduct({ title: "good", imageUrl: "https://cdn/a.png", category: "c", collection: "", tags: [] });
     const bad = lib.addProduct({ title: "bad", imageUrl: DATA_URL, category: "c", collection: "", tags: [] });
     lib.createSet("S", [good.id]);
     const all = lib.productLibrarySyncAdapter.getAll();
-    const ids = new Set(all.map(d => d.id));
-    assert.ok(ids.has(`product:${good.id}`), "https product syncs");
-    assert.ok(!ids.has(`product:${bad.id}`), "data-URL product excluded");
-    assert.equal(lib.__getProductLibrarySyncDebug().excludedProducts, 1);
+    const byId = new Map(all.map(d => [d.id, d]));
+    assert.ok(byId.has(`product:${good.id}`) && !byId.get(`product:${good.id}`)!.hold, "https product syncs (not held)");
+    // The un-offloaded product is RETURNED with hold:true — dropping it would tombstone it.
+    assert.ok(byId.has(`product:${bad.id}`), "data-URL product still returned (not dropped)");
+    assert.equal(byId.get(`product:${bad.id}`)!.hold, true, "data-URL product is HELD");
+    assert.equal(lib.__getProductLibrarySyncDebug().excludedProducts, 1, "held count reported (back-compat key)");
     assert.ok(all.some(d => d.id.startsWith("set:") && (d.doc as { kind: string }).kind === "set"));
     assert.ok(all.some(d => d.id.startsWith("collection:") && (d.doc as { kind: string }).kind === "collection"));
-    assert.equal((all.find(d => d.id === `product:${good.id}`)!.doc as { kind: string }).kind, "product");
+    assert.equal((byId.get(`product:${good.id}`)!.doc as { kind: string }).kind, "product");
   });
 
   // ── product_library: LWW (product + set + collection) ──────────────────────
@@ -186,28 +188,33 @@ async function main() {
     const ref = lib.saveReference({ imageUrl: "https://cdn/r.png", source: "uploaded" });
     const bad = lib.saveReference({ imageUrl: DATA_URL, source: "uploaded" });
     const all = lib.referenceLibrarySyncAdapter.getAll();
-    assert.equal(all.length, 1, "data-URL reference excluded");
-    assert.equal(all[0].updatedAt, ref.savedAt, "updatedAt backfilled from savedAt");
-    assert.equal(lib.__getProductLibrarySyncDebug().excludedReferences, 1);
+    assert.equal(all.length, 2, "held data-URL reference is returned (not dropped)");
+    const cleanRef = all.find(d => d.id === ref.id)!;
+    const heldRef = all.find(d => d.id === bad.id)!;
+    assert.ok(!cleanRef.hold, "https reference not held");
+    assert.equal(heldRef.hold, true, "data-URL reference is HELD");
+    assert.equal(cleanRef.updatedAt, ref.savedAt, "updatedAt backfilled from savedAt");
+    assert.equal(lib.__getProductLibrarySyncDebug().excludedReferences, 1, "held count reported (back-compat key)");
     // Newer server ref wins.
     lib.referenceLibrarySyncAdapter.mergeServer([{ ...ref, keyword: "srv", updatedAt: iso(60_000) } as never], []);
     assert.equal(lib.getReferences().find(r => r.id === ref.id)!.keyword, "srv");
     // Newer tombstone removes.
     lib.referenceLibrarySyncAdapter.mergeServer([], [{ id: ref.id, deletedAt: iso(120_000) }]);
     assert.equal(lib.getReferences().find(r => r.id === ref.id), undefined);
-    void bad;
   });
 
-  // ── assets: exclusion (data + blob) + LWW + tombstone ──────────────────────
-  await test("assets getAll excludes data:/blob: images; LWW + tombstone", () => {
+  // ── assets: HOLD (data + blob) + LWW + tombstone ───────────────────────────
+  await test("assets getAll HOLDS data:/blob: images (returned, not dropped); LWW + tombstone", () => {
     reset();
     const good = assets.saveAsset({ role: "product", source: "upload", imageUrl: "https://cdn/a.png", title: "g" });
     assets.saveAsset({ role: "product", source: "upload", imageUrl: DATA_URL, title: "d" });
     assets.saveAsset({ role: "product", source: "upload", imageUrl: "blob:x", title: "b" });
-    const ids = new Set(assets.assetsSyncAdapter.getAll().map(d => d.id));
-    assert.equal(ids.size, 1, "only the https asset syncs");
-    assert.ok(ids.has(good.id));
-    assert.equal(assets.__getAssetsSyncDebug().excluded, 2);
+    const all = assets.assetsSyncAdapter.getAll();
+    assert.equal(all.length, 3, "all assets returned (held ones included, never dropped)");
+    const held = all.filter(d => d.hold);
+    assert.equal(held.length, 2, "the data: and blob: assets are HELD");
+    assert.ok(all.some(d => d.id === good.id && !d.hold), "the https asset syncs (not held)");
+    assert.equal(assets.__getAssetsSyncDebug().excluded, 2, "held count reported (back-compat key)");
     // Newer server asset wins.
     assets.assetsSyncAdapter.mergeServer([{ ...good, title: "server", updatedAt: iso(60_000) } as never], []);
     assert.equal(assets.getAssets().find(a => a.id === good.id)!.title, "server");
@@ -247,20 +254,25 @@ async function main() {
     assert.equal(srv.deleteCalls("assets").length, 0, "capacity eviction must never DELETE server-side");
   });
 
-  // ── basket: singleton getAll + exclusion + no-restamp merge ────────────────
-  await test("basket getAll: [] when empty; excludes data-URL; single doc otherwise", () => {
+  // ── basket: singleton getAll + HOLD + no-restamp merge ─────────────────────
+  await test("basket getAll: [] when empty; HOLDS data-URL basket; single clean doc otherwise", () => {
     reset();
     assert.deepEqual(basket.basketSyncAdapter.getAll(), [], "empty basket must not sync");
     basket.addProducts([{ id: "p1", title: "P", imageUrl: DATA_URL }]);
-    assert.deepEqual(basket.basketSyncAdapter.getAll(), [], "data-URL basket excluded");
-    assert.equal(basket.__getBasketSyncDebug().excluded, true);
+    let all = basket.basketSyncAdapter.getAll();
+    assert.equal(all.length, 1, "held basket is RETURNED (dropping it would tombstone a synced basket)");
+    assert.equal(all[0].id, "basket");
+    assert.equal(all[0].hold, true, "basket with an inline image is HELD");
+    assert.equal(basket.__getBasketSyncDebug().excluded, true, "held reported (back-compat key)");
     basket.addProducts([{ id: "p2", title: "P2", imageUrl: "https://cdn/a.png" }]);
-    // Still excluded: p1 (data URL) is present.
-    assert.deepEqual(basket.basketSyncAdapter.getAll(), []);
+    // Still held: p1 (data URL) is present.
+    all = basket.basketSyncAdapter.getAll();
+    assert.equal(all[0].hold, true, "still held while p1 data-URL present");
     basket.removeProduct("p1");
-    const all = basket.basketSyncAdapter.getAll();
+    all = basket.basketSyncAdapter.getAll();
     assert.equal(all.length, 1, "clean basket syncs as one doc");
     assert.equal(all[0].id, "basket");
+    assert.ok(!all[0].hold, "clean basket no longer held");
   });
 
   await test("basket mergeServer LWW does not re-stamp updatedAt (no ping-pong)", () => {
@@ -289,6 +301,91 @@ async function main() {
     basket.addProducts([{ id: "p1", title: "P", imageUrl: "https://cdn/a.png" }]);
     await until(() => srv.live("basket").length === 1, 3_000);
     assert.equal((srv.row("basket", "basket")!.payload as { products: unknown[] }).products.length, 1);
+  });
+
+  // ── P0 regression: hold never tombstones a synced doc; sweep releases → PUT ──
+
+  await test("basket P0: adding a data-URL product to a SYNCED basket never DELETEs it; sweep releases → PUT with latest", async () => {
+    reset();
+    const srv = createMockServer();
+    sync.registerStoreSync(basket.basketSyncAdapter, { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("basket"));
+
+    basket.addProducts([{ id: "p1", title: "P1", imageUrl: "https://cdn/p1.png" }]);
+    await until(() => srv.live("basket").length === 1, 3_000);
+    const delBefore = srv.deleteCalls("basket").length;
+
+    // Add an un-offloaded (data:) product → basket becomes HELD.
+    basket.addProducts([{ id: "p2", title: "P2", imageUrl: DATA_URL }]);
+    await sleep(60);
+    assert.equal(srv.deleteCalls("basket").length, delBefore, "held basket must NOT be tombstoned");
+    assert.ok(srv.row("basket", "basket"), "server basket still present");
+    assert.equal((srv.row("basket", "basket")!.payload as { products: unknown[] }).products.length, 1,
+      "server still holds the last synced (p1-only) content while held");
+
+    // The media-offload sweep externalizes p2 → hold releases → one PUT with both.
+    const cands = basket.collectMediaOffloadCandidates();
+    assert.equal(cands.length, 1, "one local image to offload");
+    cands[0].replace("https://cdn/p2.png");
+    await until(() => (srv.row("basket", "basket")!.payload as { products: unknown[] }).products.length === 2, 3_000);
+    assert.equal(srv.deleteCalls("basket").length, delBefore, "no DELETE across the entire hold→release cycle");
+  });
+
+  await test("basket P0: server LWW still merges while the local basket is held", () => {
+    reset();
+    basket.addProducts([{ id: "p1", title: "P1", imageUrl: DATA_URL }]); // held locally
+    const serverTs = iso(60_000);
+    basket.basketSyncAdapter.mergeServer(
+      [{ opportunities: [], products: [{ id: "s1", title: "srv", imageUrl: "https://cdn/s.png" }], references: [], updatedAt: serverTs } as never],
+      []);
+    const b = basket.getBasket();
+    assert.equal(b.products[0].id, "s1", "newer server basket wins even though local was held");
+    assert.equal(b.updatedAt, serverTs, "merge preserved the server timestamp (no restamp)");
+  });
+
+  await test("assets P0: adding a data-URL asset to a SYNCED collection never DELETEs the synced asset; sweep releases → PUT", async () => {
+    reset();
+    const srv = createMockServer();
+    sync.registerStoreSync(assets.assetsSyncAdapter, { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("assets"));
+
+    const good = assets.saveAsset({ role: "product", source: "upload", imageUrl: "https://cdn/a.png", title: "g" });
+    await until(() => srv.live("assets").some(r => r.docId === good.id), 3_000);
+    const delBefore = srv.deleteCalls("assets").length;
+
+    const bad = assets.saveAsset({ role: "product", source: "upload", imageUrl: DATA_URL, title: "d" }); // held
+    await sleep(60);
+    assert.equal(srv.deleteCalls("assets").length, delBefore, "held asset must NOT be tombstoned");
+    assert.ok(srv.row("assets", good.id), "the already-synced asset survives");
+    assert.ok(!srv.row("assets", bad.id), "held asset not uploaded while inline");
+
+    for (const c of assets.collectMediaOffloadCandidates()) c.replace("https://cdn/offloaded.png");
+    await until(() => !!srv.row("assets", bad.id), 3_000);
+    assert.equal(srv.deleteCalls("assets").length, delBefore, "no DELETE across the hold→release cycle");
+  });
+
+  await test("product_library P0: adding a data-URL product to a SYNCED library never DELETEs; sweep releases → PUT", async () => {
+    reset();
+    const srv = createMockServer();
+    sync.registerStoreSync(lib.productLibrarySyncAdapter, { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("product_library"));
+
+    const good = lib.addProduct({ title: "good", imageUrl: "https://cdn/a.png", category: "c", collection: "", tags: [] });
+    await until(() => !!srv.row("product_library", `product:${good.id}`), 3_000);
+    const delBefore = srv.deleteCalls("product_library").length;
+
+    const bad = lib.addProduct({ title: "bad", imageUrl: DATA_URL, category: "c", collection: "", tags: [] }); // held
+    await sleep(60);
+    assert.equal(srv.deleteCalls("product_library").length, delBefore, "held product must NOT be tombstoned");
+    assert.ok(srv.row("product_library", `product:${good.id}`), "the already-synced product survives");
+    assert.ok(!srv.row("product_library", `product:${bad.id}`), "held product not uploaded while inline");
+
+    for (const c of lib.collectMediaOffloadCandidates()) c.replace("https://cdn/offloaded.png");
+    await until(() => !!srv.row("product_library", `product:${bad.id}`), 3_000);
+    assert.equal(srv.deleteCalls("product_library").length, delBefore, "no DELETE across the hold→release cycle");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

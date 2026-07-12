@@ -169,8 +169,11 @@ export function getRecentReferences(limit = 20): AssetItem[] {
 // ── Account-level sync (WP-C) ────────────────────────────────────────────────
 // Collection under storeKey `assets` (doc_id = asset id). LWW key = updatedAt ??
 // lastUsedAt ?? createdAt. getAll() reports the hot cache PLUS the capacity-eviction
-// shadow (so a 200-cap trim never tombstones), and EXCLUDES any asset whose image is
-// still a local (data:/blob:) URL — the media-offload sweep replaces those first.
+// shadow (so a 200-cap trim never tombstones), and marks any asset whose image is
+// still a local (data:/blob:) URL as `hold: true` — the engine keeps a held asset
+// (never PUTs or tombstones it) until the media-offload sweep externalizes the image
+// and bumps updatedAt, which releases the hold and re-enters the diff. Held assets
+// must be RETURNED (not dropped): dropping an already-synced asset would tombstone it.
 
 function assetTsMs(v: string | null | undefined): number {
   const ms = v ? Date.parse(v) : NaN;
@@ -178,25 +181,28 @@ function assetTsMs(v: string | null | undefined): number {
 }
 function assetTs(a: AssetItem): string { return a.updatedAt || a.lastUsedAt || a.createdAt; }
 
-let _excludedAssets = 0;
+let _heldAssets = 0;
 
 export const assetsSyncAdapter: StoreSyncAdapter<AssetItem> = {
   storeKey: "assets",
   eventName: ASSET_STORE_EVENT,
   getAll() {
     const present = read();
-    const out: Array<{ id: string; updatedAt: string; doc: AssetItem }> = [];
+    const out: Array<{ id: string; updatedAt: string; doc: AssetItem; hold?: boolean }> = [];
     const seen = new Set<string>();
-    let excluded = 0;
+    let held = 0;
     const consider = (a: AssetItem) => {
       if (seen.has(a.id)) return;
       seen.add(a.id);
-      if (isLocalMediaUrl(a.imageUrl)) { excluded++; return; } // wait for the sweep
-      out.push({ id: a.id, updatedAt: assetTs(a), doc: a });
+      // Still a local (data:/blob:) image → return it but HOLD (never PUT/tombstone
+      // until the sweep externalizes it).
+      const hold = isLocalMediaUrl(a.imageUrl);
+      if (hold) held++;
+      out.push({ id: a.id, updatedAt: assetTs(a), doc: a, ...(hold ? { hold: true } : {}) });
     };
     for (const a of present) consider(a);
     for (const a of _evicted.values()) consider(a);
-    _excludedAssets = excluded;
+    _heldAssets = held;
     return out;
   },
   mergeServer(live, deleted) {
@@ -260,12 +266,13 @@ function replaceAssetImage(id: string, stableUrl: string): void {
 
 // ── Test-only hooks (not used by product code) ───────────────────────────────
 export function __setMaxAssetsForTests(n: number): void { MAX_ASSETS = n; }
-export function __getAssetsSyncDebug(): { excluded: number; evicted: number } {
-  return { excluded: _excludedAssets, evicted: _evicted.size };
+// `excluded` key kept for back-compat; it now reports the count of HELD assets.
+export function __getAssetsSyncDebug(): { excluded: number; held: number; evicted: number } {
+  return { excluded: _heldAssets, held: _heldAssets, evicted: _evicted.size };
 }
 export function __resetAssetStoreForTests(): void {
   _cache = null;
   _evicted.clear();
-  _excludedAssets = 0;
+  _heldAssets = 0;
   MAX_ASSETS = 200;
 }

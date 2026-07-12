@@ -54,12 +54,15 @@ function tsMs(v: string | undefined): number {
 
 function makeStore(eventName: string) {
   const docs = new Map<string, Doc>();
+  const held = new Set<string>();
   const emit = () => dispatch(eventName);
   return {
     eventName,
-    getAll: () => [...docs.values()].map(d => ({ id: d.id, updatedAt: d.updatedAt, doc: d })),
+    getAll: () => [...docs.values()].map(d => ({ id: d.id, updatedAt: d.updatedAt, doc: d, ...(held.has(d.id) ? { hold: true } : {}) })),
     peek: (id: string) => docs.get(id) ?? null,
     all: () => [...docs.values()],
+    /** Mark/unmark a doc as held (not-yet-uploadable) and emit so the engine re-diffs. */
+    hold(id: string, on: boolean) { if (on) held.add(id); else held.delete(id); emit(); },
     /** Local write (create/update) — emits. */
     put(id: string, patch: Partial<Doc> = {}) {
       const now = new Date(Date.now() + 1).toISOString(); // strictly-monotonic-ish
@@ -327,6 +330,70 @@ async function main() {
     assert.equal(s.peek("dead"), null, "newer server tombstone wins locally");
     assert.ok(s.peek("alive"), "newer local survives a stale tombstone");
     await until(() => !srv.row("tomb2", "alive")?.deletedAt, 3_000); // re-uploaded → revived
+  });
+
+  // ── Held docs (media not yet offloaded): never tombstone, never PUT ─────────
+
+  await test("held doc: a newly-added held doc is neither PUT nor DELETEd; release uploads it", async () => {
+    reset();
+    const s = makeStore("evt:hold_new");
+    const srv = createMockServer();
+    sync.registerStoreSync(adapterFor(s, "hold_new"), { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("hold_new"));
+
+    s.hold("c", true);            // mark held BEFORE it exists
+    s.put("c", { value: "inline" }); // add while held (e.g. still a data: URL)
+    await sleep(40);
+    assert.ok(!srv.row("hold_new", "c"), "held doc must NOT be uploaded");
+    assert.equal(srv.deleteCalls("hold_new").length, 0, "held doc must NOT be tombstoned");
+
+    s.hold("c", false);           // sweep externalized → release
+    await until(() => (srv.row("hold_new", "c")?.payload as { value?: string })?.value === "inline", 3_000);
+    assert.equal(srv.deleteCalls("hold_new").length, 0, "still no DELETE after release");
+  });
+
+  await test("held doc: an already-synced doc that becomes held is never deleted; edits during hold flush on release as one PUT with the latest", async () => {
+    reset();
+    const s = makeStore("evt:hold_edit");
+    const srv = createMockServer();
+    sync.registerStoreSync(adapterFor(s, "hold_edit"), { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("hold_edit"));
+
+    s.put("a", { value: "v1" });
+    await until(() => srv.live("hold_edit").some(r => r.docId === "a"), 3_000);
+
+    s.hold("a", true);            // e.g. user replaced the image with an inline data: URL
+    s.put("a", { value: "v2" });  // edited while held → must NOT upload v2 yet
+    await sleep(40);
+    assert.equal((srv.row("hold_edit", "a")!.payload as { value?: string }).value, "v1", "held edit not uploaded");
+    assert.equal(srv.deleteCalls("hold_edit").length, 0, "held doc never tombstoned");
+
+    const putsBefore = srv.putCalls("hold_edit").length;
+    s.hold("a", false);           // release → one PUT carrying the latest content
+    await until(() => (srv.row("hold_edit", "a")?.payload as { value?: string })?.value === "v2", 3_000);
+    assert.ok(srv.putCalls("hold_edit").length > putsBefore, "release triggered a PUT");
+    assert.equal(srv.deleteCalls("hold_edit").length, 0, "no DELETE across the whole hold cycle");
+  });
+
+  await test("held doc at startup: a locally-held doc present on the server is not re-uploaded while held, no DELETE, uploads on release", async () => {
+    reset();
+    const s = makeStore("evt:hold_start");
+    s.seed("d", new Date(Date.now() - 60_000).toISOString(), { value: "local" });
+    s.hold("d", true); // held before the engine mounts (inline image awaiting the sweep)
+    // Server holds an OLDER copy → local is kept by LWW but must stay un-uploaded while held.
+    const srv = createMockServer({ hold_start: [serverRow("d", "2000-01-01T00:00:00.000Z", { value: "server-old" })] });
+    sync.registerStoreSync(adapterFor(s, "hold_start"), { ...FAST, fetchImpl: srv.fetchImpl });
+    sync.initUserStoreSync(getToken);
+    assert.ok(await sync.__waitForUserStoreSyncReady("hold_start"));
+    await sleep(40);
+    assert.equal((srv.row("hold_start", "d")!.payload as { value?: string }).value, "server-old", "held local not uploaded at startup");
+    assert.equal(srv.deleteCalls("hold_start").length, 0, "held-at-startup doc never tombstoned");
+
+    s.hold("d", false); // release → the kept-local value finally uploads
+    await until(() => (srv.row("hold_start", "d")?.payload as { value?: string })?.value === "local", 3_000);
+    assert.equal(srv.deleteCalls("hold_start").length, 0, "no DELETE after release");
   });
 
   // ── Pagination + first-load migration ───────────────────────────────────────

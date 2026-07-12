@@ -202,15 +202,27 @@ def _sql_str(s: str) -> str:
     return s.replace("'", "''")
 
 
+# Per-table text expression to search for the object's filename. Most stores keep
+# their image refs inside a jsonb `payload`; pin_generations instead stores them in
+# ref_urls (text[]) and groups_json (jsonb, holds per-group refUrl), so those source
+# images stay referenced by generation history. Missing pin_generations here would
+# let --delete remove studio/uploads/ source images still cited by past generations.
+_REFERENCE_PROBE_TABLES: dict[str, str] = {
+    "pin_drafts":      "payload::text",
+    "user_store_docs": "payload::text",
+    "pin_generations": "(array_to_string(ref_urls, ',') || ' ' || groups_json::text)",
+}
+
+
 def is_referenced(path: str, *, token: str, project_ref: str) -> tuple[bool, str]:
-    """True if the object's filename appears in any payload text. On a probe error
-    returns True (fail-safe: keep the object). Returns (referenced, reason)."""
+    """True if the object's filename appears in any referencing table's text. On a
+    probe error returns True (fail-safe: keep the object). Returns (referenced, reason)."""
     basename = path.rsplit("/", 1)[-1]
     pattern = _sql_str(_like_escape(basename))
-    for table in ("pin_drafts", "user_store_docs"):
+    for table, expr in _REFERENCE_PROBE_TABLES.items():
         sql = (
             f"SELECT 1 FROM {table} "
-            f"WHERE payload::text LIKE '%{pattern}%' ESCAPE '\\' LIMIT 1"
+            f"WHERE {expr} LIKE '%{pattern}%' ESCAPE '\\' LIMIT 1"
         )
         status, body = _mgmt_query(sql, token=token, project_ref=project_ref)
         if status not in (200, 201):
@@ -220,7 +232,7 @@ def is_referenced(path: str, *, token: str, project_ref: str) -> tuple[bool, str
         except Exception:
             return True, f"unparseable probe response on {table} — kept to be safe"
         if isinstance(rows, list) and len(rows) > 0:
-            return True, f"referenced in {table}.payload"
+            return True, f"referenced in {table}"
     return False, "no reference found"
 
 

@@ -166,10 +166,14 @@ export function getTotalCount(): number {
 
 // ── Account-level sync (WP-C) ────────────────────────────────────────────────
 // Singleton under storeKey `basket` (fixed doc_id "basket"). The basket already
-// carries updatedAt. getAll() returns [] for an empty basket (nothing to sync) AND
-// EXCLUDES the doc while any product/reference image is still a local (data:/blob:)
-// URL — the media-offload sweep replaces those first, which bumps updatedAt and
-// re-enters the diff. mergeServer writes the winner via persistRaw (no re-stamp).
+// carries updatedAt. getAll() returns [] for an empty basket (nothing to sync) and
+// returns the doc with `hold: true` while any product/reference image is still a
+// local (data:/blob:) URL — the engine keeps a held doc (never tombstones or PUTs
+// it) until the media-offload sweep replaces the image and bumps updatedAt, which
+// releases the hold and re-enters the diff. NOTE: returning [] here would look like
+// a delete to the engine and tombstone an already-synced basket, wiping other
+// devices — that is exactly why a still-inline basket is HELD, not dropped.
+// mergeServer writes the winner via persistRaw (no re-stamp).
 
 const BASKET_DOC_ID = "basket";
 const BASKET_EPOCH = "1970-01-01T00:00:00.000Z";
@@ -187,17 +191,19 @@ function basketIsEmpty(b: CreateBasket): boolean {
   return b.opportunities.length === 0 && b.products.length === 0 && b.references.length === 0;
 }
 
-let _basketExcluded = false;
+let _basketHeld = false;
 
 export const basketSyncAdapter: StoreSyncAdapter<CreateBasket> = {
   storeKey: "basket",
   eventName: BASKET_EVENT,
   getAll() {
     const b = read();
-    if (basketIsEmpty(b)) { _basketExcluded = false; return []; }
-    if (basketHasLocalImage(b)) { _basketExcluded = true; return []; } // wait for the sweep
-    _basketExcluded = false;
-    return [{ id: BASKET_DOC_ID, updatedAt: b.updatedAt || BASKET_EPOCH, doc: b }];
+    if (basketIsEmpty(b)) { _basketHeld = false; return []; }
+    // Still holds a local (data:/blob:) image → return the doc but HOLD it so the
+    // engine keeps it (no tombstone, no PUT) until the sweep externalizes the image.
+    const hold = basketHasLocalImage(b);
+    _basketHeld = hold;
+    return [{ id: BASKET_DOC_ID, updatedAt: b.updatedAt || BASKET_EPOCH, doc: b, ...(hold ? { hold: true } : {}) }];
   },
   mergeServer(live, deleted) {
     if (typeof window === "undefined") return;
@@ -262,5 +268,8 @@ export function collectMediaOffloadCandidates(): MediaOffloadCandidate[] {
 }
 
 // ── Test-only hooks ───────────────────────────────────────────────────────────
-export function __getBasketSyncDebug(): { excluded: boolean } { return { excluded: _basketExcluded }; }
-export function __resetBasketForTests(): void { _cache = null; _basketExcluded = false; }
+// `excluded` key kept for back-compat; it now reports whether the basket is HELD.
+export function __getBasketSyncDebug(): { excluded: boolean; held: boolean } {
+  return { excluded: _basketHeld, held: _basketHeld };
+}
+export function __resetBasketForTests(): void { _cache = null; _basketHeld = false; }
