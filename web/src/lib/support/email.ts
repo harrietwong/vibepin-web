@@ -62,7 +62,8 @@ function wrap(bodyHtml: string): string {
   return `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.6;color:#1A2236;max-width:520px">${bodyHtml}</div>`;
 }
 
-export function userTicketConfirmationEmail(args: { ticketNumber: string; userNameOrEmail: string; subject: string }) {
+export function userTicketConfirmationEmail(args: { ticketNumber: string; userNameOrEmail: string; subject: string; ticketId: string }) {
+  const ticketUrl = `${appBaseUrl()}/app/support/tickets/${args.ticketId}`;
   const subjectLine = `We received your support request ${args.ticketNumber}`;
   const text = `Hi ${args.userNameOrEmail},
 
@@ -71,13 +72,17 @@ We received your support request.
 Ticket: ${args.ticketNumber}
 Subject: ${args.subject}
 
-We'll reply by email.`;
+We'll reply by email. We usually reply within 24 hours.
+
+Please don't reply to this email — to add details or follow the conversation, open your ticket:
+${ticketUrl}`;
   const html = wrap(`
     <p>Hi ${escapeHtml(args.userNameOrEmail)},</p>
     <p>We received your support request.</p>
     <p><strong>Ticket:</strong> ${escapeHtml(args.ticketNumber)}<br/>
     <strong>Subject:</strong> ${escapeHtml(args.subject)}</p>
-    <p>We'll reply by email.</p>
+    <p>We'll reply by email. We usually reply within 24 hours.</p>
+    <p>Please don't reply to this email — to add details or follow the conversation, <a href="${ticketUrl}">open your ticket</a>.</p>
   `);
   return { subject: subjectLine, html, text };
 }
@@ -121,9 +126,11 @@ export function adminReplyEmail(args: { ticketSubject: string; adminReply: strin
   const subjectLine = `Re: ${args.ticketSubject}`;
   const text = `${args.adminReply}
 
+Please don't reply directly to this email — use the link below to respond.
 View ticket: ${ticketUrl}`;
   const html = wrap(`
     <p>${escapeHtml(args.adminReply).replace(/\n/g, "<br/>")}</p>
+    <p>Please don't reply directly to this email — use the link below to respond.</p>
     <p><a href="${ticketUrl}">View ticket</a></p>
   `);
   return { subject: subjectLine, html, text };

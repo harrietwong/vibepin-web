@@ -108,6 +108,7 @@ export async function POST(req: Request) {
         ticketNumber: ticket.ticketNumber,
         userNameOrEmail: userEmail,
         subject: ticket.subject || SUPPORT_CATEGORY_LABELS[category],
+        ticketId: ticket.id,
       });
       void sendEmail({ to: userEmail, ...confirmation });
     }

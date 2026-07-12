@@ -145,7 +145,7 @@ export function ContactSupportModal({
               Support ID: {result.ticketNumber}
             </p>
             <p style={{ margin: 0, fontSize: 12.5, color: UI.textSec, maxWidth: 340, lineHeight: 1.5 }}>
-              We&apos;ll reply by email.
+              We usually reply within 24 hours — you&apos;ll get our reply by email.
             </p>
             {result.aiReplied && (
               <p style={{ margin: 0, fontSize: 12.5, color: UI.textSec, maxWidth: 340, lineHeight: 1.5 }}>
