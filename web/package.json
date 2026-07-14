@@ -59,7 +59,8 @@
     "verify:sync": "tsc --noEmit && npx tsx scripts/test-user-store-sync.ts && npx tsx scripts/test-user-store-route.ts && npx tsx scripts/test-user-store-adapters.ts && npx tsx scripts/test-user-store-media-adapters.ts && npx tsx scripts/test-media-offload.ts && npx tsx scripts/test-pin-draft-sync.ts",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "scan:secrets": "node ../scripts/scan-secrets.mjs"
   },
   "dependencies": {
     "@paddle/paddle-js": "^1.6.4",
