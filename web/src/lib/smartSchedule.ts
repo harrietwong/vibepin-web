@@ -70,12 +70,13 @@ export function findNextAvailableScheduleSlot(params: FindNextSlotParams): Sched
   } = params;
 
   const occupied = buildOccupiedSet(existingPlannedPins, extraOccupied);
-  // Never assign a past slot: the floor is the later of the requested start and the
-  // real current time. So a drag onto *today* still skips this morning's past slots,
-  // and an auto-schedule (fromDateTime = now) only uses today's remaining future slots.
-  // In strictDate mode the caller owns the day (including a historical one, e.g.
-  // re-normalizing a legacy draft), so the wall-clock floor must not veto it.
-  const nowMs = strictDate ? fromDateTime.getTime() : Math.max(fromDateTime.getTime(), Date.now());
+  // Never assign a past slot — the floor is ALWAYS the real current time, in both
+  // modes. A drag onto today therefore skips this morning's slots, and a strict-date
+  // request for a past day (or a past time today) finds nothing and returns null.
+  // strictDate constrains only WHICH DAY may be used, never whether the clock applies:
+  // relaxing this floor would let a Pin be scheduled into the past, and it would never
+  // publish.
+  const nowMs = Math.max(fromDateTime.getTime(), Date.now());
   const days = strictDate ? 1 : maxDaysAhead;
 
   for (let offset = 0; offset < days; offset++) {
@@ -282,7 +283,12 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
   const curDate = sanitizeHandoffField(draft.scheduledDate);
   const curTime = sanitizeHandoffField(draft.scheduledTime);
   const curPlannedAt = sanitizeHandoffField(draft.plannedAt);
-  const targetDate = sanitizeHandoffField(opts?.date ?? "") || curDate;
+  // A date the CALLER named is an intent to honour exactly (drag, reschedule); the
+  // draft's own stored date is merely a default. Conflating them meant an omitted
+  // opts.date silently fell back to curDate and re-locked the search onto it — which
+  // strands a draft whose stored day has already passed.
+  const requestedDate = sanitizeHandoffField(opts?.date ?? "");
+  const targetDate = requestedDate || curDate;
 
   // Idempotent: a fully-scheduled Pin is left untouched unless we are explicitly
   // rescheduling or moving it to a different date.
@@ -300,10 +306,11 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
 
   // Exclude self so a Pin that already has a date/time doesn't block its own slot.
   const existing = pinDraftStore.getAllDrafts().filter(d => d.id !== id);
-  // An explicit target date is the user's choice (drag, reschedule, or a legacy draft's
-  // own stored day). Honour it exactly: assign a time ON that day or fail — never slide
-  // the Pin onto a different day while reporting success.
-  const strictDate = !!targetDate;
+  // Only a date the CALLER named locks the search to that day: honour it exactly —
+  // assign a time on it or fail, never slide the Pin to another day while reporting
+  // success. A date merely inherited from the draft stays a soft starting point, so a
+  // draft sitting on a day that has already passed can still be rescued forward.
+  const strictDate = !!requestedDate;
   const fromDateTime = targetDate ? new Date(`${targetDate}T00:00:00`) : new Date();
   const slot = findNextAvailableScheduleSlot({
     weeklySlots: config.weeklySlots,
@@ -344,8 +351,14 @@ export function normalizeInPlanDraftTimes(): number {
     if (!inPlan) continue;
     const hasTime = !!sanitizeHandoffField(d.scheduledTime);
     if (hasTime) continue;
+    // Keep the draft's own day only while that day can still be published on. A date
+    // that has already passed is not worth preserving — pinning to it would strand the
+    // draft as permanently unschedulable (no slot on a past day is ever valid), so let
+    // it take the next free future slot instead.
+    const own = sanitizeHandoffField(d.scheduledDate);
+    const stillReachable = !!own && own >= localDateISO(new Date());
     const res = ensureScheduledPlanTime(d.id, {
-      date: sanitizeHandoffField(d.scheduledDate) || undefined,
+      date: stillReachable ? own : undefined,
       config,
       extraOccupied,
     });

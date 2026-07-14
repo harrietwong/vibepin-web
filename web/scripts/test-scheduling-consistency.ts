@@ -31,8 +31,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as pinDraftStore from "../src/lib/pinDraftStore";
 import type { PinDraft } from "../src/lib/pinDraftStore";
-import { ensureScheduledPlanTime, normalizeInPlanDraftTimes } from "../src/lib/smartSchedule";
-import { saveSmartScheduleConfig } from "../src/lib/smartScheduleStore";
+import { ensureScheduledPlanTime, normalizeInPlanDraftTimes, buildDaySlotRows } from "../src/lib/smartSchedule";
+import { saveSmartScheduleConfig, getSmartScheduleConfig } from "../src/lib/smartScheduleStore";
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "../src/lib/planCalendar";
 import { pinMissingFields } from "../src/lib/pinReadiness";
 
@@ -42,6 +42,17 @@ function test(name: string, fn: () => void) {
   catch (e) { console.error(`  FAIL ${name}`); console.error(`       ${(e as Error).message}`); failed++; }
 }
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
+
+/** Local YYYY-MM-DD, `n` days from today. Tests must never hardcode calendar dates:
+ *  scheduling into the past is rejected by design, so a fixed date silently rots into
+ *  a false failure the day it slips into the past. */
+function daysFromToday(n: number): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + n);
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 function seedConfig() {
   saveSmartScheduleConfig({
@@ -123,10 +134,14 @@ test("Schedule does not overwrite existing plannedAt (idempotent)", () => {
   const first = pinDraftStore.getDraft("u1")!.plannedAt;
   ensureScheduledPlanTime("u1");
   assert(pinDraftStore.getDraft("u1")!.plannedAt === first, "plannedAt changed on re-schedule without reschedule flag");
-  // Explicit reschedule onto a new date should change it.
-  ensureScheduledPlanTime("u1", { date: "2026-06-29", reschedule: true });
+  // Explicit reschedule onto a new date should change it. Must be a FUTURE date —
+  // scheduling into the past is rejected by design (the Pin could never publish), so
+  // a hardcoded calendar date would rot into a false failure the day it passes.
+  const target = daysFromToday(5);
+  const res = ensureScheduledPlanTime("u1", { date: target, reschedule: true });
+  assert(res.ok, "reschedule onto a free future day should succeed");
   const moved = pinDraftStore.getDraft("u1")!;
-  assert(moved.scheduledDate === "2026-06-29", `reschedule date not applied: ${moved.scheduledDate}`);
+  assert(moved.scheduledDate === target, `reschedule date not applied: ${moved.scheduledDate}`);
 });
 
 // 4
@@ -188,22 +203,30 @@ test("Product missing is not a schedule-blocking readiness field", () => {
 // 9
 test("Legacy added_to_plan drafts without time normalize safely (no dupes)", () => {
   reset();
+  const future = daysFromToday(6);
+  const past = daysFromToday(-20);
   seedDrafts([
-    mkDraft({ id: "leg1", scheduledDate: "2026-06-24", scheduledTime: "", addedToPlanAt: "2026-06-01T00:00:00Z" }),
+    // Still-reachable day → must be preserved exactly.
+    mkDraft({ id: "leg1", scheduledDate: future, scheduledTime: "", addedToPlanAt: "2026-06-01T00:00:00Z" }),
+    // No day at all → takes the next free future slot.
     mkDraft({ id: "leg2", scheduledDate: "", scheduledTime: "", addedToPlanAt: "2026-06-01T00:00:00Z" }),
+    // Day already gone → must NOT be pinned to it (nothing can publish on a past day,
+    // so keeping it would strand the draft as permanently unschedulable). It moves.
+    mkDraft({ id: "leg3", scheduledDate: past, scheduledTime: "", addedToPlanAt: "2026-06-01T00:00:00Z" }),
   ]);
   const before = pinDraftStore.getAllDrafts().length;
   const fixed = normalizeInPlanDraftTimes();
   const after = pinDraftStore.getAllDrafts().length;
   assert(after === before, `draft count changed (dupes): ${before} -> ${after}`);
-  assert(fixed >= 2, `expected >=2 normalized, got ${fixed}`);
-  for (const id of ["leg1", "leg2"]) {
+  assert(fixed === 3, `expected 3 normalized, got ${fixed}`);
+  for (const id of ["leg1", "leg2", "leg3"]) {
     const d = pinDraftStore.getDraft(id)!;
     assert(/^\d{2}:\d{2}$/.test(d.scheduledTime ?? ""), `${id} still time-less: ${d.scheduledTime}`);
     assert(!!d.plannedAt, `${id} no plannedAt`);
   }
-  // leg1 keeps its date.
-  assert(pinDraftStore.getDraft("leg1")!.scheduledDate === "2026-06-24", "leg1 date changed during normalize");
+  const today = daysFromToday(0);
+  assert(pinDraftStore.getDraft("leg1")!.scheduledDate === future, "leg1 (reachable day) must keep its date");
+  assert(pinDraftStore.getDraft("leg3")!.scheduledDate >= today, "leg3 must be rescued off its past date, not stranded");
 });
 
 // 10
@@ -218,6 +241,85 @@ test("Duplicate Schedule does not create duplicate plan items", () => {
   const c2 = pinDraftStore.getAllDrafts().length;
   assert(c1 === c2, `duplicate plan items created: ${c1} -> ${c2}`);
   assert(pinDraftStore.getDraft("u1")!.plannedAt === at1, "plannedAt drifted on duplicate schedule");
+});
+
+// ── Strict target date ────────────────────────────────────────────────────────
+// An explicitly requested date is an intent, not a hint. It is honoured exactly or
+// it fails: sliding the Pin to another day, or accepting a slot in the past (which
+// could never publish), are both silent data corruption.
+
+// 11
+test("strict date: a free future day schedules ON that day", () => {
+  reset();
+  seedDrafts([mkDraft({ id: "s1" })]);
+  const date = daysFromToday(4);
+  const res = ensureScheduledPlanTime("s1", { date, reschedule: true });
+  assert(res.ok, `expected ok, got ${res.ok ? "" : res.reason}`);
+  assert(res.ok && res.slot.plannedDate === date, `landed on the wrong day: ${res.ok && res.slot.plannedDate}`);
+  assert(pinDraftStore.getDraft("s1")!.scheduledDate === date, "draft not persisted on the requested day");
+});
+
+// 12
+test("strict date: a FULL day fails — it must not slide to the next day", () => {
+  reset();
+  const date = daysFromToday(3);
+  seedDrafts([mkDraft({ id: "s1" })]);
+  // Occupy every configured slot on that day. Ask the product for the day's real slot
+  // list — hand-deriving the weekday index gets it wrong (weeklySlots is Monday-based,
+  // Date#getDay is Sunday-based) and would silently occupy the wrong day.
+  const times = buildDaySlotRows(date, [], { config: getSmartScheduleConfig() }).map(r => r.time);
+  assert(times.length > 0, "fixture needs a day that has slots");
+  const occupied = new Set(times.map(t => `${date}|${t}`));
+
+  const res = ensureScheduledPlanTime("s1", { date, reschedule: true, extraOccupied: occupied });
+  assert(!res.ok, `full day must fail, but it scheduled onto ${res.ok && res.slot.plannedDate}`);
+  assert(!res.ok && res.reason === "no_slot", `expected no_slot, got ${!res.ok && res.reason}`);
+  const d = pinDraftStore.getDraft("s1")!;
+  assert(!d.scheduledDate && !d.scheduledTime && !d.plannedAt, "a failed schedule must not touch the draft");
+});
+
+// 13
+test("strict date: today's ALREADY-PAST times are never used", () => {
+  reset();
+  seedDrafts([mkDraft({ id: "s1" })]);
+  const today = daysFromToday(0);
+  // Give today a single slot one minute in the past.
+  const past = new Date(Date.now() - 60_000);
+  const hhmm = `${String(past.getHours()).padStart(2, "0")}:${String(past.getMinutes()).padStart(2, "0")}`;
+  saveSmartScheduleConfig({ weeklySlots: { [past.getDay()]: [hhmm] }, boards: [] });
+
+  const res = ensureScheduledPlanTime("s1", { date: today, reschedule: true });
+  assert(!res.ok, `a past time today must not be scheduled (got ${res.ok && res.slot.plannedTime})`);
+  const d = pinDraftStore.getDraft("s1")!;
+  assert(!d.plannedAt, "draft must be untouched after a past-time rejection");
+});
+
+// 14
+test("strict date: a historical date fails and leaves the draft untouched", () => {
+  reset();
+  seedDrafts([mkDraft({ id: "s1" })]);
+  const res = ensureScheduledPlanTime("s1", { date: daysFromToday(-10), reschedule: true });
+  assert(!res.ok, "scheduling into the past must fail");
+  assert(!res.ok && res.reason === "no_slot", `expected no_slot, got ${!res.ok && res.reason}`);
+  const d = pinDraftStore.getDraft("s1")!;
+  assert(!d.scheduledDate && !d.scheduledTime && !d.plannedAt, "a failed schedule must not touch the draft");
+});
+
+// 15
+test("strict date: a failed reschedule preserves the EXISTING schedule", () => {
+  reset();
+  seedDrafts([mkDraft({ id: "s1" })]);
+  const good = daysFromToday(2);
+  assert(ensureScheduledPlanTime("s1", { date: good, reschedule: true }).ok, "setup schedule failed");
+  const before = pinDraftStore.getDraft("s1")!;
+  const keptDate = before.scheduledDate, keptTime = before.scheduledTime, keptAt = before.plannedAt;
+
+  // Now try to move it into the past — must fail and change NOTHING.
+  const res = ensureScheduledPlanTime("s1", { date: daysFromToday(-3), reschedule: true });
+  assert(!res.ok, "past reschedule must fail");
+  const after = pinDraftStore.getDraft("s1")!;
+  assert(after.scheduledDate === keptDate && after.scheduledTime === keptTime && after.plannedAt === keptAt,
+    `failed reschedule clobbered the existing slot: ${keptDate} ${keptTime} -> ${after.scheduledDate} ${after.scheduledTime}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
