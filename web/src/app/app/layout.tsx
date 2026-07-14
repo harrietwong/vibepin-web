@@ -431,7 +431,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           padding: "0 12px",
           borderBottom: "1px solid var(--app-sidebar-border)", flexShrink: 0,
         }}>
-          <Link href="/app/workspace/home-decor" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+          <Link href="/app/studio" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
             <BrandLogo size={32} />
             <span data-sidebar-label="" style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em", color: "var(--app-text)" }}>VibePin</span>
           </Link>

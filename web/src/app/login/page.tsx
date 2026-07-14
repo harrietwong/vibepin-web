@@ -11,18 +11,35 @@ const supabase = createBrowserClient(
 );
 
 function safeNextPath(value: string | null): string {
-  return value?.startsWith("/app") ? value : "/app/workspace/home-decor";
+  if (
+    value &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.includes("\\") &&
+    !value.startsWith("/login") &&
+    !value.startsWith("/signup") &&
+    !value.startsWith("/auth")
+  ) return value;
+  return "/app/studio";
 }
 
 function LoginContent() {
   const router = useRouter();
   const params = useSearchParams();
   const next   = safeNextPath(params.get("next"));
+  const plan   = params.get("plan");
 
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
+
+  const signUpHref = (() => {
+    const qs = new URLSearchParams();
+    qs.set("next", next);
+    if (plan && plan !== "free") qs.set("plan", plan);
+    return `/signup?${qs.toString()}`;
+  })();
 
   useEffect(() => {
     if (params.get("error")) setError("Authentication failed. Please try again.");
@@ -116,7 +133,7 @@ function LoginContent() {
                   if (!email) { setError("Enter your email first."); return; }
                   setLoading(true);
                   await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: `${window.location.origin}/auth/callback?next=/app/workspace/home-decor`,
+                    redirectTo: `${window.location.origin}/auth/callback?next=/app/studio`,
                   });
                   setError("");
                   setLoading(false);
@@ -145,7 +162,7 @@ function LoginContent() {
 
         <p className="text-center text-[13px] text-gray-500 mt-5">
           Don&apos;t have an account?{" "}
-          <Link href="/signup" className="text-[#0891B2] font-semibold hover:underline">
+          <Link href={signUpHref} className="text-[#0891B2] font-semibold hover:underline">
             Start free trial
           </Link>
         </p>

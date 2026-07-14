@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { ArrowRight, Check, Minus } from "lucide-react";
 import type { Paddle } from "@paddle/paddle-js";
@@ -13,6 +14,7 @@ import {
   PRICING_FAQ,
   PRICING_REASSURANCE,
   PRICING_TIERS,
+  type PlanKey,
   type PricingTier,
 } from "@/lib/pricingPlans";
 import { getPaddle } from "@/lib/paddle/paddleClient";
@@ -90,16 +92,16 @@ function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: bo
 
 function PlanCards({
   yearly,
-  paddle,
   priceMap,
-  email,
-  userId,
+  onPlanCta,
+  selectedPlanId,
+  pendingPlanId,
 }: {
   yearly: boolean;
-  paddle: Paddle | null;
   priceMap: PriceMap;
-  email: string | null;
-  userId: string | null;
+  onPlanCta: (planId: PlanKey, priceId: string) => void;
+  selectedPlanId: PlanKey | null;
+  pendingPlanId: PlanKey | null;
 }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 items-stretch">
@@ -116,15 +118,21 @@ function PlanCards({
           : undefined;
         const localizedTotal = paddlePriceId ? priceMap[paddlePriceId] : undefined;
 
-        // Checkout only when Paddle is ready AND this tier has catalog IDs.
-        const canCheckout = !!paddle && !!plan.paddlePriceIds;
+        const isSelected = selectedPlanId === plan.id;
 
         return (
           <div
             key={plan.id}
             className="relative flex flex-col rounded-2xl p-6 transition-transform hover:-translate-y-1"
             style={
-              plan.highlighted
+              isSelected
+                ? {
+                    background:
+                      "linear-gradient(180deg,rgba(124,58,237,0.14),rgba(217,70,239,0.05))",
+                    border: "1px solid rgba(232,121,249,0.65)",
+                    boxShadow: "0 0 0 1px rgba(232,121,249,0.35), 0 0 40px rgba(168,85,247,0.16)",
+                  }
+                : plan.highlighted
                 ? {
                     background:
                       "linear-gradient(180deg,rgba(124,58,237,0.14),rgba(217,70,239,0.05))",
@@ -203,18 +211,19 @@ function PlanCards({
               ))}
             </ul>
 
-            {canCheckout && paddle && paddlePriceId ? (
+            {plan.paddlePriceIds && paddlePriceId ? (
               <button
                 type="button"
-                onClick={() => openCheckout(paddle, paddlePriceId, email, userId)}
-                className={`w-full rounded-full py-3 text-[13px] font-bold text-center transition-all ${
+                onClick={() => onPlanCta(plan.id, paddlePriceId)}
+                disabled={pendingPlanId === plan.id}
+                className={`w-full rounded-full py-3 text-[13px] font-bold text-center transition-all disabled:opacity-60 disabled:cursor-wait ${
                   plan.highlighted ? VibeBtn : "border hover:text-white hover:border-white/30"
                 }`}
                 style={
                   plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
                 }
               >
-                {plan.cta}
+                {pendingPlanId === plan.id ? "Loading…" : plan.cta}
               </button>
             ) : (
               <Link
@@ -362,15 +371,29 @@ function ComparisonTable() {
   );
 }
 
-export default function PricingPageClient({ country }: { country?: string }) {
+function PricingPageContent({ country }: { country?: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [yearly, setYearly] = useState(false);
   const [paddle, setPaddle] = useState<Paddle | null>(null);
+  const [paddleError, setPaddleError] = useState(false);
   const [priceMap, setPriceMap] = useState<PriceMap>({});
   const [email, setEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState<PlanKey | null>(null);
+  const [checkoutUnavailable, setCheckoutUnavailable] = useState(false);
+  // A CTA click that arrived before we knew enough to act on it yet (auth
+  // still loading, or signed-in but Paddle still initializing). Consumed by
+  // the effect below the instant readiness catches up; times out to the
+  // "unavailable" banner rather than spinning forever.
+  const [pendingIntent, setPendingIntent] = useState<{ planId: PlanKey; priceId: string } | null>(null);
 
   // Prefill checkout email + link the Paddle customer to this VibePin user
-  // (anonymous is normal — both stay null).
+  // (anonymous is normal — both stay null). `authReady` distinguishes "session
+  // still loading" from "confirmed logged out" so the auto-checkout effect
+  // below never mistakes a not-yet-resolved session for an anonymous visitor.
   useEffect(() => {
     let active = true;
     supabase.auth
@@ -383,6 +406,9 @@ export default function PricingPageClient({ country }: { country?: string }) {
       })
       .catch(() => {
         /* anonymous visitor — ignore */
+      })
+      .finally(() => {
+        if (active) setAuthReady(true);
       });
     return () => {
       active = false;
@@ -403,6 +429,7 @@ export default function PricingPageClient({ country }: { country?: string }) {
         console.error(
           err instanceof Error ? err.message : "Paddle failed to initialize.",
         );
+        if (active) setPaddleError(true);
         return; // fallback mode
       }
       if (!active) return;
@@ -443,13 +470,157 @@ export default function PricingPageClient({ country }: { country?: string }) {
     };
   }, [country]);
 
+  // Actually perform the CTA action once we know for certain what the buyer's
+  // state is — either "definitely signed in with Paddle ready" or
+  // "definitely signed out". Never call this while a signal is still loading.
+  const runPlanCta = useCallback(
+    (planId: PlanKey, priceId: string) => {
+      if (userId && paddle) {
+        openCheckout(paddle, priceId, email, userId);
+        return;
+      }
+      const period = yearly ? "year" : "month";
+      const resumeNext = `/pricing?checkout=${encodeURIComponent(planId)}&period=${period}`;
+      router.push(`/signup?plan=${encodeURIComponent(planId)}&next=${encodeURIComponent(resumeNext)}`);
+    },
+    [userId, paddle, yearly, email, router],
+  );
+
+  // Decide what a plan CTA click does. This is the single entry point for
+  // both the plan cards and the bottom Pro CTA.
+  //  - authReady is still false → we don't yet know who the user is. Do NOT
+  //    guess "anonymous" — record the intent and show a loading state; the
+  //    resume effect below fires the instant auth resolves.
+  //  - confirmed signed out → send the buyer to signup carrying the intended
+  //    plan + period, so we can resume checkout automatically once they land
+  //    back here signed in.
+  //  - confirmed signed in + Paddle ready → open checkout directly.
+  //  - confirmed signed in but Paddle still initializing (no error yet) →
+  //    record the intent and wait; the resume effect fires once Paddle
+  //    finishes loading (or degrades to the banner on paddleError/timeout).
+  //  - confirmed signed in + Paddle failed (or plan has no catalog id) → a
+  //    real, permanent failure: mark the plan selected and show the banner.
+  const handlePlanCta = useCallback(
+    (planId: PlanKey, priceId: string) => {
+      if (!authReady) {
+        setPendingIntent({ planId, priceId });
+        return;
+      }
+      if (!userId) {
+        runPlanCta(planId, priceId);
+        return;
+      }
+      if (paddle) {
+        runPlanCta(planId, priceId);
+        return;
+      }
+      if (!paddleError) {
+        setPendingIntent({ planId, priceId });
+        return;
+      }
+      // Signed in, Paddle confirmed-failed (or no catalog id for this plan) —
+      // never silently no-op: mark the selection and surface the banner.
+      setSelectedPlanId(planId);
+      setCheckoutUnavailable(true);
+    },
+    [userId, paddle, paddleError, authReady, runPlanCta],
+  );
+
+  // Consume a pending intent the instant readiness catches up. Mirrors the
+  // same decision order as handlePlanCta, minus the "still unknown" branch
+  // (which is exactly the condition that keeps this effect from firing).
+  useEffect(() => {
+    if (!pendingIntent) return;
+    if (!authReady) return;
+
+    if (!userId) {
+      const { planId, priceId } = pendingIntent;
+      setPendingIntent(null);
+      runPlanCta(planId, priceId);
+      return;
+    }
+
+    if (paddle) {
+      const { planId, priceId } = pendingIntent;
+      setPendingIntent(null);
+      runPlanCta(planId, priceId);
+      return;
+    }
+
+    if (paddleError) {
+      // Paddle confirmed-failed while we were waiting — degrade instead of
+      // hanging forever.
+      setPendingIntent(null);
+      setSelectedPlanId(pendingIntent.planId);
+      setCheckoutUnavailable(true);
+    }
+    // else: signed in, Paddle still initializing, no error yet — keep waiting.
+  }, [pendingIntent, authReady, userId, paddle, paddleError, runPlanCta]);
+
+  // Timeout fallback: if a pending intent never resolves (Paddle CDN
+  // blocked, getUser() hangs, ...), don't leave the button spinning forever —
+  // degrade to the "unavailable" banner after a bounded wait.
+  useEffect(() => {
+    if (!pendingIntent) return;
+    const planId = pendingIntent.planId;
+    const timer = window.setTimeout(() => {
+      setPendingIntent(null);
+      setSelectedPlanId(planId);
+      setCheckoutUnavailable(true);
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, [pendingIntent]);
+
+  // Resume an intent-carrying return from signup/login: `?checkout=<planId>&period=<month|year>`.
+  const autoCheckoutFired = useRef(false);
+  useEffect(() => {
+    const checkoutPlanId = searchParams.get("checkout");
+    if (!checkoutPlanId || autoCheckoutFired.current) return;
+    // Wait for both async-ready signals before deciding anything — treating a
+    // still-loading session as "logged out" would wrongly drop the intent.
+    if (!authReady) return;
+
+    const period = searchParams.get("period") === "year" ? "year" : "month";
+    const plan = PRICING_TIERS.find(t => t.id === checkoutPlanId);
+    const priceId = plan?.paddlePriceIds
+      ? period === "year"
+        ? plan.paddlePriceIds.year
+        : plan.paddlePriceIds.month
+      : undefined;
+
+    if (!userId) {
+      // Landed back here still not signed in (e.g. direct link) — nothing to
+      // resume; leave the URL alone rather than silently discarding intent.
+      return;
+    }
+
+    // Plan/catalog id missing is a permanent condition — degrade immediately.
+    // Paddle itself may still be initializing (paddle === null, paddleError
+    // === false): keep waiting rather than misreading "not ready yet" as
+    // "failed forever". Only degrade once initialization has confirmed-failed.
+    if (!plan || !priceId || paddleError) {
+      autoCheckoutFired.current = true;
+      setSelectedPlanId((plan?.id as PlanKey | undefined) ?? (checkoutPlanId as PlanKey));
+      setCheckoutUnavailable(true);
+      setYearly(period === "year");
+      router.replace("/pricing", { scroll: false });
+      return;
+    }
+
+    if (!paddle) return; // still initializing — wait for the next effect run
+
+    autoCheckoutFired.current = true;
+    setYearly(period === "year");
+    openCheckout(paddle, priceId, email, userId);
+    router.replace("/pricing", { scroll: false });
+  }, [searchParams, authReady, userId, paddle, paddleError, email, router]);
+
   const proTier = PRICING_TIERS.find(t => t.id === "pro");
   const proPriceId = proTier?.paddlePriceIds
     ? yearly
       ? proTier.paddlePriceIds.year
       : proTier.paddlePriceIds.month
     : undefined;
-  const canCheckoutPro = !!paddle && !!proPriceId;
 
   return (
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -490,6 +661,25 @@ export default function PricingPageClient({ country }: { country?: string }) {
           style={{ background: "radial-gradient(circle, rgba(217,70,239,0.14), transparent 70%)" }}
         />
         <div className={`${CONTAINER} relative`}>
+          {checkoutUnavailable && (
+            <div
+              role="alert"
+              className="mb-8 rounded-xl border px-5 py-3.5 text-center text-[13px] font-medium"
+              style={{
+                background: "rgba(217,70,239,0.08)",
+                borderColor: "rgba(217,70,239,0.30)",
+                color: "#E5C9F5",
+              }}
+            >
+              Checkout is temporarily unavailable — please try again in a moment or{" "}
+              <Link href="mailto:support@vibepin.co" className="underline hover:opacity-80">
+                contact support
+              </Link>
+              . We&apos;ve kept your{" "}
+              {selectedPlanId ? PRICING_TIERS.find(t => t.id === selectedPlanId)?.name ?? "plan" : "plan"}{" "}
+              selection below — just click it again once ready.
+            </div>
+          )}
           <div className="text-center max-w-[760px] mx-auto mb-12">
             <SectionLabel>PRICING</SectionLabel>
             <h1 className="text-3xl sm:text-5xl font-black text-white tracking-tight leading-[1.08] mb-4">
@@ -506,7 +696,13 @@ export default function PricingPageClient({ country }: { country?: string }) {
           </div>
 
           <div className="mb-6">
-            <PlanCards yearly={yearly} paddle={paddle} priceMap={priceMap} email={email} userId={userId} />
+            <PlanCards
+              yearly={yearly}
+              priceMap={priceMap}
+              onPlanCta={handlePlanCta}
+              selectedPlanId={selectedPlanId}
+              pendingPlanId={pendingIntent?.planId ?? null}
+            />
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 mb-8">
@@ -591,14 +787,15 @@ export default function PricingPageClient({ country }: { country?: string }) {
             <Link href="/app/discover?demo=true" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
               Get started free <ArrowRight className="w-4 h-4" />
             </Link>
-            {canCheckoutPro && paddle && proPriceId ? (
+            {proTier?.paddlePriceIds && proPriceId ? (
               <button
                 type="button"
-                onClick={() => openCheckout(paddle, proPriceId, email, userId)}
-                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30"
+                onClick={() => handlePlanCta("pro", proPriceId)}
+                disabled={pendingIntent?.planId === "pro"}
+                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30 disabled:opacity-60 disabled:cursor-wait"
                 style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
               >
-                Start Pro
+                {pendingIntent?.planId === "pro" ? "Loading…" : "Start Pro"}
               </button>
             ) : (
               <Link
@@ -615,5 +812,13 @@ export default function PricingPageClient({ country }: { country?: string }) {
 
       <LandingFooter />
     </div>
+  );
+}
+
+export default function PricingPageClient({ country }: { country?: string }) {
+  return (
+    <Suspense fallback={null}>
+      <PricingPageContent country={country} />
+    </Suspense>
   );
 }

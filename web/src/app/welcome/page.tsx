@@ -29,8 +29,8 @@ export default function WelcomePage() {
         </p>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-          <Link href="/app/dashboard" className="btn-cta rounded-full px-8 py-3.5 text-[14px] font-bold text-white">
-            Go to dashboard
+          <Link href="/app/studio" className="btn-cta rounded-full px-8 py-3.5 text-[14px] font-bold text-white">
+            Start creating
           </Link>
           <Link
             href="/app/discover"

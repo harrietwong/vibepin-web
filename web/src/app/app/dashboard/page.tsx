@@ -4,6 +4,7 @@ import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
 import { Layers, Sparkles, BarChart2, ArrowRight } from "lucide-react";
 import { getWeekStart, formatWeekLabel } from "@/lib/useWeeklyPlan";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,6 +12,7 @@ const supabase = createBrowserClient(
 );
 
 export default function DashboardPage() {
+  const { t: tr } = useLocale();
   const [plan, setPlan] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
   const [signalCount, setSignalCount] = useState<number | null>(null);
@@ -72,14 +74,14 @@ export default function DashboardPage() {
 
   const workspaceHref = plan?.category
     ? `/app/workspace/${encodeURIComponent(plan.category)}`
-    : "/app/workspace/home-decor";
+    : "/app/studio";
 
   return (
     <div className="h-full overflow-y-auto bg-[#F7F8FA]">
       <div className="max-w-[680px] mx-auto px-6 py-10">
 
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-1">Overview</p>
-        <h1 className="text-2xl font-black text-gray-900 tracking-tight mb-8">Weekly Progress</h1>
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-1">{tr("dashboard.overview")}</p>
+        <h1 className="text-2xl font-black text-gray-900 tracking-tight mb-8">{tr("dashboard.weeklyProgress")}</h1>
 
         <div className="space-y-4">
 
@@ -87,7 +89,7 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-gray-200 p-5">
             <div className="flex items-center gap-2 mb-4">
               <Layers className="h-4 w-4 text-gray-400" />
-              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Current Weekly Plan</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{tr("dashboard.currentWeeklyPlan")}</span>
             </div>
 
             {loading ? (
@@ -107,7 +109,7 @@ export default function DashboardPage() {
                       ? "bg-emerald-50 text-emerald-600"
                       : "bg-amber-50 text-amber-600"
                   }`}>
-                    {planStatus === "ready" ? "Ready" : "Draft"}
+                    {planStatus === "ready" ? tr("dashboard.statusReady") : tr("dashboard.statusDraft")}
                   </span>
                 </div>
                 <Link
@@ -115,19 +117,19 @@ export default function DashboardPage() {
                   className="no-underline shrink-0 flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold text-white"
                   style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}
                 >
-                  {planStatus === "ready" ? "Open Weekly Plan" : "Continue Workspace"}
+                  {planStatus === "ready" ? tr("dashboard.openWeeklyPlan") : tr("dashboard.continueWorkspace")}
                   <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
               </div>
             ) : (
               <div className="flex items-center justify-between gap-4">
-                <p className="text-[13px] text-gray-400">No plan for this week yet.</p>
+                <p className="text-[13px] text-gray-400">{tr("dashboard.noPlanThisWeek")}</p>
                 <Link
                   href={workspaceHref}
                   className="no-underline shrink-0 flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold"
                   style={{ background: "transparent", color: "#6B7280", border: "1px solid #E5E7EB" }}
                 >
-                  Start Workspace <ArrowRight className="h-3.5 w-3.5" />
+                  {tr("dashboard.continueCreating")} <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
               </div>
             )}
@@ -137,7 +139,7 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-gray-200 p-5">
             <div className="flex items-center gap-2 mb-4">
               <Sparkles className="h-4 w-4 text-gray-400" />
-              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Create Progress</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{tr("dashboard.createProgress")}</span>
             </div>
 
             {loading ? (
@@ -149,14 +151,14 @@ export default function DashboardPage() {
                     {createdCount}
                     <span className="text-[16px] font-semibold text-gray-400"> / {selectedCount || targetCount}</span>
                   </p>
-                  <p className="text-[11px] text-gray-400 mt-1">Pins created this week</p>
+                  <p className="text-[11px] text-gray-400 mt-1">{tr("dashboard.pinsCreatedThisWeek")}</p>
                 </div>
                 <Link
                   href="/app/studio"
                   className="no-underline shrink-0 flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold"
                   style={{ background: "transparent", color: "#6B7280", border: "1px solid #E5E7EB" }}
                 >
-                  Continue Creating <ArrowRight className="h-3.5 w-3.5" />
+                  {tr("dashboard.continueCreating")} <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
               </div>
             )}
@@ -166,7 +168,7 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-gray-200 p-5">
             <div className="flex items-center gap-2 mb-4">
               <BarChart2 className="h-4 w-4 text-gray-400" />
-              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">New Signals</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{tr("dashboard.newSignals")}</span>
             </div>
 
             {loading ? (
@@ -179,8 +181,8 @@ export default function DashboardPage() {
                   </p>
                   <p className="text-[11px] text-gray-400 mt-1">
                     {topCategory
-                      ? <>Active opportunities · Top: <span className="capitalize font-medium text-gray-600">{topCategory}</span></>
-                      : "Active opportunities this week"}
+                      ? <>{tr("dashboard.activeOpportunitiesTopPrefix")}<span className="capitalize font-medium text-gray-600">{topCategory}</span></>
+                      : tr("dashboard.activeOpportunitiesThisWeek")}
                   </p>
                 </div>
                 <Link
@@ -188,7 +190,7 @@ export default function DashboardPage() {
                   className="no-underline shrink-0 flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold"
                   style={{ background: "transparent", color: "#6B7280", border: "1px solid #E5E7EB" }}
                 >
-                  View Workspace <ArrowRight className="h-3.5 w-3.5" />
+                  {plan?.category ? tr("dashboard.viewWorkspace") : tr("dashboard.continueCreating")} <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
               </div>
             )}

@@ -17,9 +17,23 @@ const PLAN_LABELS: Record<string, string> = {
   creator: "Starter · $19/mo", growth: "Pro · $49/mo",
 };
 
+function safeNextPath(value: string | null): string {
+  if (
+    value &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.includes("\\") &&
+    !value.startsWith("/login") &&
+    !value.startsWith("/signup") &&
+    !value.startsWith("/auth")
+  ) return value;
+  return "/app/studio";
+}
+
 function SignupContent() {
   const params = useSearchParams();
   const plan   = params.get("plan") ?? "free";
+  const next   = safeNextPath(params.get("next"));
 
   const [email,     setEmail]     = useState("");
   const [password,  setPassword]  = useState("");
@@ -27,12 +41,19 @@ function SignupContent() {
   const [error,     setError]     = useState("");
   const [done,      setDone]      = useState(false);
 
+  const signInHref = (() => {
+    const qs = new URLSearchParams();
+    qs.set("next", next);
+    if (plan !== "free") qs.set("plan", plan);
+    return `/login?${qs.toString()}`;
+  })();
+
   async function handleGoogle() {
     setLoading(true);
     setError("");
     await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback?next=/app/workspace/home-decor` },
+      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` },
     });
   }
 
@@ -45,7 +66,7 @@ function SignupContent() {
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
         data: { plan },
       },
     });
@@ -158,7 +179,7 @@ function SignupContent() {
         {!done && (
           <p className="text-center text-[13px] text-gray-500 mt-5">
             Already have an account?{" "}
-            <Link href="/login" className="text-[#0891B2] font-semibold hover:underline">
+            <Link href={signInHref} className="text-[#0891B2] font-semibold hover:underline">
               Sign in
             </Link>
           </p>

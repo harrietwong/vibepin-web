@@ -2,6 +2,19 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+function safeNextPath(value: string | null | undefined): string {
+  if (
+    value &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.includes("\\") &&
+    !value.startsWith("/login") &&
+    !value.startsWith("/signup") &&
+    !value.startsWith("/auth")
+  ) return value;
+  return "/app/studio";
+}
+
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
@@ -9,7 +22,7 @@ export async function GET(request: Request) {
   const cookieNext = cookieStore.get("vp_next")?.value;
   const decodedCookieNext = cookieNext ? decodeURIComponent(cookieNext) : null;
   const requestedNext = searchParams.get("next") ?? decodedCookieNext;
-  const next = requestedNext?.startsWith("/app") ? requestedNext : "/app/workspace/home-decor";
+  const next = safeNextPath(requestedNext);
 
   if (code) {
     const supabase = createServerClient(
