@@ -1,13 +1,12 @@
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 
-// TODO: replace with final support email after domain purchase
 const CONTACT = "support@vibepin.co";
-const UPDATED = "June 9, 2026";
+const UPDATED = "July 14, 2026";
 
 export const metadata = {
   title: "Privacy Policy — VibePin",
-  description: "How VibePin collects, uses, and protects your data.",
+  description: "How VibePin collects, uses, and protects your data, including Pinterest OAuth information.",
 };
 
 export default function PrivacyPage() {
@@ -39,104 +38,72 @@ export default function PrivacyPage() {
 
           <section>
             <h2 className="text-[16px] font-bold text-white mb-3">1. Overview</h2>
-            <p>
-              VibePin (&quot;we&quot;, &quot;us&quot;, &quot;our&quot;) is a Pinterest intelligence and content planning tool.
-              This Privacy Policy explains what data we collect, how we use it, and your rights regarding that data.
-              By using VibePin, you agree to the practices described here.
-            </p>
-          </section>
-
-          <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">2. Pinterest OAuth Integration</h2>
             <p className="mb-3">
-              VibePin uses Pinterest OAuth to allow users to optionally connect their Pinterest account.
-              This connection is activated only when a user explicitly chooses to authorize access.
+              VibePin (&quot;VibePin,&quot; &quot;we,&quot; &quot;us,&quot; or &quot;our&quot;) is a merchant-facing ecommerce content creation, planning, and publishing workflow platform. VibePin helps ecommerce merchants create and manage social-ready product content from product information and content they control.
+            </p>
+            <p>
+              This Privacy Policy explains what information we collect, how we use and protect it, how we handle Pinterest-related information, and the choices and rights available to users. By using VibePin, you acknowledge the practices described in this Privacy Policy.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">2. Pinterest API and OAuth Integration</h2>
+            <p className="mb-3">
+              VibePin uses the official Pinterest API and Pinterest OAuth to allow an authorized merchant to connect the merchant&apos;s own Pinterest Business account and use Pinterest-related features within VibePin.
             </p>
             <p className="mb-3">
-              VibePin does not automatically publish Pins, bulk post content, or take actions on a
-              user&apos;s Pinterest account without explicit user confirmation.
+              Connecting a Pinterest account is optional and occurs only after the user initiates Pinterest&apos;s official OAuth authorization flow and grants the requested permissions. VibePin does not request or store Pinterest passwords.
             </p>
-            <ul className="space-y-2 pl-4">
-              {[
-                "VibePin requests only the Pinterest permissions needed to provide the selected feature.",
-                "We only request Pinterest permissions after you explicitly authorize access.",
-                "With your authorization, VibePin may access Pinterest profile information, boards, and Pins to support account connection, board selection, Pin planning, and user-confirmed publishing features.",
-                "VibePin may publish Pins only after you explicitly review and confirm each publish action.",
-                "Pinterest OAuth tokens are stored securely and are not sold or shared with third parties.",
-                "You can disconnect your Pinterest account at any time from your VibePin Settings page. When disconnected, VibePin will stop accessing Pinterest data and will delete or invalidate stored OAuth tokens where applicable.",
-              ].map(item => (
-                <li key={item} className="flex items-start gap-2">
-                  <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">3. Data We Collect</h2>
-            <ul className="space-y-2 pl-4">
-              {[
-                "Account data: email address used to create your VibePin account.",
-                "Usage data: pages visited, features used, and interactions within the app (for product improvement).",
-                "Pinterest data: profile information, board list, and pin data — only if you connect Pinterest and only for the purpose of providing app features.",
-                "Content data: Pin drafts, titles, and descriptions you create inside VibePin.",
-              ].map(item => (
-                <li key={item} className="flex items-start gap-2">
-                  <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">4. How We Use Your Data</h2>
-            <ul className="space-y-2 pl-4">
-              {[
-                "To operate and improve the VibePin service.",
-                "To publish Pins on your behalf when you explicitly request it.",
-                "To personalize opportunity recommendations based on your selected niches.",
-                "To send product updates and feature announcements (you can opt out at any time).",
-              ].map(item => (
-                <li key={item} className="flex items-start gap-2">
-                  <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">5. Data Sharing</h2>
             <p className="mb-3">
-              We do not sell, rent, or trade your personal data to any third party.
+              VibePin requests only the Pinterest permissions reasonably necessary to provide the features selected by the user. Depending on the permissions granted, VibePin may access limited Pinterest account information, profile information, boards, Pins, and publishing-related information to support account connection, board selection, content review, and user-approved publishing.
+            </p>
+            <p className="mb-3">
+              VibePin does not publish a Pin without the user&apos;s explicit action. Before publishing, the user can review the content, selected board, destination URL (if provided), and other applicable publishing settings, and must explicitly approve the publish action.
+            </p>
+            <p className="mb-3">
+              VibePin does not use the Pinterest API to automate engagement, follows, comments, messages, or other artificial activity. VibePin does not scrape Pinterest or use Pinterest data for unauthorized competitor monitoring.
             </p>
             <p>
-              We may share data with trusted infrastructure providers, such as database hosting,
-              authentication, analytics, and email service providers, strictly to operate the service.
-              These providers are bound by their own privacy policies and may not use your data for any
-              other purpose.
+              VibePin is not endorsed by, sponsored by, or affiliated with Pinterest. Pinterest is a trademark of Pinterest, Inc.
             </p>
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">6. Data Retention</h2>
-            <p>
-              We retain your data for as long as your account is active. You may request deletion of your
-              account and associated data at any time by contacting us at the email below.
-            </p>
+            <h2 className="text-[16px] font-bold text-white mb-3">3. Information We Collect</h2>
+            <p className="mb-4">We may collect the following categories of information:</p>
+            <div className="space-y-4">
+              {[
+                { t: "Account information:", d: "Information used to create and manage a VibePin account, such as name, email address, account identifiers, and authentication information." },
+                { t: "Merchant and product information:", d: "Product titles, descriptions, images, product URLs, store information, and other content imported from or provided by the merchant." },
+                { t: "Content information:", d: "Draft images, titles, descriptions, captions, links, publishing selections, and other content created, uploaded, edited, or approved through VibePin." },
+                { t: "Pinterest-related information:", d: "If a user connects Pinterest, we may receive limited information made available through the Pinterest API and the permissions granted by the user, such as Pinterest account identifiers, profile information, board information, Pin information, publishing status, and OAuth tokens." },
+                { t: "Usage and technical information:", d: "Information about how users interact with VibePin, such as pages visited, features used, device and browser information, IP address, logs, and error information." },
+                { t: "Communications:", d: "Information users provide when contacting customer support or communicating with us." },
+              ].map(item => (
+                <div key={item.t}>
+                  <p className="font-semibold text-white mb-1">{item.t}</p>
+                  <p>{item.d}</p>
+                </div>
+              ))}
+            </div>
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">7. Your Rights</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">4. How We Use Information</h2>
+            <p className="mb-4">We use information to:</p>
             <ul className="space-y-2 pl-4">
               {[
-                "Access: request a copy of the data we hold about you.",
-                "Correction: request correction of inaccurate data.",
-                "Deletion: request deletion of your account and personal data.",
-                "Disconnect: remove Pinterest access at any time from Settings.",
-                "Opt-out: unsubscribe from marketing emails at any time.",
+                "Provide, operate, maintain, and secure VibePin.",
+                "Authenticate users and manage connected accounts.",
+                "Import and organize merchant-provided product information.",
+                "Create, save, edit, and manage content drafts.",
+                "Display Pinterest boards and other authorized account information.",
+                "Publish content only after the user explicitly reviews and approves the publish action.",
+                "Display publishing status and help diagnose publishing errors.",
+                "Improve product functionality, reliability, usability, and security.",
+                "Respond to support requests and communicate service-related information.",
+                "Send product updates or marketing communications where permitted, with an option to opt out.",
+                "Comply with legal obligations and enforce our terms and policies.",
               ].map(item => (
                 <li key={item} className="flex items-start gap-2">
                   <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
@@ -147,13 +114,153 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">8. Contact</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">5. Pinterest Data Handling</h2>
+            <p className="mb-3">
+              Pinterest-related information is used only to provide features requested and authorized by the user.
+            </p>
+            <p className="mb-3">
+              VibePin does not sell, rent, license, resell, redistribute, or otherwise provide Pinterest content or Pinterest-derived data to third parties for their independent use, advertising, data brokerage, or other unrelated purposes.
+            </p>
+            <p className="mb-3">
+              We do not use Pinterest-derived data to create profiles for unrelated advertising purposes. We do not combine Pinterest-derived data with data from unrelated sources for sale or redistribution.
+            </p>
             <p>
-              For any privacy-related questions or requests, contact us at:{" "}
-              <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors"
-                style={{ color: "#0891B2" }}>
-                {CONTACT}
-              </a>
+              We may use service providers that process information on our behalf solely as necessary to host, secure, maintain, monitor, and operate VibePin. These providers may not use Pinterest-related information for their own independent purposes and are subject to contractual or legal confidentiality and data-protection obligations.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">6. Disconnecting Pinterest and Deletion of Pinterest-Related Data</h2>
+            <p className="mb-3">
+              A user may disconnect their Pinterest account from VibePin at any time through VibePin Settings or by revoking access through Pinterest.
+            </p>
+            <p className="mb-3">After a Pinterest account is disconnected or authorization is revoked:</p>
+            <ul className="space-y-2 pl-4 mb-3">
+              {[
+                "VibePin stops making new Pinterest API requests using that authorization.",
+                "Stored Pinterest OAuth access and refresh tokens associated with the connection are deleted, invalidated, or otherwise made unusable.",
+                "Pinterest-derived account, board, Pin, and publishing information stored solely to provide the connected Pinterest features is deleted or anonymized within 30 days.",
+                "Limited records may be retained where reasonably necessary for security, fraud prevention, dispute resolution, legal compliance, or the establishment, exercise, or defense of legal claims.",
+                "Residual copies may remain temporarily in encrypted backups and are removed through the ordinary backup-retention cycle, generally within 90 days, unless a longer period is legally required.",
+              ].map(item => (
+                <li key={item} className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+            <p className="mb-3">
+              Disconnecting Pinterest does not automatically delete content that the user independently created or uploaded to VibePin, such as product information or draft content, unless the user separately requests its deletion.
+            </p>
+            <p>
+              Users may request earlier deletion of eligible Pinterest-related data by contacting{" "}
+              <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors" style={{ color: "#0891B2" }}>{CONTACT}</a>.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">7. Data Sharing and Service Providers</h2>
+            <p className="mb-3">We do not sell, rent, or trade personal information.</p>
+            <p className="mb-3">
+              We may disclose limited information to trusted service providers that help us operate VibePin, including providers of cloud hosting, databases, authentication, security, analytics, communications, and customer support. They may process information only to provide services to VibePin and subject to applicable confidentiality and data-protection obligations.
+            </p>
+            <p className="mb-3">We may also disclose information:</p>
+            <ul className="space-y-2 pl-4">
+              {[
+                "When required by law, regulation, legal process, or a valid governmental request.",
+                "To protect the rights, safety, security, and integrity of VibePin, our users, or others.",
+                "In connection with a merger, acquisition, financing, reorganization, or sale of assets, subject to appropriate safeguards and notice where required.",
+              ].map(item => (
+                <li key={item} className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">8. Data Retention</h2>
+            <p className="mb-3">
+              We retain personal information only for as long as reasonably necessary to provide VibePin, fulfill the purposes described in this Privacy Policy, comply with legal obligations, resolve disputes, and enforce agreements.
+            </p>
+            <p className="mb-3">
+              Account and merchant content may generally be retained while the account remains active. Users may request deletion of their account and associated eligible information at any time.
+            </p>
+            <p>
+              Pinterest-related information is handled according to the disconnection and deletion practices described in Section 6.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">9. Data Security</h2>
+            <p className="mb-3">
+              We use reasonable administrative, technical, and organizational safeguards designed to protect information against unauthorized access, loss, misuse, alteration, or disclosure.
+            </p>
+            <p>
+              Pinterest OAuth tokens are stored using appropriate security controls and are not exposed to other users or included in public client-side code. However, no system or method of transmission is completely secure, and we cannot guarantee absolute security.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">10. International Processing</h2>
+            <p>
+              VibePin and its service providers may process information in countries other than the user&apos;s country of residence. Where required, we use appropriate safeguards for international data transfers.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">11. Your Choices and Rights</h2>
+            <p className="mb-4">Depending on applicable law, users may have the right to:</p>
+            <ul className="space-y-2 pl-4 mb-4">
+              {[
+                "Request access to personal information we hold about them.",
+                "Request correction of inaccurate or incomplete information.",
+                "Request deletion of eligible personal information.",
+                "Request restriction of or object to certain processing.",
+                "Request a portable copy of certain information.",
+                "Withdraw consent where processing is based on consent.",
+                "Disconnect Pinterest or revoke Pinterest authorization at any time.",
+                "Opt out of marketing communications.",
+              ].map(item => (
+                <li key={item} className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+            <p>
+              To exercise a privacy right, contact{" "}
+              <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors" style={{ color: "#0891B2" }}>{CONTACT}</a>.
+              We may need to verify the requester&apos;s identity before completing a request.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">12. Children&apos;s Privacy</h2>
+            <p>
+              VibePin is not directed to children under 13, or a higher minimum age where required by applicable law. We do not knowingly collect personal information from children in violation of applicable law.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">13. Changes to This Privacy Policy</h2>
+            <p>
+              We may update this Privacy Policy from time to time. When we make material changes, we will update the &quot;Last updated&quot; date and provide additional notice where required.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">14. Contact</h2>
+            <p className="mb-2">For privacy questions, requests, or concerns, contact:</p>
+            <p className="mb-1 text-white font-semibold">VibePin</p>
+            <p className="mb-1">
+              Email:{" "}
+              <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors" style={{ color: "#0891B2" }}>{CONTACT}</a>
+            </p>
+            <p>
+              Website:{" "}
+              <a href="https://www.vibepin.co" className="font-semibold hover:text-white transition-colors" style={{ color: "#0891B2" }}>https://www.vibepin.co</a>
             </p>
           </section>
 
