@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
+import { BackButton } from "@/components/BackButton";
 import ContactForm from "./ContactForm";
 
 const CONTACT = "support@vibepin.co";
@@ -22,7 +23,10 @@ export default function ContactPage() {
       {/* Nav */}
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md" style={{ background: "rgba(8,12,18,0.92)", borderColor: "rgba(255,255,255,0.07)" }}>
         <div className="max-w-[1000px] mx-auto px-5 h-[56px] flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 no-underline"><BrandLogo size={24} /><span className="font-black text-white text-[15px] tracking-tight">VibePin</span></Link>
+          <div className="flex items-center gap-4">
+            <BackButton />
+            <Link href="/" className="flex items-center gap-2 no-underline"><BrandLogo size={24} /><span className="font-black text-white text-[15px] tracking-tight">VibePin</span></Link>
+          </div>
           <div className="flex items-center gap-4 text-[12px]" style={{ color: "#9097A0" }}>
             <Link href="/about" className="hover:text-white transition-colors">About</Link>
             <Link href="/privacy" className="hover:text-white transition-colors">Privacy</Link>
