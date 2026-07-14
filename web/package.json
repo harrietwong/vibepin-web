@@ -62,7 +62,7 @@
     "test:e2e:ui": "playwright test --ui",
     "scan:secrets": "node ../scripts/scan-secrets.mjs",
     "check:test-registry": "npx tsx scripts/check-test-registry.ts",
-    "test:browser": "npx tsx scripts/test-ai-copy-context.ts"
+    "test:browser": "npx tsx scripts/test-ai-copy-context.ts && npx tsx scripts/qa-generating-visibility.ts"
   },
   "dependencies": {
     "@paddle/paddle-js": "^1.6.4",
