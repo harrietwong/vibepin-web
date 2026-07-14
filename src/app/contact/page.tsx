@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
+import ContactForm from "./ContactForm";
 
 const CONTACT = "support@vibepin.co";
 
@@ -59,28 +61,10 @@ export default function ContactPage() {
               </div>
             </div>
 
-            {/* Right — form (mailto) */}
-            <form action={`mailto:${CONTACT}`} method="post" encType="text/plain"
-              className="rounded-2xl border p-6 sm:p-7" style={{ background: "linear-gradient(180deg,#0C1018,#0A0C14)", borderColor: "rgba(255,255,255,0.10)", boxShadow: "0 24px 70px rgba(0,0,0,0.28)" }}>
-              <p className="text-[15px] font-black text-white mb-4">Send us a message</p>
-              <div className="grid sm:grid-cols-2 gap-3 mb-3">
-                <Field label="Name" name="name" placeholder="Your name" />
-                <Field label="Email" name="email" type="email" placeholder="you@example.com" />
-              </div>
-              <Field label="Subject" name="subject" placeholder="How can we help?" />
-              <div className="mt-3">
-                <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "#9097A0" }}>Message</label>
-                <textarea name="message" rows={5} placeholder="Tell us a bit more…"
-                  className="w-full rounded-lg px-3 py-2.5 text-[13px] outline-none focus:border-fuchsia-500/50 transition-colors"
-                  style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.10)", color: "#E5E7EB", resize: "vertical" }} />
-              </div>
-              <button type="submit" className="btn-cta w-full mt-5 rounded-full py-3 text-[14px] font-bold text-white transition-transform hover:scale-[1.02]">
-                Send message
-              </button>
-              <p className="text-[11px] text-center mt-3" style={{ color: "#4B5563" }}>
-                Opens your email app. Prefer email? Write to <a href={`mailto:${CONTACT}`} className="hover:text-white" style={{ color: "#A855F7" }}>{CONTACT}</a>.
-              </p>
-            </form>
+            {/* Right — form */}
+            <Suspense fallback={null}>
+              <ContactForm />
+            </Suspense>
           </div>
 
           <div className="mt-16 pt-8 border-t flex flex-wrap gap-5 text-[12px]" style={{ borderColor: "rgba(255,255,255,0.07)", color: "#5B6472" }}>
@@ -89,20 +73,10 @@ export default function ContactPage() {
             <Link href="/careers" className="hover:text-white transition-colors">Careers</Link>
             <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
             <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
+            <Link href="/refund-policy" className="hover:text-white transition-colors">Refund Policy</Link>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Field({ label, name, type = "text", placeholder }: { label: string; name: string; type?: string; placeholder?: string }) {
-  return (
-    <div>
-      <label className="block text-[11px] font-semibold mb-1.5" style={{ color: "#9097A0" }}>{label}</label>
-      <input type={type} name={name} placeholder={placeholder}
-        className="w-full rounded-lg px-3 py-2.5 text-[13px] outline-none focus:border-fuchsia-500/50 transition-colors"
-        style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.10)", color: "#E5E7EB" }} />
     </div>
   );
 }

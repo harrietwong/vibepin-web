@@ -1,4 +1,5 @@
 import Link from "next/link";
+import BrandLogo from "@/components/BrandLogo";
 
 // TODO: replace with final support email after domain purchase
 const CONTACT = "support@vibepin.co";
@@ -18,11 +19,7 @@ export default function TermsPage() {
         style={{ background: "rgba(8,14,11,0.92)", borderColor: "rgba(255,255,255,0.07)" }}>
         <div className="max-w-[860px] mx-auto px-5 h-[56px] flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2 no-underline">
-            <div className="h-6 w-6 rounded-md flex items-center justify-center" style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-              <svg viewBox="0 0 20 20" fill="none" style={{ width: 12, height: 12 }} aria-hidden>
-                <path d="M4 5.5L10 15L16 5.5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
+            <BrandLogo size={24} />
             <span className="font-black text-white text-[15px] tracking-tight">VibePin</span>
           </Link>
           <div className="flex items-center gap-4 text-[12px]" style={{ color: "#6B7280" }}>
@@ -208,6 +205,7 @@ export default function TermsPage() {
           style={{ borderColor: "rgba(255,255,255,0.07)", color: "#374151" }}>
           <Link href="/" className="hover:text-white transition-colors">← Home</Link>
           <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
+          <Link href="/refund-policy" className="hover:text-white transition-colors">Refund Policy</Link>
           <Link href="/pinterest-app" className="hover:text-white transition-colors">Pinterest App</Link>
         </div>
       </div>

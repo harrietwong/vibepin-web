@@ -60,6 +60,7 @@ export default function AboutPage() {
           <Link href="/contact" className="hover:text-white transition-colors">Contact</Link>
           <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
           <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
+          <Link href="/refund-policy" className="hover:text-white transition-colors">Refund Policy</Link>
         </div>
       </div>
     </div>
