@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { createBrowserClient } from "@supabase/ssr";
 import { ArrowRight, Check, Minus } from "lucide-react";
+import type { Paddle } from "@paddle/paddle-js";
 import BrandLogo from "@/components/BrandLogo";
 import {
   ACCOUNTS_HELPER_TEXT,
@@ -11,7 +13,9 @@ import {
   PRICING_FAQ,
   PRICING_REASSURANCE,
   PRICING_TIERS,
+  type PricingTier,
 } from "@/lib/pricingPlans";
+import { getPaddle } from "@/lib/paddle/paddleClient";
 import { CONTAINER, GradientText, SectionLabel, VibeBtn } from "@/components/landing/conversion/shared";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
@@ -19,6 +23,34 @@ import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
 const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
 };
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+);
+
+/** Map of Paddle price id → localized, currency-formatted total string. */
+type PriceMap = Record<string, string>;
+
+function openCheckout(
+  paddle: Paddle,
+  priceId: string,
+  email: string | null,
+  userId: string | null,
+) {
+  paddle.Checkout.open({
+    items: [{ priceId, quantity: 1 }],
+    settings: {
+      displayMode: "overlay",
+      variant: "one-page",
+      successUrl: `${window.location.origin}/welcome`,
+    },
+    ...(email ? { customer: { email } } : {}),
+    // Server webhook prefers custom_data.userId to link the Paddle customer to
+    // this VibePin user. Only sent when signed in; anonymous checkout omits it.
+    ...(userId ? { customData: { userId } } : {}),
+  });
+}
 
 function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -56,11 +88,37 @@ function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: bo
   );
 }
 
-function PlanCards({ yearly }: { yearly: boolean }) {
+function PlanCards({
+  yearly,
+  paddle,
+  priceMap,
+  email,
+  userId,
+}: {
+  yearly: boolean;
+  paddle: Paddle | null;
+  priceMap: PriceMap;
+  email: string | null;
+  userId: string | null;
+}) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 items-stretch">
       {PRICING_TIERS.map(plan => {
-        const price = yearly ? plan.priceYearly : plan.priceMonthly;
+        // Static USD fallback (also used for the Free card and whenever the
+        // Paddle preview hasn't loaded).
+        const staticPrice = yearly ? plan.priceYearly : plan.priceMonthly;
+
+        // Localized price string from Paddle, when available for this toggle.
+        const paddlePriceId = plan.paddlePriceIds
+          ? yearly
+            ? plan.paddlePriceIds.year
+            : plan.paddlePriceIds.month
+          : undefined;
+        const localizedTotal = paddlePriceId ? priceMap[paddlePriceId] : undefined;
+
+        // Checkout only when Paddle is ready AND this tier has catalog IDs.
+        const canCheckout = !!paddle && !!plan.paddlePriceIds;
+
         return (
           <div
             key={plan.id}
@@ -93,21 +151,43 @@ function PlanCards({ yearly }: { yearly: boolean }) {
             >
               {plan.name}
             </p>
-            <div className="flex items-end gap-1 mb-1">
-              <span className="text-4xl font-black text-white" style={MONO}>
-                ${price}
-              </span>
-              <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
-                /mo
-              </span>
-            </div>
-            <p className="text-[11px] mb-3 min-h-[1em]" style={{ color: "#6B7280" }}>
-              {plan.priceMonthly > 0
-                ? yearly
-                  ? "billed annually"
-                  : `$${plan.priceYearly}/mo billed annually`
-                : "free forever"}
-            </p>
+
+            {localizedTotal ? (
+              // Localized: show Paddle's formatted total verbatim + period label.
+              <>
+                <div className="flex items-end gap-1 mb-1">
+                  <span className="text-4xl font-black text-white" style={MONO}>
+                    {localizedTotal}
+                  </span>
+                  <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
+                    {yearly ? "/yr" : "/mo"}
+                  </span>
+                </div>
+                <p className="text-[11px] mb-3 min-h-[1em]" style={{ color: "#6B7280" }}>
+                  {yearly ? "billed annually" : ""}
+                </p>
+              </>
+            ) : (
+              // Static USD fallback (unchanged from the pre-Paddle rendering).
+              <>
+                <div className="flex items-end gap-1 mb-1">
+                  <span className="text-4xl font-black text-white" style={MONO}>
+                    ${staticPrice}
+                  </span>
+                  <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
+                    /mo
+                  </span>
+                </div>
+                <p className="text-[11px] mb-3 min-h-[1em]" style={{ color: "#6B7280" }}>
+                  {plan.priceMonthly > 0
+                    ? yearly
+                      ? "billed annually"
+                      : `$${plan.priceYearly}/mo billed annually`
+                    : "free forever"}
+                </p>
+              </>
+            )}
+
             <p className="text-[12px] mb-5 leading-relaxed" style={{ color: "#8B93A1" }}>
               {plan.description}
             </p>
@@ -122,17 +202,33 @@ function PlanCards({ yearly }: { yearly: boolean }) {
                 </li>
               ))}
             </ul>
-            <Link
-              href={plan.ctaHref}
-              className={`w-full rounded-full py-3 text-[13px] font-bold text-center transition-all ${
-                plan.highlighted ? VibeBtn : "border hover:text-white hover:border-white/30"
-              }`}
-              style={
-                plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
-              }
-            >
-              {plan.cta}
-            </Link>
+
+            {canCheckout && paddle && paddlePriceId ? (
+              <button
+                type="button"
+                onClick={() => openCheckout(paddle, paddlePriceId, email, userId)}
+                className={`w-full rounded-full py-3 text-[13px] font-bold text-center transition-all ${
+                  plan.highlighted ? VibeBtn : "border hover:text-white hover:border-white/30"
+                }`}
+                style={
+                  plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
+                }
+              >
+                {plan.cta}
+              </button>
+            ) : (
+              <Link
+                href={plan.ctaHref}
+                className={`w-full rounded-full py-3 text-[13px] font-bold text-center transition-all ${
+                  plan.highlighted ? VibeBtn : "border hover:text-white hover:border-white/30"
+                }`}
+                style={
+                  plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
+                }
+              >
+                {plan.cta}
+              </Link>
+            )}
           </div>
         );
       })}
@@ -266,8 +362,94 @@ function ComparisonTable() {
   );
 }
 
-export default function PricingPageClient() {
+export default function PricingPageClient({ country }: { country?: string }) {
   const [yearly, setYearly] = useState(false);
+  const [paddle, setPaddle] = useState<Paddle | null>(null);
+  const [priceMap, setPriceMap] = useState<PriceMap>({});
+  const [email, setEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+
+  // Prefill checkout email + link the Paddle customer to this VibePin user
+  // (anonymous is normal — both stay null).
+  useEffect(() => {
+    let active = true;
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (active) {
+          setEmail(data.user?.email ?? null);
+          setUserId(data.user?.id ?? null);
+        }
+      })
+      .catch(() => {
+        /* anonymous visitor — ignore */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Initialize Paddle + fetch localized price previews. On any failure
+  // (missing env, load error, preview error) we stay in static fallback mode:
+  // the page renders exactly as before with static USD prices and /signup CTAs.
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      let instance: Paddle;
+      try {
+        instance = await getPaddle();
+      } catch (err) {
+        console.error(
+          err instanceof Error ? err.message : "Paddle failed to initialize.",
+        );
+        return; // fallback mode
+      }
+      if (!active) return;
+      setPaddle(instance);
+
+      // Every catalog price id across the paid tiers (month + year).
+      const items = PRICING_TIERS.flatMap((plan: PricingTier) =>
+        plan.paddlePriceIds
+          ? [
+              { priceId: plan.paddlePriceIds.month, quantity: 1 },
+              { priceId: plan.paddlePriceIds.year, quantity: 1 },
+            ]
+          : [],
+      );
+      if (items.length === 0) return;
+
+      try {
+        const preview = await instance.PricePreview({
+          items,
+          ...(country ? { address: { countryCode: country } } : {}),
+        });
+        if (!active) return;
+        const map: PriceMap = {};
+        for (const lineItem of preview.data.details.lineItems) {
+          map[lineItem.price.id] = lineItem.formattedTotals.total;
+        }
+        setPriceMap(map);
+      } catch (err) {
+        console.error(
+          err instanceof Error ? err.message : "Paddle PricePreview failed.",
+        );
+        // Keep priceMap empty → static prices remain shown; checkout still works.
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [country]);
+
+  const proTier = PRICING_TIERS.find(t => t.id === "pro");
+  const proPriceId = proTier?.paddlePriceIds
+    ? yearly
+      ? proTier.paddlePriceIds.year
+      : proTier.paddlePriceIds.month
+    : undefined;
+  const canCheckoutPro = !!paddle && !!proPriceId;
 
   return (
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -288,7 +470,7 @@ export default function PricingPageClient() {
           </div>
           <div className="flex items-center gap-2.5">
             <Link
-              href="/login"
+              href="/login?next=/pricing"
               className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white"
               style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}
             >
@@ -324,7 +506,7 @@ export default function PricingPageClient() {
           </div>
 
           <div className="mb-6">
-            <PlanCards yearly={yearly} />
+            <PlanCards yearly={yearly} paddle={paddle} priceMap={priceMap} email={email} userId={userId} />
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 mb-8">
@@ -409,13 +591,24 @@ export default function PricingPageClient() {
             <Link href="/app/discover?demo=true" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
               Get started free <ArrowRight className="w-4 h-4" />
             </Link>
-            <Link
-              href="/signup?plan=pro"
-              className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30"
-              style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
-            >
-              Start Pro
-            </Link>
+            {canCheckoutPro && paddle && proPriceId ? (
+              <button
+                type="button"
+                onClick={() => openCheckout(paddle, proPriceId, email, userId)}
+                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30"
+                style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
+              >
+                Start Pro
+              </button>
+            ) : (
+              <Link
+                href="/signup?plan=pro&next=/pricing"
+                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30"
+                style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
+              >
+                Start Pro
+              </Link>
+            )}
           </div>
         </div>
       </section>

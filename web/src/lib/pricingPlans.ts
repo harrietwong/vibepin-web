@@ -23,6 +23,8 @@ export type PricingTier = {
   ctaHref: string;
   highlighted?: boolean;
   badge?: string;
+  /** Paddle Billing catalog price IDs (LIVE). Absent on the Free tier. */
+  paddlePriceIds?: { month: string; year: string };
 };
 
 export const PRICING_TIERS: PricingTier[] = [
@@ -72,6 +74,10 @@ export const PRICING_TIERS: PricingTier[] = [
     ],
     cta: "Start Starter",
     ctaHref: "/signup?plan=starter",
+    paddlePriceIds: {
+      month: "pri_01kxcssce69ra3ck5ra7k8twmk",
+      year: "pri_01kxcssd0gftaxp4ehg9h7xs6z",
+    },
   },
   {
     id: "pro",
@@ -102,6 +108,10 @@ export const PRICING_TIERS: PricingTier[] = [
     ctaHref: "/signup?plan=pro",
     highlighted: true,
     badge: "MOST POPULAR",
+    paddlePriceIds: {
+      month: "pri_01kxcsse6c7v4bybqn520kvz08",
+      year: "pri_01kxcsseqq934frrct7kx4ctwv",
+    },
   },
   {
     id: "business",
@@ -129,6 +139,10 @@ export const PRICING_TIERS: PricingTier[] = [
     ],
     cta: "Start Business",
     ctaHref: "/signup?plan=business",
+    paddlePriceIds: {
+      month: "pri_01kxcssfv1fp06a73md7bwhtxt",
+      year: "pri_01kxcssgcr5fc496g6e71jjxfz",
+    },
   },
 ];
 
