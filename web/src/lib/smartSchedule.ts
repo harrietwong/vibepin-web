@@ -26,6 +26,10 @@ export type FindNextSlotParams = {
   fromDateTime?:        Date;
   extraOccupied?:       Set<string>;
   maxDaysAhead?:        number;
+  /** Confine the search to `fromDateTime`'s calendar day. When the caller named an
+   *  explicit date (drag, reschedule, legacy normalize), sliding to another day is a
+   *  silent relocation, not a schedule — return null instead so the caller can say so. */
+  strictDate?:          boolean;
 };
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -62,15 +66,19 @@ export function findNextAvailableScheduleSlot(params: FindNextSlotParams): Sched
     fromDateTime = new Date(),
     extraOccupied,
     maxDaysAhead = 90,
+    strictDate = false,
   } = params;
 
   const occupied = buildOccupiedSet(existingPlannedPins, extraOccupied);
   // Never assign a past slot: the floor is the later of the requested start and the
   // real current time. So a drag onto *today* still skips this morning's past slots,
   // and an auto-schedule (fromDateTime = now) only uses today's remaining future slots.
-  const nowMs = Math.max(fromDateTime.getTime(), Date.now());
+  // In strictDate mode the caller owns the day (including a historical one, e.g.
+  // re-normalizing a legacy draft), so the wall-clock floor must not veto it.
+  const nowMs = strictDate ? fromDateTime.getTime() : Math.max(fromDateTime.getTime(), Date.now());
+  const days = strictDate ? 1 : maxDaysAhead;
 
-  for (let offset = 0; offset < maxDaysAhead; offset++) {
+  for (let offset = 0; offset < days; offset++) {
     const day = new Date(fromDateTime);
     day.setHours(0, 0, 0, 0);
     day.setDate(day.getDate() + offset);
@@ -292,15 +300,22 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
 
   // Exclude self so a Pin that already has a date/time doesn't block its own slot.
   const existing = pinDraftStore.getAllDrafts().filter(d => d.id !== id);
+  // An explicit target date is the user's choice (drag, reschedule, or a legacy draft's
+  // own stored day). Honour it exactly: assign a time ON that day or fail — never slide
+  // the Pin onto a different day while reporting success.
+  const strictDate = !!targetDate;
   const fromDateTime = targetDate ? new Date(`${targetDate}T00:00:00`) : new Date();
   const slot = findNextAvailableScheduleSlot({
     weeklySlots: config.weeklySlots,
     existingPlannedPins: existing,
     fromDateTime,
     extraOccupied: opts?.extraOccupied,
+    strictDate,
   });
   if (!slot) {
-    return { ok: false, reason: "no_slot", toast: "No available Smart Schedule slots in the next 90 days." };
+    return strictDate
+      ? { ok: false, reason: "no_slot", toast: "No free Smart Schedule slot on that day. Pick another day or add a slot." }
+      : { ok: false, reason: "no_slot", toast: "No available Smart Schedule slots in the next 90 days." };
   }
 
   const slotIndex = opts?.slotIndex ?? countScheduledWithDateTime(existing);

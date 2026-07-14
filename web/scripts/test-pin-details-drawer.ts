@@ -91,7 +91,7 @@ test("Clicking generating PinCard opens drawer", () => {
 
 test("Drawer displays status badge", () => {
   assert(drawerSource.includes('data-testid="pin-details-status-badge"'), "status badge test id missing");
-  assert(drawerSource.includes("Pin Details"), "drawer header title missing");
+  assert(drawerSource.includes("pinDrawer.dialogAriaLabel"), "drawer header title missing");
 });
 
 test("Drawer displays prompt snapshot", () => {
@@ -106,7 +106,7 @@ test("Drawer displays setup snapshot context", () => {
 
 test("Failed drawer displays error reason or Unknown generation error fallback", () => {
   assert(drawerSource.includes('data-testid="pin-details-error-reason"'), "error reason test id missing");
-  assert(drawerSource.includes("Unknown generation error."), "error fallback missing");
+  assert(drawerSource.includes("pinDrawer.unknownGenerationError"), "error fallback missing");
   const failed = resolvePinDetail(baseSession, {
     key: "fail-1", sessionId: "sess_001", groupIdx: 0, status: "failed",
     refLabel: "Reference 1", createdAt: baseSession.savedAt, placeholderVariant: "failed",
@@ -127,8 +127,8 @@ test("Shared modal auto-saves + owns Schedule / Pin now / readiness", () => {
 test("Failed drawer shows Try again / Edit and retry", () => {
   assert(drawerSource.includes('data-testid="pin-details-retry-pin"'), "retry pin testId missing");
   assert(drawerSource.includes('data-testid="pin-details-edit-and-retry"'), "edit-and-retry testId missing");
-  assert(drawerSource.includes("Try again"), "Try again label missing");
-  assert(drawerSource.includes("Edit and retry"), "Edit and retry label missing");
+  assert(drawerSource.includes("pinDetails.tryAgain"), "Try again label missing");
+  assert(drawerSource.includes("pinDrawer.plan.editAndRetry"), "Edit and retry label missing");
   assert(!drawerSource.includes("Retry this Pin"), "Old 'Retry this Pin' label must be gone");
   assert(!drawerSource.includes("Retry this group"), "Old 'Retry this group' label must be gone");
 });
@@ -270,18 +270,18 @@ test("UI does not expose metadata text to users", () => {
   const userCopy = quotedStrings.join(" ");
   assert(!/\bmetadata\b/i.test(userCopy), `drawer user copy exposes metadata: ${userCopy}`);
   assert(!studioSource.includes(">Generate metadata<") && !studioSource.includes('"Generate metadata"'), "studio still says Generate metadata");
-  assert(studioSource.includes("Generate Pin Details"), "batch toolbar should say Generate Pin Details");
-  assert(studioSource.includes("Batch Edit Details"), "batch toolbar should say Batch Edit Details");
+  assert(studioSource.includes("studio.batch.generatePinDetails"), "batch toolbar should say Generate Pin Details");
+  assert(studioSource.includes("studio.batch.editDetails"), "batch toolbar should say Batch Edit Details");
 });
 
 test("Drawer shows loading state while generating Pin details", () => {
   assert(drawerSource.includes('data-testid="pin-details-generating"'), "generating state missing");
-  assert(drawerSource.includes("Generating Pin details"), "generating copy missing");
+  assert(drawerSource.includes("pinDrawer.plan.generatingDetails"), "generating copy missing");
 });
 
 test("Failed Pin Details generation shows retry", () => {
   assert(drawerSource.includes('data-testid="pin-details-generate-error"'), "error state missing");
-  assert(drawerSource.includes("Could not generate Pin details"), "error copy missing");
+  assert(drawerSource.includes("pinDrawer.plan.couldNotGenerateDetails"), "error copy missing");
   assert(drawerSource.includes('data-testid="pin-details-retry-generate"'), "retry button missing");
 });
 
@@ -293,12 +293,12 @@ test("Save changes disabled until user edits", () => {
 test("Title candidates show source labels", () => {
   assert(drawerSource.includes("pin-details-title-source"), "title source label test id missing");
   assert(drawerSource.includes("sourceLabel"), "suggested title source labels missing");
-  assert(drawerSource.includes("View ${others.length} more"), "compact suggestion reveal missing");
+  assert(drawerSource.includes("pinDrawer.titleSuggestions.viewMore"), "compact suggestion reveal missing");
 });
 
 test("Low confidence hint shown in drawer", () => {
   assert(drawerSource.includes('data-testid="pin-details-low-confidence-hint"'), "low confidence hint missing");
-  assert(drawerSource.includes("Add an opportunity or keyword"), "hint copy missing");
+  assert(drawerSource.includes("pinDrawer.content.lowConfidenceHint"), "hint copy missing");
 });
 
 test("Studio auto-generates Pin Details when drawer opens with missing fields", () => {
@@ -344,7 +344,7 @@ test("handleReuseSetup no longer hard-fails on missing snapshot", () => {
   const reuseBlock = studioSource.slice(studioSource.indexOf("function handleReuseSetup"), studioSource.indexOf("function handleReuseSetup") + 1800);
   assert(!reuseBlock.includes("toast.error"), "handleReuseSetup must not toast.error for missing snapshot");
   assert(reuseBlock.includes("if (snap)"), "handleReuseSetup guards snap-specific ops");
-  assert(reuseBlock.includes("Prompt loaded"), "handleReuseSetup always shows success with appropriate message");
+  assert(reuseBlock.includes("studio.toast.promptLoadedLegacy"), "handleReuseSetup always shows success with appropriate message");
 });
 
 test("onPinDetailRegenerateWithRemix calls handleGenerateFromRemix (no composer mutation)", () => {
@@ -378,7 +378,7 @@ test("Remix prompt is never gated behind snapshot availability", () => {
 
 test("Recovery notice is calm and quality-aware (no alarming legacy banner)", () => {
   assert(drawerSource.includes('data-testid="pin-details-remix-recovery-notice"'), "calm recovery notice present");
-  assert(drawerSource.includes("Some original inputs are unavailable"), "calm text_only copy present");
+  assert(drawerSource.includes("pinDrawer.recovery.textOnly.body"), "calm text_only copy present");
   assert(!drawerSource.includes("Older generation"), "alarming 'Older generation' banner must be gone");
   assert(!drawerSource.includes("Setup snapshot unavailable for this older"), "old blunt message removed from remix tab");
 });
@@ -426,8 +426,8 @@ test("Remix tab has editable prompt, settings, and simplified action buttons", (
   assert(drawerSource.includes('"pin-details-setup-settings"'), "settings section missing");
   assert(drawerSource.includes('"pin-details-regenerate-with-remix"'), "Generate again button testId missing");
   assert(drawerSource.includes('"pin-details-remix-reset"'), "Reset button testId missing");
-  assert(drawerSource.includes("Generate again"), "Generate again label missing");
-  assert(drawerSource.includes("Reset"), "Reset label missing");
+  assert(drawerSource.includes("pinDrawer.setup.generateAgain"), "Generate again label missing");
+  assert(drawerSource.includes("pinDrawer.setup.reset"), "Reset label missing");
   assert(!drawerSource.includes("Regenerate with changes"), "Old label must be gone");
   assert(!drawerSource.includes('"pin-details-remix-cancel"'), "Old Cancel button must be gone");
 });

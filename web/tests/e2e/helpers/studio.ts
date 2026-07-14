@@ -225,6 +225,62 @@ export async function setupStudioMocks(page: Page, opts: StudioMockOptions = {})
     });
   });
 
+  // Board-v2 upload endpoint (POST /api/studio/upload) — required by uploadBoardImage()
+  // / StudioBoard's handleFiles. Same shape as creative-intelligence-smoke.spec.ts.
+  await page.route("**/api/studio/upload", async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ path: "studio/e2e.png", publicUrl: "https://placehold.co/600x750/8B5CF6/white?text=Uploaded", proxyUrl: "https://placehold.co/600x750/8B5CF6/white?text=Uploaded" }),
+    });
+  });
+
+  // Background image analysis kicked off after upload/generation (fire-and-forget in
+  // app code, but left unmocked it would hit the real backend during tests).
+  await page.route("**/api/ai-copy/analyze", async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, analysis: { imageSummary: "", visibleObjects: [], colors: [], style: "", ocrText: "", category: "home-decor" }, recommendedKeywords: [], timingsMs: { total: 1 } }),
+    });
+  });
+
+  // Quality judge kicked off after AI generation (fire-and-forget).
+  await page.route("**/api/quality-judge", async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, verdict: "ok", overall: 80, scores: { safety: 100, realism: 80, artifacts: 80, productPreservation: 80 }, judgeVersion: "qj_v1" }),
+    });
+  });
+
+  // Pin-draft server sync (pinDraftSync.ts) runs on startup/reload. Without a real
+  // authenticated session this would otherwise hit the live endpoint; keep it inert
+  // so the store stays pure-localStorage during tests (matches
+  // creative-intelligence-smoke.spec.ts's installMocks).
+  await page.route("**/api/pin-drafts**", async route => {
+    const m = route.request().method();
+    if (m === "GET") { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ drafts: [] }) }); return; }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
+
+  // Pinterest connection status + boards — usePinterestBoards() gates Schedule/
+  // Publish readiness (noBoardAccess). Without this the real endpoint 401s (no
+  // authenticated session in tests) and every card stays "disconnected", so Schedule
+  // never succeeds. Matches scripts/qa-prd-workflow-v1.ts's mock shape.
+  await page.route("**/api/pinterest/status**", async route => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      connected: true, account: { id: "e2e", username: "e2e-user", accountType: "BUSINESS" },
+      scopes: ["boards:read", "pins:read", "pins:write", "boards:write", "user_accounts:read"],
+      needsReconnect: false, lastSyncedAt: null, connectionSource: "db", apiEnv: "sandbox", environment: "sandbox",
+    }) });
+  });
+  await page.route("**/api/pinterest/boards**", async route => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      items: [{ id: "b1", name: "Home Decor" }], bookmark: null,
+    }) });
+  });
+
   await page.route("**/api/history-storage", async route => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries: [] }) });
   });
@@ -249,22 +305,33 @@ export async function prepareStudioPage(page: Page, opts: StudioMockOptions = {}
   }
 }
 
+/**
+ * Board-v2 landing check. Legacy composer testids (composer-panel, generate-btn,
+ * generation-feed, add-product-images, studio-interactive) do not exist in board-v2
+ * — the whole page is a single `studio-board` root (StudioBoard.tsx). Callers that
+ * need a guaranteed-empty board should follow this with an explicit localStorage
+ * clear + reload (see creative-intelligence-smoke.spec.ts's gotoFreshStudio pattern).
+ */
 export async function gotoStudio(page: Page) {
   await page.goto("/app/studio", { waitUntil: "domcontentloaded", timeout: 45_000 });
   await expect(page).not.toHaveURL(/\/login/);
-  await expect(page.getByTestId("composer-panel")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("generate-btn")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("generation-feed")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("add-product-images")).toBeEnabled({ timeout: 20_000 });
-  await expect(page.getByTestId("studio-interactive")).toBeAttached({ timeout: 20_000 });
+  await expect(page.getByTestId("studio-board")).toBeVisible({ timeout: 20_000 });
 }
 
+/**
+ * Board-v2 has no page-level product/reference picker entry point. The SAME picker
+ * component (InlineCreateAssetPicker — product-picker/reference-picker, picker-tab-*,
+ * compact-upload-*, compact-import-url, asset-picker-* testids all unchanged) now
+ * lives inside the "Generate AI Image" drawer (AiVersionDrawer), reached via a
+ * card's `card-generate-ai-image` action (after expanding via `card-edit`) or the
+ * empty board's `board-create-with-ai`. Callers must open/have open an AiVersionDrawer
+ * before calling these.
+ */
 export async function openProductPicker(page: Page): Promise<Locator> {
-  const btn = page.getByTestId("add-product-images");
+  const btn = page.getByTestId("ai-version-add-product");
   await btn.scrollIntoViewIfNeeded();
   await expect(btn).toBeVisible();
   await btn.click();
-  await expect(page.getByTestId("asset-picker-modal")).toHaveCount(0);
 
   const panel = page.getByTestId("product-picker");
   await expect(panel).toBeVisible({ timeout: 15000 });
@@ -274,16 +341,29 @@ export async function openProductPicker(page: Page): Promise<Locator> {
 }
 
 export async function openReferencePicker(page: Page): Promise<Locator> {
-  const btn = page.getByTestId("add-pin-references");
+  const btn = page.getByTestId("ai-version-add-reference");
   await btn.scrollIntoViewIfNeeded();
   await expect(btn).toBeVisible();
   await btn.click();
-  await expect(page.getByTestId("asset-picker-modal")).toHaveCount(0);
 
   const panel = page.getByTestId("reference-picker");
   await expect(panel).toBeVisible({ timeout: 15000 });
   await expect(page.getByTestId("picker-tab-my_references")).toBeVisible();
   return panel;
+}
+
+/** Opens the AiVersionDrawer in "scratch" mode from an empty board. */
+export async function openCreateWithAi(page: Page) {
+  await page.getByTestId("board-create-with-ai").click();
+  await expect(page.getByTestId("ai-version-drawer")).toBeVisible({ timeout: 10_000 });
+}
+
+/** Opens the AiVersionDrawer ("Generate AI Image") for an existing board card. */
+export async function openAiDrawerForCard(page: Page, card: Locator) {
+  await card.getByTestId("card-edit").click();
+  await expect(card.getByTestId("card-generate-ai-image")).toBeVisible({ timeout: 10_000 });
+  await card.getByTestId("card-generate-ai-image").click();
+  await expect(page.getByTestId("ai-version-drawer")).toBeVisible({ timeout: 10_000 });
 }
 
 export async function uploadProductInPicker(page: Page, panel?: Locator, buffer: Buffer = TINY_RED_PNG) {
@@ -318,46 +398,82 @@ export async function uploadReferenceInPicker(page: Page, panel?: Locator, buffe
   await expect.poll(async () => pickerSelectedCount(page), { timeout: 10000 }).toBe(before + 1);
 }
 
+/**
+ * Board-v2: uploading a product image creates a full board card directly (no
+ * page-level "selected-products" pool/count). Uses the real upload input
+ * (`board-upload-input`), matching creative-intelligence-smoke.spec.ts's proven
+ * pattern. Requires `**\/api/studio/upload` to be mocked (see StudioMockOptions
+ * callers / installMocks in that smoke spec) — prepareStudioPage() alone does not
+ * mock it.
+ */
+export async function uploadBoardImage(page: Page, buffer: Buffer = TINY_RED_PNG, filename = "product.png") {
+  const before = await page.getByTestId("pin-board-card").count();
+  const input = page.getByTestId("board-upload-input");
+  await expect(input).toHaveCount(1, { timeout: 10000 });
+  await input.setInputFiles({ name: filename, mimeType: "image/png", buffer });
+  await expect.poll(async () => page.getByTestId("pin-board-card").count(), { timeout: 20000 }).toBe(before + 1);
+}
+
+/** @deprecated Board-v2 has no page-level product pool. Use uploadBoardImage(). */
 export async function addProductViaUpload(page: Page) {
-  const panel = await openProductPicker(page);
-  await uploadProductInPicker(page, panel);
-  await confirmAssetPicker(page);
-  await expect(page.getByTestId("product-picker")).toHaveCount(0, { timeout: 10000 });
-  await expect(page.getByTestId("generation-feed")).toBeVisible({ timeout: 10000 });
-  await expect(page.getByTestId("products-asset-section-count")).toHaveText("(1)", { timeout: 10000 });
+  await uploadBoardImage(page);
 }
 
+/** @deprecated Board-v2 has no page-level reference pool; references are selected
+ * per-generation inside the AI drawer (openReferencePicker). No standalone
+ * page-level equivalent exists. */
 export async function addReferenceViaUpload(page: Page, buffer: Buffer = TINY_RED_PNG) {
-  const panel = await openReferencePicker(page);
-  await uploadReferenceInPicker(page, panel, buffer);
-  await confirmAssetPicker(page);
-  await expect(page.getByTestId("reference-picker")).toHaveCount(0, { timeout: 10000 });
-  await expect(page.getByTestId("generation-feed")).toBeVisible({ timeout: 10000 });
-  await expect(page.getByTestId("refs-asset-section-count")).toHaveText("(1)", { timeout: 10000 });
+  void buffer;
+  throw new Error("addReferenceViaUpload has no board-v2 equivalent — references are selected per-generation inside AiVersionDrawer (see openReferencePicker + openAiDrawerForCard).");
 }
 
+/**
+ * Board-v2 generation flow: upload a product (creates a card) -> open its AI
+ * drawer -> generate. Mirrors creative-intelligence-smoke.spec.ts's proven
+ * upload -> openAiDrawer -> generate pattern.
+ *
+ * NOTE: board-v2's AiVersionDrawer has NO free-text prompt input — the
+ * `directionBrief` sent to /api/generate is auto-derived from product/reference
+ * analysis and the selected creative direction/tags (see creativeControls.ts);
+ * there is no editable textarea testid. The `prompt` param is therefore unused
+ * and kept only for call-site compatibility with the old composer-driven signature.
+ */
 export async function generatePins(
   page: Page,
   prompt: string,
   opts: StudioMockOptions = {},
 ) {
+  void prompt;
   await prepareStudioPage(page, opts);
   await gotoStudio(page);
-  await addProductViaUpload(page);
-  await page.getByTestId("prompt-textarea").fill(prompt);
-  await page.getByTestId("generate-btn").click();
+  await uploadBoardImage(page);
+  const card = page.getByTestId("pin-board-card").first();
+  await openAiDrawerForCard(page, card);
+  await expect(page.getByTestId("ai-version-generate")).toBeEnabled({ timeout: 10000 });
+  await page.getByTestId("ai-version-generate").click();
+  await expect(page.getByTestId("ai-version-drawer")).toHaveCount(0, { timeout: 10000 });
 }
 
+/** Board-v2: generated results land as `pin-board-card` entries on the board
+ * (no separate "generated-pin-card" feed). */
 export async function expectGeneratedPins(page: Page, min = 1) {
-  const cards = page.getByTestId("generated-pin-card");
+  const cards = page.getByTestId("pin-board-card");
   await expect(cards.first()).toBeVisible({ timeout: 30000 });
-  await expect.poll(async () => cards.count(), { timeout: 10000 }).toBeGreaterThanOrEqual(min);
+  await expect.poll(async () => cards.count(), { timeout: 15000 }).toBeGreaterThanOrEqual(min);
 }
 
-export async function expectFailedPlaceholder(page: Page) {
-  await page.getByTestId("feed-tab-failed").click();
-  await expect(page.getByTestId("placeholder-card").first()).toBeVisible({ timeout: 30000 });
+/** Board-v2: a failed generation surfaces as a `pin-board-card` with
+ * data-lifecycle="failed" under the Failed board filter (no separate feed tabs /
+ * placeholder-card testid). */
+export async function expectFailedCard(page: Page) {
+  await page.getByTestId("board-filter-failed").click();
+  await expect(page.locator('[data-testid="pin-board-card"][data-lifecycle="failed"]').first())
+    .toBeVisible({ timeout: 30000 });
 }
+
+/** @deprecated kept as an alias so other (out-of-scope) spec files importing the old
+ * name still compile. Use expectFailedCard(). */
+export const expectFailedPlaceholder = expectFailedCard;
 
 export function pickerTab(page: Page, tabId: "my_products" | "product_ideas" | "my_references" | "pin_ideas") {
   return page.getByTestId(`picker-tab-${tabId}`);

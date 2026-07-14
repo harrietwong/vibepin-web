@@ -43,6 +43,10 @@ report-*.png
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except the template, which carries key NAMES + docs only (never values) and
+# must be reviewable — e.g. E2E_TEST_MODE must ship as false so production can
+# never inherit the auth bypass.
+!.env.example
 
 # vercel
 .vercel

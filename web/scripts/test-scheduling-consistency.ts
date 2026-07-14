@@ -71,8 +71,18 @@ function mkDraft(p: Partial<PinDraft>): PinDraft {
 }
 function seedDrafts(drafts: PinDraft[]) {
   _store.set("vp:pin_drafts:v1", JSON.stringify({ drafts: Object.fromEntries(drafts.map(d => [d.id, d])) }));
+  // pinDraftStore keeps an in-memory cache that is the source of truth once loaded;
+  // writing raw localStorage behind its back is invisible until the cache is dropped.
+  pinDraftStore.__resetMemoryCacheForTests();
 }
-function reset() { _store.clear(); for (const k of Object.keys(listeners)) delete listeners[k]; seq = 0; seedConfig(); }
+function reset() {
+  _store.clear();
+  for (const k of Object.keys(listeners)) delete listeners[k];
+  seq = 0;
+  // Drop the store's cached drafts too, or the previous test's drafts leak into this one.
+  pinDraftStore.__resetMemoryCacheForTests();
+  seedConfig();
+}
 
 const planSrc = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
 

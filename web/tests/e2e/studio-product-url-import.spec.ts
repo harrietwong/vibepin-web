@@ -77,15 +77,26 @@ async function gotoStudio(page: Page) {
     sessionStorage.clear();
   });
   await page.goto("/app/studio", { waitUntil: "domcontentloaded" });
-  await expect(page.getByTestId("studio-interactive")).toBeAttached({ timeout: 15000 });
-  await expect(page.getByTestId("generate-btn")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId("studio-board")).toBeAttached({ timeout: 15000 });
 }
 
 test.describe("Create Pins multi-URL product import", () => {
-  test("imports reviewed URL candidates into My Products and composer selection", async ({ page }) => {
+  // Legacy behavior: "Add product images" was a page-level composer button that
+  // opened the Product Images picker directly, and confirmed selections landed in a
+  // page-level "selected-products" composer section (products-asset-section-count).
+  // Board-v2 is upload-first with no page-level composer — the SAME picker
+  // (InlineCreateAssetPicker, same product-picker/url-import-*/asset-picker-* testids)
+  // now lives inside the "Generate AI Image" drawer (AiVersionDrawer), reached via
+  // the empty board's "Create with AI" entry. Confirmed selections land in the
+  // drawer's Product Images asset strip instead of a composer section.
+  test("imports reviewed URL candidates into My Products and the AI drawer's product selection", async ({ page }) => {
     await gotoStudio(page);
 
-    await page.getByTestId("add-product-images").click();
+    // Board-v2 entry point: empty board -> "Create with AI" opens AiVersionDrawer in
+    // scratch mode -> "Add" on the Product Images strip opens the same product picker.
+    await page.getByTestId("board-create-with-ai").click();
+    await expect(page.getByTestId("ai-version-drawer")).toBeVisible({ timeout: 8000 });
+    await page.getByTestId("ai-version-add-product").click();
     await expect(page.getByTestId("product-picker")).toBeVisible({ timeout: 8000 });
     await expect(page.getByTestId("picker-tab-my_products")).toBeVisible();
 
@@ -108,10 +119,12 @@ test.describe("Create Pins multi-URL product import", () => {
 
     await page.getByTestId("asset-picker-confirm").click();
     await expect(page.getByTestId("product-picker")).toHaveCount(0);
-    await expect(page.getByTestId("products-asset-section-count")).toHaveText("(2)");
-    await expect(page.getByTestId("selected-products").locator("img")).toHaveCount(2);
+    // Back on the AI drawer: the Product Images strip now holds both imported images.
+    await expect(page.getByTestId("ai-version-drawer")).toBeVisible();
+    await expect(page.getByTestId("product-images-selected").locator("img")).toHaveCount(2);
 
-    await page.getByTestId("add-product-images").click();
+    // Re-opening the picker confirms the imported products persisted into My Products.
+    await page.getByTestId("ai-version-add-product").click();
     await expect(page.getByTestId("product-picker")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("my-products-grid").getByTestId("asset-card")).toHaveCount(2, { timeout: 15000 });
   });

@@ -40,7 +40,13 @@ function test(name: string, fn: () => void) {
   catch (e) { console.error(`  FAIL ${name}`); console.error(`       ${(e as Error).message}`); failed++; }
 }
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
-function reset() { _store.clear(); for (const k of Object.keys(listeners)) delete listeners[k]; }
+function reset() {
+  _store.clear();
+  for (const k of Object.keys(listeners)) delete listeners[k];
+  // pinDraftStore keeps an in-memory cache that is the source of truth once loaded;
+  // drop it so raw localStorage seeding below (and the previous test's drafts) take effect.
+  pinDraftStore.__resetMemoryCacheForTests();
+}
 
 const srcForm = readFileSync(join(process.cwd(), "src/components/plan/SmartScheduleConfigForm.tsx"), "utf8");
 const srcModal = readFileSync(join(process.cwd(), "src/components/plan/SmartScheduleDrawer.tsx"), "utf8");
@@ -71,6 +77,9 @@ function seed(pins: Seed[]) {
     } as PinDraft;
   }
   _store.set("vp:pin_drafts:v1", JSON.stringify({ drafts }));
+  // pinDraftStore keeps an in-memory cache that is the source of truth once loaded;
+  // writing raw localStorage behind its back is invisible until the cache is dropped.
+  pinDraftStore.__resetMemoryCacheForTests();
 }
 
 console.log("Smart Schedule v3 -?reactive / fresh-save / rebalance / manual lock");
@@ -180,7 +189,7 @@ test("11. eligible future planned Pins are detected (drives the confirmation)", 
 
 test("12. rebalance dialog excludes forbidden options; offers only Keep / Rebalance", () => {
   assert(srcForm.includes('data-testid="smart-schedule-rebalance-confirm"'), "rebalance dialog missing");
-  assert(/Keep current times/.test(srcForm) && /Rebalance planned Pins/.test(srcForm), "rebalance actions missing");
+  assert(/planViews\.form\.rebalance\.keepButton/.test(srcForm) && /planViews\.form\.rebalance\.confirmButton/.test(srcForm), "rebalance actions missing");
   assert(!/Apply from next week/.test(srcForm), "must not offer 'Apply from next week'");
   assert(!/Use for future Pins only/.test(srcForm), "must not offer 'Use for future Pins only'");
 });
@@ -367,7 +376,7 @@ test("M2. Average + Customize removed; Recommended has NO stepper; Same keeps st
   assert(srcForm.includes('data-testid="smart-schedule-recommended-help"'), "recommended helper (no stepper) missing");
   assert(srcForm.includes('data-testid="smart-schedule-pins-value"'), "same-every-day numeric stepper missing");
   assert(srcForm.includes('data-testid="smart-schedule-reset-recommended"'), "Reset to recommended missing");
-  assert(/Regenerate times/.test(srcForm) && srcForm.includes('data-testid="smart-schedule-regenerate"'), "Regenerate times missing");
+  assert(/planViews\.form\.regenerateTimes/.test(srcForm) && srcForm.includes('data-testid="smart-schedule-regenerate"'), "Regenerate times missing");
 });
 
 test("M3. Reset to recommended restores recommended mode + default days/windows", () => {
@@ -376,19 +385,19 @@ test("M3. Reset to recommended restores recommended mode + default days/windows"
 });
 
 test("M4. Rebalance dialog uses the updated lock/undo copy; no forbidden options", () => {
-  assert(/Only unlocked planned Pins will be updated\./.test(srcForm), "missing unlocked copy");
-  assert(/Locked, posted, past, and manually scheduled Pins will not be changed\./.test(srcForm), "missing locked-skip copy");
-  assert(/You can undo this after rebalancing\./.test(srcForm), "missing undo copy");
+  assert(/planViews\.form\.rebalance\.bulletUnlockedOnly/.test(srcForm), "missing unlocked copy");
+  assert(/planViews\.form\.rebalance\.bulletExclusions/.test(srcForm), "missing locked-skip copy");
+  assert(/planViews\.form\.rebalance\.bulletUndo/.test(srcForm), "missing undo copy");
   assert(!/Apply from next week/.test(srcForm), "must not show 'Apply from next week'");
   assert(!/Use for future Pins only/.test(srcForm), "must not show 'Use for future Pins only'");
   assert(!/This action cannot be undone/.test(srcForm), "must not show 'This action cannot be undone'");
 });
 
 test("M5. Inline validation hints exist (lightweight, not an error wall)", () => {
-  assert(srcForm.includes("Select at least one active day."), "no active-days validation");
-  assert(srcForm.includes("End time must be later than start time."), "no window validation");
-  assert(srcForm.includes("No publishing slots generated."), "no slots validation");
-  assert(srcForm.includes("Choose a publishing timezone."), "no timezone validation");
+  assert(srcForm.includes("planViews.form.validationSelectActiveDay"), "no active-days validation");
+  assert(srcForm.includes("planViews.form.validationEndAfterStart"), "no window validation");
+  assert(srcForm.includes("planViews.form.validationNoSlots"), "no slots validation");
+  assert(srcForm.includes("planViews.form.toast.chooseTimezone"), "no timezone validation");
 });
 
 // - Follow-up: saved-mode init, board removal, lock UI, lock behavior, toast copy -
@@ -458,9 +467,9 @@ test("F6. Undo restores scheduleSource + scheduleLocked too", () => {
 });
 
 test("F7. Keep-current-times toast + rebalance lock/undo copy", () => {
-  assert(/Smart Schedule saved\. Existing planned Pins were unchanged\./.test(srcForm), "keep-current toast copy missing");
-  assert(/Only unlocked planned Pins will be updated\./.test(srcForm), "lock copy missing");
-  assert(/You can undo this after rebalancing\./.test(srcForm), "undo copy missing");
+  assert(/planViews\.form\.toast\.savedUnchanged/.test(srcForm), "keep-current toast copy missing");
+  assert(/planViews\.form\.rebalance\.bulletUnlockedOnly/.test(srcForm), "lock copy missing");
+  assert(/planViews\.form\.rebalance\.bulletUndo/.test(srcForm), "undo copy missing");
 });
 
 console.log(`\nSmart Schedule v3: ${passed} passed, ${failed} failed`);

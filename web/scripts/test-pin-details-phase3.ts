@@ -142,8 +142,12 @@ test("PinAltTextSection preserves maxLength=500", () => {
 });
 
 test("PinAltTextSection preserves accessibility help text", () => {
+  assert.ok(altSrc.includes('t("pinDetails.altText.helper")'), "PinAltTextSection must render the accessibility help text key");
+  const enSrc = readFileSync(join(root, "src/lib/i18n/messages/en.ts"), "utf8");
+  const match = enSrc.match(/"pinDetails\.altText\.helper":\s*"([^"]*)"/);
+  assert.ok(match, "pinDetails.altText.helper key missing from en.ts");
   assert.ok(
-    altSrc.includes("Describe what") && altSrc.includes("accessibility"),
+    match![1].includes("Describe what") && match![1].includes("accessibility"),
     "PinAltTextSection must include the accessibility help text",
   );
 });

@@ -15,6 +15,7 @@ import BrandLogo from "@/components/BrandLogo";
 import { EXISTING_APP_TOKEN_BALANCE } from "@/lib/accountSummary";
 import {
   SETTINGS_DEFAULT_PATH,
+  SETTINGS_SUPPORT_PATH,
 } from "@/lib/settingsPaths";
 import { SettingsModal, type SettingsTab } from "@/components/settings/SettingsModal";
 import { ThemeProvider, useTheme } from "@/lib/theme/ThemeProvider";
@@ -377,7 +378,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       path.startsWith("/app/settings/preferences")
     ) {
       setSettingsTab("ai-settings"); setSettingsOpen(true);
-    } else if (path.startsWith("/app/settings/support")) {
+    } else if (path.startsWith(SETTINGS_SUPPORT_PATH)) {
       setSettingsTab("support"); setSettingsOpen(true);
     } else if (
       path.startsWith("/app/settings/workspace") ||

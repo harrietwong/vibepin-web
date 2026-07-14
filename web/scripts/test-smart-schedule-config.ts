@@ -36,7 +36,13 @@ function test(name: string, fn: () => void) {
   catch (e) { console.error(`  FAIL ${name}`); console.error(`       ${(e as Error).message}`); failed++; }
 }
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
-function reset() { _store.clear(); for (const k of Object.keys(listeners)) delete listeners[k]; }
+function reset() {
+  _store.clear();
+  for (const k of Object.keys(listeners)) delete listeners[k];
+  // pinDraftStore keeps an in-memory cache that is the source of truth once loaded;
+  // drop it so raw localStorage seeding below (and the previous test's drafts) take effect.
+  pinDraftStore.__resetMemoryCacheForTests();
+}
 
 const srcModal = readFileSync(join(process.cwd(), "src/components/plan/SmartScheduleDrawer.tsx"), "utf8");
 const srcForm  = readFileSync(join(process.cwd(), "src/components/plan/SmartScheduleConfigForm.tsx"), "utf8");
@@ -52,7 +58,7 @@ test("Smart Schedule opens as a centered modal, not a right drawer", () => {
   assert(!/width: 420/.test(srcModal) && !/borderLeft/.test(srcModal), "still rendering a right drawer panel");
   assert(srcModal.includes('role="dialog"') && srcModal.includes('aria-modal="true"'), "missing dialog semantics");
   // Footer CTA is a simple sticky "Save" (not the long "Save Smart Schedule").
-  assert(/>\s*Save\s*</.test(srcModal) && !srcModal.includes("Save Smart Schedule"), "footer should be a simple 'Save'");
+  assert(/planViews\.drawer\.save/.test(srcModal) && !srcModal.includes("Save Smart Schedule"), "footer should be a simple 'Save'");
 });
 
 // 2
@@ -179,7 +185,7 @@ test("Missing product does not block scheduling", () => {
 
 // Copy
 test("Modal subtitle uses the clearer generator-focused copy", () => {
-  assert(/Choose how often VibePin should publish/.test(srcModal), "subtitle copy not updated");
+  assert(/planViews\.drawer\.subtitle/.test(srcModal), "subtitle copy not updated");
 });
 
 // - Posting volume: recommended vs same_every_day -

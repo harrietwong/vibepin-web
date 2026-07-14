@@ -90,11 +90,26 @@ test("every translated locale localizes the settings tab labels", () => {
 // Fallback to English
 
 test("missing keys fall back to English in getMessages()", () => {
-  const it = getMessages("it");
-  // "billing.noUsage" is intentionally untranslated in the core-chrome locales.
-  assert(it["billing.noUsage"] === en["billing.noUsage"],
-    "untranslated key should fall back to English text");
+  // Every shipped locale is now fully translated (validate:i18n-coverage enforces
+  // it), so no real key can serve as the "untranslated" fixture. Assert the
+  // fallback MECHANISM instead: temporarily drop a key from a locale catalog and
+  // confirm getMessages() still resolves it to the English source of truth.
+  const itCatalog = PARTIAL["it"] as Record<string, string>;
+  const probe: MessageKey = "billing.noUsage";
+  const saved = itCatalog[probe];
+  assert(typeof saved === "string", `fixture key ${probe} is absent from the Italian catalog`);
+
+  delete itCatalog[probe];
+  try {
+    const it = getMessages("it");
+    assert(it[probe] === en[probe],
+      "untranslated key should fall back to English text");
+  } finally {
+    itCatalog[probe] = saved;
+  }
+
   // A translated key should differ from English ("Salva" vs "Save").
+  const it = getMessages("it");
   assert(it["common.save"] !== en["common.save"],
     "translated key should not equal English");
 });
@@ -118,16 +133,17 @@ test("switching app language selects a different catalog without touching conten
   assert(enMsgs["settings.title"] !== zhMsgs["settings.title"], "app language must change UI text");
 });
 
-test("AI content language is independent of app language (resolveContentLanguage)", () => {
-  // App English, content explicitly Chinese -> UI stays English, content is zh-CN.
+test("AI-generated Pin copy always defaults to English (resolveContentLanguage), independent of app language", () => {
+  // Product decision: generation always defaults to English regardless of app
+  // language or any stored contentLanguage preference (per-generation language
+  // picker on Create Pins is the only override). See config.ts resolveContentLanguage.
   const prefs = normalizeLocalePreferences({ appLanguage: "en", contentLanguage: "zh-CN", pinterestRegion: "US" });
   assert(getMessages(prefs.appLanguage)["settings.title"] === "Settings",
     "changing content language must not change UI language");
-  assert(resolveContentLanguage(prefs) === "zh-CN", "content language should resolve to zh-CN");
+  assert(resolveContentLanguage(prefs) === "en", "resolveContentLanguage should always default to English");
 
-  // "same" makes content follow the app language.
   const samePrefs = normalizeLocalePreferences({ appLanguage: "ja", contentLanguage: "same", pinterestRegion: "JP" });
-  assert(resolveContentLanguage(samePrefs) === "ja", "'same' should resolve content to the app language");
+  assert(resolveContentLanguage(samePrefs) === "en", "resolveContentLanguage should always default to English regardless of app language");
 });
 
 // Persistence
@@ -176,11 +192,11 @@ test("Settings modal shell uses translation keys (title, tabs, save/cancel)", ()
   assert(settingsSrc.includes("tabItem.labelKey"), "tab labels not driven by translation keys");
 });
 
-test("Settings has a dedicated Language tab with App language + AI content language", () => {
+test("Settings has a dedicated Language tab with App language (AI content language setting removed)", () => {
   assert(settingsSrc.includes("settings-tab-language"), "no Language tab in the sidebar");
   assert(settingsSrc.includes("function LanguageTab"), "LanguageTab component missing");
   assert(settingsSrc.includes("language-app-language"), "App language selector missing from Language tab");
-  assert(settingsSrc.includes("language-content-language"), "AI content language selector missing from Language tab");
+  assert(!settingsSrc.includes("language-content-language"), "AI content language selector should no longer exist in the Language tab");
   assert(settingsSrc.includes('t("language.appLanguage")'), "App language label not translated");
   assert(settingsSrc.includes('t("language.appLanguageHint")'), "App language hint not translated");
 });
@@ -190,13 +206,9 @@ test("App language does NOT live only in Appearance (panel removed from Appearan
     "App language panel is still embedded in Appearance; it must move to the Language tab");
 });
 
-test("AI Settings tab keeps content language + a shortcut to the Language tab", () => {
-  assert(settingsSrc.includes('t("ai.contentLanguage")'), "AI content language label not translated");
-  assert(settingsSrc.includes('t("ai.contentLanguageHint")'), "AI content language hint not translated");
+test("AI Settings tab keeps a shortcut to the Language tab (content language selector removed)", () => {
   assert(settingsSrc.includes("ai-settings-open-language"), "AI Settings is missing the 'Open Language settings' button");
   assert(settingsSrc.includes('onOpenTab("language")'), "shortcut does not switch to the Language tab");
-  assert(en["ai.contentLanguageHint"].includes("does not affect the app UI language"),
-    "AI content hint must clarify it does not change the UI language");
 });
 
 test("Amazon Associates tab label uses a translation key (zh-CN keeps 'Amazon Associates' as a brand exception)", () => {
