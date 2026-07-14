@@ -190,6 +190,27 @@ export async function upsertBillingSubscription(
   if (error) throw new Error(`billing_subscriptions upsert failed: ${error.message}`);
 }
 
+/**
+ * Backfill the customer→user linkage from an event that carries it (subscription
+ * / transaction custom_data), regardless of event ordering.
+ *
+ * Why this is NOT subject to the out-of-order guard: `user_id` is monotonic —
+ * it goes null → value exactly once and never changes back. A customer.created
+ * event carries no custom_data, so when it lands LAST (newest last_event_at) the
+ * guarded upsert would leave user_id null forever and the customer portal would
+ * 404 for a paying user. Linking on any event that knows the user is always
+ * correct; we only ever fill a null, never overwrite an existing linkage.
+ */
+export async function linkCustomerToUser(customerId: string, userId: string): Promise<void> {
+  const db = createServerClient();
+  const { error } = await db
+    .from("billing_customers")
+    .update({ user_id: userId, updated_at: new Date().toISOString() })
+    .eq("customer_id", customerId)
+    .is("user_id", null);
+  if (error) throw new Error(`linkCustomerToUser failed: ${error.message}`);
+}
+
 // ── Reads ───────────────────────────────────────────────────────────────────────
 
 /** The billing customer linked to a VibePin user, or null. */

@@ -25,6 +25,7 @@ import { NextResponse } from "next/server";
 import { EventName } from "@paddle/paddle-node-sdk";
 import { getPaddleServer } from "@/lib/server/paddle/paddleServer";
 import {
+  linkCustomerToUser,
   planKeyForPriceId,
   subscriptionGrantsAccess,
   upsertBillingCustomer,
@@ -153,6 +154,22 @@ export async function POST(request: Request): Promise<Response> {
           // Fall back to the stored customer→user linkage.
           userId = await resolveUserIdForCustomer(s.customerId);
         }
+
+        if (eventUserId) {
+          // This event knows the user — make sure the customer row exists and is
+          // linked, whatever order the events arrived in. customer.created carries
+          // no custom_data, so without this a customer row created by that event
+          // would keep user_id = null and the customer portal would 404 for a
+          // paying user (getBillingCustomerByUserId finds nothing).
+          await upsertBillingCustomer({
+            customerId: s.customerId,
+            email: null,
+            userId: eventUserId,
+            occurredAt: event.occurredAt,
+          });
+          await linkCustomerToUser(s.customerId, eventUserId);
+        }
+
         if (!userId) {
           console.warn(
             `[paddle/webhook] subscription ${s.id}: no VibePin user resolvable (customer ${s.customerId}); mirror stored, provisioning deferred.`,
@@ -170,12 +187,16 @@ export async function POST(request: Request): Promise<Response> {
         if (t.customerId) {
           // Ensure a customer row exists so a later subscription event has a
           // linkage to hang off. Placeholder: null email until customer.created.
+          const txUserId = userIdFromCustomData(t.customData);
           await upsertBillingCustomer({
             customerId: t.customerId,
             email: null,
-            userId: userIdFromCustomData(t.customData),
+            userId: txUserId,
             occurredAt: event.occurredAt,
           });
+          // Order-independent linkage (see linkCustomerToUser) — a customer.created
+          // landing later with no custom_data must not leave user_id null.
+          if (txUserId) await linkCustomerToUser(t.customerId, txUserId);
         }
         console.log(
           `[paddle/webhook] transaction.completed ${t.id} (customer ${t.customerId ?? "none"}).`,
