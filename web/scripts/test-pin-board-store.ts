@@ -200,6 +200,54 @@ async function main() {
     assert.ok(raw && raw.includes("After quota failure"), "durable copy contains the edit after retry");
   });
 
+  // ── Board filter: an in-flight generation must never be filtered out ──────────
+  // Regression guard. Filters used to be strict lifecycle equality, and
+  // "generating" matches none of the four resting buckets — so the moment a user
+  // hit Generate, the new card vanished from the default ("unscheduled") board and
+  // the product's core button looked dead until the image came back.
+  // End-to-end over the REAL pipeline the board hook uses to build `items`:
+  //   createBoardDraft → isBoardSource → getPinLifecycle → matchesFilter
+  // so this cannot pass on a hand-made fixture while the real flow still hides the card.
+  await test("board filter: a just-generated Pin is visible on the DEFAULT board", async () => {
+    reset();
+    const { matchesFilter } = await import("../src/hooks/usePinBoardDrafts");
+    const parent = store.createBoardDraft({ imageUrl: "https://x/p.png", source: "uploaded_image", title: "Parent" });
+    // Exactly what StudioBoard does when the user hits Generate.
+    const gen = store.createBoardDraft({
+      imageUrl: parent.imageUrl,
+      source: "ai_generated_from_upload",
+      idempotencyKey: "gen:req1:0",
+      generationStatus: "generating",
+      parentDraftId: parent.id,
+    });
+
+    const fresh = store.getDraft(gen.id)!;
+    assert.ok(store.isBoardSource(fresh), "generating Pin must be a board-source draft");
+    assert.equal(life.getPinLifecycle(fresh), "generating");
+
+    // The board lands on "unscheduled" by default — the card MUST survive that filter,
+    // or the user hits Generate and watches nothing happen.
+    const item = { draft: fresh, lifecycle: life.getPinLifecycle(fresh) };
+    assert.ok(matchesFilter(item, "unscheduled"),
+      "generating Pin hidden on the default board — Generate looks like it did nothing");
+    for (const f of ["all", "scheduled", "posted", "failed"] as const) {
+      assert.ok(matchesFilter(item, f), `generating Pin hidden under "${f}" filter`);
+    }
+  });
+
+  await test("board filter: resting lifecycles still match only their own bucket", async () => {
+    const { matchesFilter } = await import("../src/hooks/usePinBoardDrafts");
+    for (const l of ["unscheduled", "scheduled", "posted", "failed"] as const) {
+      const item = { draft: { id: l } as never, lifecycle: l };
+      assert.ok(matchesFilter(item, l), `${l} should match its own filter`);
+      assert.ok(matchesFilter(item, "all"), `${l} should match "all"`);
+      for (const other of ["unscheduled", "scheduled", "posted", "failed"] as const) {
+        if (other === l) continue;
+        assert.ok(!matchesFilter(item, other), `${l} must NOT leak into the "${other}" filter`);
+      }
+    }
+  });
+
   console.log(`\nPin board store: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

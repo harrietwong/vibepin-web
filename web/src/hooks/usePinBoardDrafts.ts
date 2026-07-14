@@ -27,8 +27,14 @@ export type BoardFilter = "all" | "unscheduled" | "scheduled" | "posted" | "fail
 export type BoardItem = { draft: PinDraft; lifecycle: PinLifecycle };
 export type BoardCounts = Record<BoardFilter, number>;
 
-function matchesFilter(item: BoardItem, filter: BoardFilter): boolean {
+export function matchesFilter(item: BoardItem, filter: BoardFilter): boolean {
   if (filter === "all") return true;
+  // "generating" is a transient state, not one of the four resting places a Pin
+  // ends up in — so it belongs to no filter bucket. Matching filters by strict
+  // lifecycle equality therefore HID a Pin the instant the user hit Generate
+  // (the board lands on "unscheduled" by default), making the app's core button
+  // look dead until the image came back. Always show in-flight generations.
+  if (item.lifecycle === "generating") return true;
   return item.lifecycle === filter;
 }
 
