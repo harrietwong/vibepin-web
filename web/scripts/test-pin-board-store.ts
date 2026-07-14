@@ -225,13 +225,18 @@ async function main() {
     assert.ok(store.isBoardSource(fresh), "generating Pin must be a board-source draft");
     assert.equal(life.getPinLifecycle(fresh), "generating");
 
-    // The board lands on "unscheduled" by default — the card MUST survive that filter,
-    // or the user hits Generate and watches nothing happen.
     const item = { draft: fresh, lifecycle: life.getPinLifecycle(fresh) };
+
+    // Visible where it belongs: the board lands on "unscheduled" by default, so the
+    // card must survive that filter or Generate looks like it did nothing.
     assert.ok(matchesFilter(item, "unscheduled"),
       "generating Pin hidden on the default board — Generate looks like it did nothing");
-    for (const f of ["all", "scheduled", "posted", "failed"] as const) {
-      assert.ok(matchesFilter(item, f), `generating Pin hidden under "${f}" filter`);
+    assert.ok(matchesFilter(item, "all"), "generating Pin missing from All");
+
+    // ...and nowhere else. Scheduled / Posted / Failed are claims about a SETTLED
+    // outcome; an in-flight Pin has none yet, so listing it there would be a lie.
+    for (const f of ["scheduled", "posted", "failed"] as const) {
+      assert.ok(!matchesFilter(item, f), `generating Pin must NOT appear under "${f}"`);
     }
   });
 
