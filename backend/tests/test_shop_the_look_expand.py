@@ -872,13 +872,27 @@ class TestProductIdeasAPIContract(unittest.TestCase):
             self.skipTest("Could not locate enrichRow return block in route.ts")
 
         return_block = return_block_match.group(1)
+        # Strip nested object/call literals (e.g. helper calls like
+        # `deriveProductSourceType({ discovery_method: row.discovery_method, ... })`
+        # that appear as a VALUE inside the return block) before scanning for keys.
+        # Without this, a forbidden field name used as an argument key one level
+        # down reads as a false positive top-level key of enrichRow's own return
+        # object. Repeatedly collapse the innermost {...} pair until none remain,
+        # which leaves only the return object's own top-level key: value pairs.
+        top_level_block = return_block
+        while True:
+            collapsed = re.sub(r"\{[^{}]*\}", "{}", top_level_block)
+            if collapsed == top_level_block:
+                break
+            top_level_block = collapsed
+
         for field in ("discovery_method", "discovery_method_detail", "source_category",
                       "normalized_product_url_hash", "source_pin_id", "source_pin_url"):
             # Look for  field:  as an object key assignment
             pattern = rf"\b{re.escape(field)}\s*:"
             self.assertIsNone(
-                re.search(pattern, return_block),
-                f"Field {field!r} must NOT appear as a key in enrichRow's return object",
+                re.search(pattern, top_level_block),
+                f"Field {field!r} must NOT appear as a top-level key in enrichRow's return object",
             )
 
 

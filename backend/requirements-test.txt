@@ -1,0 +1,13 @@
+# Test-only dependencies for `pytest backend/tests`.
+#
+# Runtime deps that the tests import through (httpx, python-dotenv,
+# curl_cffi, cryptography, playwright, psutil) live in
+# `requirements-cloud.txt` — install that too:
+#
+#   py -3 -m pip install -r backend/requirements-cloud.txt
+#   py -3 -m pip install -r backend/requirements-test.txt
+#
+# The suite is plain unittest.TestCase (stdlib unittest.mock for
+# fakes/mocks) collected via pytest, so no pytest-mock / requests-mock
+# is required today. Add them here if a future test needs them.
+pytest>=7.0

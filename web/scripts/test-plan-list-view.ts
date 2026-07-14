@@ -85,18 +85,18 @@ test("List rows show plannedDate + plannedTime", () => {
 
 // 7
 test("Missing time shows 'Unscheduled' (not empty/undefined)", () => {
-  assert(/if \(!ev\.plannedDate \|\| !ev\.plannedTime\) return "Unscheduled"/.test(listSrc), "Unscheduled fallback missing");
+  assert(/if \(!ev\.plannedDate \|\| !ev\.plannedTime\) return tr\("planViews\.list\.status\.unscheduled"\)/.test(listSrc), "Unscheduled fallback missing");
 });
 
 // 8
 test("Product missing shows 'No product' (not an error)", () => {
-  assert(listSrc.includes('"No product"'), "No product label missing");
+  assert(listSrc.includes('tr("planViews.list.noProduct")'), "No product label missing");
   assert(!/Missing product|Product error|Product issue/i.test(listSrc), "product shown as an error");
 });
 
 // 9
 test("Missing URL shows 'Add URL' (neutral, not blocking error)", () => {
-  assert(listSrc.includes('"Add URL"'), "Add URL placeholder missing");
+  assert(listSrc.includes('tr("planViews.list.addUrl")'), "Add URL placeholder missing");
   assert(!/Missing URL|url-error|#EF4444.*url/i.test(listSrc), "missing URL styled as error");
 });
 
@@ -128,7 +128,7 @@ test("Scheduled from List shows same time as Calendar (one mapper)", () => {
 
 // 12
 test("Multi-select toolbar shows 'N selected' and primary Schedule", () => {
-  assert(listSrc.includes("{selected.size} selected"), "quiet 'N selected' text missing");
+  assert(listSrc.includes('tr("planViews.list.selectedCount").replace("{n}", String(selected.size))'), "quiet 'N selected' text missing");
   assert(listSrc.includes('data-testid="plan-list-schedule-selected"'), "selection Schedule button missing");
 });
 

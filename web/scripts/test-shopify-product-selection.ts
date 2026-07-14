@@ -38,6 +38,27 @@ const listeners = new Set<() => void>();
   removeEventListener: (_t: string, cb: () => void) => { listeners.delete(cb); },
   dispatchEvent: () => { listeners.forEach(fn => fn()); return true; },
 };
+// Minimal `document` stub. Two module-scope consumers need it:
+//  - @supabase/phoenix (pulled in by ShopifyProductPickerPanel) registers a window
+//    "visibilitychange" listener that reads document.visibilityState on dispatchEvent.
+//  - sonner (toast lib, transitively imported) injects a <style> tag at import time
+//    via document.head / getElementsByTagName / createElement / createTextNode.
+function stubNode() {
+  return {
+    appendChild: () => {},
+    styleSheet: undefined as unknown,
+  };
+}
+const stubHead = stubNode();
+(globalThis as unknown as { document: unknown }).document = {
+  visibilityState: "visible",
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  head: stubHead,
+  getElementsByTagName: () => [stubHead],
+  createElement: () => stubNode(),
+  createTextNode: () => ({}),
+};
 
 // Dummy env so importing shopifyClient's supabase-browser chain never throws
 // (ShopifyProductPickerPanel.tsx imports shopifyClient.ts at module scope).
@@ -252,14 +273,13 @@ async function main() {
 
   await test("ProductPickerModal: shopify tab is wired (flag-gated, source badge, sourceBadge label)", () => {
     const src = readFileSync("src/components/studio/ProductPickerModal.tsx", "utf8");
-    assert.match(src, /\{ id: "shopify" as const, label: "Shopify" \}/);
     assert.match(src, /shopifyEnabled = isShopifyIntegrationEnabled\(\)/);
-    assert.match(src, /label: "Shopify",\s*bg: "rgba\(149,191,71/);
+    assert.match(src, /labelKey: "studioModals\.source\.shopify",\s*bg: "rgba\(149,191,71/);
   });
 
   await test("InlineCreateAssetPicker: \"From Shopify\" source is wired for the product role only", () => {
     const src = readFileSync("src/components/studio/InlineCreateAssetPicker.tsx", "utf8");
-    assert.match(src, /\{ id: "shopify", label: "From Shopify" \}/);
+    assert.match(src, /\{ id: "shopify", labelKey: "studioModals\.tabs\.fromShopify" \}/);
     assert.match(src, /mode="select-images"\s*onSelectImages=\{saveShopifyImages\}/);
   });
 

@@ -56,8 +56,13 @@ async function main() {
     assert.ok(!pinMissingFieldLabels(base).includes("Destination URL"));
   });
 
-  await test("Still blocks on the real required fields", () => {
-    assert.equal(isPinReady({ ...base, title: "" }), false);
+  await test("Still blocks on the real required fields (only image + board)", () => {
+    // pinReadiness.ts: title/description/altText are OPTIONAL — publishPinForUser
+    // happily sends a Pin without them, so only image + board actually block
+    // publishing (Pinterest's create-Pin call rejects a missing board_id).
+    assert.equal(isPinReady({ ...base, title: "" }), true);
+    assert.equal(isPinReady({ ...base, description: "" }), true);
+    assert.equal(isPinReady({ ...base, altText: "" }), true);
     assert.equal(isPinReady({ ...base, boardId: "" }), false);
     assert.equal(isPinReady({ ...base, imageUrl: "" }), false);
   });
