@@ -1,0 +1,1205 @@
+# VibePin AI + 人工协同客服系统 PRD
+
+**产品名称：** VibePin Support
+**文档版本：** V1.0
+**产品阶段：** MVP 规划
+**适用端：** 用户端 Web、客服管理后台
+**核心形态：** AI 自动接待 + 人工实时接管 + 双向翻译 + 受控客服操作
+
+---
+
+## 一、项目背景
+
+VibePin 是面向 Pinterest 内容创作、编辑、排程和发布的 AI SaaS 产品。用户在使用过程中可能遇到以下问题：
+
+* Pinterest 账户连接失败
+* Board 列表加载失败
+* Pin 发布或排程失败
+* AI 生成失败
+* AI Credits 已扣除但未获得结果
+* 上传图片失败
+* 找不到已生成的内容或草稿
+* 订阅、扣款、取消和退款问题
+* 不理解某项功能的使用方法
+* 希望获得人工客服帮助
+
+单纯使用帮助中心或工单系统，无法满足用户在使用产品时即时求助的需求；单纯使用 AI 聊天机器人，又无法处理退款、账户异常、复杂故障和用户情绪等问题。
+
+因此，需要建设一套 AI 与人工客服协同的实时客服系统：
+
+> 无人工客服在线时，由 AI 第一时间接待；人工客服上线后可接管会话；AI 在人工接管后继续提供翻译、摘要、诊断和回复建议；客服可在受控权限范围内帮助用户执行产品操作。
+
+---
+
+## 二、产品目标
+
+### 2.1 核心目标
+
+1. 用户遇到问题后能够立即获得响应。
+2. AI 可解决常见问题，并完成基础故障排查。
+3. AI 无法解决时，可无缝转接人工客服。
+4. 客服可在后台与客户进行实时聊天。
+5. 客户使用自己的语言发送消息，客服后台自动显示中文。
+6. 客服使用中文回复，客户收到其对应语言的内容。
+7. 客服可查看客户的产品状态、错误日志和历史操作。
+8. 客服可通过受控操作帮助客户解决实际问题。
+9. 所有聊天、翻译和客服操作均可审计、追溯和回滚。
+
+### 2.2 非目标
+
+MVP 阶段暂不建设：
+
+* 复杂呼叫中心系统
+* 电话客服
+* 视频客服
+* 多层级客服排班
+* 复杂 SLA 计费体系
+* 客服绩效薪酬系统
+* 无限制模拟登录客户账户
+* AI 自动退款
+* AI 自动执行高风险账户操作
+
+---
+
+## 三、用户角色
+
+### 3.1 普通客户
+
+使用 VibePin 创建、编辑、排程和发布 Pinterest 内容的用户。
+
+主要诉求：
+
+* 快速获得帮助
+* 不需要重复解释问题
+* 使用自己的语言沟通
+* 能够查看问题处理进度
+* 必要时联系真人客服
+
+### 3.2 人工客服
+
+负责接待客户、解决问题和执行低风险后台操作的工作人员。
+
+主要诉求：
+
+* 后台统一接收会话
+* 用中文理解全球客户的问题
+* 用中文回复客户
+* 快速获取客户上下文
+* 获得 AI 摘要和回复建议
+* 不需要登录客户账号即可帮助客户处理问题
+
+### 3.3 客服管理员
+
+负责客服权限、会话分配、敏感操作审批和质量管理。
+
+主要诉求：
+
+* 查看全部会话
+* 分配客服
+* 审批高风险操作
+* 查看客服操作记录
+* 管理知识库和翻译术语
+* 管理客服权限
+
+### 3.4 AI 客服
+
+系统中的自动化服务角色。
+
+主要职责：
+
+* 识别客户语言
+* 回答常见问题
+* 查询产品状态
+* 分析错误日志
+* 判断是否需要人工客服
+* 转人工时生成中文摘要
+* 在人工接管后提供后台辅助
+* 执行低风险、已授权的系统操作
+
+---
+
+## 四、核心产品原则
+
+### 4.1 AI 先接待，人工可接管
+
+无人工客服在线时，AI 必须能够立即接待客户。
+
+人工客服上线后，可主动接管 AI 正在处理的会话，也可以接收 AI 转交的会话。
+
+### 4.2 同一会话连续处理
+
+AI 与人工客服必须使用同一条会话。
+
+用户不需要重新提交工单，也不需要重新描述问题。
+
+### 4.3 原文和译文同时保存
+
+任何消息均需保存：
+
+* 原始内容
+* 原始语言
+* 翻译内容
+* 翻译目标语言
+* 翻译状态
+* 是否被人工修改
+
+不得只保存翻译后的内容。
+
+### 4.4 客服操作必须受控
+
+客服不得直接登录客户账户。
+
+客服只能通过后台提供的明确操作按钮执行任务，并受到权限、审批、审计和风险等级限制。
+
+### 4.5 AI 与人工不能同时直接回复
+
+人工客服接管后，AI 不得未经客服确认直接向客户发送消息。
+
+此时 AI 只负责：
+
+* 翻译
+* 摘要
+* 回复建议
+* 故障分析
+* 操作建议
+
+---
+
+## 五、产品整体流程
+
+### 5.1 标准客服流程
+
+```text
+客户打开客服窗口
+→ 系统识别语言和当前页面
+→ AI 自动接待
+→ AI 查询知识库和产品状态
+→ AI 回答或执行低风险排查
+→ 问题解决后结束会话
+```
+
+### 5.2 AI 转人工流程
+
+```text
+客户提出问题
+→ AI 尝试解决
+→ 触发人工转接条件
+→ AI 生成中文会话摘要
+→ 会话进入人工等待队列
+→ 客服接管
+→ 客服使用中文沟通
+→ 系统翻译为客户语言
+→ 客服解决问题
+→ 会话关闭
+```
+
+### 5.3 客服代操作流程
+
+```text
+客服判断需要执行操作
+→ 选择后台操作
+→ 系统判断风险等级
+→ 低风险操作直接执行
+→ 中高风险操作请求客户确认或管理员审批
+→ 后端执行操作
+→ 保存执行前后状态
+→ 双方收到操作结果
+```
+
+---
+
+## 六、会话状态设计
+
+每个客服会话包含 `status` 和 `mode` 两套状态。
+
+### 6.1 会话状态 status
+
+| 状态                   | 说明        |
+| -------------------- | --------- |
+| Open                 | 会话已创建     |
+| In progress          | 正在处理中     |
+| Waiting for agent    | 等待人工客服    |
+| Waiting for customer | 等待客户回复或确认 |
+| Resolved             | 问题已解决     |
+| Closed               | 会话已关闭     |
+
+### 6.2 服务模式 mode
+
+| 模式                   | 说明           |
+| -------------------- | ------------ |
+| AI                   | AI 独立接待      |
+| WAITING_FOR_AGENT    | 等待人工客服接管     |
+| HUMAN                | 人工客服独立处理     |
+| HUMAN_WITH_AI_ASSIST | 人工处理，AI 后台辅助 |
+| RESOLVED             | 已解决          |
+| CLOSED               | 已关闭          |
+
+### 6.3 状态切换规则
+
+* 新会话默认进入 `AI`。
+* 用户要求人工时进入 `WAITING_FOR_AGENT`。
+* 客服点击接管后进入 `HUMAN_WITH_AI_ASSIST`。
+* 客服离线或主动释放后，可重新进入 `AI`。
+* 问题解决后进入 `RESOLVED`。
+* 超过设定时间无新消息后进入 `CLOSED`。
+
+---
+
+## 七、用户端需求
+
+### 7.1 右下角客服入口
+
+在 VibePin 页面右下角提供统一客服入口。
+
+默认状态：
+
+```text
+VibePin Support
+
+AI Assistant is online
+
+How can we help?
+
+[Publishing problem]
+[Pinterest connection]
+[AI credits issue]
+[Billing question]
+[Talk to a person]
+```
+
+人工客服接管前显示：
+
+```text
+AI Assistant
+Usually replies immediately
+```
+
+人工客服接管后显示：
+
+```text
+Amanda · Customer Support
+```
+
+### 7.2 聊天窗口
+
+聊天窗口应支持：
+
+* 文本发送
+* 图片上传
+* 文件上传
+* 历史消息显示
+* 新消息提醒
+* 未读消息数量
+* 人工客服请求
+* 客服身份显示
+* AI 身份显示
+* 当前处理状态
+* 操作确认卡片
+* 问题解决评价
+
+### 7.3 快捷问题入口
+
+根据用户当前页面动态显示快捷入口。
+
+#### 创建 Pin 页面
+
+* 如何生成 Pin
+* AI 生成失败
+* Product Link 检查
+* Creative Direction 说明
+* AI Credits 问题
+
+#### 发布页面
+
+* Publish Now 失败
+* Schedule 失败
+* Board 无法加载
+* Pinterest 账户异常
+
+#### Billing 页面
+
+* 套餐问题
+* 重复扣款
+* 取消订阅
+* 退款问题
+
+### 7.4 转人工入口
+
+用户可随时点击：
+
+```text
+Talk to a person
+```
+
+或输入：
+
+* 人工客服
+* 真人客服
+* Human
+* Agent
+* Talk to support
+
+系统识别后将会话转入人工等待队列。
+
+### 7.5 操作确认卡片
+
+需要客户确认的操作，以卡片形式出现。
+
+示例：
+
+```text
+客服希望重新执行您的发布任务。
+
+该操作可能会重新发布这条 Pin，但不会再次扣除 AI Credits。
+
+[确认执行] [取消]
+```
+
+客户确认后，系统才执行操作。
+
+---
+
+## 八、AI 客服需求
+
+### 8.1 AI 客服能力
+
+AI 客服需支持：
+
+1. 自动语言识别
+2. 多语言回复
+3. 常见问题回答
+4. 产品功能解释
+5. 帮助中心检索
+6. 客户状态查询
+7. 发布日志查询
+8. Pinterest 连接状态查询
+9. Credits 流水查询
+10. 订阅状态查询
+11. 故障初步诊断
+12. 转人工判断
+13. 会话摘要生成
+14. 人工客服回复建议
+15. 客户情绪识别
+
+### 8.2 AI 可独立处理的问题
+
+* 如何连接 Pinterest
+* 如何选择 Board
+* 如何生成 Pin
+* 如何使用 Smart Schedule
+* Credits 如何计算
+* 套餐功能说明
+* 发布失败的常见原因
+* Board 暂时无法加载
+* 草稿位置说明
+* 如何取消任务
+* 如何找到生成结果
+
+### 8.3 自动转人工条件
+
+出现以下任一情况时，AI 应建议或自动转人工：
+
+* 用户明确要求人工客服
+* AI 连续两次未能解决问题
+* 用户反复提出相同问题
+* 用户表达愤怒、投诉或强烈不满
+* 涉及退款
+* 涉及重复扣款
+* Credits 已扣除但无结果
+* 涉及账户安全
+* 涉及数据删除
+* 涉及订阅取消争议
+* 系统检测到严重错误
+* AI 无权执行所需操作
+
+### 8.4 转人工摘要
+
+转人工时，AI 自动生成中文摘要：
+
+```text
+客户语言：
+西班牙语
+
+客户问题：
+Pinterest Board 列表无法加载。
+
+已检查：
+- Pinterest 账户存在
+- 授权状态为 expired
+- 最近 Board 同步失败
+- 错误代码：PINTEREST_TOKEN_EXPIRED
+
+AI 已进行：
+- 解释授权可能过期
+- 建议重新连接账户
+
+客户当前诉求：
+希望人工客服帮助处理。
+
+建议下一步：
+向客户发送重新授权入口。
+```
+
+---
+
+## 九、人工客服后台
+
+### 9.1 页面结构
+
+客服工作台采用三栏结构。
+
+#### 左侧：会话队列
+
+分类：
+
+* 等待人工
+* 我的会话
+* AI 处理中
+* 等待客户回复
+* 已解决
+* 全部会话
+
+每条会话显示：
+
+* 客户名称
+* 客户语言
+* 问题类型
+* 优先级
+* 当前状态
+* 等待时长
+* 最后一条消息
+* 是否有未读消息
+
+#### 中间：聊天区域
+
+展示：
+
+* 客户原始消息
+* 中文翻译
+* 客服原始回复
+* 发给客户的译文
+* 系统消息
+* 操作确认卡片
+* 操作执行结果
+* AI 摘要
+* AI 回复建议
+
+#### 右侧：客户上下文
+
+展示：
+
+* 客户信息
+* Workspace
+* 当前套餐
+* AI Credits
+* Pinterest 连接状态
+* Board 同步状态
+* 当前页面
+* 最近发布任务
+* 最近生成任务
+* 订阅状态
+* 错误日志
+* 历史客服记录
+* 可执行操作
+
+### 9.2 客服操作
+
+客服可执行：
+
+* 接管会话
+* 释放会话
+* 回复客户
+* 添加内部备注
+* 修改会话分类
+* 修改优先级
+* 等待客户回复
+* 标记已解决
+* 关闭会话
+* 查看 AI 摘要
+* 获取 AI 回复建议
+* 调用受控客服操作
+
+### 9.3 AI 辅助按钮
+
+客服后台提供：
+
+```text
+[总结会话]
+[建议回复]
+[翻译原文]
+[优化中文回复]
+[分析错误日志]
+[推荐处理操作]
+[查找帮助文章]
+```
+
+AI 生成的内容必须由客服确认后才能发送。
+
+---
+
+## 十、实时翻译系统
+
+### 10.1 客户消息翻译
+
+处理流程：
+
+```text
+客户发送消息
+→ 自动识别语言
+→ 保存原文
+→ 翻译成中文
+→ 客服后台展示原文和中文
+```
+
+### 10.2 客服消息翻译
+
+处理流程：
+
+```text
+客服输入中文
+→ 翻译为客户语言
+→ 后台显示译文预览
+→ 客服确认
+→ 发送给客户
+```
+
+### 10.3 后台显示模式
+
+客服可切换：
+
+* 仅中文
+* 原文 + 中文
+* 仅原文
+
+默认使用：
+
+```text
+原文 + 中文
+```
+
+### 10.4 翻译失败处理
+
+翻译失败时：
+
+* 保留原文
+* 显示翻译失败状态
+* 允许重新翻译
+* 允许客服手动输入译文
+* 不得阻止原始消息展示
+
+### 10.5 产品术语表
+
+建立可维护术语表：
+
+| 原词              | 建议处理                  |
+| --------------- | --------------------- |
+| VibePin         | 不翻译                   |
+| Pin             | 保留 Pin                |
+| Board           | 根据语言使用官方 Pinterest 术语 |
+| Smart Schedule  | 不翻译                   |
+| AI Credits      | 保留 AI Credits         |
+| Publish Now     | 按界面语言翻译               |
+| Destination URL | 按界面语言翻译               |
+| Draft           | 按界面语言翻译               |
+| Workspace       | 按界面语言翻译               |
+
+客服管理员可维护术语表，以减少品牌词和功能词误译。
+
+---
+
+## 十一、客服代操作系统
+
+### 11.1 操作原则
+
+客服不能直接进入客户账户进行自由操作。
+
+所有客服操作必须：
+
+* 使用固定 Action
+* 验证客服权限
+* 判断风险等级
+* 判断是否需要客户确认
+* 记录操作原因
+* 保存执行前状态
+* 保存执行后状态
+* 记录执行结果
+* 支持错误重试
+* 避免重复执行
+
+### 11.2 权限等级
+
+#### Level 1：查看和诊断
+
+客服可直接查看：
+
+* Pinterest 连接状态
+* Board 同步状态
+* 发布任务状态
+* 发布错误
+* AI Credits 流水
+* AI 生成任务
+* 订阅状态
+* 当前套餐
+* 草稿状态
+* 最近登录和设备信息
+
+#### Level 2：低风险操作
+
+普通客服可执行：
+
+* 重新同步 Board
+* 重试失败的 Board 拉取
+* 重新发送验证邮件
+* 重新发送系统通知
+* 刷新账户状态
+* 重试未完成的后台任务
+* 重新生成下载链接
+* 恢复系统可恢复的草稿
+* 重试未产生扣费的生成任务
+
+#### Level 3：需要客户确认
+
+以下操作必须由客户确认：
+
+* 重新执行发布任务
+* 修改排程时间
+* 重新生成内容
+* 修改目标链接
+* 断开 Pinterest 连接
+* 重新连接 Pinterest
+* 修改发布 Board
+* 删除草稿
+* 取消尚未执行的任务
+
+#### Level 4：需要管理员审批
+
+以下操作需管理员审批：
+
+* 退款
+* 补偿 AI Credits
+* 修改订阅
+* 取消订阅
+* 修改账单状态
+* 删除账户数据
+* 永久删除内容
+* 恢复超过普通期限的数据
+* 大额 Credits 补偿
+
+### 11.3 Action 执行接口
+
+统一使用：
+
+```ts
+executeSupportAction({
+  actionType,
+  customerId,
+  conversationId,
+  operatorId,
+  parameters,
+  reason
+})
+```
+
+每种 Action 包含：
+
+```ts
+{
+  actionType: string
+  riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  requiredPermission: string
+  requiresCustomerApproval: boolean
+  requiresAdminApproval: boolean
+  idempotencyKey: string
+  parameters: Record<string, unknown>
+}
+```
+
+---
+
+## 十二、通知和在线状态
+
+### 12.1 客服在线状态
+
+客服状态：
+
+* Online
+* Busy
+* Away
+* Offline
+
+### 12.2 AI 托管逻辑
+
+* 无客服在线时，AI 自动接待。
+* 有客服在线但无空闲客服时，AI 继续处理。
+* AI 可将会话加入等待队列。
+* 客服接管后，AI 停止直接回复。
+* 客服释放后，AI 可重新接管。
+
+### 12.3 通知
+
+需要支持：
+
+* 客户新消息通知
+* 客服接管通知
+* 客服回复通知
+* 操作确认通知
+* 操作执行结果通知
+* 会话解决通知
+* 客户离线邮件通知
+* 客服后台声音提醒，可由客服关闭
+
+---
+
+## 十三、数据模型
+
+### 13.1 support_conversations
+
+```ts
+{
+  id: string
+  customerId: string
+  workspaceId?: string
+  status: string
+  mode: string
+  assignedAgentId?: string
+  customerLanguage: string
+  category?: string
+  priority: string
+  sourcePage?: string
+  aiSummary?: string
+  createdAt: Date
+  updatedAt: Date
+  resolvedAt?: Date
+  closedAt?: Date
+}
+```
+
+### 13.2 support_messages
+
+```ts
+{
+  id: string
+  conversationId: string
+  senderType: "customer" | "agent" | "ai" | "system"
+  senderId?: string
+  originalText?: string
+  originalLanguage?: string
+  translatedText?: string
+  translatedLanguage?: string
+  translationProvider?: string
+  translationStatus: "pending" | "success" | "failed"
+  manuallyEdited: boolean
+  messageType: "text" | "image" | "file" | "system" | "action_request" | "action_result"
+  createdAt: Date
+}
+```
+
+### 13.3 support_participants
+
+```ts
+{
+  id: string
+  conversationId: string
+  participantType: "customer" | "agent" | "ai"
+  participantId?: string
+  joinedAt: Date
+  leftAt?: Date
+}
+```
+
+### 13.4 support_assignments
+
+```ts
+{
+  id: string
+  conversationId: string
+  agentId: string
+  assignedBy: string
+  assignedAt: Date
+  releasedAt?: Date
+}
+```
+
+### 13.5 support_actions
+
+```ts
+{
+  id: string
+  conversationId: string
+  customerId: string
+  operatorId: string
+  actionType: string
+  riskLevel: string
+  parameters: Record<string, unknown>
+  reason: string
+  requiresCustomerApproval: boolean
+  requiresAdminApproval: boolean
+  approvalStatus: string
+  executionStatus: string
+  beforeSnapshot?: Record<string, unknown>
+  afterSnapshot?: Record<string, unknown>
+  errorMessage?: string
+  createdAt: Date
+  executedAt?: Date
+}
+```
+
+### 13.6 support_internal_notes
+
+```ts
+{
+  id: string
+  conversationId: string
+  agentId: string
+  body: string
+  createdAt: Date
+}
+```
+
+### 13.7 support_translation_glossary
+
+```ts
+{
+  id: string
+  sourceTerm: string
+  targetLanguage: string
+  targetTerm: string
+  shouldPreserve: boolean
+  createdAt: Date
+  updatedAt: Date
+}
+```
+
+### 13.8 support_events
+
+记录：
+
+* conversation_created
+* ai_replied
+* transfer_requested
+* agent_joined
+* agent_left
+* translation_completed
+* translation_failed
+* action_requested
+* customer_approved
+* action_executed
+* action_failed
+* conversation_resolved
+* conversation_closed
+
+---
+
+## 十四、接口设计
+
+### 14.1 用户端接口
+
+```text
+POST /api/support/conversations
+GET /api/support/conversations/:id
+POST /api/support/conversations/:id/messages
+POST /api/support/conversations/:id/request-agent
+POST /api/support/conversations/:id/approve-action
+POST /api/support/conversations/:id/reject-action
+POST /api/support/conversations/:id/resolve
+```
+
+### 14.2 客服端接口
+
+```text
+GET /api/admin/support/conversations
+GET /api/admin/support/conversations/:id
+POST /api/admin/support/conversations/:id/takeover
+POST /api/admin/support/conversations/:id/release
+POST /api/admin/support/conversations/:id/messages
+POST /api/admin/support/conversations/:id/internal-notes
+PATCH /api/admin/support/conversations/:id
+POST /api/admin/support/conversations/:id/actions
+```
+
+### 14.3 翻译接口
+
+```text
+POST /api/support/translate
+POST /api/support/messages/:id/retranslate
+PATCH /api/support/messages/:id/translation
+```
+
+### 14.4 实时通信
+
+可采用：
+
+* WebSocket
+* Socket.IO
+* Supabase Realtime
+* SSE + HTTP POST
+
+MVP 需支持：
+
+* 实时消息
+* 断线重连
+* 消息去重
+* 消息顺序
+* 未读状态
+* 客服接管状态同步
+* 操作确认结果同步
+
+---
+
+## 十五、安全和权限
+
+### 15.1 禁止客服查看的信息
+
+不得在客服后台显示：
+
+* Pinterest access token
+* Pinterest refresh token
+* OAuth secret
+* 用户密码
+* Session token
+* Cookie
+* API Secret
+* 完整银行卡号
+* 完整支付方式
+* 私密认证 Header
+* 第三方服务密钥
+
+### 15.2 权限模型
+
+建议权限：
+
+```text
+support.view
+support.reply
+support.assign
+support.internal_note
+support.action.low_risk
+support.action.customer_approval
+support.action.billing
+support.action.refund
+support.action.credit_compensation
+support.admin
+```
+
+### 15.3 审计要求
+
+所有客服操作记录：
+
+* 操作者
+* 客户
+* 会话
+* 操作类型
+* 操作原因
+* 执行参数
+* 执行前状态
+* 执行后状态
+* 审批人
+* 客户是否确认
+* 执行结果
+* 时间
+* IP 和设备信息
+
+---
+
+## 十六、异常处理
+
+### 16.1 AI 服务异常
+
+AI 无法回复时：
+
+```text
+I’m having trouble answering right now.
+I’ve added your message to the support queue.
+```
+
+同时自动转人工。
+
+### 16.2 翻译服务异常
+
+* 显示客户原文
+* 标记“翻译失败”
+* 提供重新翻译按钮
+* 允许客服手动编辑译文
+
+### 16.3 客服离线
+
+* 会话重新进入 AI 托管
+* 客户收到状态说明
+* 未解决问题保留在人工队列
+* 客服再次上线后可继续接管
+
+### 16.4 操作执行失败
+
+* 不重复执行高风险操作
+* 显示错误原因
+* 保存执行状态
+* 允许客服安全重试
+* 向客户发送失败提示
+
+---
+
+## 十七、数据指标
+
+上线后重点关注：
+
+### 服务指标
+
+* AI 首次响应时间
+* 人工首次响应时间
+* 平均解决时长
+* 人工等待时间
+* 会话解决率
+* 重复咨询率
+* 客户满意度
+
+### AI 指标
+
+* AI 独立解决率
+* AI 转人工率
+* AI 错误回复率
+* AI 建议被客服采用率
+* 会话摘要准确率
+* AI 诊断成功率
+
+### 翻译指标
+
+* 翻译成功率
+* 人工修改译文比例
+* 各语言会话数量
+* 术语纠错次数
+* 翻译平均耗时
+
+### 客服操作指标
+
+* 操作执行次数
+* 操作成功率
+* 客户确认率
+* 操作失败率
+* Credits 补偿数量
+* 退款审批数量
+
+---
+
+## 十八、开发阶段
+
+### P0：AI + 人工 + 翻译基础版
+
+必须完成：
+
+* 右下角客服窗口
+* AI 自动接待
+* 客户语言自动识别
+* 客户消息翻译成中文
+* 客服中文回复翻译成客户语言
+* 原文与译文同时保存
+* 转人工
+* 人工客服后台
+* 客服接管和释放
+* 实时消息
+* 客户上下文基础信息
+* AI 转人工摘要
+* 会话历史
+* 内部备注
+* 基础权限
+* 会话解决和关闭
+
+P0 暂不包含：
+
+* 客服直接修改订阅
+* 自动退款
+* 自动补 Credits
+* 高风险代操作
+* 复杂客服审批流
+
+### P1：客服代操作
+
+增加：
+
+* 产品状态查看
+* 发布和生成日志查看
+* Board 重新同步
+* 发布任务重试
+* 验证邮件重发
+* Credits 流水查询
+* Credits 补偿申请
+* 客户确认卡片
+* 风险等级
+* 操作权限
+* 审计日志
+* 管理员审批
+
+### P2：智能诊断和运营管理
+
+增加：
+
+* AI 自动分析错误日志
+* 主动发现客户异常
+* 自动推荐修复操作
+* 自动生成操作确认卡片
+* 多语言术语库管理
+* 客服质量检测
+* 客户满意度评价
+* 客服绩效分析
+* 会话智能分类
+* 风险会话识别
+
+---
+
+## 十九、P0 验收标准
+
+### 用户端
+
+1. 用户可通过右下角入口创建客服会话。
+2. AI 可立即回复用户。
+3. 用户可要求转人工。
+4. 人工接管后，用户无需重新描述问题。
+5. 用户可看到当前是 AI 还是人工客服。
+6. 用户可上传图片。
+7. 用户可查看历史消息。
+8. 用户可收到操作确认卡片。
+
+### 客服端
+
+1. 客服可查看等待接入的会话。
+2. 客服可接管 AI 会话。
+3. 客服后台可查看客户原文和中文翻译。
+4. 客服可以中文输入回复。
+5. 客服发送前可预览客户语言译文。
+6. 客服可修改译文。
+7. 客服可添加内部备注。
+8. 客服可释放和关闭会话。
+9. 客服可查看 AI 生成的中文摘要。
+10. 客服可查看客户基础产品上下文。
+
+### AI
+
+1. AI 能识别客户语言。
+2. AI 能回答常见产品问题。
+3. AI 能在符合条件时转人工。
+4. 转人工时生成完整摘要。
+5. 人工接管后 AI 不再直接回复客户。
+6. AI 可在后台提供回复建议。
+
+### 翻译
+
+1. 客户消息自动翻译成中文。
+2. 客服中文回复自动翻译成客户语言。
+3. 原文和译文同时保存。
+4. 翻译失败不影响原文展示。
+5. 客服可重新翻译或手动修改。
+
+### 安全
+
+1. 客服无法查看用户密码和 Token。
+2. 普通客服无法执行高风险操作。
+3. 所有客服操作均有审计记录。
+4. 客服不能自由登录客户账户。
+5. 内部备注不会展示给客户。
+
+---
+
+## 二十、一句话产品定义
+
+VibePin Support 是一套：
+
+> AI 负责即时接待和基础排查，人工客服负责复杂问题和用户情绪，翻译系统解决跨语言沟通，受控 Action 系统帮助客服真正替客户解决问题的智能客服平台。

@@ -1,0 +1,55 @@
+
+
+---
+
+# 22. 不做
+
+
+当前不要：
+
+
+❌ CRM
+
+❌ Sales Pipeline
+
+❌ Revenue Analytics
+
+❌ Enterprise Account
+
+❌ Complex Customer Success
+
+
+---
+
+# 最终定位
+
+
+VibePin Admin Intelligence:
+
+
+System Health
+
++
+
+Creator Intelligence
+
++
+
+Content Performance
+
++
+
+AI Learning
+
+
+核心问题：
+
+不是：
+
+“哪个客户赚多少钱？”
+
+
+而是：
+
+
+“谁在用 VibePin 创造成功内容？为什么成功？我们如何帮助更多用户成功？”

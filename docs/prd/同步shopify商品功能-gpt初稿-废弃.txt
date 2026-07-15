@@ -1,0 +1,786 @@
+You are planning the next major VibePin feature: Shopify product synchronization and Product Library integration.
+
+Use the attached “VibePin Ecommerce Integration Deep Research Report” as the product and research baseline.
+
+Do not implement code yet.
+
+Your task is to audit the current repository and produce an execution-ready implementation plan for:
+
+VibePin Ecommerce Integration — Phase 1 Shopify MVP
+
+==================================================
+1. Core planning rule
+==================================================
+
+Before proposing any implementation:
+
+Audit the current code and verify the real existing capabilities.
+
+Do not assume that models, database tables, APIs, OAuth infrastructure, background jobs, product pickers, asset libraries, or persistence layers already exist.
+
+Clearly separate:
+
+- verified existing capability;
+- reusable but incomplete capability;
+- missing capability;
+- assumption requiring verification.
+
+Do not rewrite Create Pins.
+
+Use the principle:
+
+Extract and extend, do not rebuild.
+
+==================================================
+2. Product goal
+==================================================
+
+The Phase 1 user workflow should be:
+
+Connect Shopify
+→ complete OAuth installation
+→ run initial product sync
+→ products appear in a shared Product Library
+→ search and filter products
+→ select one product
+→ choose one or more product images
+→ create or enhance Pin Draft Cards
+→ AI Copy uses product metadata as grounded context
+→ user explicitly chooses “Use product link as destination”
+→ edit
+→ select Pinterest Board
+→ Smart Schedule / Publish.
+
+Important product rules:
+
+- Pin Draft Card remains the core publishing object.
+- A Product is reusable context and an AI input.
+- Syncing a Product must not create a Pin Draft automatically.
+- Connecting Shopify must not automatically schedule or publish anything.
+- Selecting a Product must not silently overwrite the Pin Website URL.
+- Product URL belongs to the Product.
+- Website URL / Destination URL belongs to the Pin.
+- Only an explicit “Use product link as destination” action may copy the Product URL into an empty Pin URL.
+- Replacing an existing Pin destination must require confirmation.
+- Product images used for AI Image generation must not overwrite the original Pin image.
+- Pinterest remains the only real publishing destination.
+
+==================================================
+3. Phase 1 scope
+==================================================
+
+Plan only the smallest valuable Shopify MVP:
+
+A. StoreConnection foundation
+- Shopify store connection record
+- workspace/store isolation
+- encrypted OAuth credentials
+- connection status
+- granted scopes
+- last sync status and timestamps
+- reconnect and disconnect handling
+
+B. Shopify OAuth
+- public Shopify app installation flow
+- install entry point
+- OAuth callback
+- state validation
+- shop-domain validation
+- narrow read-only scopes
+- token encryption
+- app uninstall handling
+
+C. Initial Shopify product sync
+- Shopify Admin GraphQL API
+- initial full sync
+- Bulk Operations if justified by current architecture
+- normalized local Product records
+- manual “Sync now”
+- pagination / rate-limit behavior
+- sync progress
+- partial failure handling
+- idempotency
+- product deletion / tombstone strategy
+
+D. Normalized data model
+Plan the minimum useful versions of:
+
+StoreConnection
+Product
+ProductVariant
+ProductImage
+ProductCollection
+
+Include:
+- source
+- external IDs
+- title
+- description
+- product URL
+- admin URL
+- status
+- vendor
+- product type/category
+- tags
+- collections
+- price
+- compare-at price
+- currency
+- availability
+- SKU
+- product images
+- primary image
+- source timestamps
+- last synced time
+- sync status
+- sync error
+- deleted / archived state
+- provenance
+
+Do not over-model inventory locations, orders, customers, fulfillment, or ERP behavior.
+
+E. Product Library
+Plan a lightweight Products workspace containing:
+
+- Products navigation item
+- connected-store selector or source badge
+- search
+- active / draft / archived / out-of-stock filters
+- collection or product-type filter where practical
+- sync status
+- last synced time
+- Sync now
+- reconnect state
+- product cards or rows
+- product detail drawer
+- product image selection
+- Create Pins action
+- Use in AI Image action
+
+This must not become a full ecommerce admin panel.
+
+F. Create Pins integration
+Audit the current Create Pins, AI Image Drawer, Product Picker, Asset Picker, Draft store, and AI Copy flow.
+
+Plan how to:
+
+- open a real Shopify Product Picker;
+- reuse any existing product-picker or asset-picker architecture;
+- attach a selected Product to a Pin Draft;
+- display the linked Product neutrally;
+- allow multiple Product images as AI inputs;
+- make the current Pin image remain Product Image #1 where applicable;
+- use Shopify product metadata in AI Copy;
+- use Shopify category/tags/product type in keyword matching;
+- add “Use product link as destination”;
+- prevent silent URL replacement;
+- preserve current Upload-first behavior;
+- preserve existing AI Image Drawer functionality.
+
+G. Grounded AI context
+Plan the minimum changes needed so AI Copy and AI Image can receive:
+
+- product title;
+- product description;
+- product type/category;
+- vendor/brand;
+- tags;
+- selected images;
+- selected variant where applicable;
+- product URL;
+- price only when relevant;
+- availability only when relevant.
+
+Do not redesign the AI Copy service.
+
+Do not create a second AI Copy implementation.
+
+H. Security and operations
+Include:
+
+- OAuth state and CSRF protection;
+- token encryption;
+- workspace/store isolation;
+- least-privilege scopes;
+- Shopify webhook or uninstall verification where needed;
+- API rate limiting;
+- duplicate sync protection;
+- retry strategy;
+- logging and observability;
+- user data deletion;
+- disconnect cleanup;
+- multi-store leakage prevention;
+- stale product warnings;
+- deleted-product destination warnings.
+
+==================================================
+3A. Exact product placement and information architecture
+==================================================
+
+The implementation plan must explicitly place the Shopify feature in the existing VibePin product.
+
+Do not design Shopify as a backend-only integration.
+
+The feature must be distributed across four product surfaces:
+
+1. Settings → Integrations
+2. Products
+3. Create Pins
+4. Generate AI Image Drawer
+
+Audit the real current navigation and component structure before proposing exact file changes.
+
+--------------------------------------------------
+A. Settings → Integrations
+--------------------------------------------------
+
+Shopify store connection and connection management belong in:
+
+Settings
+→ Integrations
+→ Shopify
+
+This area should contain:
+
+- Connect Shopify
+- connected store name and domain
+- connection status
+- granted scopes
+- last synced time
+- Sync now
+- reconnect
+- disconnect
+- sync error
+- initial-sync progress
+
+This page is for connection and sync management only.
+
+Do not put Pin creation, AI generation, scheduling, or automatic publishing controls here.
+
+After successful OAuth:
+
+Shopify authorization
+→ return to VibePin
+→ create StoreConnection
+→ start initial sync
+→ show sync progress
+→ route or link the user to Products.
+
+--------------------------------------------------
+B. Main navigation → Products
+--------------------------------------------------
+
+Add a first-class Products navigation destination.
+
+Recommended information architecture:
+
+Create Pins
+Products
+Plan
+Calendar
+Analytics
+Settings
+
+Verify the real current navigation before choosing the exact placement.
+
+Products is a shared Product Library, not a full ecommerce admin panel.
+
+Products page minimum UI:
+
+- store/source selector
+- Connect store action when no store exists
+- Sync now
+- last synced
+- search
+- All / Active / Draft / Archived / Out of stock filters
+- collection or product-type filters where supported
+- source badge
+- product image
+- product title
+- price
+- source status
+- image count
+- sync state
+- Create Pins action
+- View details action
+
+Product detail drawer minimum UI:
+
+- product images
+- title
+- description
+- vendor
+- product type
+- tags
+- collections
+- variants, if included in MVP
+- price
+- availability
+- product URL
+- last synced
+- Create Pins
+- Use in AI Image
+
+Syncing a Shopify product must only add or update it in Products.
+
+It must not automatically create a Pin Draft Card.
+
+--------------------------------------------------
+C. Create Pins entry
+--------------------------------------------------
+
+Create Pins must remain Upload-first.
+
+Do not introduce a source-mode chooser.
+
+The primary action remains:
+
+Upload images
+
+Add a secondary action:
+
+Select product
+
+Recommended header behavior:
+
+[Upload images] [Select product] [History]
+
+Recommended empty-state secondary entry:
+
+Create from your store?
+Select a product →
+
+Do not create a large Shopify panel on the default Create Pins page.
+
+Clicking Select product should open a reusable Product Picker:
+
+Select product
+→ search and filter products
+→ select one product
+→ select one or more product images
+→ confirm Create Pin Draft
+→ create an Unscheduled Pin Draft Card.
+
+Opening the picker or selecting a product must not create a Draft until the user confirms.
+
+Preserve current filters, Draft Board and Active Card behavior.
+
+--------------------------------------------------
+D. Product Picker
+--------------------------------------------------
+
+The Product Picker must be reusable from:
+
+- Create Pins
+- Generate AI Image Drawer
+- Products page “Create Pins”
+- later Batch Product workflows
+
+Minimum picker UI:
+
+- store/source selector
+- search
+- active/status filter
+- collection/product-type filter
+- product rows/cards
+- primary image
+- title
+- price
+- source badge
+- availability/status
+- image count
+- product detail preview
+- product image selection
+- confirm selection
+
+Do not duplicate the complete Products page inside the picker.
+
+Reuse existing picker infrastructure where possible.
+
+Audit whether InlineCreateAssetPicker, Product Picker, Asset Picker, My Products, Product Ideas, or similar components already exist.
+
+--------------------------------------------------
+E. Generate AI Image Drawer
+--------------------------------------------------
+
+Keep the existing AI Image Drawer.
+
+In the existing Product images section, connect Add to a real Product Picker.
+
+Recommended product image sources:
+
+- current Pin image
+- Upload
+- Library
+- Shopify Products
+- Product Ideas
+- URL Import
+
+Use only sources that truly exist after repository audit.
+
+When opened from an existing Pin Draft:
+
+- current Pin image remains Product Image #1;
+- Shopify product images can be added as additional inputs;
+- product metadata becomes generation context;
+- selecting a product image does not create a Pin Draft;
+- generated results create new child Pin Draft Cards;
+- the source Pin is never overwritten.
+
+Do not redesign or simplify the existing AI Image Drawer.
+
+--------------------------------------------------
+F. Linked Product in Edit Pin
+--------------------------------------------------
+
+When a Pin Draft is linked to a Shopify Product, show a compact Linked Product summary inside Edit Pin.
+
+Recommended placement:
+
+after AI actions and before the main Pin metadata fields,
+or at the top of More details if current layout constraints require it.
+
+Preferred compact UI:
+
+Linked product
+
+[thumbnail]
+Product title
+Shopify · Product status · Price
+
+[View product] [Change]
+
+Do not display a large ecommerce product card.
+
+The linked Product should provide AI context but should not become a lifecycle status.
+
+A missing, archived, deleted, or out-of-stock Product must not change the Pin lifecycle from Unscheduled / Scheduled / Posted.
+
+Show a separate warning instead.
+
+--------------------------------------------------
+G. Destination URL handling
+--------------------------------------------------
+
+Website URL remains a Pin field.
+
+Product URL remains a Product field.
+
+When a linked Product has a URL, show:
+
+Product link available
+[Use product link as destination]
+
+Rules:
+
+- never copy the Product URL automatically;
+- if the Pin Website URL is empty, the explicit action may fill it;
+- if the Pin Website URL already has a value, require confirmation before replacement;
+- unlinking a Product must not automatically erase the Pin Website URL;
+- later Product URL changes must not silently update existing Pin Draft URLs.
+
+--------------------------------------------------
+H. AI Copy placement
+--------------------------------------------------
+
+Do not add a separate product-copy generator.
+
+Continue to use the shared PinAICopyPanel and existing /api/ai-copy flow.
+
+Add linked Product context to the existing generation request.
+
+In Context used, show only actual inputs, such as:
+
+- image summary
+- linked product title/category
+- selected variant
+- keywords actually used
+- Pinterest Board
+
+Do not expose raw Shopify payloads or internal reasoning.
+
+--------------------------------------------------
+I. Batch product creation — later phase
+--------------------------------------------------
+
+Do not place a complex multi-product generator in the Create Pins header in Phase 1.
+
+Plan it as Phase 1.2 from the Products page:
+
+Select products
+→ Create Pins
+→ choose Pins per product
+→ choose product images / direction
+→ create independent Pin Draft Cards
+→ Batch Edit
+→ Schedule.
+
+The Phase 1 schema and Product Picker should be future-safe for this flow, but the first browser-demonstrable milestone should use one selected product.
+
+--------------------------------------------------
+J. Required placement deliverable
+--------------------------------------------------
+
+The plan must include a screen-by-screen placement map:
+
+- global navigation
+- Settings / Integrations
+- Products page
+- Product detail drawer
+- Product Picker
+- Create Pins header and empty state
+- Edit Pin linked-product section
+- Website URL action
+- AI Image Drawer
+- future batch entry
+
+For each surface, specify:
+
+- what appears there;
+- what does not appear there;
+- entry action;
+- exit/return behavior;
+- empty/loading/error/disconnected states;
+- exact current component or page that should be reused or extended;
+- whether the change belongs in Phase 1 or later.
+==================================================
+4. Explicit non-goals
+==================================================
+
+Do not include these in Phase 1 implementation:
+
+- WooCommerce integration
+- Etsy integration
+- Pinterest Catalog feed generation
+- automatic draft creation after sync
+- automatic scheduling
+- automatic publishing
+- back-in-stock campaigns
+- price-drop campaigns
+- recurring evergreen automation
+- order synchronization
+- customer synchronization
+- inventory management
+- fulfillment
+- full analytics by Product
+- Creative Intelligence Layer
+- model training
+- large AI architecture rewrites
+- complete variants and collections automation unless required for the basic picker
+- multi-store support beyond making the schema future-safe
+
+You may list these as later phases, but do not put them in the Phase 1 implementation scope.
+
+==================================================
+5. Required code audit
+==================================================
+
+Inspect and report the real current state of:
+
+- database and ORM;
+- authentication and workspace ownership;
+- existing OAuth patterns;
+- API route patterns;
+- encryption / secret storage;
+- jobs, queues, cron, or background processing;
+- current Product-related models or interfaces;
+- current Product Picker;
+- current Asset / Library system;
+- current AI Image Drawer;
+- current Create Pins page;
+- current Pin Draft data structure;
+- current AI Copy product context;
+- current Website URL handling;
+- current settings / integrations pages;
+- current navigation structure;
+- current test setup;
+- environment-variable conventions.
+
+Pay particular attention to whether the following can be reused:
+
+- existing product records;
+- existing product-image input UI;
+- existing InlineCreateAssetPicker or similar picker;
+- existing AI Image Product images section;
+- existing connected-account status patterns;
+- existing Pinterest OAuth patterns;
+- current storage provider for public images;
+- current workspace isolation utilities.
+
+For every claimed reusable capability, cite the exact file path and explain what is actually reusable.
+
+==================================================
+6. Architecture decisions to make
+==================================================
+
+Give a clear recommendation for each:
+
+1. Should Shopify records be persisted in the existing database or a new module?
+2. Should raw Shopify payloads be stored?
+3. Should product images be proxied/cached or used through Shopify CDN URLs?
+4. Should initial sync run synchronously, asynchronously, or through an existing job mechanism?
+5. What is the safe fallback if no job system exists?
+6. Should Phase 1 use Bulk Operations or paginated GraphQL queries?
+7. How should manual Sync now work?
+8. How should deleted and archived products affect existing Pin Drafts?
+9. Should existing Pin Drafts remain frozen after product updates?
+10. When should fresh Shopify data be rechecked before publishing?
+11. How should variants be represented in the MVP?
+12. How should StoreConnection status be modeled?
+13. How should OAuth reconnect and uninstall be handled?
+14. Which exact Shopify read scopes are required?
+15. Which capabilities require Shopify App Store review or mandatory compliance webhooks?
+
+Do not leave these as vague alternatives. Recommend one approach and explain why.
+
+==================================================
+7. Deliverables
+==================================================
+
+Produce the following:
+
+A. Executive summary
+- Is the current repository ready for Shopify integration?
+- What are the three largest technical risks?
+- What can be reused?
+- What must be built?
+
+B. Current capability map
+For each capability:
+- current status;
+- verified files;
+- reusable parts;
+- gaps;
+- risk.
+
+C. Gap matrix
+Use:
+- Done
+- Partial
+- Missing
+- Blocked
+- Needs verification
+
+D. Proposed architecture
+Include:
+- database entities;
+- API routes;
+- Shopify OAuth flow;
+- initial sync flow;
+- Product Library flow;
+- Product Picker flow;
+- Product-to-Pin flow;
+- AI grounding flow;
+- error-state flow.
+
+E. Exact data model proposal
+List tables/models, fields, indexes, uniqueness constraints, foreign keys, and lifecycle states.
+
+F. Exact file-level change plan
+For every proposed file:
+- create or modify;
+- responsibility;
+- why it is needed;
+- dependencies.
+
+Do not invent paths without first checking the repository structure.
+
+G. API contract plan
+Include proposed request/response/error contracts for:
+- connect Shopify;
+- OAuth callback;
+- connection status;
+- list products;
+- product details;
+- Sync now;
+- sync status;
+- disconnect;
+- Product Picker queries.
+
+H. UI plan
+Include:
+- Integrations settings;
+- Products page;
+- Product detail drawer;
+- Product Picker;
+- Create Pins linked-product state;
+- explicit destination-link action;
+- loading, empty, disconnected, reconnect, failed-sync and stale-data states.
+
+I. Migration strategy
+Explain:
+- schema migration;
+- compatibility with current Pin Drafts;
+- rollback;
+- feature flag;
+- existing localStorage-only draft implications;
+- how no current user workflow is broken.
+
+J. Testing plan
+Include:
+- unit tests;
+- OAuth security tests;
+- API integration tests;
+- sync idempotency tests;
+- product normalization tests;
+- multi-workspace isolation tests;
+- image URL tests;
+- browser QA;
+- Shopify development-store smoke test;
+- disconnect and reinstall tests;
+- expired-token tests;
+- deleted-product tests.
+
+K. Phased implementation packages for Sonnet
+Break Phase 1 into small reviewable work packages.
+
+Recommended shape:
+
+WP1 — data model and StoreConnection foundation
+WP2 — Shopify install and OAuth
+WP3 — initial product synchronization
+WP4 — Product Library
+WP5 — Product Picker and Create Pins integration
+WP6 — product-grounded AI Copy / AI Image context
+WP7 — destination-link safety
+WP8 — QA, security and release hardening
+
+For every work package include:
+- goal;
+- dependencies;
+- exact likely files;
+- acceptance criteria;
+- tests;
+- risk;
+- whether it can be merged independently.
+
+L. Open questions
+List only questions that genuinely block implementation.
+
+Do not use open questions to avoid making normal architecture decisions.
+
+==================================================
+8. Acceptance criteria for the plan
+==================================================
+
+The plan is acceptable only if:
+
+- it is based on verified repository files;
+- it does not propose a rewrite;
+- it keeps Pin Draft Card as the core object;
+- Shopify sync does not create Pins automatically;
+- Product URL never silently replaces Pin destination;
+- the Product Library is reusable across Create Pins and AI Image;
+- the design is future-safe for WooCommerce and Etsy without prematurely implementing them;
+- OAuth and workspace isolation are treated as security-critical;
+- the implementation is divided into small Sonnet-ready work packages;
+- it provides a clear Phase 1 boundary;
+- it identifies any external Shopify app-review or configuration dependencies.
+
+End with:
+
+1. Recommended implementation order.
+2. Recommended first PR.
+3. What Sonnet must not touch.
+4. The smallest browser-demonstrable milestone.
+5. A release gate checklist.

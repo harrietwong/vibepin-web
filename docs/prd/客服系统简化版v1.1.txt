@@ -1,0 +1,1095 @@
+# VibePin AI 客服与邮件升级 PRD
+
+## 无工单系统版本
+
+**版本：** V1.0
+**阶段：** P0 上线版本
+**产品形态：** AI-first Support + Conversation-based Email Escalation
+**核心原则：** 不建设工单系统，复用客服会话完成异步人工处理。
+
+---
+
+# 一、产品结论
+
+VibePin 第一阶段不建设传统工单系统。
+
+不建设的内容包括：
+
+* Ticket 模型
+* Support Request 独立模型
+* My Tickets
+* 用户工单详情页
+* 工单状态中心
+* 客服排队
+* Waiting for agent
+* Waiting for user
+* SLA
+* 实时人工接管
+* 入站邮件同步
+* 完整邮件线程管理
+
+系统复用现有 AI 客服会话作为唯一业务记录。
+
+当 AI 无法解决问题时：
+
+```text
+AI 会话
+→ 标记为需要邮件处理
+→ 自动生成中文摘要和翻译
+→ 出现在管理员“待邮件回复”列表
+→ 管理员使用中文回复
+→ 系统翻译为客户语言
+→ 管理员预览
+→ 发送邮件
+```
+
+这里的“待邮件回复列表”不是工单系统，只是对已有客服会话的筛选视图。
+
+---
+
+# 二、背景与问题
+
+VibePin 当前没有成熟的实时人工客服团队。
+
+用户的真实需求不是创建和管理工单，而是：
+
+```text
+尽快解决问题
+或者明确知道之后会通过邮件收到回复
+```
+
+建设完整工单系统会引入以下额外复杂度：
+
+* 用户需要理解 Ticket、状态和编号
+* 需要维护工单详情页和用户入口
+* 需要设计复杂状态流转
+* 容易产生实时客服和回复时效预期
+* 增加数据库模型、权限和页面数量
+* 增加测试和后续维护成本
+* 与当前人工运营能力不匹配
+
+因此，P0 阶段采用“会话即记录”的轻量方案。
+
+---
+
+# 三、产品目标
+
+## 3.1 用户目标
+
+用户能够：
+
+1. 在帮助页面直接向 AI 提问。
+2. 获得明确、可执行的 AI 回答。
+3. 在 AI 无法解决时，一键请求邮件帮助。
+4. 清楚知道回复会发送到哪个邮箱。
+5. 无需理解工单、状态或客服排队。
+6. 无需保持页面打开。
+7. 不会因为 AI 无法解决而失去求助渠道。
+
+## 3.2 管理员目标
+
+管理员能够：
+
+1. 查看所有需要邮件回复的 AI 会话。
+2. 直接看到客户原文和中文翻译。
+3. 直接看到 AI 自动生成的中文摘要。
+4. 了解问题为什么需要人工处理。
+5. 查看必要的用户和产品上下文。
+6. 使用中文撰写回复。
+7. 预览客户语言版本。
+8. 发送邮件并查看发送结果。
+9. 失败时安全重试。
+10. 避免重复发送和敏感信息泄露。
+
+## 3.3 商业目标
+
+* 降低用户因问题无法解决造成的流失。
+* 避免建设过重的客服基础设施。
+* 降低多语言客服的人工要求。
+* 提高退款、扣费、发布失败等高风险问题的处理可靠性。
+* 为未来工单、入站邮件和多客服协作保留扩展空间。
+
+---
+
+# 四、非目标
+
+本版本不包含：
+
+* 独立 Ticket 或 Support Request 数据表
+* 用户工单中心
+* 用户查看处理进度
+* 用户工单详情
+* 客服在线状态
+* 实时人工聊天
+* WebSocket 客服功能
+* 客服排队和自动分配
+* SLA 和超时提醒
+* 入站邮件 Webhook
+* 客户邮件回复同步后台
+* 邮件线程自动关联
+* 多管理员抢单或锁定
+* 高风险账户代操作
+* 自动退款
+* 客服模拟登录
+* 全功能 Helpdesk
+
+---
+
+# 五、核心用户流程
+
+## 5.1 AI 成功解决
+
+```text
+用户打开帮助页面
+→ 输入问题
+→ AI 分析问题和必要产品上下文
+→ AI 提供回答
+→ 用户点击“This solved my issue”
+→ 会话标记为 resolved_by_ai
+→ 流程结束
+```
+
+AI 回答应显示：
+
+```text
+VibePin AI · Automated answer
+```
+
+回答下方显示：
+
+```text
+This solved my issue
+I still need help
+```
+
+---
+
+## 5.2 用户主动要求人工帮助
+
+触发方式包括：
+
+* 点击 “I still need help”
+* 输入 “human support”
+* 输入 “contact support”
+* 输入 “I want to speak to a person”
+* 输入其他语言中的人工客服意图
+
+流程：
+
+```text
+用户要求人工帮助
+→ 系统确认账户邮箱
+→ 当前会话标记为 needs_email_reply
+→ 自动执行翻译和摘要任务
+→ 显示邮件升级确认
+```
+
+用户确认文案：
+
+```text
+Request sent
+
+We’ve sent your message to the VibePin support team.
+
+We’ll reply to your account email:
+customer@email.com
+
+You don’t need to keep this page open.
+```
+
+中文含义：
+
+```text
+请求已发送
+
+我们已将你的问题发送给 VibePin 支持团队。
+
+我们会通过以下账户邮箱回复：
+customer@email.com
+
+你不需要保持此页面打开。
+```
+
+不显示：
+
+* View ticket
+* Ticket status
+* Waiting for agent
+* My Tickets
+* 客服排队位置
+
+---
+
+## 5.3 AI 自动升级
+
+系统在以下情况自动升级：
+
+* 退款请求
+* 重复扣费
+* Credits 已扣但没有结果
+* 账户安全问题
+* 数据删除请求
+* 用户明确要求人工客服
+* AI 连续两次未能解决
+* AI 置信度低于配置阈值
+* 用户重复提出相同问题
+* 用户情绪明显愤怒或不满
+* AI 没有执行所需操作的权限
+* 高风险产品错误
+* 涉及不可逆操作
+* 系统无法获取关键产品状态
+
+自动升级后不再显示普通的“是否解决”反馈。
+
+显示：
+
+```text
+This issue requires human review.
+
+We’ve sent the details to our support team.
+We’ll reply by email.
+```
+
+消息标识：
+
+```text
+VibePin Support · Automatic confirmation
+```
+
+不能标识为：
+
+```text
+AI answer
+Resolved
+AI replied
+```
+
+---
+
+# 六、后台处理流程
+
+## 6.1 后台入口
+
+新增后台页面：
+
+```text
+/admin/support-inbox
+```
+
+页面名称：
+
+```text
+Support Inbox
+```
+
+中文后台可显示：
+
+```text
+客服邮件处理
+```
+
+该页面不是工单列表，而是满足以下条件的会话列表：
+
+```text
+escalation_state = needs_email_reply
+或
+email_state = failed
+```
+
+## 6.2 列表字段
+
+列表显示：
+
+* 会话编号
+* 用户邮箱
+* 用户语言
+* 问题分类
+* 升级原因
+* 邮件状态
+* 创建时间
+* 最近更新时间
+* 是否已发送回复
+
+推荐筛选：
+
+* 待回复
+* 发送失败
+* 已发送
+* 全部
+
+P0 不做：
+
+* 负责人分配
+* SLA
+* 多级优先级
+* 复杂标签
+* 自定义视图
+* 批量处理
+
+## 6.3 会话详情
+
+管理员打开一条会话后，显示以下区域。
+
+### 客户问题
+
+* 客户最新问题原文
+* 完整 AI 会话记录
+* 客户原语言
+* 中文翻译
+* 问题分类
+* 会话创建时间
+* 当前页面
+
+### AI 分析
+
+* 中文摘要
+* AI 已尝试的解决方式
+* 未解决原因
+* 自动升级原因
+* 推荐管理员下一步
+* 是否涉及资金
+* 是否涉及账户或安全
+* 情绪风险
+
+### 产品上下文
+
+优先显示：
+
+* 用户套餐
+* 账户状态
+* Pinterest 连接状态
+* 最近发布任务
+* 最近排程任务
+* 最近 AI 生成任务
+* Credits 余额
+* 最近 Credits 扣除
+* Billing 状态
+* 最新错误码
+* 相关 Job ID
+
+折叠区域显示：
+
+* User ID
+* Browser
+* OS
+* Page URL
+* Conversation ID
+* Raw context
+
+不得显示：
+
+* 密码
+* Session Token
+* Cookie
+* Pinterest Access Token
+* Pinterest Refresh Token
+* OAuth Secret
+* API Key
+* Authorization Header
+* 完整银行卡号
+* 完整支付信息
+
+### 回复区域
+
+显示：
+
+* 中文回复输入框
+* 中文建议回复
+* 客户语言译文
+* 编辑译文
+* 发送邮件
+* 邮件状态
+* 历史发送记录
+* 内部备注
+
+---
+
+# 七、多语言回复流程
+
+## 7.1 入站消息处理
+
+```text
+保存客户原文
+→ 自动识别语言
+→ 翻译为中文
+→ 生成中文摘要
+→ 保存翻译结果
+```
+
+翻译失败不能阻止升级记录创建。
+
+翻译失败时后台显示：
+
+```text
+自动翻译失败，请查看客户原文。
+```
+
+并允许管理员手动重试。
+
+## 7.2 管理员回复
+
+管理员默认使用中文输入。
+
+系统根据客户语言生成译文：
+
+```text
+管理员中文回复
+→ 保护术语和结构化数据
+→ 翻译为客户语言
+→ 显示译文预览
+→ 管理员修改
+→ 发送最终版本
+```
+
+必须保护：
+
+* VibePin
+* Pinterest
+* Board
+* Pin
+* AI Credits
+* Credits 数量
+* 金额
+* 日期
+* 退款状态
+* 订阅状态
+* 按钮名称
+* 错误码
+* URL
+* Job ID
+
+## 7.3 高风险内容
+
+以下内容必须预览后才能发送：
+
+* 金额
+* 退款
+* 重复扣款
+* 取消订阅
+* Credits 补偿
+* 数据删除
+* 账户权限
+* 法律问题
+* 隐私问题
+* 不可逆操作
+
+系统检测到高风险内容时显示：
+
+```text
+This reply contains billing, account, or irreversible-action information.
+Please review the translated version before sending.
+```
+
+发送按钮在译文未成功生成时保持禁用。
+
+---
+
+# 八、邮件发送设计
+
+## 8.1 发件配置
+
+```text
+From: VibePin Support <support@vibepin.com>
+Reply-To: support@vibepin.com
+```
+
+客户回复后进入普通支持邮箱。
+
+P0 不同步客户回复到后台。
+
+## 8.2 邮件主题
+
+推荐格式：
+
+```text
+Re: Your VibePin support request
+```
+
+可以附加简短引用编号，但不使用 Ticket 字样：
+
+```text
+Re: Your VibePin support request [VBP-1234]
+```
+
+引用编号仅用于邮箱搜索，不提供用户详情页面。
+
+## 8.3 发送状态
+
+邮件状态：
+
+```text
+not_created
+draft_ready
+sending
+sent
+failed
+```
+
+必须保存：
+
+* 收件邮箱
+* 客户语言
+* 管理员中文原文
+* 最终客户语言文本
+* 翻译引擎
+* 是否人工编辑译文
+* Provider Message ID
+* 发送时间
+* 失败原因
+* 重试次数
+
+## 8.4 防重复发送
+
+管理员点击发送时，前端立即禁用按钮。
+
+后端必须使用幂等键：
+
+```text
+conversation_id + reply_version
+```
+
+重复请求不得发送第二封邮件。
+
+发送结果不明确时，不得直接重新发送，必须先查询邮件 Provider 状态或由管理员确认重试。
+
+## 8.5 失败处理
+
+邮件发送失败时：
+
+* `email_state` 设置为 `failed`
+* 会话保持在待处理列表
+* 不标记为已回复
+* 显示 Provider 错误信息的安全摘要
+* 允许管理员重试
+* 记录每一次发送尝试
+
+---
+
+# 九、数据设计
+
+不新增 Ticket 或 SupportRequest 表。
+
+## 9.1 SupportConversation
+
+在现有客服会话表增加或复用：
+
+```text
+id
+user_id
+account_email
+detected_language
+category
+resolution_mode
+escalation_state
+escalation_reason
+ai_summary_zh
+translated_latest_message_zh
+context_snapshot
+created_at
+updated_at
+escalated_at
+resolved_at
+```
+
+`resolution_mode`：
+
+```text
+ai_active
+resolved_by_ai
+email_escalated
+```
+
+`escalation_state`：
+
+```text
+none
+processing
+needs_email_reply
+email_sent
+email_failed
+closed
+```
+
+这些字段只是会话处理元数据，不构成完整工单状态机。
+
+## 9.2 SupportMessage
+
+继续使用会话消息表：
+
+```text
+id
+conversation_id
+sender_type
+message_type
+original_text
+language
+translated_text_zh
+created_at
+```
+
+`sender_type`：
+
+```text
+user
+ai
+system
+admin
+```
+
+`message_type`：
+
+```text
+user_message
+ai_answer
+automatic_confirmation
+admin_reply
+internal_note
+```
+
+## 9.3 SupportEmail
+
+建议增加轻量邮件发送记录表：
+
+```text
+id
+conversation_id
+to_email
+from_email
+reply_to_email
+subject
+admin_source_text_zh
+translated_text
+target_language
+translation_engine
+translation_edited
+status
+provider_message_id
+failure_code
+failure_message
+idempotency_key
+retry_count
+sent_at
+created_at
+```
+
+该表只负责邮件发送审计，不负责工单管理。
+
+## 9.4 Audit Log
+
+复用全局审计日志，至少记录：
+
+* 会话升级
+* 自动分类结果
+* 管理员查看敏感上下文
+* 生成译文
+* 修改译文
+* 发送邮件
+* 重试发送
+* 关闭会话
+
+---
+
+# 十、API 设计
+
+## 用户侧
+
+```text
+POST /api/support/conversations
+POST /api/support/conversations/:id/messages
+POST /api/support/conversations/:id/feedback
+POST /api/support/conversations/:id/escalate
+```
+
+升级接口必须：
+
+1. 验证会话属于当前用户。
+2. 验证账户邮箱存在。
+3. 防止重复升级。
+4. 保存升级原因。
+5. 异步触发翻译、摘要和上下文快照。
+6. 返回用户确认文案。
+
+## 管理员侧
+
+```text
+GET /api/admin/support/conversations
+GET /api/admin/support/conversations/:id
+POST /api/admin/support/conversations/:id/generate-reply
+POST /api/admin/support/conversations/:id/translate-reply
+POST /api/admin/support/conversations/:id/send-email
+POST /api/admin/support/conversations/:id/retry-email
+POST /api/admin/support/conversations/:id/close
+```
+
+管理员 API 必须验证 Admin 权限。
+
+禁止仅依赖前端隐藏按钮实现权限控制。
+
+---
+
+# 十一、自动分类
+
+P0 至少支持：
+
+```text
+Billing / Refund
+Billing / Duplicate charge
+Credits issue
+Publishing issue
+Pinterest connection issue
+AI generation issue
+Subscription issue
+Account issue
+Other
+```
+
+关键字和语义识别示例：
+
+```text
+refund
+money back
+charged twice
+duplicate charge
+credits deducted
+credits missing
+publish failed
+board not loading
+Pinterest connection
+cancel subscription
+account hacked
+```
+
+自动升级分类：
+
+* Billing / Refund
+* Billing / Duplicate charge
+* Credits 已扣无结果
+* Account / Security
+* 数据删除
+* 法律或隐私
+
+分类置信度低时可以进入 `Other`，但不能阻止升级。
+
+---
+
+# 十二、权限设计
+
+## 普通用户
+
+只能：
+
+* 查看自己的 AI 会话
+* 发送消息
+* 提交反馈
+* 请求邮件帮助
+
+不能：
+
+* 查看后台字段
+* 查看其他用户会话
+* 修改邮件状态
+* 查看内部摘要
+* 查看管理员回复草稿
+
+## 管理员
+
+可以：
+
+* 查看需要处理的会话
+* 查看必要的产品上下文
+* 编写中文回复
+* 查看和修改译文
+* 发送邮件
+* 重试失败邮件
+* 添加内部备注
+* 关闭已完成会话
+
+## 系统服务
+
+可以：
+
+* 自动分类
+* 自动翻译
+* 自动生成摘要
+* 创建 Context Snapshot
+* 调用邮件 Provider
+* 更新邮件发送状态
+
+---
+
+# 十三、安全与隐私
+
+在进入 AI、翻译和邮件流程前，必须执行敏感数据过滤。
+
+过滤内容包括：
+
+```text
+password
+token
+cookie
+secret
+authorization header
+API key
+完整银行卡号
+完整支付方式
+敏感身份信息
+```
+
+产品上下文采用白名单模式，不允许将完整用户对象或完整日志直接传给 AI。
+
+日志只记录安全错误摘要，不记录 Token 或邮件完整敏感内容。
+
+管理员页面必须防止：
+
+* 未授权访问
+* ID 枚举
+* 跨用户数据读取
+* HTML 注入
+* 邮件内容脚本注入
+* 翻译结果注入
+* 重复提交
+
+---
+
+# 十四、异常场景
+
+必须处理：
+
+1. 用户没有账户邮箱。
+2. 邮箱格式无效。
+3. AI 升级接口超时。
+4. 会话已升级后再次点击。
+5. 语言识别错误。
+6. 翻译失败。
+7. AI 摘要失败。
+8. 产品上下文查询失败。
+9. 邮件 Provider 超时。
+10. Provider 返回失败。
+11. 管理员重复点击发送。
+12. 网络断开后前端不知道是否发送成功。
+13. 管理员修改中文后译文未刷新。
+14. 客户账户邮箱发生变化。
+15. 会话包含敏感数据。
+16. 管理员无权限访问。
+17. 已发送会话被再次发送。
+18. 浏览器刷新导致重复提交。
+
+原则：
+
+```text
+翻译或摘要失败不能导致客户升级请求丢失。
+邮件失败不能被显示为回复成功。
+未知发送状态不能自动重试。
+```
+
+---
+
+# 十五、UI 文案
+
+## AI 回答标识
+
+```text
+VibePin AI · Automated answer
+```
+
+## 自动确认标识
+
+```text
+VibePin Support · Automatic confirmation
+```
+
+## AI 回答反馈
+
+```text
+This solved my issue
+I still need help
+```
+
+## 高风险问题
+
+```text
+This issue requires human review.
+
+We’ve sent the details to our support team.
+We’ll reply by email.
+```
+
+## 邮件升级成功
+
+```text
+Request sent
+
+We’ll reply to your account email:
+customer@email.com
+
+You don’t need to keep this page open.
+```
+
+## 后台翻译失败
+
+```text
+Translation failed. Review the original customer message or try again.
+```
+
+## 邮件失败
+
+```text
+Email could not be sent.
+
+The conversation remains in the pending list.
+Review the error and try again.
+```
+
+---
+
+# 十六、验收标准
+
+## 用户侧
+
+* 用户可以正常与 AI 对话。
+* AI 回答和自动确认有明确视觉区分。
+* 用户可以点击 “I still need help”。
+* 退款、重复扣费和账户安全问题自动升级。
+* 升级后用户看到正确账户邮箱。
+* 升级后不出现 View ticket。
+* 不存在 My Tickets 入口。
+* 用户无需保持页面打开。
+* 重复点击不会创建重复升级记录。
+
+## 后台
+
+* 升级会话自动进入待回复列表。
+* 客户原文完整保存。
+* 系统自动识别客户语言。
+* 中文翻译自动生成。
+* 中文摘要自动生成。
+* 升级原因正确显示。
+* 管理员可以使用中文回复。
+* 客户语言译文可以预览和编辑。
+* 高风险内容必须预览后发送。
+* 发送成功后保存 Provider Message ID。
+* 发送失败时会话仍在待处理列表。
+* 管理员可以安全重试。
+* 重复点击不会发送重复邮件。
+* 已发送邮件有完整历史记录。
+
+## 安全
+
+* 普通用户无法访问管理员接口。
+* 普通管理员无法看到 Token、Cookie 或支付敏感信息。
+* AI 摘要中不包含敏感凭证。
+* 翻译记录中不包含敏感凭证。
+* 邮件正文中不包含内部技术秘密。
+* 所有发送操作有审计日志。
+
+## 邮件基础设施
+
+* SPF 配置通过。
+* DKIM 配置通过。
+* DMARC 已配置。
+* From 地址合法。
+* Reply-To 地址合法。
+* 测试邮件可以送达主流邮箱。
+* Provider 失败状态能够写入数据库。
+* 退信至少能够在邮件 Provider 控制台查看。
+
+---
+
+# 十七、P0 / P1 / P2
+
+## P0
+
+* AI 客服会话
+* AI 成功解决反馈
+* 自动升级规则
+* 会话升级元数据
+* 后台待邮件回复列表
+* 客户原文和中文翻译
+* AI 中文摘要
+* 产品 Context Snapshot
+* 管理员中文回复
+* 客户语言译文预览
+* 邮件发送
+* 防重复发送
+* 发送失败重试
+* 基础审计日志
+* 敏感数据过滤
+
+## P1
+
+* 更好的搜索和筛选
+* 常用回复模板
+* 自动生成建议回复
+* 重复问题识别
+* 自动标签
+* 低风险客服代操作
+* Credits 补偿审批
+* 邮件退信自动回写
+* 多管理员简单协作
+
+## P2
+
+* 入站邮件同步
+* 完整邮件线程
+* 用户请求历史
+* 正式工单系统
+* SLA
+* 客服分配
+* 实时人工接管
+* My Tickets
+* 客户门户
+* 高级审批流
+
+---
+
+# 十八、成功指标
+
+上线后重点观察：
+
+* AI 自助解决率
+* 用户点击 “I still need help” 的比例
+* 自动升级准确率
+* 误升级率
+* 人工邮件回复数量
+* 邮件发送成功率
+* 邮件重复发送次数
+* 翻译人工修改比例
+* 退款和重复扣款漏处理数量
+* Credits 问题平均处理时间
+* 客户重复询问率
+* 客服导致的用户流失反馈
+
+P0 阶段不设置复杂 SLA，但必须确保没有待回复会话因系统问题完全丢失。
+
+---
+
+# 十九、最终产品定义
+
+VibePin 第一阶段客服不是工单系统。
+
+它是：
+
+```text
+AI 会话
++ 自动升级判断
++ 后台待回复视图
++ 多语言邮件发送
+```
+
+用户只需要理解：
+
+```text
+AI 能否解决问题
+不能解决时会通过邮件得到回复
+```
+
+管理员只需要完成：
+
+```text
+查看问题
+→ 修改中文回复
+→ 检查译文
+→ 发送邮件
+```
+
+该方案以最少的新模型、页面和状态，完成 VibePin 上线前真正需要的客服闭环。

@@ -1,0 +1,1124 @@
+# VibePin PRD 补充：非 Create Pins / Plan 功能规则与定价模式
+
+本补充文档覆盖以下模块：
+
+1. Discover / Data 数据发现功能
+2. Calendar 日历功能
+3. History 历史记录功能
+4. Account / Platform Connections 平台账号连接
+5. Settings 设置
+6. Billing / Pricing 定价模式
+7. Credits / Usage Limits 使用限制
+8. Future Multi-platform Rules 多平台扩展规则
+
+---
+
+## 1. Discover / Data 数据发现功能
+
+### 1.1 功能定位
+
+Discover / Data 是 VibePin 的重要差异化能力，不应被弱化成普通“灵感页”。
+
+它的核心价值是帮助用户发现：
+
+* 哪些产品或内容更适合做 Pinterest
+* 哪些 Pin 正在获得高保存率
+* 哪些关键词值得围绕其创建内容
+* 哪些趋势可以转化为新的 Pin 创意
+
+Discover / Data 应服务于内容生产，而不是单纯展示数据。
+
+---
+
+### 1.2 核心功能
+
+Discover / Data 至少包含以下三类能力：
+
+#### 1.2.1 High-save products
+
+展示高保存率或高兴趣度的产品方向。
+
+用途：
+
+* 帮助 affiliate marketers 找选题
+* 帮助 Etsy / Shopify sellers 发现潜在内容方向
+* 帮助 Pinterest creators 决定下一批 Pin 的主题
+
+可展示字段：
+
+* Product / topic name
+* Category
+* Save potential
+* Related keywords
+* Example Pin angle
+* Suggested title idea
+* Suggested description idea
+* Trend strength
+* Competition level
+* Last updated
+
+---
+
+#### 1.2.2 Trending Pins
+
+展示近期表现较好的 Pinterest Pin 或趋势内容。
+
+用途：
+
+* 帮助用户参考当前流行视觉风格
+* 帮助用户理解标题、描述、关键词、图片构图
+* 帮助用户生成类似方向但不抄袭的原创 Pin
+
+可展示字段：
+
+* Pin image preview
+* Pin title
+* Category
+* Save / engagement signal
+* Related keywords
+* Visual style tags
+* Content angle
+* Why it works
+* Create similar Pin
+* Save to ideas
+
+规则：
+
+1. 不能鼓励用户直接复制别人的 Pin。
+2. 应强调“inspired by”或“create similar idea”，而不是 copy。
+3. 用户点击某个趋势 Pin 后，可进入 detail view。
+4. Detail view 可以提供：
+
+   * 视觉拆解
+   * 标题结构
+   * 关键词建议
+   * 可生成的 Pin idea
+5. “Create similar Pin” 应进入 Create Pins 的生成流程或创建草稿，但不要覆盖原趋势内容。
+
+---
+
+#### 1.2.3 Keyword ideas
+
+展示与 Pinterest 搜索和内容发现相关的关键词建议。
+
+用途：
+
+* 帮助用户写 Pin title
+* 帮助用户写 description
+* 帮助用户生成 tags / hashtags
+* 帮助用户规划内容主题
+
+可展示字段：
+
+* Keyword
+* Category
+* Search intent
+* Trend level
+* Competition
+* Related keywords
+* Suggested Pin title
+* Suggested description phrase
+* Best use case
+
+关键词类型：
+
+* Seed keyword
+* Related keyword
+* Long-tail keyword
+* Seasonal keyword
+* Product keyword
+* Audience keyword
+* Problem / solution keyword
+
+---
+
+## 2. Discover / Data 页面规则
+
+### 2.1 页面入口
+
+导航名称建议：
+
+* Discover
+* Trends
+* Data
+* Ideas
+
+当前更推荐：
+
+**Discover**
+
+原因：
+
+* 对普通用户更容易理解。
+* “Data” 太偏工具化。
+* “Trends” 只覆盖趋势，不覆盖关键词和产品机会。
+
+---
+
+### 2.2 页面结构
+
+Discover 页面可分为三个 Tab：
+
+1. High-save products
+2. Trending Pins
+3. Keyword ideas
+
+或采用左侧筛选 + 右侧卡片流：
+
+筛选项：
+
+* Category
+* Niche
+* Platform
+* Trend level
+* Competition
+* Content type
+* Updated time
+
+---
+
+### 2.3 从 Discover 到 Create Pins 的跳转规则
+
+用户在 Discover 中看到一个机会后，可以执行：
+
+1. Create Pin from this idea
+2. Save idea
+3. Add to campaign，未来功能
+4. Copy keyword
+5. Generate title / description
+
+跳转规则：
+
+#### Create Pin from this idea
+
+跳转到 Create Pins，并带入：
+
+* selected keyword
+* content angle
+* suggested title
+* suggested description
+* category
+* visual style suggestion
+
+但不自动发布，不自动排程。
+
+#### Save idea
+
+保存到 Ideas / Saved collection。
+
+如果 Saved collection 未实现，Phase 1 不展示该按钮。
+
+#### Generate title / description
+
+可以在 Discover 页面内预览 AI 文案，但最终仍应进入 Create Pins 完成编辑和发布。
+
+---
+
+### 2.4 Discover 与 Create Pins 的关系
+
+Discover 负责回答：
+
+“我应该做什么内容？”
+
+Create Pins 负责回答：
+
+“我如何把这个内容做成可发布的 Pin？”
+
+二者不能混在一起。
+
+Discover 不应该直接变成复杂编辑器。
+
+---
+
+## 3. Calendar 日历功能
+
+### 3.1 功能定位
+
+Calendar 是内容排程视图，不是所有 draft 的展示页。
+
+Calendar 只展示：
+
+* 已排程 Pins
+* 有 scheduledDate / scheduledTime 的 drafts
+* 未来可扩展展示 published history
+
+Calendar 不展示：
+
+* 刚上传但未排程的图片
+* 普通 draft
+* 未计划的 AI generated cards
+
+---
+
+### 3.2 Calendar 展示规则
+
+Calendar 默认展示：
+
+* Week view
+* Month view，后续可选
+* Scheduled Pins
+* Published Pins，可选
+
+每个 calendar item 显示：
+
+* Pin thumbnail
+* Title
+* Scheduled time
+* Platform icon
+* Status
+
+状态包括：
+
+* Scheduled
+* Publishing
+* Published
+* Failed
+
+---
+
+### 3.3 Calendar 点击规则
+
+用户点击日历中的 Pin：
+
+打开 DraftDetailsDrawer 或 Pin detail modal。
+
+用户可以：
+
+* 查看 Pin
+* 修改标题
+* 修改描述
+* 修改 Board
+* 修改 scheduled time
+* Publish now
+* Unschedule
+* Delete schedule
+
+---
+
+### 3.4 Calendar 与 Plan 的边界
+
+Weekly Plan 偏“内容计划与待安排”。
+
+Calendar 偏“时间表与排程结果”。
+
+规则：
+
+1. Draft 只有进入 scheduled 状态后，才必须出现在 Calendar。
+2. 未排程但 planned 的内容可以出现在 Weekly Plan，但不一定出现在 Calendar。
+3. Calendar 不能展示所有 Board drafts。
+4. Calendar 不负责大规模内容编辑，编辑应回到 drawer 或 Create Pins card。
+
+---
+
+## 4. History 历史记录功能
+
+### 4.1 当前策略
+
+History 不应立即删除。
+
+原因：
+
+* 旧 AI generation results 可能没有进入 pinDraftStore。
+* 有些结果只存在于 GenerationSession / HistoryEntry。
+* 直接删除 History 可能导致用户旧内容消失。
+
+---
+
+### 4.2 长期策略
+
+长期方向：
+
+Board 替代 History。
+
+但前提是：
+
+1. 旧 History 已完成迁移。
+2. 所有旧生成结果仍可访问。
+3. 无效图片有明确提示。
+4. 用户不会因为 UI 改版找不到旧内容。
+5. /app/history 有合理 redirect 或 fallback。
+
+---
+
+### 4.3 Legacy History 页面规则
+
+在迁移完成前，History 页面可以保留为：
+
+* View legacy history
+* Legacy generated Pins
+* Past generations
+
+不建议在主导航中继续强化它。
+
+可以弱化为：
+
+* Studio 页面中的 “View legacy history”
+* Settings / Data 中的历史入口
+* Migration fallback page
+
+---
+
+### 4.4 History 退休规则
+
+只有满足以下条件，才能退休 History：
+
+1. legacy records 已迁移。
+2. migration 可重复执行且不重复创建。
+3. 无法发布的旧图片已标记 unavailable。
+4. 新 Board 可以展示迁移后的内容。
+5. 用户能按 Uploaded / AI Generated / Published / Scheduled 过滤旧内容。
+6. E2E 测试通过。
+7. /app/history redirect 已完成。
+
+---
+
+## 5. Account / Platform Connections 平台账号连接
+
+### 5.1 Account 定义
+
+VibePin 中的 account 应定义为：
+
+**一个社交平台连接 = 一个 account**
+
+示例：
+
+* 连接 1 个 Pinterest 账号 = 1 account
+* 连接 1 个 TikTok 账号 = 1 account
+* 连接 1 个 Instagram 账号 = 1 account
+* 连接 1 个 Facebook Page = 1 account
+
+---
+
+### 5.2 Platform 显示规则
+
+当前产品应 Pinterest-first。
+
+未来定价页或营销页可以展示未来支持平台：
+
+* Pinterest
+* TikTok
+* Instagram
+* Facebook
+
+但产品功能 UI 中必须遵守：
+
+1. 没有实现发布的平台，不展示可操作发布按钮。
+2. 没有实现排程的平台，不展示 schedule 控件。
+3. 没有实现账号连接的平台，不允许用户连接。
+4. 不要让用户误以为当前已经支持多平台发布。
+
+---
+
+### 5.3 Connected Accounts 页面
+
+Settings 中应有 Connected accounts 页面。
+
+展示字段：
+
+* Platform
+* Account name
+* Connection status
+* Last synced
+* Permissions
+* Reconnect
+* Disconnect
+
+状态：
+
+* Connected
+* Disconnected
+* Token expired
+* Permission missing
+* Sync failed
+
+---
+
+### 5.4 Pinterest Connection 规则
+
+Pinterest 是 Phase 1 的核心平台。
+
+必须支持：
+
+* Connect Pinterest
+* Fetch boards
+* Refresh boards
+* Detect disconnected state
+* Detect token expiration
+* Reconnect
+* Disconnect
+
+如果 Pinterest 未连接：
+
+Create Pins 中 Board selector 应显示：
+
+* Connect Pinterest to choose a board
+
+Publish now 应不可用，并提示用户连接 Pinterest。
+
+---
+
+## 6. Settings 设置功能
+
+### 6.1 Settings 页面结构
+
+Settings 可包含：
+
+1. Profile
+2. Connected accounts
+3. Billing
+4. Usage / Credits
+5. Notifications
+6. Data / Export，后续
+7. Team，暂不做，除非团队功能上线
+
+---
+
+### 6.2 Profile
+
+字段：
+
+* Name
+* Email
+* Avatar，可选
+* Default timezone
+* Default platform，当前为 Pinterest
+
+---
+
+### 6.3 Default Settings
+
+可配置：
+
+* Default Pinterest board
+* Default destination URL
+* Default Pin style，后续
+* Default schedule window
+* Default timezone
+
+这些默认值不应强制覆盖用户在 card 中的手动编辑。
+
+---
+
+### 6.4 Billing
+
+Billing 页面显示：
+
+* Current plan
+* Renewal date
+* Usage limits
+* AI credits remaining
+* Connected account limit
+* Scheduled post limit，如采用
+* Upgrade / downgrade
+* Cancel plan
+* Invoice history，后续
+
+---
+
+## 7. Notifications 通知规则
+
+Phase 1 可以简化，不必做复杂通知中心。
+
+基础通知类型：
+
+1. Publish success
+2. Publish failed
+3. Schedule success
+4. Token expired
+5. AI generation failed
+6. Credits low
+7. Plan limit reached
+
+通知形式：
+
+* Toast
+* Inline error
+* Settings warning badge
+
+不建议 Phase 1 做：
+
+* Email notifications
+* Slack notifications
+* Mobile push
+* Full notification center
+
+---
+
+## 8. 定价模式总原则
+
+### 8.1 定价逻辑
+
+VibePin 不应只按“图片生成次数”收费。
+
+更合理的定价维度包括：
+
+1. Connected social accounts
+2. AI image credits
+3. AI copy generation
+4. Scheduled / published Pins
+5. Discover / Data access
+6. Advanced analytics，后续
+7. Batch operations
+8. Multi-platform support，未来
+
+---
+
+### 8.2 不建议当前采用的定价维度
+
+暂不建议把以下内容作为当前定价核心：
+
+* Users
+* Seats
+* Team members
+* Workspaces
+* Approval workflows
+
+原因：
+
+这些功能目前不是产品重点，如果定价页写了，会造成用户预期和实际功能不一致。
+
+---
+
+## 9. Recommended Pricing Tiers 推荐定价层级
+
+### 9.1 Free
+
+定位：
+
+试用产品核心价值。
+
+建议包含：
+
+* 1 account on 1 platform
+* Limited AI copy generations
+* Very limited AI image credits
+* Limited scheduled Pins
+* Basic Upload Pins
+* Basic Board
+* Basic Pinterest board selection
+* Limited Discover access
+* VibePin watermark，可选，不一定建议
+* No batch actions
+* No advanced analytics
+
+推荐文案：
+
+**Free**
+For trying VibePin with one Pinterest account.
+
+限制建议：
+
+* 1 connected account
+* 1 platform
+* 每月少量 AI credits
+* 每月少量 scheduled / published Pins
+* Discover 数据只展示部分结果
+
+---
+
+### 9.2 Starter
+
+定位：
+
+适合 solo creator、blogger、affiliate beginner。
+
+建议包含：
+
+* 1 account per platform
+* Pinterest publishing
+* Upload Pins
+* AI copy generation
+* Basic AI image credits
+* Manual scheduling
+* Calendar
+* Basic Discover
+* Keyword ideas
+* Basic trending Pins
+
+推荐文案：
+
+**Starter**
+For solo creators building a consistent Pinterest workflow.
+
+账号规则：
+
+* 1 account per platform
+
+如果当前只支持 Pinterest，则实际显示：
+
+* 1 Pinterest account
+
+未来平台上线后再扩展为：
+
+* 1 account per platform
+
+---
+
+### 9.3 Pro
+
+定位：
+
+适合 serious creators、affiliate marketers、Etsy / Shopify sellers。
+
+建议包含：
+
+* 2 accounts per platform
+* More AI image credits
+* More AI copy generation
+* Smart Schedule
+* Batch edit
+* Batch AI copy generation
+* High-save products
+* Trending Pins
+* Keyword ideas
+* Better limits for scheduled / published Pins
+* Priority generation speed，可选
+
+推荐文案：
+
+**Pro**
+For creators and sellers producing Pins every week.
+
+账号规则：
+
+* 2 accounts per platform
+
+差异化重点：
+
+* 数据发现能力完整开放
+* 批量操作
+* 更多 AI credits
+* 更适合持续生产内容
+
+---
+
+### 9.4 Business
+
+定位：
+
+适合多品牌运营者、小型 agency、电商团队。
+
+建议包含：
+
+* 3 accounts per platform
+* Highest AI credits
+* Highest scheduled / published Pin limits
+* Full Discover access
+* Advanced keyword and trend data
+* Batch publish
+* Bulk Create AI Pins
+* Priority support
+* Brand presets，后续
+* Analytics，后续
+
+推荐文案：
+
+**Business**
+For brands and operators managing multiple Pinterest accounts.
+
+账号规则：
+
+* 3 accounts per platform
+
+注意：
+
+如果 team / seats / workspaces 没有实现，不要写 team seats。
+
+可以写：
+
+* For multi-brand operators
+
+但不要写：
+
+* Invite your team
+* Team approval
+* Multiple seats
+
+除非功能真实存在。
+
+---
+
+## 10. Pricing Display 规则
+
+### 10.1 Account 文案
+
+不要写：
+
+* 10 connected accounts
+* 25 connected accounts
+
+推荐写：
+
+* 1 account on 1 platform
+* 1 account per platform
+* 2 accounts per platform
+* 3 accounts per platform
+
+这样更清楚，也更适合未来多平台扩展。
+
+---
+
+### 10.2 Platform icons
+
+在 pricing table 的 account 行旁边展示平台图标：
+
+* Pinterest
+* TikTok
+* Instagram
+* Facebook
+
+但应通过脚注说明：
+
+* Pinterest-first at launch
+* Additional platforms will be enabled as they become available
+
+如果当前产品里实际只支持 Pinterest，不要在功能列表里写：
+
+* Publish to TikTok
+* Publish to Instagram
+* Publish to Facebook
+
+---
+
+### 10.3 Discover / Data 文案
+
+不要只写：
+
+* Discovery access
+* Opportunity intelligence
+
+推荐明确写：
+
+* High-save products
+* Trending Pins
+* Keyword ideas
+
+这是 VibePin 的重要差异化，应该在 pricing table 中单独展示。
+
+---
+
+## 11. Pricing Table 示例结构
+
+| Feature                    |                    Free |                Starter |                     Pro |                Business |
+| -------------------------- | ----------------------: | ---------------------: | ----------------------: | ----------------------: |
+| Connected accounts         | 1 account on 1 platform | 1 account per platform | 2 accounts per platform | 3 accounts per platform |
+| Upload Pins                |                 Limited |                    Yes |                     Yes |                     Yes |
+| AI copy generation         |                 Limited |               Standard |            Higher limit |           Highest limit |
+| AI image credits           |           Trial credits |                  Basic |                    More |                    Most |
+| Scheduled / published Pins |                 Limited |               Standard |                  Higher |                 Highest |
+| Pinterest publishing       |                     Yes |                    Yes |                     Yes |                     Yes |
+| Calendar                   |                   Basic |                    Yes |                     Yes |                     Yes |
+| Smart Schedule             |                      No |     Limited / optional |                     Yes |                     Yes |
+| Batch edit                 |                      No |           No / limited |                     Yes |                     Yes |
+| Batch publish              |                      No |                     No |      Limited / optional |                     Yes |
+| High-save products         |                 Preview |                  Basic |                    Full |                    Full |
+| Trending Pins              |                 Preview |                  Basic |                    Full |                    Full |
+| Keyword ideas              |                 Limited |               Standard |                    Full |                    Full |
+| Analytics                  |                      No |          Basic / later |        Advanced / later |        Advanced / later |
+| Priority support           |                      No |                     No |                Optional |                     Yes |
+
+---
+
+## 12. Credits 规则
+
+### 12.1 AI Image Credits
+
+AI image generation 应使用 credits。
+
+消耗场景：
+
+* Create AI Pin
+* Generate AI image variants
+* Batch Create AI Pins
+
+不建议消耗 credits 的场景：
+
+* 手动编辑字段
+* 上传图片
+* 选择 Board
+* 排程
+* 普通保存
+
+---
+
+### 12.2 AI Copy Credits
+
+AI copy generation 可采用两种模式：
+
+Option A：计入 AI credits
+Option B：单独限制 AI copy generations
+
+更推荐：
+
+* AI image 用 credits
+* AI copy 用 monthly generation limit
+
+原因：
+
+AI image 成本更高，用户也更容易理解“credits”。
+AI copy 更适合作为套餐限制。
+
+---
+
+### 12.3 Credit 消耗前确认
+
+以下功能必须在消耗 credits 前确认：
+
+* Create AI Pin
+* Batch Create AI Pins
+* 多版本 AI image generation
+
+确认弹窗应显示：
+
+* 将生成多少张
+* 将消耗多少 credits
+* 当前剩余 credits
+* 失败是否退还 credits，需明确
+
+---
+
+## 13. Usage Limit 规则
+
+可能限制项：
+
+1. connected accounts
+2. AI image credits
+3. AI copy generations
+4. scheduled Pins per month
+5. published Pins per month
+6. Discover results unlocked
+7. saved ideas，后续
+8. batch operation count，后续
+
+不建议限制：
+
+* Board 中 draft 数量，除非技术或成本需要
+* 手动编辑次数
+* 上传图片次数，除非存储成本过高
+
+---
+
+## 14. Upgrade Triggers 升级触发点
+
+当用户达到限制时显示 upgrade prompt。
+
+触发场景：
+
+1. 连接第二个账号。
+2. AI image credits 用完。
+3. AI copy generation 达到上限。
+4. 想使用 Smart Schedule。
+5. 想使用 Batch edit。
+6. 想查看完整 High-save products。
+7. 想查看完整 Trending Pins。
+8. 想查看完整 Keyword ideas。
+9. 想发布或排程超过套餐限制的 Pins。
+
+Upgrade prompt 要具体说明用户为什么需要升级。
+
+例如：
+
+“You’ve used all AI image credits for this month. Upgrade to Pro to create more AI Pin variations.”
+
+不要泛泛写：
+
+“Upgrade to unlock more features.”
+
+---
+
+## 15. Free Plan 边界
+
+Free 的目标是让用户体验核心价值，而不是长期免费使用完整产品。
+
+Free 必须让用户完成一次核心闭环：
+
+Upload image
+→ Generate AI copy
+→ Edit
+→ Schedule or Publish
+
+但应限制：
+
+* AI credits
+* scheduled / published Pins
+* Discover access
+* connected accounts
+* batch actions
+
+Free 不应包含完整：
+
+* batch edit
+* batch publish
+* full Discover
+* advanced data
+* high AI image limits
+
+---
+
+## 16. Starter / Pro / Business 差异化
+
+### 16.1 Starter
+
+卖点：
+
+* 开始稳定做 Pinterest
+* 适合单账号用户
+* 低门槛体验 AI copy + scheduling
+
+### 16.2 Pro
+
+卖点：
+
+* 更高频内容生产
+* 批量效率
+* 完整数据发现
+* 更多 AI credits
+
+### 16.3 Business
+
+卖点：
+
+* 多账号 / 多品牌运营
+* 更高限额
+* 更强批量能力
+* 更完整数据和优先支持
+
+---
+
+## 17. 不应在 Pricing 中提前承诺的内容
+
+除非已经实现，否则不要写：
+
+1. Team members
+2. Invite teammates
+3. Approval workflow
+4. Workspace
+5. Client management
+6. TikTok publishing
+7. Instagram publishing
+8. Facebook publishing
+9. Advanced analytics
+10. Auto-reposting
+11. AI performance prediction
+12. Guaranteed traffic growth
+
+可以写成 future roadmap，但不要作为当前套餐功能。
+
+---
+
+## 18. 定价页核心卖点结构
+
+定价页不应只展示表格。
+
+建议页面结构：
+
+1. Hero
+
+   * Pinterest-first AI Pin workflow
+   * Upload, generate, schedule, publish
+
+2. Plan cards
+
+   * Free
+   * Starter
+   * Pro
+   * Business
+
+3. Feature comparison table
+
+4. Data advantage section
+
+   * High-save products
+   * Trending Pins
+   * Keyword ideas
+
+5. AI credits explanation
+
+6. Connected accounts explanation
+
+7. FAQ
+
+---
+
+## 19. Pricing FAQ 建议
+
+### Q1: What is a connected account?
+
+A connected account is one social platform account connected to VibePin, such as one Pinterest account.
+
+### Q2: What does “per platform” mean?
+
+It means you can connect the allowed number of accounts on each supported platform. VibePin is Pinterest-first at launch, and additional platforms will be enabled as they become available.
+
+### Q3: What uses AI credits?
+
+AI image generation uses credits, including creating AI Pin variations from uploaded images.
+
+### Q4: Does AI copy use credits?
+
+AI copy may have a monthly usage limit depending on your plan.
+
+### Q5: Can I publish to Instagram, TikTok, or Facebook?
+
+Only supported platforms available in the product can be published to. VibePin is Pinterest-first at launch.
+
+### Q6: Do uploaded images count as AI credits?
+
+No. Uploading images does not consume AI credits.
+
+---
+
+## 20. 最终定价建议
+
+推荐采用四档：
+
+1. Free
+2. Starter
+3. Pro
+4. Business
+
+核心限制维度：
+
+* connected accounts
+* AI image credits
+* AI copy generations
+* scheduled / published Pins
+* Discover access
+* batch operations
+
+核心差异化展示：
+
+* High-save products
+* Trending Pins
+* Keyword ideas
+* Pinterest publishing
+* AI Pin creation
+* Smart Schedule
+* Batch edit
+
+不要当前引入：
+
+* seats
+* teams
+* workspaces
+* approval workflow
+
+最终推荐账号规则：
+
+Free：
+
+* 1 account on 1 platform
+
+Starter：
+
+* 1 account per platform
+
+Pro：
+
+* 2 accounts per platform
+
+Business：
+
+* 3 accounts per platform
+
+当前如果只实现 Pinterest，产品内就只显示 Pinterest 相关能力。多平台可以作为未来扩展，但不能在操作层面提前假装可用。

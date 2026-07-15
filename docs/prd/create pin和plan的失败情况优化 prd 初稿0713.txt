@@ -1,0 +1,73 @@
+# Create Pins & Plan 失败情况优化 PRD
+
+**版本：** v1.0（作为《Create Pins & Plan 工作流优化 V1.0》第 12/13 节的修订，合并后编号 V1.1）
+**日期：** 2026-07-13
+**状态：** 已评审定稿（Fable 评审 + 用户确认三项决策）
+**动机：** 失败 Banner 告警强度过高（"太吓人"）；点击 Review failed Pins 后 Banner 不消失（用户已在处理却仍被催促）。
+
+---
+
+## 1. 设计原则
+
+失败可见性原则不变（失败必须持续可发现、可恢复），调整的是**告警强度与信息密度的分配**：
+- 高强度提醒（Banner）只在"用户还不知道有失败"时出现；
+- 用户知晓/处理后，降级为低强度常驻提醒（统计区计数），永不完全消失；
+- 新失败出现时重新升级为 Banner。
+
+## 2. Banner 改造
+
+### 2.1 视觉与文案
+- 由全宽深红横幅改为**浅色警示卡**（圆角、含边距、警示图标），深浅主题用 `--app-*` token 自动适配，不硬编码颜色。
+- 文案：标题 `{n} Pin(s) failed to publish`；正文 `Review the errors and choose how to continue.`；CTA `Review failed Pins`；右上角 `×` 关闭。
+
+### 2.2 消失语义（替代 V1.0 §12.4 "数量为 0 前持续显示"）
+- **点击 CTA = 等同关闭（dismiss）**：跳转后 Banner 视为已读，返回 Plan 不再显示；
+- **× 关闭**：会话级 dismiss（现有语义保留）；
+- **上下文抑制**：用户处于 Create Pins 的 Failed 视图时，Banner 无条件不渲染；
+- **重现规则**：失败计数**上升**（新失败）时 Banner 重新出现（现有逻辑保留）；
+- 计数为 0 时 Banner 与统计提醒都消失。
+
+## 3. 统计区常驻小提醒（新增）
+
+- Plan 页现有 `CompactSummaryBar`（This week: N scheduled · N published · N unscheduled）**新增 `N failed` 项**：警示色、失败数 > 0 时显示、可点击；
+- 点击行为与 Banner CTA **统一**：跳转 Create Pins Failed 视图（Publish failures 子筛选）；
+- Create Pins 侧不新增：Failed 筛选 chip 的计数已承担此角色。
+
+## 4. Failed 视图子筛选（新增）
+
+- Failed 筛选内新增二级 chips：`Publish failures (n)` / `Generation failures (n)` / `All (n)`；
+- 判定：publishError 非空 → Publish failures；generationStatus ∈ {failed,error} 且无 publishError → Generation failures；
+- **入口默认值**：经 Banner CTA / 统计区提醒进入 → 默认 `Publish failures`（解决 Banner 数字与列表数量不一致）；手动点 Failed chip → 默认 `All`；
+- 徽章文案区分：`Publish failed` / `Generation failed`（替代统一的 `Failed`）。
+
+## 5. 失败卡文案收紧
+
+| 元素 | 文案 |
+|------|------|
+| 徽章 | Publish failed / Generation failed |
+| 错误标题 | 具体 publishError 原文（不变） |
+| 提示（transient） | Usually temporary — try publishing again. |
+| 提示（content） | Fix the Pin details, then retry. |
+| 提示（auth） | Reconnect Pinterest, then retry. |
+| 原排程行 | Was scheduled: {Mon DD, HH:mm}（用 previousScheduledTime） |
+| Board 行 | Board: {boardName} |
+
+操作矩阵不变（transient 主 Retry publish / content 主 Edit / More: Move to Unscheduled、Delete）。
+
+## 6. 非目标
+
+- 不改失败数据模型（failureType/errorCategory/previousScheduledTime 沿用）；
+- 不改失败落库与 cron 行为；
+- 不新增 Failed 独立页面；
+- 不做邮件通知（仍为下一轮 P1）。
+
+## 7. 验收标准
+
+- Banner 为浅色警示卡，深浅主题下均正常；
+- 点击 CTA 跳转 Failed 视图（Publish failures 选中）且 Banner 不再出现（本会话），直到新失败；
+- × 关闭后统计区仍显示 `N failed`，点击可进入 Failed 视图；
+- 处于 Failed 视图时 Banner 不渲染；
+- 新失败（计数上升）时 Banner 重现；
+- Failed 视图三个子筛选计数正确，Banner 数字与 Publish failures 子筛选数量一致；
+- 失败卡显示新文案集，徽章区分两类失败；
+- 失败数归 0 时 Banner 与统计提醒消失。
