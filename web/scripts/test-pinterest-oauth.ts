@@ -272,7 +272,7 @@ await test("PinterestClient refreshes and retries exactly once on 401", async ()
         refreshCalls++;
         return { accessToken: "new", refreshToken: "rt2", accessTokenExpiresAt: null, refreshTokenExpiresAt: null, scopes: [] };
       },
-      persistTokens: async () => {},
+      persistTokens: async () => ({ applied: true }),
     },
   });
   const user = await client.getCurrentPinterestUser();
@@ -290,7 +290,7 @@ await test("PinterestClient does NOT retry more than once on repeated 401", asyn
     hooks: {
       fetchImpl: async () => { fetchCalls++; return new Response("{}", { status: 401 }); },
       refreshFn: async () => { refreshCalls++; return { accessToken: "new", refreshToken: "rt2", accessTokenExpiresAt: null, refreshTokenExpiresAt: null, scopes: [] }; },
-      persistTokens: async () => {},
+      persistTokens: async () => ({ applied: true }),
     },
   });
   await expectThrow(() => client.getCurrentPinterestUser(), "should throw after single retry");
@@ -306,7 +306,7 @@ await test("toSafeStatus never includes token fields", () => {
     access_token_encrypted: "v1:secret", refresh_token_encrypted: "v1:secret",
     access_token_expires_at: null, refresh_token_expires_at: null,
     scopes: ["user_accounts:read", "boards:read", "boards:write", "pins:read", "pins:write"], needs_reconnect: false,
-    created_at: "", updated_at: "", disconnected_at: null,
+    created_at: "", updated_at: "", disconnected_at: null, token_version: 0,
   };
   const safe = connectionStore.toSafeStatus(row);
   const json = JSON.stringify(safe);
@@ -323,7 +323,7 @@ const mkRow = (scopes: string[]) => ({
   access_token_encrypted: "v1:secret", refresh_token_encrypted: "v1:secret",
   access_token_expires_at: null, refresh_token_expires_at: null,
   scopes, needs_reconnect: false,
-  created_at: "", updated_at: "", disconnected_at: null,
+  created_at: "", updated_at: "", disconnected_at: null, token_version: 0,
 });
 
 await test("toSafeStatus: production-scope connection (no boards:write) is usable, NOT needsReconnect", () => {
@@ -414,7 +414,7 @@ await test("concurrent refreshes for one user coalesce into a single refresh + a
         await new Promise(r => setTimeout(r, 40)); // widen the race window
         return { accessToken: `at${refreshCalls}`, refreshToken: `rt${refreshCalls}`, accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), refreshTokenExpiresAt: null, scopes: [] };
       },
-      persistTokens: async (_uid, t) => { persisted.push({ accessToken: t.accessToken, refreshToken: t.refreshToken }); },
+      persistTokens: async (_uid, t) => { persisted.push({ accessToken: t.accessToken, refreshToken: t.refreshToken }); return { applied: true }; },
     },
   });
   const [a, b] = [mk(), mk()];
@@ -448,6 +448,68 @@ await test("debug-status returns booleans + non-secret host only (never secrets)
     if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
     if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
   }
+});
+
+// ── Cross-instance refresh CAS (Vercel multi-instance safety) ─────────────────
+await test("refresh CAS: a lost write adopts the other instance's tokens, no reconnect", async () => {
+  let marked = false;
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const client = service.PinterestClient.forTest({
+    accessToken: "stale", refreshToken: "rt-old", accessExpiresAt: past, // expiring → forces doRefresh
+    hooks: {
+      // Our refresh "succeeds" against Pinterest…
+      refreshFn: async () => ({ accessToken: "mine", refreshToken: "rt-mine", accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), refreshTokenExpiresAt: null, scopes: [] }),
+      // …but the CAS loses: another instance already bumped the version.
+      persistTokens: async () => ({ applied: false }),
+      reloadConnection: async () => ({ accessToken: "theirs", refreshToken: "rt-theirs", accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), tokenVersion: 1 }),
+      markReconnect: async () => { marked = true; },
+      fetchImpl: async (_url, init) => {
+        const auth = String((init?.headers as Record<string, string>)?.Authorization ?? "");
+        // The request must go out with the ADOPTED token, not ours or the stale one.
+        assert(auth.includes("theirs"), `must use the other instance's token, got ${auth}`);
+        return new Response(JSON.stringify({ username: "creator", account_type: "BUSINESS" }), { status: 200 });
+      },
+    },
+  });
+  const user = await client.getCurrentPinterestUser();
+  assertEq(user.username, "creator", "request succeeds with adopted tokens");
+  assert(!marked, "a lost CAS must NOT mark needs_reconnect");
+});
+
+await test("refresh CAS: invalid_grant with a bumped version adopts, does not reconnect", async () => {
+  let marked = false;
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const client = service.PinterestClient.forTest({
+    accessToken: "stale", refreshToken: "rt-old", accessExpiresAt: past,
+    hooks: {
+      // Pinterest rejects OUR refresh (another instance already consumed the old token).
+      refreshFn: async () => { throw new service.PinterestApiError("invalid_grant", 400, "invalid_grant"); },
+      // But the stored version moved past ours → someone else refreshed successfully.
+      reloadConnection: async () => ({ accessToken: "theirs", refreshToken: "rt-theirs", accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), tokenVersion: 1 }),
+      markReconnect: async () => { marked = true; },
+      fetchImpl: async () => new Response(JSON.stringify({ username: "creator", account_type: "BUSINESS" }), { status: 200 }),
+    },
+  });
+  const user = await client.getCurrentPinterestUser();
+  assertEq(user.username, "creator", "invalid_grant race recovers with adopted tokens");
+  assert(!marked, "a concurrent-refresh invalid_grant must NOT mark needs_reconnect");
+});
+
+await test("refresh CAS: invalid_grant with NO version bump is a real reconnect", async () => {
+  let marked = false;
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const client = service.PinterestClient.forTest({
+    accessToken: "stale", refreshToken: "rt-dead", accessExpiresAt: past,
+    hooks: {
+      refreshFn: async () => { throw new service.PinterestApiError("invalid_grant", 400, "invalid_grant"); },
+      // Version unchanged → nobody else refreshed → the token is genuinely dead.
+      reloadConnection: async () => ({ accessToken: "stale", refreshToken: "rt-dead", accessExpiresAt: past, tokenVersion: 0 }),
+      markReconnect: async () => { marked = true; },
+      fetchImpl: async () => new Response("{}", { status: 200 }),
+    },
+  });
+  await expectThrow(() => client.getCurrentPinterestUser(), "genuinely-dead token must throw NeedsReconnect");
+  assert(marked, "a real invalid_grant (no concurrent refresh) MUST mark needs_reconnect");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

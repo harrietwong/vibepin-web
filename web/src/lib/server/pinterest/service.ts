@@ -209,15 +209,39 @@ type ClientHooks = {
   persistTokens: (uid: string, t: {
     accessToken: string; refreshToken: string | null;
     accessTokenExpiresAt: string | null; refreshTokenExpiresAt: string | null;
-  }) => Promise<void>;
+  }, expectedVersion?: number) => Promise<{ applied: boolean }>;
   markReconnect: (uid: string) => Promise<void>;
+  /** Re-read the persisted connection — used after a lost refresh CAS to adopt the
+   *  tokens another instance just rotated in, instead of failing. */
+  reloadConnection: (uid: string) => Promise<ReloadedConnection | null>;
 };
+
+/** What a re-read of the connection yields for adopting another instance's refresh. */
+type ReloadedConnection = {
+  accessToken: string;
+  refreshToken: string | null;
+  accessExpiresAt: string | null;
+  tokenVersion: number;
+};
+
+async function reloadConnectionTokens(uid: string): Promise<ReloadedConnection | null> {
+  const row = await getActiveConnection(uid);
+  if (!row || !row.access_token_encrypted) return null;
+  const t = decryptTokens(row);
+  return {
+    accessToken: t.accessToken,
+    refreshToken: t.refreshToken,
+    accessExpiresAt: t.accessTokenExpiresAt,
+    tokenVersion: row.token_version,
+  };
+}
 
 const DEFAULT_HOOKS: ClientHooks = {
   fetchImpl: (input, init) => fetch(input, init),
   refreshFn: refreshAccessToken,
   persistTokens: updateTokens,
   markReconnect: markNeedsReconnect,
+  reloadConnection: reloadConnectionTokens,
 };
 
 /** The refreshed token values a single refresh produced, shared by coalesced callers. */
@@ -225,6 +249,7 @@ type RefreshResult = {
   accessToken: string;
   refreshToken: string | null;
   accessExpiresAt: string | null;
+  tokenVersion: number;
 };
 
 // ── Concurrent-refresh coalescing ─────────────────────────────────────────────
@@ -244,6 +269,8 @@ export class PinterestClient {
   private accessToken: string;
   private refreshToken: string | null;
   private accessExpiresAt: string | null;
+  /** token_version at the time this client last read/refreshed — the CAS baseline. */
+  private tokenVersion: number;
   private hooks: ClientHooks;
   /** Whether this client coalesces refresh via the shared per-user lock (prod: yes). */
   private shareRefresh: boolean;
@@ -257,6 +284,7 @@ export class PinterestClient {
     this.accessToken = t.accessToken;
     this.refreshToken = t.refreshToken;
     this.accessExpiresAt = t.accessTokenExpiresAt;
+    this.tokenVersion = row.token_version;
   }
 
   /** Build a client for a user, or throw NotConnectedError. */
@@ -328,6 +356,7 @@ export class PinterestClient {
     c.accessToken = opts.accessToken;
     c.refreshToken = opts.refreshToken ?? null;
     c.accessExpiresAt = opts.accessExpiresAt ?? null;
+    c.tokenVersion = 0;
     c.hooks = { ...DEFAULT_HOOKS, ...(opts.hooks ?? {}) };
     c.shareRefresh = opts.shareRefresh ?? false;
     return c;
@@ -367,10 +396,11 @@ export class PinterestClient {
     }
 
     const result = await promise;
-    // Adopt the shared fresh tokens onto this instance.
+    // Adopt the shared fresh tokens (and the new CAS baseline) onto this instance.
     this.accessToken = result.accessToken;
     this.refreshToken = result.refreshToken ?? this.refreshToken;
     this.accessExpiresAt = result.accessExpiresAt;
+    this.tokenVersion = result.tokenVersion;
   }
 
   /**
@@ -380,30 +410,52 @@ export class PinterestClient {
    * (e.g. invalid_grant) marks the connection needs_reconnect and throws.
    */
   private async performRefresh(refreshToken: string): Promise<RefreshResult> {
+    const baseVersion = this.tokenVersion;
     let next: TokenSet;
     try {
       next = await this.hooks.refreshFn(refreshToken);
     } catch (err) {
-      // 4xx (e.g. invalid_grant) ⇒ permanent; mark for reconnect.
       const status = err instanceof PinterestApiError ? err.status : 500;
       if (status >= 400 && status < 500) {
+        // invalid_grant can mean the token is truly dead — OR that another instance
+        // rotated it out from under us (cross-instance race). Re-read first: if the
+        // stored version has moved past ours, someone else refreshed successfully;
+        // adopt their tokens rather than falsely marking needs_reconnect.
+        const reloaded = await this.hooks.reloadConnection(this.uid);
+        if (reloaded && reloaded.tokenVersion > baseVersion) {
+          return { ...reloaded };
+        }
         await this.hooks.markReconnect(this.uid);
         throw new NeedsReconnectError();
       }
       throw err;
     }
-    // Atomic persist of the rotated set (single DB UPDATE) before returning, so the
-    // stored token is never older than what any coalesced caller adopts.
-    await this.hooks.persistTokens(this.uid, {
+
+    // Compare-and-swap persist: write only while token_version is still ours, then
+    // bump it. This is the cross-instance mutex the in-process Map can't provide.
+    const { applied } = await this.hooks.persistTokens(this.uid, {
       accessToken: next.accessToken,
       refreshToken: next.refreshToken,
       accessTokenExpiresAt: next.accessTokenExpiresAt,
       refreshTokenExpiresAt: next.refreshTokenExpiresAt,
-    });
+    }, baseVersion);
+
+    if (!applied) {
+      // Lost the race: another instance persisted a newer refresh between our read and
+      // write. Our `next` tokens may already be invalidated by Pinterest's rotation, so
+      // discard them and adopt whatever is now stored.
+      const reloaded = await this.hooks.reloadConnection(this.uid);
+      if (reloaded) return { ...reloaded };
+      // No connection to reload → genuinely gone.
+      await this.hooks.markReconnect(this.uid);
+      throw new NeedsReconnectError();
+    }
+
     return {
       accessToken: next.accessToken,
       refreshToken: next.refreshToken,
       accessExpiresAt: next.accessTokenExpiresAt,
+      tokenVersion: baseVersion + 1,
     };
   }
 
