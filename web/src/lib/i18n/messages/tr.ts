@@ -415,6 +415,23 @@ const tr: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "Genel bakış",
+  "dashboard.weeklyProgress": "Haftalık ilerleme",
+  "dashboard.currentWeeklyPlan": "Geçerli haftalık plan",
+  "dashboard.statusReady": "Hazır",
+  "dashboard.statusDraft": "Taslak",
+  "dashboard.openWeeklyPlan": "Haftalık planı aç",
+  "dashboard.continueWorkspace": "Çalışma alanına devam et",
+  "dashboard.noPlanThisWeek": "Bu hafta için henüz plan yok.",
+  "dashboard.createProgress": "Oluşturma ilerlemesi",
+  "dashboard.pinsCreatedThisWeek": "Bu hafta oluşturulan Pinler",
+  "dashboard.continueCreating": "Oluşturmaya devam et",
+  "dashboard.newSignals": "Yeni sinyaller",
+  "dashboard.activeOpportunitiesTopPrefix": "Aktif fırsatlar · En iyi: ",
+  "dashboard.activeOpportunitiesThisWeek": "Bu haftaki aktif fırsatlar",
+  "dashboard.viewWorkspace": "Çalışma alanını görüntüle",
+
 };
 
 export default tr;

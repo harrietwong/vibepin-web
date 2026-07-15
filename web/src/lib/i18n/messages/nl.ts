@@ -415,6 +415,23 @@ const nl: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "Overzicht",
+  "dashboard.weeklyProgress": "Wekelijkse voortgang",
+  "dashboard.currentWeeklyPlan": "Huidig weekplan",
+  "dashboard.statusReady": "Klaar",
+  "dashboard.statusDraft": "Concept",
+  "dashboard.openWeeklyPlan": "Weekplan openen",
+  "dashboard.continueWorkspace": "Workspace voortzetten",
+  "dashboard.noPlanThisWeek": "Nog geen plan voor deze week.",
+  "dashboard.createProgress": "Aanmaakvoortgang",
+  "dashboard.pinsCreatedThisWeek": "Deze week gemaakte pins",
+  "dashboard.continueCreating": "Blijven maken",
+  "dashboard.newSignals": "Nieuwe signalen",
+  "dashboard.activeOpportunitiesTopPrefix": "Actieve kansen · Top: ",
+  "dashboard.activeOpportunitiesThisWeek": "Actieve kansen deze week",
+  "dashboard.viewWorkspace": "Workspace bekijken",
+
 };
 
 export default nl;

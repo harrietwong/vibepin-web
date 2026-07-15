@@ -476,6 +476,23 @@ const en = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+
+  // ── Home dashboard (app/dashboard) ──
+  "dashboard.overview": "Overview",
+  "dashboard.weeklyProgress": "Weekly Progress",
+  "dashboard.currentWeeklyPlan": "Current Weekly Plan",
+  "dashboard.statusReady": "Ready",
+  "dashboard.statusDraft": "Draft",
+  "dashboard.openWeeklyPlan": "Open Weekly Plan",
+  "dashboard.continueWorkspace": "Continue Workspace",
+  "dashboard.noPlanThisWeek": "No plan for this week yet.",
+  "dashboard.createProgress": "Create Progress",
+  "dashboard.pinsCreatedThisWeek": "Pins created this week",
+  "dashboard.continueCreating": "Continue Creating",
+  "dashboard.newSignals": "New Signals",
+  "dashboard.activeOpportunitiesTopPrefix": "Active opportunities · Top: ",
+  "dashboard.activeOpportunitiesThisWeek": "Active opportunities this week",
+  "dashboard.viewWorkspace": "View Workspace",
 } as const;
 
 export type MessageKey = keyof typeof en;

@@ -415,6 +415,23 @@ const vi: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "Tổng quan",
+  "dashboard.weeklyProgress": "Tiến độ hàng tuần",
+  "dashboard.currentWeeklyPlan": "Kế hoạch tuần hiện tại",
+  "dashboard.statusReady": "Sẵn sàng",
+  "dashboard.statusDraft": "Bản nháp",
+  "dashboard.openWeeklyPlan": "Mở kế hoạch tuần",
+  "dashboard.continueWorkspace": "Tiếp tục workspace",
+  "dashboard.noPlanThisWeek": "Chưa có kế hoạch cho tuần này.",
+  "dashboard.createProgress": "Tiến độ tạo",
+  "dashboard.pinsCreatedThisWeek": "Pin đã tạo tuần này",
+  "dashboard.continueCreating": "Tiếp tục tạo",
+  "dashboard.newSignals": "Tín hiệu mới",
+  "dashboard.activeOpportunitiesTopPrefix": "Cơ hội đang hoạt động · Hàng đầu: ",
+  "dashboard.activeOpportunitiesThisWeek": "Cơ hội đang hoạt động tuần này",
+  "dashboard.viewWorkspace": "Xem workspace",
+
 };
 
 export default vi;

@@ -415,6 +415,23 @@ const ja: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "概要",
+  "dashboard.weeklyProgress": "週間の進捗",
+  "dashboard.currentWeeklyPlan": "現在の週間プラン",
+  "dashboard.statusReady": "準備完了",
+  "dashboard.statusDraft": "下書き",
+  "dashboard.openWeeklyPlan": "週間プランを開く",
+  "dashboard.continueWorkspace": "ワークスペースを続ける",
+  "dashboard.noPlanThisWeek": "今週のプランはまだありません。",
+  "dashboard.createProgress": "作成の進捗",
+  "dashboard.pinsCreatedThisWeek": "今週作成したピン",
+  "dashboard.continueCreating": "作成を続ける",
+  "dashboard.newSignals": "新しいシグナル",
+  "dashboard.activeOpportunitiesTopPrefix": "アクティブな機会 · トップ：",
+  "dashboard.activeOpportunitiesThisWeek": "今週のアクティブな機会",
+  "dashboard.viewWorkspace": "ワークスペースを表示",
+
 };
 
 export default ja;

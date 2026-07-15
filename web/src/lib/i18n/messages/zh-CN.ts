@@ -415,6 +415,23 @@ const zhCN: Record<MessageKey, string> = {
   "sync.status.synced": "所有更改已同步",
   "sync.status.syncing": "正在同步…",
   "sync.status.error": "同步遇到问题，正在重试；你的数据仍保存在本设备。",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "概览",
+  "dashboard.weeklyProgress": "每周进度",
+  "dashboard.currentWeeklyPlan": "当前每周计划",
+  "dashboard.statusReady": "就绪",
+  "dashboard.statusDraft": "草稿",
+  "dashboard.openWeeklyPlan": "打开每周计划",
+  "dashboard.continueWorkspace": "继续工作区",
+  "dashboard.noPlanThisWeek": "本周暂无计划。",
+  "dashboard.createProgress": "创作进度",
+  "dashboard.pinsCreatedThisWeek": "本周已创作 Pin",
+  "dashboard.continueCreating": "继续创作",
+  "dashboard.newSignals": "新信号",
+  "dashboard.activeOpportunitiesTopPrefix": "活跃机会 · 热门：",
+  "dashboard.activeOpportunitiesThisWeek": "本周活跃机会",
+  "dashboard.viewWorkspace": "查看工作区",
+
 };
 
 export default zhCN;

@@ -415,6 +415,23 @@ const th: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "ภาพรวม",
+  "dashboard.weeklyProgress": "ความคืบหน้ารายสัปดาห์",
+  "dashboard.currentWeeklyPlan": "แผนรายสัปดาห์ปัจจุบัน",
+  "dashboard.statusReady": "พร้อม",
+  "dashboard.statusDraft": "แบบร่าง",
+  "dashboard.openWeeklyPlan": "เปิดแผนรายสัปดาห์",
+  "dashboard.continueWorkspace": "ดำเนินการต่อในเวิร์กสเปซ",
+  "dashboard.noPlanThisWeek": "ยังไม่มีแผนสำหรับสัปดาห์นี้",
+  "dashboard.createProgress": "ความคืบหน้าการสร้าง",
+  "dashboard.pinsCreatedThisWeek": "พินที่สร้างสัปดาห์นี้",
+  "dashboard.continueCreating": "สร้างต่อ",
+  "dashboard.newSignals": "สัญญาณใหม่",
+  "dashboard.activeOpportunitiesTopPrefix": "โอกาสที่ใช้งาน · ยอดนิยม: ",
+  "dashboard.activeOpportunitiesThisWeek": "โอกาสที่ใช้งานสัปดาห์นี้",
+  "dashboard.viewWorkspace": "ดูเวิร์กสเปซ",
+
 };
 
 export default th;

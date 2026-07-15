@@ -415,6 +415,23 @@ const es: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "Resumen",
+  "dashboard.weeklyProgress": "Progreso semanal",
+  "dashboard.currentWeeklyPlan": "Plan semanal actual",
+  "dashboard.statusReady": "Listo",
+  "dashboard.statusDraft": "Borrador",
+  "dashboard.openWeeklyPlan": "Abrir plan semanal",
+  "dashboard.continueWorkspace": "Continuar espacio",
+  "dashboard.noPlanThisWeek": "Aún no hay plan para esta semana.",
+  "dashboard.createProgress": "Progreso de creación",
+  "dashboard.pinsCreatedThisWeek": "Pines creados esta semana",
+  "dashboard.continueCreating": "Seguir creando",
+  "dashboard.newSignals": "Nuevas señales",
+  "dashboard.activeOpportunitiesTopPrefix": "Oportunidades activas · Top: ",
+  "dashboard.activeOpportunitiesThisWeek": "Oportunidades activas esta semana",
+  "dashboard.viewWorkspace": "Ver espacio de trabajo",
+
 };
 
 export default es;

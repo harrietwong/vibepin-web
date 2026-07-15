@@ -415,6 +415,23 @@ const ru: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "Обзор",
+  "dashboard.weeklyProgress": "Прогресс за неделю",
+  "dashboard.currentWeeklyPlan": "Текущий недельный план",
+  "dashboard.statusReady": "Готово",
+  "dashboard.statusDraft": "Черновик",
+  "dashboard.openWeeklyPlan": "Открыть недельный план",
+  "dashboard.continueWorkspace": "Продолжить рабочее пространство",
+  "dashboard.noPlanThisWeek": "На эту неделю пока нет плана.",
+  "dashboard.createProgress": "Прогресс создания",
+  "dashboard.pinsCreatedThisWeek": "Пины, созданные на этой неделе",
+  "dashboard.continueCreating": "Продолжить создание",
+  "dashboard.newSignals": "Новые сигналы",
+  "dashboard.activeOpportunitiesTopPrefix": "Активные возможности · Топ: ",
+  "dashboard.activeOpportunitiesThisWeek": "Активные возможности на этой неделе",
+  "dashboard.viewWorkspace": "Посмотреть рабочее пространство",
+
 };
 
 export default ru;

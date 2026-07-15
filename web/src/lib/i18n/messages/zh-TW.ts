@@ -415,6 +415,23 @@ const zhTW: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "總覽",
+  "dashboard.weeklyProgress": "每週進度",
+  "dashboard.currentWeeklyPlan": "目前每週計畫",
+  "dashboard.statusReady": "就緒",
+  "dashboard.statusDraft": "草稿",
+  "dashboard.openWeeklyPlan": "開啟每週計畫",
+  "dashboard.continueWorkspace": "繼續工作區",
+  "dashboard.noPlanThisWeek": "本週尚無計畫。",
+  "dashboard.createProgress": "創作進度",
+  "dashboard.pinsCreatedThisWeek": "本週已建立 Pin",
+  "dashboard.continueCreating": "繼續創作",
+  "dashboard.newSignals": "新訊號",
+  "dashboard.activeOpportunitiesTopPrefix": "活躍機會 · 熱門：",
+  "dashboard.activeOpportunitiesThisWeek": "本週活躍機會",
+  "dashboard.viewWorkspace": "查看工作區",
+
 };
 
 export default zhTW;

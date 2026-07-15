@@ -415,6 +415,23 @@ const id: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "Ringkasan",
+  "dashboard.weeklyProgress": "Progres mingguan",
+  "dashboard.currentWeeklyPlan": "Rencana mingguan saat ini",
+  "dashboard.statusReady": "Siap",
+  "dashboard.statusDraft": "Draf",
+  "dashboard.openWeeklyPlan": "Buka rencana mingguan",
+  "dashboard.continueWorkspace": "Lanjutkan workspace",
+  "dashboard.noPlanThisWeek": "Belum ada rencana untuk minggu ini.",
+  "dashboard.createProgress": "Progres pembuatan",
+  "dashboard.pinsCreatedThisWeek": "Pin dibuat minggu ini",
+  "dashboard.continueCreating": "Lanjutkan membuat",
+  "dashboard.newSignals": "Sinyal baru",
+  "dashboard.activeOpportunitiesTopPrefix": "Peluang aktif · Teratas: ",
+  "dashboard.activeOpportunitiesThisWeek": "Peluang aktif minggu ini",
+  "dashboard.viewWorkspace": "Lihat workspace",
+
 };
 
 export default id;

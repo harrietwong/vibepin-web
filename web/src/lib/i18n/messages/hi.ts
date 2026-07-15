@@ -415,6 +415,23 @@ const hi: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "अवलोकन",
+  "dashboard.weeklyProgress": "साप्ताहिक प्रगति",
+  "dashboard.currentWeeklyPlan": "वर्तमान साप्ताहिक योजना",
+  "dashboard.statusReady": "तैयार",
+  "dashboard.statusDraft": "ड्राफ़्ट",
+  "dashboard.openWeeklyPlan": "साप्ताहिक योजना खोलें",
+  "dashboard.continueWorkspace": "वर्कस्पेस जारी रखें",
+  "dashboard.noPlanThisWeek": "इस सप्ताह के लिए अभी कोई योजना नहीं।",
+  "dashboard.createProgress": "निर्माण प्रगति",
+  "dashboard.pinsCreatedThisWeek": "इस सप्ताह बनाए गए पिन",
+  "dashboard.continueCreating": "बनाना जारी रखें",
+  "dashboard.newSignals": "नए संकेत",
+  "dashboard.activeOpportunitiesTopPrefix": "सक्रिय अवसर · शीर्ष: ",
+  "dashboard.activeOpportunitiesThisWeek": "इस सप्ताह के सक्रिय अवसर",
+  "dashboard.viewWorkspace": "वर्कस्पेस देखें",
+
 };
 
 export default hi;

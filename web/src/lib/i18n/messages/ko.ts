@@ -415,6 +415,23 @@ const ko: Record<MessageKey, string> = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  // Home dashboard (app/dashboard)
+  "dashboard.overview": "개요",
+  "dashboard.weeklyProgress": "주간 진행 상황",
+  "dashboard.currentWeeklyPlan": "현재 주간 플랜",
+  "dashboard.statusReady": "준비됨",
+  "dashboard.statusDraft": "초안",
+  "dashboard.openWeeklyPlan": "주간 플랜 열기",
+  "dashboard.continueWorkspace": "워크스페이스 계속하기",
+  "dashboard.noPlanThisWeek": "이번 주 플랜이 아직 없습니다.",
+  "dashboard.createProgress": "생성 진행 상황",
+  "dashboard.pinsCreatedThisWeek": "이번 주에 만든 핀",
+  "dashboard.continueCreating": "계속 만들기",
+  "dashboard.newSignals": "새 신호",
+  "dashboard.activeOpportunitiesTopPrefix": "활성 기회 · 상위: ",
+  "dashboard.activeOpportunitiesThisWeek": "이번 주 활성 기회",
+  "dashboard.viewWorkspace": "워크스페이스 보기",
+
 };
 
 export default ko;
