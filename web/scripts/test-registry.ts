@@ -99,7 +99,6 @@ export const STUDIO: string[] = [
   "test-batch-edit-product-mapping",
   "test-edit-pin-composer",
   "test-pin-board-store",
-  "test-reference-scoring",
   "test-failure-banner",
   "test-pin-readiness",
   "test-pin-display-context",
@@ -169,6 +168,7 @@ export const EXCLUDED: Record<string, string> = {
  * committed together with their feature source, then moved into CORE/STUDIO.
  */
 export const DEFERRED: Record<string, string> = {
+  "test-reference-scoring":             "needs the reference-scoring RUNTIME (rankReferences/scoreReference/…) which is Creative Intelligence — RC0 keeps only the types the Studio components import. Restore with the CI cluster.",
   "test-analytics-events":              "needs src/lib/analyticsIngest.ts (analytics ingest, untracked)",
   "test-publish-due-claim":             "needs api/cron/publish-due/publishDueLogic.ts + api/pin-drafts/promote.ts (auto-publish, untracked)",
   "test-pin-draft-promote":             "needs api/pin-drafts/promote.ts (auto-publish, untracked)",
