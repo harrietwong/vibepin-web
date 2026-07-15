@@ -54,6 +54,36 @@ export function isPublishableImage(url: string | null | undefined): boolean {
   return true;
 }
 
+// Hosts Pinterest's servers can never reach — kept in sync with the server gate in
+// server/pinterest/validatePublish.ts (validateOptionalLink). A client-side check that
+// were more lax than the server would let a Pin look schedulable, then fail at publish.
+const PRIVATE_HOST_RE =
+  /^(localhost$|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|::1$|\[::1\]|172\.(1[6-9]|2\d|3[0-1])\.)/i;
+
+/**
+ * The optional Website URL (destination link). EMPTY is valid — the link is never
+ * required and never blocks scheduling or publishing. When present it must be a public
+ * http(s) URL, matching the server's validateOptionalLink so the client can't schedule
+ * a destination the server will reject.
+ */
+export function isValidDestinationUrl(url: string | null | undefined): boolean {
+  // NB: deliberately NOT clean() — that treats the literal strings "undefined"/"null"
+  // as empty, but the server's validateOptionalLink does not, so routing them through
+  // clean() would pass here and fail at publish. Only a real null/undefined/blank is
+  // the empty (optional) case; "undefined"/"null" fall through to URL parsing (rejected).
+  const value = String(url ?? "").trim();
+  if (!value) return true; // empty is allowed (optional field)
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  if (PRIVATE_HOST_RE.test(parsed.hostname)) return false;
+  return true;
+}
+
 /** Required publishing fields that are still missing, in display order. */
 export function pinMissingFields(d: ReadinessInput): RequiredField[] {
   const missing: RequiredField[] = [];
