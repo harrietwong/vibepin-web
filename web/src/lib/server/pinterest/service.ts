@@ -220,6 +220,24 @@ const DEFAULT_HOOKS: ClientHooks = {
   markReconnect: markNeedsReconnect,
 };
 
+/** The refreshed token values a single refresh produced, shared by coalesced callers. */
+type RefreshResult = {
+  accessToken: string;
+  refreshToken: string | null;
+  accessExpiresAt: string | null;
+};
+
+// ── Concurrent-refresh coalescing ─────────────────────────────────────────────
+// Pinterest rotates the refresh token on every refresh: the OLD refresh token is
+// invalidated the moment a new one is issued. If two requests for the same user
+// refresh concurrently, the second would send an already-consumed refresh token
+// (invalid_grant → false needs_reconnect) or clobber the newer token with an older
+// persist. We coalesce concurrent refreshes for the same user onto ONE shared
+// in-flight refresh so exactly one token exchange + one atomic persist happens; all
+// callers then adopt the same fresh tokens. The entry clears when the refresh
+// settles, so a later, genuinely-needed refresh still runs.
+const _refreshInFlight = new Map<string, Promise<RefreshResult>>();
+
 export class PinterestClient {
   private uid: string;
   private row: PinterestConnectionRow;
@@ -227,11 +245,14 @@ export class PinterestClient {
   private refreshToken: string | null;
   private accessExpiresAt: string | null;
   private hooks: ClientHooks;
+  /** Whether this client coalesces refresh via the shared per-user lock (prod: yes). */
+  private shareRefresh: boolean;
 
   private constructor(uid: string, row: PinterestConnectionRow, hooks: ClientHooks = DEFAULT_HOOKS) {
     this.uid = uid;
     this.row = row;
     this.hooks = hooks;
+    this.shareRefresh = hooks === DEFAULT_HOOKS;
     const t = decryptTokens(row);
     this.accessToken = t.accessToken;
     this.refreshToken = t.refreshToken;
@@ -298,6 +319,8 @@ export class PinterestClient {
     refreshToken?: string | null;
     accessExpiresAt?: string | null;
     hooks?: Partial<ClientHooks>;
+    /** Opt into the shared per-user refresh lock (default false for test isolation). */
+    shareRefresh?: boolean;
   }): PinterestClient {
     const c = Object.create(PinterestClient.prototype) as PinterestClient;
     c.uid = opts.uid ?? "test-user";
@@ -306,6 +329,7 @@ export class PinterestClient {
     c.refreshToken = opts.refreshToken ?? null;
     c.accessExpiresAt = opts.accessExpiresAt ?? null;
     c.hooks = { ...DEFAULT_HOOKS, ...(opts.hooks ?? {}) };
+    c.shareRefresh = opts.shareRefresh ?? false;
     return c;
   }
 
@@ -314,15 +338,51 @@ export class PinterestClient {
     return new Date(this.accessExpiresAt).getTime() - Date.now() <= REFRESH_SKEW_MS;
   }
 
-  /** Refresh tokens and persist. Marks needs_reconnect + throws on permanent failure. */
+  /**
+   * Refresh tokens and persist, coalescing concurrent refreshes for the same user.
+   * Marks needs_reconnect + throws on permanent failure. After a successful refresh
+   * this client adopts the shared fresh tokens (whether it ran the refresh or waited
+   * on another request's).
+   */
   private async doRefresh(): Promise<void> {
     if (!this.refreshToken) {
       await this.hooks.markReconnect(this.uid);
       throw new NeedsReconnectError();
     }
+
+    // Only coalesce the real, shared refresh path. Injected test hooks stay
+    // per-instance so unit tests keep deterministic call counts, unless a test opts
+    // in via forTest({ shareRefresh: true }).
+    const shareable = this.shareRefresh;
+    let promise = shareable ? _refreshInFlight.get(this.uid) : undefined;
+    if (!promise) {
+      promise = this.performRefresh(this.refreshToken);
+      if (shareable) {
+        _refreshInFlight.set(this.uid, promise);
+        // Clear the entry once settled so a later needed refresh can run again.
+        promise.finally(() => {
+          if (_refreshInFlight.get(this.uid) === promise) _refreshInFlight.delete(this.uid);
+        }).catch(() => {});
+      }
+    }
+
+    const result = await promise;
+    // Adopt the shared fresh tokens onto this instance.
+    this.accessToken = result.accessToken;
+    this.refreshToken = result.refreshToken ?? this.refreshToken;
+    this.accessExpiresAt = result.accessExpiresAt;
+  }
+
+  /**
+   * Perform ONE token exchange and persist the rotated tokens atomically. The new
+   * access token, rotated refresh token, and expiry are written in a single
+   * updateTokens() call so a reader never sees a half-updated pair. On a 4xx
+   * (e.g. invalid_grant) marks the connection needs_reconnect and throws.
+   */
+  private async performRefresh(refreshToken: string): Promise<RefreshResult> {
     let next: TokenSet;
     try {
-      next = await this.hooks.refreshFn(this.refreshToken);
+      next = await this.hooks.refreshFn(refreshToken);
     } catch (err) {
       // 4xx (e.g. invalid_grant) ⇒ permanent; mark for reconnect.
       const status = err instanceof PinterestApiError ? err.status : 500;
@@ -332,15 +392,19 @@ export class PinterestClient {
       }
       throw err;
     }
-    this.accessToken = next.accessToken;
-    this.refreshToken = next.refreshToken ?? this.refreshToken;
-    this.accessExpiresAt = next.accessTokenExpiresAt;
+    // Atomic persist of the rotated set (single DB UPDATE) before returning, so the
+    // stored token is never older than what any coalesced caller adopts.
     await this.hooks.persistTokens(this.uid, {
       accessToken: next.accessToken,
       refreshToken: next.refreshToken,
       accessTokenExpiresAt: next.accessTokenExpiresAt,
       refreshTokenExpiresAt: next.refreshTokenExpiresAt,
     });
+    return {
+      accessToken: next.accessToken,
+      refreshToken: next.refreshToken,
+      accessExpiresAt: next.accessTokenExpiresAt,
+    };
   }
 
   /** Authenticated request with refresh-before-expiry and one 401 refresh+retry. */

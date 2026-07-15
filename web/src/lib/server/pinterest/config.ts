@@ -12,7 +12,20 @@ import { ConfigurationError } from "./errors";
 
 // Requested scopes — read existing public boards + create public Pins only.
 // No ads:*, catalogs:*, or *_secret scopes.
-export const PINTEREST_SCOPES = [
+//
+// Production requests the MINIMUM needed to publish: read the profile + boards,
+// read + write Pins. It deliberately omits boards:write because the product does
+// not create or edit Pinterest boards for real users (only the sandbox demo-board
+// helper does, and only in the sandbox environment). Sandbox keeps boards:write so
+// the demo-board helper can run during the approval flow.
+export const PRODUCTION_SCOPES = [
+  "user_accounts:read",
+  "boards:read",
+  "pins:read",
+  "pins:write",
+] as const;
+
+export const SANDBOX_SCOPES = [
   "user_accounts:read",
   "boards:read",
   "boards:write",
@@ -20,8 +33,29 @@ export const PINTEREST_SCOPES = [
   "pins:write",
 ] as const;
 
-export const PINTEREST_SCOPE_STRING = PINTEREST_SCOPES.join(",");
-export const PINTEREST_REQUIRED_SCOPES = PINTEREST_SCOPES;
+// Back-compat aliases (existing imports). PINTEREST_SCOPES is the production set.
+export const PINTEREST_SCOPES = PRODUCTION_SCOPES;
+export const PINTEREST_SCOPE_STRING = PRODUCTION_SCOPES.join(",");
+
+// Scopes REQUIRED for a connection to be usable (drives reconnect gating). This is
+// the publish-capability floor — boards:write is NOT required (it is not requested
+// in production), so an existing production-scope connection is never marked
+// needs_reconnect for lacking it.
+export const PINTEREST_REQUIRED_SCOPES = [
+  "boards:read",
+  "pins:read",
+  "pins:write",
+] as const;
+
+/** Scopes to REQUEST at authorize time for the current environment. */
+export function pinterestRequestScopes(): readonly string[] {
+  return isPinterestSandboxEnv() ? SANDBOX_SCOPES : PRODUCTION_SCOPES;
+}
+
+/** Comma-joined scope string for the current environment's authorize request. */
+export function pinterestScopeString(): string {
+  return pinterestRequestScopes().join(",");
+}
 
 export function missingPinterestScopes(scopes: readonly string[] | null | undefined): string[] {
   const granted = new Set(scopes ?? []);
@@ -45,11 +79,22 @@ export const PINTEREST_SANDBOX_API_BASE = "https://api-sandbox.pinterest.com/v5"
 /**
  * Which Pinterest environment API calls target.
  *
- * Primary flag: PINTEREST_API_ENV=sandbox (task spec). PINTEREST_API_MODE is kept
- * as a backward-compatible alias for earlier wiring. Anything other than the exact
- * value "sandbox" resolves to production, so the default is always production.
+ * SAFETY: Vercel Production ALWAYS uses the real Pinterest production API,
+ * regardless of any PINTEREST_API_ENV value. This makes it impossible for a stray
+ * sandbox flag in Production env to route real users at the sandbox host or to reuse
+ * a sandbox token. Sandbox is only reachable on localhost / Preview / non-production
+ * deploys, and only when explicitly opted in via PINTEREST_API_ENV=sandbox.
+ *
+ * Primary opt-in flag: PINTEREST_API_ENV=sandbox. PINTEREST_API_MODE is kept as a
+ * backward-compatible alias. Anything other than the exact value "sandbox" resolves
+ * to production, so the default is always production.
  */
 export function getPinterestApiEnv(): PinterestApiEnv {
+  // Hard guard: Vercel Production is production-only. VERCEL_ENV is set by Vercel to
+  // "production" | "preview" | "development"; it is absent on local dev.
+  if ((process.env.VERCEL_ENV ?? "").trim().toLowerCase() === "production") {
+    return "production";
+  }
   const raw = (process.env.PINTEREST_API_ENV ?? process.env.PINTEREST_API_MODE ?? "")
     .trim()
     .toLowerCase();
@@ -134,6 +179,27 @@ export function isPinterestConfigured(): boolean {
   }
 }
 
+/**
+ * True when the app credentials (id + secret) are present. Safe for diagnostics —
+ * reports presence only, never the values.
+ */
+export function areAppCredentialsConfigured(): boolean {
+  return (
+    (process.env.PINTEREST_APP_ID?.trim().length ?? 0) > 0 &&
+    (process.env.PINTEREST_APP_SECRET?.trim().length ?? 0) > 0
+  );
+}
+
+/**
+ * True when the configured redirect URI looks like a valid PRODUCTION callback:
+ * an https URL ending in the registered callback path. Reports config shape only,
+ * never the value. Used by debug-status to confirm the production redirect is set.
+ */
+export function isProductionRedirectConfigured(): boolean {
+  const uri = process.env.PINTEREST_REDIRECT_URI?.trim() ?? "";
+  return uri.startsWith("https://") && uri.endsWith("/api/auth/pinterest/callback");
+}
+
 /** Basic auth header for the token endpoint: base64(appId:appSecret). */
 export function basicAuthHeader(env: PinterestEnv): string {
   return "Basic " + Buffer.from(`${env.appId}:${env.appSecret}`).toString("base64");
@@ -145,7 +211,9 @@ export function buildAuthorizeUrl(env: PinterestEnv, state: string): string {
     client_id: env.appId,
     redirect_uri: env.redirectUri,
     response_type: "code",
-    scope: PINTEREST_SCOPE_STRING,
+    // Environment-aware: production requests the minimum (no boards:write); sandbox
+    // keeps boards:write for the demo-board helper.
+    scope: pinterestScopeString(),
     state,
   });
   return `${PINTEREST_AUTH_URL}?${params.toString()}`;
