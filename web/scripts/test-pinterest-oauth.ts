@@ -154,7 +154,14 @@ await test("encryptSecret/decryptSecret roundtrips and detects tampering", () =>
   assert(ct.startsWith("v1:"), "versioned ciphertext");
   assert(!ct.includes(secret), "ciphertext must not contain plaintext");
   assertEq(crypto.decryptSecret(ct), secret, "roundtrip");
-  const tampered = ct.slice(0, -2) + (ct.endsWith("A") ? "B" : "A");
+  // Flip a REAL byte of the AES-GCM payload, not a trailing base64 char: changing the
+  // last base64 character can leave the decoded bytes identical (the low bits fall on
+  // discarded padding), so decryption would sometimes NOT throw — a flaky test. Decode
+  // "v1:"+base64, flip one payload byte (here in the IV, guaranteed to change the bytes),
+  // re-encode: GCM auth then always fails and decryptSecret must throw.
+  const raw = Buffer.from(ct.slice(3), "base64");
+  raw[0] ^= 0xff;
+  const tampered = "v1:" + raw.toString("base64");
   return expectThrow(() => crypto.decryptSecret(tampered), "tampered ciphertext must throw");
 });
 
