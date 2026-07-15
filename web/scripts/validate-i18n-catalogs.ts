@@ -24,7 +24,13 @@ function samePlaceholders(a: string[], b: string[]): boolean {
 
 const errors: string[] = [];
 
-for (const file of readdirSync(MESSAGE_DIR).filter(f => f.endsWith(".ts"))) {
+const CATALOG_FILES = [
+  ...readdirSync(MESSAGE_DIR).filter(f => f.endsWith(".ts")),
+  // Per-namespace English source files live in messages/en/ and are spread into en.ts.
+  ...readdirSync(join(MESSAGE_DIR, "en")).filter(f => f.endsWith(".ts")).map(f => join("en", f)),
+];
+
+for (const file of CATALOG_FILES) {
   const path = join(MESSAGE_DIR, file);
   const raw = readFileSync(path, "utf8");
   for (const [pattern, label] of BAD_PATTERNS) {

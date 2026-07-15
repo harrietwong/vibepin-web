@@ -1,3 +1,26 @@
+import { connectPageMessages } from "./en/connectPage";
+import { dashboardMessages } from "./en/dashboard";
+import { discoverMessages } from "./en/discover";
+import { helpMessages } from "./en/help";
+import { historyMessages } from "./en/history";
+import { manualPublishMessages } from "./en/manualPublish";
+import { opportunityMessages } from "./en/opportunity";
+import { pinDrawerMessages } from "./en/pinDrawer";
+import { pinFormMessages } from "./en/pinForm";
+import { planMessages } from "./en/plan";
+import { planViewsMessages } from "./en/planViews";
+import { productLibraryMessages } from "./en/productLibrary";
+import { productsMessages } from "./en/products";
+import { queueMessages } from "./en/queue";
+import { socialPanelMessages } from "./en/socialPanel";
+import { studioMessages } from "./en/studio";
+import { studioBoardMessages } from "./en/studioBoard";
+import { studioCreativeMessages } from "./en/studioCreative";
+import { studioModalsMessages } from "./en/studioModals";
+import { trendChartMessages } from "./en/trendChart";
+import { trendsMessages } from "./en/trends";
+import { workspaceMessages } from "./en/workspace";
+
 const en = {
   // ── Sidebar / nav ──
   "nav.home": "Home",
@@ -66,9 +89,6 @@ const en = {
   "language.appLanguage": "App language",
   "language.appLanguageHint": "Changes the language used across the VibePin interface.",
   "language.appLanguageExistingNote": "App language changes the interface only. It does not translate existing Pin content.",
-  "language.aiContentLanguage": "AI content language",
-  "language.aiContentLanguageHint": "Used for generated Pin titles, descriptions, keywords, trends, and opportunity suggestions.",
-  "language.contentExistingNote": "AI content language affects newly generated titles, descriptions, keywords, and suggestions. Existing saved Pins are not changed automatically.",
   "ai.gotoLanguageNotice": "Want to change the app interface language? Go to Language → App language.",
   "ai.openLanguageSettings": "Open Language settings",
 
@@ -154,8 +174,6 @@ const en = {
   // ── AI Settings tab ──
   "ai.title": "AI content settings",
   "ai.desc": "Controls the language and region used for generated Pin titles, descriptions, keywords, trends, and opportunity suggestions.",
-  "ai.contentLanguage": "AI content language",
-  "ai.contentLanguageHint": "Language used in AI-generated Pin copy. Changing this does not affect the app UI language.",
   "ai.region": "Pinterest region",
   "ai.regionHint": "Affects keyword trends and opportunity data. Choose your target Pinterest audience region.",
 
@@ -276,9 +294,7 @@ const en = {
   "lang.modalTitle": "Language & Region",
   "lang.modalSubtitle": "App language changes the interface. AI content language controls generated Pin copy. Region affects keyword and trend data.",
   "lang.appLanguage": "App language",
-  "lang.contentLanguage": "AI content language",
   "lang.pinterestRegion": "Pinterest region",
-  "lang.sameAsApp": "Same as app language",
   "lang.moreLanguages": "More languages",
   "lang.beta": "Beta",
   "lang.rtlBeta": "RTL support coming soon",
@@ -320,7 +336,6 @@ const en = {
   "pinDetails.moreActions": "More actions",
   "pinDetails.close": "Close",
   "pinDetails.pinPreviewAlt": "Pin preview",
-  "pinDetails.overflow.pinNow": "Pin now",
   "pinDetails.overflow.unschedule": "Unschedule",
   "pinDetails.publishing": "Publishing…",
   "pinDetails.published": "Published",
@@ -403,6 +418,14 @@ const en = {
   "pinDetails.missing.description": "description",
   "pinDetails.missing.altText": "alt text",
   "pinDetails.confirmReplaceUrl": "Replace the current destination URL with the primary product URL?",
+  "pinDetails.productLinkAvailable": "Product link available",
+  "pinDetails.useProductLinkAsDestination": "Use product link as destination",
+  "pinDetails.confirmReplaceUrlTitle": "Replace the current destination URL?",
+  "pinDetails.confirmReplaceUrlBody": "The linked product has its own product URL. Do you want to use it as this Pin's destination instead?",
+  "pinDetails.confirmReplaceUrlKeep": "Keep current URL",
+  "pinDetails.confirmReplaceUrlUse": "Use product link",
+  "pinDetails.error.invalidUrl": "Enter a valid http:// or https:// URL.",
+  "pinDetails.error.missingBeforeSchedule": "Add the missing details before scheduling.",
 
   // ── Pin details: Title section ──
   "pinDetails.title.label": "Title",
@@ -477,22 +500,43 @@ const en = {
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 
-  // ── Home dashboard (app/dashboard) ──
-  "dashboard.overview": "Overview",
-  "dashboard.weeklyProgress": "Weekly Progress",
-  "dashboard.currentWeeklyPlan": "Current Weekly Plan",
-  "dashboard.statusReady": "Ready",
-  "dashboard.statusDraft": "Draft",
-  "dashboard.openWeeklyPlan": "Open Weekly Plan",
-  "dashboard.continueWorkspace": "Continue Workspace",
-  "dashboard.noPlanThisWeek": "No plan for this week yet.",
-  "dashboard.createProgress": "Create Progress",
-  "dashboard.pinsCreatedThisWeek": "Pins created this week",
-  "dashboard.continueCreating": "Continue Creating",
-  "dashboard.newSignals": "New Signals",
-  "dashboard.activeOpportunitiesTopPrefix": "Active opportunities · Top: ",
-  "dashboard.activeOpportunitiesThisWeek": "Active opportunities this week",
-  "dashboard.viewWorkspace": "View Workspace",
+  // ── AI content-language keys (RETAINED) ──
+  // The full i18n refactor removed these, but SettingsModal / LanguageRegionModal /
+  // DraftDetailsDrawer (tracked, still on their HEAD versions here) reference them.
+  // Deleting them belongs with the component changes that stop using them — a later
+  // RC0 cluster — not with this i18n base. Keep until then.
+  "ai.contentLanguage": "AI content language",
+  "ai.contentLanguageHint": "Language used in AI-generated Pin copy. Changing this does not affect the app UI language.",
+  "lang.contentLanguage": "AI content language",
+  "lang.sameAsApp": "Same as app language",
+  "language.aiContentLanguage": "AI content language",
+  "language.aiContentLanguageHint": "Used for generated Pin titles, descriptions, keywords, trends, and opportunity suggestions.",
+  "language.contentExistingNote": "AI content language affects newly generated titles, descriptions, keywords, and suggestions. Existing saved Pins are not changed automatically.",
+  "pinDetails.overflow.pinNow": "Pin now",
+
+  // ── Merged namespace modules (see ./en/*.ts) ──
+  ...connectPageMessages,
+  ...dashboardMessages,
+  ...discoverMessages,
+  ...helpMessages,
+  ...historyMessages,
+  ...manualPublishMessages,
+  ...opportunityMessages,
+  ...pinDrawerMessages,
+  ...pinFormMessages,
+  ...planMessages,
+  ...planViewsMessages,
+  ...productLibraryMessages,
+  ...productsMessages,
+  ...queueMessages,
+  ...socialPanelMessages,
+  ...studioMessages,
+  ...studioBoardMessages,
+  ...studioCreativeMessages,
+  ...studioModalsMessages,
+  ...trendChartMessages,
+  ...trendsMessages,
+  ...workspaceMessages,
 } as const;
 
 export type MessageKey = keyof typeof en;
