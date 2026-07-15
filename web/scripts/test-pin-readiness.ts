@@ -67,12 +67,26 @@ test("E3: posted wins over scheduled date", () => {
   assert.equal(result.planStatus, "posted");
 });
 
-// F. Missing details but scheduled
-test("F: need_details with scheduled planStatus when both apply", () => {
-  const result = getPinReadiness({ ...fullDetails, title: "", plannedDate: "2026-07-01" });
+// F. Copy and accessibility metadata are recommendations, not publish blockers.
+test("F: missing title, description and alt text stays ready", () => {
+  const result = getPinReadiness({ ...fullDetails, title: "", description: "", altText: "", plannedDate: "2026-07-01" });
+  assert.equal(result.detailsStatus, "ready");
+  assert.equal(result.planStatus, "scheduled");
+  assert.deepEqual(result.missingFields, []);
+});
+
+test("F2: missing image blocks publishing without changing plan status", () => {
+  const result = getPinReadiness({ ...fullDetails, imageUrl: "", plannedDate: "2026-07-01" });
   assert.equal(result.detailsStatus, "need_details");
   assert.equal(result.planStatus, "scheduled");
-  assert.deepEqual(result.missingFields, ["title"]);
+  assert.deepEqual(result.missingFields, ["image"]);
+});
+
+test("F3: missing board blocks publishing without changing plan status", () => {
+  const result = getPinReadiness({ ...fullDetails, boardId: "", plannedDate: "2026-07-01" });
+  assert.equal(result.detailsStatus, "need_details");
+  assert.equal(result.planStatus, "scheduled");
+  assert.deepEqual(result.missingFields, ["board"]);
 });
 
 // G. Ready but needs date

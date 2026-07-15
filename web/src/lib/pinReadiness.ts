@@ -3,13 +3,12 @@
  *
  * Shared by Weekly Plan counts and the Batch Edit publish gate so both surfaces
  * agree on what "Ready" / "Needs details" means. A Pin is Ready when it has a
- * publishable image, title, description, alt text, and a REAL Pinterest board
- * selected (boardId). The Website URL / destination link is OPTIONAL (recommended
- * for product Pins) and never blocks readiness. Pure functions — safe in render
- * and on server.
+ * publishable image and a REAL Pinterest board selected (boardId). Copy, alt text,
+ * Website URL, and product metadata remain editable recommendations, but never
+ * block scheduling or publishing. Pure functions — safe in render and on server.
  */
 
-export type RequiredField = "image" | "title" | "description" | "altText" | "board";
+export type RequiredField = "image" | "board";
 export type PinDetailsStatus = "ready" | "need_details";
 export type PinPlanStatus = "not_planned" | "needs_date" | "scheduled" | "posted";
 
@@ -32,13 +31,10 @@ export type ReadinessInput = {
 
 export const REQUIRED_FIELD_LABELS: Record<RequiredField, string> = {
   image:          "Image",
-  title:          "Title",
-  description:    "Description",
-  altText:        "Alt text",
   board:          "Pinterest board",
 };
 
-const REQUIRED_ORDER: RequiredField[] = ["image", "title", "description", "altText", "board"];
+const REQUIRED_ORDER: RequiredField[] = ["image", "board"];
 
 function clean(v: string | null | undefined): string {
   const s = (v ?? "").trim();
@@ -88,10 +84,7 @@ export function isValidDestinationUrl(url: string | null | undefined): boolean {
 export function pinMissingFields(d: ReadinessInput): RequiredField[] {
   const missing: RequiredField[] = [];
   if (!isPublishableImage(d.imageUrl))   missing.push("image");
-  if (!clean(d.title))                   missing.push("title");
-  if (!clean(d.description))             missing.push("description");
-  if (!clean(d.altText))                 missing.push("altText");
-  // Website URL / destination link is optional — never a blocker (recommended only).
+  // Copy, alt text, Website URL, and product metadata are recommendations only.
   if (!clean(d.boardId))                 missing.push("board");
   return REQUIRED_ORDER.filter(f => missing.includes(f));
 }

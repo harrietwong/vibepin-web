@@ -5,6 +5,7 @@
 
 import type { PinDraft } from "./pinDraftStore";
 import * as pinDraftStore from "./pinDraftStore";
+import { isPublishableImage } from "./pinReadiness";
 import { combineLocalPlannedAt, localDateISO, sanitizeHandoffField } from "./weeklyPlanHandoff";
 import {
   getSmartScheduleConfig,
@@ -263,7 +264,7 @@ export function formatSmartScheduleToast(slot: ScheduleSlot, board: SmartSchedul
 
 export type AutoScheduleResult =
   | { ok: true; draft: PinDraft; toast: string; slot: ScheduleSlot; board: SmartScheduleBoard | null }
-  | { ok: false; reason: "no_schedule" | "no_slot" | "not_found"; toast: string };
+  | { ok: false; reason: "no_schedule" | "no_slot" | "not_found" | "not_ready"; toast: string };
 
 export type EnsureScheduleOpts = {
   /** Desired calendar date (keeps the user's chosen day; a real slot time is still
@@ -291,6 +292,15 @@ export type EnsureScheduleOpts = {
 export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): AutoScheduleResult {
   const draft = pinDraftStore.getDraft(id);
   if (!draft) return { ok: false, reason: "not_found", toast: "Pin not found." };
+
+  // A scheduled Pin may auto-publish without another user review. Keep this gate
+  // deliberately narrower than copy quality: only delivery-critical fields block.
+  if (!isPublishableImage(draft.imageUrl)) {
+    return { ok: false, reason: "not_ready", toast: "Upload a usable image before scheduling this Pin." };
+  }
+  if (!sanitizeHandoffField(draft.boardId)) {
+    return { ok: false, reason: "not_ready", toast: "Choose a Pinterest board before scheduling this Pin." };
+  }
 
   const curDate = sanitizeHandoffField(draft.scheduledDate);
   const curTime = sanitizeHandoffField(draft.scheduledTime);

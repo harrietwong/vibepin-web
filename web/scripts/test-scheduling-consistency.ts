@@ -4,7 +4,8 @@
  * Guards the canonical scheduling contract:
  *  - every Schedule action stores plannedDate + plannedTime + plannedAt
  *  - Weekly and Monthly views read the SAME canonical planned time (one mapper)
- *  - missing metadata / product never blocks scheduling
+ *  - copy / URL / product metadata never blocks scheduling
+ *  - delivery-critical image + board do block scheduling
  *  - legacy "in plan, time-less" drafts normalize without duplicates
  *
  * Runs under tsx with a minimal localStorage/window shim.
@@ -70,7 +71,7 @@ function mkDraft(p: Partial<PinDraft>): PinDraft {
     keyword: p.keyword ?? "boho bedroom", category: p.category ?? "home-decor",
     title: p.title ?? "Boho bedroom", description: p.description ?? "desc",
     altText: p.altText ?? "", destinationUrl: p.destinationUrl ?? "",
-    boardId: p.boardId ?? "", boardName: p.boardName ?? "",
+    boardId: p.boardId ?? "board-1", boardName: p.boardName ?? "Main board",
     weeklyPlanItemId: "", generationSessionId: "",
     scheduledDate: p.scheduledDate ?? "", scheduledTime: p.scheduledTime ?? "",
     plannedAt: p.plannedAt ?? "",
@@ -179,13 +180,35 @@ test("Month cell renders time + VERTICAL portrait thumbnail (no horizontal strip
 });
 
 // 7
-test("Missing destinationUrl / board / product does NOT block scheduling", () => {
+test("Missing copy / destinationUrl / product does NOT block scheduling", () => {
   reset();
-  seedDrafts([mkDraft({ id: "u1", destinationUrl: "", boardId: "", boardName: "", altText: "", primaryProductId: "" })]);
+  seedDrafts([mkDraft({ id: "u1", title: "", description: "", destinationUrl: "", altText: "", primaryProductId: "" })]);
   const res = ensureScheduledPlanTime("u1");
   assert(res.ok, "scheduling blocked by missing metadata");
   const d = pinDraftStore.getDraft("u1")!;
   assert(!!d.scheduledTime && !!d.plannedAt, "no time assigned despite missing metadata");
+});
+
+test("Missing image blocks scheduling without mutating the draft", () => {
+  reset();
+  seedDrafts([mkDraft({ id: "u1", imageUrl: "" })]);
+  const before = pinDraftStore.getDraft("u1")!;
+  const res = ensureScheduledPlanTime("u1");
+  const after = pinDraftStore.getDraft("u1")!;
+  assert(!res.ok && res.reason === "not_ready", `expected not_ready, got ${res.ok ? "ok" : res.reason}`);
+  assert(!after.scheduledDate && !after.scheduledTime && !after.plannedAt, "blocked schedule mutated the draft");
+  assert(after.updatedAt === before.updatedAt, "blocked schedule changed updatedAt");
+});
+
+test("Missing board blocks scheduling without mutating the draft", () => {
+  reset();
+  seedDrafts([mkDraft({ id: "u1", boardId: "", boardName: "" })]);
+  const before = pinDraftStore.getDraft("u1")!;
+  const res = ensureScheduledPlanTime("u1");
+  const after = pinDraftStore.getDraft("u1")!;
+  assert(!res.ok && res.reason === "not_ready", `expected not_ready, got ${res.ok ? "ok" : res.reason}`);
+  assert(!after.scheduledDate && !after.scheduledTime && !after.plannedAt, "blocked schedule mutated the draft");
+  assert(after.updatedAt === before.updatedAt, "blocked schedule changed updatedAt");
 });
 
 // 8

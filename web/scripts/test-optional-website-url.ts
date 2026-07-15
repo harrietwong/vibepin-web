@@ -56,14 +56,14 @@ async function main() {
     assert.ok(!pinMissingFieldLabels(base).includes("Destination URL"));
   });
 
-  await test("Still blocks on the real required fields", () => {
-    // pinReadiness.ts (committed contract): image, title, description, alt text, and
-    // board all block publishing. Only the Website URL is optional. Whether to relax
-    // title/description/altText to optional is a product decision deferred to its own
-    // commit — this test asserts the CURRENT committed behaviour (they are required).
-    assert.equal(isPinReady({ ...base, title: "" }), false);
-    assert.equal(isPinReady({ ...base, description: "" }), false);
-    assert.equal(isPinReady({ ...base, altText: "" }), false);
+  await test("Copy and alt text are recommended but do not block publishing", () => {
+    assert.equal(isPinReady({ ...base, title: "" }), true);
+    assert.equal(isPinReady({ ...base, description: "" }), true);
+    assert.equal(isPinReady({ ...base, altText: "" }), true);
+    assert.equal(isPinReady({ ...base, title: "", description: "", altText: "" }), true);
+  });
+
+  await test("Still blocks on image and a real board", () => {
     assert.equal(isPinReady({ ...base, boardId: "" }), false);
     assert.equal(isPinReady({ ...base, imageUrl: "" }), false);
   });

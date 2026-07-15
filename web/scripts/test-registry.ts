@@ -94,6 +94,7 @@ export const STUDIO: string[] = [
   "test-studio-generated-section",
   "test-asset-picker-ia",
   "test-create-pins-prefill",
+  "test-batch-edit-planning",
   "test-batch-edit-back-close",
   "test-batch-edit-product-mapping",
   "test-edit-pin-composer",
@@ -137,9 +138,6 @@ export const EXCLUDED: Record<string, string> = {
     "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
   "test-create-pins-batch-edit-ui":
     "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of studio/page.tsx legacy PinCard + PinCardActions.tsx (BatchEditDrawer assertions pass; the failing ones target legacy surfaces). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-batch-edit-planning":
-    "Pre-existing clean-checkout failure: asserts the deferred title/description-optional pinReadiness product decision (BatchEditDrawer assertions pass; the failing one is that pending decision). " +
     "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
   "test-pin-details-drawer":
     "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of the LEGACY PinDetailsDrawer.tsx + studio/page.tsx (parallel to this cluster StudioBoard/PinBoardCard). " +

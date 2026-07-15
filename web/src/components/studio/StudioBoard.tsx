@@ -231,14 +231,18 @@ export function StudioBoard() {
   // ── Schedule = smart auto-assign (no pickers) ──────────────────────────────
   const handleSchedule = useCallback((id: string) => {
     const d = pinDraftStore.getDraft(id); if (!d) return;
-    if (noBoardAccess || !isPinReady(draftReadiness(d))) {
+    const missingImage = d.assetError || !isPublishableImage(d.imageUrl);
+    const missingBoard = noBoardAccess || !d.boardId?.trim();
+    if (missingImage || missingBoard) {
       setActiveId(id);
-      // Field-level error for the board (the one pickable field that most often
-      // blocks scheduling); other gaps are listed in the toast. Lifecycle stays
-      // Unscheduled — validation failure never creates a Scheduled state.
+      // Scheduling has its own minimal guard. It deliberately does not use the
+      // publish-readiness gate or require copy/alt text/URL metadata.
       if (!d.boardId?.trim() && !noBoardAccess) {
         setScheduleErrors(prev => ({ ...prev, [id]: tr("studioBoard.toast.chooseBoardToSchedule") }));
       }
+      // WP1 gate: only image + board block scheduling. The message already says exactly
+      // that ("Add an image and choose a board…") — no copy/alt/URL requirement — and a
+      // missing board also gets the field-level chooseBoardToSchedule hint above.
       toast.error(tr("studioBoard.toast.completeDetailsToSchedule"));
       return;
     }
