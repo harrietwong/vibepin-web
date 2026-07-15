@@ -57,13 +57,14 @@ import {
 } from "@/lib/pinterestClient";
 import { getCachedBoardsResult, isCacheFresh, setCachedBoardsResult } from "@/lib/pinterest/boardsCache";
 import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinterest/connection";
-import { beginPublish, endPublish } from "@/lib/studio/pinLifecycle";
+import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { isPublishableImage, isValidDestinationUrl } from "@/lib/pinReadiness";
 import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { publishToSocial } from "@/lib/social/socialClient";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
-import { ContactSupportModal } from "@/components/support/ContactSupportModal";
-import type { SupportCategory, SupportSource } from "@/lib/support/types";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const UI = {
@@ -168,9 +169,15 @@ export function PinDetailsModal({
   const [publishAttempts, setPublishAttempts] = useState(0);
   // Lightweight inline validation shown next to the board field (no warning banner).
   const [boardError, setBoardError] = useState(false);
+  // Field-level Website URL format error (PRD §14.2: shown near the field, not just a toast).
+  const [urlError, setUrlError] = useState(false);
+  // "Replace the current destination URL?" confirm (PRD §10.2) — replaces window.confirm.
+  const [confirmReplaceUrlOpen, setConfirmReplaceUrlOpen] = useState(false);
   // Contact Support entry points (publish failed / AI generation failed). Supplements
   // Retry publish / Try again — never replaces them.
-  const [supportRequest, setSupportRequest] = useState<{ category: SupportCategory; subject: string; source: SupportSource; extra: Record<string, unknown> } | null>(null);
+  // The "Contact support" entry points here open ContactSupportModal, which ships with
+  // the Support cluster (deferred out of RC0 Create Pins). Until it lands the failure
+  // UI keeps its error message + retry; the support shortcut is simply not offered.
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
@@ -183,8 +190,10 @@ export function PinDetailsModal({
   const [keepTimeLocked, setKeepTimeLocked] = useState(false);
   // Inline date/time editor revealed by the Schedule / Reschedule action.
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
-  // Overflow menu (Pin now / Unschedule) — keeps the footer to one primary CTA.
+  // Overflow menu (Publish now / Unschedule) — keeps the footer to one primary CTA.
   const [overflowOpen, setOverflowOpen] = useState(false);
+  // "Publish now" is irreversible and, when scheduled, drops the slot — confirm first.
+  const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
   const boardSelectRef = useRef<HTMLInputElement | null>(null);
 
   // ── Pinterest redirect feedback ─────────────────────────────────────────────
@@ -559,6 +568,8 @@ export function PinDetailsModal({
     setTrialAccess(false);
     setPublishError(null);
     setBoardError(false);
+    setUrlError(false);
+    setConfirmReplaceUrlOpen(false);
     setPinterestConnected(false);
     setPinterestAccount(null);
     setSocialDestinations([]);
@@ -716,10 +727,9 @@ export function PinDetailsModal({
       return [...prev, p];
     });
     if (!primaryProductId) setPrimaryProductId(p.id);
-    // Auto-fill the destination URL from the product link when it is empty.
-    if (p.productUrl && !destinationUrl.trim()) {
-      setDestinationUrl(p.productUrl);
-    }
+    // PRD §10.1/§10.3.1: Product URL belongs to the Product, Website URL belongs to
+    // the Pin Draft. Attaching a product must NEVER auto-fill the destination URL —
+    // the user explicitly opts in via the "Use product link as destination" affordance.
     markDirty();
   }
 
@@ -747,6 +757,15 @@ export function PinDetailsModal({
     toast.success(t("pinDetails.toast.productAttached"));
   }
 
+  // User clicked a "Publish now" affordance (footer / overflow / failed-retry). Publishing
+  // is immediate and irreversible, so confirm first (the actual publish runs on confirm).
+  // Silent guards mirror handlePublish's own: never open the dialog while a publish or an
+  // OAuth redirect is already in flight.
+  function requestPublish() {
+    if (publishing || isRedirectingToPinterest) return;
+    setConfirmPublishOpen(true);
+  }
+
   async function handlePublish() {
     // Dev-only click trace — verifies the handler fires from a real browser click.
     if (process.env.NODE_ENV !== "production") {
@@ -770,7 +789,7 @@ export function PinDetailsModal({
     setTrialAccess(false);
     setPublishAttempts((n) => n + 1);
 
-    // "Pin now" publishes immediately — branching happens here.
+    // "Publish now" publishes immediately — branching happens here.
     // Every branch below produces visible feedback (footer message / redirect / loading).
 
     // Disconnected → start Pinterest OAuth (paints "Opening Pinterest…", no Connect card).
@@ -802,11 +821,20 @@ export function PinDetailsModal({
     }
 
     // Block on missing required Pin details. Website URL / destination link is
-    // OPTIONAL (recommended for product Pins) — never a blocker.
-    if (!publicImage) {
+    // OPTIONAL (recommended for product Pins) — never a blocker on its own; only an
+    // ILLEGAL (non-http/https) value blocks (PRD §14.2/§14.3). Uses the same canonical
+    // pinReadiness.isPublishableImage check Studio/Batch Edit use, so "publishable image"
+    // means the same thing everywhere (public http(s) URL, not blob/data/localhost).
+    if (!isPublishableImage(publicImage)) {
       const msg = "This Pin needs an image before it can be published.";
       setPublishError(msg);
       toast.error(msg);
+      return;
+    }
+    if (!isValidDestinationUrl(destinationUrl)) {
+      setUrlError(true);
+      setPublishError(t("pinDetails.error.invalidUrl"));
+      toast.error(t("pinDetails.error.invalidUrl"));
       return;
     }
 
@@ -855,7 +883,13 @@ export function PinDetailsModal({
         remotePinUrl: res.pin.url,
         boardId,
         boardName,
+        // Clear any prior publish-failure state so a Pin that previously failed and is
+        // now published is fully clean (no stale "failed" lifecycle / retry framing).
         publishError: undefined,
+        failureType: undefined,
+        errorCategory: undefined,
+        previousScheduledTime: undefined,
+        publishErrorCode: undefined,
       });
       setResult({ pinUrl: res.pin.url, pinId: res.pin.id, boardName, environment: res.environment });
       toast.success(t("pinDetails.toast.publishSuccess"), {
@@ -905,6 +939,33 @@ export function PinDetailsModal({
           message: err.message,
         });
       }
+      // Persist the failure so it survives a reload and is truthfully reflected as a
+      // "failed" Pin — NOT still "Scheduled" (PRD WP-B §11.5). This is additive to the
+      // local setPublishError feedback below (immediate) — the store write is durable.
+      // We clear scheduledDate/scheduledTime (a failed publish no longer holds a slot)
+      // but remember the time in previousScheduledTime so it can be offered back later.
+      //
+      // Exception: a trial/Standard-access block is NOT a real publish failure — the Pin
+      // is publishable, just not until Pinterest grants access. The product promise is
+      // "save this Pin and publish after access is approved", so we keep its schedule and
+      // do NOT mark it failed (it stays Scheduled/Unscheduled). Only the notice is shown.
+      if (err.code !== "pinterest_trial_access") {
+        const errorCategory = mapPublishErrorToCategory(err.code, err.message);
+        const previousScheduledTime = plannedDate.trim()
+          ? new Date(`${plannedDate}T${(scheduledTime.trim() || "09:00")}:00`).toISOString()
+          : undefined;
+        pinDraftStore.updateDraft(activeDraft.id, {
+          publishError: t("pinDetails.error.publishFailed"),
+          failureType: "publish",
+          errorCategory,
+          publishErrorCode: err.code,
+          previousScheduledTime,
+          // A failed publish no longer occupies its scheduled slot (§11.5).
+          scheduledDate: "",
+          scheduledTime: "",
+        });
+      }
+
       if (needsPinterestConnect(err)) {
         goToPinterestOAuth();
       } else if (err.code === "pinterest_trial_access") {
@@ -928,13 +989,27 @@ export function PinDetailsModal({
   const primaryUrl = (primaryProduct?.productUrl ?? "").trim();
   // The action is meaningful whenever a primary product URL exists and the destination
   // doesn't already match it (offer it even when a custom URL is present, but never
-  // silently clobber — confirm before overwriting a different existing URL).
-  const canUsePrimaryUrl = !!primaryUrl && destinationUrl.trim() !== primaryUrl;
-  const applyPrimaryUrlToDestination = () => {
+  // silently clobber — confirm before overwriting a different existing URL). URL must
+  // itself be a legal http(s) address (PRD §10.3.6) — a malformed product URL is never
+  // offered as a one-click destination.
+  const canUsePrimaryUrl = !!primaryUrl && isValidDestinationUrl(primaryUrl) && destinationUrl.trim() !== primaryUrl;
+  // PRD §10.2: empty destination → fill directly; existing value → confirm via the
+  // in-app ConfirmDialog (never window.confirm, which breaks the product's visual language).
+  const requestUsePrimaryUrl = () => {
     if (!primaryUrl) return;
-    if (destinationUrl.trim() && destinationUrl.trim() !== primaryUrl
-      && !window.confirm(t("pinDetails.confirmReplaceUrl"))) return;
-    setDestinationUrl(primaryUrl); markDirty();
+    if (destinationUrl.trim() && destinationUrl.trim() !== primaryUrl) {
+      setConfirmReplaceUrlOpen(true);
+      return;
+    }
+    setDestinationUrl(primaryUrl);
+    setUrlError(false);
+    markDirty();
+  };
+  const confirmUsePrimaryUrl = () => {
+    setConfirmReplaceUrlOpen(false);
+    setDestinationUrl(primaryUrl);
+    setUrlError(false);
+    markDirty();
   };
   const isScheduled = !!plannedDate.trim();
   const canonicalDraft: PinDetailsDraft = {
@@ -1037,19 +1112,44 @@ export function PinDetailsModal({
   );
 
   // One planning CTA needs a board + a date + a time. Otherwise it's disabled with
-  // clear helper text.
+  // clear helper text. PRD §14.2 hard-blocks Schedule on: missing/non-public image,
+  // missing board, and an illegal (non-http/https) Website URL — same canonical checks
+  // used by the Publish gate (pinReadiness), so Schedule and Publish never disagree on
+  // what's required. Title/Description are length-capped inline (maxLength on the
+  // fields) rather than required-non-empty — the destination link stays optional.
   const hasBoard = !!boardId;
   const hasWhen = !!plannedDate.trim() && !!scheduledTime.trim();
-  const canSchedule = hasBoard && hasWhen && boardsStatus !== "checking";
+  const hasValidImage = isPublishableImage(publicImage);
+  const hasValidUrl = isValidDestinationUrl(destinationUrl);
+  const canSchedule = hasBoard && hasWhen && hasValidImage && hasValidUrl && boardsStatus !== "checking";
   const scheduleHelper = boardsStatus === "not_connected"
     ? t("pinDetails.helper.connectPinterest")
+    : !hasValidImage ? "This Pin needs an image before it can be scheduled."
+    : !hasValidUrl ? t("pinDetails.error.invalidUrl")
     : !hasBoard && !hasWhen ? t("pinDetails.helper.chooseBoardAndTime")
     : !hasBoard ? t("pinDetails.helper.chooseBoard")
     : !hasWhen ? t("pinDetails.helper.pickTime")
     : "";
 
-  // Primary CTA: set a date/time (if missing) then persist → scheduled.
+  // Primary CTA: set a date/time (if missing) then persist → scheduled. Re-validates the
+  // hard gate here too (not just via the disabled attribute) so a stale/edge-case click
+  // (e.g. keyboard Enter) can't slip through with a field-level error left unshown.
   function handleSchedulePrimary() {
+    if (!hasValidImage) {
+      setPublishError("This Pin needs an image before it can be scheduled.");
+      return;
+    }
+    if (!hasValidUrl) {
+      setUrlError(true);
+      setPublishError(t("pinDetails.error.invalidUrl"));
+      toast.error(t("pinDetails.error.invalidUrl"));
+      return;
+    }
+    if (!hasBoard) {
+      setBoardError(true);
+      setTimeout(() => boardSelectRef.current?.focus(), 0);
+      return;
+    }
     if (!plannedDate.trim()) setPlannedDate(plannableDateISO(1));
     if (!scheduledTime.trim()) setScheduledTime("09:00");
     setScheduleEditorOpen(true);
@@ -1075,7 +1175,7 @@ export function PinDetailsModal({
         }}
       >
         {/* Title row — quiet, no subtitle/banner. Overflow holds secondary actions
-            (Pin now / Unschedule) so the footer keeps a single primary CTA. */}
+            (Publish now / Unschedule) so the footer keeps a single primary CTA. */}
         <header style={{ padding: "12px 16px", borderBottom: `1px solid ${UI.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
           <h2 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: UI.text }}>{isPosted ? t("pinDetails.publishedTitle") : isScheduled ? t("pinDetails.editScheduledTitle") : t("pinDetails.editTitle")}</h2>
           <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
@@ -1090,9 +1190,9 @@ export function PinDetailsModal({
                     <div onClick={() => setOverflowOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 90 }} />
                     <div data-testid="draft-overflow-menu" style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 91, minWidth: 168, background: UI.card, border: `1px solid ${UI.border}`, borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,0.5)", overflow: "hidden" }}>
                       <button type="button" data-testid="draft-overflow-pin-now" disabled={publishing || isRedirectingToPinterest}
-                        onClick={() => { setOverflowOpen(false); void handlePublish(); }}
+                        onClick={() => { setOverflowOpen(false); requestPublish(); }}
                         style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", border: "none", background: "none", color: UI.text, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                        {publishing ? t("pinDetails.publishing") : t("pinDetails.overflow.pinNow")}
+                        {publishing ? t("pinDetails.publishing") : t("pinDetails.publishNow")}
                       </button>
                       {isScheduled && (
                         <button type="button" data-testid="draft-overflow-unschedule" onClick={() => { setOverflowOpen(false); doUnschedule(); }}
@@ -1154,7 +1254,7 @@ export function PinDetailsModal({
                 )}
               </div>
               {/* Quiet secondary affordance only — the single primary action lives in
-                  the footer; Pin now lives in the overflow menu. */}
+                  the footer; Publish now lives in the overflow menu. */}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {!isPosted && !isFailed && (
                   <button type="button" data-testid={isScheduled ? "draft-action-reschedule" : "draft-action-schedule"} onClick={openScheduleEditor} style={lightBtn}>
@@ -1240,7 +1340,17 @@ export function PinDetailsModal({
               boards={boards}
               analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
               hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
-              onApplyCopy={(r) => { setTitle(r.title); setDescription(r.description); setAltText(r.altText); markDirty(); }}
+              onApplyCopy={(r) => {
+                // Same fill-in-the-blank rule as Studio's PinBoardCard.applyCopy (WP-D):
+                // title/description overwrite only when the user explicitly confirmed a
+                // full replace OR the field was empty before this run; alt text only ever
+                // fills when empty. Keeps Plan drawer and Studio card AI Copy behavior
+                // consistent — never a silent, unconditional overwrite of manual edits.
+                setTitle(prev => (r.confirmedReplace || !prev.trim() ? r.title : prev));
+                setDescription(prev => (r.confirmedReplace || !prev.trim() ? r.description : prev));
+                setAltText(prev => (prev.trim() ? prev : r.altText));
+                markDirty();
+              }}
             />
           </div>
 
@@ -1272,7 +1382,19 @@ export function PinDetailsModal({
               )}
             </div>
             <input data-testid="draft-edit-destination-url" value={destinationUrl} placeholder={t("pinDetails.urlPlaceholder")}
-              onChange={e => { setDestinationUrl(e.target.value); markDirty(); }} style={field} />
+              onChange={e => {
+                setDestinationUrl(e.target.value);
+                if (urlError) setUrlError(false);
+                markDirty();
+              }}
+              onBlur={() => setUrlError(!isValidDestinationUrl(destinationUrl))}
+              style={{ ...field, ...(urlError ? { border: `1px solid ${UI.error}` } : {}) }} />
+            {/* Field-level format error (PRD §14.2/§14.3) — never just a toast. */}
+            {urlError && (
+              <p data-testid="draft-dest-url-error" style={{ display: "flex", alignItems: "center", gap: 4, margin: "5px 0 0", fontSize: 10.5, fontWeight: 700, color: UI.error }}>
+                <AlertCircle size={11} /> {t("pinDetails.error.invalidUrl")}
+              </p>
+            )}
             {(() => {
               // Small, neutral status only — the full link + product identifiers live
               // in the Product section, not the main form.
@@ -1285,11 +1407,16 @@ export function PinDetailsModal({
                 </span>
               );
             })()}
+            {/* PRD §10.2: "Product link available" banner — explicit opt-in only, never
+                an auto-fill. Shown whenever the linked product has a distinct, valid URL. */}
             {canUsePrimaryUrl && (
-              <button type="button" data-testid="draft-use-primary-url" onClick={applyPrimaryUrlToDestination}
-                style={{ marginTop: 5, background: "none", border: "none", padding: 0, fontSize: 11, fontWeight: 700, color: UI.purple, cursor: "pointer" }}>
-                {t("pinDetails.usePrimaryUrl")}
-              </button>
+              <div data-testid="draft-product-link-banner" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 8, padding: "8px 10px", borderRadius: 9, border: `1px solid ${UI.border}`, background: UI.surface3 }}>
+                <span style={{ fontSize: 11, color: UI.textSec }}>{t("pinDetails.productLinkAvailable")}</span>
+                <button type="button" data-testid="draft-use-primary-url" onClick={requestUsePrimaryUrl}
+                  style={{ background: "none", border: "none", padding: 0, fontSize: 11, fontWeight: 700, color: UI.purple, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {t("pinDetails.useProductLinkAsDestination")}
+                </button>
+              </div>
             )}
             {/* A product is linked but has no URL yet → friendly, non-blocking note. */}
             {!!primaryProduct && !primaryUrl && (
@@ -1419,30 +1546,6 @@ export function PinDetailsModal({
               <p data-testid="draft-publish-error" style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11.5, color: UI.error, margin: 0 }}>
                 <AlertCircle size={13} style={{ marginTop: 1, flexShrink: 0 }} /> {publishError}
               </p>
-              <button
-                type="button"
-                data-testid="draft-publish-contact-support"
-                onClick={() => setSupportRequest({
-                  category: "publishing_issue",
-                  subject: "Publish failed",
-                  source: "publish_failed",
-                  extra: {
-                    draftId: activeDraft.id,
-                    publishJobId: activeDraft.weeklyPlanItemId ?? null,
-                    boardId: boardId || null,
-                    boardName: boards.find(b => b.id === boardId)?.name ?? null,
-                    imageUrlExists: !!publicImage,
-                    destinationUrlExists: !!destinationUrl.trim(),
-                    publishErrorCode: null,
-                    publishErrorMessage: publishError,
-                    retryCount: publishAttempts,
-                    pinterestConnectionStatus: boardsStatus,
-                  },
-                })}
-                style={{ flexShrink: 0, background: "none", border: "none", padding: 0, fontSize: 11.5, fontWeight: 700, color: UI.textSec, textDecoration: "underline", cursor: "pointer" }}
-              >
-                {t("pinDetails.contactSupport")}
-              </button>
             </div>
           )}
           {/* Single primary CTA + a small non-clickable auto-save indicator.
@@ -1459,25 +1562,7 @@ export function PinDetailsModal({
                 </a>
             ) : isFailed ? (
               <>
-                <button
-                  type="button"
-                  data-testid="draft-cta-report-credits-issue"
-                  onClick={() => setSupportRequest({
-                    category: "credits_issue",
-                    subject: "AI credits issue",
-                    source: "ai_generation",
-                    extra: {
-                      draftId: activeDraft.id,
-                      generationStatus: activeDraft.generationStatus ?? null,
-                      providerError: activeDraft.assetError ?? null,
-                      resultCount: 0,
-                    },
-                  })}
-                  style={{ ...ghostBtn }}
-                >
-                  {t("pinDetails.reportCreditsIssue")}
-                </button>
-                <button type="button" data-testid="draft-cta-try-again" onClick={() => void handlePublish()} disabled={publishing || isRedirectingToPinterest}
+                <button type="button" data-testid="draft-cta-try-again" onClick={requestPublish} disabled={publishing || isRedirectingToPinterest}
                   style={{ ...primaryBtn, opacity: (publishing || isRedirectingToPinterest) ? 0.6 : 1 }}>
                   {publishing ? <><Loader2 size={13} className="animate-spin" /> {t("pinDetails.publishing")}</> : t("pinDetails.tryAgain")}
                 </button>
@@ -1488,7 +1573,7 @@ export function PinDetailsModal({
                     Enabled without a date/time — publishing needs no schedule. Disabled
                     only while a publish/redirect is in flight. */}
                 <button type="button" data-testid="draft-cta-publish-now"
-                  onClick={() => void handlePublish()} disabled={publishing || isRedirectingToPinterest}
+                  onClick={requestPublish} disabled={publishing || isRedirectingToPinterest}
                   style={{ ...ghostBtn, opacity: (publishing || isRedirectingToPinterest) ? 0.6 : 1, cursor: (publishing || isRedirectingToPinterest) ? "not-allowed" : "pointer" }}>
                   {publishing ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Loader2 size={13} className="animate-spin" /> {t("pinDetails.publishing")}</span> : t("pinDetails.publishNow")}
                 </button>
@@ -1523,6 +1608,32 @@ export function PinDetailsModal({
           </div>
         )}
 
+        {/* Confirm before an immediate publish (shared with Plan list / hover, which
+            funnel here rather than publishing on their own). The second sentence about the
+            scheduled time only shows when the Pin actually holds one. */}
+        <ConfirmPublishDialog
+          open={confirmPublishOpen}
+          hasSchedule={isScheduled}
+          busy={publishing || isRedirectingToPinterest}
+          onCancel={() => setConfirmPublishOpen(false)}
+          onConfirm={() => { setConfirmPublishOpen(false); void handlePublish(); }}
+          ui={{ card: UI.card, border: UI.border, text: UI.text, textSec: UI.textSec }}
+        />
+
+        {/* "Use product link as destination" replace-confirm (PRD §10.2) — replaces
+            window.confirm with an in-app modal matching the product's visual language. */}
+        <ConfirmDialog
+          open={confirmReplaceUrlOpen}
+          testId="draft-confirm-replace-url"
+          title={t("pinDetails.confirmReplaceUrlTitle")}
+          body={t("pinDetails.confirmReplaceUrlBody")}
+          cancelLabel={t("pinDetails.confirmReplaceUrlKeep")}
+          confirmLabel={t("pinDetails.confirmReplaceUrlUse")}
+          onCancel={() => setConfirmReplaceUrlOpen(false)}
+          onConfirm={confirmUsePrimaryUrl}
+          ui={{ card: UI.card, border: UI.border, text: UI.text, textSec: UI.textSec }}
+        />
+
         {/* Pinterest redirect feedback — non-blocking status only. No button click is
             ever required to "continue" the OAuth redirect: the loading state persists
             for as long as the real navigation takes (Pinterest's own authorize page can
@@ -1539,16 +1650,6 @@ export function PinDetailsModal({
         )}
 
       </div>
-      {supportRequest && (
-        <ContactSupportModal
-          open
-          onClose={() => setSupportRequest(null)}
-          defaultCategory={supportRequest.category}
-          defaultSubject={supportRequest.subject}
-          source={supportRequest.source}
-          extraContext={supportRequest.extra}
-        />
-      )}
     </>
   );
 }

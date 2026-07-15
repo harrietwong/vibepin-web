@@ -41,6 +41,19 @@ export type KeywordContextInput = {
   category?: string;
   language?: string;
   region?: string;
+  // ── Product context (Shopify / linked product) — optional relevance signal ──────
+  // When a Pin is tied to a product, its title / type / tags are strong, specific
+  // relevance signals. They feed both the query terms and the ranking (product words
+  // count for coverage AND get an explicit overlap dimension weighted at least as high
+  // as the board). Absent → behaves exactly as before.
+  productTitle?: string;
+  productType?: string;
+  productTags?: string[];
+  // ── Creative direction context — a secondary style/scene signal ─────────────────
+  // The direction the user picked (name + a few scene/style terms). Weighted BELOW
+  // product/board so it nudges but never dominates relevance. Absent → no effect.
+  directionTitle?: string;
+  directionTerms?: string[];
 };
 
 export type KeywordContextResult = {
@@ -140,6 +153,22 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
   if (boardPhrase.includes(" ")) add(0, boardPhrase);
   if (input.style) add(0, input.style);
 
+  // Tier 0 also: product type — a canonical product noun phrase (e.g. "area rug",
+  // "ceramic mug"), as query-worthy as the board phrase.
+  if (input.productType) add(0, input.productType);
+  // Tier 1: product title 2-word tail + tag tails (canonical phrase shape).
+  const productTitleWords = normalizeWords(input.productTitle ?? "").filter(w => !STOP_WORDS.has(w));
+  if (productTitleWords.length >= 2) add(1, productTitleWords.slice(-2).join(" "));
+  for (const tag of input.productTags ?? []) {
+    const tw = normalizeWords(tag).filter(w => !STOP_WORDS.has(w));
+    if (tw.length >= 2) add(1, tw.slice(-2).join(" "));
+    else if (tw.length === 1 && tw[0].length > 3 && !GENERIC_WORDS.has(tw[0])) add(2, tw[0]);
+  }
+  // Tier 2: salient product title head nouns.
+  for (const w of productTitleWords) {
+    if (!GENERIC_WORDS.has(w) && w.length > 3) add(2, w);
+  }
+
   // Tier 1: 2-word tails of visible objects (canonical phrase shape).
   for (const obj of input.visibleObjects) {
     const words = normalizeWords(obj).filter(w => !STOP_WORDS.has(w));
@@ -155,8 +184,15 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
     if (head && head.length > 2) add(2, head);
   }
 
-  // Tier 3 (fallback): category + salient summary nouns.
+  // Tier 3 (fallback): category + salient summary nouns + creative-direction words.
   if (input.category) add(3, input.category.replace(/-/g, " "));
+  const directionWords = [
+    ...normalizeWords(input.directionTitle ?? ""),
+    ...(input.directionTerms ?? []).flatMap(t => normalizeWords(t)),
+  ];
+  for (const w of directionWords) {
+    if (!GENERIC_WORDS.has(w) && !STOP_WORDS.has(w) && w.length > 3) add(3, w);
+  }
   for (const w of normalizeWords(input.imageSummary)) {
     if (!GENERIC_WORDS.has(w) && !STOP_WORDS.has(w) && w.length > 4) add(3, w);
   }
@@ -176,13 +212,29 @@ export function buildQueryTerms(input: KeywordContextInput): string[] {
  * context and returns candidates + the 5-8 recommended keywords + rejects.
  */
 export function rankKeywords(rows: KeywordRow[], input: KeywordContextInput): Omit<KeywordContextResult, "queryTerms" | "poolSize"> {
+  // Product words are specific, high-signal relevance evidence — fold them into the
+  // coverage context set (so a product-matching keyword's distinctive words are
+  // "seen") AND score them again as an explicit overlap dimension below.
+  const productWords = normalizeWords(
+    [input.productTitle ?? "", input.productType ?? "", ...(input.productTags ?? [])].join(" "),
+  ).filter(w => !STOP_WORDS.has(w));
+  // Direction words stay OUT of the coverage set (kept subordinate to image/product);
+  // they only contribute a small explicit overlap dimension.
+  const directionWords = [
+    ...normalizeWords(input.directionTitle ?? ""),
+    ...(input.directionTerms ?? []).flatMap(t => normalizeWords(t)),
+  ].filter(w => !STOP_WORDS.has(w));
+
   const contextSet = new Set<string>([
     ...normalizeWords(input.visibleObjects.join(" ")),
     ...normalizeWords(input.style),
     ...normalizeWords(input.imageSummary),
     ...normalizeWords((input.category ?? "").replace(/-/g, " ")),
+    ...productWords,
   ]);
   const boardSet = new Set<string>(normalizeWords(input.boardName ?? ""));
+  const productSet = new Set<string>(productWords);
+  const directionSet = new Set<string>(directionWords);
   const cat = (input.category ?? "").toLowerCase().replace(/-/g, " ").trim();
 
   const seen = new Set<string>();
@@ -197,9 +249,16 @@ export function rankKeywords(rows: KeywordRow[], input: KeywordContextInput): Om
 
     const coverage = specificCoverage(contextSet, keyword);
     const boardOverlap = boardSet.size ? containment(boardSet, keyword) : 0;
+    const productOverlap = productSet.size ? containment(productSet, keyword) : 0;
+    const directionOverlap = directionSet.size ? containment(directionSet, keyword) : 0;
     const categoryMatch = cat && (row.category ?? "").toLowerCase().replace(/-/g, " ").trim() === cat ? 1 : 0;
     // Relevance is coverage-led: a keyword's DISTINCTIVE words must appear in the image.
-    const relevanceScore = clamp01(coverage * 0.55 + boardOverlap * 0.25 + categoryMatch * 0.2);
+    // Product overlap is weighted at least as high as the board (both 0.25); the
+    // direction is a lighter nudge (0.1). These are ADDITIVE increments — when no
+    // product/direction context is supplied both are 0 and scoring is unchanged.
+    const relevanceScore = clamp01(
+      coverage * 0.55 + boardOverlap * 0.25 + categoryMatch * 0.2 + productOverlap * 0.25 + directionOverlap * 0.1,
+    );
 
     // A keyword must genuinely relate to the image or board — never volume alone.
     if (relevanceScore < 0.3) {

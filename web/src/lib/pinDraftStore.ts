@@ -104,6 +104,19 @@ export interface PinDraft {
   remotePinUrl?:       string;
   /** Last publish error message. Present ⇒ lifecycle is "failed" until retried. */
   publishError?:       string;
+  // ── Failure semantics (PRD WP-B §11.5) ──────────────────────────────────────
+  // Optional; drafts persisted before this feature keep working unchanged. All ride
+  // the pin_drafts payload sync automatically (whole draft is serialized — no field
+  // whitelist in pinDraftSync.flush) — no migration.
+  /** What kind of failure produced the "failed" lifecycle. */
+  failureType?:        "generation" | "publish";
+  /** Coarse failure bucket for retry framing (drives Banner/Retry copy). */
+  errorCategory?:      "transient" | "content" | "auth";
+  /** The scheduled time (ISO) this Pin had before a failed publish cleared it — so a
+   *  future "reschedule" affordance can offer to restore it. */
+  previousScheduledTime?: string;
+  /** Raw publish error code from the API (e.g. "board_not_owned"); internal, not shown. */
+  publishErrorCode?:   string;
   /** Set when the stored image URL is not publicly usable (blocks publish). */
   assetError?:         string;
   /** Explicit dedup key for board creation (upload / generation / migration). */
@@ -131,6 +144,70 @@ export interface PinDraft {
   recommendedKeywords?:    string[];
   keywordSource?:          "pinterest_high_search";
   keywordUpdatedAt?:       string;
+  // ── Creative-Intelligence selections (PRD v0.2 Phase A/B) ────────────────────
+  // Channel + storage ready this phase; the writer lands in Phase B. Round-trips
+  // to the server via `payload`; also promoted to pin_drafts.creative_selections.
+  creativeSelections?:     CreativeSelections;
+  // ── Quality Judge (PRD v0.2 §5.5, Phase C) ───────────────────────────────────
+  // Only ever set on AI-generated result cards (never on uploads). Rides the v38
+  // payload sync automatically — no migration. Scores/reasons are INTERNAL (never
+  // shown to users); only an `invalid` verdict changes the card (collapsed/dimmed).
+  qualityJudge?:           QualityJudge;
+}
+
+// The Quality Judge grader (lib/ai-copy/judgeVerdict.ts, its startQualityJudge runner,
+// and /api/quality-judge) is a separate RC0 cluster and is not yet committed. The draft
+// only ever STORES a judge result and PinBoardCard only READS verdict/status/userOverride,
+// so these result types are inlined here rather than imported — that keeps the persisted
+// shape and the card's display gate intact without pulling the grader in. Keep in sync
+// with judgeVerdict.ts when that cluster lands.
+export type QualityScoreKey =
+  | "productPreservation" | "realism" | "creatorLikeness" | "sceneFit"
+  | "pinterestFit" | "composition" | "artifacts" | "safety";
+export type QualityScores = Partial<Record<QualityScoreKey, number>>;
+export type QualityVerdict = "ok" | "borderline" | "invalid";
+
+/**
+ * Quality Judge result cached on a generated draft. `status` mirrors the async
+ * image-analysis state machine. `scores`/`reasons`/`overall` are internal diagnostics
+ * (for analytics/training) — never rendered. `userOverride` records a "Show anyway" click.
+ */
+export interface QualityJudge {
+  status:        "pending" | "ready" | "failed";
+  verdict?:      QualityVerdict;
+  scores?:       QualityScores;
+  overall?:      number;
+  /** Short internal diagnostic notes from the grader. NEVER shown to the user. */
+  reasons?:      string[];
+  judgeVersion:  string;
+  updatedAt:     string;
+  /** True once the user clicked "Show anyway" on an invalid-verdict card. */
+  userOverride?: boolean;
+}
+
+/** Minimal summary of the creative direction the user picked in the AI Image drawer.
+ *  Enough to (a) record the choice and (b) feed AI Copy a direction hint — never the
+ *  full recommendation object. */
+export interface SelectedCreativeDirection {
+  id:      string;
+  title:   string;
+  /** A few scene/style terms (from the direction's prompt hints) — copy context only. */
+  terms?:  string[];
+}
+
+/**
+ * User creative choices captured in the Creative-Intelligence flow.
+ * All optional — a draft created before this feature keeps working unchanged.
+ */
+export interface CreativeSelections {
+  /** The creative direction the user picked (id/name/terms summary). */
+  selectedDirection?:    SelectedCreativeDirection;
+  /** Reference-sample ids the user kept. */
+  selectedReferenceIds?: string[];
+  /** Reference-sample ids the user dismissed. */
+  rejectedReferenceIds?: string[];
+  /** Recommended keywords the user removed (wire a remove-chip UI here when one exists). */
+  removedKeywords?:      string[];
 }
 
 /** Board card origin. Kept as string on PinDraft for back‑compat; these are the v2 values. */

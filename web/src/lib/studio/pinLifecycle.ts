@@ -48,6 +48,69 @@ export function getPinLifecycle(draft: PinDraft): PinLifecycle {
   return "unscheduled";
 }
 
+// ── Publish-failure categorization (PRD WP-B §11.5) ─────────────────────────────
+// Maps a normalized publish error (the `code` from /api/pinterest/pins and/or the
+// user-facing message) to a coarse retry bucket. The bias is deliberately toward
+// "transient": anything not clearly auth- or content-related lets the user Retry.
+export type ErrorCategory = "transient" | "content" | "auth";
+
+/**
+ * Classify a publish failure.
+ *   auth      → the Pinterest connection must be (re)authorized (needs_reconnect / 401).
+ *   content   → the request itself is wrong and Retry-as-is won't help (bad board /
+ *               invalid image or link URL / field validation).
+ *   transient → unknown / timeout / 5xx / concurrent-publish lock → safe to Retry.
+ *
+ * Prefer `code` (stable) over `message` (localized/formatted). When neither is
+ * conclusive, return "transient" so the user is never blocked from retrying.
+ */
+export function mapPublishErrorToCategory(code?: string, message?: string): ErrorCategory {
+  const c = (code ?? "").trim().toLowerCase();
+  const m = (message ?? "").trim().toLowerCase();
+
+  // auth — connection expired / not authorized for publishing.
+  if (c === "needs_reconnect" || c === "unauthorized" || c === "401") return "auth";
+
+  // content — a fixed, request-shaped problem; retrying the same payload won't help.
+  if (
+    c === "board_not_owned" ||
+    c === "invalid_image_url" ||
+    c === "invalid_link" ||
+    c === "bad_request"
+  ) return "content";
+
+  // transient — explicitly safe to retry (do NOT let the message heuristics below
+  // reclassify these as content).
+  if (c === "publish_in_progress" || c === "network_error") return "transient";
+
+  // Fall back to message heuristics only when the code was inconclusive.
+  if (c === "" || c === "pinterest_api_error") {
+    if (/reconnect|token .*expired|connection expired|reauthor/.test(m)) return "auth";
+    if (/board (not found|not owned)|not a public|must be a public|must use http|is not a valid url|invalid/.test(m)) return "content";
+  }
+
+  // Unknown / timeout / 5xx / anything else → let the user retry.
+  return "transient";
+}
+
+/** Count drafts whose most recent PUBLISH attempt failed (drives a "N failed" banner). */
+export function countPublishFailures(drafts: Pick<PinDraft, "failureType" | "publishError">[]): number {
+  let n = 0;
+  for (const d of drafts) {
+    if (d.failureType === "publish" && sanitizeHandoffField(d.publishError)) n++;
+  }
+  return n;
+}
+
+// ── Failed-view sub-filter entry signal (PRD "失败情况优化" §4) ─────────────────
+// One-shot sessionStorage flag: any entry point that wants Create Pins' Failed view
+// to default its sub-filter to "Publish failures" (Banner CTA, Plan's stats-bar "N
+// failed") writes this key right before navigating; StudioBoard consumes (reads +
+// clears) it once on mount. Shared here so Plan (plan/page.tsx) and StudioBoard.tsx
+// agree on the exact key/value without importing each other.
+export const FAILED_SUB_ENTRY_KEY = "vp:studio:failed-sub-entry";
+export const FAILED_SUB_ENTRY_PUBLISH = "publish";
+
 export type StatusTone = "info" | "success" | "error" | "scheduled" | "neutral";
 export type StatusBadge = { lifecycle: PinLifecycle; label: string; tone: StatusTone };
 

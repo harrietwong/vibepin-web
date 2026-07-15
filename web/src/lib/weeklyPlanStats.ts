@@ -2,6 +2,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import { isPinReady, type ReadinessInput } from "@/lib/pinReadiness";
+import { countPublishFailures } from "@/lib/studio/pinLifecycle";
 
 /** Sentinel meaning "every category" — the Weekly Plan is one unified publishing
  *  calendar by default, with category only an optional filter. */
@@ -34,6 +35,11 @@ export type WeeklyPlanStats = {
   needsDetails:         number;
   unscheduledGenerated: number;
   posted:               number;
+  /** Publish-failure count (PRD "失败情况优化" §3) — GLOBAL, same source as the
+   *  FailureBanner (countPublishFailures over ALL drafts), intentionally NOT scoped
+   *  to the current week/category: the Banner/recovery flow is a single global
+   *  concept, so the stats-bar "N failed" must always agree with the Banner's count. */
+  failed:               number;
 };
 
 export function dateInWeek(dateStr: string, weekStart: string): boolean {
@@ -126,6 +132,9 @@ export function computeWeeklyPlanStatsFromDrafts(drafts: PinDraft[], weekStart: 
     needsDetails:         0,
     unscheduledGenerated: unscheduled.length,
     posted:               published,
+    // Global, not scoped to `drafts` (which may already be category-filtered) or to
+    // `weekStart` — same source as the FailureBanner so the two never disagree.
+    failed:               countPublishFailures(pinDraftStore.getAllDrafts()),
   };
 }
 

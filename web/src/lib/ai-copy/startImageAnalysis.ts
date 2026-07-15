@@ -54,6 +54,17 @@ export async function startImageAnalysis(draftId: string): Promise<void> {
   pinDraftStore.updateDraft(draftId, { imageAnalysisStatus: "pending", keywordStatus: "pending" });
   track("image_analysis_started", { draftId });
 
+  // Best-effort linked-product context for keyword relevance. `title` is always on a
+  // LinkedProduct; `productType`/`tags` ride along only on richer (Shopify) snapshots
+  // and are simply absent otherwise — never fabricated.
+  const linked = draft.linkedProducts?.length
+    ? (draft.linkedProducts.find(p => p.productId === draft.primaryProductId) ?? draft.linkedProducts[0])
+    : undefined;
+  const looseProduct = linked as (typeof linked & { productType?: string; tags?: string[] }) | undefined;
+  const productTags = Array.isArray(looseProduct?.tags) && looseProduct.tags.length
+    ? looseProduct.tags.slice(0, 10)
+    : undefined;
+
   try {
     const res = await fetch("/api/ai-copy/analyze", {
       method: "POST",
@@ -65,6 +76,9 @@ export async function startImageAnalysis(draftId: string): Promise<void> {
         category: draft.category || undefined,
         boardName: draft.boardName || undefined,
         language: readResolvedContentLanguage(),
+        productTitle: linked?.title || undefined,
+        productType: looseProduct?.productType || undefined,
+        productTags,
       }),
     });
     const body = await res.json() as AnalyzeResponse;

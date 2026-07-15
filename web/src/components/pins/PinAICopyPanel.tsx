@@ -23,6 +23,14 @@ import type { PinMetadataDraft } from "@/lib/pinMetadata";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import type { SetupSnapshot } from "@/lib/studioPersistence";
 import { readResolvedContentLanguage, type LanguageCode } from "@/lib/i18n/config";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+
+/** PRD 7.3 fill-in-the-blank rule: length/language pickers are hidden from this
+ *  panel (server keeps defaulting length→"standard", language→resolved content
+ *  language) — this constant documents the fixed length sent from the simplified
+ *  UI. Settings-level control of length/language may return later; the API
+ *  contract (PinCopyLength, `language`) is untouched to support that. */
+const FIXED_LENGTH: PinCopyLength = "standard";
 
 const P = {
   surface:  "var(--app-surface, #FFFFFF)",
@@ -44,6 +52,10 @@ export type PinAICopyResult = {
   destinationUrl: string;
   metadataDraft: PinMetadataDraft;
   context: CopyContextBundle;
+  /** True when the user explicitly confirmed replacing non-empty title+description
+   *  (PRD 7.3 fill-in-the-blank rule). The caller may then overwrite both fields;
+   *  otherwise it should only fill fields that were empty before this run. */
+  confirmedReplace: boolean;
 };
 
 export type PinAICopyPanelProps = {
@@ -82,23 +94,6 @@ export type PinAICopyPanelHandle = { generate: () => void };
 
 type Stage = "idle" | "analyzing" | "generating" | "checking" | "done" | "error";
 
-const LENGTHS: { key: PinCopyLength; label: string }[] = [
-  { key: "short", label: "Short" },
-  { key: "standard", label: "Standard" },
-  { key: "seo-rich", label: "SEO-rich" },
-];
-
-/** Copy language choices (PRD 6.3). "auto" = the user's saved AI content language. */
-const COPY_LANGUAGES: { key: "auto" | LanguageCode; label: string }[] = [
-  { key: "auto", label: "Auto" },
-  { key: "en", label: "English" },
-  { key: "zh-CN", label: "Chinese" },
-  { key: "es", label: "Spanish" },
-  { key: "fr", label: "French" },
-  { key: "de", label: "German" },
-  { key: "ja", label: "Japanese" },
-];
-
 const chip: React.CSSProperties = {
   display: "inline-block", padding: "2px 8px", borderRadius: 999,
   border: `1px solid ${P.border}`, background: P.surface, fontSize: 10.5, fontWeight: 650, color: P.text,
@@ -108,12 +103,12 @@ const sectionLabel: React.CSSProperties = {
 };
 
 export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelProps>(function PinAICopyPanel(props, ref) {
+  const { t: tr } = useLocale();
   const [stage, setStage] = useState<Stage>("idle");
   const [ctxOpen, setCtxOpen] = useState(false);
-  const [length, setLength] = useState<PinCopyLength>(props.length ?? "standard");
-  // Copy language is a per-run choice, independent of the UI language. "auto"
-  // resolves to the saved AI content language (default English).
-  const [copyLang, setCopyLang] = useState<"auto" | LanguageCode>("auto");
+  // PRD 7.3: when both title + description already have text, confirm before the
+  // AI copy overwrites them. Gates the actual generate() call, not just the apply.
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [result, setResult] = useState<{
     summary?: string; imageSummary?: string; recommendedKeywords: string[]; boardName?: string | null;
   } | null>(null);
@@ -131,19 +126,23 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   const hasContext = !!shownImageSummary || shownKeywords.length > 0 || !!shownBoard;
 
   const progressLabel = useMemo(() => {
-    if (stage === "analyzing") return analysisReady ? "Using saved image context…" : "Analyzing image…";
-    if (stage === "generating") return "Writing Pinterest copy…";
-    if (stage === "checking") return "Checking quality…";
-    if (stage === "done") return "Pinterest copy generated";
+    if (stage === "analyzing") return analysisReady ? tr("pinForm.usingSavedImageContext") : tr("pinForm.analyzingImage");
+    if (stage === "generating") return tr("pinForm.writingCopy");
+    if (stage === "checking") return tr("pinForm.checkingQuality");
+    if (stage === "done") return tr("pinForm.copyGenerated");
     return "";
-  }, [stage, analysisReady]);
+  }, [stage, analysisReady, tr]);
 
-  const generate = useCallback(async () => {
-    if (busy || props.disabled) return;
+  // PRD 7.3 fill-in-the-blank: both fields already have text → this run, once it
+  // completes, will overwrite user-written copy. Computed from current props so the
+  // confirm dialog and the applied result agree on the same snapshot.
+  const willReplaceExisting = !!props.title?.trim() && !!props.description?.trim();
+
+  const runGenerate = useCallback(async (confirmedReplace: boolean) => {
     setErrorMsg("");
     props.onBeforeGenerate?.();
     try {
-      const language = copyLang !== "auto" ? copyLang : (props.language ?? readResolvedContentLanguage());
+      const language = props.language ?? readResolvedContentLanguage();
       const res = await generatePinterestPinCopy({
         draftId: props.draftId,
         imageUrl: props.imageUrl,
@@ -160,7 +159,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
         recommendedKeywords: props.recommendedKeywords,
         boards: props.boards,
         language,
-        length,
+        length: FIXED_LENGTH,
         mode: isRegen ? "regenerate" : "initial",
         onStage: setStage,
       });
@@ -172,6 +171,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
         destinationUrl: res.fields.destinationUrl,
         metadataDraft: res.metadataDraft,
         context: res.context,
+        confirmedReplace,
       });
       setResult({
         summary: res.context.contextSummary,
@@ -181,14 +181,28 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
       });
       setStage("done");
       setGeneratedThisSession(true);
-      toast.success(isRegen ? "Regenerated Pinterest copy." : "Pinterest copy generated.");
+      toast.success(isRegen ? tr("pinForm.toastRegenerated") : tr("pinForm.toastGenerated"));
     } catch (err) {
-      const msg = (err as Error)?.message || "We couldn't generate good copy for this image. Please try again.";
+      const msg = (err as Error)?.message || tr("pinForm.genericGenerateError");
       setErrorMsg(msg);
       setStage("error");
       toast.error(msg);
     }
-  }, [busy, isRegen, length, props]);
+  }, [isRegen, props, tr]);
+
+  // Entry point used by the button + the imperative handle. Gates on the fill-in-
+  // the-blank rule: if both title and description already have text, ask first
+  // instead of silently overwriting what the user wrote.
+  const generate = useCallback(() => {
+    if (busy || props.disabled) return;
+    if (willReplaceExisting) { setConfirmOpen(true); return; }
+    void runGenerate(false);
+  }, [busy, props.disabled, willReplaceExisting, runGenerate]);
+
+  const confirmReplace = useCallback(() => {
+    setConfirmOpen(false);
+    void runGenerate(true);
+  }, [runGenerate]);
 
   useImperativeHandle(ref, () => ({ generate }), [generate]);
 
@@ -196,27 +210,37 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {/* Generate / Regenerate + length preset */}
+      {/* Single primary action — length/language pickers removed from this surface
+          (PRD WP-D). The API still accepts both; only the UI was collapsed. */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <button type="button" data-testid="ai-copy-generate" onClick={generate} disabled={busy || props.disabled}
           style={{ flex: "1 1 160px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", borderRadius: 9, border: "none", background: P.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit" }}>
           {busy ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Sparkles style={{ width: 13, height: 13 }} />}
-          {busy ? progressLabel : isRegen ? "Regenerate copy" : "Generate copy"}
+          {busy ? progressLabel : tr("pinForm.generateCopy")}
         </button>
-        <div role="group" aria-label="Copy length" style={{ display: "inline-flex", border: `1px solid ${P.border}`, borderRadius: 8, overflow: "hidden" }}>
-          {LENGTHS.map(l => (
-            <button key={l.key} type="button" data-testid={`ai-copy-length-${l.key}`} onClick={() => setLength(l.key)} disabled={busy}
-              style={{ padding: "6px 9px", border: "none", background: length === l.key ? P.surface2 : "transparent", color: length === l.key ? P.text : P.textSec, fontSize: 11, fontWeight: length === l.key ? 800 : 600, cursor: busy ? "default" : "pointer", fontFamily: "inherit" }}>
-              {l.label}
-            </button>
-          ))}
-        </div>
-        <select data-testid="ai-copy-language" aria-label="Copy language" value={copyLang} disabled={busy}
-          onChange={e => setCopyLang(e.target.value as "auto" | LanguageCode)}
-          style={{ padding: "6px 8px", borderRadius: 8, border: `1px solid ${P.border}`, background: P.surface, color: P.text, fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "default" : "pointer" }}>
-          {COPY_LANGUAGES.map(l => <option key={l.key} value={l.key}>{l.label}</option>)}
-        </select>
       </div>
+
+      {/* PRD 7.3 fill-in-the-blank confirm — only shown when both title and
+          description already have text, so a click can't silently wipe them. */}
+      {confirmOpen && (
+        <div data-testid="ai-copy-replace-confirm" role="alertdialog" aria-modal="true"
+          style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(15,23,42,0.55)" }}>
+          <div style={{ width: "min(360px, 90vw)", background: P.surface, border: `1px solid ${P.border}`, borderRadius: 14, padding: 18, boxShadow: "0 20px 50px rgba(0,0,0,0.35)" }}>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: P.text }}>{tr("pinForm.replaceExistingTitle")}</p>
+            <p style={{ margin: "8px 0 0", fontSize: 12, color: P.textSec, lineHeight: 1.5 }}>{tr("pinForm.replaceExistingBody")}</p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <button type="button" data-testid="ai-copy-replace-cancel" onClick={() => setConfirmOpen(false)}
+                style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${P.border}`, background: "transparent", color: P.text, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                {tr("pinForm.cancel")}
+              </button>
+              <button type="button" data-testid="ai-copy-replace-confirm-btn" onClick={confirmReplace}
+                style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: P.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                {tr("pinForm.replaceWithAiCopy")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pre-generate analysis status (before/without an active run). */}
       {showPreStrip && (
@@ -227,8 +251,8 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
               : <Check style={{ width: 12, height: 12, color: P.success }} />}
             <span style={{ flex: 1, fontSize: 11.5, fontWeight: 750, color: P.text }}>
               {props.analysisStatus === "pending"
-                ? "Analyzing image…"
-                : props.keywordStatus === "ready" && shownKeywords.length ? "Recommended keywords ready" : "Image analyzed"}
+                ? tr("pinForm.analyzingImage")
+                : props.keywordStatus === "ready" && shownKeywords.length ? tr("pinForm.recommendedKeywordsReady") : tr("pinForm.imageAnalyzed")}
             </span>
           </div>
           {props.analysisStatus === "ready" && hasContext && (
@@ -245,7 +269,7 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
             {busy && <Loader2 style={{ width: 12, height: 12, color: "#7C3AED" }} className="animate-spin" />}
             {stage === "done" && <Check style={{ width: 12, height: 12, color: P.success }} />}
             <span style={{ flex: 1, fontSize: 11.5, fontWeight: 750, color: stage === "error" ? P.error : P.text }}>
-              {stage === "error" ? (errorMsg || "Copy generation failed") : progressLabel}
+              {stage === "error" ? (errorMsg || tr("pinForm.copyGenerationFailed")) : progressLabel}
             </span>
           </div>
           {stage === "done" && result?.summary && (
@@ -264,26 +288,27 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
 function ContextDisclosure({ open, onToggle, imageSummary, keywords, board, language }: {
   open: boolean; onToggle: () => void; imageSummary?: string; keywords: string[]; board?: string | null; language?: LanguageCode;
 }) {
+  const { t: tr } = useLocale();
   // Never imply localized keywords: the DB is English-only.
   const isEnglish = (language ?? "en").toLowerCase().startsWith("en");
-  const kwCaption = isEnglish ? "Recommended Pinterest keywords" : "English Pinterest keyword context";
+  const kwCaption = isEnglish ? tr("pinForm.recommendedPinterestKeywords") : tr("pinForm.englishKeywordContext");
   return (
     <div style={{ marginTop: 6 }}>
       <button type="button" data-testid="ai-copy-context-toggle" onClick={onToggle}
         style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: 0, border: "none", background: "none", color: P.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
-        Context used {open ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
+        {tr("pinForm.contextUsed")} {open ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
       </button>
       {open && (
         <div data-testid="ai-copy-context-details" style={{ margin: "7px 0 0", display: "flex", flexDirection: "column", gap: 8 }}>
           {imageSummary && (
             <div>
-              <div style={sectionLabel}>Image summary</div>
+              <div style={sectionLabel}>{tr("pinForm.imageSummary")}</div>
               <p style={{ margin: 0, fontSize: 11, color: P.textSec, lineHeight: 1.45 }}>{imageSummary}</p>
             </div>
           )}
           {keywords.length > 0 && (
             <div>
-              <div style={sectionLabel}>Recommended keywords</div>
+              <div style={sectionLabel}>{tr("pinForm.recommendedKeywords")}</div>
               <div data-testid="ai-copy-keyword-chips" style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                 {keywords.map(k => <span key={k} style={chip}>{k}</span>)}
               </div>
@@ -292,7 +317,7 @@ function ContextDisclosure({ open, onToggle, imageSummary, keywords, board, lang
           )}
           {board && (
             <div>
-              <div style={sectionLabel}>Board</div>
+              <div style={sectionLabel}>{tr("pinForm.board")}</div>
               <p style={{ margin: 0, fontSize: 11, color: P.textSec }}>{board}</p>
             </div>
           )}

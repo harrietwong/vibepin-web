@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw, Search, ChevronDown } from "lucide-react";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 export type PinFieldsValue = {
   title: string;
@@ -55,10 +56,11 @@ function RegenBtn({ title, onClick, disabled }: { title: string; onClick?: () =>
 }
 
 function FieldLabel({ text, hint, onRegen }: { text: string; hint?: string; onRegen?: () => void }) {
+  const { t: tr } = useLocale();
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
       <span style={{ ...labelStyle, margin: 0 }}>{text}{hint && <span style={{ color: BUI.textMuted, fontWeight: 600 }}> · {hint}</span>}</span>
-      <RegenBtn title={`Regenerate ${text.toLowerCase()}`} onClick={onRegen} />
+      <RegenBtn title={`${tr("pinForm.regenerateLabelPrefix")}${text.toLowerCase()}`} onClick={onRegen} />
     </div>
   );
 }
@@ -68,6 +70,7 @@ function BoardCombobox({ value, boards, boardsLoading, disabled, onChange }: {
   value: string; boards: PinterestBoard[]; boardsLoading?: boolean; disabled?: boolean;
   onChange: (id: string) => void;
 }) {
+  const { t: tr } = useLocale();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -89,7 +92,7 @@ function BoardCombobox({ value, boards, boardsLoading, disabled, onChange }: {
         onClick={() => setOpen(o => !o)}
         style={{ ...fieldStyle, display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", color: selectedName ? BUI.text : BUI.textMuted }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {boardsLoading ? "Loading boards…" : selectedName || "Search or select a board"}
+          {boardsLoading ? tr("pinForm.loadingBoards") : selectedName || tr("pinForm.searchOrSelectBoard")}
         </span>
         <ChevronDown style={{ width: 15, height: 15, color: BUI.textMuted, flexShrink: 0 }} />
       </button>
@@ -97,12 +100,12 @@ function BoardCombobox({ value, boards, boardsLoading, disabled, onChange }: {
         <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 30, background: BUI.surface, border: `1px solid ${BUI.borderHi}`, borderRadius: 10, boxShadow: "0 12px 32px rgba(15,23,42,0.18)", overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", borderBottom: `1px solid ${BUI.border}` }}>
             <Search style={{ width: 13, height: 13, color: BUI.textMuted }} />
-            <input autoFocus data-testid="board-field-search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search boards…"
+            <input autoFocus data-testid="board-field-search" value={query} onChange={e => setQuery(e.target.value)} placeholder={tr("pinForm.searchBoards")}
               style={{ flex: 1, border: "none", outline: "none", background: "none", fontSize: 12.5, color: BUI.text, fontFamily: "inherit" }} />
           </div>
           <div style={{ maxHeight: 200, overflowY: "auto" }}>
             {filtered.length === 0 ? (
-              <p style={{ margin: 0, padding: "10px 12px", fontSize: 12, color: BUI.textMuted }}>No boards match.</p>
+              <p style={{ margin: 0, padding: "10px 12px", fontSize: 12, color: BUI.textMuted }}>{tr("pinForm.noBoardsMatch")}</p>
             ) : filtered.map(b => (
               <button key={b.id} type="button" onClick={() => { onChange(b.id); setOpen(false); setQuery(""); }}
                 style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", border: "none", background: b.id === value ? "rgba(124,58,237,0.10)" : "none", color: BUI.text, fontSize: 12.5, fontWeight: b.id === value ? 800 : 600, cursor: "pointer", fontFamily: "inherit" }}>
@@ -120,51 +123,52 @@ export function PinFieldsForm({
   value, boards, boardsLoading, disconnected, needsReconnect, boardsError, onRetryBoards, boardFieldError, disabled,
   onChange, onRegenerateField, onConnect,
 }: PinFieldsFormProps) {
+  const { t: tr } = useLocale();
   const regen = (f: "title" | "description") =>
     onRegenerateField ? () => onRegenerateField(f) : undefined;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
       <div>
-        <FieldLabel text="Pin title" onRegen={regen("title")} />
+        <FieldLabel text={tr("pinForm.pinTitle")} onRegen={regen("title")} />
         <input data-testid="board-field-title" value={value.title} disabled={disabled} maxLength={100}
-          onChange={e => onChange({ title: e.target.value })} placeholder="A clear, keyword-rich title" style={fieldStyle} />
+          onChange={e => onChange({ title: e.target.value })} placeholder={tr("pinForm.pinTitlePlaceholder")} style={fieldStyle} />
       </div>
 
       <div>
-        <FieldLabel text="Description" onRegen={regen("description")} />
+        <FieldLabel text={tr("pinForm.description")} onRegen={regen("description")} />
         <textarea data-testid="board-field-description" value={value.description} disabled={disabled} maxLength={500}
-          onChange={e => onChange({ description: e.target.value })} placeholder="Tell people what this Pin is about"
+          onChange={e => onChange({ description: e.target.value })} placeholder={tr("pinForm.descriptionPlaceholder")}
           rows={3} style={{ ...fieldStyle, resize: "vertical", minHeight: 64 }} />
       </div>
 
       <div>
-        <FieldLabel text="Website URL" hint="Optional" />
+        <FieldLabel text={tr("pinForm.websiteUrl")} hint={tr("pinForm.optional")} />
         <input data-testid="board-field-url" value={value.websiteUrl} disabled={disabled}
-          onChange={e => onChange({ websiteUrl: e.target.value })} placeholder="https://your-product-page.com" style={fieldStyle} />
+          onChange={e => onChange({ websiteUrl: e.target.value })} placeholder={tr("pinForm.websiteUrlPlaceholder")} style={fieldStyle} />
       </div>
 
       <div>
-        <span style={labelStyle}>Pinterest board</span>
+        <span style={labelStyle}>{tr("pinForm.pinterestBoard")}</span>
         {disconnected ? (
           // No connection at all → prompt to connect.
           <div data-testid="board-field-disconnected" style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2 }}>
-            <span style={{ fontSize: 12, color: BUI.textSec, flex: 1 }}>Connect an account before scheduling.</span>
+            <span style={{ fontSize: 12, color: BUI.textSec, flex: 1 }}>{tr("pinForm.connectAccountBeforeScheduling")}</span>
             {onConnect && (
               <button type="button" onClick={onConnect}
                 style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: BUI.gradient, border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer" }}>
-                Connect
+                {tr("pinForm.connect")}
               </button>
             )}
           </div>
         ) : needsReconnect ? (
           // Connected but the token needs re-authorization → reconnect (NOT "connect").
           <div data-testid="board-field-reconnect" style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2 }}>
-            <span style={{ fontSize: 12, color: BUI.textSec, flex: 1 }}>Your Pinterest connection expired. Reconnect to load boards.</span>
+            <span style={{ fontSize: 12, color: BUI.textSec, flex: 1 }}>{tr("pinForm.connectionExpired")}</span>
             {onConnect && (
               <button type="button" onClick={onConnect}
                 style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: BUI.gradient, border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer" }}>
-                Reconnect
+                {tr("pinForm.reconnect")}
               </button>
             )}
           </div>
@@ -175,7 +179,7 @@ export function PinFieldsForm({
             {onRetryBoards && (
               <button type="button" onClick={onRetryBoards}
                 style={{ fontSize: 11, fontWeight: 700, color: BUI.text, background: BUI.surface2, border: `1px solid ${BUI.border}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer" }}>
-                Retry
+                {tr("pinForm.retry")}
               </button>
             )}
           </div>

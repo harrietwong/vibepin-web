@@ -10,6 +10,17 @@ import type { ReferenceContext, ReferenceType } from "./referenceAnalysis";
 import type { CreativeIntent } from "./creativeIntent";
 import type { CategoryPlaybook } from "./categoryPlaybooks";
 import type { SelectedCreativeTag } from "./creativeControls";
+import type { InspirationPatternTags } from "./referenceScoring";
+
+/**
+ * Version stamp for the hidden technical prompt structure built by this module.
+ * Bump ("hp_v2", …) whenever the prompt's STRUCTURE changes materially (new/removed
+ * sections, reordered priority, changed influence-mode rules) so analytics events that
+ * carry `versions.promptVersion` stay comparable across generation-prompt iterations.
+ * Defined here as the source of truth; wiring into UI events is intentionally deferred
+ * (the studio components that fire those events are owned by a parallel work package).
+ */
+export const HIDDEN_PROMPT_VERSION = "hp_v1";
 
 export type ReferenceInfluenceMode =
   | "layout_scene_strong"
@@ -41,7 +52,36 @@ export type HiddenPromptInput = {
   primaryFormatTag?: string;
   opportunityKeyword?: string;
   format?: string;
+  /**
+   * Derived pattern tags from Pinterest reference samples the user marked as
+   * inspiration (PRD v0.2 Phase B). TEXT SIGNALS ONLY — these carry NO image URL and
+   * the reference image is never used as a generation input (compliance §4).
+   */
+  inspirationPatterns?: InspirationPatternTags[];
 };
+
+/** Build the INSPIRATION PATTERNS section from selected-reference pattern tags. */
+function inspirationPatternBlock(patterns: InspirationPatternTags[] | undefined): string {
+  const list = (patterns ?? []).filter(Boolean);
+  if (!list.length) return "";
+  const dedupe = (vals: Array<string | undefined>) =>
+    Array.from(new Set(vals.map(v => clean(v)).filter(Boolean)));
+  const formats = dedupe(list.map(p => p.visualFormat));
+  const compositions = dedupe(list.map(p => p.compositionType));
+  const humanPresence = dedupe(list.map(p => p.humanPresence));
+  const textOverlay = dedupe(list.map(p => p.textOverlayLevel));
+  const sceneWords = dedupe(list.flatMap(p => p.sceneStyleWords ?? []));
+  const lines = [
+    formats.length ? `Visual formats: ${formats.join(", ")}.` : "",
+    compositions.length ? `Composition: ${compositions.join(", ")}.` : "",
+    humanPresence.length ? `Human presence: ${humanPresence.join(", ")}.` : "",
+    textOverlay.length ? `Text overlay level: ${textOverlay.join(", ")}.` : "",
+    sceneWords.length ? `Scene/style cues: ${sceneWords.slice(0, 8).join(", ")}.` : "",
+    "Apply these as structural guidance for scene, composition, framing, and mood.",
+    "Do NOT copy any specific reference image — these are derived text patterns only.",
+  ];
+  return section("INSPIRATION PATTERNS (derived from saved Pinterest references — text signals only)", lines);
+}
 
 const STRUCTURAL_FASHION_REFERENCE_TYPES: ReferenceType[] = [
   "outfit_on_model",
@@ -270,6 +310,9 @@ export function buildHiddenPrompt(input: HiddenPromptInput): string {
       "Use these tags as compact creative controls for format, scene, composition, and mood.",
     ]));
   }
+
+  const inspirationBlock = inspirationPatternBlock(input.inspirationPatterns);
+  if (inspirationBlock) blocks.push(inspirationBlock);
 
   const refine = userBrief;
   if (refine) {

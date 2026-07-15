@@ -69,6 +69,7 @@ import {
 import { resolveCanonicalPinProducts } from "@/lib/studio/pinProducts";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 import {
   computeWeeklyPlanStats,
   addedNeedsDateLabel,
@@ -81,6 +82,8 @@ import {
 } from "@/lib/weeklyPlanStats";
 import { markDataReady } from "@/lib/navTiming";
 import { logPlanHydrated, logPlanTiming } from "@/lib/planLoadTiming";
+import { countPublishFailures, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 
 // ── Lazily loaded components ─────────────────────────────────────────────────
 // Heavy drawers/alternate views deferred out of the main route chunk so the
@@ -129,6 +132,10 @@ function persistCalendarScope(scope: CalendarScope): void {
 }
 
 const DAY_SHORT = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+// English fallback values above stay as plain data (used for keying/indexing).
+// Render sites look up the localized label through this table instead of using
+// DAY_SHORT's string value directly.
+const DAY_SHORT_KEY = ["plan.day.mon", "plan.day.tue", "plan.day.wed", "plan.day.thu", "plan.day.fri", "plan.day.sat", "plan.day.sun"] as const;
 
 // Local-time YYYY-MM-DD (avoids the UTC shift of Date.toISOString in +offset zones).
 function localISO(d: Date): string {
@@ -233,17 +240,20 @@ function enrichItem(item: WeeklyPlanItem): PinBrief {
   };
 }
 
-function draftStatusDisplay(draft: PinDraft): { label: string; color: string } {
+function draftStatusDisplay(draft: PinDraft, tr: (key: MessageKey) => string): { label: string; color: string } {
   if (!pinDraftStore.isDraftAddedToWeeklyPlan(draft)) {
     return unaddedStatusLabel();
   }
-  if (draft.postedAt) return { label: "Published", color: "#7C3AED" };
+  if (draft.postedAt) return { label: tr("plan.status.published"), color: "#7C3AED" };
   if (!sanitizeHandoffField(draft.scheduledDate)) {
-    return { label: "Unscheduled", color: "var(--app-text-muted)" };
+    return { label: tr("plan.status.unscheduled"), color: "var(--app-text-muted)" };
   }
-  return { label: "Scheduled", color: "#059669" };
+  return { label: tr("plan.status.scheduled"), color: "#059669" };
 }
 
+// Clipboard-only export text (Copy Brief). Field labels kept as literal English —
+// this is a plain-text interchange format (also mirrored in exportCSV's header
+// row below), not a rendered UI string, so it is left as-is per task scope.
 function briefMarkdown(b: PinBrief, dateLabel: string): string {
   return [
     `**${dateLabel}**`,
@@ -314,6 +324,8 @@ function ViewPinsModal({
   studioHref: string;
   onClose:    () => void;
 }) {
+  const { t: trBase } = useLocale();
+  const tr = (key: MessageKey) => trBase(key);
   const [drafts,    setDrafts]    = useState<PinDraft[]>([]);
   const [selected,  setSelected]  = useState<Set<string>>(new Set());
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
@@ -383,8 +395,8 @@ function ViewPinsModal({
             <div>
               <p style={{ margin: 0, fontSize: "15px", fontWeight: 800, color: "var(--app-text)", textTransform: "capitalize" }}>{title}</p>
               <p style={{ margin: "3px 0 0", fontSize: "11px", color: "var(--app-text-muted)" }}>
-                {drafts.length} pin{drafts.length !== 1 ? "s" : ""} added to plan
-                {readyN > 0 && <span style={{ color: "#059669" }}> · {readyN} ready</span>}
+                {drafts.length} {trBase("plan.viewPins.pinCountSuffix").replace("{plural}", drafts.length !== 1 ? "s" : "")}
+                {readyN > 0 && <span style={{ color: "#059669" }}> · {readyN} {tr("plan.viewPins.readySuffix")}</span>}
               </p>
             </div>
             <button type="button" onClick={onClose}
@@ -396,13 +408,13 @@ function ViewPinsModal({
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <Link href={studioHref}
               style={{ padding: "5px 14px", borderRadius: 7, fontSize: "11px", fontWeight: 700, background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", textDecoration: "none", whiteSpace: "nowrap" }}>
-              ✦ Create More
+              {tr("plan.viewPins.createMore")}
             </Link>
             {drafts.length > 0 && (
               <button type="button"
                 onClick={() => drafts.forEach((d, i) => setTimeout(() => downloadFile(d.imageUrl, i), i * 200))}
                 style={{ padding: "5px 12px", borderRadius: 7, fontSize: "11px", fontWeight: 600, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-sec)", cursor: "pointer", whiteSpace: "nowrap" }}>
-                ↓ Download all
+                {tr("plan.viewPins.downloadAll")}
               </button>
             )}
           </div>
@@ -418,19 +430,19 @@ function ViewPinsModal({
               onChange={() => setSelected(allSel ? new Set() : new Set(drafts.map(d => d.id)))}
               style={{ accentColor: "#7C3AED", width: 14, height: 14, cursor: "pointer" }} />
             <span style={{ fontSize: "12px", fontWeight: 700, color: "#7C3AED", flex: 1 }}>
-              {selected.size} selected
+              {trBase("plan.viewPins.selectedCount").replace("{n}", String(selected.size))}
             </span>
             <button type="button" onClick={handleDownloadSelected}
               style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "#475569", fontSize: "11px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-              ↓ Download selected
+              {tr("plan.viewPins.downloadSelected")}
             </button>
             <button type="button" onClick={handleRemoveSelected}
               style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #FECACA", background: "#FFF5F5", color: "#EF4444", fontSize: "11px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-              Remove selected
+              {tr("plan.viewPins.removeSelected")}
             </button>
             <button type="button" onClick={() => setSelected(new Set())}
               style={{ padding: "4px 8px", borderRadius: 7, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-sec)", fontSize: "11px", cursor: "pointer" }}>
-              Deselect
+              {tr("plan.viewPins.deselect")}
             </button>
           </div>
         )}
@@ -443,7 +455,7 @@ function ViewPinsModal({
               style={{ accentColor: "#7C3AED", width: 14, height: 14, cursor: "pointer" }} />
             <span style={{ fontSize: "11px", color: "var(--app-text-muted)", cursor: "pointer" }}
               onClick={() => setSelected(new Set(drafts.map(d => d.id)))}>
-              Select all
+              {tr("plan.viewPins.selectAll")}
             </span>
           </div>
         )}
@@ -452,20 +464,20 @@ function ViewPinsModal({
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
           {drafts.length === 0 ? (
             <div style={{ textAlign: "center", padding: "48px 0" }}>
-              <p style={{ fontSize: "13px", color: "var(--app-text-muted)", fontWeight: 600 }}>No pins added yet</p>
+              <p style={{ fontSize: "13px", color: "var(--app-text-muted)", fontWeight: 600 }}>{tr("plan.viewPins.emptyTitle")}</p>
               <p style={{ fontSize: "11px", color: "#CBD5E1", marginTop: 4 }}>
-                Generate pins in Create Pin and add them to this plan item.
+                {tr("plan.viewPins.emptySub")}
               </p>
               <Link href={studioHref}
                 style={{ display: "inline-block", marginTop: 14, padding: "8px 20px", borderRadius: 8, background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: "12px", fontWeight: 700, textDecoration: "none" }}>
-                ✦ Create Pins
+                {tr("plan.viewPins.createPins")}
               </Link>
             </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: 10 }}>
               {drafts.map((draft, idx) => {
                 const sel         = selected.has(draft.id);
-                const st          = draftStatusDisplay(draft);
+                const st          = draftStatusDisplay(draft, tr);
                 const statusColor = st.color;
                 const statusLabel = st.label;
                 return (
@@ -512,15 +524,15 @@ function ViewPinsModal({
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-around", padding: "5px 2px", borderTop: "1px solid #F1F5F9", gap: 2, flexWrap: "wrap" }}>
                       <button type="button" data-testid="weekly-plan-edit-details" onClick={() => setEditDraft(draft)}
                         style={{ padding: "3px 5px", background: "none", border: "none", cursor: "pointer", color: "#7C3AED", fontSize: "9px", fontWeight: 600 }}>
-                        Edit
+                        {tr("plan.viewPins.edit")}
                       </button>
                       <button type="button" onClick={() => downloadFile(toProxyUrl(draft.imageUrl), idx)}
                         style={{ padding: "3px 5px", background: "none", border: "none", cursor: "pointer", color: "#9CA3AF", fontSize: "9px", fontWeight: 600 }}>
-                        ↓ DL
+                        {tr("plan.viewPins.download")}
                       </button>
                       <button type="button" onClick={() => handleRemove(draft.id)}
                         style={{ padding: "3px 5px", background: "none", border: "none", cursor: "pointer", color: "#EF4444", fontSize: "9px", fontWeight: 600 }}>
-                        Remove
+                        {tr("plan.viewPins.remove")}
                       </button>
                     </div>
                   </div>
@@ -844,21 +856,21 @@ function PlanRow({
 
 // ── Week display helpers ──────────────────────────────────────────────────────
 
-function formatWeekLabel(startISO: string): string {
+function formatWeekLabel(startISO: string, localeTag: string): string {
   const start = new Date(`${startISO}T00:00:00`);
   const end   = new Date(start);
   end.setDate(start.getDate() + 6);
-  const s = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const e = end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const s = start.toLocaleDateString(localeTag, { month: "short", day: "numeric" });
+  const e = end.toLocaleDateString(localeTag, { month: "short", day: "numeric", year: "numeric" });
   return `Week of ${s} – ${e}`;
 }
 
-function formatWeekRange(startISO: string): string {
+function formatWeekRange(startISO: string, localeTag: string): string {
   const start = new Date(`${startISO}T00:00:00`);
   const end   = new Date(start);
   end.setDate(start.getDate() + 6);
-  const s = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const e = end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const s = start.toLocaleDateString(localeTag, { month: "short", day: "numeric" });
+  const e = end.toLocaleDateString(localeTag, { month: "short", day: "numeric", year: "numeric" });
   return `${s} – ${e}`;
 }
 
@@ -870,23 +882,37 @@ function SummarySep() {
   );
 }
 
-function SummarySegment({ dot, count, label, tipLabel, testId, onClick }: {
+function SummarySegment({ dot, count, label, tipLabel, testId, onClick, linkColor, clickTitle }: {
   dot: string; count: number; label: string; tipLabel?: string; testId: string; onClick?: () => void;
+  /** Color for the label text + underline while clickable. Defaults to the existing
+   *  batch-edit purple; the failed segment (PRD §3) overrides to the warning accent. */
+  linkColor?: string;
+  /** Tooltip while clickable. Defaults to the existing batch-edit tip. */
+  clickTitle?: string;
 }) {
+  const { t: trBase } = useLocale();
   const clickable = !!onClick && count > 0;
+  const color = linkColor ?? "#C026D3";
   return (
-    <span data-testid={testId} title={clickable ? "Open Batch Edit for these Pins" : tipLabel}
+    <span data-testid={testId} title={clickable ? (clickTitle ?? trBase("plan.summary.batchEditTip")) : tipLabel}
       onClick={clickable ? onClick : undefined}
       style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: clickable ? "pointer" : "default",
         textDecoration: clickable ? "underline" : "none", textUnderlineOffset: 3 }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0, display: "inline-block" }} />
       <span style={{ fontSize: 12, fontWeight: 800, color: "var(--app-text)" }}>{count}</span>
-      <span style={{ fontSize: 12, fontWeight: 500, color: clickable ? "#C026D3" : "var(--app-text-sec)" }}>{label}</span>
+      <span style={{ fontSize: 12, fontWeight: 500, color: clickable ? color : "var(--app-text-sec)" }}>{label}</span>
     </span>
   );
 }
 
-function CompactSummaryBar({ stats }: { stats: WeeklyPlanStats }) {
+// Warning accent for the "N failed" stat segment (PRD "失败情况优化" §3) — same
+// literal as FailureBanner's WARN / boardUI's BUI.warning, kept local since this file
+// doesn't import boardUI (Plan uses --app-* tokens, not the Studio BUI palette).
+const FAILED_STAT_COLOR = "#D97706";
+
+function CompactSummaryBar({ stats, onFailedClick }: { stats: WeeklyPlanStats; onFailedClick?: () => void }) {
+  const { t: trBase } = useLocale();
+  const tr = (key: MessageKey) => trBase(key);
   return (
     <div
       data-testid="weekly-plan-summary-bar"
@@ -899,12 +925,30 @@ function CompactSummaryBar({ stats }: { stats: WeeklyPlanStats }) {
         flexShrink: 0,
       }}
     >
-      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--app-text-sec)", marginRight: 8 }}>This week:</span>
-      <SummarySegment dot="var(--app-text-muted)" count={stats.scheduled} label="scheduled" tipLabel="Pins scheduled in this week" testId="stat-scheduled" />
+      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--app-text-sec)", marginRight: 8 }}>{tr("plan.summary.thisWeek")}</span>
+      <SummarySegment dot="var(--app-text-muted)" count={stats.scheduled} label={tr("plan.summary.scheduled")} tipLabel={tr("plan.summary.scheduledTip")} testId="stat-scheduled" />
       <SummarySep />
-      <SummarySegment dot="var(--app-text-muted)" count={stats.published} label="published" tipLabel="Pins published to Pinterest" testId="stat-published" />
+      <SummarySegment dot="var(--app-text-muted)" count={stats.published} label={tr("plan.summary.published")} tipLabel={tr("plan.summary.publishedTip")} testId="stat-published" />
       <SummarySep />
-      <SummarySegment dot="var(--app-text-muted)" count={stats.unscheduled} label="unscheduled" tipLabel="Generated Pins not placed on the calendar" testId="stat-unscheduled" />
+      <SummarySegment dot="var(--app-text-muted)" count={stats.unscheduled} label={tr("plan.summary.unscheduled")} tipLabel={tr("plan.summary.unscheduledTip")} testId="stat-unscheduled" />
+      {/* Low-intensity, always-available failure reminder (PRD §3) — n===0 hides it
+          entirely; n>0 shows in the warning accent and is clickable, routing into the
+          same Create Pins "Publish failures" view as the FailureBanner CTA. */}
+      {stats.failed > 0 && (
+        <>
+          <SummarySep />
+          <SummarySegment
+            dot={FAILED_STAT_COLOR}
+            count={stats.failed}
+            // i18n backfill pending — hardcoded per WP-G's explicit i18n exemption.
+            label="failed"
+            testId="stat-failed"
+            onClick={onFailedClick}
+            linkColor={FAILED_STAT_COLOR}
+            clickTitle="Review failed Pins"
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -920,12 +964,13 @@ function CompactSummaryBar({ stats }: { stats: WeeklyPlanStats }) {
 function SelectCheckbox({ selected, visible, onToggle, testId }: {
   selected: boolean; visible: boolean; onToggle: () => void; testId?: string;
 }) {
+  const { t: trBase } = useLocale();
   if (!visible && !selected) return null;
   return (
     <button
       type="button"
       data-testid={testId ?? "wp-select-checkbox"}
-      title={selected ? "Deselect" : "Select"}
+      title={selected ? trBase("plan.select.deselect") : trBase("plan.select.select")}
       onMouseDown={e => { e.stopPropagation(); }}
       onClick={e => { e.stopPropagation(); e.preventDefault(); onToggle(); }}
       style={{
@@ -949,6 +994,7 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
   select?: PlanSelect;
   hoverActions?: PinHoverPreviewActions;
 }) {
+  const { t: trBase } = useLocale();
   const isDragging = dnd.draggingId === draft.id;
   const selected = !!select?.isSelected(draft.id);
   const [hovered, setHovered] = useState(false);
@@ -990,7 +1036,7 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
         )}
         {/* Subtle lock indicator — only shown when the Pin's time is locked. */}
         {draft.scheduleLocked && (
-          <span data-testid="weekly-plan-pin-lock" title="Time locked — kept when rebalancing" aria-label="Time locked" style={{
+          <span data-testid="weekly-plan-pin-lock" title={trBase("plan.card.lockTitle")} aria-label={trBase("plan.card.lockAria")} style={{
             position: "absolute", bottom: 4, right: 4, fontSize: 9, lineHeight: 1,
             background: "rgba(0,0,0,0.62)", borderRadius: 4, padding: "1px 3px",
           }}>🔒</span>
@@ -999,7 +1045,7 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
         <button
           type="button"
           data-testid="scheduled-remove-btn"
-          title="Remove from plan (back to unscheduled)"
+          title={trBase("plan.card.removeTitle")}
           onMouseDown={e => e.stopPropagation()}
           onClick={e => { e.stopPropagation(); dnd.unschedule(draft.id); }}
           style={{
@@ -1024,6 +1070,7 @@ function SlotPlaceholder({ time, isPast, dayKey, isActive, isOver, onOver, onDro
   time: string; isPast: boolean; dayKey: string; isActive: boolean; isOver: boolean;
   onOver: (k: string | null) => void; onDropPin: (id: string) => void;
 }) {
+  const { t: trBase } = useLocale();
   const slotKey = `${dayKey}:${time}`;
   return (
     <div
@@ -1042,7 +1089,7 @@ function SlotPlaceholder({ time, isPast, dayKey, isActive, isOver, onOver, onDro
       }}
     >
       <span data-testid="calendar-slot-time" style={{ fontSize: 10, fontWeight: 800, color: "var(--app-text-sec)", fontVariantNumeric: "tabular-nums" }}>{time}</span>
-      <span style={{ fontSize: 9, fontWeight: 700, color: "var(--app-text-muted)" }}>{isPast ? "Past" : "Drop pin here"}</span>
+      <span style={{ fontSize: 9, fontWeight: 700, color: "var(--app-text-muted)" }}>{isPast ? trBase("plan.slot.past") : trBase("plan.slot.dropHere")}</span>
     </div>
   );
 }
@@ -1061,6 +1108,7 @@ function DayColumn({ dayLabel, dateStr, dateISO, isToday, dayBriefs, dayDrafts, 
   select?:   PlanSelect;
   hoverActions?: PinHoverPreviewActions;
 }) {
+  const { t: trBase } = useLocale();
   const dayKey   = `day:${dateISO}`;
   const isOver   = dnd.dragOverKey === dayKey;
   const isActive = !!dnd.draggingId;
@@ -1122,7 +1170,7 @@ function DayColumn({ dayLabel, dateStr, dateISO, isToday, dayBriefs, dayDrafts, 
 
         {!hasAnything && (
           <div data-testid="calendar-empty-slot" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, padding: "10px 6px", textAlign: "center" }}>
-            <p style={{ margin: 0, fontSize: 10, color: "var(--app-text-muted)", opacity: 0.7 }}>No posting slots for this day</p>
+            <p style={{ margin: 0, fontSize: 10, color: "var(--app-text-muted)", opacity: 0.7 }}>{trBase("plan.day.noSlots")}</p>
             <Link
               href="/app/studio"
               style={{
@@ -1131,7 +1179,7 @@ function DayColumn({ dayLabel, dateStr, dateISO, isToday, dayBriefs, dayDrafts, 
                 pointerEvents: hovered || isActive ? "auto" : "none",
               }}
             >
-              + Add Pin
+              {trBase("plan.day.addPin")}
             </Link>
           </div>
         )}
@@ -1151,6 +1199,7 @@ function WeekCalendar({ weekStart, slots, scheduledDrafts, dnd, onEdit, select, 
   select?:         PlanSelect;
   hoverActions?:   PinHoverPreviewActions;
 }) {
+  const { t: trBase, preferences } = useLocale();
   const today = new Date();
   return (
     <div data-testid="weekly-plan-calendar" data-testid2="weekly-plan-week-grid" style={{ maxWidth: "980px", margin: "0 auto", display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 10 }}>
@@ -1158,12 +1207,12 @@ function WeekCalendar({ weekStart, slots, scheduledDrafts, dnd, onEdit, select, 
         const d = new Date(`${weekStart}T00:00:00`);
         d.setDate(d.getDate() + i);
         const dateISO = localISO(d);
-        const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        const dateStr = d.toLocaleDateString(preferences.appLanguage, { month: "short", day: "numeric" });
         const isToday = d.toDateString() === today.toDateString();
         return (
           <DayColumn
             key={dayLabel}
-            dayLabel={dayLabel}
+            dayLabel={trBase(DAY_SHORT_KEY[i])}
             dateStr={dateStr}
             dateISO={dateISO}
             isToday={isToday}
@@ -1197,6 +1246,7 @@ function MonthDayCell({ date, inMonth, isToday, drafts, dnd, onOpenDay, select, 
   select?: PlanSelect;
   hoverActions?: PinHoverPreviewActions;
 }) {
+  const { t: trBase } = useLocale();
   const iso    = localISO(date);
   const key    = `mday:${iso}`;
   const isOver = dnd.dragOverKey === key;
@@ -1285,7 +1335,7 @@ function MonthDayCell({ date, inMonth, isToday, drafts, dnd, onOpenDay, select, 
         })}
         {extra > 0 && (
           <div data-testid="month-more" style={{ fontSize: 9.5, fontWeight: 700, color: "#C026D3", paddingLeft: 2 }}>
-            +{extra} more
+            {trBase("plan.month.more").replace("{n}", String(extra))}
           </div>
         )}
       </div>
@@ -1301,6 +1351,7 @@ function MonthCalendar({ monthAnchorISO, scheduledDrafts, dnd, onOpenDay, select
   select?:         PlanSelect;
   hoverActions?:   PinHoverPreviewActions;
 }) {
+  const { t: trBase } = useLocale();
   const anchor = new Date(`${monthAnchorISO}T00:00:00`);
   const year   = anchor.getFullYear();
   const month  = anchor.getMonth();
@@ -1325,8 +1376,8 @@ function MonthCalendar({ monthAnchorISO, scheduledDrafts, dnd, onOpenDay, select
   return (
     <div data-testid="weekly-plan-month" style={{ maxWidth: "980px", margin: "0 auto" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 6, marginBottom: 6 }}>
-        {DAY_SHORT.map(d => (
-          <div key={d} style={{ textAlign: "center", fontSize: 9, fontWeight: 800, color: "var(--app-text-muted)", letterSpacing: "0.06em" }}>{d}</div>
+        {DAY_SHORT_KEY.map(k => (
+          <div key={k} style={{ textAlign: "center", fontSize: 9, fontWeight: 800, color: "var(--app-text-muted)", letterSpacing: "0.06em" }}>{trBase(k)}</div>
         ))}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 6 }}>
@@ -1363,10 +1414,11 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
   onReschedule:  (d: PinDraft) => void;
   select?:       PlanSelect;
 }) {
+  const { t: trBase, preferences } = useLocale();
   const rows = draftsToSortedEvents(drafts);
   const byId = new Map(drafts.map(d => [d.id, d]));
   if (!dateISO) return null;
-  const dateLabel = new Date(`${dateISO}T00:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const dateLabel = new Date(`${dateISO}T00:00:00`).toLocaleDateString(preferences.appLanguage, { weekday: "short", month: "short", day: "numeric" });
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 72, background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "flex-end" }}>
       <div data-testid="month-day-detail" onClick={e => e.stopPropagation()}
@@ -1375,16 +1427,16 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
           <div>
             <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "var(--app-text)" }}>{dateLabel}</h2>
             <p style={{ margin: "3px 0 0", fontSize: 11, color: "var(--app-text-sec)" }}>
-              {rows.length} Pin{rows.length === 1 ? "" : "s"} scheduled · times in your local zone
+              {trBase("plan.dayDetail.pinsScheduledCount").replace("{n}", String(rows.length)).replace("{plural}", rows.length === 1 ? "" : "s")}
             </p>
           </div>
-          <button type="button" data-testid="day-detail-close" onClick={onClose} aria-label="Close"
+          <button type="button" data-testid="day-detail-close" onClick={onClose} aria-label={trBase("plan.dayDetail.closeAria")}
             style={{ background: "none", border: "none", color: "var(--app-text-muted)", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
           {rows.length === 0 ? (
-            <p style={{ margin: "8px 4px", fontSize: 12, color: "var(--app-text-muted)" }}>No Pins scheduled for this day.</p>
+            <p style={{ margin: "8px 4px", fontSize: 12, color: "var(--app-text-muted)" }}>{trBase("plan.dayDetail.empty")}</p>
           ) : rows.map(ev => {
             const d = byId.get(ev.draftId)!;
             const published = !!d.postedAt;
@@ -1404,21 +1456,21 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
                   </p>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, fontWeight: 700, color: published ? "#7C3AED" : "#059669" }}>
                     <span style={{ width: 5, height: 5, borderRadius: "50%", background: published ? "#7C3AED" : "#059669" }} />
-                    {published ? "Published" : "Scheduled"}
+                    {published ? trBase("plan.dayDetail.published") : trBase("plan.dayDetail.scheduled")}
                   </span>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 2 }}>
                     <button type="button" data-testid="day-detail-edit" onClick={() => onEditDetails(d)}
                       style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
-                      Edit details
+                      {trBase("plan.dayDetail.editDetails")}
                     </button>
                     <button type="button" data-testid="day-detail-reschedule" onClick={() => onReschedule(d)}
                       style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-sec)", fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>
-                      Reschedule
+                      {trBase("plan.dayDetail.reschedule")}
                     </button>
                     {!published && (
                       <button type="button" data-testid="day-detail-publish" onClick={() => onEditDetails(d)}
                         style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid rgba(5,150,105,0.45)", background: "rgba(5,150,105,0.10)", color: "#10B981", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
-                        Publish now
+                        {trBase("plan.dayDetail.publishNow")}
                       </button>
                     )}
                   </div>
@@ -1436,7 +1488,8 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
 
 function PlanPageInner() {
   const searchParams = useSearchParams();
-  const { t: tr } = useLocale();
+  const { t: trBase, preferences } = useLocale();
+  const tr = (key: MessageKey) => trBase(key);
 
   // ── [Plan timing] investigation trace — OAuth-return → Plan → drawer restore ──
   // Shared t0 for every "[Plan timing]" checkpoint logged from this page (auth/
@@ -1461,7 +1514,7 @@ function PlanPageInner() {
   );
   const isAllCategories = category === ALL_CATEGORIES;
   const catDef   = CATEGORIES.find(c => c.id === category);
-  const catLabel = isAllCategories ? "All categories" : (catDef?.label ?? category);
+  const catLabel = isAllCategories ? tr("plan.header.allCategories") : (catDef?.label ?? category);
 
   const [viewMode, setViewMode] = useState<ViewMode>("calendar");
   const [calendarScope, setCalendarScope] = useState<CalendarScope>("week");
@@ -1488,10 +1541,10 @@ function PlanPageInner() {
   const [monthUnscheduledOpen, setMonthUnscheduledOpen] = useState(false);
 
   function minimumPlanContentError(draft: PinDraft | null | undefined): string | null {
-    if (!draft) return "Could not find this Pin.";
-    if (!sanitizeHandoffField(draft.imageUrl)) return "This Pin needs an image before it can be scheduled.";
-    if (!displayTitle(draft.title, draft.keyword)) return "This Pin needs a title before it can be scheduled.";
-    if (!sanitizeHandoffField(draft.description)) return "This Pin needs a description before it can be scheduled.";
+    if (!draft) return tr("plan.error.pinNotFound");
+    if (!sanitizeHandoffField(draft.imageUrl)) return tr("plan.error.needsImage");
+    if (!displayTitle(draft.title, draft.keyword)) return tr("plan.error.needsTitle");
+    if (!sanitizeHandoffField(draft.description)) return tr("plan.error.needsDescription");
     return null;
   }
 
@@ -1523,7 +1576,7 @@ function PlanPageInner() {
     onViewDetails: setCalendarEditDraft,
     onToggleLock: (draft, locked) => {
       pinDraftStore.setScheduleLocked(draft.id, locked);
-      toast.success(locked ? "Time locked — kept during rebalancing." : "Time unlocked.");
+      toast.success(locked ? tr("plan.toast.timeLocked") : tr("plan.toast.timeUnlocked"));
     },
     // Publish now: distinct from scheduling. Only a board is required (Website URL is
     // optional; missing product is NOT a blocker). Always opens Pin Details — the
@@ -1532,11 +1585,12 @@ function PlanPageInner() {
     onPublishNow: (draft) => {
       const hasBoard = !!(sanitizeHandoffField(draft.boardId) || sanitizeHandoffField(draft.metadataDraft?.boardId));
       if (!hasBoard) {
-        toast.error("Add a board before publishing.");
+        toast.error(tr("plan.error.needsBoard"));
       }
       setCalendarEditDraft(draft);
     },
-  }), []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- tr/trBase are stable per-locale-render function identities; recomputing on trBase keeps toast copy in sync with the active app language without changing the memo's effective behavior.
+  }), [trBase]);
   const unscheduledHoverActions = useMemo<PinHoverPreviewActions>(() => ({
     variant: "unscheduled",
     onEditDetails: setCalendarEditDraft,
@@ -1676,19 +1730,19 @@ function PlanPageInner() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCalendarEditDraft(draft);
       if (isConnected) {
-        toast.success("Pinterest connected. You can continue publishing this Pin.");
+        toast.success(tr("plan.restore.pinterestConnectedContinue"));
       } else if (isCancelled) {
-        toast.info("Pinterest connection was cancelled. You can try again when ready.");
+        toast.info(tr("plan.restore.pinterestCancelled"));
       } else if (isFailure) {
-        toast.error("Pinterest couldn't be connected. Please try again from the Pin.");
+        toast.error(tr("plan.restore.pinterestFailed"));
       }
     } else {
       // Drawer context is gone (draft no longer in local storage) — render Plan
       // normally with a safe, actionable message instead of a blank/failed state.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setRestoreNotice(isConnected
-        ? "Pinterest connected. Please select the Pin again to continue publishing."
-        : "Pinterest connection was not completed. Please select the Pin again.");
+        ? tr("plan.restore.connectedSelectAgain")
+        : tr("plan.restore.notCompletedSelectAgain"));
     }
     // "Finished" here means the drawer's `open` prop flipped (or the not-found
     // banner was decided) — a synchronous localStorage read, NOT gated on the
@@ -1700,7 +1754,7 @@ function PlanPageInner() {
 
   function dismissRestoreNotice() { setRestoreNotice(null); }
   const [planStats, setPlanStats] = useState<WeeklyPlanStats>({
-    scheduled: 0, published: 0, unscheduled: 0, plannedThisWeek: 0, ready: 0, needsDetails: 0, unscheduledGenerated: 0, posted: 0,
+    scheduled: 0, published: 0, unscheduled: 0, plannedThisWeek: 0, ready: 0, needsDetails: 0, unscheduledGenerated: 0, posted: 0, failed: 0,
   });
 
   // Drag-and-drop state, shared with calendar + side sections.
@@ -1733,23 +1787,23 @@ function PlanPageInner() {
       if (!dayHasFreeFutureSlot(date, dayDrafts)) {
         const label = formatScheduleDateLabel(date);
         const { reason, scheduledCount } = classifyDayDropBlock(date, dayDrafts);
-        const editAction = { label: "Edit Smart Schedule", onClick: () => setSmartScheduleOpen(true) };
+        const editAction = { label: tr("plan.dropBlock.editSmartSchedule"), onClick: () => setSmartScheduleOpen(true) };
         if (reason === "all_past") {
           // The day is NOT full — its remaining slots have simply already passed
           // (e.g. dragging onto today after the last slot time). Tell the truth.
-          toast.error(`No open time left on ${label}.`, {
-            description: `${label}'s remaining Smart Schedule slots have already passed. Pick a later custom time today, or choose another day.`,
+          toast.error(trBase("plan.dropBlock.allPastTitle").replace("{date}", label), {
+            description: trBase("plan.dropBlock.allPastDesc").replace("{date}", label),
             action: editAction,
           });
         } else if (reason === "no_slots") {
-          toast.error(`No Smart Schedule slots on ${label}.`, {
-            description: `${label} has no Smart Schedule time slots yet. Add a slot in Smart Schedule, or choose another day.`,
+          toast.error(trBase("plan.dropBlock.noSlotsTitle").replace("{date}", label), {
+            description: trBase("plan.dropBlock.noSlotsDesc").replace("{date}", label),
             action: editAction,
           });
         } else {
           // Genuinely full: every configured slot on the TARGET day is taken.
-          toast.error(`No available slots on ${formatScheduleDateLabel(date)}.`, {
-            description: `This day already has ${scheduledCount} scheduled Pin${scheduledCount === 1 ? "" : "s"} filling every Smart Schedule slot. Increase pins per day or choose another day.`,
+          toast.error(trBase("plan.dropBlock.fullTitle").replace("{date}", formatScheduleDateLabel(date)), {
+            description: trBase("plan.dropBlock.fullDesc").replace("{n}", String(scheduledCount)).replace("{plural}", scheduledCount === 1 ? "" : "s"),
             action: editAction,
           });
         }
@@ -1768,7 +1822,8 @@ function PlanPageInner() {
       setDraggingId(null);
       setDragOverKey(null);
     },
-  }), [draggingId, dragOverKey, setSmartScheduleOpen]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- trBase omitted from the primary list intentionally; adding it here documents the toast copy depends on the active app language.
+  }), [draggingId, dragOverKey, setSmartScheduleOpen, trBase]);
 
   // ── Edit Plan multi-select + shared Batch Edit ──────────────────────────────
   const [editMode, setEditMode] = useState(false);
@@ -1878,16 +1933,20 @@ function PlanPageInner() {
     const blocked = candidates.length - ids.length;
     const already = pinIds.length - candidates.length;
     if (!ids.length) {
-      toast.info(blocked ? `${blocked} Pin${blocked === 1 ? "" : "s"} need an image, title, or description before scheduling.` : `${already} Pin${already === 1 ? " is" : "s are"} already scheduled`);
+      toast.info(blocked
+        ? trBase("plan.toast.blockedNeedsDetails").replace("{n}", String(blocked)).replace("{plural}", blocked === 1 ? "" : "s")
+        : trBase("plan.toast.alreadyScheduled").replace("{n}", String(already)).replace("{plural}", already === 1 ? "" : "s"));
       return;
     }
     const result = autoSchedulePins(ids, { skipAlreadyScheduled: true, skipPosted: true });
     if (result.scheduled === 0) {
-      toast.error(result.toasts[0] ?? "Could not schedule selected Pins.");
+      toast.error(result.toasts[0] ?? tr("plan.toast.couldNotSchedule"));
       if (result.toasts[0]?.includes("Set up Smart Schedule")) setSmartScheduleOpen(true);
       return;
     }
-    toast.success(`Scheduled ${result.scheduled} Pin${result.scheduled === 1 ? "" : "s"}${already ? ` · ${already} already scheduled` : ""}`);
+    toast.success(trBase("plan.toast.scheduledCount")
+      .replace("{n}", String(result.scheduled)).replace("{plural}", result.scheduled === 1 ? "" : "s")
+      .replace("{alreadySuffix}", already ? trBase("plan.toast.alreadyScheduledSuffix").replace("{n}", String(already)) : ""));
   }
 
   // Shared "Generate missing details" for weekly-plan drafts.
@@ -1912,7 +1971,7 @@ function PlanPageInner() {
         metadataDraft:  mergedMd,
       });
     }
-    toast.success("Generated missing details");
+    toast.success(tr("plan.toast.generatedMissingDetails"));
   }
 
   function handleWpPublishComplete(publishedIds: string[]) {
@@ -1934,13 +1993,13 @@ function PlanPageInner() {
     }
     setMoveDateOpen(false);
     setMoveDateValue("");
-    toast.success(`Moved ${selectedIds.size} Pin${selectedIds.size === 1 ? "" : "s"} to ${date}`);
+    toast.success(trBase("plan.toast.movedPins").replace("{n}", String(selectedIds.size)).replace("{plural}", selectedIds.size === 1 ? "" : "s").replace("{date}", date));
     setSelectedIds(new Set());
   }
 
   function handleBulkRemove() {
     for (const id of selectedIds) pinDraftStore.removeFromWeeklyPlan(id);
-    toast.success(`Removed ${selectedIds.size} Pin${selectedIds.size === 1 ? "" : "s"} from plan`);
+    toast.success(trBase("plan.toast.removedPins").replace("{n}", String(selectedIds.size)).replace("{plural}", selectedIds.size === 1 ? "" : "s"));
     setSelectedIds(new Set());
   }
 
@@ -1948,24 +2007,24 @@ function PlanPageInner() {
     const candidates = filterUnscheduledPinIds([...selectedIds]);
     const ids = candidates.filter(id => !minimumPlanContentError(pinDraftStore.getDraft(id)));
     if (!ids.length) {
-      toast.info(candidates.length ? "Selected Pins need an image, title, or description before scheduling." : "No unscheduled Pins selected — already scheduled Pins are skipped.");
+      toast.info(candidates.length ? tr("plan.toast.selectedNeedDetails") : tr("plan.toast.noUnscheduledSelected"));
       return;
     }
     const result = autoSchedulePins(ids, { skipAlreadyScheduled: true, skipPosted: true });
     if (result.scheduled === 0) {
-      toast.error(result.toasts[0] ?? "Could not schedule selected Pins.");
+      toast.error(result.toasts[0] ?? tr("plan.toast.couldNotSchedule"));
       if (result.toasts[0]?.includes("Set up Smart Schedule")) setSmartScheduleOpen(true);
       return;
     }
-    toast.success(result.toasts[result.toasts.length - 1] ?? `Scheduled ${result.scheduled} Pin${result.scheduled === 1 ? "" : "s"}.`);
+    toast.success(result.toasts[result.toasts.length - 1] ?? trBase("plan.toast.scheduledCount").replace("{n}", String(result.scheduled)).replace("{plural}", result.scheduled === 1 ? "" : "s").replace("{alreadySuffix}", ""));
     setSelectedIds(new Set());
   }
 
   const displayWeekStart = computeWeekStartISO(weekOffset);
   const monthAnchorISO   = computeMonthAnchorISO(monthOffset);
 
-  const monthLabel = new Date(`${monthAnchorISO}T00:00:00`).toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  const displayWeekLabel = formatWeekLabel(displayWeekStart);
+  const monthLabel = new Date(`${monthAnchorISO}T00:00:00`).toLocaleDateString(preferences.appLanguage, { month: "long", year: "numeric" });
+  const displayWeekLabel = formatWeekLabel(displayWeekStart, preferences.appLanguage);
 
   // Restore the user's explicit Week/Month choice (once, client-side). With no
   // saved preference the Plan defaults to Weekly view; Month stays available via
@@ -2025,6 +2084,30 @@ function PlanPageInner() {
     };
   }, [itemsSummaryKey, category, displayWeekStart]);
 
+  // Publish-failure banner (PRD §12, WP-F) — same board-wide count as Create Pins,
+  // recomputed on every draft-store write (Retry/Move to Unscheduled/Delete etc. all
+  // fire DRAFT_STORE_EVENT) so the count/visibility stay live without extra wiring.
+  const [publishFailureCount, setPublishFailureCount] = useState(0);
+  useEffect(() => {
+    function refreshFailureCount() {
+      setPublishFailureCount(countPublishFailures(pinDraftStore.getAllDrafts()));
+    }
+    refreshFailureCount();
+    window.addEventListener(pinDraftStore.DRAFT_STORE_EVENT, refreshFailureCount);
+    return () => window.removeEventListener(pinDraftStore.DRAFT_STORE_EVENT, refreshFailureCount);
+  }, []);
+  const { visibleCount: failureBannerCount, dismiss: dismissFailureBanner } = useFailureBannerDismiss(publishFailureCount);
+  const openFailedInStudio = useCallback(() => {
+    try {
+      window.sessionStorage.setItem("vp:studio:filter", "failed");
+      // Failed-view sub-filter default (PRD §4): both the Banner CTA and the stats-bar
+      // "N failed" click land on "Publish failures" (matches this count's own source —
+      // countPublishFailures — so the number the user just saw equals the list they land on).
+      window.sessionStorage.setItem(FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH);
+    } catch { /* storage unavailable — studio still defaults sanely */ }
+    window.location.href = "/app/studio";
+  }, []);
+
   // ── Dev-only Plan identity diagnostics (Issue B) ──────────────────────────────
   // Makes the "same account, different browser/incognito shows different Plan"
   // mismatch visible. Core finding: the keyword plan SLOTS come from Supabase
@@ -2081,6 +2164,8 @@ function PlanPageInner() {
   return (
     <div data-testid="weekly-plan-page" style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--app-bg)" }}>
 
+      <FailureBanner count={failureBannerCount} onReview={openFailedInStudio} onDismiss={dismissFailureBanner} />
+
       {/* ── Header ── */}
       <div style={{ background: "var(--app-surface)", flexShrink: 0 }}>
 
@@ -2090,16 +2175,16 @@ function PlanPageInner() {
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <h1 style={{ margin: 0, fontSize: "14px", fontWeight: 800, color: "var(--app-text)" }}>{tr("page.plan.title")}</h1>
-              <span data-testid="weekly-plan-workspace" title="Single publishing calendar for this workspace"
+              <span data-testid="weekly-plan-workspace" title={tr("plan.header.filteringTitle")}
                 style={{ fontSize: 10, fontWeight: 600, color: "var(--app-text-muted)", border: "1px solid var(--app-border)", borderRadius: 20, padding: "1px 8px", whiteSpace: "nowrap" }}>
-                Default workspace
+                {tr("plan.header.defaultWorkspace")}
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
               <p style={{ margin: 0, fontSize: "12px", color: "var(--app-text-sec)" }}>{hydrated ? (calendarScope === "month" ? monthLabel : displayWeekLabel) : tr("page.plan.loading")}</p>
               {!isAllCategories && (
                 <button type="button" data-testid="weekly-plan-active-filter" onClick={() => setCategory(ALL_CATEGORIES)}
-                  title="Filtering by category — click to show all"
+                  title={tr("plan.header.filteringTitle")}
                   style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, border: "1px solid rgba(192,38,211,0.45)", background: "rgba(192,38,211,0.08)", color: "#C026D3", cursor: "pointer" }}>
                   {catDef?.emoji} {catLabel} ✕
                 </button>
@@ -2111,7 +2196,7 @@ function PlanPageInner() {
           <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0, flexWrap: "wrap" }}>
             <button type="button" data-testid="week-nav-today" onClick={() => { setWeekOffset(0); setMonthOffset(0); }}
               style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, border: "1px solid var(--app-border)", background: (calendarScope === "month" ? monthOffset : weekOffset) === 0 ? "var(--app-inset-hi)" : "transparent", color: "var(--app-text-sec)", cursor: "pointer", whiteSpace: "nowrap" }}>
-              Today
+              {tr("plan.header.today")}
             </button>
             <button type="button" data-testid="week-nav-prev" onClick={() => calendarScope === "month" ? setMonthOffset(o => o - 1) : setWeekOffset(o => o - 1)}
               style={{ padding: "3px 8px", borderRadius: 6, fontSize: 13, border: "1px solid var(--app-border)", background: "transparent", color: "var(--app-text-sec)", cursor: "pointer", lineHeight: 1 }}>
@@ -2122,40 +2207,40 @@ function PlanPageInner() {
               ›
             </button>
             <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, border: "1px solid var(--app-border)", color: "var(--app-text-sec)", whiteSpace: "nowrap" }}>
-              {hydrated ? (calendarScope === "month" ? monthLabel : formatWeekRange(displayWeekStart)) : "—"}
+              {hydrated ? (calendarScope === "month" ? monthLabel : formatWeekRange(displayWeekStart, preferences.appLanguage)) : "—"}
             </span>
             {isPlanReady && hasItems && (
               <button type="button"
                 onClick={() => exportCSV(exportBriefs, fileName)}
                 style={{ padding: "3px 10px", fontSize: "11px", fontWeight: 600, borderRadius: "6px", border: "1px solid var(--app-border)", background: "transparent", color: "var(--app-text-sec)", cursor: "pointer", whiteSpace: "nowrap" }}>
-                ↓ Export CSV
+                {tr("plan.header.exportCsv")}
               </button>
             )}
             <button type="button" data-testid="smart-schedule-btn" onClick={() => setSmartScheduleOpen(true)}
               style={{ padding: "3px 10px", fontSize: "11px", fontWeight: 700, borderRadius: "7px", cursor: "pointer", whiteSpace: "nowrap",
                 border: "1px solid rgba(99,102,241,0.45)", background: "rgba(99,102,241,0.08)", color: "#6366F1" }}>
-              Smart Schedule
+              {tr("plan.header.smartSchedule")}
             </button>
             <button type="button" data-testid="weekly-plan-edit-toggle" onClick={toggleEditMode}
               style={{ padding: "3px 10px", fontSize: "11px", fontWeight: 700, borderRadius: "7px", cursor: "pointer", whiteSpace: "nowrap",
                 border: `1.5px solid rgba(192,38,211,0.6)`, background: editMode ? "rgba(192,38,211,0.12)" : "transparent", color: "#C026D3" }}>
-              {editMode ? "✓ Done" : "✏️ Edit Plan"}
+              {editMode ? tr("plan.header.editDone") : tr("plan.header.editPlan")}
             </button>
             {!isAllCategories && (
-              <Link href={`/app/workspace/${category}`} title="Edit keyword plan"
+              <Link href={`/app/workspace/${category}`} title={tr("plan.header.keywordPlanTitle")}
                 style={{ padding: "3px 10px", fontSize: "11px", fontWeight: 600, borderRadius: "7px", border: "1px solid var(--app-border)", color: "var(--app-text-sec)", textDecoration: "none", whiteSpace: "nowrap" }}>
-                Keyword plan
+                {tr("plan.header.keywordPlan")}
               </Link>
             )}
             <Link href="/app/studio" data-testid="create-pin-btn"
               style={{ padding: "3px 12px", fontSize: "11px", fontWeight: 700, borderRadius: "7px", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", textDecoration: "none", whiteSpace: "nowrap" }}>
-              ✦ Create Pin
+              {tr("plan.header.createPin")}
             </Link>
           </div>
         </div>
 
         {/* Compact summary bar */}
-        <CompactSummaryBar stats={planStats} />
+        <CompactSummaryBar stats={planStats} onFailedClick={openFailedInStudio} />
 
         {/* View mode + calendar controls */}
         <div style={{ padding: "4px 20px 8px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -2170,7 +2255,7 @@ function PlanPageInner() {
                   color:      viewMode === mode ? "var(--app-text)" : "var(--app-text-sec)",
                   boxShadow:  viewMode === mode ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
                 }}>
-                {mode === "calendar" ? "Calendar" : "List"}
+                {mode === "calendar" ? tr("plan.viewMode.calendar") : tr("plan.viewMode.list")}
               </button>
             ))}
           </div>
@@ -2187,7 +2272,7 @@ function PlanPageInner() {
                     color:      calendarScope === scope ? "var(--app-text)" : "var(--app-text-sec)",
                     boxShadow:  calendarScope === scope ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
                   }}>
-                  {scope}
+                  {scope === "week" ? tr("plan.scope.week") : tr("plan.scope.month")}
                 </button>
               ))}
             </div>
@@ -2197,7 +2282,7 @@ function PlanPageInner() {
               <button type="button" data-testid="month-unscheduled-toggle" onClick={() => setMonthUnscheduledOpen(true)}
                 style={{ padding: "5px 12px", fontSize: "11px", fontWeight: 700, borderRadius: 7,
                   border: "1px solid rgba(99,102,241,0.45)", background: "rgba(99,102,241,0.08)", color: "#6366F1", cursor: "pointer", whiteSpace: "nowrap" }}>
-                Unscheduled ({planStats.unscheduledGenerated})
+                {trBase("plan.unscheduledToggle").replace("{n}", String(planStats.unscheduledGenerated))}
               </button>
             )}
             <div style={{ position: "relative" }}>
@@ -2206,31 +2291,31 @@ function PlanPageInner() {
                   border: `1px solid ${isAllCategories ? "var(--app-border)" : "rgba(192,38,211,0.45)"}`,
                   background: isAllCategories ? "transparent" : "rgba(192,38,211,0.08)",
                   color: isAllCategories ? "var(--app-text-sec)" : "#C026D3", cursor: "pointer" }}>
-                ⚙ Filters{!isAllCategories ? " · 1" : ""}
+                {tr("plan.filters.button")}{!isAllCategories ? " · 1" : ""}
               </button>
               {filtersOpen && (
                 <>
                   <div onClick={() => setFiltersOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
                   <div data-testid="weekly-plan-filters-panel" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 41, width: 230, background: "var(--app-surface)", border: "1px solid var(--app-border)", borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,0.4)", padding: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontSize: 11, fontWeight: 800, color: "var(--app-text)" }}>Filters</span>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: "var(--app-text)" }}>{tr("plan.filters.title")}</span>
                       {!isAllCategories && (
                         <button type="button" data-testid="weekly-plan-filters-clear" onClick={() => setCategory(ALL_CATEGORIES)}
                           style={{ background: "none", border: "none", padding: 0, fontSize: 10.5, fontWeight: 700, color: "#C026D3", cursor: "pointer" }}>
-                          Clear
+                          {tr("plan.filters.clear")}
                         </button>
                       )}
                     </div>
-                    <label style={{ display: "block", fontSize: 9.5, fontWeight: 700, color: "var(--app-text-sec)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Category</label>
+                    <label style={{ display: "block", fontSize: 9.5, fontWeight: 700, color: "var(--app-text-sec)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{tr("plan.filters.category")}</label>
                     <select data-testid="weekly-plan-filter-category" value={category} onChange={e => setCategory(e.target.value)}
                       style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 8, fontSize: 12, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text)", cursor: "pointer", outline: "none" }}>
-                      <option value={ALL_CATEGORIES}>All categories</option>
+                      <option value={ALL_CATEGORIES}>{tr("plan.header.allCategories")}</option>
                       {ACTIVE_CATEGORIES.map(c => (
                         <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>
                       ))}
                     </select>
                     <p style={{ margin: "8px 0 0", fontSize: 9.5, color: "var(--app-text-muted)", lineHeight: 1.5 }}>
-                      Boards, status, and opportunity filters coming soon. Category is optional — Pins of any category plan in the same calendar.
+                      {tr("plan.filters.footer")}
                     </p>
                   </div>
                 </>
@@ -2254,10 +2339,10 @@ function PlanPageInner() {
             Shown above the calendar so the shell stays usable either way. */}
         {hydrated && showPlanLoadRetry && (
           <div data-testid="weekly-plan-load-retry" style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(239,68,68,0.3)", background: "rgba(239,68,68,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <p style={{ margin: 0, fontSize: 12, color: "#EF4444" }}>Could not load your plan.</p>
+            <p style={{ margin: 0, fontSize: 12, color: "#EF4444" }}>{tr("plan.load.error")}</p>
             <button type="button" onClick={() => window.location.reload()}
               style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid rgba(239,68,68,0.35)", background: "var(--app-surface)", color: "#EF4444", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-              Retry
+              {tr("plan.load.retry")}
             </button>
           </div>
         )}
@@ -2289,11 +2374,11 @@ function PlanPageInner() {
                 <div style={{ marginBottom: 16, padding: "12px 16px", borderRadius: 10, border: "1px solid var(--app-border)", background: "var(--app-surface)" }}>
                   <p style={{ margin: 0, fontSize: 13, color: "var(--app-text-sec)" }}>
                     {isAllCategories ? (
-                      <>Nothing scheduled this week yet. Add Pins from the unscheduled list{wideLayout ? " on the right" : " below"}, or{" "}
-                        <Link href="/app/studio" style={{ color: "#C026D3", fontWeight: 700 }}>create new Pins →</Link></>
+                      <>{tr("plan.empty.allCategoriesPrefix")}{wideLayout ? tr("plan.empty.allCategoriesOnRight") : tr("plan.empty.allCategoriesBelow")}{tr("plan.empty.allCategoriesSuffix")}
+                        <Link href="/app/studio" style={{ color: "#C026D3", fontWeight: 700 }}>{tr("plan.empty.createNewPins")}</Link></>
                     ) : (
-                      <>No keyword plan for <strong>{catLabel}</strong> this week yet. Add Pins from the unscheduled list, or{" "}
-                        <Link href={`/app/workspace/${category}`} style={{ color: "#C026D3", fontWeight: 700 }}>build a keyword plan →</Link></>
+                      <>{tr("plan.empty.categoryPrefix")}<strong>{catLabel}</strong>{tr("plan.empty.categorySuffix")}
+                        <Link href={`/app/workspace/${category}`} style={{ color: "#C026D3", fontWeight: 700 }}>{tr("plan.empty.buildKeywordPlan")}</Link></>
                     )}
                   </p>
                 </div>
@@ -2321,7 +2406,7 @@ function PlanPageInner() {
               )}
 
               <p style={{ textAlign: "center", fontSize: "11px", color: "var(--app-text-muted)", marginTop: "20px", paddingBottom: "10px" }}>
-                🕐 All times are in your local time zone · Schedule uses Smart Schedule · drag Pins to reschedule manually
+                {tr("plan.footer.timezoneNote")}
               </p>
               <AddedNeedsDateSection category={category} weekStart={displayWeekStart} dnd={dnd} hoverActions={scheduledHoverActions} />
               {/* Narrow fallback — stacked Unscheduled section (rail not shown). */}
@@ -2382,44 +2467,44 @@ function PlanPageInner() {
         }}>
           {selectedIds.size === 0 ? (
             <span data-testid="wp-selection-hint" style={{ fontSize: 12, fontWeight: 600, color: "var(--app-text-sec)", padding: "2px 4px" }}>
-              Select Pins to perform actions.
+              {tr("plan.selectionBar.hint")}
             </span>
           ) : (
             <>
               {/* Quiet count — just the number, no verbose action-count labels */}
               <span data-testid="wp-selected-count" style={{ fontSize: 12, fontWeight: 700, color: "var(--app-text-sec)", paddingRight: 4 }}>
-                {selectedIds.size} selected
+                {trBase("plan.selectionBar.selectedCount").replace("{n}", String(selectedIds.size))}
               </span>
               {/* Primary: Batch edit opens the shared Batch Edit workspace with selected IDs */}
               <button type="button" data-testid="wp-batch-edit" onClick={() => openBatchEditFor([...selectedIds])}
                 style={{ padding: "7px 14px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                Batch edit
+                {tr("plan.selectionBar.batchEdit")}
               </button>
               {/* Secondary: Schedule (Smart Schedule next available slot) */}
               <button type="button" data-testid="wp-schedule-selected" onClick={handleBulkSmartSchedule}
                 style={{ padding: "7px 14px", borderRadius: 9, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text)", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                Schedule
+                {tr("plan.selectionBar.schedule")}
               </button>
               {/* Secondary: Publish now. The drawer validates image/account/board at action time. */}
               <button type="button" data-testid="wp-publish-selected" onClick={() => openBatchEditFor([...selectedIds])}
                 disabled={!canPublishSelected}
-                title={canPublishSelected ? "Publish the selected Pins" : "Select at least one Pin to publish"}
+                title={canPublishSelected ? tr("plan.selectionBar.publishNowTitle") : tr("plan.selectionBar.publishNowDisabledTitle")}
                 style={{ padding: "7px 14px", borderRadius: 9, border: "1px solid var(--app-border)", background: "var(--app-surface-2)",
                   color: canPublishSelected ? "var(--app-text)" : "var(--app-text-muted)", fontSize: 12, fontWeight: 700,
                   cursor: canPublishSelected ? "pointer" : "not-allowed", opacity: canPublishSelected ? 1 : 0.5 }}>
-                Publish now
+                {tr("plan.selectionBar.publishNow")}
               </button>
               <button type="button" onClick={() => { setMoveDateValue(""); setMoveDateOpen(true); }}
                 style={{ padding: "7px 12px", borderRadius: 9, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text-sec)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                Move date
+                {tr("plan.selectionBar.moveDate")}
               </button>
               <button type="button" onClick={handleBulkRemove}
                 style={{ padding: "7px 12px", borderRadius: 9, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text-sec)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                Remove from plan
+                {tr("plan.selectionBar.removeFromPlan")}
               </button>
               <button type="button" data-testid="wp-clear-selection" onClick={() => setSelectedIds(new Set())}
                 style={{ padding: "7px 10px", borderRadius: 9, border: "none", background: "none", color: "var(--app-text-muted)", fontSize: 12, cursor: "pointer" }}>
-                Clear
+                {tr("plan.selectionBar.clear")}
               </button>
             </>
           )}
@@ -2430,13 +2515,13 @@ function PlanPageInner() {
       {moveDateOpen && (
         <div onClick={() => setMoveDateOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "var(--app-surface)", border: "1px solid var(--app-border)", borderRadius: 14, padding: "20px 22px", width: 320, maxWidth: "90vw" }}>
-            <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: "var(--app-text)" }}>Move {selectedIds.size} Pin{selectedIds.size === 1 ? "" : "s"} to…</h3>
+            <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: "var(--app-text)" }}>{trBase("plan.moveDate.title").replace("{n}", String(selectedIds.size)).replace("{plural}", selectedIds.size === 1 ? "" : "s")}</h3>
             <input type="date" value={moveDateValue} onChange={e => setMoveDateValue(e.target.value)}
               style={{ width: "100%", boxSizing: "border-box", padding: "9px 11px", borderRadius: 8, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text)", fontSize: 12, outline: "none", colorScheme: "dark" }} />
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-              <button type="button" onClick={() => setMoveDateOpen(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text-sec)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+              <button type="button" onClick={() => setMoveDateOpen(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text-sec)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{tr("plan.moveDate.cancel")}</button>
               <button type="button" onClick={handleBulkMoveDate} disabled={!moveDateValue}
-                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: moveDateValue ? "linear-gradient(135deg,#FF4D8D,#7C3AED)" : "var(--app-surface-2)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: moveDateValue ? "pointer" : "not-allowed", opacity: moveDateValue ? 1 : 0.6 }}>Move</button>
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: moveDateValue ? "linear-gradient(135deg,#FF4D8D,#7C3AED)" : "var(--app-surface-2)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: moveDateValue ? "pointer" : "not-allowed", opacity: moveDateValue ? 1 : 0.6 }}>{tr("plan.moveDate.move")}</button>
             </div>
           </div>
         </div>
@@ -2460,6 +2545,8 @@ function PlanPageInner() {
 // ── Added to plan, needs date ─────────────────────────────────────────────────
 
 function AddedNeedsDateSection({ category, weekStart, dnd, hoverActions }: { category: string; weekStart: string; dnd: PlanDnD; hoverActions?: PinHoverPreviewActions }) {
+  const { t: trBase } = useLocale();
+  const tr = (key: MessageKey) => trBase(key);
   const [drafts, setDrafts] = useState<PinDraft[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDate, setEditDate] = useState("");
@@ -2500,13 +2587,13 @@ function AddedNeedsDateSection({ category, weekStart, dnd, hoverActions }: { cat
     <div data-testid="added-needs-date-section" style={{ maxWidth: "980px", margin: "16px auto 0", borderRadius: 14, background: "var(--app-surface)", border: "1px solid rgba(217,119,6,0.25)", overflow: "hidden" }}>
       <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--app-border)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--app-text-sec)" }}>Added to plan · assign a date</span>
+          <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--app-text-sec)" }}>{tr("plan.needsDate.heading")}</span>
           <span style={{ fontSize: "9px", fontWeight: 700, padding: "2px 7px", borderRadius: 20, background: "rgba(217,119,6,0.12)", color: "#D97706" }}>
             {drafts.length}
           </span>
         </div>
         <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--app-text-muted)" }}>
-          These pins are in your plan but not on the calendar yet. Assign a date to place them on a day above.
+          {tr("plan.needsDate.helper")}
         </p>
       </div>
       <div style={{ padding: "14px 18px" }}>
@@ -2542,7 +2629,7 @@ function AddedNeedsDateSection({ category, weekStart, dnd, hoverActions }: { cat
                     <div style={{ display: "flex", gap: 4 }}>
                       <button type="button" data-testid="added-needs-date-confirm" onClick={() => handleAssignDate(draft.id, editDate)}
                         style={{ flex: 1, padding: "4px 0", borderRadius: 7, border: "none", background: "#7C3AED", color: "#fff", fontSize: "10px", fontWeight: 700, cursor: "pointer" }}>
-                        Assign date
+                        {tr("plan.needsDate.assignDate")}
                       </button>
                       <button type="button" onClick={() => setEditingId(null)}
                         style={{ padding: "4px 8px", borderRadius: 7, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-muted)", fontSize: "10px", cursor: "pointer" }}>
@@ -2555,15 +2642,15 @@ function AddedNeedsDateSection({ category, weekStart, dnd, hoverActions }: { cat
                     <button type="button" data-testid="needs-date-assign-btn"
                       onClick={() => { setEditingId(draft.id); setEditDate(plannableDateISO(1)); }}
                       style={{ flex: "1 1 auto", padding: "4px 6px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: "9px", fontWeight: 700, cursor: "pointer" }}>
-                      Assign date
+                      {tr("plan.needsDate.assignDate")}
                     </button>
                     <button type="button" data-testid="needs-date-edit-details-btn" onClick={() => setEditDraft(draft)}
                       style={{ flex: "0 0 auto", padding: "4px 6px", borderRadius: 7, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-sec)", fontSize: "9px", fontWeight: 600, cursor: "pointer" }}>
-                      Edit details
+                      {tr("plan.needsDate.editDetails")}
                     </button>
                     <button type="button" onClick={() => pinDraftStore.removeFromWeeklyPlan(draft.id)}
                       style={{ flex: "0 0 auto", padding: "4px 6px", borderRadius: 7, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-muted)", fontSize: "9px", cursor: "pointer" }}>
-                      Remove
+                      {tr("plan.needsDate.remove")}
                     </button>
                   </div>
                 )}
@@ -2589,6 +2676,8 @@ function AddedNeedsDateSection({ category, weekStart, dnd, hoverActions }: { cat
 function UnscheduledDraftsSection({ category, dnd, hoverActions, onAddToPlan }: {
   category: string; dnd: PlanDnD; hoverActions?: PinHoverPreviewActions; onAddToPlan: (id: string) => void;
 }) {
+  const { t: trBase } = useLocale();
+  const tr = (key: MessageKey) => trBase(key);
   const [drafts,    setDrafts]    = useState<PinDraft[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [editDraft, setEditDraft] = useState<PinDraft | null>(null);
@@ -2637,7 +2726,7 @@ function UnscheduledDraftsSection({ category, dnd, hoverActions, onAddToPlan }: 
       <div onClick={() => setCollapsed(c => !c)}
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", cursor: "pointer", borderBottom: collapsed ? "none" : "1px solid var(--app-border)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--app-text-sec)" }}>Generated Pins · Not added to plan</span>
+          <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--app-text-sec)" }}>{tr("plan.unscheduledSection.heading")}</span>
           <span style={{ fontSize: "9px", fontWeight: 700, padding: "2px 7px", borderRadius: 20, background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>
             {drafts.length}
           </span>
@@ -2645,7 +2734,7 @@ function UnscheduledDraftsSection({ category, dnd, hoverActions, onAddToPlan }: 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Link href="/app/history" style={{ fontSize: "11px", fontWeight: 600, color: "#C026D3", textDecoration: "none" }}
             onClick={e => e.stopPropagation()}>
-            View all in History →
+            {tr("plan.unscheduledSection.viewAllHistory")}
           </Link>
           <span style={{ fontSize: "12px", color: "var(--app-text-muted)" }}>{collapsed ? "▶" : "▼"}</span>
         </div>
@@ -2653,7 +2742,7 @@ function UnscheduledDraftsSection({ category, dnd, hoverActions, onAddToPlan }: 
 
       {dnd.draggingId && (
         <div style={{ padding: "8px 18px", borderBottom: "1px solid var(--app-border)", textAlign: "center", fontSize: 11, fontWeight: 700, color: isOver ? "#C026D3" : "var(--app-text-muted)" }}>
-          Drop here to remove from plan
+          {tr("plan.unscheduledSection.dropToRemove")}
         </div>
       )}
 
@@ -2693,13 +2782,13 @@ function UnscheduledDraftsSection({ category, dnd, hoverActions, onAddToPlan }: 
 
                   <div style={{ padding: "4px 9px 8px", display: "flex", gap: 4, flexWrap: "wrap" }}>
                     <button type="button" data-testid="unscheduled-add-to-plan" data-testid2="weekly-plan-unscheduled-schedule" onClick={() => handleAddToPlan(draft.id)}
-                      title="Schedule into the next available Smart Schedule slot"
+                      title={tr("plan.unscheduledSection.scheduleTitle")}
                       style={{ flex: "1 1 auto", padding: "4px 6px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: "9px", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-                      Schedule
+                      {tr("plan.unscheduledSection.schedule")}
                     </button>
                     <button type="button" data-testid="unscheduled-edit-details" data-testid2="weekly-plan-unscheduled-edit-details" onClick={() => setEditDraft(draft)}
                       style={{ flex: "1 1 auto", padding: "4px 6px", borderRadius: 7, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-sec)", fontSize: "9px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                      Edit details
+                      {tr("plan.unscheduledSection.editDetails")}
                     </button>
                   </div>
                 </div>
@@ -2723,10 +2812,10 @@ function UnscheduledDraftsSection({ category, dnd, hoverActions, onAddToPlan }: 
 // single-Pin editor (via onEditDraft → page-level DraftDetailsDrawer) as the rest
 // of Weekly Plan. No second editor, no duplicate readiness logic.
 
-function railStatus(draft: PinDraft): { label: string; color: string } {
-  if (draft.postedAt) return { label: "Published", color: "#7C3AED" };
-  if (sanitizeHandoffField(draft.scheduledDate)) return { label: "Scheduled", color: "#059669" };
-  return { label: "Unscheduled", color: "var(--app-text-muted)" };
+function railStatus(draft: PinDraft, tr: (key: MessageKey) => string): { label: string; color: string } {
+  if (draft.postedAt) return { label: tr("plan.status.published"), color: "#7C3AED" };
+  if (sanitizeHandoffField(draft.scheduledDate)) return { label: tr("plan.status.scheduled"), color: "#059669" };
+  return { label: tr("plan.status.unscheduled"), color: "var(--app-text-muted)" };
 }
 
 function UnscheduledCard({ draft, dnd, select, onAddToPlan, onEdit, hoverActions }: {
@@ -2735,11 +2824,13 @@ function UnscheduledCard({ draft, dnd, select, onAddToPlan, onEdit, hoverActions
   onEdit: (d: PinDraft) => void;
   hoverActions?: PinHoverPreviewActions;
 }) {
-  const st = railStatus(draft);
+  const { t: trBase } = useLocale();
+  const tr = (key: MessageKey) => trBase(key);
+  const st = railStatus(draft, tr);
   const selected = !!select?.isSelected(draft.id);
   const [hovered, setHovered] = useState(false);
   const checkVisible = hovered || !!select?.active;
-  const meta = sanitizeHandoffField(draft.source) || "Generated";
+  const meta = sanitizeHandoffField(draft.source) || tr("plan.rail.generatedFallback");
   const cardHoverActions: PinHoverPreviewActions = hoverActions
     ? { ...hoverActions, onEditDetails: onEdit, onAddToPlan }
     : { variant: "unscheduled", onEditDetails: onEdit, onAddToPlan };
@@ -2775,13 +2866,13 @@ function UnscheduledCard({ draft, dnd, select, onAddToPlan, onEdit, hoverActions
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 2 }}>
           <button type="button" data-testid="rail-add-to-plan" data-testid2="weekly-plan-unscheduled-schedule" onClick={e => { e.stopPropagation(); onAddToPlan(draft.id); }}
-            title="Schedule into the next available Smart Schedule slot"
+            title={tr("plan.rail.scheduleTitle")}
             style={{ padding: "4px 9px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: 9.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-            Schedule
+            {tr("plan.rail.schedule")}
           </button>
           <button type="button" data-testid="rail-edit-details" data-testid2="weekly-plan-unscheduled-edit-details" onClick={e => { e.stopPropagation(); onEdit(draft); }}
             style={{ padding: "4px 9px", borderRadius: 7, border: "1px solid var(--app-border)", background: "var(--app-surface)", color: "var(--app-text-sec)", fontSize: 9.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-            Edit details
+            {tr("plan.rail.editDetails")}
           </button>
         </div>
       </div>
@@ -2793,6 +2884,8 @@ function UnscheduledRail({ category, dnd, select, onEditDraft, hoverActions, onA
   category: string; dnd: PlanDnD; select: PlanSelect; onEditDraft: (d: PinDraft) => void;
   hoverActions?: PinHoverPreviewActions; onAddToPlan: (id: string) => void;
 }) {
+  const { t: trBase } = useLocale();
+  const tr = (key: MessageKey) => trBase(key);
   const [drafts, setDrafts] = useState<PinDraft[]>([]);
   const [showAll, setShowAll] = useState(false);
   const dropKey = "unscheduled-rail";
@@ -2828,22 +2921,22 @@ function UnscheduledRail({ category, dnd, select, onEditDraft, hoverActions, onA
         boxShadow: isOver ? "0 0 0 2px rgba(192,38,211,0.18)" : "none", overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid var(--app-border)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 800, color: "var(--app-text)" }}>Unscheduled Pins</span>
+          <span style={{ fontSize: 12.5, fontWeight: 800, color: "var(--app-text)" }}>{tr("plan.rail.title")}</span>
           <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 7px", borderRadius: 20, background: "rgba(99,102,241,0.12)", color: "#6366F1" }}>{drafts.length}</span>
         </div>
-        <Link href="/app/history" style={{ fontSize: 10.5, fontWeight: 600, color: "#C026D3", textDecoration: "none" }}>History →</Link>
+        <Link href="/app/history" style={{ fontSize: 10.5, fontWeight: 600, color: "#C026D3", textDecoration: "none" }}>{tr("plan.rail.history")}</Link>
       </div>
 
       {dnd.draggingId && (
         <div style={{ padding: "7px 14px", borderBottom: "1px solid var(--app-border)", textAlign: "center", fontSize: 10.5, fontWeight: 700, color: isOver ? "#C026D3" : "var(--app-text-muted)" }}>
-          Drop here to remove from plan
+          {tr("plan.rail.dropToRemove")}
         </div>
       )}
 
       <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
         {drafts.length === 0 ? (
           <p data-testid="rail-empty" style={{ margin: "6px 4px", fontSize: 11.5, color: "var(--app-text-muted)", lineHeight: 1.6 }}>
-            No unscheduled Pins. <Link href="/app/studio" style={{ color: "#C026D3", fontWeight: 700 }}>Create Pins</Link> or view your <Link href="/app/history" style={{ color: "#C026D3", fontWeight: 700 }}>Pin history</Link>.
+            {tr("plan.rail.emptyPrefix")}<Link href="/app/studio" style={{ color: "#C026D3", fontWeight: 700 }}>{tr("plan.rail.createPins")}</Link>{tr("plan.rail.emptyOr")}<Link href="/app/history" style={{ color: "#C026D3", fontWeight: 700 }}>{tr("plan.rail.pinHistory")}</Link>{tr("plan.rail.emptySuffix")}
           </p>
         ) : (
           <>
@@ -2851,7 +2944,7 @@ function UnscheduledRail({ category, dnd, select, onEditDraft, hoverActions, onA
             {drafts.length > VISIBLE && (
               <button type="button" data-testid="rail-view-all" onClick={() => setShowAll(true)}
                 style={{ marginTop: 2, padding: "9px 0", borderRadius: 9, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text)", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
-                View all {drafts.length} unscheduled Pins
+                {trBase("plan.rail.viewAll").replace("{n}", String(drafts.length))}
               </button>
             )}
           </>
@@ -2864,7 +2957,7 @@ function UnscheduledRail({ category, dnd, select, onEditDraft, hoverActions, onA
           <div data-testid="rail-view-all-drawer" onClick={e => e.stopPropagation()}
             style={{ width: 400, maxWidth: "92vw", height: "100%", background: "var(--app-surface)", borderLeft: "1px solid var(--app-border)", display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: "1px solid var(--app-border)" }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: "var(--app-text)" }}>All unscheduled Pins · {drafts.length}</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "var(--app-text)" }}>{trBase("plan.rail.viewAllDrawerTitle").replace("{n}", String(drafts.length))}</span>
               <button type="button" onClick={() => setShowAll(false)} style={{ background: "none", border: "none", color: "var(--app-text-muted)", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -2879,13 +2972,18 @@ function UnscheduledRail({ category, dnd, select, onEditDraft, hoverActions, onA
 
 // ── Page export ───────────────────────────────────────────────────────────────
 
+function PlanPageSuspenseFallback() {
+  const { t } = useLocale();
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--app-text-sec)" }}>
+      {t("common.loading")}
+    </div>
+  );
+}
+
 export default function PlanPage() {
   return (
-    <Suspense fallback={
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--app-text-sec)" }}>
-        Loading…
-      </div>
-    }>
+    <Suspense fallback={<PlanPageSuspenseFallback />}>
       <PlanPageInner />
     </Suspense>
   );

@@ -30,6 +30,12 @@ export class CopyError extends Error {
   }
 }
 
+// Version stamp for the copy prompts defined below (buildFastPathPrompt /
+// buildVisionPrompt). The constant itself lives in promptVersions.ts so CLIENT code
+// (generatePinCopy.ts analytics) can import it without pulling in this server module;
+// re-exported here for server-side convenience.
+export { COPY_PROMPT_VERSION } from "./promptVersions";
+
 export const GENERIC_COPY_MESSAGE = "We couldn't generate good copy for this image. Please try again.";
 export const IMAGE_MESSAGE = "We couldn't read this image. Re-upload it and try again.";
 export const PROVIDER_MESSAGE = "The AI service is temporarily unavailable. Please try again in a moment.";
@@ -438,9 +444,12 @@ export function buildContextBlock(input: {
   boardContext: { name?: string };
   keywords: string[];
   category?: string;
+  /** Picked creative direction — tone/framing guidance only (never quoted verbatim). */
+  directionHint?: string;
 }): string {
   const lines: string[] = [];
   if (input.productContext.title || input.productContext.category) lines.push(`Product (name may stay as originally written; translate the category concept): ${[input.productContext.title, input.productContext.category].filter(Boolean).join(" — ")}`);
+  if (input.directionHint) lines.push(`Creative direction to reflect in tone/framing (guidance only — do not quote): ${input.directionHint}`);
   if (input.boardContext.name) lines.push(`Pinterest board (context only — translate/paraphrase unless it is a proper noun): ${input.boardContext.name}`);
   if (input.pageContext.title || input.pageContext.domain) lines.push(`Destination page (context only): ${[input.pageContext.title, input.pageContext.domain].filter(Boolean).join(" — ")}`);
   if (input.category) lines.push(`Reference keyword context (do not quote verbatim — translate/paraphrase into the target language): ${input.category}`);
@@ -475,6 +484,8 @@ export function lengthInstruction(length: CopyLength | undefined): string {
 export type FastPathPromptArgs = {
   analysis: GroundingAnalysis;
   recommendedKeywords: string[];
+  /** Picked creative direction — tone/framing guidance only (never quoted verbatim). */
+  directionHint?: string;
   boardName?: string;
   category?: string;
   language: string;
@@ -508,6 +519,7 @@ export function buildFastPathPrompt(args: FastPathPromptArgs): string {
     lengthInstruction(args.length),
     `Write Pinterest Pin copy from this image analysis. STRICT JSON only: {"title":"","description":"","altText":""}`,
     `Analysis: ${JSON.stringify(compact)}`,
+    args.directionHint ? `Creative direction to reflect in tone/framing (guidance only — do not quote): ${args.directionHint}` : "",
     args.boardName ? `Board (context only — translate/paraphrase unless it is a proper noun): ${args.boardName}` : "",
     kws.length ? `Weave in 2-4 of these keyword CONCEPTS naturally, translated/paraphrased into the target language (they are English-language SEO reference terms, not text to quote verbatim unless the target language is English; skip any that don't fit): ${kws.join(", ")}` : "",
     "Rules: title Pinterest-style <=90 chars (not a keyword list); description 1-3 sentences naming visible details, no keyword-stuffing. Ground everything in the analysis. No generic filler, no invented brands/materials/seasons.",
@@ -526,6 +538,7 @@ export async function generateCopyFromAnalysis(args: {
   cfg: ProviderConfig;
   analysis: GroundingAnalysis;
   recommendedKeywords: string[];
+  directionHint?: string;
   boardName?: string;
   category?: string;
   language: string;

@@ -62,6 +62,8 @@ type RequestBody = {
   previousCopy?: PreviousCopy;
   productContext?: ProductContext;
   boardContext?: BoardContext;
+  /** Picked creative direction — copy-context guidance only (NOT a keyword claim). */
+  directionContext?: { title?: string; terms?: string[] };
   // Fast-path inputs: cached image analysis + recommended keywords computed at upload.
   imageAnalysis?: {
     status?: string;
@@ -159,6 +161,7 @@ async function refineCopyWithKeywords(args: {
   baseTitle: string;
   baseDescription: string;
   recommendedKeywords: string[];
+  directionHint?: string;
   boardName?: string;
   language: string;
 }): Promise<{ title: string; description: string }> {
@@ -173,6 +176,7 @@ async function refineCopyWithKeywords(args: {
     "- Do not use generic filler (Home Decor Product Inspiration, Pinterest look, etc.).",
     ...languageInstructions(args.language),
     `Image analysis:\n${JSON.stringify({ imageSummary: args.analysis.imageSummary, visibleObjects: args.analysis.visibleObjects, colors: args.analysis.colors, style: args.analysis.style }, null, 2)}`,
+    args.directionHint ? `Creative direction to reflect in tone/framing (guidance only — do not quote): ${args.directionHint}` : "",
     args.boardName ? `Pinterest board (context only — translate/paraphrase unless it is a proper noun): ${args.boardName}` : "",
     `Recommended high-search keyword CONCEPTS to consider (English-language SEO reference terms — translate/paraphrase into the target language; use only the fitting ones, and only quote verbatim if the target language is English):\n${args.recommendedKeywords.join(", ")}`,
     `Current copy:\n${JSON.stringify({ title: args.baseTitle, description: args.baseDescription }, null, 2)}`,
@@ -211,6 +215,15 @@ export async function POST(req: Request) {
   const lengthLimits = LENGTH_LIMITS[copyLength];
   const productContext = body.productContext ?? {};
   const boardContext = body.boardContext ?? {};
+  // Direction hint: a compact "Creative direction: <title> — <terms>" string woven into
+  // the copy prompt as guidance (concept reference), kept SEPARATE from recommended
+  // keywords so it never leaks into displayed tags / the "high-search keyword" claim.
+  const directionHint = ((): string | undefined => {
+    const title = body.directionContext?.title?.trim();
+    if (!title) return undefined;
+    const terms = (body.directionContext?.terms ?? []).map(t => t.trim()).filter(Boolean).slice(0, 5);
+    return terms.length ? `${title} — ${terms.join(", ")}` : title;
+  })();
 
   // Fast path is available when the client sends a ready cached analysis.
   const cachedAnalysis: GroundingAnalysis | null = body.imageAnalysis?.imageSummary
@@ -273,14 +286,14 @@ export async function POST(req: Request) {
 
       const modelStart = performance.now();
       mark("modelStart");
-      result = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, boardName: boardContext.name, category: body.category, language, length: copyLength, mode, previousCopy: body.previousCopy });
+      result = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, category: body.category, language, length: copyLength, mode, previousCopy: body.previousCopy });
       mark("modelDone");
       let issues = [...qualityIssues(result, body.previousCopy), ...stuffingIssues(result.description, recommended)];
       mark("gateDone");
       // Retry ONLY when the gate actually failed (rare on a grounded cached analysis).
       if (issues.length) {
         retryCount = 1;
-        const retry = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, boardName: boardContext.name, category: body.category, language, length: copyLength, mode: "regenerate", previousCopy: { title: result.title, description: result.description } });
+        const retry = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, category: body.category, language, length: copyLength, mode: "regenerate", previousCopy: { title: result.title, description: result.description } });
         const retryIssues = [...qualityIssues(retry, body.previousCopy), ...stuffingIssues(retry.description, recommended)];
         if (retryIssues.length < issues.length || !retryIssues.length) { result = retry; issues = retryIssues; }
         mark("retryDone");
@@ -303,7 +316,7 @@ export async function POST(req: Request) {
       mark("imageFetched");
       const hints = keywordHints({ analysis: null, productContext, pageContext, boardContext, category: body.category });
       const contextBlock = appendShopifyProductDetails(
-        buildContextBlock({ productContext, pageContext, boardContext, keywords: hints, category: body.category }),
+        buildContextBlock({ productContext, pageContext, boardContext, keywords: hints, category: body.category, directionHint }),
         productContext,
       );
       mark("promptBuilt");
@@ -338,7 +351,7 @@ export async function POST(req: Request) {
       recommended = kw.recommended;
       if (recommended.length) {
         try {
-          const refined = await refineCopyWithKeywords({ cfg, analysis: groundingAnalysis, baseTitle: result.title, baseDescription: result.description, recommendedKeywords: recommended, boardName: boardContext.name, language });
+          const refined = await refineCopyWithKeywords({ cfg, analysis: groundingAnalysis, baseTitle: result.title, baseDescription: result.description, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, language });
           const refinedVision: VisionResult = { ...result, title: refined.title, description: refined.description };
           const refineIssues = [...qualityIssues(refinedVision, body.previousCopy), ...stuffingIssues(refined.description, recommended)];
           if (!refineIssues.length && refined.title && refined.description) { result = refinedVision; }

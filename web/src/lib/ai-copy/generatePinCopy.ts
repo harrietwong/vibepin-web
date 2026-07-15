@@ -2,6 +2,7 @@ import { applyDraftToPinFields, generatePinMetadataDraft } from "@/lib/pinMetada
 import type { LinkedProduct } from "@/lib/pinMetadata";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { track, trackLatency } from "@/lib/analytics";
+import { COPY_PROMPT_VERSION } from "@/lib/ai-copy/promptVersions";
 import type {
   GeneratePinterestPinCopyInput,
   GeneratePinterestPinCopyResult,
@@ -131,6 +132,26 @@ export function inferProductContext(input: GeneratePinterestPinCopyInput, storeD
   };
 }
 
+/** Direction hint for AI Copy: prefer the draft's recorded creativeSelections (parent
+ *  uploads, written when the user picks a direction), else the generated Pin's
+ *  setupSnapshot.creativeDirectionSnapshot (AI pins carry it from generation). Returns
+ *  a minimal { title, terms } or undefined — copy-context only, never a keyword claim. */
+export function resolveDirectionContext(
+  storeDraft?: pinDraftStore.PinDraft | null,
+): { title: string; terms?: string[] } | undefined {
+  const sel = storeDraft?.creativeSelections?.selectedDirection;
+  if (sel?.title) return { title: sel.title, terms: sel.terms?.length ? sel.terms.slice(0, 5) : undefined };
+  const snap = storeDraft?.setupSnapshot?.creativeDirectionSnapshot;
+  if (snap?.selectedDirectionTitle) {
+    const gc = snap.guidedControls ?? {};
+    const terms = Array.from(new Set(
+      [gc.subject, gc.mood, gc.composition].map(v => (typeof v === "string" ? v.trim() : "")).filter(Boolean),
+    )).slice(0, 5);
+    return { title: snap.selectedDirectionTitle, terms: terms.length ? terms : undefined };
+  }
+  return undefined;
+}
+
 export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyInput): Promise<GeneratePinterestPinCopyResult> {
   const started = performance.now();
   const storeDraft = findStoreDraft(input.draftId, input.imageUrl);
@@ -154,6 +175,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
   const cacheHit = !!cachedAnalysis;
 
   const productContext = inferProductContext(input, storeDraft);
+  const directionContext = resolveDirectionContext(storeDraft);
   const board = input.boards?.find(b => b.id === input.boardId);
   const boardContext = {
     name: board?.name || input.boardName || undefined,
@@ -190,6 +212,7 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
       previousCopy,
       productContext,
       boardContext,
+      directionContext,
       imageAnalysis: cachedAnalysis ?? undefined,
       recommendedKeywords: cachedAnalysis && isEnglish ? recommendedKeywords : undefined,
     }),
@@ -242,11 +265,18 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     // 422 = quality gate (don't write fields); 502 = provider failure. Never leak
     // internal codes (e.g. ai_copy_quality_gate_failed) into the UI.
     if (res.status === 502) track("ai_copy_provider_failed", { draftId: input.draftId, error: body.error ?? null });
-    else track("ai_copy_quality_failed", { draftId: input.draftId, error: body.error ?? null });
+    else track("ai_copy_quality_failed", { draftId: input.draftId, error: body.error ?? null, versions: { promptVersion: COPY_PROMPT_VERSION } });
     throw new Error(body.userMessage || "We couldn't generate good copy for this image. Please try again.");
   }
 
-  track("ai_copy_success", { draftId: input.draftId, mode, cacheHit, pathUsed: body.pathUsed ?? null, keywords: body.output.keywords?.length ?? 0 });
+  track("ai_copy_success", {
+    draftId: input.draftId,
+    mode,
+    cacheHit,
+    pathUsed: body.pathUsed ?? null,
+    keywords: body.output.keywords?.length ?? 0,
+    versions: { promptVersion: COPY_PROMPT_VERSION, modelVersion: body.model || undefined },
+  });
 
   const metadataDraft = generatePinMetadataDraft({
     keyword: input.keyword,

@@ -6,6 +6,7 @@ import {
   Search, SlidersHorizontal, Calendar, Tag, Link2, CheckCircle2,
   AlertCircle, Sparkles, MoreHorizontal, Star, Pencil, Copy, CalendarClock,
 } from "lucide-react";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
 import {
@@ -17,7 +18,9 @@ import {
 } from "@/lib/pinMetadata";
 import { startPinterestConnect, publishPin, type PinterestBoard } from "@/lib/pinterestClient";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
-import { beginPublish, endPublish } from "@/lib/studio/pinLifecycle";
+import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+import * as pinDraftStore from "@/lib/pinDraftStore";
+import type { PinterestClientError } from "@/lib/pinterestClient";
 import { generatePinterestPinCopy } from "@/lib/ai-copy/generatePinCopy";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
 import { isPinReady, pinMissingFieldLabels, type ReadinessInput } from "@/lib/pinReadiness";
@@ -220,6 +223,14 @@ function planLabel(pin: BatchPinRow, edits: Record<string, RowEdit>): PlanLabel 
   if (plannedAt || date) return "Planned";
   return "Not planned";
 }
+// Canonical PlanLabel values double as filter-state/select values — never
+// translated at the source. Render sites look up the display string here.
+const PLAN_LABEL_KEY: Record<PlanLabel, "studioModals.plan.notPlanned" | "studioModals.plan.planned" | "studioModals.plan.posted" | "studioModals.plan.failed"> = {
+  "Not planned": "studioModals.plan.notPlanned",
+  "Planned":     "studioModals.plan.planned",
+  "Posted":      "studioModals.plan.posted",
+  "Failed":      "studioModals.plan.failed",
+} as const;
 
 function shortDomain(url: string): string {
   const u = (url ?? "").trim();
@@ -375,9 +386,10 @@ function Modal({ title, subtitle, width = 440, onClose, children, footer }: {
 type ConfirmState = { title: string; body: React.ReactNode; confirmLabel: string; danger?: boolean; onConfirm: () => void };
 
 function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => void }) {
+  const { t: tr } = useLocale();
   return (
     <Modal title={state.title} onClose={onClose} footer={<>
-      <button type="button" onClick={onClose} style={{ ...btnBase }}>Cancel</button>
+      <button type="button" onClick={onClose} style={{ ...btnBase }}>{tr("common.cancel")}</button>
       <button type="button" onClick={() => { state.onConfirm(); onClose(); }} style={{ ...btnBase, border: "none", background: state.danger ? UI.error : UI.gradient, color: "#fff" }}>{state.confirmLabel}</button>
     </>}>
       <div style={{ fontSize: 12, color: UI.textSec, lineHeight: 1.6 }}>{state.body}</div>
@@ -396,16 +408,17 @@ function BoardSelect({ value, boardsState, onChange, recommendFor, dense }: {
   recommendFor?: { category?: string; topic?: string };
   dense?: boolean;
 }) {
+  const { t: tr } = useLocale();
   const { boards, status } = boardsState;
-  if (status === "loading") return <span style={{ fontSize: 11, color: UI.textMuted }}>Loading…</span>;
+  if (status === "loading") return <span style={{ fontSize: 11, color: UI.textMuted }}>{tr("common.loading")}</span>;
   if (status === "not_connected") return (
-    <button type="button" onClick={() => startPinterestConnect()} style={{ ...btnBase, fontSize: 10.5, padding: "4px 8px", color: "#93C5FD" }}>Connect Pinterest</button>
+    <button type="button" onClick={() => startPinterestConnect()} style={{ ...btnBase, fontSize: 10.5, padding: "4px 8px", color: "#93C5FD" }}>{tr("studioModals.board.connectPinterest")}</button>
   );
   // Expired/revoked token: the account IS connected — never say "Connect".
   if (status === "reconnect") return (
-    <button type="button" onClick={() => startPinterestConnect()} style={{ ...btnBase, fontSize: 10.5, padding: "4px 8px", color: "#FBBF24" }}>Reconnect Pinterest</button>
+    <button type="button" onClick={() => startPinterestConnect()} style={{ ...btnBase, fontSize: 10.5, padding: "4px 8px", color: "#FBBF24" }}>{tr("studioModals.board.reconnectPinterest")}</button>
   );
-  if (status === "error") return <span style={{ fontSize: 11, color: UI.textMuted }}>Couldn’t load boards</span>;
+  if (status === "error") return <span style={{ fontSize: 11, color: UI.textMuted }}>{tr("studioModals.board.couldNotLoad")}</span>;
   const known = !value.id || boards.some(b => b.id === value.id);
   const recName = !value.id && recommendFor ? recommendRealBoard(boards.map(b => b.name), recommendFor) : null;
   const recBoard = recName ? boards.find(b => b.name === recName) ?? null : null;
@@ -419,8 +432,8 @@ function BoardSelect({ value, boardsState, onChange, recommendFor, dense }: {
       }}
       onFocus={dense ? onInlineFocus : undefined} onBlur={dense ? onInlineBlur : undefined}
       style={dense ? { ...inlineInput, appearance: "none" } : { ...inputStyle, padding: "8px 10px" }}>
-      <option value="">Select board</option>
-      {!known && value.id && <option value="__unavailable__">Board unavailable</option>}
+      <option value="">{tr("studioModals.board.selectBoard")}</option>
+      {!known && value.id && <option value="__unavailable__">{tr("studioModals.board.boardUnavailable")}</option>}
       {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
     </select>
   );
@@ -431,7 +444,7 @@ function BoardSelect({ value, boardsState, onChange, recommendFor, dense }: {
       {recBoard && (
         <button type="button" data-testid="board-recommend" onClick={() => onChange({ id: recBoard.id, name: recBoard.name })}
           style={{ marginTop: 5, background: "none", border: "none", padding: 0, fontSize: 10.5, fontWeight: 700, color: "#A78BFA", cursor: "pointer" }}>
-          Use “{recBoard.name}”
+          {tr("studioModals.board.usePrefix")}{recBoard.name}{tr("studioModals.board.useSuffix")}
         </button>
       )}
     </div>
@@ -446,27 +459,29 @@ function DestinationUrlPopover({ count, onApply, onClose }: {
   onApply: (url: string, mode: DestUrlMode) => void;
   onClose: () => void;
 }) {
+  const { t: tr } = useLocale();
   const [url, setUrl]   = useState("");
   const [mode, setMode] = useState<DestUrlMode>("fill_empty");
   const needsUrl = mode === "fill_empty" || mode === "replace";
   const canApply = needsUrl ? !!url.trim() : true;
-  const applyLabel = mode === "clear" ? "Clear URLs" : mode === "product" ? "Use product URLs" : "Apply";
+  const applyLabel = mode === "clear" ? tr("studioModals.dest.clearUrls") : mode === "product" ? tr("studioModals.dest.useProductUrls") : tr("studioModals.apply");
   const modeTestId: Record<DestUrlMode, string> = { fill_empty: "fill", replace: "replace", product: "product", clear: "clear" };
+  const modeRows: [DestUrlMode, string, string][] = [
+    ["fill_empty", tr("studioModals.dest.fillEmptyOnly"), tr("studioModals.dest.fillEmptyOnlyHint")],
+    ["replace", tr("studioModals.dest.replaceExisting"), tr("studioModals.dest.replaceExistingHint")],
+    ["product", tr("studioModals.dest.useProductUrlWhereAvailable"), tr("studioModals.dest.useProductUrlWhereAvailableHint")],
+    ["clear", tr("studioModals.dest.clearWebsiteUrl"), tr("studioModals.dest.clearWebsiteUrlHint")],
+  ];
   return (
-    <Modal title={`Website URL for ${count} selected Pin${count === 1 ? "" : "s"}`} onClose={onClose}
+    <Modal title={(count === 1 ? tr("studioModals.dest.titleOne") : tr("studioModals.dest.titleMany").replace("{n}", String(count)))} onClose={onClose}
       footer={<>
-        <button type="button" onClick={onClose} style={btnBase}>Cancel</button>
+        <button type="button" onClick={onClose} style={btnBase}>{tr("common.cancel")}</button>
         <button type="button" disabled={!canApply} data-testid="batch-edit-destination-url-apply"
           onClick={() => canApply && onApply(url.trim(), mode)}
           style={{ ...btnBase, border: "none", background: canApply ? UI.gradient : UI.cardElev, color: "#fff", opacity: canApply ? 1 : 0.5 }}>{applyLabel}</button>
       </>}>
-      <p style={{ ...labelStyle, marginTop: 0 }}>Website URL is optional — this only changes the Pins you choose below.</p>
-      {([
-        ["fill_empty", "Fill empty only", "Set a URL only on Pins that don't have one"],
-        ["replace", "Replace existing", "Overwrite the Website URL on every selected Pin"],
-        ["product", "Use product URL where available", "Set each Pin's Website URL to its product URL; Pins without one stay unchanged"],
-        ["clear", "Clear Website URL", "Remove the Website URL from selected Pins"],
-      ] as const).map(([m, lbl, sub]) => (
+      <p style={{ ...labelStyle, marginTop: 0 }}>{tr("studioModals.dest.optionalHint")}</p>
+      {modeRows.map(([m, lbl, sub]) => (
         <label key={m} data-testid={`batch-edit-destination-mode-${modeTestId[m]}`} style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10, cursor: "pointer" }}>
           <input type="radio" name="dest-mode" checked={mode === m} onChange={() => setMode(m)} style={{ accentColor: UI.purple, marginTop: 2 }} />
           <span><span style={{ fontSize: 12, color: UI.text, fontWeight: 600 }}>{lbl}</span><br /><span style={{ fontSize: 10.5, color: UI.textMuted }}>{sub}</span></span>
@@ -474,11 +489,11 @@ function DestinationUrlPopover({ count, onApply, onClose }: {
       ))}
       {needsUrl && (
         <>
-          <label style={{ ...labelStyle, marginTop: 6 }}>Destination URL</label>
+          <label style={{ ...labelStyle, marginTop: 6 }}>{tr("pinDetails.websiteUrl")}</label>
           <input data-testid="batch-edit-destination-url-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…" autoFocus style={inputStyle} />
         </>
       )}
-      <p style={{ margin: "10px 0 0", fontSize: 10.5, color: UI.textMuted }}>Product URLs are never changed by this action.</p>
+      <p style={{ margin: "10px 0 0", fontSize: 10.5, color: UI.textMuted }}>{tr("studioModals.dest.productUrlsNeverChanged")}</p>
     </Modal>
   );
 }
@@ -488,19 +503,20 @@ function SchedulePopover({ count, onApply, onClose }: {
   onApply: (date: string, time: string) => void;
   onClose: () => void;
 }) {
+  const { t: tr } = useLocale();
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   return (
-    <Modal title={`Set publish time for ${count} selected Pin${count === 1 ? "" : "s"}`}
-      subtitle="Optional override — Schedule auto-assigns a slot via Smart Schedule if you leave this blank." onClose={onClose}
+    <Modal title={(count === 1 ? tr("studioModals.schedule.titleOne") : tr("studioModals.schedule.titleMany").replace("{n}", String(count)))}
+      subtitle={tr("studioModals.schedule.subtitle")} onClose={onClose}
       footer={<>
-        <button type="button" onClick={onClose} style={btnBase}>Cancel</button>
+        <button type="button" onClick={onClose} style={btnBase}>{tr("common.cancel")}</button>
         <button type="button" disabled={!date} data-testid="batch-edit-schedule-apply" onClick={() => date && onApply(date, time)}
-          style={{ ...btnBase, border: "none", background: date ? UI.gradient : UI.cardElev, color: "#fff", opacity: date ? 1 : 0.5 }}>Apply</button>
+          style={{ ...btnBase, border: "none", background: date ? UI.gradient : UI.cardElev, color: "#fff", opacity: date ? 1 : 0.5 }}>{tr("studioModals.apply")}</button>
       </>}>
-      <label style={labelStyle}>Date</label>
+      <label style={labelStyle}>{tr("studioModals.schedule.date")}</label>
       <input type="date" data-testid="batch-edit-schedule-date" value={date} onChange={e => setDate(e.target.value)} style={{ ...inputStyle, colorScheme: "dark" }} />
-      <label style={{ ...labelStyle, marginTop: 14 }}>Time</label>
+      <label style={{ ...labelStyle, marginTop: 14 }}>{tr("studioModals.schedule.time")}</label>
       <input type="time" data-testid="batch-edit-schedule-time" value={time} onChange={e => setTime(e.target.value)} style={{ ...inputStyle, colorScheme: "dark" }} />
     </Modal>
   );
@@ -512,6 +528,7 @@ function ProductPopover({ count, onApply, onReplace, onClose }: {
   onReplace: (urls: string[]) => void;
   onClose: () => void;
 }) {
+  const { t: tr } = useLocale();
   const [urls, setUrls] = useState<string[]>([""]);
   const [mode, setMode] = useState<"add" | "replace">("add");
   const [setPrimary, setSetPrimary] = useState(true);
@@ -523,15 +540,15 @@ function ProductPopover({ count, onApply, onReplace, onClose }: {
     onApply(cleaned, cleaned.length === 1 ? (setPrimary ? 0 : -1) : 0);
   }
   return (
-    <Modal title={`Edit products for ${count} selected Pin${count === 1 ? "" : "s"}`} onClose={onClose}
+    <Modal title={(count === 1 ? tr("studioModals.product.editTitleOne") : tr("studioModals.product.editTitleMany").replace("{n}", String(count)))} onClose={onClose}
       footer={<>
-        <button type="button" onClick={onClose} style={btnBase}>Cancel</button>
+        <button type="button" onClick={onClose} style={btnBase}>{tr("common.cancel")}</button>
         <button type="button" disabled={!canApply} data-testid="batch-edit-product-apply" onClick={submit}
           style={{ ...btnBase, border: "none", background: canApply ? UI.gradient : UI.cardElev, color: "#fff", opacity: canApply ? 1 : 0.5 }}>
-          {mode === "replace" ? "Replace products" : "Add products"}
+          {mode === "replace" ? tr("studioModals.product.replaceProducts") : tr("studioModals.product.addProducts")}
         </button>
       </>}>
-      <label style={labelStyle}>Product URLs</label>
+      <label style={labelStyle}>{tr("studioModals.product.productUrls")}</label>
       {urls.map((u, i) => (
         <div key={i} style={{ display: "flex", gap: 6, marginBottom: 8 }}>
           <input data-testid="batch-edit-product-url-input" value={u} placeholder="https://store.example.com/product"
@@ -543,30 +560,30 @@ function ProductPopover({ count, onApply, onReplace, onClose }: {
       ))}
       <button type="button" data-testid="batch-edit-add-product-url" onClick={() => setUrls(prev => [...prev, ""])}
         style={{ background: "none", border: "none", padding: 0, fontSize: 11.5, fontWeight: 700, color: "#A78BFA", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
-        <Plus style={{ width: 13, height: 13 }} /> Add another URL
+        <Plus style={{ width: 13, height: 13 }} /> {tr("studioModals.product.addAnotherUrl")}
       </button>
 
-      <p style={{ ...labelStyle, marginTop: 16 }}>Mode</p>
+      <p style={{ ...labelStyle, marginTop: 16 }}>{tr("studioModals.product.mode")}</p>
       <label data-testid="batch-edit-product-mode-add" style={{ display: "flex", gap: 10, marginBottom: 9, cursor: "pointer", alignItems: "center" }}>
         <input type="radio" name="prod-mode" checked={mode === "add"} onChange={() => setMode("add")} style={{ accentColor: UI.purple }} />
-        <span style={{ fontSize: 12, color: UI.text }}>Add to existing products</span>
+        <span style={{ fontSize: 12, color: UI.text }}>{tr("studioModals.product.addToExisting")}</span>
       </label>
       <label data-testid="batch-edit-product-mode-replace" style={{ display: "flex", gap: 10, marginBottom: 4, cursor: "pointer", alignItems: "center" }}>
         <input type="radio" name="prod-mode" checked={mode === "replace"} onChange={() => setMode("replace")} style={{ accentColor: UI.purple }} />
-        <span style={{ fontSize: 12, color: UI.text }}>Replace all products</span>
+        <span style={{ fontSize: 12, color: UI.text }}>{tr("studioModals.product.replaceAll")}</span>
       </label>
 
       {mode === "add" && cleaned.length <= 1 && (
         <label style={{ display: "flex", gap: 9, marginTop: 12, cursor: "pointer", alignItems: "center", fontSize: 11.5, color: UI.text }}>
           <input type="checkbox" checked={setPrimary} onChange={e => setSetPrimary(e.target.checked)} style={{ accentColor: UI.purple }} />
-          Set as primary product
+          {tr("studioModals.product.setAsPrimary")}
         </label>
       )}
       {cleaned.length > 1 && (
-        <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textSec }}>First product becomes primary.</p>
+        <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textSec }}>{tr("studioModals.product.firstBecomesPrimary")}</p>
       )}
       <p style={{ margin: "14px 0 0", fontSize: 10.5, color: UI.textMuted, lineHeight: 1.5, padding: "8px 10px", borderRadius: 8, background: UI.purpleSoft, border: `1px solid ${UI.border}` }}>
-        Product URLs are linked to Pins. They do not change Pin Destination URLs.
+        {tr("studioModals.product.linkedNotDestination")}
       </p>
     </Modal>
   );
@@ -579,23 +596,24 @@ function ProductQuickAdd({ title, current, onApply, onClose }: {
   onApply: (next: PinProductsEdit) => void;
   onClose: () => void;
 }) {
+  const { t: tr } = useLocale();
   const [url, setUrl] = useState("");
   const [primary, setPrimary] = useState(!current.primary);
   return (
     <Modal title={title} width={400} onClose={onClose}
       footer={<>
-        <button type="button" onClick={onClose} style={btnBase}>Cancel</button>
+        <button type="button" onClick={onClose} style={btnBase}>{tr("common.cancel")}</button>
         <button type="button" disabled={!url.trim()} data-testid="batch-edit-product-quickadd-apply"
           onClick={() => { if (url.trim()) { onApply(applyProductAdd(current, linkedProductFromUrl(url.trim()), primary)); } }}
-          style={{ ...btnBase, border: "none", background: url.trim() ? UI.gradient : UI.cardElev, color: "#fff", opacity: url.trim() ? 1 : 0.5 }}>Add product</button>
+          style={{ ...btnBase, border: "none", background: url.trim() ? UI.gradient : UI.cardElev, color: "#fff", opacity: url.trim() ? 1 : 0.5 }}>{tr("studioModals.product.addProduct")}</button>
       </>}>
-      <label style={labelStyle}>Product URL</label>
+      <label style={labelStyle}>{tr("studioModals.product.productUrl")}</label>
       <input data-testid="batch-edit-product-quickadd-input" value={url} autoFocus placeholder="https://store.example.com/product" onChange={e => setUrl(e.target.value)} style={inputStyle} />
       <label style={{ display: "flex", gap: 9, marginTop: 12, cursor: "pointer", alignItems: "center", fontSize: 11.5, color: UI.text }}>
         <input type="checkbox" checked={primary} onChange={e => setPrimary(e.target.checked)} style={{ accentColor: UI.purple }} />
-        Set as primary product
+        {tr("studioModals.product.setAsPrimary")}
       </label>
-      <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textMuted }}>Product URLs are linked to the Pin. They do not change its Destination URL.</p>
+      <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textMuted }}>{tr("studioModals.product.linkedToPinNotDestination")}</p>
     </Modal>
   );
 }
@@ -609,6 +627,7 @@ function ProductLinksPopover({ products, affiliateUrl, onClose, onAdd, onManage 
   onAdd: () => void;
   onManage: () => void;
 }) {
+  const { t: tr } = useLocale();
   return (
     <>
       <div onClick={e => { e.stopPropagation(); onClose(); }} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
@@ -631,12 +650,12 @@ function ProductLinksPopover({ products, affiliateUrl, onClose, onAdd, onManage 
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: UI.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title || "Product"}</span>
-                  {i === 0 && <span style={{ flexShrink: 0, fontSize: 8, fontWeight: 800, color: "#C4B5FD", background: UI.purpleSoft, padding: "1px 5px", borderRadius: 999 }}>Primary</span>}
+                  <span style={{ fontSize: 11, fontWeight: 700, color: UI.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title || tr("studioModals.product.productFallback")}</span>
+                  {i === 0 && <span style={{ flexShrink: 0, fontSize: 8, fontWeight: 800, color: "#C4B5FD", background: UI.purpleSoft, padding: "1px 5px", borderRadius: 999 }}>{tr("pinDetails.products.primary")}</span>}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 1 }}>
                   {amazon
-                    ? <span style={{ flexShrink: 0, fontSize: 8, fontWeight: 800, color: "#F59E0B", background: "rgba(245,158,11,0.14)", padding: "1px 5px", borderRadius: 999 }}>Amazon</span>
+                    ? <span style={{ flexShrink: 0, fontSize: 8, fontWeight: 800, color: "#F59E0B", background: "rgba(245,158,11,0.14)", padding: "1px 5px", borderRadius: 999 }}>{tr("studioModals.product.amazon")}</span>
                     : domain ? <span style={{ flexShrink: 0, fontSize: 9, color: UI.textMuted }}>{domain}</span> : null}
                   {link.url
                     ? <a href={link.url} target="_blank" rel="noopener noreferrer" data-testid="batch-edit-popover-link" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 9.5, fontWeight: 600, color: "#60A5FA", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}><ExternalLink style={{ width: 9, height: 9 }} /> {link.label}</a>
@@ -648,9 +667,9 @@ function ProductLinksPopover({ products, affiliateUrl, onClose, onAdd, onManage 
         })}
         <div style={{ display: "flex", gap: 6, marginTop: 4, paddingTop: 6, borderTop: `1px solid ${UI.border}` }}>
           <button type="button" data-testid="batch-edit-popover-add" onClick={() => { onAdd(); onClose(); }}
-            style={{ flex: 1, ...btnBase, justifyContent: "center", fontSize: 10.5 }}><Plus style={{ width: 12, height: 12 }} /> Add product</button>
+            style={{ flex: 1, ...btnBase, justifyContent: "center", fontSize: 10.5 }}><Plus style={{ width: 12, height: 12 }} /> {tr("studioModals.product.addProduct")}</button>
           <button type="button" onClick={() => { onManage(); onClose(); }}
-            style={{ flex: 1, ...btnBase, justifyContent: "center", fontSize: 10.5 }}>Manage</button>
+            style={{ flex: 1, ...btnBase, justifyContent: "center", fontSize: 10.5 }}>{tr("studioModals.product.manage")}</button>
         </div>
       </div>
     </>
@@ -671,6 +690,7 @@ type PublishPhase = null | "confirm" | "blocked" | "running" | "done";
 type PublishResultRow = { pinId: string; title: string; status: "published" | "failed" | "skipped"; message?: string; url?: string };
 
 export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetadata, source = "history", onPublishComplete, onScheduleSelected, initialFilter = "all" }: BatchEditDrawerProps) {
+  const { t: tr } = useLocale();
   const [rowEdits,    setRowEdits]    = useState<Record<string, RowEdit>>({});
   const [checkedRows, setCheckedRows] = useState<Set<string>>(new Set());
   const [search,      setSearch]      = useState("");
@@ -835,24 +855,24 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       previewSuggestBoards: () => {
         const plan = boardPlan();
         if (!plan.length) return null;
-        const changes: PreviewChange[] = plan.map((x) => ({ label: titleOf(x.pin), before: "No board", after: x.boardName }));
-        return { title: "Suggest boards", changes, note: "Only Pins with a confident board match are shown." } satisfies AssistantPreview;
+        const changes: PreviewChange[] = plan.map((x) => ({ label: titleOf(x.pin), before: tr("studioModals.assistant.noBoard"), after: x.boardName }));
+        return { title: tr("studioModals.assistant.suggestBoards"), changes, note: tr("studioModals.assistant.suggestBoardsNote") } satisfies AssistantPreview;
       },
       applySuggestBoards: () => {
         const plan = boardPlan();
         plan.forEach((x) => patchRow(x.pin.pinId, { boardId: x.boardId, boardName: x.boardName }));
-        if (plan.length) toast.success(`Assigned boards to ${plan.length} Pin${plan.length === 1 ? "" : "s"}.`);
+        if (plan.length) toast.success(plan.length === 1 ? tr("studioModals.assistant.assignedBoardsOne") : tr("studioModals.assistant.assignedBoardsMany").replace("{n}", String(plan.length)));
       },
       previewFillUrls: () => {
         const plan = urlPlan();
         if (!plan.length) return null;
         const changes: PreviewChange[] = plan.map((x) => ({ label: titleOf(x.pin), before: "", after: x.url }));
-        return { title: "Fill missing URLs", changes, note: "Filled from each Pin's linked product." } satisfies AssistantPreview;
+        return { title: tr("studioModals.assistant.fillMissingUrls"), changes, note: tr("studioModals.assistant.fillMissingUrlsNote") } satisfies AssistantPreview;
       },
       applyFillUrls: () => {
         const plan = urlPlan();
         plan.forEach((x) => patchRow(x.pin.pinId, { destinationUrl: x.url }));
-        if (plan.length) toast.success(`Filled ${plan.length} destination URL${plan.length === 1 ? "" : "s"}.`);
+        if (plan.length) toast.success(plan.length === 1 ? tr("studioModals.assistant.filledUrlsOne") : tr("studioModals.assistant.filledUrlsMany").replace("{n}", String(plan.length)));
       },
     };
 
@@ -860,17 +880,17 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       id: "batch-edit",
       source: "modal",
       kind: "batch-edit",
-      label: "Batch Edit",
-      summary: `${pins.length} Pin${pins.length === 1 ? "" : "s"} selected`,
-      greeting: "Ask me anything about this batch — titles, boards, destination URLs, product links, or scheduling.",
-      examplePrompts: ["Review titles", "Suggest boards", "Check schedule"],
+      label: tr("studioModals.assistant.batchEdit"),
+      summary: pins.length === 1 ? tr("studioModals.assistant.pinsSelectedOne") : tr("studioModals.assistant.pinsSelectedMany").replace("{n}", String(pins.length)),
+      greeting: tr("studioModals.assistant.greeting"),
+      examplePrompts: [tr("studioModals.assistant.reviewTitles"), tr("studioModals.assistant.suggestBoards"), tr("studioModals.assistant.checkSchedule")],
       tone: "detected",
       findings: buildBatchFindings(report, handlers),
       footerOffset: 72,
     };
     // patchRow is a hoisted, stable component function; deps below drive recompute.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pins, rowEdits, boards]);
+  }, [pins, rowEdits, boards, tr]);
   usePublishAssistantContext(assistantBatchContext, open, [assistantBatchContext]);
 
   if (!open) return null;
@@ -947,11 +967,11 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     }
     commit(next);
     setGenProgress(null);
-    if (updated && failed) toast.error(`${updated} updated, ${failed} failed.`);
-    else if (updated) toast.success(`${updated} updated.`);
-    else toast.error(`${failed} failed.`);
+    if (updated && failed) toast.error(tr("studioModals.genCopy.updatedAndFailed").replace("{updated}", String(updated)).replace("{failed}", String(failed)));
+    else if (updated) toast.success(tr("studioModals.genCopy.updated").replace("{n}", String(updated)));
+    else toast.error(tr("studioModals.genCopy.failedCount").replace("{n}", String(failed)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genProgress, pins, checkedRows, rowEdits, boards]);
+  }, [genProgress, pins, checkedRows, rowEdits, boards, tr]);
 
   function toggleCheck(pinId: string) {
     setCheckedRows(prev => { const n = new Set(prev); if (n.has(pinId)) n.delete(pinId); else n.add(pinId); return n; });
@@ -977,9 +997,9 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     return { next, affected };
   }
   function undoFieldToast(label: string, field: ApplyFieldKey, affected: { pinId: string; original: string }[]) {
-    if (affected.length === 0) { toast.info("No Pins changed"); return; }
-    toast.success(`${label} applied to ${affected.length} Pin${affected.length === 1 ? "" : "s"}.`, {
-      action: { label: "Undo", onClick: () => {
+    if (affected.length === 0) { toast.info(tr("studioModals.noPinsChanged")); return; }
+    toast.success((affected.length === 1 ? tr("studioModals.fieldAppliedToOne") : tr("studioModals.fieldAppliedToMany").replace("{n}", String(affected.length))).replace("{label}", label), {
+      action: { label: tr("studioModals.undo"), onClick: () => {
         setRowEdits(prev => {
           const n = { ...prev };
           for (const a of affected) n[a.pinId] = { ...n[a.pinId], [field]: a.original };
@@ -1006,13 +1026,13 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       }
       commit(next);
       if (affected.length === 0) {
-        toast.info("None of the selected Pins have a product URL yet.");
+        toast.info(tr("studioModals.dest.noneHaveProductUrl"));
       } else {
         const msg = missing > 0
-          ? "Product URL was applied where available. Some selected items do not have a product URL."
-          : `Product URL applied to ${affected.length} Pin${affected.length === 1 ? "" : "s"}.`;
+          ? tr("studioModals.dest.appliedWhereAvailable")
+          : (affected.length === 1 ? tr("studioModals.dest.productUrlAppliedToOne") : tr("studioModals.dest.productUrlAppliedToMany").replace("{n}", String(affected.length)));
         toast.success(msg, {
-          action: { label: "Undo", onClick: () => {
+          action: { label: tr("studioModals.undo"), onClick: () => {
             setRowEdits(prev => { const n = { ...prev }; for (const a of affected) n[a.pinId] = { ...n[a.pinId], destinationUrl: a.original }; persist(n); return n; });
           } },
         });
@@ -1023,14 +1043,14 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     // Clear the Website URL on every selected Pin (publishing is still allowed).
     if (mode === "clear") {
       setConfirm({
-        title: "Clear Website URLs?",
-        body: <>This clears the Website URL for the selected Pins. Publishing is still allowed without one.<br /><span style={{ color: UI.textMuted }}>Product URLs will not be changed.</span></>,
-        confirmLabel: "Clear URLs", danger: true, onConfirm: () => {
+        title: tr("studioModals.dest.clearConfirmTitle"),
+        body: <>{tr("studioModals.dest.clearConfirmBody")}<br /><span style={{ color: UI.textMuted }}>{tr("studioModals.dest.productUrlsNotChanged")}</span></>,
+        confirmLabel: tr("studioModals.dest.clearUrls"), danger: true, onConfirm: () => {
           const { next, affected } = bulkSetField("destinationUrl", "");
           commit(next);
-          if (affected.length === 0) { toast.info("No Pins changed"); }
-          else toast.success(`Cleared Website URL for ${affected.length} Pin${affected.length === 1 ? "" : "s"}.`, {
-            action: { label: "Undo", onClick: () => {
+          if (affected.length === 0) { toast.info(tr("studioModals.noPinsChanged")); }
+          else toast.success(affected.length === 1 ? tr("studioModals.dest.clearedToOne") : tr("studioModals.dest.clearedToMany").replace("{n}", String(affected.length)), {
+            action: { label: tr("studioModals.undo"), onClick: () => {
               setRowEdits(prev => { const n = { ...prev }; for (const a of affected) n[a.pinId] = { ...n[a.pinId], destinationUrl: a.original }; persist(n); return n; });
             } },
           });
@@ -1042,33 +1062,40 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     const run = () => {
       const { next, affected } = bulkSetField("destinationUrl", url, mode === "fill_empty" ? (p => !getVal(p, rowEdits, "destinationUrl").trim()) : undefined);
       commit(next);
-      undoFieldToast("Website URL", "destinationUrl", affected);
+      undoFieldToast(tr("pinDetails.websiteUrl"), "destinationUrl", affected);
       setBulk(null);
     };
     if (mode === "replace") {
       setConfirm({
-        title: "Replace existing Website URLs?",
-        body: <>This will replace existing Pin Website URLs for selected Pins.<br /><span style={{ color: UI.textMuted }}>Product URLs will not be changed.</span></>,
-        confirmLabel: "Replace existing", danger: true, onConfirm: run,
+        title: tr("studioModals.dest.replaceConfirmTitle"),
+        body: <>{tr("studioModals.dest.replaceConfirmBody")}<br /><span style={{ color: UI.textMuted }}>{tr("studioModals.dest.productUrlsNotChanged")}</span></>,
+        confirmLabel: tr("studioModals.dest.replaceExisting"), danger: true, onConfirm: run,
       });
     } else run();
   }
 
   function applyBulkBoard(b: { id: string; name: string }) {
-    const affected: { pinId: string; original: string }[] = [];
+    // Capture BOTH the effective id and name before the change (not just id) — a
+    // second bulk-board-apply layered on top of a first one must undo back to
+    // whatever board was effective a moment ago (which may itself already be a
+    // session edit), never fall back to the pin's originally-persisted boardName.
+    // Restoring id+name from mismatched sources previously showed the correct
+    // boardId with the wrong (stale/original) boardName after Undo.
+    const affected: { pinId: string; original: string; originalName: string }[] = [];
     const next = { ...rowEdits };
     for (const pinId of checkedRows) {
       const p = pins.find(x => x.pinId === pinId); if (!p) continue;
-      affected.push({ pinId, original: effBoard(p, rowEdits).id });
+      const eff = effBoard(p, rowEdits);
+      affected.push({ pinId, original: eff.id, originalName: eff.name });
       next[pinId] = { ...next[pinId], boardId: b.id, boardName: b.name };
     }
     commit(next);
     if (affected.length) {
-      toast.success(`Board applied to ${affected.length} Pin${affected.length === 1 ? "" : "s"}.`, {
-        action: { label: "Undo", onClick: () => {
+      toast.success(affected.length === 1 ? tr("studioModals.board.appliedToOne") : tr("studioModals.board.appliedToMany").replace("{n}", String(affected.length)), {
+        action: { label: tr("studioModals.undo"), onClick: () => {
           setRowEdits(prev => {
             const n = { ...prev };
-            for (const a of affected) { const orig = pins.find(p => p.pinId === a.pinId); n[a.pinId] = { ...n[a.pinId], boardId: a.original, boardName: orig?.boardName ?? "" }; }
+            for (const a of affected) { n[a.pinId] = { ...n[a.pinId], boardId: a.original, boardName: a.originalName }; }
             persist(n); return n;
           });
         } },
@@ -1085,7 +1112,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       next2[pinId] = { ...next2[pinId], plannedTime: time, plannedAt: combineLocalPlannedAt(date, time) };
     }
     commit(next2);
-    undoFieldToast("Publish date", "plannedDate", affected);
+    undoFieldToast(tr("studioModals.schedule.publishDate"), "plannedDate", affected);
     setBulk(null);
   }
 
@@ -1116,14 +1143,14 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       changed++;
     }
     commit(next);
-    toast.success(`Products added to ${changed} Pin${changed === 1 ? "" : "s"}.`, { action: { label: "Undo", onClick: () => commit(snapshot) } });
+    toast.success(changed === 1 ? tr("studioModals.product.addedToOne") : tr("studioModals.product.addedToMany").replace("{n}", String(changed)), { action: { label: tr("studioModals.undo"), onClick: () => commit(snapshot) } });
     setBulk(null);
   }
   function applyBulkProductReplace(urls: string[]) {
     setConfirm({
-      title: `Replace products for ${checkedCount} selected Pin${checkedCount === 1 ? "" : "s"}?`,
-      body: <>This will remove existing linked products and replace them with the product URLs you entered.<br /><span style={{ color: UI.textMuted }}>Pin Destination URLs will not be changed.</span></>,
-      confirmLabel: "Replace products", danger: true,
+      title: checkedCount === 1 ? tr("studioModals.product.replaceConfirmTitleOne") : tr("studioModals.product.replaceConfirmTitleMany").replace("{n}", String(checkedCount)),
+      body: <>{tr("studioModals.product.replaceConfirmBody")}<br /><span style={{ color: UI.textMuted }}>{tr("studioModals.product.destUrlNotChanged")}</span></>,
+      confirmLabel: tr("studioModals.product.replaceProducts"), danger: true,
       onConfirm: () => {
         const products = urls.map(resolveProductFromUrl);
         const snapshot = { ...rowEdits };
@@ -1135,7 +1162,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           changed++;
         }
         commit(next);
-        toast.success(`Products replaced on ${changed} Pin${changed === 1 ? "" : "s"}.`, { action: { label: "Undo", onClick: () => commit(snapshot) } });
+        toast.success(changed === 1 ? tr("studioModals.product.replacedOnOne") : tr("studioModals.product.replacedOnMany").replace("{n}", String(changed)), { action: { label: tr("studioModals.undo"), onClick: () => commit(snapshot) } });
         setBulk(null);
       },
     });
@@ -1154,7 +1181,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       filled++;
     }
     commit(next);
-    toast.success(`Filled ${filled} · skipped ${skipped}`, { action: { label: "Undo", onClick: () => commit(snapshot) } });
+    toast.success(tr("studioModals.dest.filledSkipped").replace("{filled}", String(filled)).replace("{skipped}", String(skipped)), { action: { label: tr("studioModals.undo"), onClick: () => commit(snapshot) } });
   }
 
   // ── Schedule (no readiness gate; parent assigns the next Smart Schedule slot) ──
@@ -1170,15 +1197,15 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     if (!checkedPins.length) return;
     // Access guard: publishing needs a usable Pinterest connection.
     if (boardsStatus === "not_connected") {
-      toast.error("Connect an account before publishing.");
+      toast.error(tr("studioModals.publish.connectBeforePublish"));
       return;
     }
     if (boardsStatus === "reconnect") {
-      toast.error("Your Pinterest connection expired. Reconnect to publish.");
+      toast.error(tr("studioModals.publish.connectionExpired"));
       return;
     }
     const blocked = checkedPins
-      .map(p => ({ pinId: p.pinId, title: getVal(p, rowEdits, "title") || p.title || "Untitled Pin", missing: pinMissingFieldLabels(pubReadinessInput(p, rowEdits)) }))
+      .map(p => ({ pinId: p.pinId, title: getVal(p, rowEdits, "title") || p.title || tr("studioModals.untitledPin"), missing: pinMissingFieldLabels(pubReadinessInput(p, rowEdits)) }))
       .filter(b => b.missing.length > 0);
     // Some selected Pins are incomplete → validation summary (never silently skip).
     if (blocked.length) { setPublishBlocked(blocked); setPublishPhase("blocked"); return; }
@@ -1195,12 +1222,12 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       const p = targets[i];
       setPublishProgress({ current: i + 1, total: targets.length });
       const input = pubReadinessInput(p, rowEdits);
-      const title = input.title || p.title || "Untitled Pin";
-      if (!isPinReady(input)) { results.push({ pinId: p.pinId, title, status: "skipped", message: "Missing required details" }); continue; }
+      const title = input.title || p.title || tr("studioModals.untitledPin");
+      if (!isPinReady(input)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") }); continue; }
       // Shared in-flight lock (StudioBoard.tsx's card publish uses the same registry) —
       // skip a pin that's already being published from another surface rather than
       // double-submitting it.
-      if (!beginPublish(p.pinId)) { results.push({ pinId: p.pinId, title, status: "skipped", message: "Already publishing" }); continue; }
+      if (!beginPublish(p.pinId)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") }); continue; }
       try {
         const res = await publishPin({
           boardId: effBoard(p, rowEdits).id, imageUrl: p.imageUrl,
@@ -1211,7 +1238,26 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         results.push({ pinId: p.pinId, title, status: "published", url: res.pin.url });
         publishedIds.push(p.pinId);
       } catch (e) {
-        results.push({ pinId: p.pinId, title, status: "failed", message: (e as Error)?.message ?? "Publish failed" });
+        const err = e as PinterestClientError;
+        results.push({ pinId: p.pinId, title, status: "failed", message: err?.message ?? tr("studioModals.publish.publishFailed") });
+        // Persist the failure so a batch-published Pin that fails is truthfully shown
+        // as "failed" (not still Scheduled) and survives reload (PRD WP-B §11.5). In the
+        // Weekly Plan context p.pinId is the pinDraftStore draft id; in the Studio
+        // context it isn't, so updateDraft is a harmless no-op there (returns null).
+        const prev = pinDraftStore.getDraft(p.pinId);
+        pinDraftStore.updateDraft(p.pinId, {
+          publishError: err?.message || "Publish failed",
+          failureType: "publish",
+          errorCategory: mapPublishErrorToCategory(err?.code, err?.message),
+          publishErrorCode: err?.code,
+          previousScheduledTime: prev?.plannedAt
+            ? new Date(prev.plannedAt).toISOString()
+            : (prev?.scheduledDate
+                ? new Date(`${prev.scheduledDate}T${prev.scheduledTime?.trim() || "09:00"}:00`).toISOString()
+                : undefined),
+          scheduledDate: "",
+          scheduledTime: "",
+        });
       } finally {
         endPublish(p.pinId);
       }
@@ -1222,11 +1268,11 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     const pubCount = results.filter(r => r.status === "published").length;
     const failCount = results.filter(r => r.status === "failed").length;
     if (pubCount > 0 && failCount === 0) {
-      toast.success("Selected Pins published successfully.");
+      toast.success(tr("studioModals.publish.selectedPublished"));
     } else if (pubCount > 0 && failCount > 0) {
-      toast.error(`${pubCount} Pins published. ${failCount} failed.`);
+      toast.error(tr("studioModals.publish.partialPublished").replace("{pub}", String(pubCount)).replace("{fail}", String(failCount)));
     } else if (failCount > 0) {
-      toast.error("Failed to publish. Please try again.");
+      toast.error(tr("studioModals.publish.failedTryAgain"));
     }
     // Published Pins are removed from the queue by the parent via this callback
     // (status → published; scheduled/unscheduled + counts refresh).
@@ -1253,10 +1299,10 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
 
   // Column order — Pin preview near the left; Plan is the canonical planning column.
   const cols: { id: ColId; label: string }[] = [
-    { id: "check", label: "" }, { id: "pin", label: "Pin" },
-    { id: "dest", label: "Destination URL" }, { id: "title", label: "Title" }, { id: "desc", label: "Description" },
-    { id: "board", label: "Board" }, { id: "alt", label: "Alt text" }, { id: "product", label: "Product" },
-    { id: "time", label: "Publish time" }, { id: "plan", label: "Plan" }, { id: "more", label: "" },
+    { id: "check", label: "" }, { id: "pin", label: tr("studioModals.col.pin") },
+    { id: "dest", label: tr("studioModals.col.destinationUrl") }, { id: "title", label: tr("pinDetails.title.label") }, { id: "desc", label: tr("studioModals.col.description") },
+    { id: "board", label: tr("studioModals.col.board") }, { id: "alt", label: tr("studioModals.col.altText") }, { id: "product", label: tr("studioModals.col.product") },
+    { id: "time", label: tr("studioModals.col.publishTime") }, { id: "plan", label: tr("studioModals.col.plan") }, { id: "more", label: "" },
   ];
   const tableWidth = cols.reduce((s, c) => s + colW[c.id], 0);
 
@@ -1275,30 +1321,30 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         <header style={{ padding: "14px 22px", borderBottom: `1px solid ${UI.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
             <div style={{ minWidth: 0 }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: UI.text }}>Batch Edit Details</h2>
-              <p style={{ margin: "2px 0 0", fontSize: 11.5, color: UI.textSec }}>Edit, schedule, and publish your pins in bulk.</p>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: UI.text }}>{tr("studioModals.header.title")}</h2>
+              <p style={{ margin: "2px 0 0", fontSize: 11.5, color: UI.textSec }}>{tr("studioModals.header.subtitle")}</p>
             </div>
             {checkedCount > 0 && (
               <span data-testid="batch-edit-selected-count" style={{
                 flexShrink: 0, padding: "3px 10px", borderRadius: 999, fontSize: 11, fontWeight: 600,
                 color: UI.textSec, background: UI.bg2, border: `1px solid ${UI.border}`,
               }}>
-                {checkedCount} selected
+                {tr("studioModals.selectedCount").replace("{n}", String(checkedCount))}
               </span>
             )}
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
             <button type="button" data-testid="batch-edit-schedule-selected" disabled={checkedCount === 0 || publishPhase === "running"} onClick={scheduleSelected}
               style={{ ...btnBase, border: "none", background: checkedCount > 0 ? UI.gradient : UI.cardElev, color: "#fff", opacity: (checkedCount > 0 && publishPhase !== "running") ? 1 : 0.55, padding: "8px 18px", fontWeight: 700 }}>
-              <CalendarClock style={{ width: 14, height: 14 }} /> Schedule
+              <CalendarClock style={{ width: 14, height: 14 }} /> {tr("studioModals.header.schedule")}
             </button>
             {checkedCount > 0 && (
               <button type="button" data-testid="batch-edit-publish-now" disabled={publishPhase === "running"} onClick={startPublish}
                 style={{ ...btnBase, padding: "8px 14px", opacity: publishPhase === "running" ? 0.6 : 1, cursor: publishPhase === "running" ? "not-allowed" : "pointer" }}>
-                <Send style={{ width: 13, height: 13 }} /> {publishPhase === "running" ? "Publishing…" : "Publish selected now"}
+                <Send style={{ width: 13, height: 13 }} /> {publishPhase === "running" ? tr("studioModals.header.publishing") : tr("studioModals.header.publishSelectedNow")}
               </button>
             )}
-            <button type="button" data-testid="batch-edit-close" title="Close" aria-label="Close" onClick={onClose}
+            <button type="button" data-testid="batch-edit-close" title={tr("pinDetails.close")} aria-label={tr("pinDetails.close")} onClick={onClose}
               style={{ background: "none", border: "none", cursor: "pointer", color: UI.textMuted, padding: 6, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: 8, flexShrink: 0 }}>
               <X style={{ width: 16, height: 16 }} />
             </button>
@@ -1310,40 +1356,40 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           <div data-testid="batch-edit-default-toolbar" style={{ padding: "8px 22px", borderBottom: `1px solid ${UI.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0, background: UI.bg2 }}>
             <div style={{ position: "relative", flex: "0 0 220px", maxWidth: 260 }}>
               <Search style={{ width: 13, height: 13, color: UI.textMuted, position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} />
-              <input data-testid="batch-edit-search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search pins…"
+              <input data-testid="batch-edit-search" value={search} onChange={e => setSearch(e.target.value)} placeholder={tr("studioModals.toolbar.searchPins")}
                 style={{ ...inputStyle, padding: "7px 10px 7px 30px", fontSize: 11.5 }} />
             </div>
-            <span style={btnBase}><SlidersHorizontal style={{ width: 13, height: 13 }} /> Filter</span>
+            <span style={btnBase}><SlidersHorizontal style={{ width: 13, height: 13 }} /> {tr("studioModals.toolbar.filter")}</span>
             <select data-testid="batch-edit-plan-filter" value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)} style={{ ...btnBase, paddingRight: 8 }}>
-              <option value="all">Plan</option>
-              <option value="Not planned">Not planned</option>
-              <option value="Planned">Planned</option>
-              <option value="Posted">Posted</option>
-              <option value="Failed">Failed</option>
+              <option value="all">{tr("studioModals.col.plan")}</option>
+              <option value="Not planned">{tr(PLAN_LABEL_KEY["Not planned"])}</option>
+              <option value="Planned">{tr(PLAN_LABEL_KEY["Planned"])}</option>
+              <option value="Posted">{tr(PLAN_LABEL_KEY["Posted"])}</option>
+              <option value="Failed">{tr(PLAN_LABEL_KEY["Failed"])}</option>
             </select>
             <select data-testid="batch-edit-board-filter" value={boardFilter} onChange={e => setBoardFilter(e.target.value)} style={{ ...btnBase, paddingRight: 8, maxWidth: 160 }}>
-              <option value="all">Board</option>
+              <option value="all">{tr("studioModals.col.board")}</option>
               {boardNames.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
             <div style={{ flex: 1 }} />
           </div>
         ) : (
           <div data-testid="batch-edit-selection-toolbar" style={{ padding: "8px 22px", borderBottom: `1px solid ${UI.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0, background: UI.bg2 }}>
-            <span data-testid="batch-edit-selected-count" style={{ fontSize: 11.5, fontWeight: 700, color: "#C4B5FD", border: `1px solid ${UI.borderStr}`, borderRadius: 20, padding: "3px 11px" }}>{checkedCount} selected</span>
-            <button type="button" data-testid="batch-edit-bulk-destination-url" onClick={() => setBulk("destination")} style={btnBase}><Link2 style={{ width: 13, height: 13 }} /> Destination URL</button>
-            <button type="button" data-testid="batch-edit-bulk-board" onClick={() => setBulk("board")} style={btnBase}><Package style={{ width: 13, height: 13 }} /> Board</button>
-            <button type="button" data-testid="batch-edit-bulk-product" onClick={() => setBulk("product")} style={btnBase}><Tag style={{ width: 13, height: 13 }} /> Product</button>
-            <button type="button" data-testid="batch-edit-bulk-schedule" onClick={() => setBulk("schedule")} style={btnBase}><Calendar style={{ width: 13, height: 13 }} /> Publish time</button>
+            <span data-testid="batch-edit-selected-count" style={{ fontSize: 11.5, fontWeight: 700, color: "#C4B5FD", border: `1px solid ${UI.borderStr}`, borderRadius: 20, padding: "3px 11px" }}>{tr("studioModals.selectedCount").replace("{n}", String(checkedCount))}</span>
+            <button type="button" data-testid="batch-edit-bulk-destination-url" onClick={() => setBulk("destination")} style={btnBase}><Link2 style={{ width: 13, height: 13 }} /> {tr("studioModals.col.destinationUrl")}</button>
+            <button type="button" data-testid="batch-edit-bulk-board" onClick={() => setBulk("board")} style={btnBase}><Package style={{ width: 13, height: 13 }} /> {tr("studioModals.col.board")}</button>
+            <button type="button" data-testid="batch-edit-bulk-product" onClick={() => setBulk("product")} style={btnBase}><Tag style={{ width: 13, height: 13 }} /> {tr("studioModals.col.product")}</button>
+            <button type="button" data-testid="batch-edit-bulk-schedule" onClick={() => setBulk("schedule")} style={btnBase}><Calendar style={{ width: 13, height: 13 }} /> {tr("studioModals.col.publishTime")}</button>
             <button type="button" data-testid="batch-edit-bulk-generate-copy" onClick={handleGenerateCopyBatch} disabled={!!genProgress}
               style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff", opacity: genProgress ? 0.7 : 1 }}>
               {genProgress ? <Loader2 className="animate-spin" style={{ width: 13, height: 13 }} /> : <Sparkles style={{ width: 13, height: 13 }} />}
-              {genProgress ? `Generating copy ${genProgress.current} / ${genProgress.total}` : "Generate copy"}
+              {genProgress ? tr("studioModals.toolbar.generatingCopy").replace("{current}", String(genProgress.current)).replace("{total}", String(genProgress.total)) : tr("studioModals.toolbar.generateCopy")}
             </button>
-            <Dropdown align="left" width={260} trigger={() => <span data-testid="batch-edit-more-menu" style={btnBase}><MoreHorizontal style={{ width: 14, height: 14 }} /> More</span>}>
+            <Dropdown align="left" width={260} trigger={() => <span data-testid="batch-edit-more-menu" style={btnBase}><MoreHorizontal style={{ width: 14, height: 14 }} /> {tr("studioModals.toolbar.more")}</span>}>
               {close => <>
-                <MenuItem icon={<Sparkles style={{ width: 13, height: 13 }} />} label="Generate missing details" onClick={() => { close(); onGenerateMetadata(false); }} />
-                <MenuItem icon={<Link2 style={{ width: 13, height: 13 }} />} label="Fill empty Destination URLs from primary product" onClick={() => { close(); fillEmptyDestFromPrimary(); }} />
-                <MenuItem icon={<X style={{ width: 13, height: 13 }} />} label="Remove from selection" onClick={() => { close(); setCheckedRows(new Set()); }} />
+                <MenuItem icon={<Sparkles style={{ width: 13, height: 13 }} />} label={tr("studioModals.toolbar.generateMissingDetails")} onClick={() => { close(); onGenerateMetadata(false); }} />
+                <MenuItem icon={<Link2 style={{ width: 13, height: 13 }} />} label={tr("studioModals.toolbar.fillEmptyDestFromPrimary")} onClick={() => { close(); fillEmptyDestFromPrimary(); }} />
+                <MenuItem icon={<X style={{ width: 13, height: 13 }} />} label={tr("studioModals.toolbar.removeFromSelection")} onClick={() => { close(); setCheckedRows(new Set()); }} />
               </>}
             </Dropdown>
             <div style={{ flex: 1 }} />
@@ -1354,9 +1400,9 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
           <div style={{ flex: 1, overflow: "auto", padding: "0 22px" }}>
             {pins.length === 0 ? (
-              <div style={{ padding: 60, textAlign: "center", color: UI.textMuted }}>Select Pins to batch edit.</div>
+              <div style={{ padding: 60, textAlign: "center", color: UI.textMuted }}>{tr("studioModals.empty.selectPins")}</div>
             ) : visiblePins.length === 0 ? (
-              <div style={{ padding: 60, textAlign: "center", color: UI.textMuted }}>No Pins match these filters.</div>
+              <div style={{ padding: 60, textAlign: "center", color: UI.textMuted }}>{tr("studioModals.empty.noPinsMatch")}</div>
             ) : (
               <table data-testid="batch-edit-table" style={{ width: tableWidth, borderCollapse: "collapse", tableLayout: "fixed" }}>
                 <colgroup>{cols.map(c => <col key={c.id} style={{ width: colW[c.id] }} />)}</colgroup>
@@ -1405,7 +1451,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "pin":
                               return (
                                 <td key={c.id} style={td}>
-                                  <button type="button" data-testid="batch-edit-pin-cell" onClick={() => openDrawer(p.pinId, "details")} title="Open preview & details"
+                                  <button type="button" data-testid="batch-edit-pin-cell" onClick={() => openDrawer(p.pinId, "details")} title={tr("studioModals.cell.openPreviewDetails")}
                                     style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "block" }}>
                                     {/* Vertical Pin thumbnail (2:3), not a horizontal strip crop. */}
                                     <span data-testid="batch-edit-pin-thumb" style={{ width: 40, height: 54, borderRadius: 5, overflow: "hidden", background: UI.cardElev, display: "block" }}>
@@ -1421,18 +1467,18 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                               const popoverProducts = [primary, ...tagged].filter(Boolean) as LinkedProduct[];
                               const amazonPrimary = isAmazonProduct({ productUrl: primary?.productUrl, canonicalUrl: primary?.canonicalUrl, source: primary?.source, store: primary?.store });
                               const primLink = resolveProductLinkDisplay({ productUrl: primary?.productUrl, canonicalUrl: primary?.canonicalUrl, source: primary?.source, store: primary?.store }, amazonPrimary ? displayCtx.affiliateUrl : null);
-                              const primDomain = amazonPrimary ? "Amazon" : (linkDomain(primary?.productUrl) || primary?.store || "");
+                              const primDomain = amazonPrimary ? tr("studioModals.product.amazon") : (linkDomain(primary?.productUrl) || primary?.store || "");
                               const popoverOpen = productPopoverPinId === p.pinId;
                               return (
                                 <td key={c.id} style={td}>
                                   <div data-testid="batch-edit-product-cell" style={{ position: "relative", display: "flex", alignItems: "center", gap: 6 }}>
                                     {prodCount === 0 ? (
                                       <button type="button" data-testid="batch-edit-product-add" onClick={() => setQuickAddPinId(p.pinId)} style={{ ...cellMuted, display: "inline-flex", alignItems: "center", gap: 4, width: "auto" }}>
-                                        <Plus style={{ width: 12, height: 12 }} /> Add product
+                                        <Plus style={{ width: 12, height: 12 }} /> {tr("studioModals.cell.addProduct")}
                                       </button>
                                     ) : (
                                       <>
-                                        <button type="button" data-testid="batch-edit-product-summary" onClick={() => setProductPopoverPinId(popoverOpen ? null : p.pinId)} title="View linked products"
+                                        <button type="button" data-testid="batch-edit-product-summary" onClick={() => setProductPopoverPinId(popoverOpen ? null : p.pinId)} title={tr("studioModals.cell.viewLinkedProducts")}
                                           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
                                           {primary?.imageUrl ? (
                                             // eslint-disable-next-line @next/next/no-img-element
@@ -1440,17 +1486,17 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                           ) : <span style={{ width: 26, height: 26, borderRadius: 5, background: UI.bg2, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Package style={{ width: 12, height: 12, color: UI.textMuted }} /></span>}
                                           <span style={{ minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1 }}>
                                             <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: UI.text }}>
-                                              {primary?.title ?? "Product"}{prodCount > 1 ? <span style={{ color: "#A78BFA" }}> · +{prodCount - 1}</span> : ""}
+                                              {primary?.title ?? tr("studioModals.product.productFallback")}{prodCount > 1 ? <span style={{ color: "#A78BFA" }}> · +{prodCount - 1}</span> : ""}
                                             </span>
                                             <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 8.5 }}>
                                               {amazonPrimary
-                                                ? <span data-testid="batch-edit-product-source" style={{ fontWeight: 800, color: "#F59E0B", background: "rgba(245,158,11,0.14)", padding: "0 5px", borderRadius: 999 }}>Amazon</span>
+                                                ? <span data-testid="batch-edit-product-source" style={{ fontWeight: 800, color: "#F59E0B", background: "rgba(245,158,11,0.14)", padding: "0 5px", borderRadius: 999 }}>{tr("studioModals.product.amazon")}</span>
                                                 : primDomain ? <span data-testid="batch-edit-product-source" style={{ fontWeight: 600, color: UI.textMuted }}>{primDomain}</span> : null}
                                               <span data-testid="batch-edit-product-linktype" style={{ fontWeight: 700, color: primLink.url ? "#60A5FA" : UI.textMuted }}>{primLink.label}</span>
                                             </span>
                                           </span>
                                         </button>
-                                        <button type="button" data-testid="batch-edit-product-add" title="Add product" onClick={() => setQuickAddPinId(p.pinId)} style={{ background: "none", border: `1px solid ${UI.border}`, borderRadius: 5, padding: "2px", cursor: "pointer", color: UI.textMuted, flexShrink: 0, lineHeight: 0 }}><Plus style={{ width: 12, height: 12 }} /></button>
+                                        <button type="button" data-testid="batch-edit-product-add" title={tr("studioModals.cell.addProduct")} onClick={() => setQuickAddPinId(p.pinId)} style={{ background: "none", border: `1px solid ${UI.border}`, borderRadius: 5, padding: "2px", cursor: "pointer", color: UI.textMuted, flexShrink: 0, lineHeight: 0 }}><Plus style={{ width: 12, height: 12 }} /></button>
                                         {popoverOpen && (
                                           <ProductLinksPopover
                                             products={popoverProducts}
@@ -1469,13 +1515,13 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "dest":
                               return (
                                 <td key={c.id} style={td}>
-                                  <input data-testid="batch-edit-destination-url-cell" value={url} placeholder="Enter destination URL"
+                                  <input data-testid="batch-edit-destination-url-cell" value={url} placeholder={tr("studioModals.cell.enterDestinationUrl")}
                                     onChange={e => patchRow(p.pinId, { destinationUrl: e.target.value }, { debounce: true })}
                                     onBlur={e => { onInlineBlur(e); patchRow(p.pinId, { destinationUrl: e.target.value }); }}
                                     onFocus={onInlineFocus} style={inlineInput} />
                                   {displayCtx.affiliateUrl && url.trim() === displayCtx.affiliateUrl && (
                                     <p data-testid="batch-edit-dest-affiliate" style={{ margin: "2px 0 0", padding: "0 7px", fontSize: 8.5, fontWeight: 700, color: UI.success }}>
-                                      Affiliate link
+                                      {tr("studioModals.cell.affiliateLink")}
                                     </p>
                                   )}
                                 </td>
@@ -1483,7 +1529,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "title":
                               return (
                                 <td key={c.id} style={td}>
-                                  <input data-testid="batch-edit-title-cell" value={title} placeholder="Add title…" maxLength={100}
+                                  <input data-testid="batch-edit-title-cell" value={title} placeholder={tr("studioModals.cell.addTitle")} maxLength={100}
                                     onChange={e => patchRow(p.pinId, { title: e.target.value }, { debounce: true })}
                                     onBlur={e => { onInlineBlur(e); patchRow(p.pinId, { title: e.target.value }); }}
                                     onFocus={onInlineFocus} style={inlineInput} />
@@ -1492,7 +1538,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "desc":
                               return (
                                 <td key={c.id} style={td}>
-                                  <input data-testid="batch-edit-description-cell" value={desc} placeholder="Add description…" maxLength={500}
+                                  <input data-testid="batch-edit-description-cell" value={desc} placeholder={tr("studioModals.cell.addDescription")} maxLength={500}
                                     onChange={e => patchRow(p.pinId, { description: e.target.value }, { debounce: true })}
                                     onBlur={e => { onInlineBlur(e); patchRow(p.pinId, { description: e.target.value }); }}
                                     onFocus={onInlineFocus} style={inlineInput} />
@@ -1509,7 +1555,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "alt":
                               return (
                                 <td key={c.id} style={td}>
-                                  <input data-testid="batch-edit-alt-cell" value={alt} placeholder="Add alt text…"
+                                  <input data-testid="batch-edit-alt-cell" value={alt} placeholder={tr("studioModals.cell.addAltText")}
                                     onChange={e => patchRow(p.pinId, { altText: e.target.value }, { debounce: true })}
                                     onBlur={e => { onInlineBlur(e); patchRow(p.pinId, { altText: e.target.value }); }}
                                     onFocus={onInlineFocus} style={inlineInput} />
@@ -1527,16 +1573,16 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                 </td>
                               );
                             case "plan":
-                              return <td key={c.id} style={td}><span data-testid="batch-edit-plan-cell" style={{ color: UI.textSec, fontSize: 11 }}>{planLabel(p, rowEdits)}</span></td>;
+                              return <td key={c.id} style={td}><span data-testid="batch-edit-plan-cell" style={{ color: UI.textSec, fontSize: 11 }}>{tr(PLAN_LABEL_KEY[planLabel(p, rowEdits)])}</span></td>;
                             case "more":
                               return (
                                 <td key={c.id} style={td}>
                                   <Dropdown align="right" width={200} trigger={() => <span style={{ cursor: "pointer", color: UI.textMuted, display: "inline-flex", padding: 4 }}><MoreHorizontal style={{ width: 16, height: 16 }} /></span>}>
                                     {close => <>
-                                      <MenuItem icon={<Pencil style={{ width: 13, height: 13 }} />} label="Edit details" onClick={() => { close(); openDrawer(p.pinId, "details"); }} />
-                                      <MenuItem icon={<Package style={{ width: 13, height: 13 }} />} label="Manage products" onClick={() => { close(); openDrawer(p.pinId, "products"); }} />
-                                      <MenuItem icon={<Copy style={{ width: 13, height: 13 }} />} label="View in Plan" onClick={() => { close(); window.open("/app/plan", "_blank"); }} />
-                                      <MenuItem icon={<X style={{ width: 13, height: 13 }} />} label="Remove from selection" onClick={() => { close(); setCheckedRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} />
+                                      <MenuItem icon={<Pencil style={{ width: 13, height: 13 }} />} label={tr("studioModals.rowMenu.editDetails")} onClick={() => { close(); openDrawer(p.pinId, "details"); }} />
+                                      <MenuItem icon={<Package style={{ width: 13, height: 13 }} />} label={tr("studioModals.rowMenu.manageProducts")} onClick={() => { close(); openDrawer(p.pinId, "products"); }} />
+                                      <MenuItem icon={<Copy style={{ width: 13, height: 13 }} />} label={tr("studioModals.rowMenu.viewInPlan")} onClick={() => { close(); window.open("/app/plan", "_blank"); }} />
+                                      <MenuItem icon={<X style={{ width: 13, height: 13 }} />} label={tr("studioModals.toolbar.removeFromSelection")} onClick={() => { close(); setCheckedRows(prev => { const n = new Set(prev); n.delete(p.pinId); return n; }); }} />
                                     </>}
                                   </Dropdown>
                                 </td>
@@ -1575,14 +1621,14 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       {bulk === "schedule" && <SchedulePopover count={checkedCount} onApply={applyBulkSchedule} onClose={() => setBulk(null)} />}
       {bulk === "product" && <ProductPopover count={checkedCount} onApply={applyBulkProductAdd} onReplace={applyBulkProductReplace} onClose={() => setBulk(null)} />}
       {bulk === "board" && (
-        <Modal title={`Set board for ${checkedCount} selected Pin${checkedCount === 1 ? "" : "s"}`} onClose={() => setBulk(null)}>
+        <Modal title={checkedCount === 1 ? tr("studioModals.board.setBoardForOne") : tr("studioModals.board.setBoardForMany").replace("{n}", String(checkedCount))} onClose={() => setBulk(null)}>
           <BoardSelect value={{ id: "", name: "" }} boardsState={boardsState} onChange={b => { if (b) applyBulkBoard(b); }} />
-          <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textMuted }}>Choosing a board applies it to all selected Pins.</p>
+          <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textMuted }}>{tr("studioModals.board.appliesToAll")}</p>
         </Modal>
       )}
       {quickAddPin && (
-        <ProductQuickAdd title="Add product to this Pin" current={(() => { const e = effProducts(quickAddPin, rowEdits); return { primary: e.primary, tagged: e.tagged }; })()}
-          onApply={next => { patchProducts(quickAddPin.pinId, next); setQuickAddPinId(null); toast.success("Product added."); }}
+        <ProductQuickAdd title={tr("studioModals.product.addToThisPin")} current={(() => { const e = effProducts(quickAddPin, rowEdits); return { primary: e.primary, tagged: e.tagged }; })()}
+          onApply={next => { patchProducts(quickAddPin.pinId, next); setQuickAddPinId(null); toast.success(tr("studioModals.product.productAdded")); }}
           onClose={() => setQuickAddPinId(null)} />
       )}
 
@@ -1595,35 +1641,35 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           <div data-testid="batch-edit-publish-modal" onClick={e => e.stopPropagation()} style={{ background: UI.bg2, border: `1px solid ${UI.borderStr}`, borderRadius: 14, boxShadow: "0 20px 56px rgba(0,0,0,0.6)", padding: "22px 24px", width: 480, maxWidth: "92vw", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
             {publishPhase === "confirm" && (
               <div data-testid="batch-edit-publish-confirm">
-                <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>Publish selected Pins now?</h3>
-                <p style={{ margin: "0 0 18px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>These Pins will be published immediately. They will not wait for their scheduled time.</p>
+                <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.publish.confirmTitle")}</h3>
+                <p style={{ margin: "0 0 18px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>{tr("studioModals.publish.confirmBody")}</p>
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                  <button type="button" data-testid="batch-edit-publish-cancel" onClick={() => setPublishPhase(null)} style={btnBase}>Cancel</button>
+                  <button type="button" data-testid="batch-edit-publish-cancel" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
                   <button type="button" data-testid="batch-edit-publish-confirm-go" onClick={() => void runPublish(checkedPins)}
-                    style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>Publish now</button>
+                    style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("pinDetails.publishNow")}</button>
                 </div>
               </div>
             )}
             {publishPhase === "blocked" && (
               <div data-testid="batch-edit-publish-readiness">
-                <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>Some Pins need details</h3>
-                <p style={{ margin: "0 0 10px", fontSize: 11.5, color: UI.textSec, lineHeight: 1.5 }}>Some selected Pins are missing required information and cannot be published yet.</p>
+                <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.publish.someNeedDetails")}</h3>
+                <p style={{ margin: "0 0 10px", fontSize: 11.5, color: UI.textSec, lineHeight: 1.5 }}>{tr("studioModals.publish.missingRequiredInfo")}</p>
                 <p style={{ margin: "0 0 14px", fontSize: 11.5, fontWeight: 700, color: UI.text }}>
-                  {publishReadyCount} {publishReadyCount === 1 ? "Pin is" : "Pins are"} ready to publish. {publishBlocked.length} {publishBlocked.length === 1 ? "Pin needs" : "Pins need"} details.
+                  {publishReadyCount} {publishReadyCount === 1 ? tr("studioModals.publish.pinIsReady") : tr("studioModals.publish.pinsAreReady")} {publishBlocked.length} {publishBlocked.length === 1 ? tr("studioModals.publish.pinNeedsDetails") : tr("studioModals.publish.pinsNeedDetails")}
                 </p>
                 <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, maxHeight: 300 }}>
                   {publishBlocked.map(b => (
                     <div key={b.pinId} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, background: UI.card }}>
                       <p style={{ margin: "0 0 4px", fontSize: 11.5, fontWeight: 700, color: UI.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</p>
-                      <p style={{ margin: 0, fontSize: 10.5, color: UI.textSec }}>Missing: {b.missing.join(", ")}</p>
+                      <p style={{ margin: 0, fontSize: 10.5, color: UI.textSec }}>{tr("studioModals.publish.missingPrefix")}{b.missing.join(", ")}</p>
                     </div>
                   ))}
                 </div>
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
-                  <button type="button" onClick={() => setPublishPhase(null)} style={btnBase}>Cancel</button>
+                  <button type="button" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
                   {publishReadyCount > 0 && (
                     <button type="button" data-testid="batch-edit-publish-ready" onClick={() => void runPublish(checkedPins.filter(p => isPinReady(pubReadinessInput(p, rowEdits))))}
-                      style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>Publish ready Pins</button>
+                      style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("studioModals.publish.publishReadyPins")}</button>
                   )}
                 </div>
               </div>
@@ -1632,7 +1678,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
               <div style={{ padding: "20px 8px", textAlign: "center" }}>
                 <style>{"@keyframes vp-batch-spin{to{transform:rotate(360deg)}}"}</style>
                 <Loader2 style={{ width: 26, height: 26, color: UI.purple, margin: "0 auto 12px", animation: "vp-batch-spin 1s linear infinite" }} />
-                <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: UI.text }}>Publishing {publishProgress.current} of {publishProgress.total}…</p>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: UI.text }}>{tr("studioModals.publish.publishingProgress").replace("{current}", String(publishProgress.current)).replace("{total}", String(publishProgress.total))}</p>
               </div>
             )}
             {publishPhase === "done" && (() => {
@@ -1641,23 +1687,23 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
               const skip = publishResults.filter(r => r.status === "skipped").length;
               return (
                 <>
-                  <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>Publish complete</h3>
+                  <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.publish.complete")}</h3>
                   <p style={{ margin: "0 0 14px", fontSize: 12, color: UI.textSec }}>
-                    <span style={{ color: UI.success, fontWeight: 700 }}>{pub} published</span>
-                    {fail > 0 && <> · <span style={{ color: UI.error, fontWeight: 700 }}>{fail} failed</span></>}
-                    {skip > 0 && <> · <span style={{ color: UI.textSec, fontWeight: 700 }}>{skip} need details</span></>}
+                    <span style={{ color: UI.success, fontWeight: 700 }}>{tr("studioModals.publish.publishedCount").replace("{n}", String(pub))}</span>
+                    {fail > 0 && <> · <span style={{ color: UI.error, fontWeight: 700 }}>{tr("studioModals.publish.failedCount").replace("{n}", String(fail))}</span></>}
+                    {skip > 0 && <> · <span style={{ color: UI.textSec, fontWeight: 700 }}>{tr("studioModals.publish.needDetailsCount").replace("{n}", String(skip))}</span></>}
                   </p>
                   <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, maxHeight: 320 }}>
                     {publishResults.map(r => (
                       <div key={r.pinId} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, background: UI.card }}>
                         {r.status === "published" ? <CheckCircle2 style={{ width: 14, height: 14, color: UI.success, flexShrink: 0 }} /> : r.status === "failed" ? <X style={{ width: 14, height: 14, color: UI.error, flexShrink: 0 }} /> : <AlertCircle style={{ width: 14, height: 14, color: UI.textSec, flexShrink: 0 }} />}
                         <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: UI.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</span>
-                        {r.status === "published" && r.url ? <a href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 10, fontWeight: 700, color: "#93C5FD" }}>View ↗</a> : <span style={{ fontSize: 9.5, color: r.status === "failed" ? UI.error : UI.textSec }}>{r.message}</span>}
+                        {r.status === "published" && r.url ? <a href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 10, fontWeight: 700, color: "#93C5FD" }}>{tr("studioModals.publish.viewLink")}</a> : <span style={{ fontSize: 9.5, color: r.status === "failed" ? UI.error : UI.textSec }}>{r.message}</span>}
                       </div>
                     ))}
                   </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
-                    <button type="button" onClick={() => setPublishPhase(null)} style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>Done</button>
+                    <button type="button" onClick={() => setPublishPhase(null)} style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("studioModals.publish.done")}</button>
                   </div>
                 </>
               );
@@ -1682,6 +1728,7 @@ function DetailDrawer({ pin, edits, boardsState, tab, onTab, onClose, onPatch, o
   onProducts: (products: PinProductsEdit) => void;
   onConfirm: (c: ConfirmState) => void;
 }) {
+  const { t: tr } = useLocale();
   const title = getVal(pin, edits, "title");
   const desc  = getVal(pin, edits, "description");
   const alt   = getVal(pin, edits, "altText");
@@ -1702,15 +1749,15 @@ function DetailDrawer({ pin, edits, boardsState, tab, onTab, onClose, onPatch, o
     for (const u of cleaned) cur = applyProductAdd(cur, linkedProductFromUrl(u), !cur.primary);
     onProducts(cur);
     setNewUrls([""]);
-    toast.success(`Added ${cleaned.length} product${cleaned.length === 1 ? "" : "s"}.`);
+    toast.success(cleaned.length === 1 ? tr("studioModals.product.addedCountOne") : tr("studioModals.product.addedCountMany").replace("{n}", String(cleaned.length)));
   }
 
   return (
     <aside data-testid="batch-edit-drawer" style={{ width: "min(420px, 42vw)", flexShrink: 0, borderLeft: `1px solid ${UI.borderStr}`, background: UI.bg2, display: "flex", flexDirection: "column" }}>
       <header style={{ padding: "12px 16px", borderBottom: `1px solid ${UI.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" data-testid="batch-edit-drawer-details-tab" onClick={() => onTab("details")} style={{ ...btnBase, background: tab === "details" ? UI.purpleSoft : "none", color: tab === "details" ? "#C4B5FD" : UI.textSec, border: tab === "details" ? `1px solid ${UI.purple}` : `1px solid transparent` }}>Details</button>
-          <button type="button" data-testid="batch-edit-drawer-products-tab" onClick={() => onTab("products")} style={{ ...btnBase, background: tab === "products" ? UI.purpleSoft : "none", color: tab === "products" ? "#C4B5FD" : UI.textSec, border: tab === "products" ? `1px solid ${UI.purple}` : `1px solid transparent` }}>Products</button>
+          <button type="button" data-testid="batch-edit-drawer-details-tab" onClick={() => onTab("details")} style={{ ...btnBase, background: tab === "details" ? UI.purpleSoft : "none", color: tab === "details" ? "#C4B5FD" : UI.textSec, border: tab === "details" ? `1px solid ${UI.purple}` : `1px solid transparent` }}>{tr("studioModals.drawer.details")}</button>
+          <button type="button" data-testid="batch-edit-drawer-products-tab" onClick={() => onTab("products")} style={{ ...btnBase, background: tab === "products" ? UI.purpleSoft : "none", color: tab === "products" ? "#C4B5FD" : UI.textSec, border: tab === "products" ? `1px solid ${UI.purple}` : `1px solid transparent` }}>{tr("studioModals.drawer.products")}</button>
         </div>
         <button type="button" data-testid="batch-edit-drawer-close" onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: UI.textMuted, padding: 4 }}><X style={{ width: 16, height: 16 }} /></button>
       </header>
@@ -1722,28 +1769,28 @@ function DetailDrawer({ pin, edits, boardsState, tab, onTab, onClose, onPatch, o
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={toProxyUrl(pin.imageUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </div>
-            <div><span style={lbl}>Title</span>
+            <div><span style={lbl}>{tr("pinDetails.title.label")}</span>
               <input data-testid="batch-edit-drawer-title" value={title} maxLength={100} onChange={e => onPatch({ title: e.target.value }, true)} onBlur={e => onPatch({ title: e.target.value })} style={field} /></div>
-            <div><span style={lbl}>Description</span>
+            <div><span style={lbl}>{tr("studioModals.col.description")}</span>
               <textarea value={desc} rows={4} maxLength={500} onChange={e => onPatch({ description: e.target.value }, true)} onBlur={e => onPatch({ description: e.target.value })} style={{ ...field, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} /></div>
-            <div><span style={lbl}>Alt text</span>
+            <div><span style={lbl}>{tr("pinDetails.altText.label")}</span>
               <textarea value={alt} rows={2} onChange={e => onPatch({ altText: e.target.value }, true)} onBlur={e => onPatch({ altText: e.target.value })} style={{ ...field, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} /></div>
-            <div><span style={lbl}>Destination URL</span>
+            <div><span style={lbl}>{tr("studioModals.col.destinationUrl")}</span>
               <input data-testid="batch-edit-drawer-destination-url" value={url} placeholder="https://…" onChange={e => onPatch({ destinationUrl: e.target.value }, true)} onBlur={e => onPatch({ destinationUrl: e.target.value })} style={field} /></div>
-            <div><span style={lbl}>Board</span>
+            <div><span style={lbl}>{tr("studioModals.col.board")}</span>
               <div style={{ marginTop: 6 }}><BoardSelect value={board} boardsState={boardsState} onChange={b => onPatch({ boardId: b?.id ?? "", boardName: b?.name ?? "" })} recommendFor={{ category: pin.category, topic: title }} /></div></div>
             <div style={{ display: "flex", gap: 12 }}>
-              <div style={{ flex: 1 }}><span style={lbl}>Publish date</span>
+              <div style={{ flex: 1 }}><span style={lbl}>{tr("studioModals.schedule.publishDate")}</span>
                 <input type="date" value={date} onChange={e => onPatch({ plannedDate: e.target.value })} style={{ ...field, colorScheme: "dark" }} /></div>
-              <div style={{ flex: 1 }}><span style={lbl}>Publish time</span>
+              <div style={{ flex: 1 }}><span style={lbl}>{tr("studioModals.col.publishTime")}</span>
                 <input type="time" value={time} onChange={e => onPatch({ plannedTime: e.target.value })} style={{ ...field, colorScheme: "dark" }} /></div>
             </div>
-            <div><span style={lbl}>Plan</span><p style={{ margin: "6px 0 0", fontSize: 12, color: UI.textSec }}>{planLabel(pin, edits)}</p></div>
+            <div><span style={lbl}>{tr("studioModals.col.plan")}</span><p style={{ margin: "6px 0 0", fontSize: 12, color: UI.textSec }}>{tr(PLAN_LABEL_KEY[planLabel(pin, edits)])}</p></div>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <p style={{ margin: 0, fontSize: 10.5, color: UI.textMuted, lineHeight: 1.5, padding: "8px 10px", borderRadius: 8, background: UI.purpleSoft, border: `1px solid ${UI.border}` }}>
-              Product URLs are linked to this Pin. They do not change the Pin Destination URL.
+              {tr("studioModals.product.linkedNotDestinationSingle")}
             </p>
             {primary || tagged.length > 0 ? (
               [primary, ...tagged].filter(Boolean).map((lp, i) => {
@@ -1761,19 +1808,19 @@ function DetailDrawer({ pin, edits, boardsState, tab, onTab, onClose, onPatch, o
                         {product.title}
                       </p>
                       {product.productUrl && <p style={{ margin: "2px 0 0", fontSize: 10, color: "#93C5FD", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.productUrl}</p>}
-                      <span style={{ fontSize: 9.5, color: UI.textMuted }}>{sourceShortLabel(product.source)}{isPrimary ? " · Primary" : ""}</span>
+                      <span style={{ fontSize: 9.5, color: UI.textMuted }}>{sourceShortLabel(product.source)}{isPrimary ? ` · ${tr("pinDetails.products.primary")}` : ""}</span>
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-                      {!isPrimary && <button type="button" onClick={() => onProducts(promoteTaggedToPrimary({ primary, tagged }, productKey(product)))} style={{ ...btnBase, padding: "3px 8px", fontSize: 10 }}>Set primary</button>}
+                      {!isPrimary && <button type="button" onClick={() => onProducts(promoteTaggedToPrimary({ primary, tagged }, productKey(product)))} style={{ ...btnBase, padding: "3px 8px", fontSize: 10 }}>{tr("pinDetails.products.makePrimary")}</button>}
                       <button type="button" onClick={() => onProducts(removeProductByKey({ primary, tagged }, productKey(product)))} style={{ ...btnBase, padding: "3px 8px", fontSize: 10, color: UI.error }}><Trash2 style={{ width: 11, height: 11 }} /></button>
                     </div>
                   </div>
                 );
               })
-            ) : <p style={{ margin: 0, fontSize: 11.5, color: UI.textMuted }}>No products linked. Adding a product is optional.</p>}
+            ) : <p style={{ margin: 0, fontSize: 11.5, color: UI.textMuted }}>{tr("studioModals.product.noneLinkedOptional")}</p>}
 
             <div style={{ borderTop: `1px solid ${UI.border}`, paddingTop: 12 }}>
-              <span style={lbl}>Add product URL</span>
+              <span style={lbl}>{tr("studioModals.product.addProductUrl")}</span>
               {newUrls.map((u, i) => (
                 <div key={i} style={{ display: "flex", gap: 6, marginTop: 6 }}>
                   <input data-testid="batch-edit-drawer-product-url" value={u} placeholder="https://store.example.com/product" onChange={e => setNewUrls(prev => prev.map((x, xi) => xi === i ? e.target.value : x))} style={inputStyle} />
@@ -1781,18 +1828,18 @@ function DetailDrawer({ pin, edits, boardsState, tab, onTab, onClose, onPatch, o
                 </div>
               ))}
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                <button type="button" onClick={() => setNewUrls(prev => [...prev, ""])} style={{ ...btnBase, fontSize: 10.5 }}><Plus style={{ width: 12, height: 12 }} /> Add another</button>
-                <button type="button" data-testid="batch-edit-drawer-add-product" onClick={addProductUrls} style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff", fontSize: 10.5 }}>Link product</button>
+                <button type="button" onClick={() => setNewUrls(prev => [...prev, ""])} style={{ ...btnBase, fontSize: 10.5 }}><Plus style={{ width: 12, height: 12 }} /> {tr("studioModals.product.addAnother")}</button>
+                <button type="button" data-testid="batch-edit-drawer-add-product" onClick={addProductUrls} style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff", fontSize: 10.5 }}>{tr("studioModals.product.linkProduct")}</button>
               </div>
             </div>
 
             {primary?.productUrl && (
               <button type="button" onClick={() => {
                 if (url.trim()) {
-                  onConfirm({ title: "Overwrite destination URL?", body: <>This Pin already has a destination URL. Replace it with the primary product URL?</>, confirmLabel: "Replace", danger: true, onConfirm: () => onPatch({ destinationUrl: primary.productUrl! }) });
+                  onConfirm({ title: tr("studioModals.dest.overwriteTitle"), body: <>{tr("studioModals.dest.overwriteBody")}</>, confirmLabel: tr("studioModals.confirmReplace"), danger: true, onConfirm: () => onPatch({ destinationUrl: primary.productUrl! }) });
                 } else onPatch({ destinationUrl: primary.productUrl! });
               }} style={{ ...btnBase, fontSize: 10.5, color: "#A78BFA" }}>
-                <Link2 style={{ width: 12, height: 12 }} /> Fill empty Destination URL from primary product
+                <Link2 style={{ width: 12, height: 12 }} /> {tr("studioModals.product.fillEmptyDestFromPrimarySingle")}
               </button>
             )}
           </div>

@@ -34,6 +34,11 @@ type Body = {
   boardName?: string;
   language?: string;
   country?: string;
+  // Linked-product context (best-effort, from the client draft). Improves keyword
+  // relevance; safely absent for non-product Pins.
+  productTitle?: string;
+  productType?: string;
+  productTags?: string[];
 };
 
 export async function POST(req: Request) {
@@ -71,6 +76,9 @@ export async function POST(req: Request) {
       category: body.category || analysis.category,
       language: body.language,
       region: body.country,
+      productTitle: body.productTitle,
+      productType: body.productType,
+      productTags: Array.isArray(body.productTags) ? body.productTags : undefined,
     });
     const keywordLatencyMs = elapsed(kwStart);
     devLog("analyze.keywords", {

@@ -38,6 +38,7 @@ import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { ShopifyProductPickerPanel } from "@/components/studio/ShopifyProductPickerPanel";
 import type { ShopifyPanelImage } from "@/components/studio/ShopifyProductPickerPanel";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 export type InlineAssetItem = {
   id: string;
@@ -57,15 +58,17 @@ export type InlineCreateAssetPickerProps = {
   currentSelectedUrls?: string[];
 };
 
+// labelKey is an i18n key, resolved via useLocale() at render time — id stays the
+// canonical (untranslated) tab value used in state/comparisons.
 export const PRODUCT_PICKER_TABS = [
-  { id: "my_products", label: "My Products" },
-  { id: "product_ideas", label: "Product Ideas" },
-  { id: "shopify", label: "From Shopify" },
+  { id: "my_products", labelKey: "studioModals.tabs.myProducts" },
+  { id: "product_ideas", labelKey: "studioModals.tabs.productIdeas" },
+  { id: "shopify", labelKey: "studioModals.tabs.fromShopify" },
 ] as const;
 
 export const REFERENCE_PICKER_TABS = [
-  { id: "my_references", label: "My References" },
-  { id: "pin_ideas", label: "Pin Ideas" },
+  { id: "my_references", labelKey: "studioModals.tabs.myReferences" },
+  { id: "pin_ideas", labelKey: "studioModals.tabs.pinIdeas" },
 ] as const;
 
 const CATEGORIES = [...PRODUCT_IDEA_PICKER_CATEGORIES];
@@ -133,8 +136,9 @@ function MyProductsFilterChips({
   brokenCount: number;
   onChange: (f: MyProductsFilter) => void;
 }) {
+  const { t: tr } = useLocale();
   const chips = brokenCount > 0
-    ? [...MY_PRODUCTS_FILTERS, { id: "import_issues" as const, label: `Import issues ${brokenCount}` }]
+    ? [...MY_PRODUCTS_FILTERS, { id: "import_issues" as const, label: tr("studioModals.picker.importIssuesCount").replace("{n}", String(brokenCount)) }]
     : MY_PRODUCTS_FILTERS;
 
   return (
@@ -181,6 +185,7 @@ function ProductLibraryCard({
   /** Hide the checkbox for one-step product actions. */
   hideCheckbox?: boolean;
 }) {
+  const { t: tr } = useLocale();
   const label = productSourceLabel(item);
   const title = productDisplayTitle(item);
   const labelColor = SOURCE_LABEL_STYLE[label]?.color ?? UI.textSec;
@@ -217,7 +222,7 @@ function ProductLibraryCard({
         {broken ? (
           <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 10, textAlign: "center", boxSizing: "border-box" }}>
             <p style={{ margin: 0, fontSize: 10, color: UI.textSec, lineHeight: 1.45 }}>
-              Image unavailable. Try re-importing or upload manually.
+              {tr("studioModals.picker.imageUnavailable")}
             </p>
           </div>
         ) : (
@@ -231,7 +236,7 @@ function ProductLibraryCard({
             background: "rgba(255,153,0,0.95)", color: "#1A2235", fontSize: 9, fontWeight: 900,
             letterSpacing: "0.02em",
           }}>
-            Amazon
+            {tr("studioModals.source.amazon")}
           </span>
         )}
       </div>
@@ -250,7 +255,7 @@ function ProductLibraryCard({
           {title}
         </p>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: isAmazon ? "#FB923C" : labelColor }}>{isAmazon ? "Amazon" : label}</p>
+          <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: isAmazon ? "#FB923C" : labelColor }}>{isAmazon ? tr("studioModals.source.amazon") : label}</p>
           {asin && (
             <span data-testid="product-card-asin" style={{ fontSize: 9, fontWeight: 700, color: UI.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {"\u00B7 ASIN "}{asin}
@@ -295,6 +300,19 @@ function matchesFormat(text: string, format: string): boolean {
   return keys.some(k => haystack.includes(k));
 }
 
+// Callers pass a canonical English label from a small closed set (see assetLabel()
+// below plus "Amazon") — this maps it to a display string without disturbing the
+// `label === "Product Ideas"` identity check below. Unknown values pass through.
+const ASSET_CARD_LABEL_KEY: Record<string, "studioModals.source.amazon" | "studioModals.source.productIdeas" | "studioModals.tabs.pinIdeas" | "studioModals.assetLabel.uploaded" | "studioModals.assetLabel.urlImported" | "studioModals.assetLabel.pinOpportunities" | "studioModals.assetLabel.recent"> = {
+  "Amazon": "studioModals.source.amazon",
+  "Product Ideas": "studioModals.source.productIdeas",
+  "Pin Ideas": "studioModals.tabs.pinIdeas",
+  "Uploaded": "studioModals.assetLabel.uploaded",
+  "URL Imported": "studioModals.assetLabel.urlImported",
+  "Pin Opportunities": "studioModals.assetLabel.pinOpportunities",
+  "Recent": "studioModals.assetLabel.recent",
+};
+
 function AssetCard({
   id, imageUrl, title, label, category, selected, portrait, onToggle,
 }: {
@@ -307,8 +325,10 @@ function AssetCard({
   portrait?: boolean;
   onToggle: () => void;
 }) {
+  const { t: tr } = useLocale();
   void id;
-  const displayTitle = normalizeCardTitle(title, label === "Product Ideas" ? "Untitled product idea" : "Untitled pin idea");
+  const displayTitle = normalizeCardTitle(title, label === "Product Ideas" ? tr("studioModals.picker.untitledProductIdea") : tr("studioModals.picker.untitledPinIdea"));
+  const displayLabel = ASSET_CARD_LABEL_KEY[label] ? tr(ASSET_CARD_LABEL_KEY[label]) : label;
   return (
     <div
       role="button"
@@ -370,7 +390,7 @@ function AssetCard({
         <p style={{ margin: "0 0 3px", fontSize: 11, fontWeight: 700, color: UI.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {displayTitle}
         </p>
-        <p style={{ margin: 0, fontSize: 10, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</p>
+        <p style={{ margin: 0, fontSize: 10, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayLabel}</p>
         {category && (
           <p style={{ margin: "2px 0 0", fontSize: 9, color: UI.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{category}</p>
         )}
@@ -421,6 +441,7 @@ export function ProductIdeasPickerGrid({
   kwCatMap?: Record<string, string>;
   onRetry: () => void;
 }) {
+  const { t: tr } = useLocale();
   useEffect(() => {
     if (process.env.NODE_ENV !== "production") {
       console.log("[ProductIdeas]", {
@@ -460,10 +481,10 @@ export function ProductIdeasPickerGrid({
     return (
       <div data-testid="product-ideas-grid" style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 32, textAlign: "center" }}>
         <div>
-          <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: UI.text }}>Could not load Product Ideas</p>
+          <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.picker.couldNotLoadProductIdeas")}</p>
           <button type="button" data-testid="product-ideas-retry" onClick={onRetry}
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-            <RefreshCw style={{ width: 13, height: 13 }} /> Retry
+            <RefreshCw style={{ width: 13, height: 13 }} /> {tr("pinDetails.retry")}
           </button>
         </div>
       </div>
@@ -472,8 +493,8 @@ export function ProductIdeasPickerGrid({
 
   if (!filtered.length) {
     const emptyCopy = sourceLabel === "All Sources" && categoryLabel === "All Categories"
-      ? "No product ideas found\nTry another category or refresh the product ideas source."
-      : `No product ideas found for this category.\nTry another category or refresh the product ideas source.`;
+      ? tr("studioModals.picker.noProductIdeasFound")
+      : tr("studioModals.picker.noProductIdeasFoundCategory");
     return (
       <div data-testid="product-ideas-grid" style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 32, textAlign: "center" }}>
         <p style={{ margin: 0, fontSize: 13, color: UI.textSec, lineHeight: 1.6, whiteSpace: "pre-line" }}>{emptyCopy}</p>
@@ -559,13 +580,15 @@ function FilterSelect({ value, onChange, options, testId }: { value: string; onC
 
 type MyRefsFilter = "all" | "uploaded" | "url_imported" | "pin_ideas" | "recent" | "used_before";
 
-const MY_REFS_FILTERS: { id: MyRefsFilter; label: string }[] = [
-  { id: "all",          label: "All" },
-  { id: "uploaded",     label: "Uploaded" },
-  { id: "url_imported", label: "URL Imported" },
-  { id: "pin_ideas",    label: "Saved from Pin Ideas" },
-  { id: "recent",       label: "Recent" },
-  { id: "used_before",  label: "Used before" },
+// labelKey is an i18n key, resolved via useLocale() at render time — id stays the
+// canonical (untranslated) filter value used in filterMyReferences() comparisons.
+const MY_REFS_FILTERS: { id: MyRefsFilter; labelKey: "studioModals.refFilter.all" | "studioModals.refFilter.uploaded" | "studioModals.refFilter.urlImported" | "studioModals.refFilter.savedFromPinIdeas" | "studioModals.refFilter.recent" | "studioModals.refFilter.usedBefore" }[] = [
+  { id: "all",          labelKey: "studioModals.refFilter.all" },
+  { id: "uploaded",     labelKey: "studioModals.refFilter.uploaded" },
+  { id: "url_imported", labelKey: "studioModals.refFilter.urlImported" },
+  { id: "pin_ideas",    labelKey: "studioModals.refFilter.savedFromPinIdeas" },
+  { id: "recent",       labelKey: "studioModals.refFilter.recent" },
+  { id: "used_before",  labelKey: "studioModals.refFilter.usedBefore" },
 ];
 
 function filterMyReferences(items: assets.AssetItem[], filter: MyRefsFilter, search: string): assets.AssetItem[] {
@@ -603,6 +626,7 @@ function MyReferencesFilterChips({ active, onChange }: {
   active: MyRefsFilter;
   onChange: (f: MyRefsFilter) => void;
 }) {
+  const { t: tr } = useLocale();
   return (
     <div
       data-testid="my-references-filter-chips"
@@ -625,7 +649,7 @@ function MyReferencesFilterChips({ active, onChange }: {
               cursor: "pointer", whiteSpace: "nowrap",
             }}
           >
-            {chip.label}
+            {tr(chip.labelKey)}
           </button>
         );
       })}
@@ -638,6 +662,7 @@ function MyReferencesFilterChips({ active, onChange }: {
 export function InlineCreateAssetPicker({
   role, onClose, onConfirm, currentSelectedUrls = [],
 }: InlineCreateAssetPickerProps) {
+  const { t: tr } = useLocale();
   const allAssets = useSyncExternalStore(assets.subscribe, assets.getAssets, assets.getServerAssets);
   const fileRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -920,7 +945,7 @@ export function InlineCreateAssetPicker({
   const filteredMyRefs     = filterMyReferences(myAssets, refFilter, search);
 
   const shopifyEnabled = isShopifyIntegrationEnabled();
-  const title = isProduct ? "Choose Product Images" : "Choose Pin References";
+  const title = isProduct ? tr("studioModals.picker.chooseProductImages") : tr("studioModals.picker.choosePinReferences");
   const tabs = (isProduct ? PRODUCT_PICKER_TABS : REFERENCE_PICKER_TABS)
     .filter(t => t.id !== "shopify" || shopifyEnabled);
   const activeTab = isProduct ? productTab : referenceTab;
@@ -931,8 +956,8 @@ export function InlineCreateAssetPicker({
   };
 
   const selectedCountLabel = isProduct
-    ? `${selected.size} product${selected.size === 1 ? "" : "s"} selected`
-    : `${selected.size} reference${selected.size === 1 ? "" : "s"} selected`;
+    ? (selected.size === 1 ? tr("studioModals.picker.productsSelectedOne") : tr("studioModals.picker.productsSelectedMany").replace("{n}", String(selected.size)))
+    : (selected.size === 1 ? tr("studioModals.picker.referencesSelectedOne") : tr("studioModals.picker.referencesSelectedMany").replace("{n}", String(selected.size)));
 
   return (
     <section
@@ -946,7 +971,7 @@ export function InlineCreateAssetPicker({
             type="button"
             data-testid="asset-picker-close"
             onClick={onClose}
-            aria-label="Close picker"
+            aria-label={tr("studioModals.picker.closePicker")}
             style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 6, border: "none", background: "transparent", color: UI.textSec, cursor: "pointer", flexShrink: 0 }}
             onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = UI.cardElev; (e.currentTarget as HTMLButtonElement).style.color = UI.text; }}
             onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = UI.textSec; }}
@@ -962,7 +987,7 @@ export function InlineCreateAssetPicker({
                 key={tab.id}
                 type="button"
                 data-testid={`picker-tab-${tab.id}`}
-                aria-label={tab.label}
+                aria-label={tr(tab.labelKey)}
                 onClick={() => setActiveTab(tab.id)}
                 style={{
                   padding: "0 0 8px",
@@ -975,7 +1000,7 @@ export function InlineCreateAssetPicker({
                   cursor: "pointer",
                 }}
               >
-                {tab.label}
+                {tr(tab.labelKey)}
               </button>
             );
           })}
@@ -985,14 +1010,14 @@ export function InlineCreateAssetPicker({
       {isProduct && productTab === "my_products" && (
         <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search my products..." />
+            <SearchInput value={search} onChange={setSearch} placeholder={tr("studioModals.picker.searchMyProductsEllipsis")} />
             <button type="button" data-testid="compact-upload-product" onClick={() => fileRef.current?.click()}
               style={{ padding: "0 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 800, whiteSpace: "nowrap", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <Upload style={{ width: 13, height: 13 }} /> Upload product
+              <Upload style={{ width: 13, height: 13 }} /> {tr("studioModals.picker.uploadProduct")}
             </button>
             <button type="button" data-testid="compact-import-url" onClick={() => setShowProductUrlImport(v => !v)}
               style={{ padding: "0 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: showProductUrlImport ? UI.purpleBg : UI.cardElev, color: showProductUrlImport ? "#C4B5FD" : UI.text, fontSize: 12, fontWeight: 800, whiteSpace: "nowrap", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <Link2 style={{ width: 13, height: 13 }} /> Import from URL
+              <Link2 style={{ width: 13, height: 13 }} /> {tr("studioModals.picker.importFromUrl")}
             </button>
           </div>
           {showProductUrlImport && (
@@ -1008,7 +1033,7 @@ export function InlineCreateAssetPicker({
             onChange={setProductFilter}
           />
           <p data-testid="my-products-count" style={{ margin: "0 0 10px", fontSize: 11, color: UI.muted }}>
-            Showing {filteredMyProducts.length} product{filteredMyProducts.length === 1 ? "" : "s"}
+            {filteredMyProducts.length === 1 ? tr("studioModals.picker.showingProductOne") : tr("studioModals.picker.showingProductsMany").replace("{n}", String(filteredMyProducts.length))}
           </p>
           <div
             data-testid="my-products-grid"
@@ -1022,12 +1047,12 @@ export function InlineCreateAssetPicker({
             {filteredMyProducts.length === 0 ? (
               <p data-testid="my-products-empty" style={{ gridColumn: "1 / -1", margin: 0, fontSize: 12, color: UI.textSec, textAlign: "center", padding: "24px 12px" }}>
                 {productFilter === "import_issues"
-                  ? "No import issues found."
+                  ? tr("studioModals.picker.noImportIssuesFound")
                   : productFilter === "amazon"
-                    ? "No Amazon products found yet. Import an Amazon product URL or save one from Product Opportunities."
+                    ? tr("studioModals.picker.noAmazonProductsYet")
                     : search.trim()
-                      ? "No products match your search."
-                      : "No saved products yet. Upload product images or import products."}
+                      ? tr("studioModals.picker.noProductsMatchSearch")
+                      : tr("studioModals.picker.noSavedProductsUploadOrImport")}
               </p>
             ) : filteredMyProducts.map(item => (
               <ProductHoverPreview key={item.id} product={toPreviewProduct(item)} onUse={() => chooseProductForPins(item)}>
@@ -1046,9 +1071,9 @@ export function InlineCreateAssetPicker({
       {isProduct && productTab === "product_ideas" && (
         <>
           <div style={{ padding: "10px 12px", borderBottom: `1px solid ${UI.border}` }}>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search product ideas..." />
+            <SearchInput value={search} onChange={setSearch} placeholder={tr("studioModals.picker.searchProductIdeasEllipsis")} />
             <div data-testid="product-ideas-source-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-              <span style={{ color: UI.textSec, fontSize: 11, fontWeight: 800, marginRight: 2 }}>Source:</span>
+              <span style={{ color: UI.textSec, fontSize: 11, fontWeight: 800, marginRight: 2 }}>{tr("studioModals.picker.source")}</span>
               {PRODUCT_IDEA_SOURCES.map(source => {
                 const active = productSource === source;
                 return (
@@ -1075,7 +1100,7 @@ export function InlineCreateAssetPicker({
               })}
             </div>
             <div data-testid="product-ideas-category-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-              <span style={{ color: UI.textSec, fontSize: 11, fontWeight: 800, marginRight: 2 }}>Category:</span>
+              <span style={{ color: UI.textSec, fontSize: 11, fontWeight: 800, marginRight: 2 }}>{tr("studioModals.picker.category")}</span>
               {CATEGORIES.map(cat => {
                 const active = productCategory === cat;
                 return (
@@ -1104,7 +1129,7 @@ export function InlineCreateAssetPicker({
             {formatUpdatedAgo(productLastUpdated) && (
               <p data-testid="product-ideas-freshness" style={{ margin: "8px 0 0", fontSize: 10, color: isDataStale(productLastUpdated) ? "#F59E0B" : UI.muted }}>
                 {formatUpdatedAgo(productLastUpdated)}
-                {isDataStale(productLastUpdated) ? " \u00B7 Data may be stale." : ""}
+                {isDataStale(productLastUpdated) ? ` \u00B7 ${tr("studioModals.picker.dataMayBeStale")}` : ""}
               </p>
             )}
           </div>
@@ -1123,14 +1148,14 @@ export function InlineCreateAssetPicker({
               onRetry={loadProductIdeas}
             />
           </div>
-          <p style={{ margin: 0, padding: "0 18px 10px", color: UI.textSec, fontSize: 11 }}>Selected items are also saved to My Products.</p>
+          <p style={{ margin: 0, padding: "0 18px 10px", color: UI.textSec, fontSize: 11 }}>{tr("studioModals.picker.selectedItemsAlsoSavedProducts")}</p>
         </>
       )}
 
       {isProduct && productTab === "shopify" && shopifyEnabled && (
         <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
           <ShopifyProductPickerPanel mode="select-images" onSelectImages={saveShopifyImages} />
-          <p style={{ margin: "10px 0 0", color: UI.textSec, fontSize: 11 }}>Selected images are also saved to My Products.</p>
+          <p style={{ margin: "10px 0 0", color: UI.textSec, fontSize: 11 }}>{tr("studioModals.picker.selectedImagesAlsoSavedProducts")}</p>
         </div>
       )}
 
@@ -1138,14 +1163,14 @@ export function InlineCreateAssetPicker({
         <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
           {/* Search + upload + import */}
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search my references..." testId="search-my-references" />
+            <SearchInput value={search} onChange={setSearch} placeholder={tr("studioModals.picker.searchMyReferencesEllipsis")} testId="search-my-references" />
             <button
               type="button"
               data-testid="compact-upload-reference"
               onClick={() => fileRef.current?.click()}
               style={{ padding: "0 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 800, whiteSpace: "nowrap", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}
             >
-              <Upload style={{ width: 13, height: 13 }} /> Upload reference
+              <Upload style={{ width: 13, height: 13 }} /> {tr("studioModals.picker.uploadReference")}
             </button>
             <button
               type="button"
@@ -1153,7 +1178,7 @@ export function InlineCreateAssetPicker({
               onClick={() => setShowUrlInput(v => !v)}
               style={{ padding: "0 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: showUrlInput ? UI.purpleBg : UI.cardElev, color: showUrlInput ? "#C4B5FD" : UI.text, fontSize: 12, fontWeight: 800, whiteSpace: "nowrap", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}
             >
-              <Link2 style={{ width: 13, height: 13 }} /> Import from URL
+              <Link2 style={{ width: 13, height: 13 }} /> {tr("studioModals.picker.importFromUrl")}
             </button>
           </div>
 
@@ -1163,10 +1188,10 @@ export function InlineCreateAssetPicker({
               <input
                 value={urlText}
                 onChange={e => setUrlText(e.target.value)}
-                placeholder="Paste image URL(s), one per line"
+                placeholder={tr("studioModals.picker.pasteImageUrls")}
                 style={{ flex: 1, borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: "var(--app-surface-2, #0D1423)", color: UI.text, padding: "9px 12px", outline: "none", fontSize: 12 }}
               />
-              <button type="button" onClick={importUrls} style={{ borderRadius: 9, border: "none", background: UI.gradient, color: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Import</button>
+              <button type="button" onClick={importUrls} style={{ borderRadius: 9, border: "none", background: UI.gradient, color: "#fff", padding: "0 14px", fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>{tr("studioModals.picker.importBtn")}</button>
             </div>
           )}
 
@@ -1175,7 +1200,7 @@ export function InlineCreateAssetPicker({
 
           {/* Count */}
           <p data-testid="my-references-count" style={{ margin: "0 0 10px", fontSize: 11, color: UI.muted }}>
-            Showing {filteredMyRefs.length} reference{filteredMyRefs.length === 1 ? "" : "s"}
+            {filteredMyRefs.length === 1 ? tr("studioModals.picker.showingReferenceOne") : tr("studioModals.picker.showingReferencesMany").replace("{n}", String(filteredMyRefs.length))}
           </p>
 
           {/* Unified grid */}
@@ -1193,44 +1218,44 @@ export function InlineCreateAssetPicker({
                 {refFilter === "all" ? (
                   <>
                     <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
-                      No references saved yet.{"\n"}Upload or import a reference, or save one from Pin Ideas.
+                      {tr("studioModals.picker.noReferencesSavedYet")}{"\n"}{tr("studioModals.picker.uploadOrImportReference")}
                     </p>
                     <button
                       type="button"
                       onClick={() => fileRef.current?.click()}
                       style={{ padding: "8px 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}
                     >
-                      <Upload style={{ width: 13, height: 13 }} /> Upload reference
+                      <Upload style={{ width: 13, height: 13 }} /> {tr("studioModals.picker.uploadReference")}
                     </button>
                   </>
                 ) : refFilter === "uploaded" ? (
                   <>
-                    <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec }}>No uploaded references yet.</p>
+                    <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec }}>{tr("studioModals.picker.noUploadedReferencesYet")}</p>
                     <button
                       type="button"
                       onClick={() => fileRef.current?.click()}
                       style={{ padding: "8px 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}
                     >
-                      <Upload style={{ width: 13, height: 13 }} /> Upload reference
+                      <Upload style={{ width: 13, height: 13 }} /> {tr("studioModals.picker.uploadReference")}
                     </button>
                   </>
                 ) : refFilter === "url_imported" ? (
                   <>
-                    <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec }}>No URL-imported references yet.</p>
+                    <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec }}>{tr("studioModals.picker.noUrlImportedReferencesYet")}</p>
                     <button
                       type="button"
                       onClick={() => setShowUrlInput(true)}
                       style={{ padding: "8px 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}
                     >
-                      <Link2 style={{ width: 13, height: 13 }} /> Import from URL
+                      <Link2 style={{ width: 13, height: 13 }} /> {tr("studioModals.picker.importFromUrl")}
                     </button>
                   </>
                 ) : refFilter === "pin_ideas" ? (
                   <p style={{ margin: 0, fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
-                    No Pin Ideas references saved yet.{"\n"}Select references in the Pin Ideas tab to save them here.
+                    {tr("studioModals.picker.noPinIdeasReferencesSavedYet")}{"\n"}{tr("studioModals.picker.selectReferencesInPinIdeasTab")}
                   </p>
                 ) : (
-                  <p style={{ margin: 0, fontSize: 12, color: UI.textSec }}>No references match this filter.</p>
+                  <p style={{ margin: 0, fontSize: 12, color: UI.textSec }}>{tr("studioModals.picker.noReferencesMatchFilter")}</p>
                 )}
               </div>
             ) : (
@@ -1259,11 +1284,11 @@ export function InlineCreateAssetPicker({
               {formatUpdatedAgo(pinLastUpdated) && (
                 <p data-testid="pin-ideas-freshness" style={{ margin: "0 0 8px", fontSize: 10, color: isDataStale(pinLastUpdated) ? "#F59E0B" : UI.muted }}>
                   {formatUpdatedAgo(pinLastUpdated)}
-                  {isDataStale(pinLastUpdated) ? " \u00B7 Data may be stale." : ""}
+                  {isDataStale(pinLastUpdated) ? ` \u00B7 ${tr("studioModals.picker.dataMayBeStale")}` : ""}
                 </p>
               )}
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-                <SearchInput value={search} onChange={setSearch} placeholder="Search Pin ideas..." testId="search-pin-ideas" />
+                <SearchInput value={search} onChange={setSearch} placeholder={tr("studioModals.picker.searchPinIdeasEllipsis")} testId="search-pin-ideas" />
                 <FilterSelect value={referenceCategory} onChange={setReferenceCategory} options={REF_CATEGORIES} testId="pin-ideas-category-filter" />
                 <FilterSelect value={referenceFormat} onChange={setReferenceFormat} options={REF_FORMATS} testId="pin-ideas-format-filter" />
               </div>
@@ -1302,17 +1327,17 @@ export function InlineCreateAssetPicker({
             ) : pinIdeasError ? (
               <div data-testid="pin-ideas-grid" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 32, textAlign: "center" }}>
                 <div>
-                  <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: UI.text }}>Could not load Pin Ideas</p>
+                  <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.picker.couldNotLoadPinIdeas")}</p>
                   <button type="button" data-testid="pin-ideas-retry" onClick={loadPinIdeas}
                     style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: UI.cardElev, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                    <RefreshCw style={{ width: 13, height: 13 }} /> Retry
+                    <RefreshCw style={{ width: 13, height: 13 }} /> {tr("pinDetails.retry")}
                   </button>
                 </div>
               </div>
             ) : !filteredPinIdeas.length ? (
               <div data-testid="pin-ideas-grid" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 32, textAlign: "center" }}>
                 <p style={{ margin: 0, fontSize: 13, color: UI.textSec, lineHeight: 1.6, whiteSpace: "pre-line" }}>
-                  No pin ideas found{"\n"}Try another category or refresh the pin ideas source.
+                  {tr("studioModals.picker.noPinIdeasFound")}{"\n"}{tr("studioModals.picker.tryAnotherCategoryPinIdeas")}
                 </p>
               </div>
             ) : (
@@ -1347,7 +1372,7 @@ export function InlineCreateAssetPicker({
             )}
           </div>
           <p style={{ margin: 0, padding: "0 18px 10px", color: UI.textSec, fontSize: 11, flexShrink: 0 }}>
-            Selected references are also saved to My References.
+            {tr("studioModals.picker.selectedReferencesAlsoSaved")}
           </p>
         </div>
       )}
@@ -1357,10 +1382,10 @@ export function InlineCreateAssetPicker({
           {selectedCountLabel}
         </span>
         <button type="button" data-testid="asset-picker-cancel" onClick={() => { setSelected(new Set()); onClose(); }} style={{ padding: "9px 18px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: "transparent", color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-          Cancel
+          {tr("common.cancel")}
         </button>
         <button type="button" data-testid="asset-picker-confirm" disabled={selected.size === 0} onClick={confirm} style={{ padding: "9px 20px", borderRadius: 9, border: "none", background: selected.size ? UI.gradient : "rgba(148,163,184,0.12)", color: selected.size ? "#fff" : UI.muted, fontSize: 12, fontWeight: 800, cursor: selected.size ? "pointer" : "not-allowed" }}>
-          Add Selected
+          {tr("studioModals.picker.addSelected")}
         </button>
       </footer>
       <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => handleFiles(e.currentTarget.files)} />

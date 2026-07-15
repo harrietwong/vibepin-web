@@ -16,9 +16,20 @@ export type AnalyticsEvent =
   | "ai_copy_success"
   | "ai_copy_quality_failed"
   | "ai_copy_provider_failed"
-  | "ai_copy_latency_ms";
+  | "ai_copy_latency_ms"
+  // Create Pins board interactions.
+  | "direction_selected"
+  | "reference_selected"
+  | "reference_rejected"
+  | "keyword_removed"
+  | "generation_kept"
+  | "generation_deleted"
+  | "regenerate_clicked";
 
-export type AnalyticsProps = Record<string, string | number | boolean | null | undefined>;
+/** Version stamps attached to a generation event (prompt/model provenance). */
+export type EventVersions = { promptVersion?: string; modelVersion?: string };
+
+export type AnalyticsProps = Record<string, string | number | boolean | null | undefined | EventVersions>;
 
 export const ANALYTICS_EVENT = "vp:analytics";
 
