@@ -1,0 +1,186 @@
+{
+  "generatedAt": "2026-07-14T09:48:21.274086+00:00",
+  "mode": "READ-ONLY recount. No writes. No crawler. No scoring. No scheduler. No schema change.",
+  "gate": "current accept_link() with the PDP gate backfilled (incl. the 3 false-negative fixes)",
+  "corpus": {
+    "totalPinsScanned": 20608,
+    "pinsWithOutboundLink": 6258
+  },
+  "discovery": {
+    "acceptedProductUrls": 1092,
+    "rejectedUrls": 4702,
+    "acceptRate": "17.4%",
+    "rejectionReasons": {
+      "blog-tutorial": 2994,
+      "social": 1176,
+      "shortlink-unresolvable": 207,
+      "not-PDP": 177,
+      "homepage": 93,
+      "category-collection": 43,
+      "search": 6,
+      "browse": 6
+    },
+    "rejectionReasonsRaw_internal": {
+      "non_commerce_domain": 3051,
+      "social_media": 1176,
+      "non_product_path": 408,
+      "not_product_detail_page:not_a_pdp_path": 29,
+      "not_product_detail_page:no_recognizable_pdp_path": 23,
+      "not_product_detail_page:search_query_string": 6,
+      "not_product_detail_page:listing_or_browse_path": 6,
+      "marketplace_profile": 2,
+      "retailer_non_product_path": 1
+    }
+  },
+  "netNew": {
+    "acceptedBeforeDedup": 1556,
+    "duplicateOfExistingActiveRow": 400,
+    "duplicateWithinCandidateBatch": 64,
+    "netNewAfterLifecycleAwareDedup": 1092,
+    "ofWhichEvidenceComplete_WRITABLE": 1092,
+    "ofWhichEvidenceIncomplete_BLOCKED_by_v47_CHECK": 0,
+    "note": "Dedup is lifecycle-aware: RETIRED rows do NOT reserve their URL, so a retired T10 URL is re-collectable. Only NON-retired rows block."
+  },
+  "domainBreakdown_byFamily": {
+    "Etsy": {
+      "accepted": 777
+    },
+    "Shopify / merchant": {
+      "accepted": 199
+    },
+    "Digital marketplaces": {
+      "accepted": 103
+    },
+    "Amazon": {
+      "accepted": 13
+    }
+  },
+  "domainBreakdown_topDomains": {
+    "etsy.com": 742,
+    "payhip.com": 41,
+    "canva.com": 34,
+    "poshmark.com": 31,
+    "depop.com": 27,
+    "teacherspayteachers.com": 22,
+    "ebay.com": 21,
+    "art.com": 14,
+    "amazon.com": 13,
+    "target.com": 9,
+    "walmart.com": 8,
+    "teepublic.com": 5,
+    "scarlowdigital.com": 4,
+    "anthropologie.com": 4,
+    "lelunastudioart.com": 3,
+    "wildfeverstudio.etsy.com": 3,
+    "twgdesigns.com": 3,
+    "theflourishplanner.com": 3,
+    "posterwallprints.com": 3,
+    "highwestwild.com": 2
+  },
+  "categoryBreakdown": {
+    "digital-products": 610,
+    "beauty": 194,
+    "home-decor": 44,
+    "diy-crafts": 39,
+    "event-planning": 29,
+    "wedding": 29,
+    "parenting": 20,
+    "health": 12,
+    "fashion": 11,
+    "travel": 11,
+    "home": 10,
+    "kids-fashion": 9,
+    "education": 9,
+    "food-and-drink": 8,
+    "design": 8,
+    "quotes": 6,
+    "animals": 6,
+    "trending": 5,
+    "womens-fashion": 5,
+    "gardening": 4,
+    "mens-fashion": 4,
+    "finance": 3,
+    "automotive": 3,
+    "holidays-seasonal": 3,
+    "art": 2
+  },
+  "fieldAvailability": {
+    "product_name": {
+      "measuredOn": 19,
+      "got": 10,
+      "rate": "53%",
+      "basis": "MEASURED on fetched rows (detail enrichment — requires a real fetch)"
+    },
+    "product_image_url": {
+      "measuredOn": 19,
+      "got": 8,
+      "rate": "42%",
+      "basis": "MEASURED on fetched rows (detail enrichment — requires a real fetch)"
+    },
+    "price": {
+      "measuredOn": 19,
+      "got": 8,
+      "rate": "42%",
+      "basis": "MEASURED on fetched rows (detail enrichment — requires a real fetch)"
+    },
+    "merchant": {
+      "measuredOn": 19,
+      "got": 8,
+      "rate": "42%",
+      "basis": "MEASURED on fetched rows (detail enrichment — requires a real fetch)"
+    },
+    "source_pin_url": {
+      "measuredOn": 1092,
+      "got": 1092,
+      "rate": "100%",
+      "basis": "EXACT (Evidence field — derived from pin_id, always present by construction)"
+    },
+    "source_pin_save_count": {
+      "measuredOn": 1092,
+      "got": 1092,
+      "rate": "100%",
+      "basis": "EXACT (Evidence field — read directly from pin_samples, no fetch needed)"
+    }
+  },
+  "enrichmentProjection": {
+    "method": "STRATIFIED ESTIMATE, not a full measurement. Detail enrichment can only be known by actually fetching each merchant page, which would be a crawl (explicitly forbidden this round). We therefore take the ONLY rows whose detail fetch really ran (the outbound_link rows already in the DB), compute the enrichment rate PER DOMAIN FAMILY, and project it onto the candidate set of the same family.",
+    "sampleTotal": 19,
+    "byFamily": {
+      "Etsy": {
+        "candidates": 777,
+        "sampleN": 5,
+        "sampleAvailable": 0,
+        "sampledEnrichmentRate": "0%",
+        "projectedEnriched": 0,
+        "caveat": "extrapolated from a sample of 5 fetched rows"
+      },
+      "Digital marketplaces": {
+        "candidates": 103,
+        "sampleN": 4,
+        "sampleAvailable": 3,
+        "sampledEnrichmentRate": "75%",
+        "projectedEnriched": 77,
+        "caveat": "extrapolated from a sample of 4 fetched rows"
+      },
+      "Shopify / merchant": {
+        "candidates": 199,
+        "sampleN": 6,
+        "sampleAvailable": 5,
+        "sampledEnrichmentRate": "83%",
+        "projectedEnriched": 166,
+        "caveat": "extrapolated from a sample of 6 fetched rows"
+      },
+      "Amazon": {
+        "candidates": 13,
+        "sampleN": 4,
+        "sampleAvailable": 2,
+        "sampledEnrichmentRate": "50%",
+        "projectedEnriched": 6,
+        "caveat": "extrapolated from a sample of 4 fetched rows"
+      }
+    },
+    "projectedEnrichedOfWritable": 250,
+    "projectedNullDetailOfWritable": 842,
+    "projectedEnrichmentRate": "23%"
+  }
+}

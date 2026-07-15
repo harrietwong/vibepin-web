@@ -1,0 +1,2180 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>T2 Product Opportunity — 100-card UI impact preview</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; padding:28px; background:#0f1115; color:#e6e8ee;
+         font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  h1 { font-size:20px; margin:0 0 6px; }
+  .sub { color:#9aa3b2; margin-bottom:20px; }
+  .warn { background:#2a1c1c; border:1px solid #6b2b2b; color:#ffb4b4;
+           padding:12px 14px; border-radius:8px; margin:14px 0 22px; }
+  .warn b { color:#ff8f8f; }
+  .kpis { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
+  .kpi { background:#171a21; border:1px solid #262b36; border-radius:10px;
+          padding:12px 16px; min-width:150px; }
+  .kpi .n { font-size:22px; font-weight:700; }
+  .kpi .l { color:#9aa3b2; font-size:12px; }
+  table { border-collapse:collapse; margin-bottom:22px; font-size:13px; }
+  th,td { border:1px solid #262b36; padding:6px 12px; text-align:left; }
+  th { background:#171a21; color:#9aa3b2; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:16px; }
+  .card { background:#171a21; border:1px solid #262b36; border-radius:12px;
+           overflow:hidden; display:flex; flex-direction:column; }
+  .thumb { position:relative; aspect-ratio:3/4; background:#0b0d11; }
+  .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .mainlbl { position:absolute; left:6px; bottom:6px; background:rgba(0,0,0,.72);
+              color:#8fd3ff; font-size:10px; padding:2px 6px; border-radius:4px; }
+  .body { padding:10px 12px 12px; display:flex; flex-direction:column; gap:6px; }
+  .badges { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:2px; }
+  .b { font-size:10px; padding:2px 6px; border-radius:4px; background:#222836; color:#c8cfdb; }
+  .b.hi { background:#12351f; color:#7ee2a8; } .b.md { background:#33290f; color:#f0c674; }
+  .b.lo { background:#2a2a2a; color:#9aa3b2; } .b.na { background:#2a2a2a; color:#6b7280; }
+  .b.tr { background:#1b2438; color:#8fb8ff; } .b.src { background:#2b1f38; color:#c9a6ff; }
+  .pname { font-weight:600; font-size:13px; }
+  .price { color:#7ee2a8; font-weight:600; font-size:13px; }
+  .unavail { color:#9aa3b2; font-style:italic; font-size:12.5px;
+              background:#1c1f27; border:1px dashed #3a4150; border-radius:6px;
+              padding:6px 8px; text-align:center; }
+  .viewsrc { color:#8fb8ff; font-size:12px; text-decoration:none; }
+  .meta { font-size:12px; color:#b6bdc9; }
+  .meta.kw { color:#8fb8ff; } .meta.cat { color:#9aa3b2; }
+  .hint { color:#6b7280; font-size:11px; font-weight:400; }
+  .cta { margin-top:4px; text-align:center; background:#e60023; color:#fff;
+          padding:7px; border-radius:8px; font-weight:600; font-size:12.5px;
+          text-decoration:none; }
+  .chip { font-size:10px; padding:2px 6px; border-radius:4px; text-align:center; }
+  .chip.ok { background:#12351f; color:#7ee2a8; }
+  .chip.no { background:#3a1f1f; color:#ff9d9d; }
+</style>
+
+<h1>T2 Product Opportunity — 100-card UI impact preview</h1>
+<div class="sub">Top 100 candidates by source-pin saves, rendered against the PRD v3.1 §7 card contract.
+Real source-pin images (hot-linked), real saves / keyword / category, real NULL states.
+<b>Nothing was written to the database to produce this page.</b></div>
+
+<div class="warn">
+  <b>THE HEADLINE:</b> 71 of 100 cards (71%) fall on the
+  <i>"Product details unavailable"</i> path — because the real candidate corpus is
+  <b>777 / 1092
+  Etsy (71%)</b>,
+  and Etsy's measured detail-enrichment rate is <b>0%</b> (WAF).
+  The 19-row pilot showed 53% enrichment only because its bucket-balancing over-sampled
+  Shopify/Digital. At full scale the real figure is
+  <b>~23%</b>.
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="n">1092</div><div class="l">net-new writable (not 277)</div></div>
+  <div class="kpi"><div class="n">29</div><div class="l">of 100: full enrichment</div></div>
+  <div class="kpi"><div class="n">71</div><div class="l">of 100: NULL details</div></div>
+  <div class="kpi"><div class="n">23%</div><div class="l">projected enrichment (all 1092)</div></div>
+  <div class="kpi"><div class="n">100%</div><div class="l">source pin image present</div></div>
+</div>
+
+<table>
+  <tr><th>Domain family</th><th>Candidates</th><th>Fetched sample</th><th>Measured enrichment</th><th>Projected enriched</th></tr>
+  <tr><td>Etsy</td><td>777</td><td>5</td><td>0%</td><td>0</td></tr><tr><td>Digital marketplaces</td><td>103</td><td>4</td><td>75%</td><td>77</td></tr><tr><td>Shopify / merchant</td><td>199</td><td>6</td><td>83%</td><td>166</td></tr><tr><td>Amazon</td><td>13</td><td>4</td><td>50%</td><td>6</td></tr>
+</table>
+
+<div class="grid">
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/82/46/6e/82466e4067b11acd398dd3250bbe23d7.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b hi">Pinterest Interest: High</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>54,067</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">gel nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4483160321/gold-lotus-meditation-pendant-necklace?ref=shop_home_active_2&amp;pro=1&amp;frs=1&amp;logging_key=397717377ed7790f06ce00a73b187aa0c8258678:4483160321" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/42/e6/ff/42e6ffcbf7a68de6b39d47219eef885c.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b hi">Pinterest Interest: High</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>24,113</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wedding planner</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1723423807/printable-my-wedding-checklist" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/12/12/03/121203f81d8af3d32468a36ad02324f1.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b hi">Pinterest Interest: High</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>23,770</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital download art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/PennyBirdBoutique/listing/1452487065/watercolor-floral-book-digital-art-print?utm_source=Pinterest&amp;utm_medium=ListingManager&amp;utm_campaign=Share&amp;utm_term=so.lmsm&amp;share_time=1681660198741" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/a0/7d/7a/a07d7a68fc3b9a1ea259aaf9a5f39763.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b hi">Pinterest Interest: High</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>22,337</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nail ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/1229523564/white-sunset-chrome-press-on-nails-long" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/5b/c8/8c/5bc88c837ac91dcd569d26c1c5e32127.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>19,610</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wall art quotes</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1394850652/you-must-do-the-thing-you-think-you" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/fe/a5/f6/fea5f6fb3a74edc5ba1bc85913dde5da.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>19,409</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nail ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4475072529/teal-summer-press-on-nails" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/fc/be/42/fcbe4200bb6e36759bcac83677983cf6.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">Polka Dot Nail Art is BACK-Smaller, Cuter, and Everywhere You Scroll</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>16,896</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nail aesthetic</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://payhip.com/b/mX0Q1?utm_source=pinterest&amp;utm_medium=pin&amp;utm_campaign=pin568508441" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/fa/02/31/fa0231c194ed4b5ffb025f4cfa086179.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Lelunastudioart</span>
+        </div>
+        
+        <div class="pname">Pink Retro 8-Ball Martini Cocktail Print - Digital Print</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>16,210</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">etsy printable art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://lelunastudioart.com/products/retropinkmartini?_pos=2&amp;_sid=a1cae1cf9&amp;_ss=r" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/b4/52/a4/b452a4f214820fcc003a2bbc1ba9f8c4.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>15,616</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">grad nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4462559731/polka-dot-french-3d-flower-press-on" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/fe/10/05/fe100507971b8d9a69b88e464fe980ab.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Depop</span>
+        </div>
+        
+        <div class="pname">Depop Unisex Nails</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>13,634</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nail ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.depop.com/products/zetalab-10-piece-handmade-press-ons-41e2/?pla_feed=US" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/c6/f8/6c/c6f86cad383b2571ea348d3d6a46df07.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Lingsmoment</span>
+        </div>
+        
+        <div class="pname">How to Create a DIY Hanging Wedding Centerpiece</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>13,599</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">home decoration ideas</div>
+        <div class="meta cat">home</div>
+        <a class="cta" href="https://www.lingsmoment.com/collections/diy-color-collections/products/dusty-rose-cream-diy-flower-box-set?variant=40608257704006&amp;utm_source=pinterest&amp;utm_medium=social&amp;utm_campaign=DIY_pink-Wedding&amp;utm_content=standardpin&amp;utm_creative_format=video" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/96/ff/40/96ff40c54d96ff7ee75b02f73b97baad.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>13,395</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">may nails 2025</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4473175994/yellow-striped-almond-press-on-nails" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/fb/c1/07/fbc107a3d6fb686d5ad19f6a9c39db72.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>12,995</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">may 2026 nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4488931402/starfish-french-tip-almond-nails-teal" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/35/13/b3/3513b3e4785d532010880a2477b457bf.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Highwestwild</span>
+        </div>
+        
+        <div class="pname">Natasha Art Print</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>12,511</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wall art decor living room</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.highwestwild.com/products/natasha-art-print" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/58/3e/2f/583e2fa17f22d2a770890b8ffbac4d8c.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>12,116</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4481103859/handmade-patriotic-nails-4th-of-july" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/6a/90/dc/6a90dcfa16119ef1e7b64bfa153e8367.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>12,111</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4323290067/red-white-and-blue-4th-of-july-hotdog" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/47/88/92/478892e2a793241717b9edb4d37f1031.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>11,694</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">aesthetic nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4327634581/dreamy-fresh-pink-french-flower-nails" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/e9/7f/71/e97f71bc63235ae1d70e2b19dc4330a7.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>11,326</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">etsy digital invitation</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4356396193/sea-you-soon-coastal-baby-shower" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/eb/e3/4f/ebe34f0f275a87156ae854148ca2ed29.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>10,324</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4475079772/yellow-french-summer-press-on-nails" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/f7/5c/bf/f75cbfe741503a04cd6e7b1d96424dd3.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>10,300</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">etsy printable art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://sugarandspize.etsy.com/listing/1634602572" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/d1/65/c1/d165c1c9326c7fc79d3a13c2951985b4.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>9,792</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">grad party diy</div>
+        <div class="meta cat">event-planning</div>
+        <a class="cta" href="https://www.etsy.com/listing/4496174080/dirty-soda-bar-menu-sign-graduation-2026" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/7d/d8/f0/7dd8f0b898b567b27c2efa53c781153c.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>9,735</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">nail ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4491921884/handmade-bridal-blue-3d-flower-press-ons" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/e8/8a/e3/e88ae3ac1aeb0083f9063285ce5a40c6.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>9,702</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4505433736/patriotic-popsicle-press-on-nails-usa" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/b4/74/a2/b474a2444602955713438fb8107ceb37.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>9,518</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">etsy printable art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1524018800/blue-floral-still-life-drawing-flower" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/7f/e9/27/7fe927ac4915729f4d98a767dcb27574.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>9,336</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">mothers day gift ideas</div>
+        <div class="meta cat">event-planning</div>
+        <a class="cta" href="https://www.etsy.com/listing/4489138908/mothers-day-bedazzled-canvas" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/96/04/fb/9604fb16ba92e209edeee69dcc5865ac.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>9,231</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital art print download</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4333827772/sunflower-poster-original-size-1350-x" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/df/e0/f0/dfe0f091330953dc14c793118a21a750.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Tileandtop</span>
+        </div>
+        
+        <div class="pname">Athens Gray Marble Tiles – Polished 12x24 Floor Tile for Elegant Study</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>9,104</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">home office decor ideas</div>
+        <div class="meta cat">home-decor</div>
+        <a class="cta" href="https://www.tileandtop.com/collections/mosaics-tile/products/copy-of-3x8-athens-gray-marble-tiles?variant=32221321953358" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/83/c2/5a/83c25afcc6fa34951dfb77222c8047c5.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>8,881</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">hottest summer nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4467771995/hawaii-press-on-nailset" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/3d/3b/cc/3d3bcc6734dc37e6afdebdf4c27dc333.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>8,822</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">diy and crafts ideas creative</div>
+        <div class="meta cat">diy-crafts</div>
+        <a class="cta" href="https://studiorosiecreations.etsy.com/listing/4482588939" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/8a/d7/33/8ad73373efca3a727fd510b00d8ba535.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>8,774</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wall art set</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1679642121/claude-monet-print-set-of-11-european" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/c1/84/98/c1849862c5e9e8c37805a8036b44e947.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>8,693</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nail ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4498919477/tropical-hibiscus-press-on-nails-summer" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/b0/8f/26/b08f26b1bd5e3511c0b05fde8c7e33b3.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b md">Pinterest Interest: Medium</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>8,068</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">almond nails design</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4466909195/blue-floral-press-on-nails-3d-flower" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/56/19/05/56190532db57b4213fc991bc4b52c09f.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>7,889</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">may 2026 nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4507606500/handmade-custom-gel-press-on-nails" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/30/cd/75/30cd75e96950d91aa26d9b492c4ed15d.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>7,591</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4479684688/fairy-garden-press-on-nails-gold-chrome" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/3f/5d/87/3f5d87a6065fae5efc16684fe7309fe3.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>7,413</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital art print download</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1880800087/it-comes-in-waves-surf-art-print-digital" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/e2/5b/6f/e25b6f8e3f49fd56bb723b0ba75565d1.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>7,303</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">cute summer nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4493891103/summer-fruit-press-on-nails-orange-slice" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/14/d3/b3/14d3b3691663417fd7e36b1cc1fe85ca.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>7,030</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wall art quotes</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4366450941/confidence-looks-cute-on-me-retro-cherry" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/4c/d3/9c/4cd39ca4113a18c7e891ad347a7a9705.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Poshmark</span>
+        </div>
+        
+        <div class="pname">Press &amp; Polish Other | Custom Press On Nails | Color: Blue/Red | Size:</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>7,003</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://poshmark.com/listing/Custom-Press-On-Nails-685f3fb0d6ab5d5d5a9252ca?utm_source=pin_txn&amp;utm_campaign=626751742179&amp;campaign_id=626751742179&amp;ad_partner=pin_txn&amp;enable_guest_buy_flow=true&amp;pp=1" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/3f/f7/df/3ff7dfdb23c4c83af545501f159c5723.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>6,939</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital download wall art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4310988537/just-the-audacity-minimalist-printable" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/c8/85/a5/c885a59f9dd318512425453d1ad47efb.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>6,736</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital art print download</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1421935938/watercolor-floral-lightbulb-digital-art?utm_medium=SellerListingTools&amp;utm_campaign=Share&amp;utm_source=Pinterest&amp;share_time=1678657711000&amp;utm_term=so.slt" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/93/fe/a4/93fea4eb393cf74e0237d722dc0eb245.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">25 Genius Gardening Hacks You’ll Wish You Knew Sooner</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>6,701</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">gardening for beginners</div>
+        <div class="meta cat">gardening</div>
+        <a class="cta" href="https://payhip.com/b/cLNms" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/df/04/70/df04707f911d230ee022e1840de519c1.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>6,691</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">aesthetic outfits</div>
+        <div class="meta cat">fashion</div>
+        <a class="cta" href="https://periay.etsy.com/listing/1698176572/crochet-cream-mesh-hat-all-color-skull" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/65/e4/e3/65e4e3d0b7420ad19e7b7f4c1ca3c78c.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>6,656</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">wedding nails</div>
+        <div class="meta cat">wedding</div>
+        <a class="cta" href="https://www.etsy.com/listing/4463218682/3d-floral-press-on-nails-pink-ombre-gel" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/7a/1e/91/7a1e91d4e6c39f5d278ab4c833616ebf.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>6,597</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">etsy printable art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4337693998/sakura-poster-a3-size" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/20/7c/0f/207c0f79f3bf6eb78425d68e655123c0.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>6,334</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nail ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4463305670/hand-painted-nautical-press-on-nails?ls=s&amp;ref=listing_refinement_listing-1&amp;content_source=Eudi_cWeCOcIogBspuIBXIorxt8b%253ALT5afdf736b8f4d7304950a98196e6545a05507636&amp;logging_key=Eudi_cWeCOcIogBspuIBXIorxt8b:LT5afdf736b8f4d7304950a98196e6545a05507636" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/ad/b9/cc/adb9cccb1e8fd6a3836d50a1b829bc51.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Poshmark</span>
+        </div>
+        
+        <div class="pname">Pink And Black Swirl Coffin Press-On Nails | Color: Black/Pink | Size:</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>6,254</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">gothic summer nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://poshmark.com/listing/Pink-and-Black-Swirl-Coffin-PressOn-Nails-69c548965df8e77475f277ba?utm_source=pin_unpaid" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/a7/01/a8/a701a89f0676d364d7e5b156eaa0a136.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">TPT</span>
+        </div>
+        
+        <div class="pname">Five Senses Booklet and Activity Page</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>6,002</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">classroom printables teachers pay teachers</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.teacherspayteachers.com/Product/Five-Senses-Booklet-and-Activity-Page-4965325" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/9b/14/c4/9b14c4f3f55f7a41c1dcca0b2a46af98.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,969</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">4th of july decor</div>
+        <div class="meta cat">diy-crafts</div>
+        <a class="cta" href="https://www.etsy.com/listing/4487641229/patriotic-mason-jar-centerpiece-red" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/5a/bc/b9/5abcb9df2013449ce402537aa02cc624.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Poshmark</span>
+        </div>
+        
+        <div class="pname">Elegant Pink And White Press On Nails | Color: Pink/White | Size: Os</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>5,944</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">grad nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://poshmark.com/listing/Elegant-Pink-and-White-press-on-nails-6990ecf2b9449154e9c1b208?utm_source=pin_unpaid" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/c2/a9/56/c2a95656bb92b14e5d4ef24d25013e8f.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,843</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital stickers for goodnotes</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1332960943/handmade-pre-cropped-digital-stickers" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/65/7d/94/657d94a6a4281317dac33a7839939b75.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,649</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">french tip nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4502116890/navy-blue-star-and-polka-dot-almond" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/55/f6/c9/55f6c902afd4b0e52ae9dfee6ae84776.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Nailhandy</span>
+        </div>
+        
+        <div class="pname">Lemon Breeze, XS / Short (18mm)</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>5,620</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">lemon and blue nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://nailhandy.com/products/lemon-breeze?variant=52588321112353&amp;utm_medium=cpc&amp;utm_source=pinterest&amp;utm_campaign=Pinterest%20Shopping&amp;country=US" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/1e/57/b4/1e57b41f9ecd70a5186d5d50a696bcee.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,587</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer 2026 nail trends</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4488228382/set-of-10-hand-painted-gel-press-on" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/bc/1f/57/bc1f57e5f55098e47be13190c8558517.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Poshmark</span>
+        </div>
+        
+        <div class="pname">The Nail Bar Makeup | 24pcs Oval Polka Dot French Style Acrylic Press-</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>5,500</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nails 2026</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://poshmark.com/listing/24pcs-Oval-Polka-Dot-French-Style-Acrylic-PressOn-Nails-Perfect-Fit-6974dd8621b801245dcdd8dd?utm_source=pin_unpaid" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/c0/44/e5/c044e5ec83fd8554276e976aacaa8003.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,345</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4482811888/handmade-press-on-nails-the-kiss-lily-of" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/69/e5/49/69e549e25f064e4f68742edb0a66453c.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,340</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">extra</div>
+        <div class="meta cat">finance</div>
+        <a class="cta" href="https://www.etsy.com/listing/4462135734/bedazzled-custom-gum" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/5d/f2/d7/5df2d7c528d45cbbc73719a4d2e18bc7.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">ستيكرز زهرية ناعمة – Soft Pink Aesthetic Stickers🌸</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>5,305</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital stickers aesthetic</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://payhip.com/b/eMa06" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/5b/42/cd/5b42cdac2c7141a425f993e0a292806d.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,238</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital art print download</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1439217654/vincent-van-goghs-irises-cat-print-van" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/93/35/6c/93356c05df68f412c0bc6eda0c0e3386.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,182</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">yard stuff</div>
+        <div class="meta cat">home-decor</div>
+        <a class="cta" href="https://www.etsy.com/listing/4499633287/modern-rock-garden-design-minimalist" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/20/1b/a8/201ba87cb6c449b0856c4e12c40c1bbd.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">Fat Burning Smoothie Combos for Weight Loss (7-Day Plan Ideas)</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>5,170</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">morning smoothie</div>
+        <div class="meta cat">health</div>
+        <a class="cta" href="https://payhip.com/b/1MGRP" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/4d/82/84/4d8284bbed4aecf2ddb96cb82ab5689b.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Target</span>
+        </div>
+        
+        <div class="pname">Sunny Days Squeezy Peach</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>5,168</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">giant squishy</div>
+        <div class="meta cat">parenting</div>
+        <a class="cta" href="https://www.target.com/p/sunny-days-squeezy-peach/-/A-94843134?TCID=PDS-626755558483-2680086100596&amp;pp=0" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/31/5f/f1/315ff1f7a35690f4a768724a8919d217.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,105</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital download wall art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1820300765/dramatic-exit-hallway-wall-art-print" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/01/0e/8d/010e8defc222303e468fed2ebc4d8452.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>5,104</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital download art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1421944711/white-daisy-flower-art-print-botanical?ref=share_v4_lx" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/5f/3d/44/5f3d4475da319dec222e58dd4e23db82.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,995</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer kids activities</div>
+        <div class="meta cat">parenting</div>
+        <a class="cta" href="https://www.etsy.com/listing/4501511641/summer-boredom-buster-printable-fun" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/38/f8/6c/38f86cc3fc289e6d2fb30ee98bf89fc8.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,983</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">may 2026 nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4477974282/sage-green-press-on-nails-strawberry" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/0e/05/18/0e0518bc9ba89b9235f5d0eeea723fc7.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,973</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital download art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1419705545/cherry-blossom-flower-art-print?click_key=e8ca885d5e35c2f1c7b6d0bd3b01ff65dbf81d4f:1419705545&amp;click_sum=9d73f0e7&amp;ref=shop_home_active_2" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/2a/1e/79/2a1e79528d6fe9c8846b7cc8babd950b.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,964</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4469512600/retro-y2k-almond-press-on-nails-purple" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/66/e9/14/66e9145548be390d5f3bb37fd860acb0.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,861</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4493596596/handmade-3d-monkey-press-on-nails-pastel" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/84/be/2d/84be2de633c5d594eeb94a8951b0abcf.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,825</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital art print download</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1717279276/black-and-white-cat-dinner-time?load_webview=1&amp;bid=d6zLspi5e6DldXaf8GH7N2lWm7pA" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/ed/ce/ca/edceca583667427606e2bf7f67e7856a.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">High Protein Breakfasts to Kickstart Your Day 🌅 | Easy Healthy Breakfa</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,806</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">healthy breakfast ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://payhip.com/b/jQBrc" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/f0/0c/ff/f00cff691337116fa6e0a66aec72c0a9.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,806</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4479069458/pastel-floral-bow-press-on-nails-blue" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/8a/4a/84/8a4a8430c64838d43299f3c60fd69822.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,779</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">mason jar centerpieces for graduation</div>
+        <div class="meta cat">event-planning</div>
+        <a class="cta" href="https://www.etsy.com/listing/4467807886/graduation-centerpiece-tags" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/b0/f7/45/b0f745f629ed188f988d5eff4cda2f2a.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,643</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">grad cap quotes</div>
+        <div class="meta cat">quotes</div>
+        <a class="cta" href="https://www.etsy.com/listing/1891721126/personalized-graduation-cap-topper-i-did" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/d2/49/42/d24942483917742c1038b97fcb2f8e05.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,591</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">etsy digital invitation</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4357614876/elegant-wedding-invitation-set-black-and" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/31/47/b4/3147b431ba586bd8ba198df6f6503fe6.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Audrastyle</span>
+        </div>
+        
+        <div class="pname">Leopard Jar and Roses Blue Background Reproduction Print</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,576</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wall art decor living room</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://audrastyle.com/products/leopard-jar-and-roses-blue-background-print" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/a7/0d/bf/a70dbf345a201cbd0316a690c9a63bf1.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Amazon</span>
+        </div>
+        
+        <div class="pname">Elegant 3D Floral French Nails 🌸✨ | Pink &amp; White Almond Nail Design</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,569</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">almond nails design</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.amazon.com/LPOODDNU-Pink-Press-Nails-Almond/dp/B0FNWTNXM3?crid=36CMXXQJL8I4T&amp;dib=eyJ2IjoiMSJ9.TO8cb23Lwax-fiE-eOkZv0XCKCb7pV1adbV12y9boSZf6NjVOWRpsMr3ciqsO3J7dpfD8X8vmWYtDY1bKIxonkeD93TKhZg0LQyOUbI1mFeC7qkE8pj3JLkUDrQwvcSG864h_c4ctRO6U1-dm2-uzegVkJqfs80iKpOWcGOvH3aAhsKL1lLI5s1o2BlqoHUYE8cj2k3aw38b8U5Qqh5dNsCmNvBVJ-U1nY7uHLPTqd-XNplc_qBAn_DBL8UyCYFK2LJ7o5icmXmj2AozWAO_N0QTtivYHcHchGARyUMUOLw.J16eJ-X9uc2zkDDBGdaABRowJ8ySZCkOZVHHKz_TWps&amp;dib_tag=se&amp;keywords=pink+nails&amp;qid=1760884844&amp;sprefix=pink+nails,aps,448&amp;sr=8-10&amp;linkCode=ll1&amp;tag=purelychic73-20&amp;linkId=ca43f13fb08bcc54f20df47a2590b707&amp;language=en_US&amp;ref_=as_li_ss_tl" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/44/5f/5e/445f5e4df84f71c856a48fa2f6baea41.png" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">TPT</span>
+        </div>
+        
+        <div class="pname">FREE Google Classroom Netiquette Poster</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,545</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital classroom decor tpt</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.teacherspayteachers.com/Product/FREE-Google-Classroom-Netiquette-Poster-5388617" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/a9/63/9d/a9639d30e7f8d90dece4dd979d95b517.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,527</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wall art quotes</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4363365317/red-christian-wall-art-printable-bible" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/d1/85/fc/d185fc2b72b3c6fe688999ca65c59a85.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Amazon</span>
+        </div>
+        
+        <div class="pname">Classic Vintage Bedroom Feel With Full Mirror &amp; Floral Bedding 🌹🤌🏼</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,446</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">vintage grandma house aesthetic</div>
+        <div class="meta cat">home-decor</div>
+        <a class="cta" href="https://www.amazon.com/Bedsure-Botanical-Floral-Soft-Comforter/dp/B0BLZ14S4B?crid=VX26E2TNIYCS&amp;dib=eyJ2IjoiMSJ9.t38KZtRmAtCJeWe7EGQz0WwEctQm9_wpncPRLs2Wlyd7t-Kz_dadyqKuZj_OjYtdFG6XPrwA1fay49JKt_-h9sC4_D0LJFRGyTUSaBjezGVigxmcaF4m9ZwEvNUkKR5ZTM94Ap4ookZKWIZ_ANadhb7rnW-9DCMEYHeGy0kEGIdJSFPoRilWhPpTHpAI-UQ4mBA-HYBttl7c_BEk0KP_MRpbvmhYa7Gen7o_rfZyOtzGRPuFvkG21ozqkBwqPd91zwJ3ysu9yRaUOeJCrMRupmE8d18k8FThXpYy571sbNQ.9jG5N16iWQHQMf51uLNG0qzTOrmHHHuOOA6TqCT4QWU&amp;dib_tag=se&amp;keywords=Flower%2Bbedding&amp;qid=1777145265&amp;sprefix=flower%2Bbedding%2B,aps,411&amp;sr=8-4-spons&amp;sp_csd=d2lkZ2V0TmFtZT1zcF9hdGY&amp;th=1&amp;linkCode=ll2&amp;tag=avelynhome-20&amp;linkId=4ebe91d713117dd4db76b2994ccc5eac&amp;language=en_US&amp;ref_=as_li_ss_tl" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/62/3c/04/623c04104f93ffdda8c59e32f645113a.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">30 Easy High-Protein Recipes for Muscle, Fat Loss &amp; All-Day Energy</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,394</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">healthy food</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://payhip.com/b/a8Tgl?utm_source=pinterest&amp;utm_medium=pin&amp;utm_campaign=pin770138315" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/3e/33/de/3e33de148bcb962b5c490ce2c19687df.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,380</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital download art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/GableOrlo/listing/1460524591/back-to-school-illustration-wall-art-art?utm_source=Pinterest&amp;utm_medium=ListingManager&amp;utm_campaign=Share&amp;utm_term=so.lmsm&amp;share_time=1681556676705" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/25/51/5e/25515e4f66a6b4ce27dc043052f78351.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,371</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer 2026 nail trends</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4500115420/coral-pink-floral-press-on-nails-with" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/2d/52/7b/2d527b6d9aea4253ff655a47ce82bcdf.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">delicious food</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,361</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">aggressive cut meals</div>
+        <div class="meta cat">health</div>
+        <a class="cta" href="https://payhip.com/b/dB6V3?pp=1" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/20/2d/ca/202dca4a212e825a84ddccff67a4e2ef.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">TPT</span>
+        </div>
+        
+        <div class="pname">Digital Beat the Teacher</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,348</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">digital classroom decor tpt</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.teacherspayteachers.com/Product/Digital-Beat-the-Teacher-5842320" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/b7/86/30/b786301b0cbe9612bfc957130cad86a6.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Depop</span>
+        </div>
+        
+        <div class="pname">Depop Women&#x27;s Accessories</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,321</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">cute summer nails</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.depop.com/products/teegz_nailtdit-short-almond-hand-made-nail-4904/?pla_feed=US" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/11/f6/41/11f641493d8d9acf3fe0cdcfdc02c6e5.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">Cleaning checking list</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,319</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable cleaning checklist</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://payhip.com/b/XnNRE" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/57/49/58/574958920fa920dae27d810ec35b354d.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,286</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">etsy printable art</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/4365336276/modern-black-cat-wall-art-minimalist" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/23/5e/b0/235eb06e621a8f39d74c057056c4f79c.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,266</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">healthy recipes</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4487456506/chicken-avocado-wraps-recipe-ebook?ref=listings_manager_grid&amp;utm_source=pinterest&amp;utm_medium=pin&amp;utm_campaign=pin_19&amp;utm_content=1778428667694_24236_19" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/af/44/e2/af44e260b150eef77d79d37bc80b9545.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,265</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable cleaning checklist</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1624031459/printable-cleaning-schedule-working-moms?load_webview=1&amp;load_webview=1&amp;bid=iJfcyfUU-zS1hb81k4iQK1QexYh-&amp;bid=Q41909Pr92uIBAyrRWyKkhOs_cUw" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/3c/3b/d8/3c3bd8af4352a1d5d13e66418a82f2fb.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Canva</span>
+        </div>
+        
+        <div class="pname">Red and Beige Vintage Scrapbook Strawberry Paper Group Project Present</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,246</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">canva template free download</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.canva.com/templates/EAGlh5pbwIQ-red-and-beige-vintage-scrapbook-strawberry-paper-group-project-presentation/" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/47/5e/46/475e46db477da5b35e9d6bf0cb30741d.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">TPT</span>
+        </div>
+        
+        <div class="pname">Monthly Budget</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,243</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable budget planner template</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.teacherspayteachers.com/Product/Monthly-Budget-6044662" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/de/4f/f4/de4ff4acb97e01c744b33fe8a406a8b0.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Payhip</span>
+        </div>
+        
+        <div class="pname">30-DAY FAT LOSS PLATES EBOOK</div>
+        <div class="price">$— <span class="hint">(price when fetched)</span></div>
+        <div class="meta"><b>4,223</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">healthy food</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://payhip.com/b/GbnMJ" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip ok">details likely available</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/a0/7d/7a/a07d7a68fc3b9a1ea259aaf9a5f39763.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,179</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nails 2026</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/ca/listing/1229523564/white-sunset-chrome-press-on-nails-long" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/d6/88/ea/d688ea46a0c1a2449a507e1aea20f713.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,170</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">chrome nails design</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4475850526/colorful-french-tip-almond-nails-3d-gold" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/41/ae/e3/41aee367eb83a4a6d488348ce731970f.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,126</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">printable wall art quotes</div>
+        <div class="meta cat">digital-products</div>
+        <a class="cta" href="https://www.etsy.com/listing/1570535033/bust-a-move-song-quote-printable-wall" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/21/9a/7d/219a7dfd1d4812c28149277213072e56.webp" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,109</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer cakes</div>
+        <div class="meta cat">food-and-drink</div>
+        <a class="cta" href="https://www.etsy.com/listing/4315145031/best-recipe-for-strawberry-lemon" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/bd/d7/42/bdd7429287419f64109a9a329f38b8d1.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,090</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4493956770/pink-leopard-zebra-star-press-on-nails" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/4d/0b/f0/4d0bf0f4b51bca4e5d75c758a7d70f0d.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,038</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4490609570/pastel-pink-mint-press-on-nails-polka" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/bb/86/3b/bb863bdfb0440e2bbe81c4fbc983d139.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,031</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">press on nails ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://www.etsy.com/listing/4499483479/grey-gingham-press-on-nails-with-gold" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb">
+        <img loading="lazy" src="https://i.pinimg.com/originals/e5/25/d6/e525d60725501112a2bb23b04739c7dc.jpg" alt="">
+        <span class="mainlbl">Source Pin Image</span>
+      </div>
+      <div class="body">
+        <div class="badges">
+          <span class="b lo">Pinterest Interest: Low</span>
+          <span class="b tr">Keyword Trend: —</span>
+          <span class="b src">Etsy</span>
+        </div>
+        
+        <div class="unavail">Product details unavailable</div>
+        <a class="viewsrc" href="#">View source product</a>
+        <div class="meta"><b>4,006</b> saves <span class="hint">(source pin)</span></div>
+        <div class="meta kw">summer nail ideas</div>
+        <div class="meta cat">beauty</div>
+        <a class="cta" href="https://hwcharmstudio.etsy.com/listing/4506777977" target="_blank" rel="noopener">View Product →</a>
+        <span class="chip no">details unavailable (Etsy-class WAF)</span>
+      </div>
+    </article></div>

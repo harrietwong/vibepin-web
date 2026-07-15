@@ -1,0 +1,963 @@
+# VibePin Pinterest Creative Intelligence Layer PRD
+
+**版本：** v0.1
+**状态：** Draft for Fable Review
+**范围：** Create Pins、AI Image、AI Copy、Pinterest Keywords、Reference、Quality Evaluation
+**产品原则：** Pinterest-first · Pin-draft-first · Product-aware · Reference-aware · AI on demand
+
+---
+
+## 1. 项目背景
+
+VibePin 当前已经具备较完整的 Create Pins 闭环：
+
+```text
+Upload / Product Image
+→ Pin Draft Card
+→ AI Copy / AI Image
+→ Edit
+→ Pinterest Board
+→ Schedule / Publish
+```
+
+现阶段主要质量问题不是流程缺失，而是生成内容仍可能出现：
+
+* 图片好看，但缺乏 Pinterest 保存价值；
+* 画面过度商业化、棚拍化或 AI 感明显；
+* 商品与使用场景匹配不足；
+* 缺少真人生活分享感；
+* AI Copy 偏向图片描述，而不是搜索和收藏导向；
+* 高搜索关键词与具体商品、场景和视觉方向结合不足；
+* 一次生成后直接展示结果，缺少自动质量判断和筛选。
+
+当前产品方向是建立一层 **Pinterest Creative Intelligence Layer**，将产品理解、视觉模式、创意方向、参考匹配、关键词、生成和质量判断连接起来。
+
+---
+
+## 2. 产品定位
+
+Pinterest Creative Intelligence Layer 不是独立的图片生成器，也不是新的 Create Pins 工作区。
+
+它是 VibePin 现有创建流程中的智能决策层：
+
+```text
+Product / Image understanding
+→ Pinterest pattern matching
+→ Creative direction
+→ Reference and keyword context
+→ Controlled generation
+→ Quality evaluation
+→ Pin Draft Card
+→ Publish feedback
+```
+
+核心价值：
+
+> 根据用户的商品、图片、Board 和内容目标，自动推荐更适合 Pinterest 的视觉方向、关键词和生成策略，并优先输出更真实、更鲜活、更像创作者分享的结果。
+
+---
+
+## 3. 产品目标
+
+### 3.1 核心目标
+
+1. 自动理解上传图片或商品的类别、属性和使用场景。
+2. 为每个商品推荐 3–5 个适合 Pinterest 的创意方向。
+3. 将高收藏内容规律沉淀为结构化 Visual Pattern Library。
+4. 将创意方向、参考图、关键词和商品信息共同用于 AI Image 和 AI Copy。
+5. 降低生成图的 AI 感、棚拍感和无场景感。
+6. 自动评估多张生成结果，并优先展示质量更高的图片。
+7. 记录用户选择、修改和发布结果，为后续模型优化提供数据。
+
+### 3.2 用户感知目标
+
+用户不需要自己写复杂 Prompt。
+
+用户看到的应该是：
+
+```text
+Recommended for this product
+
+• Cozy real-home styling
+• Product in use
+• Small-space organization idea
+• Creator-style flat lay
+• Tutorial / how-to Pin
+```
+
+而不是一个空白 Prompt 输入框。
+
+---
+
+## 4. 非目标
+
+本阶段不做：
+
+* 重写 Create Pins；
+* 重做 AI Image Drawer；
+* 新增复杂的创意工作台；
+* 自动发布未经用户确认的内容；
+* 自动复制其他 Pinterest Pin；
+* 永久缓存未经授权的 Pinterest 图片作为训练素材；
+* 展示虚假的 Save Potential、Click Potential 或 Trend Score；
+* 用大段参数和高级设置增加用户负担；
+* 替代现有 Pin Draft Card 生命周期；
+* 将创意方向变成新的 Draft 状态。
+
+---
+
+## 5. 目标用户
+
+主要用户：
+
+* Shopify、Etsy、WooCommerce sellers；
+* Pinterest creators；
+* affiliate marketers；
+* bloggers；
+* ecommerce merchants；
+* Pinterest managers / agencies。
+
+典型需求：
+
+```text
+我有一张普通商品图
+→ 系统告诉我适合什么 Pinterest 场景
+→ 给我几个有收藏价值的方向
+→ 生成真实、有生活感的图片和文案
+→ 我编辑后排程发布
+```
+
+---
+
+## 6. 核心用户流程
+
+### 6.1 上传图片流程
+
+```text
+Upload image
+→ 创建 Unscheduled Pin Draft
+→ 后台分析图片
+→ 识别类别、商品属性、颜色、风格和适用场景
+→ 推荐 Creative Directions
+→ 用户可直接编辑、生成 Copy 或生成 AI Image
+```
+
+### 6.2 Shopify 商品流程
+
+```text
+Select Shopify product
+→ 选择商品图片
+→ 创建或关联 Pin Draft
+→ 使用商品标题、描述、类别、标签和图片作为上下文
+→ 推荐 Creative Directions
+→ AI Image / AI Copy
+```
+
+### 6.3 AI Image 流程
+
+```text
+Edit Pin
+→ Generate AI Image
+→ 当前图片成为 Product Image #1
+→ 系统推荐 3–5 个 Creative Directions
+→ 用户选择方向
+→ 可添加 Style References
+→ Generate N Pins
+→ 系统生成多个候选
+→ Quality Judge 评估和排序
+→ 每张结果创建独立 Pin Draft Card
+```
+
+### 6.4 AI Copy 流程
+
+```text
+Generate copy
+→ Image context
+→ Product context
+→ Selected creative direction
+→ Board context
+→ Relevant Pinterest keywords
+→ Generate title / description / alt text
+→ Quality Gate
+→ 成功后写入 Draft
+```
+
+---
+
+## 7. 功能需求
+
+## 7.1 Product and Image Analysis
+
+系统需要从用户图片或商品信息中提取：
+
+* product category；
+* subcategory；
+* visible objects；
+* materials；
+* dominant colors；
+* visual style；
+* likely use cases；
+* likely audience；
+* product scale；
+* packaging / label information；
+* scene suitability；
+* whether background removal or cleanup is needed；
+* whether the image is suitable for lifestyle generation；
+* OCR text；
+* brand/product invariants。
+
+示例输出：
+
+```json
+{
+  "category": "home_storage",
+  "productType": "wooden entryway cabinet",
+  "materials": ["wood", "metal"],
+  "colors": ["natural oak", "black"],
+  "useCases": [
+    "entryway organization",
+    "small apartment storage",
+    "living room styling"
+  ],
+  "recommendedSceneTypes": [
+    "real home corner",
+    "before and after",
+    "small-space organization"
+  ]
+}
+```
+
+分析过程不能阻塞用户手动编辑 Draft。
+
+---
+
+## 7.2 Visual Pattern Library
+
+建立结构化 Pinterest 视觉模式库。
+
+每个 Pattern 至少包含：
+
+| 字段                  | 含义             |
+| ------------------- | -------------- |
+| Pattern name        | 模式名称           |
+| Suitable categories | 适用商品类别         |
+| Scene type          | 场景类型           |
+| Composition         | 构图规则           |
+| Lighting            | 光线规则           |
+| Human presence      | 是否需要真人、手部或使用动作 |
+| Creator realism     | 真人分享感规则        |
+| Text overlay        | 推荐文字叠加类型       |
+| Search intent       | 对应搜索意图         |
+| Keywords            | 推荐关键词组         |
+| Prompt seed         | Prompt 基础结构    |
+| Negative rules      | 禁止项            |
+| Example references  | 有权使用的参考素材      |
+
+初始 Pattern 示例：
+
+```text
+Cozy real-home corner
+Product in use
+Small-space before and after
+Creator-style flat lay
+Sunday reset
+Vanity routine
+Three ways to style
+Tutorial / how-to
+Gift-ready packaging
+Searchable product roundup
+```
+
+Pattern Library 初期允许使用人工规则与大模型结构化生成共同维护。
+
+---
+
+## 7.3 Creative Direction Generator
+
+系统根据以下信息推荐 3–5 个方向：
+
+* image analysis；
+* product category；
+* product metadata；
+* Pinterest Board；
+* keywords；
+* available references；
+* user language；
+* season or campaign context。
+
+每个 Creative Direction 包含：
+
+```text
+Direction name
+Why it fits
+Scene
+Composition
+Lighting
+Human presence
+Creator style
+Pinterest intent
+Suggested keywords
+Prompt instructions
+Negative rules
+```
+
+示例：
+
+```text
+Small-Space Entryway Upgrade
+
+Why it fits:
+The cabinet is suitable for apartment storage and entryway organization.
+
+Scene:
+A real apartment entryway with shoes, keys and a small rug.
+
+Composition:
+Slightly off-center vertical phone-photo composition.
+
+Lighting:
+Soft natural window light.
+
+Creator style:
+Lived-in, useful and realistic rather than showroom-perfect.
+
+Pinterest intent:
+Small apartment organization and entryway ideas.
+```
+
+---
+
+## 7.4 Creative Direction UI
+
+Creative Directions 放在现有 **Generate AI Image Drawer** 内，不新增独立工作区。
+
+建议位置：
+
+```text
+Product images
+Style references
+Recommended directions
+Creative direction
+Advanced controls
+Generate N Pins
+```
+
+展示形式：
+
+```text
+Recommended for this product
+
+[ Cozy real-home setup ]
+[ Product in use ]
+[ Small-space idea ]
+[ Tutorial / how-to ]
+```
+
+规则：
+
+* 默认显示 3–5 个；
+* 用户只能选择一个主方向；
+* 用户可以编辑方向；
+* 用户可以重新生成方向；
+* 系统需要说明推荐理由；
+* 方向选择不能自动创建 Draft；
+* 只有图片生成结果才创建新 Draft。
+
+---
+
+## 7.5 Reference Recommendation
+
+系统未来支持根据商品图片推荐参考素材：
+
+```text
+Product image
+→ image/text embedding
+→ category and metadata filtering
+→ reference retrieval
+→ relevance ranking
+→ Recommended for this product
+```
+
+参考素材优先来源：
+
+* 用户自己上传的参考图；
+* My References；
+* 用户历史成功素材；
+* 品牌自有图片；
+* 有授权的 stock / creator references；
+* 经确认允许展示的外部引用。
+
+每张 Reference 需要保留：
+
+* source；
+* provenance；
+* usage rights；
+* category；
+* scene；
+* style；
+* embedding；
+* user-selected count；
+* accepted / rejected feedback。
+
+Pinterest 来源素材不能默认永久缓存或直接用于生成衍生内容，具体策略需经过数据与合规审查。
+
+---
+
+## 7.6 Pinterest Keyword Intelligence
+
+关键词匹配继续遵循：
+
+```text
+Relevance first
+Search volume second
+```
+
+上下文包括：
+
+* image summary；
+* product category；
+* product title and tags；
+* selected creative direction；
+* Board；
+* page context；
+* season。
+
+推荐 5–8 个关键词。
+
+关键词分组建议：
+
+```text
+Primary search intent
+Style modifiers
+Use-case keywords
+Problem / solution keywords
+Long-tail keywords
+Seasonal keywords
+```
+
+禁止：
+
+* 只按搜索量排序；
+* 无依据使用 Trending；
+* 展示未实际使用的关键词；
+* 将英文关键词伪装成本地化关键词。
+
+---
+
+## 7.7 AI Image Prompt Builder
+
+AI Image Prompt 不再只使用简单的商品描述。
+
+Prompt 结构：
+
+```text
+Product invariants
+Creative goal
+Scene direction
+Composition
+Lighting
+Human presence
+Creator realism
+Pinterest intent
+Reference context
+Negative rules
+```
+
+必须尽量保持：
+
+* 商品形状；
+* 主色；
+* Logo；
+* 标签；
+* 包装；
+* 尺寸比例；
+* 材质特征。
+
+统一 Negative Rules 示例：
+
+```text
+No glossy CGI look
+No sterile showroom
+No floating objects
+No impossible product scale
+No unrelated props
+No warped labels
+No fake reflections
+No plastic texture unless true
+No perfectly centered ecommerce hero shot
+No unnatural hands
+No inconsistent light sources
+```
+
+---
+
+## 7.8 Creator-Style Controls
+
+用户可见的简单控制项：
+
+```text
+Natural creator photo
+Product in use
+Real-life lifestyle
+Less AI-looking
+More lived-in
+More colorful
+More minimal
+Tutorial / how-to
+```
+
+这些不是模型参数，而是对 Creative Direction 和 Prompt Builder 的结构化调整。
+
+不向用户暴露：
+
+* CFG；
+* sampler；
+* hidden system prompt；
+* quality reward；
+* internal judge score。
+
+---
+
+## 7.9 Quality Judge and Reranker
+
+生成 N 张图片后，系统对候选结果进行评估。
+
+基础评价维度：
+
+| 维度                   | 说明                    |
+| -------------------- | --------------------- |
+| Product preservation | 商品是否被改形、改色或丢失细节       |
+| Realism              | 是否像真实照片               |
+| Creator likeness     | 是否具有自然分享感             |
+| Scene compatibility  | 商品与场景是否合理             |
+| Pinterest fit        | 是否具有搜索与保存价值           |
+| Composition          | 是否适合 2:3 Pinterest 画面 |
+| AI artifacts         | 手部、文字、反光、结构是否异常       |
+| Safety               | 是否满足内容安全要求            |
+
+行为：
+
+```text
+Generate 4 candidates
+→ judge all candidates
+→ rank candidates
+→ hide only clearly invalid candidates
+→ show best candidates first
+```
+
+系统不应只生成一张并立即认为成功。
+
+用户仍然可以查看未被判定为无效的其他结果。
+
+---
+
+## 7.10 AI Copy Integration
+
+继续复用现有：
+
+```text
+PinAICopyPanel
+→ generatePinCopy
+→ /api/ai-copy
+→ Quality Gate
+```
+
+增加上下文：
+
+* linked product；
+* selected creative direction；
+* selected reference summary；
+* product category；
+* use case；
+* Board；
+* keywords actually used。
+
+AI Copy 目标：
+
+```text
+Pinterest-searchable
+Save-worthy
+Product-grounded
+Creator-friendly
+Not a literal image caption
+```
+
+Context used 只显示真实使用的输入。
+
+---
+
+## 7.11 Feedback and Learning Events
+
+需要记录：
+
+* image analysis result；
+* recommended directions；
+* selected direction；
+* rejected directions；
+* selected references；
+* rejected references；
+* generation count；
+* kept images；
+* deleted images；
+* regenerate count；
+* “More like this”；
+* “Less AI-looking”；
+* AI Copy before and after user edit；
+* removed keywords；
+* selected Board；
+* schedule；
+* publish；
+* download；
+* save as reference；
+* Pinterest impressions、saves、clicks（可用时）。
+
+所有事件需要关联：
+
+```text
+workspaceId
+userId
+draftId
+productId
+directionId
+referenceIds
+generationId
+modelVersion
+promptVersion
+```
+
+---
+
+## 8. 数据模型建议
+
+### CreativePattern
+
+```text
+id
+name
+categoryIds
+sceneType
+composition
+lighting
+humanPresence
+creatorRealism
+textOverlayType
+searchIntents
+keywordGroups
+promptSeed
+negativeRules
+status
+version
+```
+
+### CreativeDirection
+
+```text
+id
+draftId
+productId
+patternId
+name
+reason
+scene
+composition
+lighting
+humanPresence
+creatorStyle
+pinterestIntent
+keywords
+promptInstructions
+negativeRules
+selected
+createdAt
+```
+
+### ReferenceAsset
+
+```text
+id
+workspaceId
+source
+sourceUrl
+cachedUrl
+provenance
+rightsStatus
+category
+sceneType
+visualStyle
+embedding
+selectedCount
+rejectedCount
+```
+
+### GenerationEvaluation
+
+```text
+id
+generationId
+draftId
+productPreservationScore
+realismScore
+creatorLikenessScore
+sceneFitScore
+pinterestFitScore
+artifactScore
+safetyStatus
+overallRank
+reasons
+judgeVersion
+```
+
+---
+
+## 9. 页面与组件落点
+
+| 页面/组件             | 增加内容                                                                   |
+| ----------------- | ---------------------------------------------------------------------- |
+| Create Pins       | 不增加常驻 AI Setup，继续 Upload-first                                         |
+| Pin Draft Card    | 不增加新生命周期                                                               |
+| Edit Pin          | 显示 Generate AI Image 和 AI Copy                                         |
+| AI Image Drawer   | Recommended directions、Reference recommendation、Creator-style controls |
+| AI Copy Panel     | 使用 Direction / Product / Keyword context                               |
+| Context used      | 显示真实图片、商品、方向、关键词和 Board                                                |
+| Generated Cards   | 保存 direction、reference 和 generation lineage                            |
+| Save as reference | 将用户认可结果加入可复用 Reference Library                                         |
+
+---
+
+## 10. 系统约束
+
+1. 不覆盖原始上传图。
+2. 每张生成结果创建独立 Pin Draft Card。
+3. Creative Direction 不是 Draft lifecycle。
+4. Quality Judge 失败不能污染正常 Draft。
+5. AI Copy 失败不能覆盖已有字段。
+6. 所有用户选择和结果跟随账号体系服务端持久化。
+7. localStorage 只能作为缓存或恢复机制。
+8. 不展示内部 chain of thought。
+9. 不将外部参考素材描述为“复制这个 Pin”。
+10. 不将未经验证的高收藏规律包装成保证表现。
+
+---
+
+## 11. 成功指标
+
+### 产品质量指标
+
+* Creative Direction 选择率；
+* 推荐 Reference 选择率；
+* 首次生成保留率；
+* regenerate rate；
+* AI image rejection rate；
+* “Less AI-looking”使用率；
+* AI Copy 编辑距离；
+* keyword removal rate；
+* Draft → Schedule 转化率；
+* Draft → Publish 转化率；
+* Save as reference 使用率。
+
+### Pinterest 结果指标
+
+在真实数据可用时：
+
+* impressions；
+* saves；
+* save rate；
+* outbound clicks；
+* outbound click rate；
+* Pin clicks；
+* product-level performance；
+* direction-level performance。
+
+---
+
+## 12. 分阶段路线
+
+### Phase 1：Creative Direction v0
+
+实现：
+
+* 扩展 Product / Image Analysis；
+* 内置 Visual Pattern Library；
+* 推荐 3–5 个方向；
+* Direction 写入 AI Image Prompt；
+* Product-aware AI Copy；
+* 基础 Creator-style controls；
+* 记录用户选择事件。
+
+### Phase 1.5：Quality Evaluation
+
+实现：
+
+* 一次生成多个候选；
+* 基础 VLM Judge；
+* product preservation；
+* realism；
+* creator likeness；
+* scene compatibility；
+* reranking；
+* 失败结果处理。
+
+### Phase 2：Reference Intelligence
+
+实现：
+
+* Reference Library；
+* embeddings；
+* semantic retrieval；
+* Recommended for this product；
+* reference selection feedback；
+* “More like this”。
+
+### Phase 3：Performance Learning
+
+实现：
+
+* 用户偏好学习；
+* 商品类别表现；
+* creative direction analytics；
+* Pinterest 发布结果回流；
+* reference ranker；
+* keyword ranker；
+* specialized quality judge。
+
+---
+
+## 13. 大模型增强方向
+
+后续的大模型方向作为独立增强层，基于已经积累的商品、创意方向、用户偏好和发布结果数据建设。
+
+### 13.1 Pinterest Multimodal Creative Model
+
+输入：
+
+```text
+Product image
+Product metadata
+Board
+Keywords
+References
+Brand context
+Creative objective
+```
+
+输出：
+
+```text
+Creative direction
+Scene recommendation
+Composition
+Prompt
+Copy angle
+Quality expectation
+```
+
+重点能力：
+
+* 商品语义理解；
+* 产品与真实场景匹配；
+* Pinterest 搜索意图理解；
+* 多模态参考理解；
+* creator-style creative planning。
+
+### 13.2 Product-Preserving Image Model
+
+面向窄任务的大模型或 LoRA：
+
+```text
+Existing product image
+→ preserve real product
+→ generate lifestyle environment
+→ maintain label, shape, scale and material
+```
+
+重点场景：
+
+* home product lifestyle；
+* beauty product in use；
+* fashion accessories styling；
+* kitchen product demonstration；
+* Etsy handmade product storytelling。
+
+### 13.3 Pinterest Copy Model
+
+基于真实用户接受和修改后的文案，建立：
+
+* category-aware copy；
+* search-intent copy；
+* Board-aware copy；
+* language-aware copy；
+* brand voice copy；
+* product-to-keyword grounding。
+
+### 13.4 Multimodal Quality Model
+
+用于自动评估：
+
+* product preservation；
+* realism；
+* Pinterest saveability；
+* creator authenticity；
+* keyword-image consistency；
+* brand consistency；
+* AI artifact detection。
+
+### 13.5 Personalization Model
+
+结合用户历史：
+
+```text
+Selected directions
+Selected references
+Rejected styles
+Edited copy
+Published Pins
+Performance
+```
+
+自动学习用户偏好，并提供：
+
+* Preferred style；
+* Brand-consistent directions；
+* More like this；
+* Personalized ranking；
+* Recommended default settings。
+
+---
+
+## 14. Fable 评审重点
+
+请 Fable 重点审查：
+
+1. 当前 image analysis 字段能复用多少；
+2. Pattern Library 最适合放在哪个现有模块；
+3. Creative Direction 如何进入现有 AI Image Drawer；
+4. Direction 是否需要服务端持久化；
+5. Product、Draft、Direction、Reference 的真实关系；
+6. 当前 AI Image prompt builder 是否能承接结构化 Direction；
+7. 当前一次生成多图后能否增加 Judge 和 reranking；
+8. AI Copy 如何继续共享，不产生第二套实现；
+9. 当前事件系统是否支持后续反馈学习；
+10. 哪些功能可以做成最小改动，哪些需要后续基础设施；
+11. 当前 Reference Picker 能否扩展为 Recommended for this product；
+12. 是否存在数据来源、缓存、版权和展示限制；
+13. 是否会破坏 Upload-first 和 Pin-draft-first；
+14. 是否存在不必要的大范围重构。
+
+---
+
+## 15. PRD 验收标准
+
+PRD 对应功能完成后，应满足：
+
+* 用户上传商品图后可以得到 3–5 个有理由的创意方向；
+* 用户无需写复杂 Prompt；
+* 选择方向后，AI Image Prompt 包含场景、构图、光线、真实感和禁止项；
+* 生成图片保留真实商品关键特征；
+* AI Copy 同时使用图片、商品、方向、关键词和 Board；
+* 一次生成多个候选时，优质结果优先显示；
+* 用户选择、拒绝和发布行为能够记录；
+* 不覆盖原图；
+* 不增加新的 Draft lifecycle；
+* 不重写 Create Pins；
+* 不引入未经授权的 Pinterest 图片训练或缓存流程；
+* 所有数据跟随账号体系跨设备持久化。

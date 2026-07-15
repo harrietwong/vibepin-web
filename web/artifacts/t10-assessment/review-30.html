@@ -1,0 +1,692 @@
+<!doctype html><meta charset="utf-8">
+<title>T10 脏数据可救性 — 人工抽查 30 行</title>
+<style>
+ body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;margin:24px;color:#111;background:#fafafa}
+ h1{margin:0 0 4px} .sub{color:#555;margin-bottom:16px}
+ .box{background:#fff;border:1px solid #e3e3e3;border-radius:8px;padding:12px 16px;margin-bottom:18px}
+ table{border-collapse:collapse;width:100%;background:#fff}
+ td,th{border:1px solid #e3e3e3;padding:10px;vertical-align:top}
+ th{background:#f2f2f2;text-align:left;position:sticky;top:0}
+ .imgcell{width:190px} .imgcell img{width:170px;height:170px;object-fit:contain;background:#f6f6f6;border-radius:6px;display:block}
+ .none{width:170px;height:170px;display:flex;align-items:center;justify-content:center;text-align:center;background:#fdeaea;color:#a11;border-radius:6px;padding:8px;box-sizing:border-box}
+ .badge{color:#fff;padding:3px 8px;border-radius:99px;font-size:11px;font-weight:700;display:inline-block;white-space:nowrap}
+ .lbl{font-size:11px;font-weight:700;margin-bottom:4px} .lbl.bad{color:#a11} .lbl.good{color:#0a7d33}
+ .ttl{font-weight:600;margin-bottom:6px} .meta{font-size:12px;color:#444;margin-top:3px} .meta.bad{color:#a11}
+ .rsn{font-size:11px;color:#555;margin-top:6px} .dom{font-size:11px;color:#888;font-family:ui-monospace,monospace;margin-top:4px}
+ .mono{font-family:ui-monospace,monospace;color:#888}
+ a{color:#0b5cad}
+</style>
+<h1>T10 历史 Outbound 脏数据 — 可救性人工抽查（30 行）</h1>
+<div class="sub">只读评估，未写库。批次：pin_products / discovery_method='outbound_link_bootstrap'（798 行）。生成于 2026-07-13。</div>
+<div class="box">
+ <b>抽样口径：</b>798 行按 domain 分层随机抽 <b>363</b> 行做只读 GET 判定；下表是从这 363 行中随机取 30 行（为便于对比，刻意保证含 12 行"可救"样本，<b>因此本表的可救比例不代表总体</b>）。<br>
+ <b>总体判定（n=363）：</b>可救 81 · WAF 拦截不可救 267 · 失效 8 · 非商品页 7 · 错误 0<br>
+ <b>加权外推可救率：约 17.8%（~142/798，95% 区间 14%–22%）</b> —— 低于任务卡 50% 停止阈值。<br>
+ <b>根因：</b>Etsy 占本批 <b>562/798 = 70.4%</b>，对任何合规轻量 GET 一律 403（抽样 240/240 全拦），<b>商品图无法重抓</b>。
+</div>
+<table>
+ <tr><th style="width:150px">判定</th><th>当前（脏）</th><th>修复后（真实商品图）</th><th>抓取到的商品信息 / 当前脏值</th></tr>
+ 
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">posterwallprints.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/a4/45/ad/a445ad57983cacd628382b3c9bfdc384.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="http://www.posterwallprints.com/cdn/shop/files/bauhausblackandwhiteposter.jpg?v=1747041601" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Bauhaus black and white poster N1</div>
+        <div class="meta">抓到价格：<b>41.00</b></div>
+        <div class="meta">DB 现有 product_name：<i>Bauhaus Black and white poster N1</i></div>
+        <div class="meta bad">当前脏 save_count：<b>729</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.posterwallprints.com/products/bauhaus-exhibition-poster-1919-classic-wave-design?variant=44011312414874" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/117304765291182283/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/b0/e3/c6/b0e3c6c258fa76be238f6b4ebf069b95.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Monthly Savings Challenge Printable Tracker Files | Budget Binder A6 size | Cash</i></div>
+        <div class="meta bad">当前脏 save_count：<b>269</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1454293510/monthly-savings-challenge-printable" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/155303888022817351/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">lunaluxestudios.etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/d9/e5/b9/d9e5b9cfcfbd49103c4852f934fe4802.png" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Rainbow Logo Design Ideas, Logo Design Canva Template</i></div>
+        <div class="meta bad">当前脏 save_count：<b>102</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://lunaluxestudios.etsy.com/listing/1840930304" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/955115033479607966/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/0c/eb/32/0ceb321604f7d2f48466eb71bf39ed8e.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Bombshell Birthday Invitation: Love Island Party, Customizable (Digital Download</i></div>
+        <div class="meta bad">当前脏 save_count：<b>141</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/4330801721/bombshell-birthday-invitation-love" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4609293614350086528/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/83/dc/0f/83dc0f0a5b1a34f503392fdc60e07f95.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Creative Mode Wall Print Large Digital Download Print Colorful Poster Retro Wall</i></div>
+        <div class="meta bad">当前脏 save_count：<b>438</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1717467815/creative-mode-wall-print-large-digital" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/412994228345496794/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">canva.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/9b/a4/f8/9ba4f874efe9e20587b3944bb34551c9.png" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Project Presentation</i></div>
+        <div class="meta bad">当前脏 save_count：<b>277</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.canva.com/templates/EAHGdacWpCo-pink-and-green-illustrated-cute-flower-project-presentation/" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/747316131958644477/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">tableshoppeco.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/e8/47/2d/e8472d60a3108fffe3ce63bded9d4694.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://tableshoppeco.com/cdn/shop/files/799E094C-113A-4628-9CE8-65E5B2D7DCF1.jpg?v=1776361741&amp;width=1920" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Navy Stripe Double Bow Kit</div>
+        <div class="meta">抓到价格：<b>14.00</b></div>
+        <div class="meta">DB 现有 product_name：<i>Navy Stripe Double Bow Kit - Include 4 twist ties</i></div>
+        <div class="meta bad">当前脏 save_count：<b>530</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://tableshoppeco.com/products/navy-stripe-double-bow-kit?variant=51067727675698" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4592616179165367424/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">sugarandspize.etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/f7/5c/bf/f75cbfe741503a04cd6e7b1d96424dd3.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>New York City Print, Hand Drawn NYC Poster, Retro Trendy Ink Bleed Style, Minima</i></div>
+        <div class="meta bad">当前脏 save_count：<b>10300</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://sugarandspize.etsy.com/listing/1634602572" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/979884831413073411/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/a0/7d/7a/a07d7a68fc3b9a1ea259aaf9a5f39763.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Navy Blue Polka Dot Press On Nails - Set of 10 False Nails</i></div>
+        <div class="meta bad">当前脏 save_count：<b>4065</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1229523564/white-sunset-chrome-press-on-nails-long" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4596345729491285632/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">chicandluna.etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/f8/29/d5/f829d564828cbd020e8a33f5864c68c1.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Planner Stickers PNG Bundle – Cute Kawaii Office Supplies, Planner Girl Stickers</i></div>
+        <div class="meta bad">当前脏 save_count：<b>159</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://chicandluna.etsy.com/listing/4303031553/planner-stickers-png-bundle-cute-kawaii" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/1081426929283575412/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/56/4b/eb/564beba510b60eb15abaa614d3b90c6e.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Black Cat Press On Nails | Retro Cute Short Almond Nails | Star, Swirl, Meow &amp; C</i></div>
+        <div class="meta bad">当前脏 save_count：<b>2832</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/4493248048/black-cat-press-on-nails-retro-cute" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4604156657046148736/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/a8/2e/48/a82e4898ffd58b0bfb29e55ded02edf6.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>5x7 Wedding Seating Chart Template Calligraphy, Table Seating Chart Printable, E</i></div>
+        <div class="meta bad">当前脏 save_count：<b>1441</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1205298550/5x7-wedding-seating-chart-template" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/260716265922752838/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/58/fe/81/58fe8144ea81370441128fe8823a5e04.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Modern Minimalist Wedding Seating Chart Template, Editable Canva (Instant Downlo</i></div>
+        <div class="meta bad">当前脏 save_count：<b>567</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/4429747435/editable-wedding-seating-chart-template" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4607534396992906368/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/09/08/68/090868dbbea6a07647db2ab4a2669103.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Blue Window Woman Art Print: Minimalist Modern Decor (Digital Download)</i></div>
+        <div class="meta bad">当前脏 save_count：<b>355</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/4384524803/blue-window-woman-art-print-minimalist" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4595430964497067520/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/b3/08/fc/b308fc90dc71e541013da86bc6df3f55.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Universe Show Me How Good It Gets Print Trendy Wall Art Manifestation Print Affi</i></div>
+        <div class="meta bad">当前脏 save_count：<b>135</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1395774799/universe-show-me-how-good-it-gets-print" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/155303888045587178/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">byskylerolson.shop</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/82/ab/77/82ab779048053ca44cec429ed587e5b3.png" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://byskylerolson.shop/cdn/shop/files/1_09f8c65d-5237-437b-ad7b-26d428f90a7e.png?v=1757471680&amp;width=1920" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Ultimate Wedding Planning Spreadsheet-Pink</div>
+        <div class="meta">抓到价格：<b>34.80</b></div>
+        <div class="meta">DB 现有 product_name：<i>Ultimate Wedding Planning Spreadsheet-Pink</i></div>
+        <div class="meta bad">当前脏 save_count：<b>106</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://byskylerolson.shop/products/ultimate-wedding-planning-spreadsheet-pink?variant=42023294500926" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4602186323954796800/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">marybensonart.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/f8/42/19/f842198a0f13c3b75d17294baac1c7ab.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://marybensonart.com/cdn/shop/files/IntotheGarden.jpg?v=1710792055&amp;width=1920" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Into the Garden PRINT</div>
+        <div class="meta">抓到价格：<b>42.00</b></div>
+        <div class="meta">DB 现有 product_name：<i>Into the Garden PRINT – Mary Benson Art</i></div>
+        <div class="meta bad">当前脏 save_count：<b>1096</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://marybensonart.com/products/into-the-garden-print" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/35888128285032097/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/d4/79/e2/d479e215400e6659ebd82329773d8b69.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>🎨 Painting Abstract Flowers in Procreate
+
+Who said gold details are only for Chr</i></div>
+        <div class="meta bad">当前脏 save_count：<b>1370</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1811131400/nabor-kistej-glitter-dla-procreate-o?ref=shop_home_feat_1&amp;pro=1&amp;logging_key=0bc9d2a612e53b04834fdd22acf7b60c8b4f8f37:1811131400" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/350788258496005324/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">amazon.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/a7/0d/bf/a70dbf345a201cbd0316a690c9a63bf1.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://m.media-amazon.com/images/I/61UWot0bM-L._SL1000_.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>$10</b></div>
+        <div class="meta">DB 现有 product_name：<i>Elegant 3D Floral French Nails 🌸✨ | Pink &amp; White Almond Nail Design</i></div>
+        <div class="meta bad">当前脏 save_count：<b>4569</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.amazon.com/LPOODDNU-Pink-Press-Nails-Almond/dp/B0FNWTNXM3?crid=36CMXXQJL8I4T&amp;dib=eyJ2IjoiMSJ9.TO8cb23Lwax-fiE-eOkZv0XCKCb7pV1adbV12y9boSZf6NjVOWRpsMr3ciqsO3J7dpfD8X8vmWYtDY1bKIxonkeD93TKhZg0LQyOUbI1mFeC7qkE8pj3JLkUDrQwvcSG864h_c4ctRO6U1-dm2-uzegVkJqfs80iKpOWcGOvH3aAhsKL1lLI5s1o2BlqoHUYE8cj2k3aw38b8U5Qqh5dNsCmNvBVJ-U1nY7uHLPTqd-XNplc_qBAn_DBL8UyCYFK2LJ7o5icmXmj2AozWAO_N0QTtivYHcHchGARyUMUOLw.J16eJ-X9uc2zkDDBGdaABRowJ8ySZCkOZVHHKz_TWps&amp;dib_tag=se&amp;keywords=pink+nails&amp;qid=1760884844&amp;sprefix=pink+nails,aps,448&amp;sr=8-10&amp;linkCode=ll1&amp;tag=purelychic73-20&amp;linkId=ca43f13fb08bcc54f20df47a2590b707&amp;language=en_US&amp;ref_=as_li_ss_tl" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/5699937025076502/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">lysfilter.etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/41/f8/32/41f8325a763ed57a6f23e9490d4e285e.png" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Wedding Website Template | Editable Digital Invitation with RSVP | Red Classic</i></div>
+        <div class="meta bad">当前脏 save_count：<b>468</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://lysfilter.etsy.com/listing/4371272430" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/1045749975984326892/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">presets.io</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/5a/2c/66/5a2c664f85e34279da675304ec315279.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://presets.io/cdn/shop/products/VintageLook.jpg?v=1742659996&amp;width=2048" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Vintage Look Preset Collection</div>
+        <div class="meta">抓到价格：<b>15.00</b></div>
+        <div class="meta">DB 现有 product_name：<i>Vintage Look Lightroom Presets</i></div>
+        <div class="meta bad">当前脏 save_count：<b>440</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://presets.io/products/vintage-look" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/895371969647685811/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">delicatetype.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/41/a3/64/41a364827a6a35e12719b49d7b9c6392.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://delicatetype.com/cdn/shop/files/day6-sketch-bw2.jpg?v=1732043855&amp;width=2400" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Practice Will Never Make You Worse Print</div>
+        <div class="meta">抓到价格：<b>6.00</b></div>
+        <div class="meta">DB 现有 product_name：<i>Practice Will Never Make You Worse Print - 4x5</i></div>
+        <div class="meta bad">当前脏 save_count：<b>144</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://delicatetype.com/products/practice-will-never-make-you-worse-print?variant=50114163114276" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/586734657749658905/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">scarlowdigital.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/e6/95/72/e6957277f9a44f6e02dc5887cfa4613f.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://scarlowdigital.com/cdn/shop/files/IMG_5767_c0aec5e9-95e8-4568-b2e2-e345b0746d07.jpg?v=1738069891&amp;width=1920" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Love Like Jesus PNG Digital Design</div>
+        <div class="meta">抓到价格：<b>4.00</b></div>
+        <div class="meta">DB 现有 product_name：<i>Love Like Jesus PNG Digital Design</i></div>
+        <div class="meta bad">当前脏 save_count：<b>760</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://scarlowdigital.com/products/love-like-jesus-png-digital-design-1?variant=50956087492881" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/1037094620440715204/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/40/9f/98/409f98d7025b52a7e746062cba83fad7.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Everyday Planner Stickers for Printed or Digital Planners, Goodnotes, Bullet Jou</i></div>
+        <div class="meta bad">当前脏 save_count：<b>172</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1184033405/planner-stickers-for-printed-or-digital?utm_medium=SellerListingTools&amp;utm_campaign=Share&amp;utm_source=Pinterest&amp;share_time=1645995127000&amp;utm_term=so.slt" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/1042935226179731290/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">museelegance.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/67/6d/02/676d02df0b8bf80046f076fe6536f2f7.png" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://museelegance.com/cdn/shop/files/wallart-68-white-framed.png?v=1777824793&amp;width=1920" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Vogue Dancing Ladies Wall Art Print - A0 84x119 cm / White Framed</div>
+        <div class="meta">抓到价格：<b>22.99</b></div>
+        <div class="meta">DB 现有 product_name：<i>Vogue Dancing Ladies Wall Art Print</i></div>
+        <div class="meta bad">当前脏 save_count：<b>647</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://museelegance.com/products/vogue-dancing-ladies-wall-art-print?utm_medium=clickthrough&amp;utm_source=pinterest" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/1087056428837829000/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">poshmark.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/c5/3d/ef/c53def016b3fc29544628c79543ff0bc.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://di2ponv0v5otw.cloudfront.net/posts/2024/11/21/67401be26af5750f7a2bff3d/m_67401bec154600ba06cce87d.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">I May Snap 20oz tumbler! NWOT! Hand wash only. Made to order!</div>
+        <div class="meta">抓到价格：<b>23.0</b></div>
+        <div class="meta">DB 现有 product_name：<i>Hand Crafted Dining | I May Snap 20oz Tumbler! Nwot! Hand Wash Only. Made To Ord</i></div>
+        <div class="meta bad">当前脏 save_count：<b>143</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://poshmark.com/listing/I-May-Snap-20oz-tumbler-NWOT-Hand-wash-only-Made-to-order-67401be26af5750f7a2bff3d?utm_source=pin_unpaid" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/68749411386/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/fa/6b/a7/fa6ba7fd04b0a06372e80f061b49a8a6.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>etsy</i></div>
+        <div class="meta bad">当前脏 save_count：<b>172</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/799187613/lifestyle-digital-stickers-for-goodnotes" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/416934878015936513/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">nailhandy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/55/f6/c9/55f6c902afd4b0e52ae9dfee6ae84776.png" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://nailhandy.com/cdn/shop/files/4_d5bd3218-ddfc-4ac7-975c-6f110f0c39d4.png?v=1776745208&amp;width=1920" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Lemon Breeze</div>
+        <div class="meta">抓到价格：<b>24.95</b></div>
+        <div class="meta">DB 现有 product_name：<i>Lemon Breeze, XS / Short (18mm)</i></div>
+        <div class="meta bad">当前脏 save_count：<b>5620</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://nailhandy.com/products/lemon-breeze?variant=52588321112353&amp;utm_medium=cpc&amp;utm_source=pinterest&amp;utm_campaign=Pinterest%20Shopping&amp;country=US" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/4611263927895500160/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#8a5a00">不可救 BLOCKED (WAF 403)</span>
+          <div class="rsn">站点 WAF 对任何只读 GET 返回 403，抓不到商品图</div>
+          <div class="dom">etsy.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/2d/ca/72/2dca72e64d31d0ef0a1dd3f8e55ae323.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <div class="none">抓不到真实商品图<br><small>站点 WAF 对任何只读 GET 返回 403，抓不到商品图</small></div>
+      </td>
+      <td>
+        <div class="ttl">—</div>
+        <div class="meta">抓到价格：<b>—</b></div>
+        <div class="meta">DB 现有 product_name：<i>Two Planner Covers</i></div>
+        <div class="meta bad">当前脏 save_count：<b>752</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.etsy.com/listing/1627634659/two-planner-covers" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/155303888080934611/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 403</div>
+      </td>
+    </tr>
+    <tr>
+      <td><span class="badge" style="background:#0a7d33">可救 RECOVERABLE</span>
+          <div class="rsn">商品页可抓，取到真实商品图</div>
+          <div class="dom">teacherspayteachers.com</div></td>
+      <td class="imgcell">
+        <div class="lbl bad">当前脏 image_url（pinimg 来源 Pin 图）</div>
+        <img src="https://i.pinimg.com/originals/2f/fd/39/2ffd39327d6589ba9a5418fe450ff90f.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td class="imgcell">
+        <div class="lbl good">重新抓取的真实商品图</div>
+        <img src="https://ecdn.teacherspayteachers.com/thumbitem/Editable-Word-Wall-2721957-1628795557/original-2721957-1.jpg" loading="lazy" referrerpolicy="no-referrer">
+      </td>
+      <td>
+        <div class="ttl">Editable Word Wall</div>
+        <div class="meta">抓到价格：<b>3.00</b></div>
+        <div class="meta">DB 现有 product_name：<i>Editable Word Wall by Especially Education | TPT</i></div>
+        <div class="meta bad">当前脏 save_count：<b>222</b>（实为来源 Pin 收藏数，应迁到 source_pin_saves 且产品侧置 NULL）</div>
+        <div class="meta"><a href="https://www.teacherspayteachers.com/Product/Editable-Word-Wall-2721957" target="_blank" rel="noopener">source_url ↗</a>
+           &nbsp;|&nbsp; <a href="https://www.pinterest.com/pin/2111131071712208/" target="_blank" rel="noopener">来源 Pin ↗</a></div>
+        <div class="meta mono">HTTP 200</div>
+      </td>
+    </tr>
+</table>

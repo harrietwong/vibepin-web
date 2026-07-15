@@ -1,0 +1,756 @@
+{
+  "generated_at": "2026-07-13T09:17:11.442505+00:00",
+  "model": "gemini-2.5-flash",
+  "results": [
+    {
+      "id": "c1bc2d7f-be87-49ec-be5e-db426c2983a3",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/a7/ad/85/a7ad8528460c11e33457f98b2a6e8ecc.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 201,
+      "error": null
+    },
+    {
+      "id": "84646834-04bf-49a5-bf0b-a68f45765ca8",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/32/10/a4/3210a42d78f32429d0e70884ddca4a90.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 205,
+      "error": null
+    },
+    {
+      "id": "6598f746-a49f-409e-a149-e893adb20713",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/83/cb/22/83cb22d8144a7b76ec450dbb21147f39.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 210,
+      "error": null
+    },
+    {
+      "id": "35fbf4ad-60f5-4381-acf6-699d79a7a920",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/46/62/cc/4662cce19715138e4b36ecf73195802f.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 226,
+      "error": null
+    },
+    {
+      "id": "c5eeed02-6831-4936-8e4f-b0c521d5d34e",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/4f/17/c8/4f17c8915793a006a0631d87e430aa6f.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "light"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 239,
+      "error": null
+    },
+    {
+      "id": "cef666d0-61f8-4f70-8729-6dde521eca5e",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/68/a4/61/68a46113dee1986aa39c0716d699c844.png",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 393,
+      "error": null
+    },
+    {
+      "id": "7d242844-fd97-4c57-aef7-e326bed0a963",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/0a/d2/72/0ad272046fad7238ef71db6e3177584a.png",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "light"
+      },
+      "status": "ok",
+      "tokens_in": 1619,
+      "tokens_out": 304,
+      "error": null
+    },
+    {
+      "id": "6f851ae5-5eeb-4362-b9dd-796425df291a",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/c2/99/db/c299dbbd7a64a970dd0e2f1b6c72be4c.jpg",
+      "labels": {
+        "visual_format": "flat_lay",
+        "human_presence": "none",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 829,
+      "error": null
+    },
+    {
+      "id": "f4758c59-ae43-40cf-9d92-8715cefa8bc6",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/9d/69/52/9d6952aab579abbb908ff2ca2c8fd07c.png",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 214,
+      "error": null
+    },
+    {
+      "id": "cac9c6ef-e7c2-4a82-9228-fe5af167a498",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/9b/87/9a/9b879aa631663f90be79e9ec78b2e306.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "moderate"
+      },
+      "status": "ok",
+      "tokens_in": 1619,
+      "tokens_out": 273,
+      "error": null
+    },
+    {
+      "id": "8c116c49-03b4-481f-82a0-d699d30466b5",
+      "category": "home-decor",
+      "image_url": "https://i.pinimg.com/originals/46/6e/8b/466e8ba5f0aaa836cf9995dea3b24749.png",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 209,
+      "error": null
+    },
+    {
+      "id": "e886137f-0db6-40f3-a519-c1ec739fe83e",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/60/27/3c/60273c52ed9ac927114820d170a0d0ec.jpg",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "unknown",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 533,
+      "error": null
+    },
+    {
+      "id": "70e656c9-8135-4cff-89d5-60290f143cfe",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/5d/e2/86/5de286d663c53d35d3213fa28bdfe1bf.png",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 800,
+      "error": null
+    },
+    {
+      "id": "de6d4b57-44da-4f9a-a26e-fb00f764f529",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/9e/a3/06/9ea30628da7e1ae63f3ff1979989d2b0.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "full",
+        "composition_type": "single_focal",
+        "text_overlay_level": "light"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 288,
+      "error": null
+    },
+    {
+      "id": "a41dc918-06e4-45f8-a69d-3a3731a18248",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/ba/d5/03/bad5036e5d8f40009fa7d89c80b5cc15.jpg",
+      "labels": {
+        "visual_format": "product_only",
+        "human_presence": "none",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 355,
+      "error": null
+    },
+    {
+      "id": "4fd1c651-d1de-4469-b179-362d2be71ddd",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/1f/3f/a5/1f3fa5d743188ef11c3412c1c9a60628.jpg",
+      "labels": {
+        "visual_format": "collage",
+        "human_presence": "partial",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 835,
+      "error": null
+    },
+    {
+      "id": "1eb68676-d102-4d38-ad81-923b2ff4d483",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/0f/a4/01/0fa4018809c35a1f9627c6cf13c30970.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2651,
+      "tokens_out": 322,
+      "error": null
+    },
+    {
+      "id": "87396ae2-fec0-46f1-bce0-7a2c81a8253a",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/f3/2d/11/f32d11b888b02d9f8767647dcc790ee0.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "full",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 240,
+      "error": null
+    },
+    {
+      "id": "96229508-32cf-4844-894b-d2909d2986b8",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/ca/25/d6/ca25d60109bdc55de946450fd57c3761.jpg",
+      "labels": {
+        "visual_format": "collage",
+        "human_presence": "full",
+        "composition_type": "multi_product",
+        "text_overlay_level": "light"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 1282,
+      "error": null
+    },
+    {
+      "id": "42884c94-3a0e-4974-baf2-4c1a2b5a5d90",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/ea/42/93/ea42933a6e9dfc8d800dd86819f3a561.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "full",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 256,
+      "error": null
+    },
+    {
+      "id": "0025fa38-6254-4777-91fb-a7622f8e479d",
+      "category": "fashion",
+      "image_url": "https://i.pinimg.com/originals/77/73/82/77738245faf5c60b8b4b8fc40148f266.png",
+      "labels": {
+        "visual_format": "infographic",
+        "human_presence": "none",
+        "composition_type": "multi_product",
+        "text_overlay_level": "moderate"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 583,
+      "error": null
+    },
+    {
+      "id": "651ae63e-f9a2-412e-822e-c21dff6126d9",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/3a/9d/26/3a9d269a60ceb191faf3bc2c436cbf00.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "full",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 332,
+      "error": null
+    },
+    {
+      "id": "43886fea-ae28-44ef-bc2e-a6a94e8ade6a",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/da/7b/f6/da7bf6b6000dd83d65e1eec9c93a1ad8.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "partial",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 411,
+      "error": null
+    },
+    {
+      "id": "eb1a7ec8-f7a2-4c11-a3a0-37bb0736a9fc",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/1e/45/b0/1e45b08244d631f7a9a48589c9b01602.jpg",
+      "labels": {
+        "visual_format": "product_only",
+        "human_presence": "none",
+        "composition_type": "single_focal",
+        "text_overlay_level": "light"
+      },
+      "status": "ok",
+      "tokens_in": 1619,
+      "tokens_out": 1190,
+      "error": null
+    },
+    {
+      "id": "4d8fb130-b4a5-4f32-8fb6-d3a1029848fe",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/6c/99/ee/6c99eef5457e6c1a7c6b9f51b537425b.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "full",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 252,
+      "error": null
+    },
+    {
+      "id": "dc154c5a-f76a-4d41-9463-1fe678528d23",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/64/bb/20/64bb20ac67a90f910153c86f21e36ab1.jpg",
+      "labels": {
+        "visual_format": "collage",
+        "human_presence": "none",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 1025,
+      "error": null
+    },
+    {
+      "id": "7f85aa2f-9b98-4df9-8bb9-e70782cd703a",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/20/04/a9/2004a91d07742d6fcfe0786521b8119e.jpg",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 1619,
+      "tokens_out": 1148,
+      "error": null
+    },
+    {
+      "id": "71dc9272-c492-4240-b20a-67c289d69e7a",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/af/25/6b/af256b5edde58bbd199a6cb9f6f6b149.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "full",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 270,
+      "error": null
+    },
+    {
+      "id": "9e799f22-ff30-4801-95ef-71670d398945",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/originals/6e/fc/e0/6efce0755eecdc45c335e57896f143a6.jpg",
+      "labels": {
+        "visual_format": "product_only",
+        "human_presence": "none",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 641,
+      "error": null
+    },
+    {
+      "id": "cf430243-3adb-4bce-ad85-0d1beddef56e",
+      "category": "womens-fashion",
+      "image_url": "https://i.pinimg.com/236x/00/2a/f7/002af7b233c8f008d9dc2d5354875d0e.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "full",
+        "composition_type": "scene",
+        "text_overlay_level": "light"
+      },
+      "status": "ok",
+      "tokens_in": 1103,
+      "tokens_out": 241,
+      "error": null
+    },
+    {
+      "id": "69072b59-d2b6-4a88-b529-66c641d15120",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/82/46/6e/82466e4067b11acd398dd3250bbe23d7.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 288,
+      "error": null
+    },
+    {
+      "id": "2887879f-b886-4f42-878e-a6e6431961ed",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/f1/1c/92/f11c925f0a0ffa026e00ce84c1fdedc8.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 294,
+      "error": null
+    },
+    {
+      "id": "b8e2ab6d-7819-426c-86b3-433f255643f1",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/4a/b3/77/4ab377350f385cf6aed7ffa5b0ee891f.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 277,
+      "error": null
+    },
+    {
+      "id": "456b1f56-b546-4cea-ae99-c2a2e748017e",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/a0/76/c0/a076c06202258f93db4393d608965ef6.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 3683,
+      "tokens_out": 308,
+      "error": null
+    },
+    {
+      "id": "25d1886d-f56c-4eab-ad11-dd0f1e0ab86b",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/c3/64/20/c3642024d5d9f5e96bd9782fb9dd7183.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 323,
+      "error": null
+    },
+    {
+      "id": "99832ee2-046e-4636-b3e8-aaa99ac8eff2",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/91/01/c0/9101c0d20a0803cf9239b5236c4519d2.webp",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 279,
+      "error": null
+    },
+    {
+      "id": "36dc5bb3-fe3e-42e2-a86a-ef00ec6de237",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/1d/88/41/1d8841d420ba1eb7c999fef34f1c1589.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 1619,
+      "tokens_out": 326,
+      "error": null
+    },
+    {
+      "id": "507df0ee-bf3a-4fbd-902b-35c90b4344b4",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/30/f8/0f/30f80f6ef5b7c1aae84b4cc530ca6702.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 303,
+      "error": null
+    },
+    {
+      "id": "f976011a-a955-4812-8f3b-4f6b7ec03478",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/5d/1d/aa/5d1daa3044b0bdbddb250276586ea58d.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 305,
+      "error": null
+    },
+    {
+      "id": "a70b3d09-ffee-4c4c-983c-59d1bf1dd000",
+      "category": "beauty",
+      "image_url": "https://i.pinimg.com/originals/03/dc/52/03dc521c3d79647a0d950ce4ab3559b5.jpg",
+      "labels": {
+        "visual_format": "lifestyle",
+        "human_presence": "hands",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 482,
+      "error": null
+    },
+    {
+      "id": "3bfda56c-4200-4328-b260-405eee81a1d1",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/be/ab/ce/beabcef0dbf052840cbfd7c897eb4fe3.jpg",
+      "labels": {
+        "visual_format": "infographic",
+        "human_presence": "none",
+        "composition_type": "abstract",
+        "text_overlay_level": "heavy"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 358,
+      "error": null
+    },
+    {
+      "id": "b86e9466-e1a6-45c3-a51c-2f80062ccadf",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/e7/95/50/e79550aefde2afced626aed7335664e4.jpg",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "abstract",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 658,
+      "error": null
+    },
+    {
+      "id": "c9cd2ae6-8197-4e49-80be-54a61c4bbfe5",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/10/40/a2/1040a24d0831b823904d57d07223f8b9.jpg",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "unknown",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 1275,
+      "error": null
+    },
+    {
+      "id": "0a60e6f4-809a-40fb-b7ae-375c0d7bae90",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/10/7f/fb/107ffb61b2277e87933c5dd2f98a4125.png",
+      "labels": {
+        "visual_format": "infographic",
+        "human_presence": "none",
+        "composition_type": "abstract",
+        "text_overlay_level": "heavy"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 281,
+      "error": null
+    },
+    {
+      "id": "9a6319da-f3f8-47f6-b95a-e31d4f455f72",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/3b/e1/cf/3be1cf9bc12944100d21cf77ac4e7cfc.jpg",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 939,
+      "error": null
+    },
+    {
+      "id": "a367d890-c987-4181-9084-d9986f8dceaa",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/f7/5c/bf/f75cbfe741503a04cd6e7b1d96424dd3.jpg",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "moderate"
+      },
+      "status": "ok",
+      "tokens_in": 3683,
+      "tokens_out": 781,
+      "error": null
+    },
+    {
+      "id": "9415831a-e00d-44c5-980b-e2feecd1a5de",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/bf/f6/d3/bff6d366941156ba5d1e8b98b341e27c.jpg",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "scene",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 1270,
+      "error": null
+    },
+    {
+      "id": "f90215cc-6c4f-46fc-b86d-6b18e856ae08",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/b4/74/a2/b474a2444602955713438fb8107ceb37.jpg",
+      "labels": {
+        "visual_format": "product_only",
+        "human_presence": "none",
+        "composition_type": "single_focal",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 3683,
+      "tokens_out": 775,
+      "error": null
+    },
+    {
+      "id": "50085b9e-bec3-4db2-9045-ee63c3dd94d3",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/96/04/fb/9604fb16ba92e209edeee69dcc5865ac.jpg",
+      "labels": {
+        "visual_format": "infographic",
+        "human_presence": "none",
+        "composition_type": "single_focal",
+        "text_overlay_level": "heavy"
+      },
+      "status": "ok",
+      "tokens_in": 1619,
+      "tokens_out": 640,
+      "error": null
+    },
+    {
+      "id": "7b317b17-55c6-4b21-acd1-bb8738563694",
+      "category": "digital-products",
+      "image_url": "https://i.pinimg.com/originals/03/b1/61/03b161d153aa727ea4baa83fd655ad3f.png",
+      "labels": {
+        "visual_format": "unknown",
+        "human_presence": "none",
+        "composition_type": "multi_product",
+        "text_overlay_level": "none"
+      },
+      "status": "ok",
+      "tokens_in": 2135,
+      "tokens_out": 802,
+      "error": null
+    }
+  ]
+}

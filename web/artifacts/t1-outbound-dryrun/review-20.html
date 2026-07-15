@@ -1,0 +1,201 @@
+<!doctype html><html><head><meta charset="utf-8"><title>T1 Outbound Dry-run — 20-row human review</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:24px;color:#1a1a1a;background:#fafafa}
+h1{font-size:20px}.meta{color:#666;margin-bottom:16px}
+table{border-collapse:collapse;width:100%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+th,td{border:1px solid #e5e5e5;padding:8px;vertical-align:top;text-align:left;font-size:13px}
+th{background:#f0f0f0;position:sticky;top:0}
+.thumb{width:90px;height:120px;object-fit:cover;border-radius:4px;background:#eee}
+.sub{font-size:11px;color:#555;margin-top:3px}.muted{color:#999}
+.ok{color:#0a7d28;font-weight:600}.warn{color:#b26a00}
+a{color:#1155cc;word-break:break-all}
+</style></head><body>
+<h1>T1 Outbound Link dry-run — 20-row human review表</h1>
+<div class="meta">生成: 2026-07-13T09:34:10.073Z · 用途: 决策人核对误收率 (首页/分类页混入即算误收, ≤10% 为过)。<br>
+每行 = 两层判定均通过。左=来源 Pin 缩略图 (热链, referrerpolicy=no-referrer)；中=outbound 终点 URL (可点击)；右=提取到的商品图/标题/价格。<br>
+<b>page-blocked 行</b> (Etsy/eBay/Depop): 页面被 WAF 403 拦截, 无法轻量 GET; 但 URL 命中 canonical 商品详情页模式 (/listing/&lt;id&gt;, /itm/&lt;id&gt;, /products/&lt;slug&gt;)——不可能是首页/分类/搜索。</div>
+<table>
+<thead><tr><th>#</th><th>来源 Pin</th><th>Outbound 终点 URL</th><th>商品图</th><th>商品标题</th><th>价格</th><th>判定依据</th></tr></thead>
+<tbody>
+<tr>
+      <td>1</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/0b/cc/80/0bcc80bca3ac963454cd671267240d5e.png" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/2181499816876166/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 1370 · cat: digital-products</div></td>
+      <td><a href="https://www.etsy.com/listing/4331007869/ecclesiastes-311-floral-scripture-wall?etsrc=sdt" target="_blank" rel="noreferrer">https://www.etsy.com/listing/4331007869/ecclesiastes-311-floral-scripture-wall?etsrc=sdt</a><div class="sub muted">lunascriptjournals.etsy.com · etsy</div></td>
+      <td><span class='muted'>blocked</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class="warn">URL-rule ✓ + page-blocked (WAF 403); URL pattern is canonical PDP (Etsy /listing, eBay /itm, Depop /products)</span></td>
+    </tr>
+<tr>
+      <td>2</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/f8/fe/7b/f8fe7bc931277da08cbef3aa0ae298d6.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/840554717998303785/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 1125 · cat: home-decor</div></td>
+      <td><a href="https://tableclothsfactory.com/products/scuba-90x156-rounded-tablecloth-ivory?variant=45293426770105" target="_blank" rel="noreferrer">https://tableclothsfactory.com/products/scuba-90x156-rounded-tablecloth-ivory?variant=4529</a><div class="sub muted">tableclothsfactory.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://tableclothsfactory.com/cdn/shop/files/TAB_SCUBA_90156RR_IVR__02_efa0ae27-0557-4d3d-8d36-4029fff9cd77.jpg?crop=center&amp;height=1024&amp;v=1763604867&amp;width=1024" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Scuba Rectangular 90&amp;quot;x156&amp;quot; Tablecloth Ivory with Rounded Corners – Seamless, Wrinkle Free &amp;amp; Stain Resistant Table Cover</td>
+      <td>25.29</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>3</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/2d/ca/72/2dca72e64d31d0ef0a1dd3f8e55ae323.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/155303888080934611/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 752 · cat: digital-products</div></td>
+      <td><a href="https://www.etsy.com/listing/1627634659/two-planner-covers" target="_blank" rel="noreferrer">https://www.etsy.com/listing/1627634659/two-planner-covers</a><div class="sub muted">www.etsy.com · etsy</div></td>
+      <td><span class='muted'>blocked</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class="warn">URL-rule ✓ + page-blocked (WAF 403); URL pattern is canonical PDP (Etsy /listing, eBay /itm, Depop /products)</span></td>
+    </tr>
+<tr>
+      <td>4</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/65/8e/e3/658ee3c8e42abdf59fb9b42979ee6fe4.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/275845545923914275/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 3735 · cat: home-decor</div></td>
+      <td><a href="https://everlastingfabric.com/products/textured-ruffle-cotton-blanket-blue?_pos=3&amp;_psq=blue+blan&amp;_ss=e&amp;_v=1.0&amp;variant=43898197639409" target="_blank" rel="noreferrer">https://everlastingfabric.com/products/textured-ruffle-cotton-blanket-blue?_pos=3&amp;_psq=blu</a><div class="sub muted">everlastingfabric.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://everlastingfabric.com/cdn/shop/files/textured-ruffle-cotton-blanket-blue-blankets-ever-lasting-blanket011-blue-sm-6401480.jpg?v=1764946634&amp;width=2048" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Textured Ruffle Cotton Blanket / Blue</td>
+      <td>119.00</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>5</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/b8/9f/5e/b89f5e81d9c64c59fc243a7ac7ce4d1e.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/1113937289114294484/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 1045 · cat: beauty</div></td>
+      <td><a href="https://www.rhodeskin.com/products/peptide-lip-tint-sweet-pea?utm_source=google&amp;utm_medium=paid&amp;utm_campaign=FF_Search_Brand_US&amp;utm_content=141398040630&amp;utm_term=rhode&amp;utm_source=google&amp;utm_medium=cpc&amp;utm_campaign=17448150165&amp;utm_adgroup=141398040630&amp;utm_content=779591381173&amp;utm_term=rhode&amp;gad_source=1&amp;gad_campaignid=17448150165&amp;gbraid=0AAAAAok-sx-ibnd6EzRX8PoRmpkJK9nRN&amp;gclid=Cj0KCQjws83OBhD4ARIsACblj1926gmkwToKhePLnGldJRtEy89Cu6Y8mCRMRt-TSzCweyocwZR5GtYaAgI4EALw_wcB" target="_blank" rel="noreferrer">https://www.rhodeskin.com/products/peptide-lip-tint-sweet-pea?utm_source=google&amp;utm_medium</a><div class="sub muted">www.rhodeskin.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://www.rhodeskin.com/cdn/shop/files/sweet-pea-main_480x480.png?v=1771969846" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>peptide lip tint sweet pea</td>
+      <td>20.00</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>6</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/87/74/9d/87749dd483b9d919768c6582696f7c70.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub">no pin url</div><div class="sub">saves: 812 · cat: home-decor</div></td>
+      <td><a href="https://www.westelm.com/products/calla-coffee-table-h12199/" target="_blank" rel="noreferrer">https://www.westelm.com/products/calla-coffee-table-h12199/</a><div class="sub muted">www.westelm.com · shopify/other</div></td>
+      <td><img class="thumb" src="https://assets.weimgs.com/weimgs/rk/images/wcm/products/202602/0038/calla-solid-wood-coffee-table-48-58-d.jpg" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Calla Solid Wood Coffee Table (48&amp;quot;&amp;ndash;58&amp;quot;) | West Elm</td>
+      <td>$39.99</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (price marker)</td>
+    </tr>
+<tr>
+      <td>7</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/2e/d9/60/2ed960c0b1e3f22c1dee6f8018363580.png" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/309622543153812509/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 2380 · cat: digital-products</div></td>
+      <td><a href="https://www.etsy.com/listing/4352831442/neutral-planner-bundle-weekly-planner" target="_blank" rel="noreferrer">https://www.etsy.com/listing/4352831442/neutral-planner-bundle-weekly-planner</a><div class="sub muted">www.etsy.com · etsy</div></td>
+      <td><span class='muted'>blocked</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class="warn">URL-rule ✓ + page-blocked (WAF 403); URL pattern is canonical PDP (Etsy /listing, eBay /itm, Depop /products)</span></td>
+    </tr>
+<tr>
+      <td>8</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/9a/74/f9/9a74f995ed4a8c6d0b182ff99e85660c.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/1078823285743526689/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 110 · cat: digital-products</div></td>
+      <td><a href="https://www.rigmaidencreations.com/products/playfully-risque-20oz-tumbler-wrap-multiple?variant=50004845723946" target="_blank" rel="noreferrer">https://www.rigmaidencreations.com/products/playfully-risque-20oz-tumbler-wrap-multiple?va</a><div class="sub muted">www.rigmaidencreations.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://www.rigmaidencreations.com/cdn/shop/files/TW-006-001WM.jpg?v=1741102034" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Playfully Risqué - 20oz Tumbler Wrap {Multiple}</td>
+      <td>1.25</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>9</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/74/ed/af/74edaf878919b8a4c3dcea8e975ea49a.png" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/1118300151237510759/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 353 · cat: digital-products</div></td>
+      <td><a href="https://dtfdallas.com/products/beach-vibes-design-dtf-ready-to-press-2?variant=48383151210784" target="_blank" rel="noreferrer">https://dtfdallas.com/products/beach-vibes-design-dtf-ready-to-press-2?variant=48383151210</a><div class="sub muted">dtfdallas.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://dtfdallas.com/cdn/shop/files/s10-519377.png?v=1758914640" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Beach Vibes Design DTF-Ready to Press (V2) | DTF Dallas</td>
+      <td>3.00</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>10</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/0f/5c/6b/0f5c6bdb9780d29ab8134e3f52f07c08.png" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/4596134613730945280/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 302 · cat: digital-products</div></td>
+      <td><a href="https://wondermom.shop/products/my-budget?variant=45780043759915" target="_blank" rel="noreferrer">https://wondermom.shop/products/my-budget?variant=45780043759915</a><div class="sub muted">wondermom.shop · shopify/other</div></td>
+      <td><img class="thumb" src="http://wondermom.shop/cdn/shop/files/MyBudget.png?v=1689384417" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>My Budget</td>
+      <td>0.99</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>11</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/d6/11/76/d61176cd5dc29bc70bd84036a76a9d09.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/4607534349772764800/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 1056 · cat: home-decor</div></td>
+      <td><a href="https://mavbythesimplehomedesignco.com/products/golden-quiet-fine-art-print?variant=51295187108004" target="_blank" rel="noreferrer">https://mavbythesimplehomedesignco.com/products/golden-quiet-fine-art-print?variant=512951</a><div class="sub muted">mavbythesimplehomedesignco.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://mavbythesimplehomedesignco.com/cdn/shop/files/6B0D1DD7-CA6F-411C-97E5-66B95225E0AB.jpg?v=1775241847" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Golden Quiet Fine Art Print</td>
+      <td>7.00</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>12</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/11/17/6b/11176b7a4c65fea1fe160d11d88ef9b1.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/4593038399004447744/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 103 · cat: digital-products</div></td>
+      <td><a href="https://www.etsy.com/listing/4330957618/digital-calendar-pink-pastel-coquette" target="_blank" rel="noreferrer">https://www.etsy.com/listing/4330957618/digital-calendar-pink-pastel-coquette</a><div class="sub muted">www.etsy.com · etsy</div></td>
+      <td><span class='muted'>blocked</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class='muted'>—</span></td>
+      <td><span class="warn">URL-rule ✓ + page-blocked (WAF 403); URL pattern is canonical PDP (Etsy /listing, eBay /itm, Depop /products)</span></td>
+    </tr>
+<tr>
+      <td>13</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/73/3e/35/733e3529bb7ff112eeb1ba0fa477f184.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/813322013999696448/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 1538 · cat: architecture</div></td>
+      <td><a href="https://heartcraftshop.com/products/medieval-modern-vintage-handmade-horse-landscape-tapestry-william-morris" target="_blank" rel="noreferrer">https://heartcraftshop.com/products/medieval-modern-vintage-handmade-horse-landscape-tapes</a><div class="sub muted">heartcraftshop.com · shopify/other</div></td>
+      <td><img class="thumb" src="//heartcraftshop.com/cdn/shop/files/Medieval_Modern_Vintage_Handmade_Horse_Landscape_Tapestry_-_2026_Editionf.jpg?crop=center&amp;height=500&amp;v=1776335880&amp;width=600" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Medieval Modern Vintage Handmade Horse Landscape Tapestry - William Morris</td>
+      <td>$128.21</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>14</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/e8/47/2d/e8472d60a3108fffe3ce63bded9d4694.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/4592616194197752960/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 1751 · cat: home-decor</div></td>
+      <td><a href="https://tableshoppeco.com/products/navy-stripe-double-bow-kit?variant=51067727642930" target="_blank" rel="noreferrer">https://tableshoppeco.com/products/navy-stripe-double-bow-kit?variant=51067727642930</a><div class="sub muted">tableshoppeco.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://tableshoppeco.com/cdn/shop/files/799E094C-113A-4628-9CE8-65E5B2D7DCF1.jpg?v=1776361741" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Navy Stripe Double Bow Kit</td>
+      <td>14.00</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>15</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/11/27/11/112711546de5ea84bb77d2ed3a2e55cc.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub">no pin url</div><div class="sub">saves: 211 · cat: digital-products</div></td>
+      <td><a href="https://hypesheriff.com/products/neutral-colors-boho-chic-art-print?utm_source=Pinterest" target="_blank" rel="noreferrer">https://hypesheriff.com/products/neutral-colors-boho-chic-art-print?utm_source=Pinterest</a><div class="sub muted">hypesheriff.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://hypesheriff.com/cdn/shop/files/a1_d664eacd-a717-4e6c-aa98-474b366362cf.jpg?v=1760296832" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Neutral Colors Boho Chic Art Print</td>
+      <td>35.99</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>16</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/47/e8/c4/47e8c408f979ab1bb90dee1c56515b8f.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub">no pin url</div><div class="sub">saves: 7628 · cat: home-decor</div></td>
+      <td><a href="https://rainbowunicornbirthdaysurprise.com/products/cottagecore-themed-blind-box-cozy-hygge-mystery-box-nostalgia-gift-baskets-renaissance-faire-forest-fairy-bridesmaid-gifts-gifts-for-her?_pos=3&amp;_sid=3e9794787&amp;_ss=r" target="_blank" rel="noreferrer">https://rainbowunicornbirthdaysurprise.com/products/cottagecore-themed-blind-box-cozy-hygg</a><div class="sub muted">rainbowunicornbirthdaysurprise.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://rainbowunicornbirthdaysurprise.com/cdn/shop/files/CottagecoreMysteryBox_4_1200x.jpg?v=1741382349" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>CottageCore themed Blind Box Cozy Hygge Mystery Box Nostalgia Gift Baskets, Renaissance Faire Forest Fairy Bridesmaid Gifts Gifts for her</td>
+      <td>40.00</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>17</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/97/c2/8a/97c28a605e97b7446b59747d4d9bdfe0.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/985443962237497916/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 533 · cat: wedding</div></td>
+      <td><a href="https://charmingcharlie.com/products/lace-spaghetti-strap-maxi-dress" target="_blank" rel="noreferrer">https://charmingcharlie.com/products/lace-spaghetti-strap-maxi-dress</a><div class="sub muted">charmingcharlie.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://charmingcharlie.com/cdn/shop/files/bf1ad46d28c841bc98fa13184d4fbebc-Max-Origin.webp?crop=center&amp;height=1200&amp;v=1771340214&amp;width=1200" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Lace Spaghetti Strap Maxi Dress</td>
+      <td>72.60</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>18</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/1b/3a/25/1b3a259306ac7db87b92fabdcd033b6a.png" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub">no pin url</div><div class="sub">saves: 76 · cat: digital-products</div></td>
+      <td><a href="https://hypesheriff.com/products/boho-sun-art-print" target="_blank" rel="noreferrer">https://hypesheriff.com/products/boho-sun-art-print</a><div class="sub muted">hypesheriff.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://hypesheriff.com/cdn/shop/products/0_65803446-9045-4a88-a828-c28a5cd64159.jpg?v=1761902677" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Boho Sun Art Print</td>
+      <td>35.99</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>19</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/7a/41/01/7a4101d781bdc61a66db01daf38983be.webp" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/443393525849649202/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 756 · cat: digital-products</div></td>
+      <td><a href="https://hypesheriff.com/products/portuguese-landscape-travel-wall-art-print?utm_source=Pinterest" target="_blank" rel="noreferrer">https://hypesheriff.com/products/portuguese-landscape-travel-wall-art-print?utm_source=Pin</a><div class="sub muted">hypesheriff.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://hypesheriff.com/cdn/shop/files/a1_fee3eba2-1c66-4596-bc87-5c89bd4d0056.jpg?v=1772049813" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Portuguese Landscape - Travel Wall Art Print</td>
+      <td>35.99</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+<tr>
+      <td>20</td>
+      <td><img class="thumb" src="https://i.pinimg.com/originals/41/a3/64/41a364827a6a35e12719b49d7b9c6392.jpg" loading="lazy" referrerpolicy="no-referrer" alt="pin"/><div class="sub"><a href="https://www.pinterest.com/pin/586734657749658905/" target="_blank" rel="noreferrer">pin ↗</a></div><div class="sub">saves: 145 · cat: digital-products</div></td>
+      <td><a href="https://delicatetype.com/products/practice-will-never-make-you-worse-print?variant=50114163114276" target="_blank" rel="noreferrer">https://delicatetype.com/products/practice-will-never-make-you-worse-print?variant=5011416</a><div class="sub muted">delicatetype.com · shopify/other</div></td>
+      <td><img class="thumb" src="http://delicatetype.com/cdn/shop/files/day6-sketch-bw2.jpg?v=1732043855" loading="lazy" referrerpolicy="no-referrer" alt="product"/></td>
+      <td>Practice Will Never Make You Worse Print</td>
+      <td>6.00</td>
+      <td><span class="ok">URL-rule ✓ + page-verified ✓</span> (schema/og:product)</td>
+    </tr>
+</tbody></table>
+</body></html>
