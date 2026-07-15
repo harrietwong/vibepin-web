@@ -98,6 +98,8 @@ export const STUDIO: string[] = [
   "test-batch-edit-product-mapping",
   "test-edit-pin-composer",
   "test-pin-board-store",
+  "test-reference-scoring",
+  "test-failure-banner",
   "test-pin-readiness",
   "test-pin-display-context",
   "test-pin-details-model",
@@ -174,11 +176,9 @@ export const DEFERRED: Record<string, string> = {
   "test-pin-draft-promote":             "needs api/pin-drafts/promote.ts (auto-publish, untracked)",
   "test-judge-verdict":                 "needs src/lib/ai-copy/judgeVerdict.ts (quality judge, untracked)",
   "test-creative-intelligence-metrics": "needs src/lib/creativeIntelligenceMetrics.ts + judgeCalibration.ts (untracked)",
-  "test-reference-scoring":             "needs src/lib/studio/referenceScoring.ts (untracked)",
   "test-top-pick":                      "needs src/lib/studio/topPick.ts (untracked)",
   "test-support-chat":                  "needs src/lib/support/chatResponder.ts + escalationCore.ts (untracked)",
   "test-support-inbox":                 "needs src/lib/support/inboxCore.ts (untracked)",
-  "test-failure-banner":                "needs src/components/shared/FailureBanner.tsx (untracked)",
 };
 
 export const ALL_REGISTERED = [...CORE, ...STUDIO, ...PLAN, ...Object.keys(EXCLUDED)];
