@@ -99,6 +99,10 @@ export const STUDIO: string[] = [
   "test-batch-edit-product-mapping",
   "test-edit-pin-composer",
   "test-pin-board-store",
+  "test-shopify-product-selection",
+  "test-create-pins-batch-edit-ui",
+  "test-pin-details-drawer",
+  "test-pin-details-persistence",
   "test-failure-banner",
   "test-pin-readiness",
   "test-pin-display-context",
@@ -122,6 +126,10 @@ export const PLAN: string[] = [
   "test-smart-schedule",
   "test-smart-schedule-sync",
   "test-scheduling-consistency",
+  "test-weekly-plan-slots",
+  "test-plan-list-view",
+  "test-smart-schedule-config",
+  "test-smart-schedule-rebalance",
 ];
 
 /**
@@ -132,30 +140,6 @@ export const EXCLUDED: Record<string, string> = {
   "test-ai-copy-context":
     "Real-browser Playwright test — drives a live dev server (E2E_TEST_MODE=true npm run dev). " +
     "`npm test` is the node-only gate; this runs via `npm run test:browser`.",
-  "test-shopify-product-selection":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of ProductPickerModal.tsx (legacy Studio surface, zero-diff vs HEAD). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-create-pins-batch-edit-ui":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of studio/page.tsx legacy PinCard + PinCardActions.tsx (BatchEditDrawer assertions pass; the failing ones target legacy surfaces). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-pin-details-drawer":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of the LEGACY PinDetailsDrawer.tsx + studio/page.tsx (parallel to this cluster StudioBoard/PinBoardCard). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-pin-details-persistence":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of SmartScheduleDrawer.tsx (legacy, zero-diff vs HEAD). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-weekly-plan-slots":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of SmartScheduleConfigForm.tsx (legacy, zero-diff vs HEAD). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-plan-list-view":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of PlanListView.tsx (legacy, zero-diff vs HEAD). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-smart-schedule-config":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification + centered-modal of SmartScheduleDrawer.tsx (legacy, zero-diff vs HEAD). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
-  "test-smart-schedule-rebalance":
-    "Pre-existing clean-checkout failure: asserts uncommitted i18n-ification of SmartScheduleConfigForm.tsx rebalance UI (legacy, zero-diff vs HEAD). " +
-    "Re-add to CORE/STUDIO/PLAN when the legacy-Studio i18n cluster (or the pinReadiness decision) lands.",
 };
 
 /**
