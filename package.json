@@ -3,6 +3,7 @@
   "private": true,
   "description": "Repo-root entry points. Frontend lives in web/ with its own package.json; this file only wires up cross-cutting commands like the backend pytest gate.",
   "scripts": {
-    "test:backend": "py -3 -m pytest backend/tests -q -s"
+    "test:backend": "py -3 -m pytest backend/tests -q -s",
+    "verify:release": "node scripts/verify-release.mjs"
   }
 }

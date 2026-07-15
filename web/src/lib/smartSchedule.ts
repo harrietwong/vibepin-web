@@ -79,9 +79,21 @@ export function findNextAvailableScheduleSlot(params: FindNextSlotParams): Sched
   const nowMs = Math.max(fromDateTime.getTime(), Date.now());
   const days = strictDate ? 1 : maxDaysAhead;
 
+  // Soft-date scans must never START in the past. A legacy draft whose own (stale)
+  // date is a year old would otherwise burn all `maxDaysAhead` iterations on days that
+  // are all before now, find nothing, and return null — stranding a rescuable draft.
+  // A strict-date request keeps its exact day (it is honoured-or-fails by design, and
+  // the clock floor below still rejects a past day / past time on it).
+  const scanStart = new Date(fromDateTime);
+  scanStart.setHours(0, 0, 0, 0);
+  if (!strictDate) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (scanStart.getTime() < today.getTime()) scanStart.setTime(today.getTime());
+  }
+
   for (let offset = 0; offset < days; offset++) {
-    const day = new Date(fromDateTime);
-    day.setHours(0, 0, 0, 0);
+    const day = new Date(scanStart);
     day.setDate(day.getDate() + offset);
     const dateISO = localDateISO(day);
     const dow = localWeekdayIndex(day);
@@ -351,14 +363,13 @@ export function normalizeInPlanDraftTimes(): number {
     if (!inPlan) continue;
     const hasTime = !!sanitizeHandoffField(d.scheduledTime);
     if (hasTime) continue;
-    // Keep the draft's own day only while that day can still be published on. A date
-    // that has already passed is not worth preserving — pinning to it would strand the
-    // draft as permanently unschedulable (no slot on a past day is ever valid), so let
-    // it take the next free future slot instead.
-    const own = sanitizeHandoffField(d.scheduledDate);
-    const stillReachable = !!own && own >= localDateISO(new Date());
+    // Never re-pass the draft's own date as a STRICT date: strict is honour-or-fail, so
+    // a draft on a full future day (or a day whose slots have all passed, or a day that
+    // is simply gone) would fail to normalize and stay stranded. Instead let the draft's
+    // stored date act as a SOFT starting point — ensureScheduledPlanTime + the soft scan
+    // keep that day when it still has a free future slot, and otherwise walk FORWARD from
+    // today to the next free slot. Passing `date` here would make it strict; we don't.
     const res = ensureScheduledPlanTime(d.id, {
-      date: stillReachable ? own : undefined,
       config,
       extraOccupied,
     });

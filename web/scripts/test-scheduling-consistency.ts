@@ -283,10 +283,15 @@ test("strict date: today's ALREADY-PAST times are never used", () => {
   reset();
   seedDrafts([mkDraft({ id: "s1" })]);
   const today = daysFromToday(0);
-  // Give today a single slot one minute in the past.
+  // Give today a single slot one minute in the past. weeklySlots is keyed Monday-based
+  // (0 = Monday); Date#getDay is Sunday-based (0 = Sunday). Using getDay() directly put
+  // the slot on the WRONG weekday, so "today" had no configured slot at all and the test
+  // passed for the wrong reason (nothing to schedule) instead of exercising the past-time
+  // rejection. Convert to Monday-based so the slot really lands on today.
   const past = new Date(Date.now() - 60_000);
   const hhmm = `${String(past.getHours()).padStart(2, "0")}:${String(past.getMinutes()).padStart(2, "0")}`;
-  saveSmartScheduleConfig({ weeklySlots: { [past.getDay()]: [hhmm] }, boards: [] });
+  const mondayBasedDow = (past.getDay() + 6) % 7;
+  saveSmartScheduleConfig({ weeklySlots: { [mondayBasedDow]: [hhmm] }, boards: [] });
 
   const res = ensureScheduledPlanTime("s1", { date: today, reschedule: true });
   assert(!res.ok, `a past time today must not be scheduled (got ${res.ok && res.slot.plannedTime})`);
@@ -320,6 +325,70 @@ test("strict date: a failed reschedule preserves the EXISTING schedule", () => {
   const after = pinDraftStore.getDraft("s1")!;
   assert(after.scheduledDate === keptDate && after.scheduledTime === keptTime && after.plannedAt === keptAt,
     `failed reschedule clobbered the existing slot: ${keptDate} ${keptTime} -> ${after.scheduledDate} ${after.scheduledTime}`);
+});
+
+// ── Legacy / stale draft rescue (soft-date forward scan) ───────────────────────
+// A time-less draft whose stored date is long past must NOT be stranded: with no
+// explicit (strict) date, the scan floors at TODAY and walks forward to the next free
+// slot. A strict past date, by contrast, is still honoured-or-fails (never rescued).
+
+// 16
+test("legacy draft with a ~1-year-old date is rescued to a FUTURE slot", () => {
+  reset();
+  const stale = daysFromToday(-365);
+  seedDrafts([mkDraft({ id: "old1", scheduledDate: stale, scheduledTime: "", addedToPlanAt: "2025-06-01T00:00:00Z" })]);
+  const fixed = normalizeInPlanDraftTimes();
+  assert(fixed === 1, `expected 1 normalized, got ${fixed}`);
+  const d = pinDraftStore.getDraft("old1")!;
+  const today = daysFromToday(0);
+  assert(/^\d{2}:\d{2}$/.test(d.scheduledTime ?? ""), `still time-less: ${d.scheduledTime}`);
+  assert(!!d.scheduledDate && d.scheduledDate >= today, `must be rescued to a future day, not left on ${stale} (got ${d.scheduledDate})`);
+  assert(!!d.plannedAt, "no plannedAt after rescue");
+});
+
+// 17
+test("ensureScheduledPlanTime rescues a draft sitting on a stale date (soft, no strict date)", () => {
+  reset();
+  const stale = daysFromToday(-400);
+  seedDrafts([mkDraft({ id: "old2", scheduledDate: stale, scheduledTime: "" })]);
+  // No opts.date → the stored date is a SOFT hint, so the scan starts at today and
+  // finds a future slot instead of burning 90 days on dates that are all in the past.
+  const res = ensureScheduledPlanTime("old2");
+  assert(res.ok, `expected ok (rescued forward), got ${res.ok ? "" : res.reason}`);
+  const today = daysFromToday(0);
+  assert(res.ok && res.slot.plannedDate >= today, `rescued slot must be today or later, got ${res.ok && res.slot.plannedDate}`);
+});
+
+// 18
+test("today with ALL slots past falls through to a forward rescue (not stranded)", () => {
+  reset();
+  const today = daysFromToday(0);
+  const tomorrow = daysFromToday(1);
+  const todayDow = (new Date(`${today}T00:00:00`).getDay() + 6) % 7;
+  const tomorrowDow = (new Date(`${tomorrow}T00:00:00`).getDay() + 6) % 7;
+  // Today's only slot is one minute in the past; tomorrow has a real future slot.
+  const past = new Date(Date.now() - 60_000);
+  const pastHHmm = `${String(past.getHours()).padStart(2, "0")}:${String(past.getMinutes()).padStart(2, "0")}`;
+  const slots: Record<number, string[]> = { [todayDow]: [pastHHmm] };
+  slots[tomorrowDow] = [...(slots[tomorrowDow] ?? []), "23:59"];
+  saveSmartScheduleConfig({ weeklySlots: slots, boards: [] });
+  seedDrafts([mkDraft({ id: "leg", scheduledDate: today, scheduledTime: "", addedToPlanAt: "2025-06-01T00:00:00Z" })]);
+  const fixed = normalizeInPlanDraftTimes();
+  assert(fixed === 1, `expected 1 normalized, got ${fixed}`);
+  const d = pinDraftStore.getDraft("leg")!;
+  assert(!!d.scheduledTime && !!d.plannedAt, "draft not scheduled");
+  assert(d.scheduledDate > today,
+    `must be rescued to a future day, not pinned to today's past slot (got ${d.scheduledDate} ${d.scheduledTime})`);
+  assert(d.scheduledTime !== pastHHmm, "must not have been assigned today's already-past slot");
+});
+
+// 19
+test("strict past date is still rejected — the rescue is only for SOFT dates", () => {
+  reset();
+  seedDrafts([mkDraft({ id: "sp1", scheduledDate: daysFromToday(-30), scheduledTime: "" })]);
+  // Explicit (strict) past date must fail, never silently slide forward.
+  const res = ensureScheduledPlanTime("sp1", { date: daysFromToday(-30), reschedule: true });
+  assert(!res.ok && res.reason === "no_slot", `strict past date must fail with no_slot, got ${res.ok ? "ok" : res.reason}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
