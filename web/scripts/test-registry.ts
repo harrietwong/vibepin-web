@@ -70,6 +70,8 @@ export const CORE: string[] = [
   "test-support-metrics",
   // Sync / storage
   "test-pin-draft-sync",
+  "test-pin-draft-promote",
+  "test-publish-due-claim",
   "test-user-store-sync",
   "test-user-store-route",
   "test-user-store-adapters",
@@ -154,8 +156,6 @@ export const EXCLUDED: Record<string, string> = {
 export const DEFERRED: Record<string, string> = {
   "test-reference-scoring":             "needs the reference-scoring RUNTIME (rankReferences/scoreReference/…) which is Creative Intelligence — RC0 keeps only the types the Studio components import. Restore with the CI cluster.",
   "test-analytics-events":              "needs src/lib/analyticsIngest.ts (analytics ingest, untracked)",
-  "test-publish-due-claim":             "needs api/cron/publish-due/publishDueLogic.ts + api/pin-drafts/promote.ts (auto-publish, untracked)",
-  "test-pin-draft-promote":             "needs api/pin-drafts/promote.ts (auto-publish, untracked)",
   "test-judge-verdict":                 "needs src/lib/ai-copy/judgeVerdict.ts (quality judge, untracked)",
   "test-creative-intelligence-metrics": "needs src/lib/creativeIntelligenceMetrics.ts + judgeCalibration.ts (untracked)",
   "test-top-pick":                      "needs src/lib/studio/topPick.ts (untracked)",
