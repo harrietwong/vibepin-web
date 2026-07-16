@@ -2856,6 +2856,8 @@ const es: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "El idioma de contenido IA afecta a los títulos, descripciones, keywords y sugerencias recién generados. Los Pines guardados no se modifican automáticamente.",
   "pinDetails.overflow.pinNow": "Texto de interfaz",
 
+  "studioBoard.toast.fieldTooLong": "Acorta el título o la descripción antes de programar o publicar.",
+
 };
 
 export default es;

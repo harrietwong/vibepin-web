@@ -2599,6 +2599,8 @@ const ar: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "لغة محتوى الذكاء الاصطناعي تؤثر على العناوين والأوصاف والكلمات المفتاحية والاقتراحات المُنشأة حديثًا. أما الـ Pins المحفوظة فلا تتغيّر تلقائيًا.",
   "pinDetails.overflow.pinNow": "نص الواجهة",
 
+  "studioBoard.toast.fieldTooLong": "اختصر العنوان أو الوصف قبل الجدولة أو النشر.",
+
 };
 
 export default ar;

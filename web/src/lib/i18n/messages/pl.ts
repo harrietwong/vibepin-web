@@ -2575,6 +2575,8 @@ const pl: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "Język treści AI dotyczy nowo generowanych tytułów, opisów, słów kluczowych i sugestii. Zapisane Piny nie są zmieniane automatycznie.",
   "pinDetails.overflow.pinNow": "Tekst interfejsu",
 
+  "studioBoard.toast.fieldTooLong": "Skróć tytuł lub opis przed zaplanowaniem lub opublikowaniem.",
+
 };
 
 export default pl;

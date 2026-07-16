@@ -2601,6 +2601,8 @@ const ja: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "AIコンテンツ言語は、新しく生成されるタイトル・説明・キーワード・提案に適用されます。保存済みのPinは自動的に変更されません。",
   "pinDetails.overflow.pinNow": "インターフェース文言",
 
+  "studioBoard.toast.fieldTooLong": "タイトルまたは説明を短くしてから、スケジュールまたは公開してください。",
+
 };
 
 export default ja;

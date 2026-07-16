@@ -2595,6 +2595,8 @@ const ko: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "AI 콘텐츠 언어는 새로 생성되는 제목, 설명, 키워드, 제안에 적용됩니다. 저장된 핀은 자동으로 변경되지 않습니다.",
   "pinDetails.overflow.pinNow": "인터페이스 문구",
 
+  "studioBoard.toast.fieldTooLong": "제목이나 설명을 줄인 후 예약하거나 게시하세요.",
+
 };
 
 export default ko;

@@ -2595,6 +2595,8 @@ const hi: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "AI सामग्री भाषा नए बनाए गए शीर्षक, विवरण, कीवर्ड और सुझावों पर लागू होती है। सहेजे गए Pin स्वतः नहीं बदले जाते।",
   "pinDetails.overflow.pinNow": "इंटरफ़ेस पाठ",
 
+  "studioBoard.toast.fieldTooLong": "शेड्यूल या प्रकाशित करने से पहले शीर्षक या विवरण छोटा करें।",
+
 };
 
 export default hi;

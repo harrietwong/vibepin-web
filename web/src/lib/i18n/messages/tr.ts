@@ -2676,6 +2676,8 @@ const tr: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "Yapay zeka içerik dili, yeni oluşturulan başlıkları, açıklamaları, anahtar kelimeleri ve önerileri etkiler. Kaydedilmiş Pinler otomatik olarak değiştirilmez.",
   "pinDetails.overflow.pinNow": "Arayüz metni",
 
+  "studioBoard.toast.fieldTooLong": "Planlamadan veya yayınlamadan önce başlığı veya açıklamayı kısaltın.",
+
 };
 
 export default tr;

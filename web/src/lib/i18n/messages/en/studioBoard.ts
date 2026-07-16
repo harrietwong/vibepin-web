@@ -44,6 +44,7 @@ export const studioBoardMessages = {
   "studioBoard.toast.openInPlan": "Open in Plan",
   "studioBoard.toast.imageUnavailable": "Image unavailable — upload the image again before publishing.",
   "studioBoard.toast.completeDetailsToPublish": "Add an image and choose a board to publish this Pin.",
+  "studioBoard.toast.fieldTooLong": "Shorten the title or description before scheduling or publishing.",
   "studioBoard.toast.publishSuccess": "Pin published successfully.",
   "studioBoard.toast.publishFailed": "Failed to publish. Please try again.",
   "studioBoard.toast.productNoImage": "That product has no image to use yet.",

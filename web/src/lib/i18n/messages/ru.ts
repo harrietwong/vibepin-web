@@ -2649,6 +2649,8 @@ const ru: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "Язык AI-контента применяется к вновь создаваемым заголовкам, описаниям, ключевым словам и подсказкам. Сохранённые пины не изменяются автоматически.",
   "pinDetails.overflow.pinNow": "Текст интерфейса",
 
+  "studioBoard.toast.fieldTooLong": "Сократите заголовок или описание перед планированием или публикацией.",
+
 };
 
 export default ru;

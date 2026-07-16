@@ -2619,6 +2619,8 @@ const id: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "Bahasa konten AI memengaruhi judul, deskripsi, kata kunci, dan saran yang baru dibuat. Pin yang tersimpan tidak diubah secara otomatis.",
   "pinDetails.overflow.pinNow": "Teks antarmuka",
 
+  "studioBoard.toast.fieldTooLong": "Persingkat judul atau deskripsi sebelum menjadwalkan atau memublikasikan.",
+
 };
 
 export default id;

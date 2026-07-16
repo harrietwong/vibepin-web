@@ -60,7 +60,7 @@ import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinter
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { isPublishableImage, isValidDestinationUrl } from "@/lib/pinReadiness";
+import { isPublishableImage, isValidDestinationUrl, pinFieldErrors } from "@/lib/pinReadiness";
 import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { publishToSocial } from "@/lib/social/socialClient";
@@ -171,6 +171,10 @@ export function PinDetailsModal({
   const [boardError, setBoardError] = useState(false);
   // Field-level Website URL format error (PRD §14.2: shown near the field, not just a toast).
   const [urlError, setUrlError] = useState(false);
+  // Field-level title/description over-limit error (WP1 follow-up) — empty stays fine;
+  // only an over-cap value blocks Schedule/Publish. maxLength on the inputs prevents a
+  // typed overflow, but an AI-generated or imported value can still land over the cap.
+  const [fieldErrors, setFieldErrors] = useState<{ title?: string; description?: string }>({});
   // "Replace the current destination URL?" confirm (PRD §10.2) — replaces window.confirm.
   const [confirmReplaceUrlOpen, setConfirmReplaceUrlOpen] = useState(false);
   // Contact Support entry points (publish failed / AI generation failed). Supplements
@@ -837,6 +841,16 @@ export function PinDetailsModal({
       toast.error(t("pinDetails.error.invalidUrl"));
       return;
     }
+    // Title ≤100 / description ≤500 — over-limit blocks (empty stays fine). Field-level
+    // errors render next to the title/description inputs; the toast/footer are a summary.
+    const lenErrors = pinFieldErrors({ title, description });
+    if (lenErrors.title || lenErrors.description) {
+      setFieldErrors(lenErrors);
+      const msg = lenErrors.title || lenErrors.description!;
+      setPublishError(msg);
+      toast.error(msg);
+      return;
+    }
 
     // Module-level in-flight lock (shared with Studio's card/batch publish) — guards
     // against this same Pin being published concurrently from another surface. Same
@@ -1116,16 +1130,20 @@ export function PinDetailsModal({
   // missing board, and an illegal (non-http/https) Website URL — same canonical checks
   // used by the Publish gate (pinReadiness), so Schedule and Publish never disagree on
   // what's required. Title/Description are length-capped inline (maxLength on the
-  // fields) rather than required-non-empty — the destination link stays optional.
+  // fields) and — as of WP1's follow-up — an over-cap VALUE (e.g. from AI-generated copy,
+  // which bypasses the DOM maxLength) also hard-blocks; empty stays fine (never required).
   const hasBoard = !!boardId;
   const hasWhen = !!plannedDate.trim() && !!scheduledTime.trim();
   const hasValidImage = isPublishableImage(publicImage);
   const hasValidUrl = isValidDestinationUrl(destinationUrl);
-  const canSchedule = hasBoard && hasWhen && hasValidImage && hasValidUrl && boardsStatus !== "checking";
+  const lenErrors = pinFieldErrors({ title, description });
+  const hasValidFieldLengths = !lenErrors.title && !lenErrors.description;
+  const canSchedule = hasBoard && hasWhen && hasValidImage && hasValidUrl && hasValidFieldLengths && boardsStatus !== "checking";
   const scheduleHelper = boardsStatus === "not_connected"
     ? t("pinDetails.helper.connectPinterest")
     : !hasValidImage ? "This Pin needs an image before it can be scheduled."
     : !hasValidUrl ? t("pinDetails.error.invalidUrl")
+    : !hasValidFieldLengths ? (lenErrors.title || lenErrors.description!)
     : !hasBoard && !hasWhen ? t("pinDetails.helper.chooseBoardAndTime")
     : !hasBoard ? t("pinDetails.helper.chooseBoard")
     : !hasWhen ? t("pinDetails.helper.pickTime")
@@ -1143,6 +1161,13 @@ export function PinDetailsModal({
       setUrlError(true);
       setPublishError(t("pinDetails.error.invalidUrl"));
       toast.error(t("pinDetails.error.invalidUrl"));
+      return;
+    }
+    if (!hasValidFieldLengths) {
+      setFieldErrors(lenErrors);
+      const msg = lenErrors.title || lenErrors.description!;
+      setPublishError(msg);
+      toast.error(msg);
       return;
     }
     if (!hasBoard) {
@@ -1356,16 +1381,23 @@ export function PinDetailsModal({
 
           {/* Title */}
           <div style={fieldBlock}>
-            <PinTitleSection value={title} onChange={(v) => { setTitle(v); markDirty(); }} />
+            <PinTitleSection value={title}
+              onChange={(v) => { setTitle(v); if (fieldErrors.title) setFieldErrors(prev => ({ ...prev, title: undefined })); markDirty(); }}
+              error={fieldErrors.title} />
           </div>
 
           {/* Description */}
           <div style={fieldBlock}>
             <div style={{ marginBottom: 6 }}><span style={lbl}>{t("pinDetails.description")}</span></div>
             <textarea data-testid="draft-edit-description" value={description} maxLength={500}
-              onChange={e => { setDescription(e.target.value); markDirty(); }}
-              style={{ ...field, minHeight: 120, resize: "vertical" }} placeholder={t("pinDetails.descriptionPlaceholder")} />
+              onChange={e => { setDescription(e.target.value); if (fieldErrors.description) setFieldErrors(prev => ({ ...prev, description: undefined })); markDirty(); }}
+              style={{ ...field, minHeight: 120, resize: "vertical", ...(fieldErrors.description ? { border: `1px solid ${UI.error}` } : {}) }} placeholder={t("pinDetails.descriptionPlaceholder")} />
             <div style={{ textAlign: "right", fontSize: 10, color: UI.textMuted, marginTop: 3 }}>{description.length}/500</div>
+            {fieldErrors.description && (
+              <p data-testid="draft-edit-description-error" style={{ margin: "2px 0 0", fontSize: 10.5, fontWeight: 700, color: UI.error }}>
+                {fieldErrors.description}
+              </p>
+            )}
           </div>
 
           {/* Website URL */}

@@ -2619,6 +2619,8 @@ const de: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "Die KI-Inhaltssprache gilt für neu generierte Titel, Beschreibungen, Keywords und Vorschläge. Bereits gespeicherte Pins werden nicht automatisch geändert.",
   "pinDetails.overflow.pinNow": "Oberflächentext",
 
+  "studioBoard.toast.fieldTooLong": "Kürze Titel oder Beschreibung, bevor du planst oder veröffentlichst.",
+
 };
 
 export default de;

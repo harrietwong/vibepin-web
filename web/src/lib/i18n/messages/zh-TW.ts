@@ -2619,6 +2619,8 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "AI 內容語言只影響新生成的標題、描述、關鍵字和建議。已儲存的 Pin 不會自動改寫。",
   "pinDetails.overflow.pinNow": "介面文字",
 
+  "studioBoard.toast.fieldTooLong": "請縮短標題或描述後再排程或發布。",
+
 };
 
 export default zhTW;

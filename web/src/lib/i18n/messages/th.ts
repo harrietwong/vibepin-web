@@ -2598,6 +2598,8 @@ const th: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "ภาษาเนื้อหา AI มีผลกับชื่อ คำอธิบาย คำค้นหา และคำแนะนำที่สร้างขึ้นใหม่ Pin ที่บันทึกไว้จะไม่ถูกเปลี่ยนโดยอัตโนมัติ",
   "pinDetails.overflow.pinNow": "ข้อความอินเทอร์เฟซ",
 
+  "studioBoard.toast.fieldTooLong": "ย่อชื่อหรือคำอธิบายให้สั้นลงก่อนกำหนดเวลาหรือเผยแพร่",
+
 };
 
 export default th;

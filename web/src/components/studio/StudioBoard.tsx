@@ -25,7 +25,7 @@ import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { track } from "@/lib/analytics";
 import { beginPublish, endPublish, countPublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
-import { isPinReady, isPublishableImage } from "@/lib/pinReadiness";
+import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
@@ -219,10 +219,21 @@ export function StudioBoard() {
   // In-place field validation errors from Schedule (PRD: missing Board shows a
   // field-level error, not just a toast). Cleared as soon as a board is chosen.
   const [scheduleErrors, setScheduleErrors] = useState<Record<string, string>>({});
+  // Title ≤100 / description ≤500 over-limit errors (WP1 follow-up). Keyed by draft id,
+  // cleared as soon as the offending field is edited back under the cap.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, PinFieldErrors>>({});
 
   const handlePersist = useCallback((id: string, patch: Partial<PinDraft>) => {
     pinDraftStore.updateDraft(id, patch); flashSaved();
     if (patch.boardId) setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
+    if ("title" in patch || "description" in patch) {
+      setFieldErrors(prev => {
+        const cur = pinDraftStore.getDraft(id);
+        const next = pinFieldErrors({ title: cur?.title, description: cur?.description });
+        if (!next.title && !next.description && !prev[id]) return prev;
+        return { ...prev, [id]: next };
+      });
+    }
   }, [flashSaved]);
 
   // AI Copy generation now lives inside <PinAICopyPanel> (shared across Create Pins,
@@ -246,6 +257,15 @@ export function StudioBoard() {
       toast.error(tr("studioBoard.toast.completeDetailsToSchedule"));
       return;
     }
+    // Title ≤100 / description ≤500 — over-limit blocks (empty stays fine). Field-level
+    // errors render next to the title/description inputs; the toast is a summary only.
+    const lenErrors = pinFieldErrors({ title: d.title, description: d.description });
+    if (lenErrors.title || lenErrors.description) {
+      setActiveId(id);
+      setFieldErrors(prev => ({ ...prev, [id]: lenErrors }));
+      toast.error(tr("studioBoard.toast.fieldTooLong"));
+      return;
+    }
     setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
     const result = ensureScheduledPlanTime(id);
     if (result.ok) {
@@ -263,6 +283,13 @@ export function StudioBoard() {
     const d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
     if (noBoardAccess || !isPinReady(draftReadiness(d))) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
+    const lenErrors = pinFieldErrors({ title: d.title, description: d.description });
+    if (lenErrors.title || lenErrors.description) {
+      setActiveId(id);
+      setFieldErrors(prev => ({ ...prev, [id]: lenErrors }));
+      toast.error(tr("studioBoard.toast.fieldTooLong"));
+      return;
+    }
     if (!beginPublish(id)) return;
     pinDraftStore.updateDraft(id, { publishError: undefined });
     try {
@@ -653,6 +680,8 @@ export function StudioBoard() {
                 boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}
                 boardFieldError={scheduleErrors[draft.id] || undefined}
+                titleFieldError={fieldErrors[draft.id]?.title}
+                descriptionFieldError={fieldErrors[draft.id]?.description}
                 onPersist={handlePersist}
                 onSchedule={handleSchedule} onGenerateAiImage={handleGenerateAiImage} onPublish={handlePublish}
                 onDelete={handleDelete} onArchive={handleArchive} onDuplicate={handleDuplicate}

@@ -2597,6 +2597,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "AI 内容语言只影响新生成的标题、描述、关键词和建议。已保存的 Pin 不会自动改写。",
   "pinDetails.overflow.pinNow": "立即发布",
 
+  "studioBoard.toast.fieldTooLong": "请缩短标题或描述后再排期或发布。",
+
 };
 
 export default zhCN;

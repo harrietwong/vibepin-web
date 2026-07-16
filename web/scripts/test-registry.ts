@@ -114,6 +114,7 @@ export const STUDIO: string[] = [
   "test-pin-details-phase3",
   "test-pin-details-modal-compact",
   "test-optional-website-url",
+  "test-schedule-publish-validation",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */

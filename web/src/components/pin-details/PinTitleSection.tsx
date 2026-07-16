@@ -8,6 +8,7 @@ const UI = {
   fieldBorder: "var(--app-border-hi, rgba(255,255,255,0.18))",
   text: "var(--app-text, #E2E8F0)",
   textMuted: "var(--app-text-muted, #5B6577)",
+  error: "var(--app-error, #F87171)",
 };
 
 const field: React.CSSProperties = {
@@ -23,13 +24,16 @@ export type PinTitleSectionProps = {
   value: string;
   /** Called with the new value on every keystroke. Parent updates state and marks dirty. */
   onChange: (value: string) => void;
+  /** Field-level over-limit error (WP1 follow-up) — set when Schedule/Publish is
+   *  pressed with a title over the cap (e.g. AI-generated copy bypassing maxLength). */
+  error?: string;
 };
 
 /**
  * Controlled title field for PinDetailsModal.
  * Presentational only — no API calls, no store writes.
  */
-export function PinTitleSection({ value, onChange }: PinTitleSectionProps) {
+export function PinTitleSection({ value, onChange, error }: PinTitleSectionProps) {
   const { t } = useLocale();
   return (
     <>
@@ -41,12 +45,17 @@ export function PinTitleSection({ value, onChange }: PinTitleSectionProps) {
         value={value}
         maxLength={100}
         onChange={e => onChange(e.target.value)}
-        style={field}
+        style={{ ...field, ...(error ? { border: `1px solid ${UI.error}` } : {}) }}
         placeholder={t("pinDetails.title.placeholder")}
       />
       <div style={{ textAlign: "right", fontSize: 10, color: UI.textMuted, marginTop: 4 }}>
         {value.length}/100
       </div>
+      {error && (
+        <p data-testid="draft-edit-title-error" style={{ margin: "2px 0 0", fontSize: 10.5, fontWeight: 700, color: UI.error }}>
+          {error}
+        </p>
+      )}
     </>
   );
 }

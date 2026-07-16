@@ -2605,6 +2605,8 @@ const vi: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "Ngôn ngữ nội dung AI áp dụng cho tiêu đề, mô tả, từ khóa và gợi ý mới được tạo. Các Pin đã lưu không tự động thay đổi.",
   "pinDetails.overflow.pinNow": "Văn bản giao diện",
 
+  "studioBoard.toast.fieldTooLong": "Rút ngắn tiêu đề hoặc mô tả trước khi lên lịch hoặc đăng.",
+
 };
 
 export default vi;

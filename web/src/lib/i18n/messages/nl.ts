@@ -2619,6 +2619,8 @@ const nl: Partial<Record<MessageKey, string>> = {
   "language.contentExistingNote": "De AI-inhoudstaal geldt voor nieuw gegenereerde titels, beschrijvingen, trefwoorden en suggesties. Opgeslagen Pins worden niet automatisch gewijzigd.",
   "pinDetails.overflow.pinNow": "Interfacetekst",
 
+  "studioBoard.toast.fieldTooLong": "Kort de titel of beschrijving in voordat je inplant of publiceert.",
+
 };
 
 export default nl;
