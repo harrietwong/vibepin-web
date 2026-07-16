@@ -138,9 +138,9 @@ test("7. full future day → no free slot (drag rejected, not mutated)", () => {
   assert(!dayHasFreeFutureSlot(dateISO, full, { config: cfg }), "full day reported free");
   assert(configuredSlotCountForDate(dateISO, cfg) === 4, "configured count wrong");
   // The drop handler shows a toast + guidance and never schedules.
-  assert(/No available slots on \$\{formatScheduleDateLabel\(date\)\}/.test(srcPlan), "full-day toast missing");
-  assert(/Increase pins per day or choose another day/.test(srcPlan), "full-day guidance missing");
-  assert(/label: "Edit Smart Schedule"/.test(srcPlan), "Edit Smart Schedule action missing");
+  assert(/plan\.dropBlock\.fullTitle/.test(srcPlan), "full-day toast missing");
+  assert(/plan\.dropBlock\.fullDesc/.test(srcPlan), "full-day guidance missing");
+  assert(/plan\.dropBlock\.editSmartSchedule/.test(srcPlan), "Edit Smart Schedule action missing");
   assert(/if \(!dayHasFreeFutureSlot\(date, dayDrafts\)\)/.test(srcPlan), "drop handler does not guard full days");
 });
 
@@ -253,11 +253,11 @@ test("next-day Pins never leak into the target day's occupancy (UTC+8 scenario)"
 // and "already has N scheduled" is confined to the genuinely-full branch.
 test("drop-rejection toast is truthful (all_past / no_slots branches, full-only count)", () => {
   assert(/reason === "all_past"/.test(srcPlan), "missing all_past branch");
-  assert(/remaining Smart Schedule slots have already passed/.test(srcPlan), "missing truthful all-past copy");
+  assert(/plan\.dropBlock\.allPastDesc/.test(srcPlan), "missing truthful all-past copy");
   assert(/reason === "no_slots"/.test(srcPlan), "missing no_slots branch");
   assert(/classifyDayDropBlock\(date, dayDrafts\)/.test(srcPlan), "handler must classify the block reason");
   // "already has N scheduled" must use the classified scheduledCount, not the config count.
-  assert(/already has \$\{scheduledCount\} scheduled Pin/.test(srcPlan), "full-day copy must use real scheduledCount");
+  assert(/plan\.dropBlock\.fullDesc.*replace\("\{n\}", String\(scheduledCount\)\)/.test(srcPlan), "full-day copy must use real scheduledCount");
   assert(!/configuredSlotCountForDate\(date\)/.test(srcPlan), "must not label configured-slot count as scheduled Pins");
 });
 
@@ -275,8 +275,10 @@ test("Week View renders configured slots via SlotPlaceholder", () => {
 test("Day chips show weekday only; no bare number beside weekday", () => {
   assert(!/\{d\}\{n \? ` \$\{n\}` : ""\}/.test(srcForm), "still rendering 'Tue 4' style label");
   assert(srcForm.includes('data-testid="smart-schedule-day-header"'), "selected-day header missing");
-  assert(/\{daySlots\.length\} slot/.test(srcForm), "header does not show slot count clearly");
-  assert(/Same every day · \$\{config\.pinsPerDay\} pins\/day/.test(srcForm), "volume summary copy not clear");
+  // i18n-ified: header resolves via tr("planViews.form.dayHeaderOne") / tr("planViews.form.dayHeaderMany").
+  assert(srcForm.includes("planViews.form.dayHeaderOne") && srcForm.includes("planViews.form.dayHeaderMany"), "header does not show slot count clearly");
+  // i18n-ified: volume summary resolves via tr("planViews.form.volumeSameEveryDay").
+  assert(srcForm.includes("planViews.form.volumeSameEveryDay"), "volume summary copy not clear");
 });
 
 // 8. Publish now: present, distinct, readiness blocks board/URL but not product.
@@ -290,7 +292,7 @@ test("8. Publish now present + readiness (board blocks; URL optional, product do
   assert(/boardId/.test(body), "readiness does not check board");
   assert(!/destinationUrl/.test(body), "Publish now must NOT gate on Website URL (optional)");
   assert(!/product/i.test(body), "Publish now must not gate on product");
-  assert(/Add a board before publishing\./.test(body), "board-only readiness message missing");
+  assert(/plan\.error\.needsBoard/.test(body), "board-only readiness message missing");
 });
 
 console.log(`\nWeekly Plan slots: ${passed} passed, ${failed} failed`);

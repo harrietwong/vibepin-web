@@ -1075,11 +1075,18 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   }
 
   function applyBulkBoard(b: { id: string; name: string }) {
-    const affected: { pinId: string; original: string }[] = [];
+    // Capture BOTH the effective id and name before the change (not just id) — a
+    // second bulk-board-apply layered on top of a first one must undo back to
+    // whatever board was effective a moment ago (which may itself already be a
+    // session edit), never fall back to the pin's originally-persisted boardName.
+    // Restoring id+name from mismatched sources previously showed the correct
+    // boardId with the wrong (stale/original) boardName after Undo.
+    const affected: { pinId: string; original: string; originalName: string }[] = [];
     const next = { ...rowEdits };
     for (const pinId of checkedRows) {
       const p = pins.find(x => x.pinId === pinId); if (!p) continue;
-      affected.push({ pinId, original: effBoard(p, rowEdits).id });
+      const eff = effBoard(p, rowEdits);
+      affected.push({ pinId, original: eff.id, originalName: eff.name });
       next[pinId] = { ...next[pinId], boardId: b.id, boardName: b.name };
     }
     commit(next);
@@ -1088,7 +1095,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         action: { label: tr("studioModals.undo"), onClick: () => {
           setRowEdits(prev => {
             const n = { ...prev };
-            for (const a of affected) { const orig = pins.find(p => p.pinId === a.pinId); n[a.pinId] = { ...n[a.pinId], boardId: a.original, boardName: orig?.boardName ?? "" }; }
+            for (const a of affected) { n[a.pinId] = { ...n[a.pinId], boardId: a.original, boardName: a.originalName }; }
             persist(n); return n;
           });
         } },

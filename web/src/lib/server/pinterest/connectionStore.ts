@@ -29,6 +29,9 @@ export type PinterestConnectionRow = {
   created_at: string;
   updated_at: string;
   disconnected_at: string | null;
+  /** Monotonic refresh counter (v49). Used for cross-instance CAS on token refresh:
+   *  updateTokens writes only while this is unchanged, then bumps it. */
+  token_version: number;
 };
 
 export type DecryptedTokens = {
@@ -159,7 +162,11 @@ export async function updateTokens(
     accessTokenExpiresAt: string | null;
     refreshTokenExpiresAt: string | null;
   },
-): Promise<void> {
+  /** When set, persist as a compare-and-swap: write only while token_version still
+   *  equals this value, then bump it. Returns { applied:false } if another instance
+   *  already rotated the token (zero rows matched). Omit for an unconditional write. */
+  expectedVersion?: number,
+): Promise<{ applied: boolean }> {
   const patch: Record<string, unknown> = {
     access_token_encrypted: encryptSecret(tokens.accessToken),
     access_token_expires_at: tokens.accessTokenExpiresAt,
@@ -170,10 +177,25 @@ export async function updateTokens(
     patch.refresh_token_encrypted = encryptSecret(tokens.refreshToken);
     patch.refresh_token_expires_at = tokens.refreshTokenExpiresAt;
   }
+  if (expectedVersion !== undefined) {
+    patch.token_version = expectedVersion + 1;
+  }
 
-  const { error } = await db().from(TABLE).update(patch).eq("vibepin_user_id", uid);
+  let q = db().from(TABLE).update(patch).eq("vibepin_user_id", uid);
+  if (expectedVersion !== undefined) {
+    // CAS: only the instance that still sees the pre-refresh version wins. `.select`
+    // returns the updated rows so we can tell a match (1) from a lost race (0).
+    q = q.eq("token_version", expectedVersion);
+    const { data, error } = await q.select("id");
+    if (error) throw dbError("update tokens", error.code, error.message);
+    dropCachedConnection(uid);
+    return { applied: Array.isArray(data) && data.length > 0 };
+  }
+
+  const { error } = await q;
   if (error) throw dbError("update tokens", error.code, error.message);
   dropCachedConnection(uid);
+  return { applied: true };
 }
 
 /**

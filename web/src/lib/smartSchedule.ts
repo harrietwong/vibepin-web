@@ -5,6 +5,7 @@
 
 import type { PinDraft } from "./pinDraftStore";
 import * as pinDraftStore from "./pinDraftStore";
+import { isPublishableImage } from "./pinReadiness";
 import { combineLocalPlannedAt, localDateISO, sanitizeHandoffField } from "./weeklyPlanHandoff";
 import {
   getSmartScheduleConfig,
@@ -26,6 +27,10 @@ export type FindNextSlotParams = {
   fromDateTime?:        Date;
   extraOccupied?:       Set<string>;
   maxDaysAhead?:        number;
+  /** Confine the search to `fromDateTime`'s calendar day. When the caller named an
+   *  explicit date (drag, reschedule, legacy normalize), sliding to another day is a
+   *  silent relocation, not a schedule — return null instead so the caller can say so. */
+  strictDate?:          boolean;
 };
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -62,17 +67,34 @@ export function findNextAvailableScheduleSlot(params: FindNextSlotParams): Sched
     fromDateTime = new Date(),
     extraOccupied,
     maxDaysAhead = 90,
+    strictDate = false,
   } = params;
 
   const occupied = buildOccupiedSet(existingPlannedPins, extraOccupied);
-  // Never assign a past slot: the floor is the later of the requested start and the
-  // real current time. So a drag onto *today* still skips this morning's past slots,
-  // and an auto-schedule (fromDateTime = now) only uses today's remaining future slots.
+  // Never assign a past slot — the floor is ALWAYS the real current time, in both
+  // modes. A drag onto today therefore skips this morning's slots, and a strict-date
+  // request for a past day (or a past time today) finds nothing and returns null.
+  // strictDate constrains only WHICH DAY may be used, never whether the clock applies:
+  // relaxing this floor would let a Pin be scheduled into the past, and it would never
+  // publish.
   const nowMs = Math.max(fromDateTime.getTime(), Date.now());
+  const days = strictDate ? 1 : maxDaysAhead;
 
-  for (let offset = 0; offset < maxDaysAhead; offset++) {
-    const day = new Date(fromDateTime);
-    day.setHours(0, 0, 0, 0);
+  // Soft-date scans must never START in the past. A legacy draft whose own (stale)
+  // date is a year old would otherwise burn all `maxDaysAhead` iterations on days that
+  // are all before now, find nothing, and return null — stranding a rescuable draft.
+  // A strict-date request keeps its exact day (it is honoured-or-fails by design, and
+  // the clock floor below still rejects a past day / past time on it).
+  const scanStart = new Date(fromDateTime);
+  scanStart.setHours(0, 0, 0, 0);
+  if (!strictDate) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (scanStart.getTime() < today.getTime()) scanStart.setTime(today.getTime());
+  }
+
+  for (let offset = 0; offset < days; offset++) {
+    const day = new Date(scanStart);
     day.setDate(day.getDate() + offset);
     const dateISO = localDateISO(day);
     const dow = localWeekdayIndex(day);
@@ -242,7 +264,7 @@ export function formatSmartScheduleToast(slot: ScheduleSlot, board: SmartSchedul
 
 export type AutoScheduleResult =
   | { ok: true; draft: PinDraft; toast: string; slot: ScheduleSlot; board: SmartScheduleBoard | null }
-  | { ok: false; reason: "no_schedule" | "no_slot" | "not_found"; toast: string };
+  | { ok: false; reason: "no_schedule" | "no_slot" | "not_found" | "not_ready"; toast: string };
 
 export type EnsureScheduleOpts = {
   /** Desired calendar date (keeps the user's chosen day; a real slot time is still
@@ -271,10 +293,24 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
   const draft = pinDraftStore.getDraft(id);
   if (!draft) return { ok: false, reason: "not_found", toast: "Pin not found." };
 
+  // A scheduled Pin may auto-publish without another user review. Keep this gate
+  // deliberately narrower than copy quality: only delivery-critical fields block.
+  if (!isPublishableImage(draft.imageUrl)) {
+    return { ok: false, reason: "not_ready", toast: "Upload a usable image before scheduling this Pin." };
+  }
+  if (!sanitizeHandoffField(draft.boardId)) {
+    return { ok: false, reason: "not_ready", toast: "Choose a Pinterest board before scheduling this Pin." };
+  }
+
   const curDate = sanitizeHandoffField(draft.scheduledDate);
   const curTime = sanitizeHandoffField(draft.scheduledTime);
   const curPlannedAt = sanitizeHandoffField(draft.plannedAt);
-  const targetDate = sanitizeHandoffField(opts?.date ?? "") || curDate;
+  // A date the CALLER named is an intent to honour exactly (drag, reschedule); the
+  // draft's own stored date is merely a default. Conflating them meant an omitted
+  // opts.date silently fell back to curDate and re-locked the search onto it — which
+  // strands a draft whose stored day has already passed.
+  const requestedDate = sanitizeHandoffField(opts?.date ?? "");
+  const targetDate = requestedDate || curDate;
 
   // Idempotent: a fully-scheduled Pin is left untouched unless we are explicitly
   // rescheduling or moving it to a different date.
@@ -292,15 +328,23 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
 
   // Exclude self so a Pin that already has a date/time doesn't block its own slot.
   const existing = pinDraftStore.getAllDrafts().filter(d => d.id !== id);
+  // Only a date the CALLER named locks the search to that day: honour it exactly —
+  // assign a time on it or fail, never slide the Pin to another day while reporting
+  // success. A date merely inherited from the draft stays a soft starting point, so a
+  // draft sitting on a day that has already passed can still be rescued forward.
+  const strictDate = !!requestedDate;
   const fromDateTime = targetDate ? new Date(`${targetDate}T00:00:00`) : new Date();
   const slot = findNextAvailableScheduleSlot({
     weeklySlots: config.weeklySlots,
     existingPlannedPins: existing,
     fromDateTime,
     extraOccupied: opts?.extraOccupied,
+    strictDate,
   });
   if (!slot) {
-    return { ok: false, reason: "no_slot", toast: "No available Smart Schedule slots in the next 90 days." };
+    return strictDate
+      ? { ok: false, reason: "no_slot", toast: "No free Smart Schedule slot on that day. Pick another day or add a slot." }
+      : { ok: false, reason: "no_slot", toast: "No available Smart Schedule slots in the next 90 days." };
   }
 
   const slotIndex = opts?.slotIndex ?? countScheduledWithDateTime(existing);
@@ -329,8 +373,13 @@ export function normalizeInPlanDraftTimes(): number {
     if (!inPlan) continue;
     const hasTime = !!sanitizeHandoffField(d.scheduledTime);
     if (hasTime) continue;
+    // Never re-pass the draft's own date as a STRICT date: strict is honour-or-fail, so
+    // a draft on a full future day (or a day whose slots have all passed, or a day that
+    // is simply gone) would fail to normalize and stay stranded. Instead let the draft's
+    // stored date act as a SOFT starting point — ensureScheduledPlanTime + the soft scan
+    // keep that day when it still has a free future slot, and otherwise walk FORWARD from
+    // today to the next free slot. Passing `date` here would make it strict; we don't.
     const res = ensureScheduledPlanTime(d.id, {
-      date: sanitizeHandoffField(d.scheduledDate) || undefined,
       config,
       extraOccupied,
     });

@@ -90,11 +90,26 @@ test("every translated locale localizes the settings tab labels", () => {
 // Fallback to English
 
 test("missing keys fall back to English in getMessages()", () => {
-  const it = getMessages("it");
-  // "billing.noUsage" is intentionally untranslated in the core-chrome locales.
-  assert(it["billing.noUsage"] === en["billing.noUsage"],
-    "untranslated key should fall back to English text");
+  // Every shipped locale is now fully translated (validate:i18n-coverage enforces
+  // it), so no real key can serve as the "untranslated" fixture. Assert the
+  // fallback MECHANISM instead: temporarily drop a key from a locale catalog and
+  // confirm getMessages() still resolves it to the English source of truth.
+  const itCatalog = PARTIAL["it"] as Record<string, string>;
+  const probe: MessageKey = "billing.noUsage";
+  const saved = itCatalog[probe];
+  assert(typeof saved === "string", `fixture key ${probe} is absent from the Italian catalog`);
+
+  delete itCatalog[probe];
+  try {
+    const it = getMessages("it");
+    assert(it[probe] === en[probe],
+      "untranslated key should fall back to English text");
+  } finally {
+    itCatalog[probe] = saved;
+  }
+
   // A translated key should differ from English ("Salva" vs "Save").
+  const it = getMessages("it");
   assert(it["common.save"] !== en["common.save"],
     "translated key should not equal English");
 });

@@ -123,7 +123,7 @@ test("Product Ideas picker uses shared useProductIdeas data source", () => {
   assert(pickerSource.includes("product-ideas-category-filters"), "picker missing separate category filter row");
   assert(!pickerSource.includes('productTab === "amazon"'), "picker must not render Amazon as a top-level tab");
   assert(pickerSource.includes("product-idea-skeleton"), "picker missing skeleton test id");
-  assert(pickerSource.includes("Could not load Product Ideas"), "picker missing error state");
+  assert(pickerSource.includes("studioModals.picker.couldNotLoadProductIdeas"), "picker missing error state");
   assert(pickerSource.includes('source: "product_ideas"'), "picker missing product_ideas source save");
   assert(!pickerSource.includes('.from("pin_products")'), "picker should not query pin_products directly");
 });
@@ -194,7 +194,7 @@ test("Product Ideas image container uses explicit aspect-ratio instead of paddin
 
 test("Product Ideas card normalizes empty titles", () => {
   assert(
-    pickerSource.includes("Untitled product idea") && pickerSource.includes("normalizeCardTitle"),
+    pickerSource.includes("studioModals.picker.untitledProductIdea") && pickerSource.includes("normalizeCardTitle"),
     "Product Ideas card must render a fallback title for blank product names"
   );
 });

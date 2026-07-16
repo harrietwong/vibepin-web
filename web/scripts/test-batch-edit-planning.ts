@@ -23,11 +23,18 @@ test("getPinReadiness returns separate details and plan statuses", () => {
   assert.deepEqual(getPinReadiness(readyInput), { detailsStatus: "ready", planStatus: "not_planned", missingFields: [] });
 });
 
-test("missing details do not change scheduled plan status", () => {
+test("missing description alone does not block readiness or change scheduled plan status", () => {
   const result = getPinReadiness({ ...readyInput, description: "", plannedDate: "2026-06-24" });
+  assert.equal(result.detailsStatus, "ready");
+  assert.equal(result.planStatus, "scheduled");
+  assert.deepEqual(result.missingFields, []);
+});
+
+test("missing board (the one content field that still blocks) does not change scheduled plan status", () => {
+  const result = getPinReadiness({ ...readyInput, boardId: "", plannedDate: "2026-06-24" });
   assert.equal(result.detailsStatus, "need_details");
   assert.equal(result.planStatus, "scheduled");
-  assert.deepEqual(result.missingFields, ["description"]);
+  assert.deepEqual(result.missingFields, ["board"]);
 });
 
 test("posted status wins over a scheduled date", () => {
@@ -108,8 +115,8 @@ test("Product column shows thumbnail + quick add, never an error", () => {
 });
 
 test("Publish time is a default column; Plan replaces Status", () => {
-  assert.match(batchSource, /id: "time", label: "Publish time"/);
-  assert.match(batchSource, /id: "plan", label: "Plan"/);
+  assert.match(batchSource, /id: "time", label: tr\("studioModals\.col\.publishTime"\)/);
+  assert.match(batchSource, /id: "plan", label: tr\("studioModals\.col\.plan"\)/);
   assert.doesNotMatch(batchSource, /showDateCol/);
   assert.doesNotMatch(batchSource, /label: "Status"/);
 });
@@ -147,7 +154,7 @@ test("Batch Edit is a fullscreen workspace, not a dimmed right drawer", () => {
 });
 
 test("Schedule button label is exactly 'Schedule'", () => {
-  assert.match(batchSource, /<CalendarClock[^>]*\/>\s*Schedule\s*<\/button>/);
+  assert.match(batchSource, /<CalendarClock[^>]*\/>\s*\{tr\("studioModals\.header\.schedule"\)\}\s*<\/button>/);
   assert.doesNotMatch(batchSource, /Schedule selected/);
 });
 
@@ -177,19 +184,19 @@ test("getPinReadiness scheduled wins over addedToPlanAt", () => {
 
 test("Website URL bulk defaults to fill-empty; replace requires confirmation", () => {
   assert.match(batchSource, /fill_empty/);
-  assert.match(batchSource, /Replace existing Website URLs\?/);
+  assert.match(batchSource, /studioModals\.dest\.replaceConfirmTitle/);
   assert.match(batchSource, /danger: true/);
 });
 
 test("Website URL bulk supports product-URL and clear modes (optional URL)", () => {
   // Three actions: keep (no-op default), set from product URL, clear.
   assert.match(batchSource, /"fill_empty" \| "replace" \| "product" \| "clear"/);
-  assert.match(batchSource, /Use product URL where available/);
-  assert.match(batchSource, /Clear Website URL/);
+  assert.match(batchSource, /studioModals\.dest\.useProductUrlWhereAvailable/);
+  assert.match(batchSource, /studioModals\.dest\.clearWebsiteUrl/);
   // Product mode never fails the batch when some Pins lack a product URL.
-  assert.match(batchSource, /Product URL was applied where available\. Some selected items do not have a product URL\./);
+  assert.match(batchSource, /studioModals\.dest\.appliedWhereAvailable/);
   // Clear mode confirms before wiping existing URLs.
-  assert.match(batchSource, /Clear Website URLs\?/);
+  assert.match(batchSource, /studioModals\.dest\.clearConfirmTitle/);
 });
 
 test("Product bulk add never mutates destinationUrl", () => {
@@ -201,7 +208,7 @@ test("Product bulk add never mutates destinationUrl", () => {
 });
 
 test("Product replace requires confirmation", () => {
-  assert.match(batchSource, /Replace products for/);
+  assert.match(batchSource, /studioModals\.product\.replaceConfirmTitle(One|Many)/);
 });
 
 test("Product is never surfaced as an error", () => {

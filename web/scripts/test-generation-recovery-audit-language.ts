@@ -134,7 +134,10 @@ function setupSnapshot(category: string, opts: {
     promptSnapshot: opts.prompt ?? promptForCategory(category),
     createdFrom: "studio",
     format: opts.format ?? "Pinterest 2:3",
-    model: opts.model ?? "GPT Image 2",
+    // Must stay a REAL label. "GPT Image 2" is the legacy hardcoded placeholder that
+    // resolveModelLabel() deliberately suppresses (see lib/studio/modelLabel.ts), so
+    // using it here would assert the very bug that resolver exists to prevent.
+    model: opts.model ?? "GPT Image",
     modelKey: "gpt_image",
   };
 }
@@ -402,7 +405,7 @@ await test("Remix immediate restore uses original batch snapshot", () => {
   assertEq(gen.pinReferences.length, 2, "2 references restored");
   assertEq(gen.prompt, entry.setupSnapshot!.promptSnapshot, "creative direction restored");
   assertEq(gen.aspectRatio, "Pinterest 2:3", "format restored");
-  assertEq(gen.model, "GPT Image 2", "model restored");
+  assertEq(gen.model, "GPT Image", "model restored");
   assertEq(gen.recoveryQuality, "full", "no partial recovery banner");
 });
 

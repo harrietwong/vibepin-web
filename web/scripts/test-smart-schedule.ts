@@ -22,23 +22,46 @@ function assert(cond: boolean, msg: string) {
   else { failed++; console.error(`  ✗ ${msg}`); }
 }
 
+/** Local YYYY-MM-DD, `n` days from today. Tests must never hardcode calendar dates:
+ *  scheduling into the past is rejected by design, so a fixed date silently rots into
+ *  a false failure the day it slips into the past. */
+function daysFromToday(n: number): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + n);
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** weeklySlots is keyed Monday-based (0=Monday), while Date#getDay is Sunday-based
+ *  (0=Sunday). Must convert, or slots land on the wrong day. */
+function mondayBasedWeekday(dateISO: string): WeekdayIndex {
+  const jsDay = new Date(`${dateISO}T00:00:00`).getDay();
+  return ((jsDay + 6) % 7) as WeekdayIndex;
+}
+
 console.log("smartSchedule tests");
 
 {
-  const weeklySlots: Partial<Record<WeekdayIndex, string[]>> = { 0: ["09:12", "09:41", "15:04"] };
-  const from = new Date("2026-06-22T08:00:00");
+  const date = daysFromToday(1);
+  const weekday = mondayBasedWeekday(date);
+  const weeklySlots: Partial<Record<WeekdayIndex, string[]>> = { [weekday]: ["09:12", "09:41", "15:04"] };
+  const from = new Date(`${date}T08:00:00`);
   const slot = findNextAvailableScheduleSlot({
     weeklySlots,
-    existingPlannedPins: [mockPin("2026-06-22", "09:12")],
+    existingPlannedPins: [mockPin(date, "09:12")],
     fromDateTime: from,
   });
   assert(slot?.plannedTime === "09:41", "skips occupied slot");
 }
 
 {
-  const from = new Date("2026-06-22T10:00:00");
+  const date = daysFromToday(1);
+  const weekday = mondayBasedWeekday(date);
+  const weeklySlots: Partial<Record<WeekdayIndex, string[]>> = { [weekday]: ["09:12", "09:41", "15:04"] };
+  const from = new Date(`${date}T10:00:00`);
   const slot = findNextAvailableScheduleSlot({
-    weeklySlots: { 0: ["09:12", "09:41", "15:04"] },
+    weeklySlots,
     existingPlannedPins: [],
     fromDateTime: from,
   });

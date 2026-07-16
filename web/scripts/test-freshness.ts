@@ -59,7 +59,7 @@ test("Pin Ideas API includes freshness metadata", () => {
 test("Picker shows freshness and stale warning", () => {
   assert(pickerSource.includes("product-ideas-freshness"), "missing product freshness");
   assert(pickerSource.includes("pin-ideas-freshness"), "missing pin freshness");
-  assert(pickerSource.includes("Data may be stale"), "missing stale warning");
+  assert(pickerSource.includes("studioModals.picker.dataMayBeStale"), "missing stale warning");
   assert(pickerSource.includes("productMeta?.products"), "picker should use API meta products");
   assert(pickerSource.includes("pinMeta?.pins"), "picker should use API meta pins");
 });

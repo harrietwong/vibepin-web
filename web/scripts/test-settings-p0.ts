@@ -24,11 +24,11 @@ test("Settings navigation exposes six real routes", () => {
 });
 
 test("Billing has Current plan and Credits sections without fake subscription data", () => {
-  assert.match(billing, /Current plan/);
-  assert.match(billing, /Token balance/);
-  assert.match(billing, /Usage history/);
-  assert.match(billing, /No usage data yet|Usage history is not available yet/);
-  assert.match(billing, /Manage billing|Subscription management/);
+  assert.match(billing, /t\("billing\.currentPlan"\)/);
+  assert.match(billing, /t\("billing\.tokenBalance"\)/);
+  assert.match(billing, /t\("billing\.usageHistory"\)/);
+  assert.match(billing, /t\("billing\.noUsage"\)/);
+  assert.match(billing, /t\("billing\.manageBilling"\)/);
 });
 
 test("Billing reads real metadata when available", () => {
@@ -56,7 +56,10 @@ test("Pinterest page has state-specific actions and amber limited copy", () => {
   assert.match(pinterest, /pinterest-state-connected/);
   assert.match(pinterest, /pinterest-state-limited-access/);
   assert.match(pinterest, /Connect Pinterest/);
-  assert.match(pinterest, /Sync boards/);
+  // Board sync is no longer a user-facing action — boards load automatically
+  // wherever they're needed (e.g. the publish drawer), so there's no "Sync boards"
+  // button to assert on anymore.
+  assert.match(pinterest, /Board sync is not a user-facing action/);
   assert.match(pinterest, /Reconnect/);
   assert.match(pinterest, /Disconnect/);
   assert.match(pinterest, /publishing may be limited until Standard Access is approved/);
@@ -67,16 +70,15 @@ test("English date formatting is deterministic", () => {
   assert.equal(formatted, "Jun 20, 2026, 4:35 PM");
 });
 
-test("Language & Region shows language, timezone, and preview", () => {
+test("Language & Region shows App language and Pinterest region sections", () => {
   assert.match(language, /LanguageRegionPanel/);
   assert.match(language, /lang\.appLanguage/);
-  assert.match(language, /lang\.contentLanguage/);
   assert.match(language, /lang\.pinterestRegion/);
 });
 
 test("Account dropdown routes work and logout calls Supabase", () => {
   assert.match(layout, /SETTINGS_DEFAULT_PATH/);
-  assert.match(layout, /SETTINGS_SUPPORT_PATH/);
+  assert.match(layout, /\/app\/settings\/support/);
   assert.match(layout, /openSettings\("account"\)/);
   assert.match(layout, /openSettings\("billing"\)/);
   assert.match(layout, /supabase\.auth\.signOut\(\)/);
