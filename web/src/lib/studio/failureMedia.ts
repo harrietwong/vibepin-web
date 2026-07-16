@@ -24,6 +24,10 @@
  * A `blob:` URL is never a valid candidate — it only ever resolves in the tab that
  * created it, so a value that looks like one is treated as already-dead and skipped
  * (no destructive migration of persisted data; just skipped at read time).
+ *
+ * A `data:` URL that is suspiciously short (see isDegenerateDataUrl below) is also
+ * skipped — a genuine 1x1/2x2 placeholder PNG "loads successfully" but renders as a
+ * giant solid color block, which is worse than falling back further down the chain.
  */
 
 import { isBlobUrl } from "@/lib/mediaUrl";
@@ -32,10 +36,28 @@ import type { PinDraft } from "@/lib/pinDraftStore";
 /** Draft fields this resolver needs — kept minimal so tests don't need a full PinDraft. */
 export type FailureMediaDraft = Pick<PinDraft, "imageUrl" | "sourceImageUrl" | "parentDraftId" | "setupSnapshot">;
 
+/**
+ * A `data:` URL whose total length is suspiciously short to hold a real photo/render.
+ * A genuine 1x1 solid-color PNG (the kind a broken generation or a test fixture emits)
+ * base64-encodes to roughly 100-120 characters total, e.g.
+ * "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" (~120 chars).
+ * A real uploaded/generated Pin image is thousands of characters. 200 is a safe,
+ * generous cutoff well below any genuine image while comfortably above a 1x1/2x2 pixel.
+ * This never touches http(s) URLs — only inline `data:` payloads are length-checked.
+ */
+const DEGENERATE_DATA_URL_MAX_LENGTH = 200;
+
+export function isDegenerateDataUrl(url: string | null | undefined): boolean {
+  const v = (url ?? "").trim();
+  if (!v.startsWith("data:")) return false;
+  return v.length < DEGENERATE_DATA_URL_MAX_LENGTH;
+}
+
 function usable(url: string | null | undefined): url is string {
   const v = (url ?? "").trim();
   if (!v) return false;
   if (isBlobUrl(v)) return false; // dead in any tab/session other than the one that created it
+  if (isDegenerateDataUrl(v)) return false; // e.g. a 1x1 placeholder PNG data URL
   return true;
 }
 

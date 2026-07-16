@@ -19,10 +19,9 @@ import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
-import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { getSourceBadge, getStatusBadge, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
-import { PinCardMedia } from "@/components/studio/PinCardMedia";
+import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
@@ -386,15 +385,18 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             // Generation-failure card: walk the original-image fallback chain
             // (generated → source → parent) instead of the raw draft.imageUrl, which
             // may be empty (scratch mode) or a dead snapshot. Never blank/broken.
-            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} />
-          ) : draft.imageUrl ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block",
-                opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1,
-                filter: hiddenByQuality ? "blur(10px)" : "none" }} />
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="generationFailed" generating={generating} hiddenByQuality={hiddenByQuality} />
+          ) : resolveInitialFailureMediaUrl(draft) ? (
+            // Publish-failed / healthy cards: same chain, starting at draft.imageUrl
+            // (so a genuinely valid final image is always preferred) but falling
+            // through source/product/reference/parent — and ultimately the neutral
+            // "No image" placeholder — instead of a broken image or a solid-color
+            // junk block when imageUrl is dead or degenerate.
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="noImage" generating={generating} hiddenByQuality={hiddenByQuality} />
           ) : (
-            // Scratch-mode Generating placeholder — no source image yet.
+            // Scratch-mode Generating placeholder — no candidate anywhere in the chain yet.
             <div data-testid="card-generating-placeholder" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Loader2 style={{ width: 26, height: 26, color: BUI.textMuted }} className="animate-spin" />
             </div>
@@ -557,11 +559,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
         <div style={{ width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
-            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} />
-          ) : draft.imageUrl ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="generationFailed" />
+          ) : resolveInitialFailureMediaUrl(draft) ? (
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="noImage" />
           ) : (
             <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: BUI.textMuted, fontSize: 10, fontWeight: 700 }}>{tr("studioBoard.card.noImage")}</div>
           )}
