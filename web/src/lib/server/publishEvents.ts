@@ -172,11 +172,17 @@ type ServerClient = ReturnType<typeof createServerClient>;
  * only (RLS with no permissive policies).
  */
 export async function recordPublishEvent(
-  db: ServerClient,
+  db: ServerClient | null,
   name: PublishEventName,
   props: PublishAttemptedProps | PublishSucceededProps | PublishFailedProps,
 ): Promise<void> {
   try {
+    // Null client = the caller could not construct one (missing service-role env).
+    // Analytics silently degrades; publish must proceed untouched.
+    if (!db) {
+      console.warn(`[publishEvents] no service client — dropped ${name}`);
+      return;
+    }
     const payload = buildPayload(name, props as PublishEventBase & Record<string, unknown>);
     const { error } = await db.from("analytics_events").insert({
       workspace_id: props.userId, // effective workspace = vibepin user today (matches v41 note)
@@ -200,7 +206,7 @@ export async function recordPublishEvent(
  * in props-building from ever escaping onto the publish path. Best-effort; never throws.
  */
 export async function recordFailedPublishEvent(
-  db: ServerClient,
+  db: ServerClient | null,
   base: PublishEventBase,
   durationMs: number,
   err: unknown,

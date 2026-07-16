@@ -90,9 +90,15 @@ export async function POST(req: Request) {
     boardId,
     source,
   };
-  // Service-role client for the best-effort analytics writes. Constructing it must never
-  // affect publish; recordPublishEvent swallows all failures.
-  const analyticsDb = createServerClient();
+  // Service-role client for the best-effort analytics writes. Construction itself is also
+  // best-effort: a missing service-role env must degrade analytics, never break publish
+  // (recordPublishEvent no-ops on null and swallows all write failures).
+  let analyticsDb: ReturnType<typeof createServerClient> | null = null;
+  try {
+    analyticsDb = createServerClient();
+  } catch (err) {
+    console.warn("[publish] analytics client unavailable:", err instanceof Error ? err.message : String(err));
+  }
 
   const lockKey = sourcePinId ? `${uid}:${sourcePinId}` : null;
   if (lockKey) {
