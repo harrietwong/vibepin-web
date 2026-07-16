@@ -201,6 +201,11 @@ export async function GET(req: Request): Promise<Response> {
         // now given small trial-user pin volumes; revisit if this ever blocks scan
         // throughput for other due rows.
         await releaseClaim(db, row);
+        // Draft-wise this is a skip (row stays scheduled, no failure written), but the
+        // publish ATTEMPT did terminate — Pinterest refused it. Record the terminal event
+        // (code pinterest_trial_access) so this attempt's `attempted` never dangles like a
+        // process death; the eventual post-approval publish is a new attempt id.
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, err);
         skipped++;
         continue;
       }
