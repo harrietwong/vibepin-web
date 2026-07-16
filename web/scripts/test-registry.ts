@@ -38,6 +38,7 @@ export const CORE: string[] = [
   "test-model-label",
   "test-model-switch",
   "test-assistant-detectors",
+  "test-analytics-events",
   // Pinterest
   "test-pinterest-oauth",
   "test-pinterest-integrations-repair",
@@ -53,6 +54,10 @@ export const CORE: string[] = [
   "test-creative-intelligence",
   "test-creative-intelligence-v1",
   "test-creative-recommendations",
+  "test-creative-intelligence-metrics",
+  "test-judge-verdict",
+  "test-reference-scoring",
+  "test-top-pick",
   // Products / opportunity
   "test-product-ideas-picker",
   "test-pin-ideas-picker",
@@ -68,6 +73,8 @@ export const CORE: string[] = [
   "test-support-ai-responder",
   "test-support-translator",
   "test-support-metrics",
+  "test-support-chat",
+  "test-support-inbox",
   // Sync / storage
   "test-pin-draft-sync",
   "test-user-store-sync",
@@ -130,6 +137,8 @@ export const PLAN: string[] = [
   "test-plan-list-view",
   "test-smart-schedule-config",
   "test-smart-schedule-rebalance",
+  "test-pin-draft-promote",
+  "test-publish-due-claim",
 ];
 
 /**
@@ -151,17 +160,7 @@ export const EXCLUDED: Record<string, string> = {
  * here (NOT in ALL_REGISTERED, so the git-tracked gate ignores them) and must be
  * committed together with their feature source, then moved into CORE/STUDIO.
  */
-export const DEFERRED: Record<string, string> = {
-  "test-reference-scoring":             "needs the reference-scoring RUNTIME (rankReferences/scoreReference/…) which is Creative Intelligence — RC0 keeps only the types the Studio components import. Restore with the CI cluster.",
-  "test-analytics-events":              "needs src/lib/analyticsIngest.ts (analytics ingest, untracked)",
-  "test-publish-due-claim":             "needs api/cron/publish-due/publishDueLogic.ts + api/pin-drafts/promote.ts (auto-publish, untracked)",
-  "test-pin-draft-promote":             "needs api/pin-drafts/promote.ts (auto-publish, untracked)",
-  "test-judge-verdict":                 "needs src/lib/ai-copy/judgeVerdict.ts (quality judge, untracked)",
-  "test-creative-intelligence-metrics": "needs src/lib/creativeIntelligenceMetrics.ts + judgeCalibration.ts (untracked)",
-  "test-top-pick":                      "needs src/lib/studio/topPick.ts (untracked)",
-  "test-support-chat":                  "needs src/lib/support/chatResponder.ts + escalationCore.ts (untracked)",
-  "test-support-inbox":                 "needs src/lib/support/inboxCore.ts (untracked)",
-};
+export const DEFERRED: Record<string, string> = {};
 
 export const ALL_REGISTERED = [...CORE, ...STUDIO, ...PLAN, ...Object.keys(EXCLUDED)];
 export const RUNNABLE = [...CORE, ...STUDIO, ...PLAN];
