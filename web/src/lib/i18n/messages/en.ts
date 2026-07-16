@@ -477,6 +477,21 @@ const en = {
   "pinDetails.schedule.scheduleForLater": "Schedule for later",
   "pinDetails.schedule.notScheduled": "Not scheduled",
 
+  // ── Pin details: Custom time picker ──
+  "pinDetails.customTime.selectButton": "Select a custom time",
+  "pinDetails.customTime.modalTitle": "Custom time",
+  "pinDetails.customTime.close": "Close",
+  "pinDetails.customTime.prevMonth": "Previous month",
+  "pinDetails.customTime.nextMonth": "Next month",
+  "pinDetails.customTime.hour": "Hour",
+  "pinDetails.customTime.minute": "Minute",
+  "pinDetails.customTime.am": "AM",
+  "pinDetails.customTime.pm": "PM",
+  "pinDetails.customTime.saveButton": "Save time",
+  "pinDetails.customTime.timezoneNote": "Times are shown in {timezone}.",
+  "pinDetails.customTime.pastTimeError": "Choose a time in the future.",
+  "pinDetails.customTime.boardChangedNotice": "Board selection changed. Please choose a new time.",
+
   // ── Publish destinations ──
   "publishDestinations.title": "Publishing accounts",
   "publishDestinations.subtitle": "Choose which connected accounts can publish this approved post.",
