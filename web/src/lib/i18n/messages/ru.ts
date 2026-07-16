@@ -1879,8 +1879,6 @@ const ru: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Подключение Pinterest не завершено. Выберите пин снова.",
   "plan.error.pinNotFound": "Не удалось найти этот пин.",
   "plan.error.needsImage": "Для этого пина нужно изображение перед планированием.",
-  "plan.error.needsTitle": "Для этого пина нужен заголовок перед планированием.",
-  "plan.error.needsDescription": "Для этого пина нужно описание перед планированием.",
   "plan.error.needsBoard": "Добавьте доску перед публикацией.",
   "plan.dropBlock.editSmartSchedule": "Редактировать умное расписание",
   "plan.dropBlock.allPastTitle": "На {date} не осталось свободного времени.",
@@ -1891,7 +1889,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "В этот день уже есть {n} запланированн{plural} пин, занимающих все слоты умного расписания. Увеличьте количество пинов в день или выберите другой день.",
   "plan.toast.timeLocked": "Время зафиксировано — сохранится при перебалансировке.",
   "plan.toast.timeUnlocked": "Время разблокировано.",
-  "plan.toast.blockedNeedsDetails": "Пинам ({n}){plural} нужно изображение, заголовок или описание перед планированием.",
+  "plan.toast.blockedNeedsDetails": "Пинам ({n}){plural} нужно изображение, доска или более короткий заголовок/описание перед планированием.",
   "plan.toast.alreadyScheduled": "Пинов уже запланировано: {n}{plural}",
   "plan.toast.couldNotSchedule": "Не удалось запланировать выбранные пины.",
   "plan.toast.scheduledCount": "Запланировано пинов: {n}{plural}{alreadySuffix}",
@@ -1899,7 +1897,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Сгенерированы недостающие детали",
   "plan.toast.movedPins": "Перенесено пинов: {n}{plural} на {date}",
   "plan.toast.removedPins": "Удалено пинов из плана: {n}{plural}",
-  "plan.toast.selectedNeedDetails": "Выбранным пинам нужно изображение, заголовок или описание перед планированием.",
+  "plan.toast.selectedNeedDetails": "Выбранным пинам нужно изображение, доска или более короткий заголовок/описание перед планированием.",
   "plan.toast.noUnscheduledSelected": "Не выбрано ни одного незапланированного пина — уже запланированные пины пропускаются.",
 
   // ── products ──

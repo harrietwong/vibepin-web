@@ -259,6 +259,24 @@ async function main() {
     const src = readFileSync(join(root, "src/lib/smartSchedule.ts"), "utf8");
     assert.match(src, /const lenErrors = pinFieldErrors\(\{ title: draft\.title, description: draft\.description \}\);/);
   });
+  await test("Weekly Plan batch-schedule precheck (plan/page.tsx minimumPlanContentError) honors the image+board contract — empty title/description never block", () => {
+    const src = readFileSync(join(root, "src/app/app/plan/page.tsx"), "utf8");
+    const start = src.indexOf("function minimumPlanContentError(");
+    const end = src.indexOf("\n  }", start);
+    assert.ok(start > -1 && end > start, "minimumPlanContentError not found");
+    const body = src.slice(start, end);
+    // Blocks: missing/non-public image, missing board, over-limit title/description.
+    assert.match(body, /isPublishableImage\(draft\.imageUrl\)/, "image gate must use the canonical isPublishableImage check");
+    assert.match(body, /sanitizeHandoffField\(draft\.boardId\)/, "board gate must mirror ensureScheduledPlanTime");
+    assert.match(body, /pinFieldErrors\(\{ title: draft\.title, description: draft\.description \}\)/, "over-limit gate must use the shared pinFieldErrors");
+    // Never blocks: EMPTY title/description (the old needsTitle/needsDescription gate).
+    assert.ok(!body.includes("needsTitle"), "empty title must not block scheduling");
+    assert.ok(!body.includes("needsDescription"), "empty description must not block scheduling");
+    // The dead copy keys are gone from the English catalog too.
+    const en = readFileSync(join(root, "src/lib/i18n/messages/en/plan.ts"), "utf8");
+    assert.ok(!en.includes('"plan.error.needsTitle"'), "dead needsTitle key must be removed from en.ts");
+    assert.ok(!en.includes('"plan.error.needsDescription"'), "dead needsDescription key must be removed from en.ts");
+  });
 
   // ── Extra: maxLength attributes present everywhere a title/description is typed ──
   await test("All title/description inputs across the three surfaces carry maxLength={100}/{500}", () => {

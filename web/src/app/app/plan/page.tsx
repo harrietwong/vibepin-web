@@ -58,6 +58,7 @@ import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, b
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "@/lib/planCalendar";
 import { filterUnscheduledPinIds } from "@/lib/smartScheduleActions";
 import { displayTitle, sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
+import { isPublishableImage, pinFieldErrors } from "@/lib/pinReadiness";
 import { fetchPinterestBoards, seedPinterestStatusConnected, syncPinterestAccount } from "@/lib/pinterestClient";
 import { invalidateBoardsCache } from "@/lib/pinterest/boardsCache";
 import { invalidateConnectionsCache } from "@/lib/social/connectionsCache";
@@ -1540,11 +1541,20 @@ function PlanPageInner() {
   const [dayDetailISO, setDayDetailISO] = useState<string | null>(null);
   const [monthUnscheduledOpen, setMonthUnscheduledOpen] = useState(false);
 
+  // Schedule/publish validation contract (WP1): ONLY a missing image or board hard-blocks
+  // scheduling — empty title/description NEVER do (they are recommendations). An over-cap
+  // title (>100) / description (>500) — e.g. AI-generated copy that bypasses the inputs'
+  // maxLength — does block, via the shared pinFieldErrors gate. This page-level precheck
+  // deliberately mirrors ensureScheduledPlanTime's canonical not_ready gate (same
+  // isPublishableImage / boardId / pinFieldErrors checks) so the batch "blocked" counts
+  // here and the authoritative scheduler downstream never disagree.
   function minimumPlanContentError(draft: PinDraft | null | undefined): string | null {
     if (!draft) return tr("plan.error.pinNotFound");
-    if (!sanitizeHandoffField(draft.imageUrl)) return tr("plan.error.needsImage");
-    if (!displayTitle(draft.title, draft.keyword)) return tr("plan.error.needsTitle");
-    if (!sanitizeHandoffField(draft.description)) return tr("plan.error.needsDescription");
+    if (!isPublishableImage(draft.imageUrl)) return tr("plan.error.needsImage");
+    if (!sanitizeHandoffField(draft.boardId)) return tr("studioBoard.toast.chooseBoardToSchedule");
+    const lenErrors = pinFieldErrors({ title: draft.title, description: draft.description });
+    if (lenErrors.title) return lenErrors.title;
+    if (lenErrors.description) return lenErrors.description;
     return null;
   }
 

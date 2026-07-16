@@ -1494,8 +1494,6 @@ const fr: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "La connexion Pinterest n'a pas été terminée. Veuillez sélectionner à nouveau le Pin.",
   "plan.error.pinNotFound": "Ce Pin est introuvable.",
   "plan.error.needsImage": "Ce Pin a besoin d'une image avant de pouvoir être programmé.",
-  "plan.error.needsTitle": "Ce Pin a besoin d'un titre avant de pouvoir être programmé.",
-  "plan.error.needsDescription": "Ce Pin a besoin d'une description avant de pouvoir être programmé.",
   "plan.error.needsBoard": "Ajoutez un tableau avant de publier.",
   "plan.dropBlock.editSmartSchedule": "Modifier le Planning intelligent",
   "plan.dropBlock.allPastTitle": "Plus de créneau disponible le {date}.",
@@ -1506,7 +1504,7 @@ const fr: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Ce jour a déjà {n} Pin{plural} programmé occupant tous les créneaux du Planning intelligent. Augmentez le nombre de Pins par jour ou choisissez un autre jour.",
   "plan.toast.timeLocked": "Heure verrouillée — conservée lors du rééquilibrage.",
   "plan.toast.timeUnlocked": "Heure déverrouillée.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} nécessite une image, un titre ou une description avant la programmation.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} nécessite une image, un tableau ou un titre/une description plus court(e) avant la programmation.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} déjà programmé",
   "plan.toast.couldNotSchedule": "Impossible de programmer les Pins sélectionnés.",
   "plan.toast.scheduledCount": "{n} Pin{plural} programmé{alreadySuffix}",
@@ -1514,7 +1512,7 @@ const fr: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Détails manquants générés",
   "plan.toast.movedPins": "{n} Pin{plural} déplacé vers {date}",
   "plan.toast.removedPins": "{n} Pin{plural} retiré du plan",
-  "plan.toast.selectedNeedDetails": "Les Pins sélectionnés ont besoin d'une image, d'un titre ou d'une description avant la programmation.",
+  "plan.toast.selectedNeedDetails": "Les Pins sélectionnés ont besoin d'une image, d'un tableau ou d'un titre/d'une description plus court(e) avant la programmation.",
   "plan.toast.noUnscheduledSelected": "Aucun Pin non programmé sélectionné — les Pins déjà programmés sont ignorés.",
 
   // ── studio ──

@@ -1171,8 +1171,6 @@ const nl: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "De Pinterest-verbinding is niet voltooid. Selecteer de Pin opnieuw.",
   "plan.error.pinNotFound": "Deze Pin kon niet worden gevonden.",
   "plan.error.needsImage": "Deze Pin heeft een afbeelding nodig voordat deze kan worden ingepland.",
-  "plan.error.needsTitle": "Deze Pin heeft een titel nodig voordat deze kan worden ingepland.",
-  "plan.error.needsDescription": "Deze Pin heeft een beschrijving nodig voordat deze kan worden ingepland.",
   "plan.error.needsBoard": "Voeg een bord toe voordat je publiceert.",
   "plan.dropBlock.editSmartSchedule": "Slim plannen bewerken",
   "plan.dropBlock.allPastTitle": "Geen open tijd meer op {date}.",
@@ -1183,7 +1181,7 @@ const nl: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Deze dag heeft al {n} ingeplande Pin{plural} die elk Slim plannen-tijdslot vullen. Verhoog het aantal pins per dag of kies een andere dag.",
   "plan.toast.timeLocked": "Tijd vergrendeld — blijft behouden bij herverdelen.",
   "plan.toast.timeUnlocked": "Tijd ontgrendeld.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} heeft een afbeelding, titel of beschrijving nodig voordat deze kan worden ingepland.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} heeft een afbeelding, een bord of een kortere titel/beschrijving nodig voordat deze kan worden ingepland.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} al ingepland",
   "plan.toast.couldNotSchedule": "Kon de geselecteerde Pins niet inplannen.",
   "plan.toast.scheduledCount": "{n} Pin{plural} ingepland{alreadySuffix}",
@@ -1191,7 +1189,7 @@ const nl: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Ontbrekende details gegenereerd",
   "plan.toast.movedPins": "{n} Pin{plural} verplaatst naar {date}",
   "plan.toast.removedPins": "{n} Pin{plural} verwijderd uit planning",
-  "plan.toast.selectedNeedDetails": "Geselecteerde Pins hebben een afbeelding, titel of beschrijving nodig voordat ze kunnen worden ingepland.",
+  "plan.toast.selectedNeedDetails": "Geselecteerde Pins hebben een afbeelding, een bord of een kortere titel/beschrijving nodig voordat ze kunnen worden ingepland.",
   "plan.toast.noUnscheduledSelected": "Geen niet-ingeplande Pins geselecteerd — al ingeplande Pins worden overgeslagen.",
 
   // ── pinDrawer ──

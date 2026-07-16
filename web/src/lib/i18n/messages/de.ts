@@ -1621,8 +1621,6 @@ const de: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Die Pinterest-Verbindung wurde nicht abgeschlossen. Bitte wählen Sie den Pin erneut aus.",
   "plan.error.pinNotFound": "Dieser Pin konnte nicht gefunden werden.",
   "plan.error.needsImage": "Dieser Pin benötigt ein Bild, bevor er geplant werden kann.",
-  "plan.error.needsTitle": "Dieser Pin benötigt einen Titel, bevor er geplant werden kann.",
-  "plan.error.needsDescription": "Dieser Pin benötigt eine Beschreibung, bevor er geplant werden kann.",
   "plan.error.needsBoard": "Fügen Sie vor der Veröffentlichung ein Board hinzu.",
   "plan.dropBlock.editSmartSchedule": "Smart Schedule bearbeiten",
   "plan.dropBlock.allPastTitle": "Keine freie Zeit mehr am {date}.",
@@ -1633,7 +1631,7 @@ const de: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Dieser Tag hat bereits {n} geplante Pin{plural}, die jeden Smart-Schedule-Slot füllen. Erhöhen Sie die Pins pro Tag oder wählen Sie einen anderen Tag.",
   "plan.toast.timeLocked": "Zeit fixiert — bleibt beim Neuausgleich erhalten.",
   "plan.toast.timeUnlocked": "Zeit freigegeben.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} benötigen vor der Planung ein Bild, einen Titel oder eine Beschreibung.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} benötigen vor der Planung ein Bild, eine Pinnwand oder einen kürzeren Titel/eine kürzere Beschreibung.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} bereits geplant",
   "plan.toast.couldNotSchedule": "Die ausgewählten Pins konnten nicht geplant werden.",
   "plan.toast.scheduledCount": "{n} Pin{plural} geplant{alreadySuffix}",
@@ -1641,7 +1639,7 @@ const de: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Fehlende Details generiert",
   "plan.toast.movedPins": "{n} Pin{plural} nach {date} verschoben",
   "plan.toast.removedPins": "{n} Pin{plural} aus dem Plan entfernt",
-  "plan.toast.selectedNeedDetails": "Die ausgewählten Pins benötigen vor der Planung ein Bild, einen Titel oder eine Beschreibung.",
+  "plan.toast.selectedNeedDetails": "Die ausgewählten Pins benötigen vor der Planung ein Bild, eine Pinnwand oder einen kürzeren Titel/eine kürzere Beschreibung.",
   "plan.toast.noUnscheduledSelected": "Keine nicht geplanten Pins ausgewählt — bereits geplante Pins werden übersprungen.",
 
   // ── Products ──

@@ -1521,8 +1521,6 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Pinterest 連接尚未完成。請重新選取該 Pin。",
   "plan.error.pinNotFound": "找不到這個 Pin。",
   "plan.error.needsImage": "此 Pin 需要一張圖片才能排程。",
-  "plan.error.needsTitle": "此 Pin 需要一個標題才能排程。",
-  "plan.error.needsDescription": "此 Pin 需要一段描述才能排程。",
   "plan.error.needsBoard": "發布前請先新增佈告欄。",
   "plan.dropBlock.editSmartSchedule": "編輯智慧排程",
   "plan.dropBlock.allPastTitle": "{date} 已沒有剩餘時間。",
@@ -1533,7 +1531,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "這一天已有 {n} 個已排程的 Pin{plural} 佔滿了所有智慧排程時段。請增加每天的 Pin 數量，或選擇其他日期。",
   "plan.toast.timeLocked": "時間已鎖定 — 重新平衡時將保留。",
   "plan.toast.timeUnlocked": "時間已解鎖。",
-  "plan.toast.blockedNeedsDetails": "{n} 個 Pin{plural} 需要先補上圖片、標題或描述才能排程。",
+  "plan.toast.blockedNeedsDetails": "{n} 個 Pin{plural} 需要先補上圖片、佈告欄，或縮短標題/描述才能排程。",
   "plan.toast.alreadyScheduled": "{n} 個 Pin{plural} 已排程",
   "plan.toast.couldNotSchedule": "無法為所選的 Pin 排程。",
   "plan.toast.scheduledCount": "已排程 {n} 個 Pin{plural}{alreadySuffix}",
@@ -1541,7 +1539,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "已產生缺少的詳情",
   "plan.toast.movedPins": "已將 {n} 個 Pin{plural} 移動到 {date}",
   "plan.toast.removedPins": "已從計畫中移除 {n} 個 Pin{plural}",
-  "plan.toast.selectedNeedDetails": "所選的 Pin 需要先補上圖片、標題或描述才能排程。",
+  "plan.toast.selectedNeedDetails": "所選的 Pin 需要先補上圖片、佈告欄，或縮短標題/描述才能排程。",
   "plan.toast.noUnscheduledSelected": "未選取任何未排程的 Pin — 已排程的 Pin 會被略過。",
 
   // ── discover ──
