@@ -45,6 +45,10 @@ export const CORE: string[] = [
   "test-pinterest-client-dedupe",
   "test-published-pin-summary",
   "test-social-provider-status",
+  // Admin operator console (derivation layer)
+  "test-admin-action-center",
+  "test-activation-funnel",
+  "test-ai-adoption",
   // AI copy / creative intelligence
   "test-ai-copy-keyword-context",
   "test-ai-copy-language-guardrail",
