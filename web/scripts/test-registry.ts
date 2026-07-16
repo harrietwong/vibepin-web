@@ -118,6 +118,7 @@ export const STUDIO: string[] = [
   "test-pin-details-phase3",
   "test-pin-details-modal-compact",
   "test-optional-website-url",
+  "test-generation-failure-media",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */
@@ -139,6 +140,7 @@ export const PLAN: string[] = [
   "test-smart-schedule-rebalance",
   "test-pin-draft-promote",
   "test-publish-due-claim",
+  "test-custom-time",
 ];
 
 /**

@@ -1239,6 +1239,7 @@ const hi: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "और कार्रवाइयाँ",
   "studioBoard.card.pinImageAlt": "Pin इमेज",
   "studioBoard.card.noImage": "कोई इमेज नहीं",
+  "studioBoard.card.generationFailedPlaceholder": "जनरेशन विफल",
   "studioBoard.card.fix.auth": "इस Pin के प्रकाशित होने से पहले आपके Pinterest कनेक्शन को फिर से कनेक्ट करना होगा।",
   "studioBoard.card.fix.transient": "प्रकाशित करते समय Pinterest या कनेक्शन विफल हो गया। अभी पुनः प्रयास करें, या इस Pin को वापस अनशेड्यूल्ड में ले जाएँ।",
   "studioBoard.card.fix.default": "इस Pin में कुछ ऐसा है जिस पर प्रकाशित होने से पहले ध्यान देना ज़रूरी है। विवरण जाँचें और समस्या ठीक करें।",

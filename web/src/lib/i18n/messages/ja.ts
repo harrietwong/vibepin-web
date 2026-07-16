@@ -939,6 +939,7 @@ const ja: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "その他の操作",
   "studioBoard.card.pinImageAlt": "Pin画像",
   "studioBoard.card.noImage": "画像なし",
+  "studioBoard.card.generationFailedPlaceholder": "生成に失敗しました",
   "studioBoard.card.fix.auth": "このPinを公開する前に、Pinterestの接続を再接続する必要があります。",
   "studioBoard.card.fix.transient": "公開中にPinterestまたは接続でエラーが発生しました。今すぐ再試行するか、このPinを未予約に戻してください。",
   "studioBoard.card.fix.default": "公開する前に、このPinの内容を確認する必要があります。詳細を確認して問題を修正してください。",

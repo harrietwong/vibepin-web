@@ -731,6 +731,7 @@ const nl: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Meer acties",
   "studioBoard.card.pinImageAlt": "Pin-afbeelding",
   "studioBoard.card.noImage": "Geen afbeelding",
+  "studioBoard.card.generationFailedPlaceholder": "Genereren mislukt",
   "studioBoard.card.fix.auth": "Je Pinterest-verbinding moet opnieuw worden gemaakt voordat deze Pin kan worden gepubliceerd.",
   "studioBoard.card.fix.transient": "Pinterest of de verbinding is mislukt tijdens publiceren. Probeer het nu opnieuw, of zet deze Pin terug naar Niet ingepland.",
   "studioBoard.card.fix.default": "Er is iets in deze Pin dat aandacht nodig heeft voordat deze kan worden gepubliceerd. Controleer de details en los het probleem op.",

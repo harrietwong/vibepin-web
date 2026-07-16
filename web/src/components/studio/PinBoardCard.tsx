@@ -22,6 +22,7 @@ import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Ch
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { getSourceBadge, getStatusBadge, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
+import { PinCardMedia } from "@/components/studio/PinCardMedia";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
@@ -381,7 +382,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       <div data-testid="pin-board-card" data-active="false" data-source={draft.source} data-lifecycle={lifecycle}
         style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
         <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 5", background: BUI.surface3 }}>
-          {draft.imageUrl ? (
+          {failed && !isPublishFailure ? (
+            // Generation-failure card: walk the original-image fallback chain
+            // (generated → source → parent) instead of the raw draft.imageUrl, which
+            // may be empty (scratch mode) or a dead snapshot. Never blank/broken.
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} />
+          ) : draft.imageUrl ? (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
               style={{ width: "100%", height: "100%", objectFit: "cover", display: "block",
@@ -550,7 +556,9 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)", gridColumn: "span 2", maxWidth: 760 }}>
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
         <div style={{ width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
-          {draft.imageUrl ? (
+          {failed && !isPublishFailure ? (
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} />
+          ) : draft.imageUrl ? (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
               style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />

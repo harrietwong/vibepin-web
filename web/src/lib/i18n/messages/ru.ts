@@ -1249,6 +1249,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Больше действий",
   "studioBoard.card.pinImageAlt": "Изображение пина",
   "studioBoard.card.noImage": "Нет изображения",
+  "studioBoard.card.generationFailedPlaceholder": "Не удалось сгенерировать",
   "studioBoard.card.fix.auth": "Перед публикацией этого пина нужно переподключить аккаунт Pinterest.",
   "studioBoard.card.fix.transient": "Pinterest или соединение дали сбой при публикации. Повторите попытку сейчас или верните этот пин в незапланированные.",
   "studioBoard.card.fix.default": "Этому пину требуется внимание перед публикацией. Проверьте детали и устраните проблему.",

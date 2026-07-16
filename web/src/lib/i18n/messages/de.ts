@@ -939,6 +939,7 @@ const de: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Weitere Aktionen",
   "studioBoard.card.pinImageAlt": "Pin-Bild",
   "studioBoard.card.noImage": "Kein Bild",
+  "studioBoard.card.generationFailedPlaceholder": "Generierung fehlgeschlagen",
   "studioBoard.card.fix.auth": "Ihre Pinterest-Verbindung muss erneut hergestellt werden, bevor dieser Pin veröffentlicht werden kann.",
   "studioBoard.card.fix.transient": "Pinterest oder die Verbindung ist beim Veröffentlichen fehlgeschlagen. Versuchen Sie es jetzt erneut, oder verschieben Sie diesen Pin zurück nach „Nicht geplant“.",
   "studioBoard.card.fix.default": "Etwas an diesem Pin muss vor der Veröffentlichung bearbeitet werden. Prüfen Sie die Details und beheben Sie das Problem.",

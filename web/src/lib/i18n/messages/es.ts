@@ -2074,6 +2074,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Más acciones",
   "studioBoard.card.pinImageAlt": "Imagen del Pin",
   "studioBoard.card.noImage": "Sin imagen",
+  "studioBoard.card.generationFailedPlaceholder": "Error al generar",
 
   // ── studioBoard: PinBoardCard — recommended fix copy ──
   "studioBoard.card.fix.auth": "Tu conexión con Pinterest debe reconectarse antes de que este Pin pueda publicarse.",

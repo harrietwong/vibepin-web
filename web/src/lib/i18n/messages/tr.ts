@@ -2534,6 +2534,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Daha fazla işlem",
   "studioBoard.card.pinImageAlt": "Pin görseli",
   "studioBoard.card.noImage": "Görsel yok",
+  "studioBoard.card.generationFailedPlaceholder": "Oluşturma başarısız oldu",
   "studioBoard.card.fix.auth": "Bu Pin yayınlanmadan önce Pinterest bağlantınızın yeniden bağlanması gerekiyor.",
   "studioBoard.card.fix.transient": "Yayınlanırken Pinterest veya bağlantı başarısız oldu. Şimdi tekrar deneyin veya bu Pini Planlanmamışa geri taşıyın.",
   "studioBoard.card.fix.default": "Bu Pinde yayınlanmadan önce dikkat edilmesi gereken bir şey var. Ayrıntıları gözden geçirip sorunu düzeltin.",

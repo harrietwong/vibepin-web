@@ -838,6 +838,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "更多操作",
   "studioBoard.card.pinImageAlt": "Pin 圖片",
   "studioBoard.card.noImage": "無圖片",
+  "studioBoard.card.generationFailedPlaceholder": "生成失敗",
   "studioBoard.card.fix.auth": "需要重新連接你的 Pinterest 帳號才能發布此 Pin。",
   "studioBoard.card.fix.transient": "發布時 Pinterest 或連接發生錯誤。請立即重試，或將此 Pin 移回未排程。",
   "studioBoard.card.fix.default": "此 Pin 有需要處理的問題才能發布。請檢查詳情並修正問題。",

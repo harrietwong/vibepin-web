@@ -1912,6 +1912,7 @@ const pl: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Więcej akcji",
   "studioBoard.card.pinImageAlt": "Obraz Pinu",
   "studioBoard.card.noImage": "Brak obrazu",
+  "studioBoard.card.generationFailedPlaceholder": "Generowanie nie powiodło się",
   "studioBoard.card.fix.auth": "Twoje połączenie z Pinterest wymaga ponownego połączenia, zanim ten Pin będzie mógł zostać opublikowany.",
   "studioBoard.card.fix.transient": "Publikacja na Pinterest nie powiodła się z powodu błędu połączenia. Spróbuj ponownie teraz lub przenieś ten Pin z powrotem do Niezaplanowanych.",
   "studioBoard.card.fix.default": "Coś w tym Pinie wymaga uwagi, zanim będzie mógł zostać opublikowany. Przejrzyj szczegóły i napraw problem.",

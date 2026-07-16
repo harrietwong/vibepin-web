@@ -2444,6 +2444,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Aksi lainnya",
   "studioBoard.card.pinImageAlt": "Gambar pin",
   "studioBoard.card.noImage": "Tidak ada gambar",
+  "studioBoard.card.generationFailedPlaceholder": "Pembuatan gagal",
   "studioBoard.card.fix.auth": "Koneksi Pinterest Anda perlu disambungkan ulang sebelum Pin ini dapat diterbitkan.",
   "studioBoard.card.fix.transient": "Pinterest atau koneksi gagal saat menerbitkan. Coba lagi sekarang, atau pindahkan Pin ini kembali ke Belum Dijadwalkan.",
   "studioBoard.card.fix.default": "Ada bagian dari Pin ini yang perlu perhatian sebelum dapat diterbitkan. Tinjau detail dan perbaiki masalahnya.",

@@ -2267,6 +2267,7 @@ const ko: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "추가 작업",
   "studioBoard.card.pinImageAlt": "핀 이미지",
   "studioBoard.card.noImage": "이미지 없음",
+  "studioBoard.card.generationFailedPlaceholder": "생성 실패",
   "studioBoard.card.fix.auth": "이 핀을 게시하려면 Pinterest 연결을 다시 설정해야 합니다.",
   "studioBoard.card.fix.transient": "게시 중 Pinterest 또는 연결에 오류가 발생했습니다. 지금 다시 시도하거나 이 핀을 예약 안 됨으로 되돌리세요.",
   "studioBoard.card.fix.default": "이 핀을 게시하려면 확인이 필요한 문제가 있습니다. 상세 정보를 확인하고 문제를 해결하세요.",

@@ -1931,6 +1931,7 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "การดำเนินการเพิ่มเติม",
   "studioBoard.card.pinImageAlt": "รูปภาพ Pin",
   "studioBoard.card.noImage": "ไม่มีรูปภาพ",
+  "studioBoard.card.generationFailedPlaceholder": "สร้างไม่สำเร็จ",
   "studioBoard.card.fix.auth": "การเชื่อมต่อ Pinterest ของคุณต้องเชื่อมต่อใหม่ก่อนที่ Pin นี้จะเผยแพร่ได้",
   "studioBoard.card.fix.transient": "Pinterest หรือการเชื่อมต่อล้มเหลวขณะเผยแพร่ ลองใหม่ตอนนี้ หรือย้าย Pin นี้กลับไปยังไม่ได้ตั้งเวลา",
   "studioBoard.card.fix.default": "มีบางอย่างใน Pin นี้ต้องการความสนใจก่อนที่จะเผยแพร่ได้ ตรวจสอบรายละเอียดและแก้ไขปัญหา",

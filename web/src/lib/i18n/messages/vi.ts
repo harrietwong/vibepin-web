@@ -814,6 +814,7 @@ const vi: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Thêm thao tác",
   "studioBoard.card.pinImageAlt": "Ảnh Pin",
   "studioBoard.card.noImage": "Không có ảnh",
+  "studioBoard.card.generationFailedPlaceholder": "Tạo không thành công",
   "studioBoard.card.fix.auth": "Cần kết nối lại tài khoản Pinterest của bạn trước khi Pin này có thể đăng.",
   "studioBoard.card.fix.transient": "Pinterest hoặc kết nối gặp sự cố khi đăng. Hãy thử lại ngay, hoặc chuyển Pin này về Chưa lên lịch.",
   "studioBoard.card.fix.default": "Pin này có vấn đề cần xử lý trước khi đăng được. Hãy kiểm tra chi tiết và khắc phục vấn đề.",

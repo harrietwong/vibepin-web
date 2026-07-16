@@ -1899,6 +1899,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "更多操作",
   "studioBoard.card.pinImageAlt": "Pin 图片",
   "studioBoard.card.noImage": "无图片",
+  "studioBoard.card.generationFailedPlaceholder": "生成失败",
   "studioBoard.card.fix.auth": "需要重新连接你的 Pinterest 账号后才能发布此 Pin。",
   "studioBoard.card.fix.transient": "发布时 Pinterest 或连接出现故障。请立即重试，或将此 Pin 移回未排期。",
   "studioBoard.card.fix.default": "此 Pin 存在需要处理的问题才能发布。请检查详情并修复问题。",

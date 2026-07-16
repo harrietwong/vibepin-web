@@ -1930,6 +1930,7 @@ const ar: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "المزيد من الإجراءات",
   "studioBoard.card.pinImageAlt": "صورة الـ Pin",
   "studioBoard.card.noImage": "لا توجد صورة",
+  "studioBoard.card.generationFailedPlaceholder": "فشل الإنشاء",
   "studioBoard.card.fix.auth": "يحتاج اتصال Pinterest إلى إعادة الربط قبل أن يتمكن هذا الـ Pin من النشر.",
   "studioBoard.card.fix.transient": "فشل Pinterest أو الاتصال أثناء النشر. حاول الآن مرة أخرى، أو انقل هذا الـ Pin إلى غير المجدولة.",
   "studioBoard.card.fix.default": "يحتاج شيء في هذا الـ Pin إلى انتباه قبل أن يتمكن من النشر. راجع التفاصيل وأصلح المشكلة.",

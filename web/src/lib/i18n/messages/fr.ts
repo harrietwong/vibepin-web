@@ -1861,6 +1861,7 @@ const fr: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Plus d'actions",
   "studioBoard.card.pinImageAlt": "Image du Pin",
   "studioBoard.card.noImage": "Aucune image",
+  "studioBoard.card.generationFailedPlaceholder": "Échec de la génération",
   "studioBoard.card.fix.auth": "Votre connexion Pinterest doit être reconnectée avant que ce Pin puisse être publié.",
   "studioBoard.card.fix.transient": "Pinterest ou la connexion a échoué lors de la publication. Réessayez maintenant, ou déplacez ce Pin vers Non programmé.",
   "studioBoard.card.fix.default": "Quelque chose dans ce Pin nécessite votre attention avant de pouvoir le publier. Vérifiez les détails et corrigez le problème.",
