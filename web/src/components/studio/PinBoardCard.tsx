@@ -29,6 +29,10 @@ import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boar
 import { track } from "@/lib/analytics";
 
 const PERSIST_DEBOUNCE = 400;
+// Hover → auto-expand delay (ms). Long enough that a mouse merely passing over the
+// card while scrolling/scanning the board never triggers an expand; short enough
+// that a deliberate pause reads as intent. Mirrors common hover-intent UX timings.
+const HOVER_EXPAND_DELAY = 400;
 
 function draftToFields(d: PinDraft): PinFieldsValue {
   return {
@@ -176,6 +180,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const selfEdit = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<PinFieldsValue>(fields);
+  // Hover-to-expand (compact card only): a deliberate pause over the card auto-opens
+  // the Quick Edit state, same as clicking Edit. Mouse-out never auto-collapses (the
+  // user may be mid-edit) — collapsing stays on the explicit collapse control / picking
+  // another card. Cleared on unmount and on every re-trigger to avoid a stray expand
+  // firing after the card is gone or already active.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
 
   useEffect(() => {
     if (selfEdit.current) { selfEdit.current = false; return; }
@@ -316,6 +327,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // shell, no loading state, capped at 8). NEVER labeled "Trending" (data honesty).
   const keywordChips = draft.keywordStatus === "ready" ? (draft.recommendedKeywords ?? []).slice(0, 8) : [];
 
+  // Hover intent (compact card only): schedule an expand after HOVER_EXPAND_DELAY; a
+  // quick pass-over (mouse leaves before the timer fires) cancels it via
+  // onCardMouseLeave, so scanning/scrolling across many cards never triggers one.
+  // Guarded on `active` (nothing to do — already expanded) and `generating` (no
+  // editable content yet).
+  const onCardMouseEnter = useCallback(() => {
+    if (active || generating) return;
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => { hoverTimer.current = null; expand(); }, HOVER_EXPAND_DELAY);
+  }, [active, generating, expand]);
+  const onCardMouseLeave = useCallback(() => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+  }, []);
+
   const badges = (
     <div style={{ position: "absolute", top: 8, left: 8, display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
       {source && (
@@ -379,6 +404,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   if (!active) {
     return (
       <div data-testid="pin-board-card" data-active="false" data-source={draft.source} data-lifecycle={lifecycle}
+        onMouseEnter={onCardMouseEnter} onMouseLeave={onCardMouseLeave}
         style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
         <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 5", background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
