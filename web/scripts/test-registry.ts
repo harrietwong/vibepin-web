@@ -72,6 +72,7 @@ export const CORE: string[] = [
   "test-pin-draft-sync",
   "test-pin-draft-promote",
   "test-publish-due-claim",
+  "test-publish-events",
   "test-user-store-sync",
   "test-user-store-route",
   "test-user-store-adapters",

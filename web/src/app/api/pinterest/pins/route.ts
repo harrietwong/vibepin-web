@@ -21,6 +21,15 @@ import { PinterestApiError, PinterestClient } from "@/lib/server/pinterest/servi
 import { getPinterestApiEnv, canAttemptSandboxPublish } from "@/lib/server/pinterest/config";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
 import { validatePublicImageUrl, validateOptionalLink } from "@/lib/server/pinterest/validatePublish";
+import { createServerClient } from "@/lib/supabase";
+import {
+  recordPublishEvent,
+  recordFailedPublishEvent,
+  newPublishAttemptId,
+  PUBLISH_EVENT_ATTEMPTED,
+  PUBLISH_EVENT_SUCCEEDED,
+  type PublishEventBase,
+} from "@/lib/server/publishEvents";
 
 export const dynamic = "force-dynamic";
 
@@ -67,9 +76,29 @@ export async function POST(req: Request) {
   const altText = typeof body.altText === "string" ? body.altText.trim().slice(0, 500) : undefined;
 
   const sourcePinId = typeof body.sourcePinId === "string" ? body.sourcePinId.trim() : "";
+
+  // Optional instrumentation fields — plumbed from client call sites, never required and
+  // never block publish (missing draftId is a valid, nullable event field; an unrecognised
+  // source degrades to "unknown"). See lib/server/publishEvents.ts for the contract.
+  const draftId = typeof body.draftId === "string" && body.draftId.trim() ? body.draftId.trim() : null;
+  const source =
+    body.source === "immediate" || body.source === "scheduled-cron" ? body.source : "immediate";
+  const eventBase: PublishEventBase = {
+    publishAttemptId: newPublishAttemptId(),
+    userId: uid,
+    draftId,
+    boardId,
+    source,
+  };
+  // Service-role client for the best-effort analytics writes. Constructing it must never
+  // affect publish; recordPublishEvent swallows all failures.
+  const analyticsDb = createServerClient();
+
   const lockKey = sourcePinId ? `${uid}:${sourcePinId}` : null;
   if (lockKey) {
     if (_inFlightPublishes.has(lockKey)) {
+      // A de-duped duplicate request never actually publishes — the winning request owns
+      // this attempt's events, so emit nothing here (avoids double-counting one publish).
       return Response.json(
         { error: "This Pin is already being published.", code: "publish_in_progress" },
         { status: 409 },
@@ -77,6 +106,11 @@ export async function POST(req: Request) {
     }
     _inFlightPublishes.add(lockKey);
   }
+
+  // Attempt starts here (past the de-dup gate). All three events share eventBase.publishAttemptId.
+  const publishStartedMs = Date.now();
+  // Fire-and-forget: the attempted event never blocks the publish it precedes.
+  void recordPublishEvent(analyticsDb, PUBLISH_EVENT_ATTEMPTED, eventBase);
 
   try {
     // Sandbox mode publishes with the SANDBOX token against the sandbox API (the real
@@ -109,6 +143,10 @@ export async function POST(req: Request) {
       if (err instanceof PinterestApiError && (err.status === 403 || err.status === 404)) {
         const board = await boardPromise.catch(() => null);
         if (!board) {
+          void recordFailedPublishEvent(analyticsDb, eventBase, Date.now() - publishStartedMs, {
+            code: "board_not_owned",
+            message: "Board not found on the connected Pinterest account",
+          });
           return Response.json(
             { error: "Board not found on the connected Pinterest account", code: "board_not_owned" },
             { status: 403 },
@@ -127,6 +165,12 @@ export async function POST(req: Request) {
       boardPromise.catch(() => null),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
     ]);
+    void recordPublishEvent(analyticsDb, PUBLISH_EVENT_SUCCEEDED, {
+      ...eventBase,
+      durationMs: Date.now() - publishStartedMs,
+      remotePinId: pin.id,
+      remotePinUrl: pin.url,
+    });
     return Response.json(
       {
         ok: true,
@@ -139,6 +183,9 @@ export async function POST(req: Request) {
       { status: 201 },
     );
   } catch (err) {
+    // Record the failure BEFORE mapping to a Response — recordFailedPublishEvent is fully
+    // wrapped/best-effort so this can never mask the original Pinterest error.
+    void recordFailedPublishEvent(analyticsDb, eventBase, Date.now() - publishStartedMs, err);
     return pinterestErrorResponse(err);
   } finally {
     if (lockKey) _inFlightPublishes.delete(lockKey);

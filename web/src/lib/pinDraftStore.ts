@@ -97,6 +97,13 @@ export interface PinDraft {
   sourceImageUrl?:     string;
   /** User‑approved tags/hashtags. `metadataDraft.topics` stays the raw AI result. */
   tags?:               string[];
+  /** Server-side generation id (generateAiVersions → generation_request_id) captured when
+   *  an AI image resolves this card. Lets the AI-adoption metric join on a stable id
+   *  instead of fragile image-URL string matching. Rides the payload sync — no migration. */
+  sourceGenerationId?: string;
+  /** Stable per-asset key for this generated card (the card's idempotencyKey), so a draft
+   *  keeps a durable handle to which generated asset it is even if its imageUrl changes. */
+  sourceAssetKey?:     string;
   /** Remote Pinterest Pin id captured after a successful publish. */
   remotePinId?:        string;
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published
@@ -445,6 +452,9 @@ export function createBoardDraft(input: {
   assetError?:      string;
   /** "generating" creates a placeholder card (AI Image run in flight). */
   generationStatus?: string;
+  /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
+  sourceGenerationId?: string;
+  sourceAssetKey?:     string;
 }): PinDraft {
   const data = load();
 
@@ -484,6 +494,8 @@ export function createBoardDraft(input: {
     pinCreatedAt:        input.pinCreatedAt,
     assetError:          input.assetError,
     generationStatus:    input.generationStatus,
+    sourceGenerationId:  input.sourceGenerationId,
+    sourceAssetKey:      input.sourceAssetKey,
   };
 
   data.drafts[draft.id] = draft;
@@ -497,7 +509,11 @@ export function createBoardDraft(input: {
  * This is the ONLY sanctioned imageUrl write after creation (updateDraft
  * deliberately forbids imageUrl patches); it also clears the generating state.
  */
-export function completeGeneratedDraft(id: string, imageUrl: string): PinDraft | null {
+export function completeGeneratedDraft(
+  id: string,
+  imageUrl: string,
+  meta?: { generationId?: string; assetKey?: string },
+): PinDraft | null {
   const data = load();
   const draft = data.drafts[id];
   if (!draft) return null;
@@ -505,6 +521,10 @@ export function completeGeneratedDraft(id: string, imageUrl: string): PinDraft |
     ...draft,
     imageUrl,
     generationStatus: "completed",
+    // Persist the server generation id + a stable asset key so the AI-adoption metric can
+    // join on ids, not image-URL strings. Only set when provided (legacy callers unchanged).
+    ...(meta?.generationId ? { sourceGenerationId: meta.generationId } : {}),
+    ...(meta?.assetKey ? { sourceAssetKey: meta.assetKey } : {}),
     updatedAt: new Date().toISOString(),
   };
   data.drafts[id] = updated;

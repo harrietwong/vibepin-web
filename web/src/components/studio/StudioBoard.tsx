@@ -266,7 +266,7 @@ export function StudioBoard() {
     if (!beginPublish(id)) return;
     pinDraftStore.updateDraft(id, { publishError: undefined });
     try {
-      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id });
+      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id, draftId: id, source: "immediate" });
       pinDraftStore.updateDraft(id, { postedAt: new Date().toISOString(), remotePinId: res.pin.id, remotePinUrl: res.pin.url, publishError: undefined, failureType: undefined, errorCategory: undefined, publishErrorCode: undefined });
       toast.success(tr("studioBoard.toast.publishSuccess"));
     } catch (e) {
@@ -386,7 +386,12 @@ export function StudioBoard() {
     try {
       const result = await generateAiVersions({ source: parent, setup: opts });
       result.urls.slice(0, placeholders.length).forEach((url, i) => {
-        pinDraftStore.completeGeneratedDraft(placeholders[i].id, url);
+        // Persist the server generation id + this card's stable asset key so the future
+        // AI-adoption metric joins on ids, not the imageUrl string.
+        pinDraftStore.completeGeneratedDraft(placeholders[i].id, url, {
+          generationId: result.generationRequestId,
+          assetKey: `gen:${requestId}:${i}`,
+        });
         void startImageAnalysis(placeholders[i].id);
       });
       // Requested more than came back → the unfilled placeholders failed.
@@ -399,6 +404,7 @@ export function StudioBoard() {
           title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
           model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
           generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
+          sourceGenerationId: result.generationRequestId, sourceAssetKey: `gen:${requestId}:extra:${i}`,
         });
         void startImageAnalysis(extra.id);
       });

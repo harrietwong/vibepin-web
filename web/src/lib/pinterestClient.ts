@@ -455,6 +455,11 @@ export type PublishPinInput = {
   link?: string;
   altText?: string;
   sourcePinId?: string;
+  // ── Server-side publish-event instrumentation (optional; never affects publish) ──
+  /** pinDraftStore id this publish is for — lets publish events join back to the draft. */
+  draftId?: string;
+  /** Where the publish was initiated. Server defaults to "immediate" when omitted. */
+  source?: "immediate" | "scheduled-cron";
   // ── VibePin-side commerce metadata (stored/used internally; never sent to the
   //    Pinterest API as official product tags) ──────────────────────────────────
   attachedProducts?: AttachedProduct[];
