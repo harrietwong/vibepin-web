@@ -1,0 +1,1125 @@
+# VibePin Create Pins & Plan 工作流优化 PRD
+
+**版本：** v1.0
+**状态：** Draft for Fable Review
+**范围：** Create Pins、Edit Pin、Shopify Product Picker、Plan、Publish now、发布失败恢复
+**产品原则：** Pinterest-first · Pin-draft-first · Upload-first · Minimal UI · Cross-device persistence
+
+---
+
+## 1. 项目背景
+
+VibePin 当前已经具备：
+
+```text
+上传图片 / 选择商品
+→ 创建 Pin Draft Card
+→ AI Copy / AI Image
+→ 编辑标题、描述、链接和 Board
+→ Schedule / Publish
+→ Plan 管理
+```
+
+本轮不新增大型功能，而是优化 Create Pins、Plan 和发布失败恢复之间的关系。
+
+当前主要问题：
+
+1. Pin Schedule 成功后仍留在 Create Pins 默认列表，用户无法明确感知任务已经进入 Plan。
+2. Scheduled Pin 展开后仍可能显示 `Schedule`，操作语义不正确。
+3. AI Copy 同时展示 Regenerate、长度选项和语言选项，界面过于复杂。
+4. Shopify 商品选择入口位置不清晰。
+5. Shopify Product 与 Pin Website URL 的关系不完整。
+6. Plan 中立即发布的命名和交互没有统一。
+7. 发布失败主要依赖局部状态或 Toast，缺少持续可见的恢复入口。
+8. 一些可以提前判断的错误仍可能等 Pinterest 拒绝后才暴露。
+
+竞品研究支持将“创建中的 Draft”“已经排程的内容”和“发布失败恢复”明确分开，同时保留 Scheduled 内容的编辑能力；研究也支持简化 AI Copy，并通过持续 Banner 与现有 Failed 筛选处理发布失败。
+
+---
+
+# 2. 产品目标
+
+本轮目标：
+
+1. 将 Create Pins 默认页面明确为待处理的 Unscheduled 工作区。
+2. Schedule 成功后让 Pin 自然进入 Plan。
+3. 保留 Scheduled Pin 的内容编辑能力，但日期时间仅在 Plan 管理。
+4. 将 AI Copy 简化为一个清晰操作。
+5. 将商品选择入口放到 Upload images 旁边。
+6. 正确区分 Product URL 和 Pin Website URL。
+7. 全产品统一使用 `Publish now`。
+8. 为发布失败提供持续、清晰、可恢复的处理流程。
+9. 在 Schedule 和 Publish 前拦截可以预测的问题。
+10. 所有 Draft、状态和 Product 关联跟随账号跨设备同步。
+
+---
+
+# 3. 非目标
+
+本轮不做：
+
+* 新增 Products 一级导航或独立页签；
+* 新增独立 Failed Pins 页面；
+* 重写 Create Pins；
+* 重做 AI Image Drawer；
+* 新增 Draft 生命周期；
+* 自动创建 Shopify Pin Draft；
+* 自动把 Product URL 写入 Website URL；
+* 自动发布 Shopify 商品；
+* Pinterest Catalog；
+* 发布失败邮件通知；
+* AI Copy 长度设置；
+* AI Copy 语言设置；
+* AI Copy 高级选项；
+* Creative Intelligence Layer；
+* 模型训练。
+
+---
+
+# 4. 核心产品对象与状态
+
+核心对象继续为：
+
+```text
+Pin Draft Card
+```
+
+可见生命周期保持不变：
+
+```text
+Generating
+Failed
+Unscheduled
+Scheduled
+Posted
+```
+
+不新增 `Publishing` 可见生命周期。发布中的状态使用临时 in-flight UI 表达。
+
+内部需要区分失败来源：
+
+```text
+failureType:
+- generation
+- publish
+```
+
+全局发布失败提醒只统计：
+
+```text
+failureType = publish
+```
+
+---
+
+# 5. Create Pins 默认工作区
+
+## 5.1 默认筛选
+
+Create Pins 默认进入：
+
+```text
+Unscheduled
+```
+
+保留筛选：
+
+```text
+All / Unscheduled / Scheduled / Posted / Failed
+```
+
+含义：
+
+| 筛选          | 内容               |
+| ----------- | ---------------- |
+| All         | 所有 Pin Draft     |
+| Unscheduled | 尚未排程的 Draft      |
+| Scheduled   | 已进入 Plan 的 Draft |
+| Posted      | 已成功发布的 Pin       |
+| Failed      | 生成失败或发布失败的 Draft |
+
+---
+
+## 5.2 Schedule 成功后的行为
+
+用户点击：
+
+```text
+Schedule
+```
+
+流程：
+
+```text
+flush pending edits
+→ validate
+→ assign Smart Schedule slot
+→ persist
+→ lifecycle = Scheduled
+```
+
+成功后：
+
+1. 当前卡片从默认 `Unscheduled` 列表移出；
+2. 不刷新整个页面；
+3. 保持当前滚动位置；
+4. 显示成功 Toast：
+
+```text
+Scheduled for Jul 13 at 9:12 AM.
+
+[Open in Plan]
+```
+
+5. 卡片仍可在 `All` 和 `Scheduled` 中找到；
+6. 卡片进入 Plan。
+
+如果用户当前查看的是 `All` 或 `Scheduled`，卡片保留在当前视图，只更新状态和操作。
+
+---
+
+# 6. Scheduled Pin 行为
+
+## 6.1 Scheduled Pin 可以编辑的内容
+
+Scheduled Pin 仍允许编辑：
+
+* Pin title；
+* Description；
+* Website URL；
+* Product；
+* Pinterest Board；
+* Alt text；
+* Tags；
+* AI Copy。
+
+编辑以上内容时：
+
+* 保留原 scheduled time；
+* 自动保存；
+* 不需要重新 Schedule。
+
+---
+
+## 6.2 日期和时间管理
+
+日期与时间只在 Plan 中修改。
+
+Create Pins 不显示：
+
+* 日期选择器；
+* 时间选择器；
+* Reschedule 表单。
+
+Create Pins 中只显示：
+
+```text
+Scheduled for Jul 13 at 9:12 AM
+
+[Open in Plan]
+```
+
+---
+
+## 6.3 Scheduled Card 操作
+
+收起状态：
+
+```text
+Primary: Edit
+Secondary: Open in Plan
+
+More:
+- Duplicate
+- Download
+- Unschedule
+```
+
+展开状态底部不能继续显示：
+
+```text
+Schedule
+```
+
+应显示：
+
+```text
+Scheduled for Jul 13 at 9:12 AM
+
+[Open in Plan]
+```
+
+---
+
+## 6.4 Unschedule
+
+用户点击 `Unschedule`：
+
+```text
+clear scheduled time
+→ clear plan placement
+→ lifecycle = Unscheduled
+```
+
+结果：
+
+* 卡片重新进入 Create Pins 默认列表；
+* Draft 字段和 Product 关联不变；
+* 不删除 Draft。
+
+---
+
+# 7. AI Copy 简化
+
+## 7.1 删除的控件
+
+从 Pin Card 第一层 UI 删除：
+
+```text
+Regenerate copy
+Short
+Standard
+SEO-rich
+Auto
+English
+Chinese
+Spanish
+French
+German
+Japanese
+```
+
+本轮不提供：
+
+* Copy length；
+* Copy language；
+* SEO mode；
+* Regenerate mode；
+* Tone selector。
+
+---
+
+## 7.2 保留的操作
+
+只保留：
+
+```text
+Generate copy
+```
+
+AI 默认生成英文。
+
+手动输入内容保持原样：
+
+* 不自动翻译；
+* 不自动改写；
+* 不因 UI 语言改变；
+* 不因 Product 语言改变。
+
+---
+
+## 7.3 Generate copy 写入规则
+
+### 标题和描述都为空
+
+```text
+Generate title
+Generate description
+Generate alt text where supported
+```
+
+### 只有一个字段为空
+
+只填写空字段，不覆盖已有字段。
+
+例如：
+
+```text
+Title 已有内容
+Description 为空
+
+→ 只生成 Description
+```
+
+### 标题和描述都有内容
+
+点击 `Generate copy` 后显示确认：
+
+```text
+Replace existing text with AI copy?
+
+This will replace the current title and description.
+
+[Cancel] [Replace with AI copy]
+```
+
+只有用户明确确认后才允许覆盖。
+
+---
+
+## 7.4 失败行为
+
+AI Copy 失败时：
+
+* 保留现有字段；
+* 不写入 filler；
+* 不清空手动文本；
+* 显示：
+
+```text
+We couldn’t generate copy for this Pin. Please try again.
+```
+
+本轮不在第一层提供单独的 `Regenerate copy` 按钮。用户仍可再次点击 `Generate copy`，并按已有字段规则处理。
+
+---
+
+# 8. Create Pins 商品入口
+
+## 8.1 Header
+
+Create Pins 顶部调整为：
+
+```text
+[Upload images] [Select product]                  [History]
+```
+
+规则：
+
+* `Upload images` 是 Primary；
+* `Select product` 是 Secondary；
+* 不使用 `Import from Shopify` 作为页面级按钮；
+* Shopify 是 ProductPickerModal 中的来源；
+* 未来 WooCommerce 和 Etsy 复用同一入口。
+
+---
+
+## 8.2 空状态
+
+```text
+Drag and drop images here or click to upload
+
+[Upload images]
+
+Create from your store?
+Select a product →
+```
+
+不新增：
+
+```text
+Upload / Shopify / AI / URL
+```
+
+模式选择页。
+
+---
+
+## 8.3 ProductPickerModal
+
+点击 `Select product`：
+
+```text
+Open ProductPickerModal
+→ select source
+→ search/filter
+→ select product
+→ select product image
+→ confirm
+→ create Unscheduled Pin Draft
+```
+
+ProductPickerModal 来源可包括：
+
+```text
+My Products
+Shopify
+WooCommerce（未来）
+Etsy（未来）
+```
+
+规则：
+
+* 打开 Modal 不创建 Draft；
+* 点击商品不创建 Draft；
+* 只有确认后才创建 Draft；
+* 不新增单独 Products 页面；
+* 不复制整套商品管理界面到 Create Pins。
+
+---
+
+# 9. Edit Pin 中的 Product
+
+## 9.1 字段顺序
+
+Edit Pin 主字段：
+
+```text
+Pin title
+Description
+Product · Optional
+Website URL · Optional
+Pinterest Board
+More details
+```
+
+Product 和 Website URL 必须保持独立。
+
+---
+
+## 9.2 Product 未关联状态
+
+```text
+Product · Optional
+
+[Select product] [Add product URL]
+```
+
+要求：
+
+* `Select product` 打开 ProductPickerModal；
+* `Add product URL` 复用现有 ProductSelection、creatorProductLink 和 Batch Edit 的 product URL 模式；
+* 不新增平行的 Product 字段体系。
+
+---
+
+## 9.3 Product 已关联状态
+
+显示紧凑摘要：
+
+```text
+Product
+
+[thumbnail] Modern Graphic Art Print
+Shopify · Active · $39.00
+
+[Change] [View product] [Remove]
+```
+
+规则：
+
+* Product 不改变 Pin lifecycle；
+* Product 删除、归档或缺货时显示独立警告；
+* 不自动把 Draft 变为 Failed；
+* Product 关联服务端持久化；
+* 跨设备显示相同关联。
+
+---
+
+# 10. Product URL 与 Website URL
+
+## 10.1 字段归属
+
+```text
+Product URL
+→ 属于 Product
+
+Website URL
+→ 属于 Pin Draft
+```
+
+选择 Product 后不能自动修改 Website URL。
+
+---
+
+## 10.2 明确采用 Product URL
+
+Product 有有效 URL 时，在 Website URL 下显示：
+
+```text
+Product link available
+
+[Use product link as destination]
+```
+
+### Website URL 为空
+
+点击后直接填写 Product URL。
+
+### Website URL 已有值
+
+显示确认：
+
+```text
+Replace the current destination URL?
+
+The linked product has its own product URL.
+Do you want to use it as this Pin’s destination instead?
+
+[Keep current URL] [Use product link]
+```
+
+---
+
+## 10.3 URL 安全规则
+
+1. 选择 Product 不自动填 URL；
+2. 解除 Product 关联不自动清空 Website URL；
+3. Shopify Product URL 更新不自动修改现有 Draft；
+4. Posted Pin 的 URL 不被 Product 更新影响；
+5. 所有 URL 修改使用现有 Draft patch 和服务端持久化路径；
+6. URL 必须为合法 `http` 或 `https` 地址。
+
+---
+
+# 11. Plan 中的 Publish now
+
+## 11.1 统一命名
+
+全产品统一使用：
+
+```text
+Publish now
+```
+
+不使用：
+
+```text
+Pin now
+Post now
+Publish immediately
+```
+
+适用位置：
+
+* Plan；
+* Plan Edit Drawer；
+* Create Pins More menu；
+* 后续 Batch Edit。
+
+---
+
+## 11.2 确认弹窗
+
+用户对 Scheduled Pin 点击 `Publish now`：
+
+```text
+Publish this Pin now?
+
+This will publish the Pin to Pinterest immediately instead of at its
+scheduled time. The scheduled time will be removed.
+
+[Cancel] [Publish now]
+```
+
+---
+
+## 11.3 发布流程
+
+```text
+confirmation
+→ flush pending edits
+→ validate
+→ begin shared in-flight protection
+→ publish to Pinterest
+→ success or failure
+```
+
+发布期间：
+
+* 防止重复点击；
+* 禁止第二次 API 调用；
+* 不允许再次 Schedule；
+* 显示：
+
+```text
+Publishing Pin…
+
+Your Pin is being sent to Pinterest.
+```
+
+---
+
+## 11.4 发布成功
+
+```text
+Pin published
+
+Your Pin is now live on Pinterest.
+
+[View Pin]
+```
+
+结果：
+
+```text
+lifecycle = Posted
+clear scheduled time
+persist remotePinId
+persist remotePinUrl
+```
+
+只有存在真实 `remotePinUrl` 时才显示 `View Pin`。
+
+---
+
+## 11.5 发布失败
+
+```text
+Failed to publish Pin
+
+We couldn’t publish this Pin. Review its details or try again.
+
+[Edit] [Retry publish]
+```
+
+结果：
+
+```text
+lifecycle = Failed
+failureType = publish
+persist publish error
+persist previous scheduled time
+```
+
+失败 Pin 不再保留为 Scheduled。
+
+---
+
+# 12. 发布失败全局提醒
+
+## 12.1 Banner 显示位置
+
+存在 Publish Failure 时，在以下页面顶部显示持久红色 Banner：
+
+* Create Pins；
+* Plan。
+
+本轮不扩展到整个 App Shell。
+
+---
+
+## 12.2 Banner 文案
+
+一个失败：
+
+```text
+1 Pin failed to publish. Review and fix it.
+
+[Review failed Pin]
+```
+
+多个失败：
+
+```text
+3 Pins failed to publish. Review and fix them.
+
+[Review failed Pins]
+```
+
+---
+
+## 12.3 Banner 跳转
+
+点击 CTA：
+
+```text
+Create Pins
+→ Failed filter
+```
+
+使用现有筛选机制，不新增独立 Failed Pins 页面。
+
+---
+
+## 12.4 Banner 规则
+
+* 只统计 Publish Failure；
+* 不统计 AI Image generation failure；
+* 数量从服务端状态计算；
+* 跨设备保持一致；
+* Retry 成功后数量减少；
+* Move to Unscheduled 后数量减少；
+* Delete 后数量减少；
+* 数量为 0 时 Banner 消失；
+* Toast 不能替代 Banner。
+
+---
+
+# 13. Failed Pin 恢复
+
+## 13.1 Publish Failure 信息
+
+Failed Card 或展开区域至少显示：
+
+* Pin image；
+* Title；
+* Board；
+* Previous scheduled time；
+* Website URL；
+* 用户可读错误；
+* 推荐解决方式。
+
+示例：
+
+```text
+Previously scheduled for Jul 13 at 9:12 AM
+
+Pinterest rejected this Pin because the destination URL is invalid.
+
+Recommended fix:
+Review the Website URL and try again.
+```
+
+---
+
+## 13.2 按错误类型分配操作
+
+### 临时 Pinterest/API 错误
+
+```text
+Primary: Retry publish
+Secondary: Edit
+
+More:
+- Move to Unscheduled
+- Delete
+```
+
+### 内容或字段错误
+
+```text
+Primary: Edit
+Secondary: Retry publish
+
+More:
+- Move to Unscheduled
+- Delete
+```
+
+---
+
+## 13.3 Retry publish
+
+流程：
+
+```text
+flush
+→ validate
+→ publish
+→ Posted or Failed
+```
+
+要求：
+
+* 使用共享 in-flight registry；
+* 防止重复发布；
+* 不重新自动分配 schedule slot；
+* Retry 成功后直接进入 Posted。
+
+---
+
+## 13.4 Move to Unscheduled
+
+行为：
+
+```text
+clear current schedule
+clear active publish error
+lifecycle = Unscheduled
+```
+
+同时：
+
+* 后台保留失败历史；
+* 清除当前失败 Banner 计数；
+* 卡片重新进入默认 Unscheduled 工作区；
+* Draft 字段和 Product 关联不变。
+
+---
+
+## 13.5 Delete
+
+使用现有 Draft 删除确认逻辑。
+
+删除后：
+
+* Banner 计数更新；
+* 不再显示失败项；
+* 不删除关联 Shopify Product。
+
+---
+
+# 14. 发布前校验
+
+系统应尽可能在发送 Pinterest API 请求之前识别可预测问题。
+
+## 14.1 编辑时校验
+
+实时提示或阻止：
+
+* 不支持的文件类型；
+* 无效图片数量；
+* Carousel 图片比例不一致；
+* 明显非法 Website URL；
+* Title 超过 100 字符；
+* Description 超过 500 字符。
+
+---
+
+## 14.2 Schedule 时硬校验
+
+必须阻止 Schedule：
+
+* 缺少图片；
+* 图片不是可公开访问 URL；
+* 缺少 Pinterest Board；
+* Website URL 格式非法；
+* Pinterest 未连接；
+* Token 已知失效；
+* 文件类型或尺寸不支持；
+* Carousel 图片比例不一致；
+* Title / Description 超限。
+
+字段错误应显示在对应字段附近，而不是只显示 Toast。
+
+---
+
+## 14.3 Publish 前再次校验
+
+Publish now 或自动到期发布前检查：
+
+* Pinterest connection；
+* Board 仍然存在且可访问；
+* 图片 URL 仍可访问；
+* Website URL scheme 合法；
+* Draft 没有正在发布；
+* 当前内容没有明显重复提交。
+
+---
+
+## 14.4 允许进入 Failed 的错误
+
+以下情况进入 Publish Failure：
+
+* Pinterest API 暂时不可用；
+* 网络或 provider timeout；
+* 平台临时拒绝；
+* 账号安全限制；
+* Pinterest 新规则尚未被本地校验覆盖；
+* 无法提前判断的 provider 错误。
+
+---
+
+# 15. 跨设备持久化
+
+以下数据必须服务端持久化，并跟随账号或 Workspace：
+
+* Pin Draft；
+* Title；
+* Description；
+* Website URL；
+* Product 关联；
+* Product snapshot；
+* Pinterest Board；
+* lifecycle；
+* scheduled time；
+* previous scheduled time；
+* failure type；
+* publish error；
+* remotePinId；
+* remotePinUrl；
+* AI Copy 结果；
+* Banner failure count 的来源状态。
+
+`localStorage` 只能作为：
+
+* 临时缓存；
+* UI 加速；
+* 保存失败恢复层。
+
+不能作为权威数据源。
+
+用户登录另一台设备后必须看到相同：
+
+* Draft；
+* Scheduled 状态；
+* Failed 状态；
+* Shopify Product 关联；
+* Website URL；
+* Publish Failure Banner。
+
+---
+
+# 16. 用户流程汇总
+
+## 16.1 创建与排程
+
+```text
+Upload images / Select product
+→ Unscheduled Draft
+→ Edit
+→ Generate copy
+→ Schedule
+→ Card leaves default view
+→ Plan
+```
+
+## 16.2 Scheduled 编辑
+
+```text
+Scheduled Pin
+→ Edit metadata
+→ autosave
+→ preserve scheduled time
+```
+
+修改日期时间：
+
+```text
+Open in Plan
+→ update date/time
+```
+
+## 16.3 立即发布
+
+```text
+Scheduled Pin
+→ Publish now
+→ confirmation
+→ Publishing
+→ Posted or Failed
+```
+
+## 16.4 发布失败
+
+```text
+Publish Failed
+→ persistent Banner
+→ Failed filter
+→ Edit / Retry publish / Move to Unscheduled / Delete
+```
+
+---
+
+# 17. 验收标准
+
+## Create Pins
+
+* 默认筛选为 Unscheduled；
+* Schedule 成功后卡片从默认列表移出；
+* All 和 Scheduled 中仍可看到；
+* 成功提示显示真实排程时间；
+* Scheduled 展开后不再显示 Schedule；
+* Scheduled metadata 仍可编辑；
+* 日期时间只能在 Plan 修改。
+
+## AI Copy
+
+* UI 只显示 Generate copy；
+* 不显示 Regenerate；
+* 不显示长度选项；
+* 不显示语言选项；
+* AI 默认英文；
+* 只填写空字段；
+* 已有 Title 和 Description 时需确认替换；
+* 手动文本不被静默覆盖或翻译。
+
+## Shopify Product
+
+* Select product 位于 Upload images 旁边；
+* 使用现有 ProductPickerModal；
+* 不新增 Products 导航；
+* Product 和 Website URL 分开；
+* 选择 Product 不自动修改 Website URL；
+* 明确点击后才采用 Product URL；
+* 已有 URL 时需要确认；
+* Product 关联跨设备保存。
+
+## Publish now
+
+* 所有页面统一使用 Publish now；
+* Scheduled Pin 点击后出现确认；
+* 双击只产生一次 publish 请求；
+* 成功进入 Posted；
+* 失败进入 Failed；
+* 失败后不再显示为 Scheduled。
+
+## Failure Banner
+
+* Create Pins 和 Plan 顶部显示；
+* 只统计 publish failure；
+* 点击打开 Failed filter；
+* Retry、Move to Unscheduled、Delete 后数量即时更新；
+* 失败数为 0 时 Banner 消失；
+* 跨设备一致。
+
+## Failed Recovery
+
+* 显示明确失败原因；
+* 显示推荐修复；
+* 临时错误优先 Retry publish；
+* 内容错误优先 Edit；
+* 支持 Move to Unscheduled；
+* 支持 Delete；
+* 后台保留失败历史。
+
+## Validation
+
+* Carousel 比例不一致在发送前被拦截；
+* Board 缺失时无法 Schedule；
+* URL 非法时无法 Schedule 或 Publish；
+* 非公共图片无法发布；
+* Pinterest 连接失效时显示清晰错误；
+* 真正 provider failure 才进入 Failed。
+
+---
+
+# 18. Fable 评审要求
+
+请 Fable 评审以下内容：
+先从产品角度评审产品方案是否合理 是否有优化空间 再评审下面的技术方案
+1. Create Pins 默认切换到 Unscheduled 是否影响现有用户数据与筛选恢复；
+2. Schedule 后卡片从默认列表移出的最小实现；
+3. Scheduled Card 是否仍出现错误 CTA；
+4. Scheduled metadata 编辑是否能保持 schedule time；
+5. AI Copy 控件删除后的旧偏好和旧调用兼容；
+6. Generate copy 的空字段填写和替换确认逻辑；
+7. ProductPickerModal 是否能直接复用；
+8. Shopify Product 是否已正确进入 ProductSelection / creatorProductLink；
+9. Product URL 与 Website URL 当前是否存在自动覆盖；
+10. Plan 和 Create Pins 是否有可复用 Banner 容器；
+11. Publish Failure 是否可以与 Generation Failure 可靠区分；
+12. Failed filter 是否足够承载恢复流程；
+13. Publish now 是否全产品统一；
+14. 预发布校验当前已有多少；
+15. Carousel 比例校验应放在哪个共享模块；
+16. Draft 和状态是否真正服务端持久化；
+17. 哪些改动需要数据库迁移；
+18. 是否存在不必要的平行字段或重复逻辑；
+19. 是否能以最小修改完成；
+20. 浏览器 QA 应如何覆盖全部流程。
+
+Fable 输出：
+
+```text
+Current verified behavior
+Gap matrix
+Exact files involved
+Minimal implementation plan
+Data migration requirements
+Risk list
+Acceptance checklist
+Browser QA plan
+P0 / P1 priority
+```
+
+评审阶段不直接重写 Create Pins，也不新增本 PRD 范围之外的功能。
+
+---
+
+# 附录 A：V1.1 修订 — 失败情况优化（2026-07-13）
+
+本修订**替代**第 12.4 节的"Banner 数量为 0 前持续显示"，**增补**第 13 节。完整规格见
+《create pin和plan的失败情况优化 prd 初稿0713.txt》。要点：
+
+1. Banner 降级为浅色警示卡（主题 token 适配）；文案改为
+   "Review the errors and choose how to continue."
+2. 消失语义：CTA 点击 = dismiss；处于 Failed 视图时无条件不渲染；
+   新失败（计数上升）时重现；× 关闭为会话级。
+3. Plan 统计条（CompactSummaryBar）新增 N failed 常驻小提醒，点击与
+   Banner CTA 统一跳 Create Pins Failed 视图（Publish failures 子筛选）。
+4. Failed 视图新增子筛选 Publish failures / Generation failures / All；
+   Banner 入口默认 Publish failures，手动入口默认 All；
+   徽章区分 Publish failed / Generation failed。
+5. 失败卡文案全套收紧（Was scheduled: … / 短祈使句提示，见修订 PRD 第 5 节）。

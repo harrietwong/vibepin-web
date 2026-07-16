@@ -1,0 +1,81 @@
+Claude 修改里最需要调整的地方
+问题一：Start Pro 不应该只返回 Pricing
+
+这是当前最明显的问题。
+
+如果用户已经点击了套餐 CTA，登录后必须保留购买意图。否则用户需要重复操作，会损害转化率。
+
+产品验收标准应改为：
+
+未登录用户点击 Start Pro
+→ 完成登录或注册
+→ 系统仍然知道用户选择了 Pro
+→ 自动进入下一步或明确恢复所选套餐
+问题二：“所有初始界面改为 Studio”需要扩大验收范围
+
+Claude 的描述主要修改了登录、注册、OAuth 回调和忘记密码相关入口。
+
+但用户要求的是：
+
+所有默认初始界面都改成 /app/studio。
+
+产品验收时还应检查这些入口：
+
+直接访问 /app
+
+官网的 Go to app
+
+已登录用户点击 Logo
+
+登录后无来源的默认落地
+
+注册完成后的默认落地
+
+OAuth 无有效来源时的默认落地
+
+Onboarding 完成后的落地
+
+404 或异常页面的 Back to app
+
+邮件中的普通 Open VibePin
+
+旧收藏地址或旧导航入口
+
+Session 恢复但没有原页面时的落地
+
+这些入口都不应该再把用户送到 home-decor。
+
+建议采用的最终跳转表
+场景	登录后目标
+直接访问登录页	/app/studio
+官网全局 Log in	/app/studio
+Pricing 普通 Log in	原 Pricing 页面
+Pricing 点击具体套餐	继续对应套餐流程
+未登录访问受保护 App 页面	原页面及必要参数
+App 内登录过期	当前 App 页面
+注册页有明确来源	延续来源或业务动作
+注册页无来源	/app/studio
+OAuth 来源失效	/app/studio
+不安全或无法识别的来源	/app/studio
+旧 /app/workspace/home-decor 默认入口	不再使用，进入 /app/studio
+最终判断
+
+Claude 的修复中：
+
+去除 home-decor 默认落地：正确。
+
+受保护页面登录后返回原页面：正确。
+
+Pricing 普通登录后返回 Pricing：正确。
+
+没有来源时进入 Studio：正确。
+
+Start Pro 登录后只返回 Pricing：不够正确，需要继续购买流程。
+
+“所有初始入口”是否彻底改成 Studio：目前描述不足，需要按完整入口清单验收。
+
+最合适的产品规则不是简单的“永远回上一页”，而是：
+
+继续未完成动作
+> 返回明确上下文
+> 默认进入 /app/studio
