@@ -33,6 +33,21 @@ let _snapshot: PinDraft[] = [];
 let _snapshotVersion = -1;
 const EMPTY_DRAFTS: PinDraft[] = [];
 
+/**
+ * The IANA timezone the current user's wall-clock schedule is expressed in (RC0 WP2).
+ * Stamped onto a draft whenever plannedAt is (re)computed from date+time so the server can
+ * resolve the wall-clock to a real UTC instant (promote.ts::buildScheduledAt) instead of
+ * mis-reading it as UTC. Empty string when Intl is unavailable → server keeps legacy UTC
+ * behavior for that draft. Never throws; safe to call during renders / SSR.
+ */
+export function resolveScheduleTimezone(): string {
+  try {
+    return new Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type DraftStatus = "needs_review" | "needs_link" | "ready";
@@ -53,6 +68,7 @@ export interface PinDraft {
   scheduledDate:       string;   // ISO date string, auto-assigned on Add to Plan
   scheduledTime?:      string;   // "HH:mm" 24h posting slot, optional
   plannedAt?:          string;   // local YYYY-MM-DDTHH:mm, no UTC conversion
+  scheduleTimezone?:   string;   // IANA zone the plannedAt wall-clock was set in (RC0 WP2)
   status:              DraftStatus;
   createdAt:           string;
   updatedAt:           string;
@@ -646,6 +662,10 @@ export function updateDraft(
   if ("scheduledDate" in patch || "scheduledTime" in patch) {
     if (!updated.scheduledDate) updated.scheduledTime = "";
     updated.plannedAt = combineLocalPlannedAt(updated.scheduledDate, updated.scheduledTime);
+    // Stamp the zone the wall-clock was set in unless the caller supplied one explicitly.
+    if (!("scheduleTimezone" in patch)) {
+      updated.scheduleTimezone = updated.plannedAt ? resolveScheduleTimezone() : "";
+    }
   }
 
   // Auto-recompute status from title + description + scheduledDate when not explicitly set.
@@ -1009,6 +1029,9 @@ export function bulkUpdateDrafts(
     if (("scheduledDate" in patch || "scheduledTime" in patch) && !("plannedAt" in patch)) {
       if (!updated.scheduledDate) updated.scheduledTime = "";
       updated.plannedAt = combineLocalPlannedAt(updated.scheduledDate, updated.scheduledTime);
+      if (!("scheduleTimezone" in patch)) {
+        updated.scheduleTimezone = updated.plannedAt ? resolveScheduleTimezone() : "";
+      }
     }
     if (!("status" in patch)) {
       updated.status = recomputeDraftStatus(updated);
