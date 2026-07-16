@@ -25,15 +25,15 @@ test("Field changes auto-save via debounced persistDraft (no Save button)", () =
 });
 test("Small non-clickable save indicator: Saving… / Saved / Failed to save", () => {
   assert.match(modal, /data-testid="draft-save-state"/);
-  assert.match(modal, /t\("pinDetails\.savingState"\)/);
-  assert.match(modal, /t\("pinDetails\.failedToSave"\)/);
-  assert.match(modal, /t\("pinDetails\.saved"\)/);
+  assert.match(modal, /Saving…/);
+  assert.match(modal, /Failed to save/);
+  assert.match(modal, /> Saved</);
 });
 
 // ── One primary CTA ─────────────────────────────────────────────────────────
 test("Footer has a single Schedule / Update schedule CTA", () => {
   assert.match(modal, /data-testid="draft-cta-schedule"/);
-  assert.match(modal, /isScheduled \? t\("pinDetails\.updateSchedule"\) : t\("pinDetails\.schedule"\)/);
+  assert.match(modal, /isScheduled \? "Update schedule" : "Schedule"/);
 });
 test("Add to Plan + Cancel removed from the modal", () => {
   assert.doesNotMatch(modal, /data-testid="pin-details-add-to-plan"/);
@@ -46,8 +46,8 @@ test("Pin now is in the overflow menu, not a competing CTA", () => {
 test("CTA is disabled with helper text when board/time missing", () => {
   assert.match(modal, /const canSchedule = /);
   assert.match(modal, /data-testid="draft-cta-helper"/);
-  assert.match(modal, /t\("pinDetails\.helper\.chooseBoardAndTime"\)/);
-  assert.match(modal, /disabled=\{!canSchedule \|\| publishing\}/);
+  assert.match(modal, /Choose a board and a date & time to schedule\./);
+  assert.match(modal, /disabled=\{!canSchedule\}/);
 });
 
 // ── Status sync ─────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ test("Status sync: schedule date/time seed falls back to plannedAt", () => {
 
 // ── Neutral affiliate tag (no prominent ASIN in main form) ──────────────────
 test("Website URL shows a small affiliate tag, not prominent ASIN", () => {
-  assert.match(modal, /t\("pinDetails\.usingAffiliate"\)/);
+  assert.match(modal, /Using product affiliate link/);
   const affBlock = modal.slice(modal.indexOf('data-testid="draft-affiliate-url"') - 400, modal.indexOf('data-testid="draft-affiliate-url"') + 200);
   assert.doesNotMatch(affBlock, /ASIN/); // ASIN not shown in the Website URL area
 });
@@ -66,13 +66,13 @@ test("Website URL shows a small affiliate tag, not prominent ASIN", () => {
 test("Board selector is a searchable combobox", () => {
   assert.match(board, /function BoardCombobox/);
   assert.match(board, /data-testid="draft-board-combobox"/);
-  assert.match(board, /placeholder=\{t\("pinDetails\.board\.searchPlaceholder"\)\}/);
+  assert.match(board, /placeholder="Search or select board"/);
   assert.match(board, /data-testid="draft-board-option"/);
   assert.match(board, /role="combobox"/);
 });
 test("Board combobox keeps loading / disconnected states", () => {
-  assert.match(board, /t\("pinDetails\.board\.loading"\)/);
-  assert.match(board, /t\("pinDetails\.board\.availableAfterConnect"\)/);
+  assert.match(board, /Loading boards…/);
+  assert.match(board, /Available after Pinterest is connected\./);
   assert.match(board, /data-testid="draft-board-field"/); // not_connected/error placeholder
 });
 

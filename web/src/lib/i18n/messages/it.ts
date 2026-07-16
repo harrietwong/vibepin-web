@@ -772,16 +772,18 @@ const it: Partial<Record<MessageKey, string>> = {
   "products.source.amazon": "Amazon",
 
   // ── products: Demand / Trend / Competition chips ──
-  "products.chip.demandHigh": "Interesse alto su Pinterest",
-  "products.chip.demandMedium": "Interesse medio su Pinterest",
-  "products.chip.demandLow": "Interesse basso su Pinterest",
-  "products.chip.demandNoData": "Interesse su Pinterest: nessun dato",
-  "products.chip.trendRising": "↑ Parola chiave in crescita",
-  "products.chip.trendStable": "→ Parola chiave stabile",
-  "products.chip.trendDeclining": "↓ Parola chiave in calo",
-  "products.chip.trendNoData": "Tendenza della parola chiave: nessun dato",
-  "products.details.unavailable": "Dettagli del prodotto non disponibili",
-  "products.details.viewSourceProduct": "Visualizza prodotto di origine",
+  "products.chip.demandHigh": "Domanda alta",
+  "products.chip.demandMedium": "Domanda media",
+  "products.chip.demandLow": "Domanda bassa",
+  "products.chip.demandNoData": "Domanda: nessun dato",
+  "products.chip.trendRising": "↑ In crescita",
+  "products.chip.trendStable": "→ Stabile",
+  "products.chip.trendDeclining": "↓ In calo",
+  "products.chip.trendNoData": "Tendenza: nessun dato",
+  "products.chip.compLow": "Concorrenza bassa",
+  "products.chip.compMedium": "Concorrenza media",
+  "products.chip.compHigh": "Concorrenza alta",
+  "products.chip.compNoData": "Concorrenza: nessun dato",
 
   // ── products: Source type labels ──
   "products.sourceType.shopTheLook": "Shop the Look",
@@ -823,8 +825,9 @@ const it: Partial<Record<MessageKey, string>> = {
 
   // ── products: Drawer signal rows ──
   "products.drawer.signals": "Segnali",
-  "products.drawer.demand": "Interesse su Pinterest",
-  "products.drawer.trend": "Tendenza della parola chiave",
+  "products.drawer.demand": "Domanda",
+  "products.drawer.trend": "Tendenza",
+  "products.drawer.competition": "Concorrenza",
   "products.drawer.notEnoughData": "Dati insufficienti",
   "products.drawer.levelHigh": "Alta",
   "products.drawer.levelMedium": "Media",
@@ -874,6 +877,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "products.sort.relevance": "Rilevanza",
   "products.sort.mostSaved": "Più salvati",
   "products.sort.rising": "Tendenza in crescita",
+  "products.sort.lowCompetition": "Bassa concorrenza",
   "products.sort.newest": "Trovati più di recente",
   "products.sort.price": "Prezzo",
   "products.filters.button": "Filtri",
@@ -2200,10 +2204,10 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.uploadFailedAndMore": " e altri {n}",
   "studioBoard.toast.uploadFailedSuffix": ". Riprova con quei file.",
   "studioBoard.toast.chooseBoardToSchedule": "Scegli una bacheca Pinterest per pianificare questo Pin.",
-  "studioBoard.toast.completeDetailsToSchedule": "Aggiungi un'immagine e scegli una bacheca per pianificare questo Pin.",
+  "studioBoard.toast.completeDetailsToSchedule": "Completa i dettagli del Pin (titolo, descrizione, testo alternativo e bacheca) per pianificarlo.",
   "studioBoard.toast.openInPlan": "Apri nel Piano",
   "studioBoard.toast.imageUnavailable": "Immagine non disponibile — carica di nuovo l'immagine prima di pubblicare.",
-  "studioBoard.toast.completeDetailsToPublish": "Aggiungi un'immagine e scegli una bacheca per pubblicare questo Pin.",
+  "studioBoard.toast.completeDetailsToPublish": "Completa i dettagli del Pin per pubblicarlo.",
   "studioBoard.toast.publishSuccess": "Pin pubblicato con successo.",
   "studioBoard.toast.publishFailed": "Pubblicazione non riuscita. Riprova.",
   "studioBoard.toast.productNoImage": "Quel prodotto non ha ancora un'immagine da usare.",
@@ -2953,16 +2957,6 @@ const it: Partial<Record<MessageKey, string>> = {
   "productLibrary.toast.productSaved": "Prodotto salvato nella libreria",
   "productLibrary.toast.collectionCreatedPrefix": "Collezione \"",
   "productLibrary.toast.collectionCreatedSuffix": "\" creata",
-
-  // AI content-language keys (retained; see en.ts)
-  "ai.contentLanguage": "Lingua contenuti IA",
-  "ai.contentLanguageHint": "Lingua usata nei testi dei Pin generati dall'IA. Modificarla non cambia la lingua dell'interfaccia.",
-  "lang.contentLanguage": "Lingua contenuti IA",
-  "lang.sameAsApp": "Come l'app",
-  "language.aiContentLanguage": "Lingua contenuti IA",
-  "language.aiContentLanguageHint": "Usata per generare titoli, descrizioni, parole chiave, tendenze e suggerimenti dei Pin.",
-  "language.contentExistingNote": "La lingua dei contenuti IA si applica a titoli, descrizioni, parole chiave e suggerimenti appena generati. I Pin salvati non vengono modificati automaticamente.",
-  "pinDetails.overflow.pinNow": "Testo dell'interfaccia",
 
 };
 

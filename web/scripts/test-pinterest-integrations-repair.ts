@@ -152,7 +152,7 @@ async function main() {
       access_token_encrypted: "v1:secret", refresh_token_encrypted: "v1:secret",
       access_token_expires_at: null, refresh_token_expires_at: null,
       scopes: [], needs_reconnect: false,
-      created_at: "", updated_at: "2026-06-22T10:30:00Z", disconnected_at: null, token_version: 0,
+      created_at: "", updated_at: "2026-06-22T10:30:00Z", disconnected_at: null,
     });
     const json = JSON.stringify(safe);
     assert(!json.includes("secret"), "token leaked in status");

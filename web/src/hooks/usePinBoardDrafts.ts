@@ -27,15 +27,8 @@ export type BoardFilter = "all" | "unscheduled" | "scheduled" | "posted" | "fail
 export type BoardItem = { draft: PinDraft; lifecycle: PinLifecycle };
 export type BoardCounts = Record<BoardFilter, number>;
 
-export function matchesFilter(item: BoardItem, filter: BoardFilter): boolean {
+function matchesFilter(item: BoardItem, filter: BoardFilter): boolean {
   if (filter === "all") return true;
-  // "generating" is a transient state, not one of the four resting places a Pin ends
-  // up in, so strict lifecycle equality matched it to NO bucket — and since the board
-  // lands on "unscheduled" by default, every card vanished the instant the user hit
-  // Generate, making the app's core button look dead. An in-flight Pin is on its way
-  // to becoming unscheduled, so that is the one bucket it belongs in; it must not
-  // pollute Scheduled / Posted / Failed, which are claims about a settled outcome.
-  if (item.lifecycle === "generating") return filter === "unscheduled";
   return item.lifecycle === filter;
 }
 

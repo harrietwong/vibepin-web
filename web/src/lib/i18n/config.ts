@@ -105,11 +105,16 @@ export const PINTEREST_REGIONS: RegionOption[] = [
   { code: "KR", labelKey: "region.KR" },
 ];
 
+// Product decision: AI-generated Pin copy always defaults to English, regardless
+// of app UI language or any stored contentLanguage preference. The per-generation
+// language dropdown on Create Pins (web/src/app/app/studio/page.tsx) is the only
+// place a user can pick a different language for a given run. The `prefs` param
+// and `contentLanguage` field/type are kept so already-stored user preferences
+// (localStorage + user_metadata) remain valid shapes; they are simply not read here.
 export function resolveContentLanguage(
-  prefs: Pick<LocalePreferences, "appLanguage" | "contentLanguage">,
+  _prefs: Pick<LocalePreferences, "appLanguage" | "contentLanguage">,
 ): LanguageCode {
-  if (prefs.contentLanguage === "same") return prefs.appLanguage;
-  return prefs.contentLanguage;
+  return "en";
 }
 
 /** Languages that render right-to-left. */

@@ -65,6 +65,7 @@ import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { publishToSocial } from "@/lib/social/socialClient";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
+import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const UI = {
@@ -175,9 +176,7 @@ export function PinDetailsModal({
   const [confirmReplaceUrlOpen, setConfirmReplaceUrlOpen] = useState(false);
   // Contact Support entry points (publish failed / AI generation failed). Supplements
   // Retry publish / Try again — never replaces them.
-  // The "Contact support" entry points here open ContactSupportModal, which ships with
-  // the Support cluster (deferred out of RC0 Create Pins). Until it lands the failure
-  // UI keeps its error message + retry; the support shortcut is simply not offered.
+  const [supportRequest, setSupportRequest] = useState<{ seedText: string; extra: Record<string, unknown> } | null>(null);
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
@@ -1546,6 +1545,29 @@ export function PinDetailsModal({
               <p data-testid="draft-publish-error" style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11.5, color: UI.error, margin: 0 }}>
                 <AlertCircle size={13} style={{ marginTop: 1, flexShrink: 0 }} /> {publishError}
               </p>
+              <button
+                type="button"
+                data-testid="draft-publish-contact-support"
+                onClick={() => setSupportRequest({
+                  seedText: "My Pin failed to publish",
+                  extra: {
+                    source: "publish_failed",
+                    draftId: activeDraft.id,
+                    publishJobId: activeDraft.weeklyPlanItemId ?? null,
+                    boardId: boardId || null,
+                    boardName: boards.find(b => b.id === boardId)?.name ?? null,
+                    imageUrlExists: !!publicImage,
+                    destinationUrlExists: !!destinationUrl.trim(),
+                    publishErrorCode: null,
+                    publishErrorMessage: publishError,
+                    retryCount: publishAttempts,
+                    pinterestConnectionStatus: boardsStatus,
+                  },
+                })}
+                style={{ flexShrink: 0, background: "none", border: "none", padding: 0, fontSize: 11.5, fontWeight: 700, color: UI.textSec, textDecoration: "underline", cursor: "pointer" }}
+              >
+                {t("pinDetails.contactSupport")}
+              </button>
             </div>
           )}
           {/* Single primary CTA + a small non-clickable auto-save indicator.
@@ -1562,6 +1584,23 @@ export function PinDetailsModal({
                 </a>
             ) : isFailed ? (
               <>
+                <button
+                  type="button"
+                  data-testid="draft-cta-report-credits-issue"
+                  onClick={() => setSupportRequest({
+                    seedText: "I think credits were charged but I didn't get a result",
+                    extra: {
+                      source: "ai_generation",
+                      draftId: activeDraft.id,
+                      generationStatus: activeDraft.generationStatus ?? null,
+                      providerError: activeDraft.assetError ?? null,
+                      resultCount: 0,
+                    },
+                  })}
+                  style={{ ...ghostBtn }}
+                >
+                  {t("pinDetails.reportCreditsIssue")}
+                </button>
                 <button type="button" data-testid="draft-cta-try-again" onClick={requestPublish} disabled={publishing || isRedirectingToPinterest}
                   style={{ ...primaryBtn, opacity: (publishing || isRedirectingToPinterest) ? 0.6 : 1 }}>
                   {publishing ? <><Loader2 size={13} className="animate-spin" /> {t("pinDetails.publishing")}</> : t("pinDetails.tryAgain")}
@@ -1650,6 +1689,14 @@ export function PinDetailsModal({
         )}
 
       </div>
+      {supportRequest && (
+        <SupportChatModal
+          open
+          onClose={() => setSupportRequest(null)}
+          seedText={supportRequest.seedText}
+          initialContext={supportRequest.extra}
+        />
+      )}
     </>
   );
 }

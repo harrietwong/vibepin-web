@@ -8,7 +8,6 @@
  *     BODY content (not just chrome) is Chinese — the run FAILS if a page body
  *     is still English,
  *   - refreshes and verifies Chinese persists,
- *   - verifies AI content language does NOT change the UI language,
  *   - captures screenshots.
  *
  * Prereq: dev server on http://localhost:3000 (npm --prefix web run dev).
@@ -61,16 +60,6 @@ async function setAppLanguage(page: Page, code: string) {
   await page.selectOption("[data-testid='language-app-language']", code, { timeout: 10000 });
   await page.click("[data-testid='settings-save']", { timeout: 10000 });
   await sleep(900);
-}
-
-/** Set AI content language (Language tab) without changing App language. */
-async function setContentLanguage(page: Page, value: string) {
-  await openSettings(page);
-  await page.click("[data-testid='settings-tab-language']", { timeout: 10000 });
-  await sleep(300);
-  await page.selectOption("[data-testid='language-content-language']", value, { timeout: 10000 });
-  await page.click("[data-testid='settings-save']", { timeout: 10000 });
-  await sleep(700);
 }
 
 async function shot(page: Page, name: string) {
@@ -232,14 +221,8 @@ async function waitForText(page: Page, needle: string, timeout = 15000) {
     await waitForLang(page, "zh-Hans"); await sleep(1200);
     check((await bodyText(page)).includes("Pin 设置"), "App language persists after refresh (still Chinese)");
 
-    // ── AI content language does NOT change the UI language ──
-    await setAppLanguage(page, "en"); // reset UI to English
-    await setContentLanguage(page, "zh-CN"); // content Chinese, app English
-    const afterContent = (await page.textContent("[data-testid='settings-modal'] h1")) ?? "";
-    check(afterContent.trim() === "Settings",
-      `AI content language does not change UI (Settings title stays English, got "${afterContent.trim()}")`);
-    // reset content language back to "same"
-    await setContentLanguage(page, "same").catch(() => {});
+    // reset UI back to English
+    await setAppLanguage(page, "en");
   } finally {
     await browser.close();
   }

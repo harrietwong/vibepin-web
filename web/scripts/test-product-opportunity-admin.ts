@@ -10,17 +10,8 @@ function test(name: string, fn: () => void) {
   console.log(`  OK ${name}`);
 }
 
-// NOTE: the admin console moved from /app/admin (inside the customer /app shell)
-// to a standalone internal console at /admin (src/app/admin/page.tsx +
-// src/app/admin/layout.tsx). src/app/app/admin/page.tsx is now just a
-// `redirect("/admin")` stub — the real super-admin guard and dashboard moved
-// with it, so this test now points at the real locations.
 const ADMIN_PAGE_SRC = readFileSync(
-  fileURLToPath(new URL("../src/app/admin/page.tsx", import.meta.url)),
-  "utf8",
-);
-const ADMIN_LAYOUT_SRC = readFileSync(
-  fileURLToPath(new URL("../src/app/admin/layout.tsx", import.meta.url)),
+  fileURLToPath(new URL("../src/app/app/admin/page.tsx", import.meta.url)),
   "utf8",
 );
 const ADMIN_API_SRC = readFileSync(
@@ -31,24 +22,23 @@ const ADMIN_ME_SRC = readFileSync(
   fileURLToPath(new URL("../src/app/api/admin/me/route.ts", import.meta.url)),
   "utf8",
 );
+const LAYOUT_SRC = readFileSync(
+  fileURLToPath(new URL("../src/app/app/layout.tsx", import.meta.url)),
+  "utf8",
+);
 const GUARD_SRC = readFileSync(
   fileURLToPath(new URL("../src/lib/server/superAdmin.ts", import.meta.url)),
   "utf8",
 );
 
-test("admin page is server-protected before loading overview data", () => {
+test("admin page is server-protected before loading status data", () => {
   assert.ok(ADMIN_PAGE_SRC.includes("getCurrentSuperAdmin"), "admin page must check super admin session");
   assert.ok(ADMIN_PAGE_SRC.includes('redirect("/app?admin=forbidden")'), "non-admin page access should redirect safely");
-  const bodyStart = ADMIN_PAGE_SRC.indexOf("export default async function AdminHomePage");
+  const bodyStart = ADMIN_PAGE_SRC.indexOf("export default async function AdminPage");
   assert.ok(
-    ADMIN_PAGE_SRC.indexOf("getCurrentSuperAdmin", bodyStart) < ADMIN_PAGE_SRC.indexOf("getAdminOverview", bodyStart),
-    "guard must run before overview data load",
+    ADMIN_PAGE_SRC.indexOf("getCurrentSuperAdmin", bodyStart) < ADMIN_PAGE_SRC.indexOf("getProductOpportunityAdminStatus", bodyStart),
+    "guard must run before status load",
   );
-});
-
-test("admin console shell (layout) also gates on super admin before rendering", () => {
-  assert.ok(ADMIN_LAYOUT_SRC.includes("getCurrentSuperAdmin"), "admin layout must check super admin session");
-  assert.ok(ADMIN_LAYOUT_SRC.includes('redirect("/app?admin=forbidden")'), "non-admin layout access should redirect safely");
 });
 
 test("admin API returns 403 to non-admin callers", () => {
@@ -61,6 +51,22 @@ test("super admin access supports role or env allowlist without hardcoded emails
   assert.ok(GUARD_SRC.includes('role === "super_admin"'), "super_admin role should grant access");
   assert.ok(GUARD_SRC.includes("SUPER_ADMIN_EMAILS"), "env allowlist should grant access");
   assert.ok(!/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/.test(GUARD_SRC), "guard must not hardcode email addresses");
+});
+
+test("sidebar Admin item is only shown after server-backed super admin probe", () => {
+  assert.ok(LAYOUT_SRC.includes('href: "/app/admin"'), "sidebar should define Admin route");
+  assert.ok(LAYOUT_SRC.includes("superAdminOnly: true"), "Admin nav item must be super-admin-only");
+  assert.ok(LAYOUT_SRC.includes('fetch("/api/admin/me"'), "sidebar should use server-backed admin probe");
+});
+
+test("admin API exposes split freshness fields without ambiguous lastUpdatedAt", () => {
+  assert.ok(ADMIN_PAGE_SRC.includes("Product Data Freshness"), "dashboard should show product-data freshness");
+  assert.ok(ADMIN_PAGE_SRC.includes("Score Freshness"), "dashboard should show score freshness");
+  assert.ok(ADMIN_PAGE_SRC.includes("Pipeline / Scheduler Summary"), "dashboard should show pipeline summary");
+  assert.ok(ADMIN_API_SRC.includes("getProductOpportunityAdminStatus"), "API should return the split status helper");
+  assert.ok(!ADMIN_PAGE_SRC.includes("Pipeline status"), "dashboard should not use one ambiguous status");
+  assert.ok(!ADMIN_PAGE_SRC.includes("Run crawler"), "dashboard must not include run buttons");
+  assert.ok(!ADMIN_PAGE_SRC.includes("Requeue"), "dashboard must not include requeue controls");
 });
 
 test("product data can be fresh while score freshness is stale", () => {

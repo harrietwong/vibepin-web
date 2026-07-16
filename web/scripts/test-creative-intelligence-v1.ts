@@ -159,7 +159,7 @@ console.log("\n=== Creative Intelligence V1 — test matrix ===\n");
 // ── Refinement is high priority ───────────────────────────────────────────────
 {
   const { hidden } = pipeline("fashion", [p("silk dress"), r("editorial", "on_body", "visible_person")], { refinement: "warm golden hour lighting, no text" });
-  check("REFINEMENT: appears as high-priority instruction", /DIRECTION BRIEF/i.test(hidden) && /Honor these instructions/i.test(hidden) && /golden hour/i.test(hidden));
+  check("REFINEMENT: appears as high-priority instruction", /USER CREATIVE INSTRUCTIONS/i.test(hidden) && /Honor these instructions/i.test(hidden) && /golden hour/i.test(hidden));
 }
 
 // ── Requirement #8: reference-quality regression matrix ──────────────────────

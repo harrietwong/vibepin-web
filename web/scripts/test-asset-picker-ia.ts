@@ -33,7 +33,7 @@ const legacyWrapperSource = readFileSync(join(process.cwd(), "src/components/stu
 function extractConstTabLabels(constName: string): string[] {
   const match = componentSource.match(new RegExp(`export const ${constName} = \\[([\\s\\S]*?)\\] as const;`));
   if (!match) throw new Error(`${constName} not found`);
-  return [...match[1].matchAll(/labelKey:\s*"([^"]+)"/g)].map(m => m[1]);
+  return [...match[1].matchAll(/label:\s*"([^"]+)"/g)].map(m => m[1]);
 }
 
 test("Product picker renders My Products / Product Ideas / From Shopify tabs", () => {
@@ -41,11 +41,7 @@ test("Product picker renders My Products / Product Ideas / From Shopify tabs", (
   // with the flag off it never appears in the DOM, but it is declared here so the tab
   // id/type union covers it. See ProductPickerModal.tsx and StudioBoard.tsx for the
   // matching flag-gated "Select product" entry points.
-  assertEqual(
-    extractConstTabLabels("PRODUCT_PICKER_TABS"),
-    ["studioModals.tabs.myProducts", "studioModals.tabs.productIdeas", "studioModals.tabs.fromShopify"],
-    "product tabs"
-  );
+  assertEqual(extractConstTabLabels("PRODUCT_PICKER_TABS"), ["My Products", "Product Ideas", "From Shopify"], "product tabs");
 });
 
 test("Product picker defaults to My Products", () => {
@@ -59,8 +55,8 @@ test("Product picker does not expose old top-level tabs", () => {
 });
 
 test("My Products contains compact Upload product and Import from URL buttons", () => {
-  assert(componentSource.includes("studioModals.picker.uploadProduct"), "Upload product compact action missing");
-  assert(componentSource.includes("studioModals.picker.importFromUrl"), "Import from URL compact action missing");
+  assert(componentSource.includes("Upload product"), "Upload product compact action missing");
+  assert(componentSource.includes("Import from URL"), "Import from URL compact action missing");
   assert(componentSource.includes('data-testid="compact-upload-product"'), "compact upload product test id missing");
   assert(componentSource.includes("my-products-grid"), "unified my products grid missing");
   assert(componentSource.includes("my-products-filter-chips"), "filter chips missing");
@@ -68,11 +64,7 @@ test("My Products contains compact Upload product and Import from URL buttons", 
 });
 
 test("Reference picker renders exactly two top-level tabs", () => {
-  assertEqual(
-    extractConstTabLabels("REFERENCE_PICKER_TABS"),
-    ["studioModals.tabs.myReferences", "studioModals.tabs.pinIdeas"],
-    "reference tabs"
-  );
+  assertEqual(extractConstTabLabels("REFERENCE_PICKER_TABS"), ["My References", "Pin Ideas"], "reference tabs");
 });
 
 test("Reference picker does not use Viral Pins labels in UI", () => {
@@ -80,8 +72,8 @@ test("Reference picker does not use Viral Pins labels in UI", () => {
   assert(!componentSource.includes("Saved from Viral Pins"), "Saved from Viral Pins label still present");
   assert(!componentSource.includes("Search viral pins"), "Search viral pins placeholder still present");
   assert(!componentSource.includes("Pins Idea"), "incorrect Pins Idea wording found");
-  assert(componentSource.includes("studioModals.refFilter.savedFromPinIdeas"), "Saved from Pin Ideas section missing");
-  assert(componentSource.includes("studioModals.picker.searchPinIdeasEllipsis"), "Search Pin ideas placeholder missing");
+  assert(componentSource.includes("Saved from Pin Ideas"), "Saved from Pin Ideas section missing");
+  assert(componentSource.includes("Search Pin ideas"), "Search Pin ideas placeholder missing");
   assert(componentSource.includes('data-testid="pin-ideas-filters"'), "pin ideas horizontal filters missing");
   assert(componentSource.includes('testId="pin-ideas-category-filter"'), "pin ideas category dropdown test id missing");
   assert(componentSource.includes('testId="pin-ideas-format-filter"'), "pin ideas format dropdown test id missing");
@@ -100,8 +92,8 @@ test("Reference picker does not expose old top-level tabs", () => {
 });
 
 test("My References contains compact Upload reference and Import from URL buttons", () => {
-  assert(componentSource.includes("studioModals.picker.uploadReference"), "Upload reference compact action missing");
-  assert(componentSource.includes("studioModals.picker.importFromUrl"), "Import from URL compact action missing");
+  assert(componentSource.includes("Upload reference"), "Upload reference compact action missing");
+  assert(componentSource.includes("Import from URL"), "Import from URL compact action missing");
   assert(componentSource.includes('data-testid="compact-upload-reference"'), "compact upload reference test id missing");
 });
 

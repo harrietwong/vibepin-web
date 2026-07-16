@@ -10,7 +10,6 @@ import {
   PINTEREST_REGIONS,
   ALL_APP_LANGUAGES,
   type LanguageCode,
-  type ContentLanguageSetting,
   type PinterestRegionCode,
 } from "@/lib/i18n/config";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -107,11 +106,6 @@ export function LanguageRegionPanel({ embedded, onClose }: Props) {
     );
   }
 
-  const contentOptions: { value: ContentLanguageSetting; label: string }[] = [
-    { value: "same", label: t("lang.sameAsApp") },
-    ...PRIMARY_APP_LANGUAGES.map(l => ({ value: l.code as ContentLanguageSetting, label: l.nativeLabel })),
-  ];
-
   return (
     <div data-testid="language-region-panel" style={embedded ? undefined : { padding: "4px 0 0" }}>
       {!embedded && (
@@ -140,27 +134,6 @@ export function LanguageRegionPanel({ embedded, onClose }: Props) {
           l.nativeLabel,
           l.beta,
           l.disabled,
-        ))}
-      </Section>
-
-      <Section title={t("lang.contentLanguage")}>
-        {contentOptions.map(opt => (
-          <OptionRow
-            key={opt.value}
-            testId={`lang-content-${opt.value}`}
-            active={draftPreferences.contentLanguage === opt.value}
-            label={opt.label}
-            onClick={() => setDraftPreferences({ contentLanguage: opt.value })}
-          />
-        ))}
-        {showBeta && BETA_APP_LANGUAGES.filter(l => !l.disabled).map(l => (
-          <OptionRow
-            key={`content-${l.code}`}
-            active={draftPreferences.contentLanguage === l.code}
-            label={l.nativeLabel}
-            sublabel={t("lang.beta")}
-            onClick={() => setDraftPreferences({ contentLanguage: l.code })}
-          />
         ))}
       </Section>
 

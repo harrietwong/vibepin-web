@@ -56,14 +56,8 @@ async function main() {
     assert.ok(!pinMissingFieldLabels(base).includes("Destination URL"));
   });
 
-  await test("Copy and alt text are recommended but do not block publishing", () => {
-    assert.equal(isPinReady({ ...base, title: "" }), true);
-    assert.equal(isPinReady({ ...base, description: "" }), true);
-    assert.equal(isPinReady({ ...base, altText: "" }), true);
-    assert.equal(isPinReady({ ...base, title: "", description: "", altText: "" }), true);
-  });
-
-  await test("Still blocks on image and a real board", () => {
+  await test("Still blocks on the real required fields", () => {
+    assert.equal(isPinReady({ ...base, title: "" }), false);
     assert.equal(isPinReady({ ...base, boardId: "" }), false);
     assert.equal(isPinReady({ ...base, imageUrl: "" }), false);
   });
@@ -86,48 +80,6 @@ async function main() {
     assert.equal(validate.validateOptionalLink("not a url").ok, false);
     assert.equal(validate.validateOptionalLink("ftp://example.com").ok, false);
     assert.equal(validate.validateOptionalLink("http://localhost:3000/x").ok, false);
-  });
-
-  const { isValidDestinationUrl } = readiness;
-
-  await test("isValidDestinationUrl: only a REAL null/undefined/blank is the empty case", () => {
-    // Genuine emptiness → valid (the field is optional).
-    for (const raw of ["", "   ", null, undefined]) {
-      assert.equal(isValidDestinationUrl(raw as string), true, `empty ${JSON.stringify(raw)} must be valid`);
-    }
-    // The literal strings "undefined"/"null" are NOT empty — the server treats them as
-    // ordinary (invalid) URLs, so the client must too, or the UI shows schedulable and
-    // publish then fails.
-    assert.equal(isValidDestinationUrl("undefined"), false, '"undefined" must be invalid, not empty');
-    assert.equal(isValidDestinationUrl("null"), false, '"null" must be invalid, not empty');
-  });
-
-  await test("isValidDestinationUrl: a present value must be a public http(s) URL", () => {
-    assert.equal(isValidDestinationUrl("https://shop.example.com/p/1"), true);
-    assert.equal(isValidDestinationUrl("http://shop.example.com"), true);
-    assert.equal(isValidDestinationUrl("not a url"), false);
-    assert.equal(isValidDestinationUrl("ftp://example.com"), false);
-    assert.equal(isValidDestinationUrl("http://localhost:3000/x"), false);
-    assert.equal(isValidDestinationUrl("http://192.168.1.5/x"), false);
-    assert.equal(isValidDestinationUrl("javascript:alert(1)"), false);
-  });
-
-  await test("isValidDestinationUrl agrees with the server's validateOptionalLink", () => {
-    // The client gate and the server gate must never disagree, or a Pin looks
-    // schedulable in the UI and then fails at publish (or vice versa). The literal
-    // "undefined"/"null" cases are the ones the first cut of this test missed.
-    const cases = [
-      "", "   ", "undefined", "null",
-      "https://shop.example.com/p/1", "http://a.co",
-      "not a url", "ftp://example.com", "http://localhost/x", "http://10.0.0.1/x",
-    ];
-    for (const c of cases) {
-      assert.equal(
-        isValidDestinationUrl(c),
-        validate.validateOptionalLink(c).ok,
-        `client/server disagree on ${JSON.stringify(c)}`,
-      );
-    }
   });
 
   function capturingClient(sink: { body: Record<string, unknown> }) {

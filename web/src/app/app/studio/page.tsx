@@ -412,7 +412,8 @@ function formatTimeAgo(isoDate: string): string {
 }
 
 const TIER_COLOR:  Record<string, string> = { best_bet: "#10B981", steady: "#3B82F6", competitive: "#F59E0B" };
-const TIER_LABEL:  Record<string, string> = { best_bet: "Best Bet", steady: "Steady", competitive: "Competitive" };
+// Values are MessageKeys — resolve with tr(TIER_LABEL_KEY[tier]) at render time.
+const TIER_LABEL_KEY = { best_bet: "studio.tier.bestBet", steady: "studio.tier.steady", competitive: "studio.tier.competitive" } as const;
 const TREND_COLOR: Record<string, string> = { rising: "#10B981", evergreen: "#3B82F6", seasonal: "#F59E0B" };
 
 type FeedFilter = "all" | "generating" | "completed" | "failed" | "added";
@@ -681,9 +682,13 @@ async function generateWithRecovery(input: GenerateRecoveryInput): Promise<Gener
 // Maps a raw generation error (type + upstream message) to safe, user-facing copy.
 // The raw provider JSON (e.g. "Invalid value at contents[0].parts[4].inline_data.data")
 // is NEVER returned here — it stays in dev/server logs only.
+// NOTE: this is a plain (non-component) helper function, so it cannot call the
+// useLocale() hook. It is called from component render paths that already have
+// `tr` in scope; those callers pass `tr` through so this stays translated.
 function getReadableGenerationError(
   errorType: GenerationErrorType | undefined,
   rawMessage: string | undefined,
+  tr: (key: import("@/lib/i18n/messages/en").MessageKey) => string,
 ): { title: string; body: string } {
   const raw = (rawMessage ?? "").toLowerCase();
   const looksLikeImage =
@@ -691,31 +696,35 @@ function getReadableGenerationError(
     /base64|inline_data|inline data|input image|decoding failed|parts\[\d+\]/.test(raw);
   if (looksLikeImage) {
     return {
-      title: "Couldn’t process an input image",
-      body: "Try generating this Pin again. If it continues, remove and re-upload the affected product or reference image.",
+      title: tr("studio.error.imageProcessFailed.title"),
+      body: tr("studio.error.imageProcessFailed.body"),
     };
   }
   switch (errorType) {
     case "provider_busy":
-      return { title: "Generation is busy", body: "Please try again shortly." };
+      return { title: tr("studio.error.generationBusy.title"), body: tr("studio.error.generationBusy.body") };
     case "user_generation_limit":
-      return { title: "A generation is already running", body: "You already have a generation running. Please wait for it to finish." };
+      return { title: tr("studio.error.generationAlreadyRunning.title"), body: tr("studio.error.generationAlreadyRunning.body") };
     case "configuration_error":
-      return { title: "Generation is not configured correctly", body: "Please check server settings." };
+      return { title: tr("studio.error.misconfigured.title"), body: tr("studio.error.misconfigured.body") };
     case "safety_blocked":
-      return { title: "Blocked by safety filters", body: "Adjust the products, reference, or direction and try again." };
+      return { title: tr("studio.error.safetyBlocked.title"), body: tr("studio.error.safetyBlocked.body") };
     case "rate_limited":
-      return { title: "The image service is busy", body: "Wait a moment, then try this Pin again." };
+      return { title: tr("studio.error.serviceBusy.title"), body: tr("studio.error.serviceBusy.body") };
     case "api_auth_error":
-      return { title: "Image service unavailable", body: "This is a configuration issue on our side — please try again later." };
+      return { title: tr("studio.error.serviceUnavailable.title"), body: tr("studio.error.serviceUnavailable.body") };
     default:
-      return { title: "Couldn’t generate this Pin", body: "Try again. If it continues, edit the inputs and regenerate." };
+      return { title: tr("studio.error.generateFailed.title"), body: tr("studio.error.generateFailed.body") };
   }
 }
 
 // Toast helper: maps an error_type to the P0 user-facing copy (never raw provider JSON).
-function toastGenerationError(errorType: GenerationErrorType | undefined, rawMessage?: string): void {
-  const { title, body } = getReadableGenerationError(errorType, rawMessage);
+function toastGenerationError(
+  errorType: GenerationErrorType | undefined,
+  rawMessage: string | undefined,
+  tr: (key: import("@/lib/i18n/messages/en").MessageKey) => string,
+): void {
+  const { title, body } = getReadableGenerationError(errorType, rawMessage, tr);
   if (errorType === "user_generation_limit" || errorType === "provider_busy") toast.message(title, { description: body });
   else toast.error(title, { description: body });
 }
@@ -1057,7 +1066,7 @@ function CompactAssetEntry({
               />
                 <button
                   type="button"
-                  aria-label={`Remove ${isProduct ? "product" : "reference"} ${i + 1}`}
+                  aria-label={(isProduct ? tr("studio.asset.removeProduct") : tr("studio.asset.removeReference")).replace("{n}", String(i + 1))}
                   onClick={(e) => { e.stopPropagation(); onToggleUrl(item.imageUrl); }}
                   style={{
                   position: "absolute", top: -4, right: -4, width: 16, height: 16, borderRadius: "50%",
@@ -1098,6 +1107,7 @@ type OppDrawerTab = "recommended" | "recent";
 function OpportunityDrawer({ open, inferredCategory, onClose, onSelect }: {
   open: boolean; inferredCategory?: string; onClose: () => void; onSelect: (o: Opportunity) => void;
 }) {
+  const { t: tr } = useLocale();
   const [opps,       setOpps]       = useState<OppRow[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [q,          setQ]          = useState("");
@@ -1154,8 +1164,8 @@ function OpportunityDrawer({ open, inferredCategory, onClose, onSelect }: {
   if (!open) return null;
 
   const tabs: { id: OppDrawerTab; label: string }[] = [
-    { id: "recommended", label: "Recommended" },
-    { id: "recent",      label: "Recent" },
+    { id: "recommended", label: tr("studio.oppDrawer.tabRecommended") },
+    { id: "recent",      label: tr("studio.oppDrawer.tabRecent") },
   ];
 
   return (
@@ -1172,8 +1182,8 @@ function OpportunityDrawer({ open, inferredCategory, onClose, onSelect }: {
         <div style={{ padding: "18px 20px 0", borderBottom: `1px solid ${D.border}`, flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 10 }}>
             <div>
-              <p style={{ margin: "0 0 2px", fontSize: "16px", fontWeight: 800, color: D.text }}>Choose Opportunity</p>
-              <p style={{ margin: 0, fontSize: "12px", color: D.textSec }}>Add an optional market angle for this generation.</p>
+              <p style={{ margin: "0 0 2px", fontSize: "16px", fontWeight: 800, color: D.text }}>{tr("studio.oppDrawer.title")}</p>
+              <p style={{ margin: 0, fontSize: "12px", color: D.textSec }}>{tr("studio.oppDrawer.subtitle")}</p>
             </div>
             <button type="button" onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: D.textSec, padding: 4 }}>
               <X style={{ width: 17, height: 17 }} />
@@ -1191,21 +1201,21 @@ function OpportunityDrawer({ open, inferredCategory, onClose, onSelect }: {
         <div style={{ padding: "10px 20px 8px", borderBottom: `1px solid ${D.border}`, flexShrink: 0 }}>
           <div style={{ position: "relative" }}>
             <Search style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", width: 13, height: 13, color: D.textSec, pointerEvents: "none" }} />
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search opportunities…"
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder={tr("studio.oppDrawer.searchPlaceholder")}
               style={{ width: "100%", boxSizing: "border-box", paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, border: `1px solid ${D.border}`, fontSize: "12px", color: D.text, outline: "none", background: D.cardElev }} />
           </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
           {tab === "recent" && recentOpps.length === 0 ? (
-            <p style={{ textAlign: "center", padding: "30px 0", fontSize: "13px", color: D.textSec }}>No recent opportunities yet</p>
+            <p style={{ textAlign: "center", padding: "30px 0", fontSize: "13px", color: D.textSec }}>{tr("studio.oppDrawer.noRecent")}</p>
           ) : (loading && tab !== "recent") ? (
             [1,2,3,4,5].map(i => <div key={i} style={{ height: 78, borderRadius: 10, background: D.cardElev, marginBottom: 6, animation: "pulse 1.5s ease-in-out infinite" }} />)
           ) : showContextEmpty ? (
             <p style={{ textAlign: "center", padding: "30px 16px", fontSize: "12px", lineHeight: 1.55, color: D.textSec }}>
-              No matching opportunities found for this upload. You can search all opportunities or generate without one.
+              {tr("studio.oppDrawer.noContextMatch")}
             </p>
           ) : filtered.length === 0 ? (
-            <p style={{ textAlign: "center", padding: "30px 0", fontSize: "13px", color: D.textSec }}>No results</p>
+            <p style={{ textAlign: "center", padding: "30px 0", fontSize: "13px", color: D.textSec }}>{tr("studio.oppDrawer.noResults")}</p>
           ) : filtered.map(row => {
             const tier = rowToTier(row);
             const trend = rowToTrend(row);
@@ -1221,7 +1231,7 @@ function OpportunityDrawer({ open, inferredCategory, onClose, onSelect }: {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <p style={{ margin: 0, fontSize: "13px", fontWeight: 700, color: D.text, textTransform: "capitalize", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{row.keyword}</p>
                   <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    <span style={{ fontSize: "9px", fontWeight: 700, color: tc, background: `${tc}20`, padding: "2px 7px", borderRadius: 20 }}>{TIER_LABEL[tier]}</span>
+                    <span style={{ fontSize: "9px", fontWeight: 700, color: tc, background: `${tc}20`, padding: "2px 7px", borderRadius: 20 }}>{tr(TIER_LABEL_KEY[tier as keyof typeof TIER_LABEL_KEY])}</span>
                     <span style={{ fontSize: "9px", fontWeight: 700, color: vc, background: `${vc}20`, padding: "2px 7px", borderRadius: 20, textTransform: "capitalize" }}>{trend}</span>
                   </div>
                 </div>
@@ -1343,11 +1353,11 @@ function MasonryPinFeed({
       </div>
         {selectedPinKeys.size > 0 && (
           <div data-testid="batch-toolbar" style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderBottom: `1px solid ${D.border}`, background: D.cardElev, flexShrink: 0, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: D.text }}>{selectedPinKeys.size} selected</span>
-            <button type="button" data-testid="generate-pin-details-button" onClick={onBatchGenerateMetadata} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textSec, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Generate Pin Details</button>
-            <button type="button" data-testid="batch-edit-details-button" onClick={onOpenBatchEdit} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textSec, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Batch Edit Details</button>
-            <button type="button" data-testid="batch-add-selected" onClick={onAddSelectedToPlan} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: D.gradient, color: "#fff", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Add selected to Plan</button>
-            <button type="button" data-testid="batch-clear-selection" onClick={onClearSelection} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textMuted, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>Clear selection</button>
+            <span style={{ fontSize: 11, fontWeight: 700, color: D.text }}>{tr("studio.batch.selectedCount").replace("{n}", String(selectedPinKeys.size))}</span>
+            <button type="button" data-testid="generate-pin-details-button" onClick={onBatchGenerateMetadata} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textSec, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>{tr("studio.batch.generatePinDetails")}</button>
+            <button type="button" data-testid="batch-edit-details-button" onClick={onOpenBatchEdit} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textSec, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>{tr("studio.batch.editDetails")}</button>
+            <button type="button" data-testid="batch-add-selected" onClick={onAddSelectedToPlan} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: D.gradient, color: "#fff", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>{tr("studio.batch.addSelectedToPlan")}</button>
+            <button type="button" data-testid="batch-clear-selection" onClick={onClearSelection} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${D.border}`, background: "none", color: D.textMuted, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>{tr("studio.batch.clearSelection")}</button>
             </div>
         )}
       </div>
@@ -1389,7 +1399,7 @@ function MasonryPinFeed({
               </div>
         ) : !hasPins ? (
           <div style={{ padding: "48px 20px", textAlign: "center" }}>
-            <p style={{ margin: 0, fontSize: "13px", color: D.textSec }}>No generations in this tab yet.</p>
+            <p style={{ margin: 0, fontSize: "13px", color: D.textSec }}>{tr("studio.feed.noGenerationsInTab")}</p>
           </div>
         ) : (
           <div data-testid="pin-feed-grid" className="pin-feed-grid" style={{ width: "100%" }}>
@@ -1629,6 +1639,7 @@ function PinCard({
   onAddAllToPlan: () => void;
   onRegenerateSet: () => void;
 }) {
+  const { t: tr } = useLocale();
   const [hover, setHover] = useState(false);
   const isPlaceholder = entry.status === "generating" || entry.status === "failed";
   const variant = entry.placeholderVariant ?? (entry.status === "failed" ? "failed" : "generating");
@@ -1657,11 +1668,11 @@ function PinCard({
 
   // ── Badge (left-top) ───────────────────────────────────────────────────────
   const badgeLabel =
-      cardStatus === "failed"     ? "Failed"
-    : cardStatus === "generating" ? (variant === "queued" ? "Queued" : "Generating")
-    : cardStatus === "posted"     ? "Posted"
-    : cardStatus === "scheduled"  ? (resolvedPlanDate ? `Scheduled ${formatShortDate(resolvedPlanDate)}` : "Scheduled")
-    : "Unscheduled";
+      cardStatus === "failed"     ? tr("studio.badge.failed")
+    : cardStatus === "generating" ? (variant === "queued" ? tr("studio.badge.queued") : tr("studio.badge.generating"))
+    : cardStatus === "posted"     ? tr("studio.badge.posted")
+    : cardStatus === "scheduled"  ? (resolvedPlanDate ? tr("studio.badge.scheduledOn").replace("{date}", formatShortDate(resolvedPlanDate)) : tr("studio.badge.scheduled"))
+    : tr("studio.badge.unscheduled");
 
   const badgeColor =
       cardStatus === "failed"     ? D.error
@@ -1688,8 +1699,8 @@ function PinCard({
   const productCount = session.setupSnapshot?.selectedProducts?.length ?? session.productCount ?? 0;
   const refCount = session.setupSnapshot?.selectedReferences?.length ?? session.refCount ?? 0;
   const batchMeta = [
-    productCount > 0 ? `${productCount} product${productCount !== 1 ? "s" : ""}` : null,
-    refCount > 0 ? `${refCount} ref${refCount !== 1 ? "s" : ""}` : null,
+    productCount > 0 ? tr("studio.count.products").replace("{n}", String(productCount)) : null,
+    refCount > 0 ? tr("studio.count.refs").replace("{n}", String(refCount)) : null,
   ].filter(Boolean).join(" · ");
 
   // ── Footer second line (workflow-aware) ───────────────────────────────────
@@ -1699,12 +1710,12 @@ function PinCard({
   const footerLine2 = (() => {
     if (isPlaceholder || !pin) return `${batchMeta ? `${batchMeta} · ` : ""}${session.format ?? "2:3"}`;
     if (cardStatus === "posted") {
-      const d = pin.plannedDate?.trim() ? `Posted ${formatShortDate(pin.plannedDate)}` : "Posted";
+      const d = pin.plannedDate?.trim() ? tr("studio.footer.postedOn").replace("{date}", formatShortDate(pin.plannedDate)) : tr("studio.badge.posted");
       return `${d} · Pinterest`;
     }
     if (cardStatus === "scheduled") {
       const d = formatShortDate(pin.plannedDate);
-      return d ? `Scheduled ${d}${catLabel ? ` · ${catLabel}` : ""}` : (catLabel || "Scheduled");
+      return d ? `${tr("studio.footer.scheduledOn").replace("{date}", d)}${catLabel ? ` · ${catLabel}` : ""}` : (catLabel || tr("studio.badge.scheduled"));
     }
     // unscheduled — show generation context
     const modelLabel = session.model ?? "";
@@ -1719,12 +1730,12 @@ function PinCard({
   // Card action buttons (labels + layout) live in the shared PinCardActions component.
 
   const placeholderCfg = {
-    generating: { bg: "linear-gradient(145deg, rgba(124,58,237,0.16), rgba(11,16,32,0.98))", color: D.purple, text: "Still generating" },
-    queued:     { bg: "linear-gradient(145deg, rgba(74,85,104,0.22), rgba(11,16,32,0.98))", color: D.textMuted, text: "Queued" },
-    failed:     { bg: "linear-gradient(145deg, rgba(239,68,68,0.2), rgba(11,16,32,0.98))", color: D.error, text: "Failed to generate" },
+    generating: { bg: "linear-gradient(145deg, rgba(124,58,237,0.16), rgba(11,16,32,0.98))", color: D.purple, text: tr("studio.placeholder.stillGenerating") },
+    queued:     { bg: "linear-gradient(145deg, rgba(74,85,104,0.22), rgba(11,16,32,0.98))", color: D.textMuted, text: tr("studio.badge.queued") },
+    failed:     { bg: "linear-gradient(145deg, rgba(239,68,68,0.2), rgba(11,16,32,0.98))", color: D.error, text: tr("studio.placeholder.failedToGenerate") },
   }[variant];
   // Safe, human copy — never surfaces the raw upstream JSON to the user.
-  const readableError = getReadableGenerationError(entry.errorType, entry.errorMessage);
+  const readableError = getReadableGenerationError(entry.errorType, entry.errorMessage, tr);
 
   // ── Dev/test-only plan-state diagnostics ───────────────────────────────────
   // Surfaces the matching internals so state mismatches between Create Pins and
@@ -1749,7 +1760,7 @@ function PinCard({
     <article
       {...diagAttrs}
       data-testid={isPlaceholder ? "placeholder-card" : "generated-pin-card"}
-      title={`Generated Set ${session.id.slice(-8)}`}
+      title={tr("studio.card.generatedSetTitle").replace("{id}", session.id.slice(-8))}
       onClick={onOpenDetails}
       onMouseEnter={() => setHover(true)}
       // Keep an open More menu open when the cursor leaves the card body — closing
@@ -1806,7 +1817,7 @@ function PinCard({
               <div style={{ width: 32, height: 32, border: `3px solid ${placeholderCfg.color}40`, borderTopColor: placeholderCfg.color, borderRadius: "50%", animation: "spin 0.8s linear infinite", position: "relative" }} />
             )}
             <p style={{ margin: 0, fontSize: "11px", color: variant === "failed" ? D.error : D.text, fontWeight: 800, position: "relative", textAlign: "center", padding: "0 10px" }}>
-              {variant === "failed" ? readableError.title : (entry.retrying ? "Retrying…" : placeholderCfg.text)}
+              {variant === "failed" ? readableError.title : (entry.retrying ? tr("studio.placeholder.retrying") : placeholderCfg.text)}
             </p>
             {/* User-facing copy only — the raw provider error stays in dev/server logs. */}
             {variant === "failed" && (
@@ -1819,7 +1830,7 @@ function PinCard({
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={toProxyUrl(pin!.url)}
-            alt="Generated pin"
+            alt={tr("studio.card.generatedPinAlt")}
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
             onError={e => {
               const el = e.currentTarget;
@@ -1853,7 +1864,11 @@ function PinCard({
         }}>
           <div>
             <p style={{ margin: "0 0 1px", fontSize: "10px", fontWeight: 700, color: "#F1F5F9" }}>
-              {globalPinIdx !== null ? `Output ${globalPinIdx} of ${session.expectedTotal}` : `Batch · ${session.expectedTotal} pin${session.expectedTotal !== 1 ? "s" : ""}`}
+              {globalPinIdx !== null
+                ? tr("studio.card.outputOfTotal").replace("{n}", String(globalPinIdx)).replace("{total}", String(session.expectedTotal))
+                : (session.expectedTotal === 1
+                    ? tr("studio.card.batchOfOne")
+                    : tr("studio.card.batchOfTotal").replace("{total}", String(session.expectedTotal)))}
             </p>
             <p style={{ margin: 0, fontSize: "9px", fontWeight: 500, color: "rgba(226,232,240,0.72)" }}>
               {footerLine2}
@@ -1873,7 +1888,7 @@ function PinCard({
             onTryAgain={(e) => onRetry?.(e)}
             onEditPrompt={(e) => onEditInputs?.(e)}
             onRegenerate={(e) => onRegenerate?.(e)}
-            onSaveReference={() => toast.success("Saved as reference.")}
+            onSaveReference={() => toast.success(tr("studio.toast.savedAsReference"))}
             downloadHref={pin ? toProxyUrl(pin.url) : ""}
             downloadName={dlName}
           />
@@ -1985,16 +2000,18 @@ function CreatePinsContent() {
       productsMissingLink: 0,
       referenceCount: refs.length,
     });
+    const productsLabel = products.length === 1 ? tr("studio.assistant.oneProduct") : tr("studio.assistant.nProducts").replace("{n}", String(products.length));
+    const refsLabel = refs.length === 1 ? tr("studio.assistant.oneReference") : tr("studio.assistant.nReferences").replace("{n}", String(refs.length));
     return {
       id: "studio-create-pins",
       source: "page",
       kind: "create-pins",
-      label: "Create Pins",
+      label: tr("studio.header.title"),
       summary: products.length || refs.length
-        ? `${products.length} product${products.length === 1 ? "" : "s"} · ${refs.length} reference${refs.length === 1 ? "" : "s"} in setup`
+        ? `${productsLabel} · ${refsLabel}`
         : undefined,
-      greeting: "Hi, I'm VibePin Assistant. Ask me anything about your creative setup, products, references, or how to get stronger Pins.",
-      examplePrompts: ["Check my setup", "Suggest Pinterest angles", "Review my creative direction"],
+      greeting: tr("studio.assistant.createPinsGreeting"),
+      examplePrompts: [tr("studio.assistant.checkMySetup"), tr("studio.assistant.suggestAngles"), tr("studio.assistant.reviewDirection")],
       tone: findings.some((f) => f.severity === "issue") ? "detected" : "suggested",
       findings,
     };
@@ -2572,7 +2589,7 @@ function CreatePinsContent() {
   // ── Generation ────────────────────────────────────────────────────────────────
 
   const handleGenerate = useCallback(async () => {
-    if (!hasInput) { toast.error("Add a prompt, product image, or reference first."); return; }
+    if (!hasInput) { toast.error(tr("studio.toast.needInputFirst")); return; }
     if (submitGuard.current) return;
     submitGuard.current = true;
     setIsSubmitting(true);
@@ -2819,8 +2836,11 @@ function CreatePinsContent() {
           studioClientId,
         });
         if (data.countClamped && data.actualImageCount) {
-          toast.message(`Limited to ${data.actualImageCount} image${data.actualImageCount === 1 ? "" : "s"} for this request`, {
-            description: "Provider protection is active for this batch.",
+          const limitedLabel = data.actualImageCount === 1
+            ? tr("studio.toast.limitedToOneImage")
+            : tr("studio.toast.limitedToNImages").replace("{n}", String(data.actualImageCount));
+          toast.message(limitedLabel, {
+            description: tr("studio.toast.providerProtectionActive"),
           });
         }
         if (data.promptSnapshot?.plan?.summary_for_ui) {
@@ -2859,24 +2879,25 @@ function CreatePinsContent() {
           totalGenerated += data.urls.length;
           if (isPartial) {
             const shortfall = expectedForResult - data.urls.length;
-            const errMsg = data.error ?? `${shortfall} image${shortfall === 1 ? "" : "s"} didn't generate — tap retry to top up.`;
+            const shortfallMsg = shortfall === 1 ? tr("studio.toast.oneImageDidntGenerate") : tr("studio.toast.nImagesDidntGenerate").replace("{n}", String(shortfall));
+            const errMsg = data.error ?? shortfallMsg;
             groupErrors[i] = { message: errMsg, errorType: data.errorType ?? "unknown_error" };
             // Informational toast — we still produced usable Pins.
-            toast.message(`${data.urls.length} of ${count} generated`, { description: errMsg });
+            toast.message(tr("studio.toast.nOfTotalGenerated").replace("{n}", String(data.urls.length)).replace("{total}", String(count)), { description: errMsg });
           }
         } else {
-          const errMsg = data.error ?? "No images returned";
+          const errMsg = data.error ?? tr("studio.toast.noImagesReturned");
           finalGroups[i] = { ...finalGroups[i], status: "failed" };
           groupErrors[i] = { message: errMsg, errorType: data.errorType ?? "unknown_error" };
           sessionErrorMessage = errMsg;
-          toast.error(`Reference ${i + 1} failed`, { description: errMsg });
+          toast.error(tr("studio.toast.referenceNFailed").replace("{n}", String(i + 1)), { description: errMsg });
         }
       } catch (err) {
         const errMsg = String(err);
         finalGroups[i] = { ...finalGroups[i], status: "failed" };
         groupErrors[i] = { message: errMsg, errorType: "unknown_error" };
         sessionErrorMessage = errMsg;
-        toast.error("Network error", { description: errMsg });
+        toast.error(tr("studio.toast.networkError"), { description: errMsg });
       }
       setSessions(prev => prev.map(s => s.id === sessionId ? {
         ...s, groups: [...finalGroups],
@@ -2945,7 +2966,7 @@ function CreatePinsContent() {
         ]),
       });
     }
-    if (doneCount) toast.success(`${doneCount} pin${doneCount !== 1 ? "s" : ""} generated`);
+    if (doneCount) toast.success(doneCount === 1 ? tr("studio.toast.oneGenerated") : tr("studio.toast.nGenerated").replace("{n}", String(doneCount)));
   }, [
     hasInput, refs, count, variationMode, prompt, manualBrief, derivedBrief, briefManuallyEdited, opportunity, products, totalPins,
     wsEntry, model, format, buildCreativeDirectionSnapshot, creativeCategory,
@@ -3048,7 +3069,7 @@ function CreatePinsContent() {
     const form = metadataForm;
     const pin = pinDetailPin;
     if (!form || !pin) {
-      return { id: "studio-single-pin", source: "modal", kind: "single-pin", label: "Pin Edit", tone: "detected", findings: [] };
+      return { id: "studio-single-pin", source: "modal", kind: "single-pin", label: tr("studio.assistant.pinEdit"), tone: "detected", findings: [] };
     }
     const planned = pin.planningStatus === "added_to_plan" || pin.planningStatus === "needs_review" || pin.planningStatus === "ready";
     const hasTime = !!((form.plannedDate ?? "").trim() || pin.plannedAt);
@@ -3068,10 +3089,10 @@ function CreatePinsContent() {
       id: "studio-single-pin",
       source: "modal",
       kind: "single-pin",
-      label: "Pin Edit",
-      summary: form.title?.trim() ? `Editing “${form.title.trim().slice(0, 40)}”` : undefined,
-      greeting: "Ask me anything about this Pin — title, description, destination URL, or schedule readiness.",
-      examplePrompts: ["Is this ready to schedule?", "Improve the description"],
+      label: tr("studio.assistant.pinEdit"),
+      summary: form.title?.trim() ? tr("studio.assistant.editingTitle").replace("{title}", form.title.trim().slice(0, 40)) : undefined,
+      greeting: tr("studio.assistant.singlePinGreeting"),
+      examplePrompts: [tr("studio.assistant.readyToSchedule"), tr("studio.assistant.improveDescription")],
       tone: "detected",
       findings,
     };
@@ -3279,7 +3300,7 @@ function CreatePinsContent() {
       referenceLabel: pinDetailView.refLabel,
       contentLanguage: readResolvedContentLanguage(),
     });
-    if (!metadataFormTouched.titleTouched || window.confirm("Overwrite edited title?")) {
+    if (!metadataFormTouched.titleTouched || window.confirm(tr("studio.confirm.overwriteTitle"))) {
       handleMetadataChange({ title: fresh.selectedTitle, metadataDraft: fresh });
     } else {
       setMetadataForm(prev => prev ? { ...prev, metadataDraft: { ...fresh, selectedTitle: prev.title, titleCandidates: fresh.titleCandidates } } : prev);
@@ -3299,7 +3320,7 @@ function CreatePinsContent() {
       referenceLabel: pinDetailView.refLabel,
       contentLanguage: readResolvedContentLanguage(),
     });
-    if (!metadataFormTouched.descriptionTouched || window.confirm("Overwrite edited description?")) {
+    if (!metadataFormTouched.descriptionTouched || window.confirm(tr("studio.confirm.overwriteDescription"))) {
       handleMetadataChange({ description: fresh.selectedDescription, metadataDraft: fresh });
     }
   }
@@ -3340,7 +3361,7 @@ function CreatePinsContent() {
       // Fall back to the affiliate product context so an Amazon-affiliate Pin always
       // shows its product thumbnail + label in Batch Edit (never "missing").
       linkedProductId: primary?.productId ?? pin.productId,
-      linkedProductTitle: primary?.title ?? (pin.creatorProductLinkId ? "Amazon product" : undefined),
+      linkedProductTitle: primary?.title ?? (pin.creatorProductLinkId ? tr("studio.product.amazonProduct") : undefined),
       linkedProductImageUrl: primary?.imageUrl ?? pin.sourceProductImageUrl,
       linkedProductUrl: primary?.productUrl,
       linkedProductSource: primary?.source,
@@ -3379,7 +3400,7 @@ function CreatePinsContent() {
         metadataTouched: overwriteEdited ? EMPTY_TOUCHED : p.metadataTouched,
       }));
     });
-    toast.success(`Pin Details generated for ${Object.keys(results).length} pins`);
+    toast.success(tr("studio.toast.pinDetailsGeneratedForN").replace("{n}", String(Object.keys(results).length)));
   }
 
   function handleAddSelectedToPlan() {
@@ -3393,7 +3414,8 @@ function CreatePinsContent() {
       addPinToWeeklyPlan(session, pin, session.id, entry.groupIdx, entry.pinIdx, group.status);
       added++;
     }
-    toast.success(`Added ${added} pin${added !== 1 ? "s" : ""} to plan${skipped ? ` · ${skipped} skipped` : ""}`);
+    const addedLabel = added === 1 ? tr("studio.toast.addedOnePinToPlan") : tr("studio.toast.addedPinsToPlan").replace("{n}", String(added));
+    toast.success(skipped ? `${addedLabel} · ${tr("studio.toast.skippedCount").replace("{n}", String(skipped))}` : addedLabel);
     setSelectedPinKeys(new Set());
   }
 
@@ -3411,10 +3433,12 @@ function CreatePinsContent() {
       added++;
     }
     if (added === 0) {
-      toast.info(`${already} Pin${already === 1 ? " is" : "s are"} already scheduled`);
+      const alreadyLabel = already === 1 ? tr("studio.toast.oneAlreadyScheduled") : tr("studio.toast.nAlreadyScheduled").replace("{n}", String(already));
+      toast.info(alreadyLabel);
       return;
     }
-    toast.success(`Scheduled ${added} Pin${added === 1 ? "" : "s"}${already ? ` · ${already} already scheduled` : ""}`);
+    const scheduledLabel = added === 1 ? tr("studio.toast.scheduledOnePin") : tr("studio.toast.scheduledNPins").replace("{n}", String(added));
+    toast.success(already ? `${scheduledLabel} · ${tr("studio.toast.nAlreadyScheduledSuffix").replace("{n}", String(already))}` : scheduledLabel);
   }
 
   // Batch Edit → Publish now (from Studio). Mark published pins Posted through the
@@ -3503,7 +3527,7 @@ function CreatePinsContent() {
   function handleReuseSetup(source: { setupSnapshot?: SetupSnapshot; promptFull?: string }) {
     const snap = source.setupSnapshot;
     const promptText = source.promptFull ?? snap?.promptSnapshot ?? "";
-    const legacyReuseMessage = "Prompt loaded — original assets unavailable for this older generation";
+    const legacyReuseMessage = tr("studio.toast.promptLoadedLegacy");
     if (snap) {
       const prodUrls = snap.selectedProducts.map(p => p.imageUrl).filter((u): u is string => !!u);
       const refUrls  = snap.selectedReferences.map(r => r.imageUrl).filter(Boolean);
@@ -3550,7 +3574,7 @@ function CreatePinsContent() {
       promptManuallyEdited.current = true;
     }
     setPinDetailSelection(null);
-    toast.success(snap ? "Setup loaded into composer" : legacyReuseMessage);
+    toast.success(snap ? tr("studio.toast.setupLoadedIntoComposer") : legacyReuseMessage);
   }
 
   // ── Generate again from Remix tab (does NOT touch composer state) ────────────
@@ -3664,11 +3688,11 @@ function CreatePinsContent() {
           totalGenerated += data.urls.length;
         } else {
           finalGroups[i] = { ...finalGroups[i], status: "failed" };
-          toast.error(`Reference ${i + 1} failed`, { description: data.error ?? "No images returned" });
+          toast.error(tr("studio.toast.referenceNFailed").replace("{n}", String(i + 1)), { description: data.error ?? tr("studio.toast.noImagesReturned") });
         }
       } catch (err) {
         finalGroups[i] = { ...finalGroups[i], status: "failed" };
-        toast.error("Network error", { description: String(err) });
+        toast.error(tr("studio.toast.networkError"), { description: String(err) });
       }
       setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, groups: [...finalGroups] } : s));
       addHistory({ ...runningEntry, groups: dbGroups, totalPins: totalGenerated });
@@ -3691,7 +3715,7 @@ function CreatePinsContent() {
       ...(remixCategoryAudit ? { category_audit: remixCategoryAudit } : {}),
       updated_at: new Date().toISOString(),
     }).catch(() => {});
-    if (totalGenerated) toast.success(`${totalGenerated} new pin${totalGenerated !== 1 ? "s" : ""} generated`);
+    if (totalGenerated) toast.success(totalGenerated === 1 ? tr("studio.toast.oneNewGenerated") : tr("studio.toast.nNewGenerated").replace("{n}", String(totalGenerated)));
   }
 
   // ── Picker confirm ────────────────────────────────────────────────────────────
@@ -3792,7 +3816,7 @@ function CreatePinsContent() {
     if (!result) return;
     const persisted = pinDraftStore.getDraftByImageUrl(updated.imageUrl);
     if (persisted) syncDetailsDraftToStudio(persisted);
-    toast.success("Added to Weekly Plan");
+    toast.success(tr("studio.toast.addedToPlan"));
   }
 
   function addPinToWeeklyPlan(
@@ -3895,17 +3919,17 @@ function CreatePinsContent() {
     const group   = session?.groups[groupIdx];
     const pin     = group?.items[pinIdx];
     if (!pin || !pin.url || (group?.status !== "done" && group?.status !== "partial")) return;
-    if (pin.planningStatus !== "not_added") { toast.info("Already added to plan"); return; }
+    if (pin.planningStatus !== "not_added") { toast.info(tr("studio.toast.alreadyAddedToPlan")); return; }
     const result = addPinToWeeklyPlan(session!, pin, sessionId, groupIdx, pinIdx, group.status);
     if (!result) return;
     const { planningStatus, plannedDate } = result;
-    toast.success(plannedDate ? "Added to Weekly Plan" : "Added to Weekly Plan · Needs date", {
+    toast.success(plannedDate ? tr("studio.toast.addedToPlan") : tr("studio.toast.addedToPlanNeedsDate"), {
       description: planningStatus === "ready"
-        ? `Ready for publish${plannedDate ? ` · ${plannedDate}` : ""}.`
+        ? (plannedDate ? tr("studio.toast.readyForPublishOn").replace("{date}", plannedDate) : tr("studio.toast.readyForPublish"))
         : plannedDate
-          ? `Needs review · scheduled ${plannedDate}.`
-          : "Assign a date in Weekly Plan to schedule it.",
-      action: { label: "View in Weekly Plan", onClick: () => { window.location.assign("/app/plan"); } },
+          ? tr("studio.toast.needsReviewScheduledOn").replace("{date}", plannedDate)
+          : tr("studio.toast.assignDateHint"),
+      action: { label: tr("studio.toast.viewInWeeklyPlan"), onClick: () => { window.location.assign("/app/plan"); } },
     });
   }
 
@@ -4164,8 +4188,8 @@ function CreatePinsContent() {
         });
       }
       // Always give visible feedback — never a silent "flash then nothing".
-      if (newUrl) toast.success("Retried successfully — added to this set");
-      else toastGenerationError(data.errorType, data.error);
+      if (newUrl) toast.success(tr("studio.toast.retrySuccess"));
+      else toastGenerationError(data.errorType, data.error, tr);
     } catch (err) {
       if (process.env.NODE_ENV !== "production") console.error("[retry-single-output] failed", err);
       setSessions(prev => prev.map(s => s.id !== sessionId ? s : {
@@ -4173,7 +4197,7 @@ function CreatePinsContent() {
         groups: s.groups.map((g, i) => i !== groupIdx ? g : applyRetryFailure(g, outputIndex)),
         groupErrors: { ...(s.groupErrors ?? {}), [groupIdx]: { message: String(err), errorType: "unknown_error" as const } },
       }));
-      toast.error("Network error during retry", { description: "Please try again shortly." });
+      toast.error(tr("studio.toast.networkErrorRetry"), { description: tr("studio.toast.tryAgainShortly") });
     } finally {
       retryGuard.current.delete(slotId);
     }
@@ -4250,13 +4274,13 @@ function CreatePinsContent() {
             return { ...g, items: [...g.items, preserveAffiliateContextOnRegenerate(sourcePin, fresh)] };
           })};
         }));
-        toast.success("New variation added");
+        toast.success(tr("studio.toast.newVariationAdded"));
       } else {
-        toastGenerationError(data.errorType, data.error);
+        toastGenerationError(data.errorType, data.error, tr);
       }
     } catch (err) {
       if (process.env.NODE_ENV !== "production") console.error("[regenerate-pin] failed", err);
-      toast.error("Network error during regeneration", { description: "Please try again shortly." });
+      toast.error(tr("studio.toast.networkErrorRegen"), { description: tr("studio.toast.tryAgainShortly") });
     }
   }
 
@@ -4277,9 +4301,10 @@ function CreatePinsContent() {
         if (result) added++; else skipped++;
       }
     }
-    if (added === 0) { toast.info("All pins are already added to plan"); return; }
-    toast.success(`Added ${added} pin${added !== 1 ? "s" : ""} to Weekly Plan`, {
-      description: skipped > 0 ? `${skipped} skipped (already added or not completed).` : undefined,
+    if (added === 0) { toast.info(tr("studio.toast.allAlreadyAdded")); return; }
+    const addedLabel = added === 1 ? tr("studio.toast.addedOnePinToWeeklyPlan") : tr("studio.toast.addedPinsToWeeklyPlan").replace("{n}", String(added));
+    toast.success(addedLabel, {
+      description: skipped > 0 ? tr("studio.toast.skippedNotCompleted").replace("{n}", String(skipped)) : undefined,
     });
   }
 
@@ -4291,7 +4316,7 @@ function CreatePinsContent() {
       creativeDirection: buildCreativeDirectionSnapshot(manualBrief || prompt),
       savedAt: new Date().toISOString(),
     }));
-    toast.success("Draft saved");
+    toast.success(tr("studio.toast.draftSaved"));
   }
 
   function handleSelectCreativeDirection(id: string) {
@@ -4369,7 +4394,8 @@ function CreatePinsContent() {
   }
 
   const tc = opportunity ? (TIER_COLOR[opportunity.tier] ?? D.purple) : "";
-  const tl = opportunity ? (TIER_LABEL[opportunity.tier] ?? opportunity.tier) : "";
+  const tierKey = opportunity ? TIER_LABEL_KEY[opportunity.tier as keyof typeof TIER_LABEL_KEY] : undefined;
+  const tl = opportunity ? (tierKey ? tr(tierKey) : opportunity.tier) : "";
   const vc = opportunity?.trend ? (TREND_COLOR[opportunity.trend] ?? D.accent) : "";
   const vl = opportunity?.trend ? (opportunity.trend.charAt(0).toUpperCase() + opportunity.trend.slice(1)) : "";
 
@@ -4387,15 +4413,15 @@ function CreatePinsContent() {
         borderBottom: `1px solid ${D.border}`,
         flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
-        <p data-testid="page-header-title" style={{ margin: 0, fontSize: "14px", fontWeight: 800, color: D.text }}>Create Pins</p>
+        <p data-testid="page-header-title" style={{ margin: 0, fontSize: "14px", fontWeight: 800, color: D.text }}>{tr("studio.header.title")}</p>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button type="button" onClick={handleSaveDraft}
             style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, border: `1px solid ${D.border}`, background: "none", fontSize: "11px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
-            Save draft
+            {tr("studio.header.saveDraft")}
           </button>
           <button type="button" onClick={() => router.push("/app/history")}
             style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 12px", borderRadius: 20, border: `1px solid ${D.border}`, background: D.cardElev, fontSize: "11px", fontWeight: 600, color: D.textSec, cursor: "pointer" }}>
-            <Clock style={{ width: 11, height: 11 }} /> History
+            <Clock style={{ width: 11, height: 11 }} /> {tr("studio.header.history")}
           </button>
         </div>
       </div>
@@ -4489,28 +4515,28 @@ function CreatePinsContent() {
                 )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <Dropdown label={tr("page.studio.numberOfPins")} value={count} options={[1,2,3,4].map(n => ({ value: n, label: String(n) }))} onChange={setCount} />
-                <Dropdown label="Model:" value={model} options={MODEL_OPTIONS as unknown as { value: string; label: string }[]} onChange={setModel} />
+                <Dropdown label={tr("studio.settings.model")} value={model} options={MODEL_OPTIONS as unknown as { value: string; label: string }[]} onChange={setModel} />
               </div>
               <div style={{ marginTop: 8 }}>
                 <Dropdown
-                  label="Results:"
+                  label={tr("studio.settings.results")}
                   value={variationMode}
                   options={[
-                    { value: "similar",  label: "Similar options" },
-                    { value: "distinct", label: "More variety" },
+                    { value: "similar",  label: tr("studio.settings.similarOptions") },
+                    { value: "distinct", label: tr("studio.settings.moreVariety") },
                   ]}
                   onChange={setVariationMode}
                 />
                 {variationMode === "distinct" && (
                   <p data-testid="results-variety-helper" style={{ margin: "5px 0 0", fontSize: "10px", lineHeight: 1.4, color: D.textMuted }}>
-                    Keeps the same products and direction, but changes pose and composition.
+                    {tr("studio.settings.moreVarietyHint")}
                   </p>
                 )}
               </div>
               <div style={{ marginTop: 8 }}>
                 <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: D.textSec }}>
                   {tr("page.studio.aspectRatio")}
-                  <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 500, color: D.textMuted }}>Recommended: 2:3</span>
+                  <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 500, color: D.textMuted }}>{tr("studio.settings.recommendedRatio")}</span>
                 </p>
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                   {(["2:3","4:5","3:4","1:1","9:16","16:9"] as const).map(r => (
@@ -4535,7 +4561,7 @@ function CreatePinsContent() {
                 <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 10 }}>
                           <AlertCircle style={{ width: 11, height: 11, color: D.warning }} />
                           <span style={{ fontSize: "10px", color: D.warning, fontWeight: 600 }}>
-                            {totalPins} Pins. Consider reducing references or count.
+                            {tr("studio.settings.overLimitWarning").replace("{n}", String(totalPins))}
                           </span>
                         </div>
                       )}
@@ -4550,15 +4576,15 @@ function CreatePinsContent() {
               background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.2)",
             }}>
               <p style={{ margin: "0 0 6px", fontSize: 10, fontWeight: 700, color: "#A78BFA", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                AI Direction
+                {tr("studio.debug.aiDirection")}
               </p>
               {enhancerSummary ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                   {([
-                    ["Scene",    enhancerSummary.scene],
-                    ["Style",    enhancerSummary.style],
-                    ["Layout",   enhancerSummary.layout],
-                    ["Products", enhancerSummary.products],
+                    [tr("studio.debug.scene"),    enhancerSummary.scene],
+                    [tr("studio.debug.style"),    enhancerSummary.style],
+                    [tr("studio.debug.layout"),   enhancerSummary.layout],
+                    [tr("studio.debug.products"), enhancerSummary.products],
                   ] as [string, string | undefined][]).filter(([, v]) => v).map(([label, value]) => (
                     <div key={label} style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
                       <span style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", minWidth: 44 }}>{label}</span>
@@ -4568,7 +4594,7 @@ function CreatePinsContent() {
                 </div>
               ) : (
                 <p style={{ margin: 0, fontSize: 10, color: D.textMuted, fontStyle: "italic" }}>
-                  AI will analyze your products and references when generating.
+                  {tr("studio.debug.willAnalyze")}
                 </p>
               )}
             </div>
@@ -4583,31 +4609,31 @@ function CreatePinsContent() {
               boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
             }}>
               <p style={{ margin: "0 0 6px", fontSize: 10, fontWeight: 800, color: "#C4B5FD", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                Developer Debug
+                {tr("studio.debug.developerDebug")}
               </p>
               <p style={{ margin: "0 0 6px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>
-                Reference mode: {referenceInfluenceMode}
+                {tr("studio.debug.referenceMode")} {referenceInfluenceMode}
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                 <div>
-                  <p style={{ margin: 0, fontSize: 9, color: D.textMuted, fontWeight: 700 }}>Products</p>
-                  <p style={{ margin: "2px 0 0", fontSize: 14, color: D.text, fontWeight: 900 }}>{products.length} images</p>
+                  <p style={{ margin: 0, fontSize: 9, color: D.textMuted, fontWeight: 700 }}>{tr("studio.debug.products")}</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 14, color: D.text, fontWeight: 900 }}>{tr("studio.debug.imagesCount").replace("{n}", String(products.length))}</p>
                 </div>
                 <div>
-                  <p style={{ margin: 0, fontSize: 9, color: D.textMuted, fontWeight: 700 }}>References</p>
-                  <p style={{ margin: "2px 0 0", fontSize: 14, color: D.text, fontWeight: 900 }}>{refs.length} images</p>
+                  <p style={{ margin: 0, fontSize: 9, color: D.textMuted, fontWeight: 700 }}>{tr("page.studio.references")}</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 14, color: D.text, fontWeight: 900 }}>{tr("studio.debug.imagesCount").replace("{n}", String(refs.length))}</p>
                 </div>
               </div>
               <div style={{ marginTop: 7, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                 <div>
-                  <p style={{ margin: "0 0 3px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>Products weight</p>
+                  <p style={{ margin: "0 0 3px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>{tr("studio.debug.productsWeight")}</p>
                   <div style={{ height: 5, borderRadius: 99, background: "rgba(148,163,184,0.16)", overflow: "hidden" }}>
                     <div style={{ width: `${productWeight}%`, height: "100%", background: "#38BDF8" }} />
                   </div>
                   <p style={{ margin: "3px 0 0", fontSize: 10, color: D.textSec, fontWeight: 800 }}>{productWeight}%</p>
                 </div>
                 <div>
-                  <p style={{ margin: "0 0 3px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>References weight</p>
+                  <p style={{ margin: "0 0 3px", fontSize: 9, color: D.textMuted, fontWeight: 700 }}>{tr("studio.debug.referencesWeight")}</p>
                   <div style={{ height: 5, borderRadius: 99, background: "rgba(148,163,184,0.16)", overflow: "hidden" }}>
                     <div style={{ width: `${referenceWeight}%`, height: "100%", background: "#A855F7" }} />
                   </div>
@@ -4642,7 +4668,7 @@ function CreatePinsContent() {
               {isSubmitting ? (
                 <>
                   <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
-                  Submitting…
+                  {tr("studio.header.submitting")}
                 </>
               ) : (
                 <>
@@ -4707,15 +4733,15 @@ function CreatePinsContent() {
               const result = group ? addPinToWeeklyPlan(session, merged, session.id, pinDetailView.groupIdx, pinDetailView.pinIdx, group.status) : null;
               if (!result) return;
               const { planningStatus, plannedDate } = result;
-              toast.success("Added to Weekly Plan", {
-                description: planningStatus === "ready" ? `Ready · ${plannedDate || "scheduled"}` : "Needs review",
+              toast.success(tr("studio.toast.addedToPlan"), {
+                description: planningStatus === "ready" ? tr("studio.toast.readyOn").replace("{date}", plannedDate || tr("studio.toast.scheduled")) : tr("studio.toast.needsReview"),
               });
             }}
             onPinDetailRegenerate={() => {
               if (!pinDetailView || pinDetailView.pinIdx === undefined) return;
               handleRegeneratePin(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx);
             }}
-            onPinDetailSaveAsReference={() => toast.success("Saved as reference.")}
+            onPinDetailSaveAsReference={() => toast.success(tr("studio.toast.savedAsReference"))}
             onPinDetailRetryPin={() => {
               if (!pinDetailView) return;
               handleRegenerateGroup(pinDetailView.sessionId, pinDetailView.groupIdx);
@@ -4851,6 +4877,7 @@ export default function CreatePinsPage() {
   // Only when the env var is UNSET do we defer to the client-only localStorage
   // override. In that (dev/local) window the initial state is "resolving" and we show
   // a neutral, board-shaped skeleton — never the legacy Studio.
+  const { t: tr } = useLocale();
   const envDecision = resolveStudioExperienceFromEnv();
   const [experience, setExperience] = useState<StudioExperience>(envDecision ?? "resolving");
 
@@ -4877,7 +4904,7 @@ export default function CreatePinsPage() {
   }
 
   return (
-    <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--app-text-sec, #8892A4)", fontSize: "13px", background: "var(--app-bg, #0B0E17)" }}>Loading…</div>}>
+    <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--app-text-sec, #8892A4)", fontSize: "13px", background: "var(--app-bg, #0B0E17)" }}>{tr("common.loading")}</div>}>
       <CreatePinsContent />
     </Suspense>
   );

@@ -43,7 +43,7 @@ export type PinReadiness = {
   detailsStatus: PinDetailsStatus;
   planStatus: PinPlanStatus;
   canPublish: boolean;
-  missing: Array<"image" | "boardId">;
+  missing: Array<"image" | "title" | "description" | "altText" | "destinationUrl" | "boardId">;
 };
 
 export function getPinPlanStatus(input: {

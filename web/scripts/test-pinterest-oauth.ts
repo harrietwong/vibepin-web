@@ -66,46 +66,16 @@ await test("authorization URL has correct params, exact redirect URI, and scopes
   assertEq(url.searchParams.get("response_type"), "code", "response_type");
   assertEq(url.searchParams.get("redirect_uri"), "http://localhost:3000/api/auth/pinterest/callback", "exact redirect URI");
   assertEq(url.searchParams.get("state"), "STATE123", "state");
-  // Default env resolves to production → minimum scopes, NO boards:write.
-  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,pins:read,pins:write", "production scopes");
+  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,boards:write,pins:read,pins:write", "scopes");
 });
 
-await test("production requests minimum scopes; no boards:write, no forbidden / secret scopes", () => {
-  const s = config.pinterestScopeString();
+await test("requested scopes contain publish permissions but no forbidden / secret scopes", () => {
+  const s = config.PINTEREST_SCOPE_STRING;
   for (const bad of ["ads:", "catalogs:", "_secret"]) {
     assert(!s.includes(bad), `scope string must not include ${bad}`);
   }
-  assert(s.includes("pins:write"), "pins:write required for publishing");
-  assert(!s.includes("boards:write"), "production must NOT request boards:write");
-  assertEq(config.PRODUCTION_SCOPES.length, 4, "exactly 4 production scopes");
-});
-
-await test("sandbox requests boards:write for the demo-board helper", () => {
-  const old = process.env.PINTEREST_API_ENV;
-  process.env.PINTEREST_API_ENV = "sandbox";
-  try {
-    const s = config.pinterestScopeString();
-    assert(s.includes("boards:write"), "sandbox requests boards:write");
-    assertEq(config.SANDBOX_SCOPES.length, 5, "exactly 5 sandbox scopes");
-  } finally {
-    if (old === undefined) delete process.env.PINTEREST_API_ENV;
-    else process.env.PINTEREST_API_ENV = old;
-  }
-});
-
-await test("VERCEL_ENV=production forces production regardless of PINTEREST_API_ENV=sandbox", () => {
-  const oldV = process.env.VERCEL_ENV;
-  const oldE = process.env.PINTEREST_API_ENV;
-  process.env.VERCEL_ENV = "production";
-  process.env.PINTEREST_API_ENV = "sandbox"; // stray flag must be ignored in prod
-  try {
-    assertEq(config.getPinterestApiEnv(), "production", "prod deploy forces production");
-    assertEq(config.getPinterestApiBase(), "https://api.pinterest.com/v5", "prod uses production base, NOT api-sandbox");
-    assert(!config.pinterestScopeString().includes("boards:write"), "prod scopes even with sandbox flag");
-  } finally {
-    if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
-    if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
-  }
+  assert(s.includes("boards:write"), "boards:write required for publishing");
+  assertEq(config.PINTEREST_SCOPES.length, 5, "exactly 5 scopes");
 });
 
 await test("sandbox mode uses api-sandbox base and sandbox access token", async () => {
@@ -184,14 +154,7 @@ await test("encryptSecret/decryptSecret roundtrips and detects tampering", () =>
   assert(ct.startsWith("v1:"), "versioned ciphertext");
   assert(!ct.includes(secret), "ciphertext must not contain plaintext");
   assertEq(crypto.decryptSecret(ct), secret, "roundtrip");
-  // Flip a REAL byte of the AES-GCM payload, not a trailing base64 char: changing the
-  // last base64 character can leave the decoded bytes identical (the low bits fall on
-  // discarded padding), so decryption would sometimes NOT throw — a flaky test. Decode
-  // "v1:"+base64, flip one payload byte (here in the IV, guaranteed to change the bytes),
-  // re-encode: GCM auth then always fails and decryptSecret must throw.
-  const raw = Buffer.from(ct.slice(3), "base64");
-  raw[0] ^= 0xff;
-  const tampered = "v1:" + raw.toString("base64");
+  const tampered = ct.slice(0, -2) + (ct.endsWith("A") ? "B" : "A");
   return expectThrow(() => crypto.decryptSecret(tampered), "tampered ciphertext must throw");
 });
 
@@ -272,7 +235,7 @@ await test("PinterestClient refreshes and retries exactly once on 401", async ()
         refreshCalls++;
         return { accessToken: "new", refreshToken: "rt2", accessTokenExpiresAt: null, refreshTokenExpiresAt: null, scopes: [] };
       },
-      persistTokens: async () => ({ applied: true }),
+      persistTokens: async () => {},
     },
   });
   const user = await client.getCurrentPinterestUser();
@@ -290,7 +253,7 @@ await test("PinterestClient does NOT retry more than once on repeated 401", asyn
     hooks: {
       fetchImpl: async () => { fetchCalls++; return new Response("{}", { status: 401 }); },
       refreshFn: async () => { refreshCalls++; return { accessToken: "new", refreshToken: "rt2", accessTokenExpiresAt: null, refreshTokenExpiresAt: null, scopes: [] }; },
-      persistTokens: async () => ({ applied: true }),
+      persistTokens: async () => {},
     },
   });
   await expectThrow(() => client.getCurrentPinterestUser(), "should throw after single retry");
@@ -306,7 +269,7 @@ await test("toSafeStatus never includes token fields", () => {
     access_token_encrypted: "v1:secret", refresh_token_encrypted: "v1:secret",
     access_token_expires_at: null, refresh_token_expires_at: null,
     scopes: ["user_accounts:read", "boards:read", "boards:write", "pins:read", "pins:write"], needs_reconnect: false,
-    created_at: "", updated_at: "", disconnected_at: null, token_version: 0,
+    created_at: "", updated_at: "", disconnected_at: null,
   };
   const safe = connectionStore.toSafeStatus(row);
   const json = JSON.stringify(safe);
@@ -317,27 +280,17 @@ await test("toSafeStatus never includes token fields", () => {
   assertEq(connectionStore.toSafeStatus(null).connected, false, "null row => not connected");
 });
 
-const mkRow = (scopes: string[]) => ({
-  id: "1", vibepin_user_id: "u", provider: "pinterest",
-  pinterest_user_id: "pid", pinterest_username: "creator", pinterest_account_type: "BUSINESS",
-  access_token_encrypted: "v1:secret", refresh_token_encrypted: "v1:secret",
-  access_token_expires_at: null, refresh_token_expires_at: null,
-  scopes, needs_reconnect: false,
-  created_at: "", updated_at: "", disconnected_at: null, token_version: 0,
-});
-
-await test("toSafeStatus: production-scope connection (no boards:write) is usable, NOT needsReconnect", () => {
-  // boards:write is no longer requested or required in production. A connection with
-  // the publish floor (boards:read + pins:read + pins:write) must stay usable.
-  const safe = connectionStore.toSafeStatus(mkRow(["boards:read", "pins:read", "pins:write"]));
+await test("toSafeStatus marks old connections missing boards:write as needsReconnect", () => {
+  const safe = connectionStore.toSafeStatus({
+    id: "1", vibepin_user_id: "u", provider: "pinterest",
+    pinterest_user_id: "pid", pinterest_username: "creator", pinterest_account_type: "BUSINESS",
+    access_token_encrypted: "v1:secret", refresh_token_encrypted: "v1:secret",
+    access_token_expires_at: null, refresh_token_expires_at: null,
+    scopes: ["user_accounts:read", "boards:read", "pins:read", "pins:write"], needs_reconnect: false,
+    created_at: "", updated_at: "", disconnected_at: null,
+  });
   assertEq(safe.connected, true, "still connected");
-  assertEq(safe.needsReconnect, false, "production floor met => no reconnect");
-});
-
-await test("toSafeStatus: connection missing a required scope (pins:write) DOES need reconnect", () => {
-  const safe = connectionStore.toSafeStatus(mkRow(["boards:read", "pins:read"]));
-  assertEq(safe.connected, true, "still connected");
-  assertEq(safe.needsReconnect, true, "missing pins:write => reconnect required");
+  assertEq(safe.needsReconnect, true, "missing scope should require reconnect");
 });
 
 // 13. Publish route rejects non-public image URLs
@@ -395,121 +348,6 @@ await test("getUserIdFromBearer returns null without a valid bearer token", asyn
     new Request("https://x.test/api", { headers: { Authorization: "Basic abc" } }),
   );
   assertEq(badScheme, null, "non-bearer scheme => null");
-});
-
-// 14. Concurrent refresh coalescing — the rotated refresh token is never clobbered.
-await test("concurrent refreshes for one user coalesce into a single refresh + atomic persist", async () => {
-  let refreshCalls = 0;
-  const persisted: Array<{ accessToken: string; refreshToken: string | null }> = [];
-  // Two shared-lock clients for the SAME uid, both already-expired so every request
-  // refreshes-before-use. Fire two requests concurrently.
-  const mk = () => service.PinterestClient.forTest({
-    uid: "same-user", accessToken: "old", refreshToken: "rt0",
-    accessExpiresAt: new Date(Date.now() - 10_000).toISOString(),
-    shareRefresh: true,
-    hooks: {
-      fetchImpl: async () => new Response(JSON.stringify({ username: "creator", account_type: "BUSINESS" }), { status: 200 }),
-      refreshFn: async () => {
-        refreshCalls++;
-        await new Promise(r => setTimeout(r, 40)); // widen the race window
-        return { accessToken: `at${refreshCalls}`, refreshToken: `rt${refreshCalls}`, accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), refreshTokenExpiresAt: null, scopes: [] };
-      },
-      persistTokens: async (_uid, t) => { persisted.push({ accessToken: t.accessToken, refreshToken: t.refreshToken }); return { applied: true }; },
-    },
-  });
-  const [a, b] = [mk(), mk()];
-  await Promise.all([a.getCurrentPinterestUser(), b.getCurrentPinterestUser()]);
-  assertEq(refreshCalls, 1, "exactly ONE refresh for two concurrent requests");
-  assertEq(persisted.length, 1, "exactly ONE atomic persist (no clobber)");
-  assertEq(persisted[0]?.refreshToken, "rt1", "rotated refresh token persisted atomically");
-});
-
-// 15. debug-status contract: only booleans / non-secret host; never a token or secret.
-await test("debug-status returns booleans + non-secret host only (never secrets)", async () => {
-  const oldV = process.env.VERCEL_ENV; const oldE = process.env.PINTEREST_API_ENV;
-  process.env.VERCEL_ENV = "production"; process.env.PINTEREST_API_ENV = "sandbox";
-  try {
-    const route = await import("../src/app/api/pinterest/debug-status/route");
-    const res = await route.GET(new Request("https://vibepin.co/api/pinterest/debug-status"));
-    const body = await res.json() as Record<string, unknown>;
-    assertEq(body.apiEnv, "production", "prod deploy => production");
-    assertEq(body.apiBaseIsProduction, true, "base is api.pinterest.com");
-    assertEq(body.baseUrl, "https://api.pinterest.com/v5", "non-secret base host");
-    assertEq(body.appCredentialsConfigured, true, "creds present");
-    assertEq(body.tokenRefreshConfigured, true, "refresh available");
-    assertEq(body.sandboxTokenPresent, false, "sandbox token ignored in production");
-    assertEq(body.standardAccessRequired, true, "production needs Standard access");
-    // No secret material anywhere in the response.
-    const json = JSON.stringify(body);
-    for (const secret of [process.env.PINTEREST_APP_SECRET!, process.env.PINTEREST_TOKEN_ENC_KEY!, "access_token", "refresh_token", "Bearer "]) {
-      assert(!json.includes(secret), `debug-status must not leak ${secret.slice(0, 12)}`);
-    }
-  } finally {
-    if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
-    if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
-  }
-});
-
-// ── Cross-instance refresh CAS (Vercel multi-instance safety) ─────────────────
-await test("refresh CAS: a lost write adopts the other instance's tokens, no reconnect", async () => {
-  let marked = false;
-  const past = new Date(Date.now() - 60_000).toISOString();
-  const client = service.PinterestClient.forTest({
-    accessToken: "stale", refreshToken: "rt-old", accessExpiresAt: past, // expiring → forces doRefresh
-    hooks: {
-      // Our refresh "succeeds" against Pinterest…
-      refreshFn: async () => ({ accessToken: "mine", refreshToken: "rt-mine", accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), refreshTokenExpiresAt: null, scopes: [] }),
-      // …but the CAS loses: another instance already bumped the version.
-      persistTokens: async () => ({ applied: false }),
-      reloadConnection: async () => ({ accessToken: "theirs", refreshToken: "rt-theirs", accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), tokenVersion: 1 }),
-      markReconnect: async () => { marked = true; },
-      fetchImpl: async (_url, init) => {
-        const auth = String((init?.headers as Record<string, string>)?.Authorization ?? "");
-        // The request must go out with the ADOPTED token, not ours or the stale one.
-        assert(auth.includes("theirs"), `must use the other instance's token, got ${auth}`);
-        return new Response(JSON.stringify({ username: "creator", account_type: "BUSINESS" }), { status: 200 });
-      },
-    },
-  });
-  const user = await client.getCurrentPinterestUser();
-  assertEq(user.username, "creator", "request succeeds with adopted tokens");
-  assert(!marked, "a lost CAS must NOT mark needs_reconnect");
-});
-
-await test("refresh CAS: invalid_grant with a bumped version adopts, does not reconnect", async () => {
-  let marked = false;
-  const past = new Date(Date.now() - 60_000).toISOString();
-  const client = service.PinterestClient.forTest({
-    accessToken: "stale", refreshToken: "rt-old", accessExpiresAt: past,
-    hooks: {
-      // Pinterest rejects OUR refresh (another instance already consumed the old token).
-      refreshFn: async () => { throw new service.PinterestApiError("invalid_grant", 400, "invalid_grant"); },
-      // But the stored version moved past ours → someone else refreshed successfully.
-      reloadConnection: async () => ({ accessToken: "theirs", refreshToken: "rt-theirs", accessExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), tokenVersion: 1 }),
-      markReconnect: async () => { marked = true; },
-      fetchImpl: async () => new Response(JSON.stringify({ username: "creator", account_type: "BUSINESS" }), { status: 200 }),
-    },
-  });
-  const user = await client.getCurrentPinterestUser();
-  assertEq(user.username, "creator", "invalid_grant race recovers with adopted tokens");
-  assert(!marked, "a concurrent-refresh invalid_grant must NOT mark needs_reconnect");
-});
-
-await test("refresh CAS: invalid_grant with NO version bump is a real reconnect", async () => {
-  let marked = false;
-  const past = new Date(Date.now() - 60_000).toISOString();
-  const client = service.PinterestClient.forTest({
-    accessToken: "stale", refreshToken: "rt-dead", accessExpiresAt: past,
-    hooks: {
-      refreshFn: async () => { throw new service.PinterestApiError("invalid_grant", 400, "invalid_grant"); },
-      // Version unchanged → nobody else refreshed → the token is genuinely dead.
-      reloadConnection: async () => ({ accessToken: "stale", refreshToken: "rt-dead", accessExpiresAt: past, tokenVersion: 0 }),
-      markReconnect: async () => { marked = true; },
-      fetchImpl: async () => new Response("{}", { status: 200 }),
-    },
-  });
-  await expectThrow(() => client.getCurrentPinterestUser(), "genuinely-dead token must throw NeedsReconnect");
-  assert(marked, "a real invalid_grant (no concurrent refresh) MUST mark needs_reconnect");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

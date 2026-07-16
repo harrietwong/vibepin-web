@@ -52,6 +52,7 @@ const en = {
   "nav.support": "Support Tickets",
   "nav.generationLogs": "Generation Logs",
   "nav.visualReview": "Visual Review",
+  "nav.creativeIntelligence": "Creative Intelligence",
 
   "data.badge": "Super Admin only · Internal",
   "data.title": "Data Freshness & Inventory",
@@ -83,6 +84,7 @@ const zh: Record<keyof typeof en, string> = {
   "nav.support": "支持工单",
   "nav.generationLogs": "生成日志",
   "nav.visualReview": "视觉审核",
+  "nav.creativeIntelligence": "创意智能",
 
   "data.badge": "仅限超级管理员 · 内部",
   "data.title": "数据新鲜度与库存",

@@ -39,6 +39,13 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 99px; }
 
+/* The /app shell locks html/body to overflow:hidden and scrolls internally via
+   its own compact scroll containers (which keep the 5px default above), so
+   this only affects the page-level scrollbar on public marketing pages
+   (landing, privacy, terms, etc.) — those scroll the document normally and
+   the 5px default was too narrow to grab with a mouse. */
+body::-webkit-scrollbar { width: 12px; }
+
 *:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }

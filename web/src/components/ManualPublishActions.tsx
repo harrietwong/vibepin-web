@@ -27,6 +27,7 @@
 import { useState } from "react";
 import { Download, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 export interface ManualPublishProps {
   imageUrl:        string | null;
@@ -111,6 +112,7 @@ export function ManualPublishActions({
   onMarkPublished,
   compact = false,
 }: ManualPublishProps) {
+  const { t: tr } = useLocale();
   const [downloading, setDownloading] = useState(false);
   const [marking,     setMarking]     = useState(false);
   const [marked,      setMarked]      = useState(false);
@@ -119,7 +121,7 @@ export function ManualPublishActions({
 
   async function handleManualPublish() {
     if (!canDownload) {
-      toast.error("No image or keyword available.");
+      toast.error(tr("manualPublish.toast.noImageOrKeyword"));
       return;
     }
     setDownloading(true);
@@ -130,14 +132,14 @@ export function ManualPublishActions({
         await navigator.clipboard.writeText(text);
       } catch {
         // Clipboard API unavailable — show text in toast as fallback
-        toast.info("Copy this manually:", { description: text.slice(0, 120) + "…", duration: 8000 });
+        toast.info(tr("manualPublish.toast.copyManually"), { description: text.slice(0, 120) + "…", duration: 8000 });
         return;
       }
-      toast.success("Image downloaded & text copied. Ready to paste on Pinterest!", {
+      toast.success(tr("manualPublish.toast.publishSuccess"), {
         duration: 5000,
       });
     } catch (err) {
-      toast.error("Export failed: " + String(err));
+      toast.error(tr("manualPublish.toast.exportFailedPrefix") + String(err));
     } finally {
       setDownloading(false);
     }
@@ -149,9 +151,9 @@ export function ManualPublishActions({
     try {
       await onMarkPublished();
       setMarked(true);
-      toast.success("Marked as published!");
+      toast.success(tr("manualPublish.toast.markedPublished"));
     } catch (err) {
-      toast.error("Failed to update status: " + String(err));
+      toast.error(tr("manualPublish.toast.markPublishedFailedPrefix") + String(err));
     } finally {
       setMarking(false);
     }
@@ -164,7 +166,7 @@ export function ManualPublishActions({
         className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
         style={{ background: "rgba(16,185,129,0.08)", color: "#10B981" }}
       >
-        <CheckCircle2 className="w-2.5 h-2.5" /> Published
+        <CheckCircle2 className="w-2.5 h-2.5" /> {tr("manualPublish.badge.published")}
       </span>
     );
   }
@@ -178,7 +180,7 @@ export function ManualPublishActions({
           onClick={handleManualPublish}
           disabled={downloading || !canDownload}
           className="rounded-full p-1.5 hover:bg-gray-100 transition-colors disabled:opacity-40"
-          title="Download image & copy caption"
+          title={tr("manualPublish.compact.downloadTitle")}
         >
           {downloading
             ? <Loader2 className="w-3.5 h-3.5 text-[#C026D3] animate-spin" />
@@ -190,7 +192,7 @@ export function ManualPublishActions({
             onClick={handleMarkPublished}
             disabled={marking}
             className="rounded-full p-1.5 hover:bg-gray-100 transition-colors disabled:opacity-40"
-            title="Mark as published"
+            title={tr("manualPublish.compact.markPublishedTitle")}
           >
             {marking
               ? <Loader2 className="w-3.5 h-3.5 text-[#10B981] animate-spin" />
@@ -218,7 +220,7 @@ export function ManualPublishActions({
         {downloading
           ? <Loader2 className="w-3 h-3 animate-spin" />
           : <Download className="w-3 h-3" />}
-        Manual Publish
+        {tr("manualPublish.button.manualPublish")}
       </button>
 
       {onMarkPublished && (
@@ -232,7 +234,7 @@ export function ManualPublishActions({
           {marking
             ? <Loader2 className="w-3 h-3 animate-spin" />
             : <CheckCircle2 className="w-3 h-3" />}
-          Mark as Published
+          {tr("manualPublish.button.markAsPublished")}
         </button>
       )}
     </div>

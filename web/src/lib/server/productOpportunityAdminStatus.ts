@@ -1,3 +1,5 @@
+import { excludeRetired } from "@/lib/productTopTiers";
+
 export type FreshnessStatus = "fresh" | "stale" | "unknown";
 
 export type ProductDataFreshness = {
@@ -237,12 +239,16 @@ export async function getProductOpportunityAdminStatus(): Promise<ProductOpportu
   const last48h = isoHoursAgo(48);
   const last5d = isoHoursAgo(24 * 5);
 
-  const productTotalQuery = db.from("pin_products").select("id", { count: "exact", head: true });
-  const product24Query = db.from("pin_products").select("id", { count: "exact", head: true }).gte("created_at", last24h);
-  const product48Query = db.from("pin_products").select("id", { count: "exact", head: true }).gte("created_at", last48h);
-  const product5dQuery = db.from("pin_products").select("id", { count: "exact", head: true }).gte("created_at", last5d);
-  const latestCreatedQuery = db.from("pin_products").select("created_at").order("created_at", { ascending: false }).limit(1);
-  const latestScrapedQuery = db.from("pin_products").select("scraped_at").not("scraped_at", "is", null).order("scraped_at", { ascending: false }).limit(1);
+  // Soft-retired rows (lifecycle_status='retired', migrate_v46) are excluded from every
+  // pin_products counter here: this is the Product Opportunity READINESS signal, and
+  // Product Opportunity reads pin_products directly — a row that can never surface must
+  // not count toward "how much product supply do we have".
+  const productTotalQuery = excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }));
+  const product24Query = excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).gte("created_at", last24h));
+  const product48Query = excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).gte("created_at", last48h));
+  const product5dQuery = excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).gte("created_at", last5d));
+  const latestCreatedQuery = excludeRetired(db.from("pin_products").select("created_at")).order("created_at", { ascending: false }).limit(1);
+  const latestScrapedQuery = excludeRetired(db.from("pin_products").select("scraped_at").not("scraped_at", "is", null)).order("scraped_at", { ascending: false }).limit(1);
 
   const scoreTotalQuery = db.from("product_scores").select("id", { count: "exact", head: true });
   const score24Query = db.from("product_scores").select("id", { count: "exact", head: true }).gte("scored_at", last24h);

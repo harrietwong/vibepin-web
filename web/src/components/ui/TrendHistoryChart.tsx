@@ -4,6 +4,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 export type TrendPoint = { date: string; value: number };
 
@@ -52,10 +53,11 @@ export function TrendHistoryChart({
   trendHistory: TrendPoint[] | null | undefined;
   label?: string;
 }) {
+  const { t: tr } = useLocale();
   if (!trendHistory || trendHistory.length < 6) {
     return (
       <div className="flex items-center justify-center py-4 text-[11px] text-gray-400">
-        No trend data available
+        {tr("trendChart.noData")}
       </div>
     );
   }
@@ -79,14 +81,14 @@ export function TrendHistoryChart({
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
-            {label ?? "Trend Direction"}
+            {label ?? tr("trendChart.defaultLabel")}
           </span>
           <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
             style={{
               background: direction === "rising" ? "rgba(5,150,105,0.1)" : "rgba(220,38,38,0.1)",
               color: dirColor,
             }}>
-            {direction === "rising" ? "↑ Rising" : "↓ Falling"}
+            {direction === "rising" ? tr("trendChart.rising") : tr("trendChart.falling")}
           </span>
         </div>
         <span className="text-[10px] font-bold tabular-nums" style={{ color: dirColor }}>
@@ -118,7 +120,7 @@ export function TrendHistoryChart({
                   borderRadius: 6, padding: "4px 8px", fontSize: 10,
                 }}>
                   <p style={{ color: "#374151", fontWeight: 600 }}>{formatDate(pt.date)}</p>
-                  <p style={{ color: "#E60023" }}>Index: {pt.value}</p>
+                  <p style={{ color: "#E60023" }}>{tr("trendChart.tooltip.indexPrefix")}{pt.value}</p>
                 </div>
               );
             }}
@@ -136,8 +138,8 @@ export function TrendHistoryChart({
       </ResponsiveContainer>
 
       {/* Footer note */}
-      <p className="text-[9px] text-gray-300 mt-0.5">
-        Estimated from YoY/MoM growth · not raw search counts
+      <p className="text-[9px] text-gray-400 mt-0.5">
+        {tr("trendChart.footerNote")}
       </p>
     </div>
   );

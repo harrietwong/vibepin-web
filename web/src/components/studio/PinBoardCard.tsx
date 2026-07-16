@@ -18,7 +18,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
-import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle, ImageOff } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { getSourceBadge, getStatusBadge, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
@@ -29,10 +29,6 @@ import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boar
 import { track } from "@/lib/analytics";
 
 const PERSIST_DEBOUNCE = 400;
-// Hover → auto-expand delay (ms). Long enough that a mouse merely passing over the
-// card while scrolling/scanning the board never triggers an expand; short enough
-// that a deliberate pause reads as intent. Mirrors common hover-intent UX timings.
-const HOVER_EXPAND_DELAY = 400;
 
 function draftToFields(d: PinDraft): PinFieldsValue {
   return {
@@ -176,21 +172,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // never leaks across drafts.
   const [hoveredKw, setHoveredKw] = useState<string | null>(null);
   const [copiedKw, setCopiedKw] = useState<string | null>(null);
-  // Image that fails to load (dead/expired URL) must NOT leave the container's bare
-  // surface colour showing as a solid block — render an explicit "unavailable" state.
-  const [imgError, setImgError] = useState(false);
-  useEffect(() => { setImgError(false); }, [draft.imageUrl]);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selfEdit = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<PinFieldsValue>(fields);
-  // Hover-to-expand (compact card only): a deliberate pause over the card auto-opens
-  // the Quick Edit state, same as clicking Edit. Mouse-out never auto-collapses (the
-  // user may be mid-edit) — collapsing stays on the explicit collapse control / picking
-  // another card. Cleared on unmount and on every re-trigger to avoid a stray expand
-  // firing after the card is gone or already active.
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
 
   useEffect(() => {
     if (selfEdit.current) { selfEdit.current = false; return; }
@@ -322,21 +307,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const failed = lifecycle === "failed";
   const scheduled = lifecycle === "scheduled";
   const generating = lifecycle === "generating";
-
-  // Hover intent (compact card only): schedule an expand after HOVER_EXPAND_DELAY; a
-  // quick pass-over (mouse leaves before the timer fires) cancels it via
-  // onCardMouseLeave, so scanning/scrolling across many cards never triggers one.
-  // Guarded on `active` (nothing to do — already expanded) and `generating` (no
-  // fields to edit yet, and hover-expanding a placeholder card would be surprising).
-  const onCardMouseEnter = useCallback(() => {
-    if (active || generating) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => { hoverTimer.current = null; expand(); }, HOVER_EXPAND_DELAY);
-  }, [active, generating, expand]);
-  const onCardMouseLeave = useCallback(() => {
-    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
-  }, []);
-
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
   // remotePinId only for legacy drafts published before remotePinUrl existed.
   const pinUrl = draft.remotePinUrl || (draft.remotePinId ? `https://www.pinterest.com/pin/${draft.remotePinId}/` : "");
@@ -409,22 +379,14 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   if (!active) {
     return (
       <div data-testid="pin-board-card" data-active="false" data-source={draft.source} data-lifecycle={lifecycle}
-        onMouseEnter={onCardMouseEnter} onMouseLeave={onCardMouseLeave}
         style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
         <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 5", background: BUI.surface3 }}>
-          {draft.imageUrl && !imgError ? (
+          {draft.imageUrl ? (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
-              onError={() => setImgError(true)}
               style={{ width: "100%", height: "100%", objectFit: "cover", display: "block",
                 opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1,
                 filter: hiddenByQuality ? "blur(10px)" : "none" }} />
-          ) : draft.imageUrl && imgError ? (
-            // Dead/expired image URL — centered icon on the neutral surface, matching the
-            // existing studio thumbnail fallback (PinDetailsDrawer). Never a bare colour block.
-            <div data-testid="card-image-unavailable" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <ImageOff style={{ width: 28, height: 28, color: BUI.textMuted }} />
-            </div>
           ) : (
             // Scratch-mode Generating placeholder — no source image yet.
             <div data-testid="card-generating-placeholder" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -588,15 +550,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)", gridColumn: "span 2", maxWidth: 760 }}>
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
         <div style={{ width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
-          {draft.imageUrl && !imgError ? (
+          {draft.imageUrl ? (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
-              onError={() => setImgError(true)}
               style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-          ) : draft.imageUrl && imgError ? (
-            <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <ImageOff style={{ width: 18, height: 18, color: BUI.textMuted }} />
-            </div>
           ) : (
             <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: BUI.textMuted, fontSize: 10, fontWeight: 700 }}>{tr("studioBoard.card.noImage")}</div>
           )}

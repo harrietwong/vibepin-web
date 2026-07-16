@@ -8,6 +8,7 @@ import { CheckCircle2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { markDataReady } from "@/lib/navTiming";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 import {
   loadHistory, mergeHistoryEntries,
   fetchGenerationsFromDb,
@@ -99,13 +100,14 @@ function addUrlsToPlan(entry: HistoryEntry, urls: string[]) {
 
 // ── Generation status badge ───────────────────────────────────────────────────
 function GenStatusBadge({ status }: { status: GenerationStatus }) {
+  const { t: tr } = useLocale();
   const cfg = ({
-    pending:     { label: "Pending",      color: "var(--app-text-sec)", bg: "rgba(100,116,139,0.08)" },
-    completed:   { label: "Completed",    color: "#059669", bg: "rgba(5,150,105,0.08)"   },
-    partial:     { label: "Partial",      color: "#D97706", bg: "rgba(217,119,6,0.08)"   },
-    failed:      { label: "Failed",       color: "#EF4444", bg: "rgba(239,68,68,0.08)"   },
-    running:     { label: "In progress",  color: "#C026D3", bg: "rgba(192,38,211,0.08)"  },
-    interrupted: { label: "Interrupted",  color: "var(--app-text-muted)", bg: "rgba(148,163,184,0.1)"  },
+    pending:     { label: tr("history.status.pending"),     color: "var(--app-text-sec)", bg: "rgba(100,116,139,0.08)" },
+    completed:   { label: tr("history.status.completed"),   color: "#059669", bg: "rgba(5,150,105,0.08)"   },
+    partial:     { label: tr("history.status.partial"),     color: "#D97706", bg: "rgba(217,119,6,0.08)"   },
+    failed:      { label: tr("history.status.failed"),      color: "#EF4444", bg: "rgba(239,68,68,0.08)"   },
+    running:     { label: tr("history.status.running"),     color: "#C026D3", bg: "rgba(192,38,211,0.08)"  },
+    interrupted: { label: tr("history.status.interrupted"), color: "var(--app-text-muted)", bg: "rgba(148,163,184,0.1)"  },
   } as Record<GenerationStatus, { label: string; color: string; bg: string }>)[status]
     ?? { label: status, color: "var(--app-text-sec)", bg: "rgba(100,116,139,0.08)" };
   return (
@@ -124,16 +126,18 @@ function GenStatusBadge({ status }: { status: GenerationStatus }) {
 }
 
 // ── Error type → user-facing copy ────────────────────────────────────────────
-function getErrorCopy(errorType: GenerationErrorType | undefined): { label: string; detail: string } {
+// Takes `tr` as a parameter (not a hook itself) since this is a plain function,
+// not a component — callers must be components that already called useLocale().
+function getErrorCopy(errorType: GenerationErrorType | undefined, tr: (key: MessageKey) => string): { label: string; detail: string } {
   switch (errorType) {
-    case "rate_limited":       return { label: "Rate limited",       detail: "The image API was temporarily rate limited. Try regenerating." };
-    case "safety_blocked":     return { label: "Safety blocked",     detail: "The model blocked this request. Try a different reference image or simplify the prompt." };
-    case "image_load_failed":  return { label: "Product images failed", detail: "Product images could not be downloaded. Re-upload or use different URLs." };
-    case "model_returned_text":return { label: "Model returned text", detail: "The model returned a text description instead of an image. Try fewer inputs or a simpler prompt." };
-    case "api_auth_error":     return { label: "Auth error",          detail: "Check your LINAPI_KEY in web/.env.local." };
-    case "api_payload_error":  return { label: "Payload rejected",    detail: "Try fewer products or a shorter prompt." };
-    case "api_server_error":   return { label: "API server error",    detail: "The image API returned a server error. Try again in a few minutes." };
-    default:                   return { label: "Unknown error",       detail: "Check the backend terminal for details." };
+    case "rate_limited":       return { label: tr("history.error.rateLimited.label"),      detail: tr("history.error.rateLimited.detail") };
+    case "safety_blocked":     return { label: tr("history.error.safetyBlocked.label"),     detail: tr("history.error.safetyBlocked.detail") };
+    case "image_load_failed":  return { label: tr("history.error.imageLoadFailed.label"),   detail: tr("history.error.imageLoadFailed.detail") };
+    case "model_returned_text":return { label: tr("history.error.modelReturnedText.label"), detail: tr("history.error.modelReturnedText.detail") };
+    case "api_auth_error":     return { label: tr("history.error.apiAuthError.label"),       detail: tr("history.error.apiAuthError.detail") };
+    case "api_payload_error":  return { label: tr("history.error.apiPayloadError.label"),    detail: tr("history.error.apiPayloadError.detail") };
+    case "api_server_error":   return { label: tr("history.error.apiServerError.label"),     detail: tr("history.error.apiServerError.detail") };
+    default:                   return { label: tr("history.error.unknown.label"),            detail: tr("history.error.unknown.detail") };
   }
 }
 
@@ -170,9 +174,10 @@ function getFailedRefUrls(entry: HistoryEntry): string[] {
 
 // ── Prompt snapshot component ─────────────────────────────────────────────────
 function PromptSnapshot({ excerpt, full }: { excerpt?: string; full?: string }) {
+  const { t: tr } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const text = full ?? excerpt;
-  if (!text) return <p style={{ margin: 0, fontSize: "11px", color: "var(--app-text-muted)" }}>Not available</p>;
+  if (!text) return <p style={{ margin: 0, fontSize: "11px", color: "var(--app-text-muted)" }}>{tr("history.notAvailable")}</p>;
   const preview = text.slice(0, 140);
   const hasMore = text.length > 140;
   return (
@@ -183,7 +188,7 @@ function PromptSnapshot({ excerpt, full }: { excerpt?: string; full?: string }) 
       {hasMore && (
         <button type="button" onClick={() => setExpanded(v => !v)}
           style={{ fontSize: "10px", color: "#7C3AED", fontWeight: 600, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-          {expanded ? "Collapse ↑" : "View full prompt ↓"}
+          {expanded ? tr("history.prompt.collapse") : tr("history.prompt.viewFull")}
         </button>
       )}
     </div>
@@ -192,6 +197,7 @@ function PromptSnapshot({ excerpt, full }: { excerpt?: string; full?: string }) 
 
 // ── Session detail modal ──────────────────────────────────────────────────────
 function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => void }) {
+  const { t: tr } = useLocale();
   const [planUrls,     setPlanUrls]     = useState<Set<string>>(() => {
     const pins = pinStore.getSessionPins(entry.id);
     return new Set(pins.filter(p => p.status !== "generated").map(p => p.imageUrl));
@@ -201,7 +207,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
   const [detailsDraft, setDetailsDraft] = useState<PinDraft | null>(null);
 
   const allPins       = entry.groups.flatMap((g: PinGroup) => g.images);
-  const title         = entry.keyword ? capWords(entry.keyword) : "Generated Session";
+  const title         = entry.keyword ? capWords(entry.keyword) : tr("history.generatedSession");
   const added         = allPins.filter(u => planUrls.has(u)).length;
   const notAdded      = allPins.filter(u => !planUrls.has(u));
   const genStatus     = deriveEntryStatus(entry);
@@ -307,10 +313,10 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                 {fmtDate(entry.savedAt)}
                 {" · "}<strong style={{ color: genStatus === "completed" ? "#059669" : genStatus === "partial" ? "#D97706" : isRunning ? "#C026D3" : "var(--app-text-muted)" }}>
                   {isRunning
-                    ? `${allPins.length} / ${expectedTotal} pins generating…`
-                    : `${allPins.length} of ${expectedTotal} pins generated`}
+                    ? tr("history.modal.generatingProgress").replace("{a}", String(allPins.length)).replace("{b}", String(expectedTotal))
+                    : tr("history.modal.pinsGenerated").replace("{a}", String(allPins.length)).replace("{b}", String(expectedTotal))}
                 </strong>
-                {!isRunning && allPins.length > 0 && ` · ${added}/${allPins.length} added to plan`}
+                {!isRunning && allPins.length > 0 && tr("history.modal.addedToPlanSuffix").replace("{a}", String(added)).replace("{b}", String(allPins.length))}
               </p>
             </div>
             <button type="button" onClick={onClose}
@@ -324,7 +330,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
             <div style={{ marginBottom:8 }}>
               <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
                 <span style={{ fontSize:"11px",color:"#C026D3",fontWeight:600 }}>
-                  Generating {allPins.length} / {expectedTotal} pins — you can leave this page
+                  {tr("history.modal.generatingLeaveHint").replace("{a}", String(allPins.length)).replace("{b}", String(expectedTotal))}
                 </span>
                 <span style={{ fontSize:"10px",color:"var(--app-text-muted)" }}>
                   {Math.min(100, Math.round((allPins.length / expectedTotal) * 100))}%
@@ -346,17 +352,17 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
             {isRunning ? (
               // Running: no add-to-plan yet
               <span style={{ fontSize:"11px",color:"var(--app-text-muted)",padding:"5px 0" }}>
-                Generation in progress — pins will appear here as they complete.
+                {tr("history.modal.runningHint")}
               </span>
             ) : isInterrupted && allPins.length === 0 ? (
               // Interrupted with 0 pins: only retry
               <>
                 <Link href={retryUrl}
                   style={{ padding:"5px 14px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"11px",fontWeight:700,textDecoration:"none" }}>
-                  ↺ Retry generation
+                  {tr("history.modal.retryGeneration")}
                 </Link>
                 <span style={{ fontSize:"11px",color:"var(--app-text-muted)",alignSelf:"center" }}>
-                  Page was refreshed or connection was lost during generation.
+                  {tr("history.modal.interruptedHint")}
                 </span>
               </>
             ) : selectedUrls.size > 0 ? (
@@ -369,11 +375,11 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                     addToPlan(toAdd);
                   }}
                   style={{ padding:"5px 14px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"11px",fontWeight:700,cursor:"pointer" }}>
-                  Add {selectedUrls.size} selected to Plan
+                  {tr("history.modal.addSelectedToPlan").replace("{n}", String(selectedUrls.size))}
                 </button>
                 <button type="button" onClick={() => setSelectedUrls(new Set())}
                   style={{ padding:"5px 12px",borderRadius:8,border:"1px solid var(--app-border)",background:"var(--app-surface)",color:"var(--app-text-muted)",fontSize:"11px",fontWeight:600,cursor:"pointer" }}>
-                  Clear
+                  {tr("history.modal.clear")}
                 </button>
               </>
             ) : (
@@ -386,29 +392,29 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                       addToPlan(notAdded);
                     }}
                     style={{ padding:"5px 14px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"11px",fontWeight:700,cursor:"pointer" }}>
-                    {added > 0 ? `Add remaining ${notAdded.length} to Plan` : "+ Add all to Plan"}
+                    {added > 0 ? tr("history.modal.addRemainingToPlan").replace("{n}", String(notAdded.length)) : tr("history.modal.addAllToPlan")}
                   </button>
                 ) : (
                   <Link href="/app/plan"
                     style={{ padding:"5px 14px",borderRadius:8,border:"1px solid rgba(5,150,105,0.3)",background:"rgba(5,150,105,0.06)",color:"#059669",fontSize:"11px",fontWeight:700,textDecoration:"none" }}>
-                    View in Weekly Plan →
+                    {tr("history.modal.viewInWeeklyPlan")}
                   </Link>
                 ))}
                 {/* Retry failed groups for partial/interrupted with some images */}
                 {(genStatus === "partial" || isInterrupted) && failedRefs.length > 0 && (
                   <Link href={retryUrl}
                     style={{ padding:"5px 14px",borderRadius:8,border:"1px solid rgba(217,119,6,0.3)",background:"rgba(217,119,6,0.06)",color:"#D97706",fontSize:"11px",fontWeight:700,textDecoration:"none" }}>
-                    ↺ Retry {failedRefs.length} failed group{failedRefs.length !== 1 ? "s" : ""}
+                    {tr(failedRefs.length !== 1 ? "history.modal.retryFailedGroupsPlural" : "history.modal.retryFailedGroups").replace("{n}", String(failedRefs.length))}
                   </Link>
                 )}
                 <Link href={studioUrl}
                   style={{ padding:"5px 14px",borderRadius:8,border:"none",background:"#7C3AED",color:"#fff",fontSize:"11px",fontWeight:700,textDecoration:"none",display:"flex",alignItems:"center",gap:5 }}>
-                  ✦ Create More from this setup
+                  {tr("history.modal.createMore")}
                 </Link>
                 {allPins.length > 0 && (
                   <button type="button" onClick={downloadAll}
                     style={{ padding:"5px 14px",borderRadius:8,border:"1px solid var(--app-border)",background:"var(--app-surface)",color:"var(--app-text-sec)",fontSize:"11px",fontWeight:600,cursor:"pointer" }}>
-                    ↓ Download all
+                    {tr("history.modal.downloadAll")}
                   </button>
                 )}
               </>
@@ -425,20 +431,20 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
             {/* Session Summary */}
             <div>
               <p style={{ margin:"0 0 8px",fontSize:"11px",fontWeight:800,color:"var(--app-text-sec)",textTransform:"uppercase",letterSpacing:"0.07em" }}>
-                Session Summary
+                {tr("history.modal.sessionSummary")}
               </p>
               <div style={{ display:"flex",flexDirection:"column",gap:5 }}>
                 {[
-                  ["Opportunity",    entry.opportunity ?? entry.keyword ?? "—"],
-                  ["Mode",           entry.mode === "product_led" ? "Product-led" : entry.mode === "plan" ? "Weekly plan" : entry.mode === "batch" ? "Batch" : "Keyword-led"],
-                  ["Status",         null as null],
-                  ["Expected",       `${expectedTotal} pin${expectedTotal !== 1 ? "s" : ""}`],
-                  ["Actual",         `${allPins.length} pin${allPins.length !== 1 ? "s" : ""}`],
-                  ["Images / ref",   entry.imagesPerRef ? String(entry.imagesPerRef) : "—"],
-                  ["Created",        fmtDate(entry.savedAt)],
-                ].map(([k, v]) => (
+                  ["Opportunity",    tr("history.modal.field.opportunity"), entry.opportunity ?? entry.keyword ?? "—"],
+                  ["Mode",           tr("history.modal.field.mode"), entry.mode === "product_led" ? tr("history.modal.mode.productLed") : entry.mode === "plan" ? tr("history.modal.mode.weeklyPlan") : entry.mode === "batch" ? tr("history.modal.mode.batch") : tr("history.modal.mode.keywordLed")],
+                  ["Status",         tr("history.modal.field.status"), null as null],
+                  ["Expected",       tr("history.modal.field.expected"), tr(expectedTotal !== 1 ? "history.modal.pinCountPlural" : "history.modal.pinCount").replace("{n}", String(expectedTotal))],
+                  ["Actual",         tr("history.modal.field.actual"), tr(allPins.length !== 1 ? "history.modal.pinCountPlural" : "history.modal.pinCount").replace("{n}", String(allPins.length))],
+                  ["Images / ref",   tr("history.modal.field.imagesPerRef"), entry.imagesPerRef ? String(entry.imagesPerRef) : "—"],
+                  ["Created",        tr("history.modal.field.created"), fmtDate(entry.savedAt)],
+                ].map(([k, kLabel, v]) => (
                   <div key={String(k)} style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8 }}>
-                    <span style={{ fontSize:"10px",color:"var(--app-text-muted)",flexShrink:0 }}>{k}</span>
+                    <span style={{ fontSize:"10px",color:"var(--app-text-muted)",flexShrink:0 }}>{kLabel}</span>
                     {k === "Status" ? (
                       <GenStatusBadge status={genStatus}/>
                     ) : (
@@ -454,7 +460,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
             {/* Products */}
             <div>
               <p style={{ margin:"0 0 8px",fontSize:"11px",fontWeight:800,color:"var(--app-text-sec)",textTransform:"uppercase",letterSpacing:"0.07em" }}>
-                Products ({displayProducts?.length ?? entry.productCount})
+                {tr("history.modal.products").replace("{n}", String(displayProducts?.length ?? entry.productCount))}
               </p>
               {displayProducts?.length ? (
                 <div style={{ display:"flex",flexDirection:"column",gap:5 }}>
@@ -491,8 +497,8 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
               ) : (
                 <p style={{ margin:0,fontSize:"11px",color:"var(--app-text-muted)" }}>
                   {entry.productCount > 0
-                    ? `${entry.productCount} product${entry.productCount !== 1 ? "s" : ""} used`
-                    : isLegacy ? "Not captured in this older session" : "No products used"}
+                    ? tr(entry.productCount !== 1 ? "history.modal.productsUsedPlural" : "history.modal.productsUsed").replace("{n}", String(entry.productCount))
+                    : isLegacy ? tr("history.modal.notCapturedLegacy") : tr("history.modal.noProductsUsed")}
                 </p>
               )}
             </div>
@@ -500,7 +506,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
             {/* References */}
             <div>
               <p style={{ margin:"0 0 8px",fontSize:"11px",fontWeight:800,color:"var(--app-text-sec)",textTransform:"uppercase",letterSpacing:"0.07em" }}>
-                References ({displayRefs?.length ?? (refUrls.length || entry.refCount)})
+                {tr("history.modal.references").replace("{n}", String(displayRefs?.length ?? (refUrls.length || entry.refCount)))}
               </p>
               {displayRefs && displayRefs.length > 0 ? (
                 <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
@@ -512,15 +518,15 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                       || ref.imageUrl?.startsWith("data:")
                       || ref.imageUrl?.startsWith("blob:");
                     const fmtLabel =
-                      isUpload         ? "Uploaded"     :
-                      vf === "on_body"       ? "On-body"      :
-                      vf === "mirror_selfie" ? "Mirror style"  :
-                      vf === "flat_lay"      ? "Flat lay"      :
-                      vf === "room_scene"    ? "Room scene"    :
-                      vf === "product_only"  ? "Product only"  : null;
+                      isUpload         ? tr("history.modal.refFormat.uploaded")     :
+                      vf === "on_body"       ? tr("history.modal.refFormat.onBody")      :
+                      vf === "mirror_selfie" ? tr("history.modal.refFormat.mirrorStyle")  :
+                      vf === "flat_lay"      ? tr("history.modal.refFormat.flatLay")      :
+                      vf === "room_scene"    ? tr("history.modal.refFormat.roomScene")    :
+                      vf === "product_only"  ? tr("history.modal.refFormat.productOnly")  : null;
                     const hpLabel =
-                      hp === "visible_person" ? "Person" :
-                      hp === "no_person"      ? "No person" : null;
+                      hp === "visible_person" ? tr("history.modal.refPresence.person") :
+                      hp === "no_person"      ? tr("history.modal.refPresence.noPerson") : null;
                     const badgeColor =
                       isUpload        ? "#059669" :
                       vf === "flat_lay" || vf === "product_only" || hp === "no_person" ? "#2563EB" :
@@ -532,7 +538,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                         <div style={{ position:"relative",flexShrink:0 }}>
                           <div style={{ width:40,height:56,borderRadius:6,overflow:"hidden",border:"1px solid var(--app-border)",background:"var(--app-surface-3)" }}>
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={displayUrl} alt={`Ref ${i+1}`}
+                            <img src={displayUrl} alt={tr("history.modal.refAlt").replace("{n}", String(i+1))}
                               style={{ width:"100%",height:"100%",objectFit:"cover" }}
                               onError={e => { e.currentTarget.style.opacity="0"; }}/>
                           </div>
@@ -559,8 +565,8 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
               ) : (
                 <p style={{ margin:0,fontSize:"11px",color:"var(--app-text-muted)" }}>
                   {entry.refCount > 0
-                    ? `${entry.refCount} reference${entry.refCount !== 1 ? "s" : ""} used`
-                    : isLegacy ? "Not captured in this older session" : "No references"}
+                    ? tr(entry.refCount !== 1 ? "history.modal.referencesUsedPlural" : "history.modal.referencesUsed").replace("{n}", String(entry.refCount))
+                    : isLegacy ? tr("history.modal.notCapturedLegacy") : tr("history.modal.noReferences")}
                 </p>
               )}
             </div>
@@ -568,19 +574,19 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
             {/* No text overlay */}
             <div style={{ padding:"8px 10px",borderRadius:8,background:"rgba(5,150,105,0.06)",border:"1px solid rgba(5,150,105,0.15)",display:"flex",alignItems:"center",gap:6 }}>
               <CheckCircle2 style={{ width:12,height:12,color:"#059669",flexShrink:0 }}/>
-              <span style={{ fontSize:"11px",color:"#059669",fontWeight:600 }}>No text overlay</span>
+              <span style={{ fontSize:"11px",color:"#059669",fontWeight:600 }}>{tr("history.modal.noTextOverlay")}</span>
             </div>
 
             {/* Prompt */}
             <div>
               <p style={{ margin:"0 0 6px",fontSize:"11px",fontWeight:800,color:"var(--app-text-sec)",textTransform:"uppercase",letterSpacing:"0.07em" }}>
-                Prompt Snapshot
+                {tr("history.modal.promptSnapshot")}
               </p>
               {displayPrompt ? (
                 <PromptSnapshot excerpt={displayPrompt.slice(0,140)} full={displayPrompt}/>
               ) : (
                 <p style={{ margin:0,fontSize:"11px",color:"var(--app-text-muted)" }}>
-                  {isLegacy ? "Not captured in this older session" : "Not available"}
+                  {isLegacy ? tr("history.modal.notCapturedLegacy") : tr("history.notAvailable")}
                 </p>
               )}
             </div>
@@ -594,7 +600,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
               <div style={{ marginBottom:14,padding:"10px 14px",borderRadius:8,background:"rgba(217,119,6,0.07)",border:"1px solid rgba(217,119,6,0.2)",display:"flex",alignItems:"center",gap:8 }}>
                 <span style={{ fontSize:"13px" }}>⚠</span>
                 <p style={{ margin:0,fontSize:"12px",color:"#92400E",fontWeight:600 }}>
-                  This session produced fewer pins than expected ({allPins.length} of {expectedTotal}).
+                  {tr("history.modal.partialWarning").replace("{a}", String(allPins.length)).replace("{b}", String(expectedTotal))}
                 </p>
               </div>
             )}
@@ -602,18 +608,18 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
               <div style={{ marginBottom:14,padding:"10px 14px",borderRadius:8,background:"rgba(239,68,68,0.07)",border:"1px solid rgba(239,68,68,0.2)",display:"flex",alignItems:"center",gap:8 }}>
                 <span style={{ fontSize:"13px" }}>✕</span>
                 <p style={{ margin:0,fontSize:"12px",color:"#991B1B",fontWeight:600 }}>
-                  This session failed to generate any pins.
+                  {tr("history.modal.failedWarning")}
                 </p>
               </div>
             )}
 
             <p style={{ margin:"0 0 12px",fontSize:"11px",fontWeight:800,color:"var(--app-text-sec)",textTransform:"uppercase",letterSpacing:"0.07em",display:"flex",alignItems:"center",gap:8 }}>
-              Outputs by Reference Group
+              {tr("history.modal.outputsByRefGroup")}
               <span style={{ fontWeight:500,fontSize:"10px",color:"var(--app-text-muted)",textTransform:"none",letterSpacing:"normal" }}>
-                {allPins.length} of {expectedTotal} pins generated
+                {tr("history.modal.pinsGenerated").replace("{a}", String(allPins.length)).replace("{b}", String(expectedTotal))}
               </span>
               <span style={{ marginLeft:"auto",fontSize:"10px",color:genStatus==="completed"?"#059669":"#D97706",fontWeight:600,textTransform:"none",letterSpacing:"normal" }}>
-                {genStatus === "completed" ? "✓ Generated" : genStatus === "partial" ? "⚠ Missing" : "✕ Failed"}
+                {genStatus === "completed" ? tr("history.modal.groupGenerated") : genStatus === "partial" ? tr("history.modal.groupMissing") : tr("history.modal.groupFailed")}
               </span>
             </p>
 
@@ -644,19 +650,19 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                     )}
                     <div style={{ flex:1,minWidth:0 }}>
                       <div style={{ display:"flex",alignItems:"center",gap:6,flexWrap:"wrap" }}>
-                        <p style={{ margin:0,fontSize:"12px",fontWeight:700,color:"var(--app-text)" }}>Reference {gi+1}</p>
+                        <p style={{ margin:0,fontSize:"12px",fontWeight:700,color:"var(--app-text)" }}>{tr("history.modal.reference").replace("{n}", String(gi+1))}</p>
                         {(() => {
                           const vf = group.visualFormat;
                           const hp = group.humanPresence;
                           const vfLabel =
-                            vf === "on_body"       ? "On-body"      :
-                            vf === "mirror_selfie" ? "Mirror style"  :
-                            vf === "flat_lay"      ? "Flat lay"      :
-                            vf === "room_scene"    ? "Room scene"    :
-                            vf === "product_only"  ? "Product only"  : null;
+                            vf === "on_body"       ? tr("history.modal.refFormat.onBody")      :
+                            vf === "mirror_selfie" ? tr("history.modal.refFormat.mirrorStyle")  :
+                            vf === "flat_lay"      ? tr("history.modal.refFormat.flatLay")      :
+                            vf === "room_scene"    ? tr("history.modal.refFormat.roomScene")    :
+                            vf === "product_only"  ? tr("history.modal.refFormat.productOnly")  : null;
                           const hpLabel =
-                            hp === "visible_person" ? "Person" :
-                            hp === "no_person"      ? "No person" : null;
+                            hp === "visible_person" ? tr("history.modal.refPresence.person") :
+                            hp === "no_person"      ? tr("history.modal.refPresence.noPerson") : null;
                           const label = [vfLabel, hpLabel].filter(Boolean).join(" / ");
                           if (!label) return null;
                           return (
@@ -667,7 +673,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                         })()}
                       </div>
                       <p style={{ margin:"2px 0 0",fontSize:"10px",color:"var(--app-text-muted)" }}>
-                        {groupActual} of {perGroupExpected} generated
+                        {tr("history.modal.groupProgress").replace("{a}", String(groupActual)).replace("{b}", String(perGroupExpected))}
                       </p>
                     </div>
                     <span style={{
@@ -676,7 +682,7 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                       color:      groupStatus === "ok" ? "#059669"              : groupStatus === "partial" ? "#D97706"              : "#EF4444",
                       border:     `1px solid ${groupStatus === "ok" ? "rgba(5,150,105,0.2)" : groupStatus === "partial" ? "rgba(217,119,6,0.2)" : "rgba(239,68,68,0.2)"}`,
                     }}>
-                      {groupStatus === "ok" ? "✓ Generated" : groupStatus === "partial" ? "⚠ Partial" : "✗ Missing"}
+                      {groupStatus === "ok" ? tr("history.modal.groupStatusGenerated") : groupStatus === "partial" ? tr("history.modal.groupStatusPartial") : tr("history.modal.groupStatusMissing")}
                     </span>
                     <div style={{ flex:1,height:1,background:"var(--app-surface-3)",marginLeft:8 }}/>
                   </div>
@@ -715,32 +721,32 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                                 background: inPlan ? "rgba(5,150,105,0.9)" : "rgba(255,255,255,0.88)",
                                 color: inPlan ? "#fff" : "var(--app-text-sec)",
                               }}>
-                                {inPlan ? "✓" : `#${gi * (entry.imagesPerRef ?? 2) + imgIdx + 1}`}
+                                {inPlan ? tr("history.modal.pinAddedBadge") : `#${gi * (entry.imagesPerRef ?? 2) + imgIdx + 1}`}
                               </span>
                             </div>
                             <div style={{ display:"flex",gap:1,padding:"3px 2px",borderTop:"1px solid var(--app-surface-3)",justifyContent:"space-around" }}>
                               <button type="button" onClick={e => { e.stopPropagation(); openPinDetails(orig, gi, imgIdx); }}
                                 style={{ flex:1,background:"none",border:"none",cursor:"pointer",fontSize:"9px",color:"#A78BFA",fontWeight:700,padding:"2px 0" }}>
-                                Details
+                                {tr("history.modal.pinDetails")}
                               </button>
                               <button type="button" onClick={e => { e.stopPropagation(); setPreview(src); }}
                                 style={{ flex:1,background:"none",border:"none",cursor:"pointer",fontSize:"9px",color:"#9CA3AF",fontWeight:600,padding:"2px 0" }}>
-                                View
+                                {tr("history.modal.pinView")}
                               </button>
                               <a href={src} download={`pin-g${gi+1}-${imgIdx+1}.jpg`}
                                 onClick={e => e.stopPropagation()}
                                 style={{ flex:1,textAlign:"center",textDecoration:"none",fontSize:"9px",color:"#9CA3AF",fontWeight:600,padding:"2px 0",lineHeight:"1.8" }}>
-                                ↓ DL
+                                {tr("history.modal.pinDownload")}
                               </a>
                               {inPlan ? (
                                 <Link href="/app/plan" onClick={e => e.stopPropagation()}
                                   style={{ flex:1,textAlign:"center",textDecoration:"none",fontSize:"9px",color:"#059669",fontWeight:700,padding:"2px 0",lineHeight:"1.8" }}>
-                                  Plan →
+                                  {tr("history.modal.pinPlanLink")}
                                 </Link>
                               ) : (
                                 <button type="button" onClick={e => { e.stopPropagation(); addToPlan([orig]); setPlanUrls(prev => new Set([...prev, orig])); }}
                                   style={{ flex:1,background:"none",border:"none",cursor:"pointer",fontSize:"9px",color:"#C026D3",fontWeight:700,padding:"2px 0" }}>
-                                  + Plan
+                                  {tr("history.modal.pinAddPlan")}
                                 </button>
                               )}
                             </div>
@@ -750,13 +756,13 @@ function SessionModal({ entry, onClose }: { entry: HistoryEntry; onClose: () => 
                     </div>
                   ) : (
                     <div style={{ padding:"18px",borderRadius:10,border:"1.5px dashed #FCA5A5",background:"rgba(239,68,68,0.03)",textAlign:"center" }}>
-                      <p style={{ margin:"0 0 4px",fontSize:"12px",fontWeight:700,color:"#EF4444" }}>No pins generated yet</p>
+                      <p style={{ margin:"0 0 4px",fontSize:"12px",fontWeight:700,color:"#EF4444" }}>{tr("history.modal.noPinsYetTitle")}</p>
                       <p style={{ margin:"0 0 10px",fontSize:"11px",color:"var(--app-text-muted)" }}>
-                        This reference group did not produce any outputs.
+                        {tr("history.modal.noPinsYetDesc")}
                       </p>
                       <Link href={studioUrl}
                         style={{ padding:"5px 12px",borderRadius:7,border:"none",background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"11px",fontWeight:700,textDecoration:"none" }}>
-                        Retry with this setup
+                        {tr("history.modal.retryWithSetup")}
                       </Link>
                     </div>
                   )}
@@ -801,10 +807,11 @@ function SessionCard({
   onToggleSelect: (e: React.MouseEvent) => void;
   onOpen: () => void;
 }) {
+  const { t: tr } = useLocale();
   const allPins   = entry.groups.flatMap((g: PinGroup) => g.images);
   const thumbs    = allPins.slice(0, 4);
   const extra     = allPins.length > 4 ? allPins.length - 4 : 0;
-  const title     = (entry.opportunity ?? entry.keyword) ? capWords(entry.opportunity ?? entry.keyword) : "Generated Session";
+  const title     = (entry.opportunity ?? entry.keyword) ? capWords(entry.opportunity ?? entry.keyword) : tr("history.generatedSession");
   const dateStr   = fmtDateShort(entry.savedAt);
   const planStatus = getPlanStatus(entry);
   const genStatus  = deriveEntryStatus(entry);
@@ -866,12 +873,12 @@ function SessionCard({
             {isRunning ? (
               <>
                 <div style={{ width:20,height:20,border:"2px solid rgba(192,38,211,0.3)",borderTopColor:"#C026D3",borderRadius:"50%",animation:"spin 0.8s linear infinite" }}/>
-                <span style={{ fontSize:"9px",color:"#C026D3",fontWeight:700 }}>Generating…</span>
+                <span style={{ fontSize:"9px",color:"#C026D3",fontWeight:700 }}>{tr("history.card.generatingLabel")}</span>
               </>
             ) : isInterrupted ? (
               <>
                 <span style={{ fontSize:"14px" }}>⚡</span>
-                <span style={{ fontSize:"9px",color:"var(--app-text-muted)",fontWeight:600,textAlign:"center",padding:"0 8px" }}>Interrupted</span>
+                <span style={{ fontSize:"9px",color:"var(--app-text-muted)",fontWeight:600,textAlign:"center",padding:"0 8px" }}>{tr("history.card.interruptedLabel")}</span>
               </>
             ) : (
               <svg width="28" height="28" fill="none" stroke="#CBD5E1" strokeWidth={1.5} viewBox="0 0 24 24">
@@ -910,12 +917,12 @@ function SessionCard({
         <div style={{ display:"flex",alignItems:"center",gap:5,flexWrap:"wrap" }}>
           {entry.productCount > 0 && (
             <span style={{ fontSize:"9px",color:"var(--app-text-sec)",background:"var(--app-surface-3)",padding:"1px 6px",borderRadius:20,fontWeight:600 }}>
-              {entry.productCount} product{entry.productCount !== 1 ? "s" : ""}
+              {tr(entry.productCount !== 1 ? "history.card.productCountPlural" : "history.card.productCount").replace("{n}", String(entry.productCount))}
             </span>
           )}
           {entry.refCount > 0 && (
             <span style={{ fontSize:"9px",color:"var(--app-text-sec)",background:"var(--app-surface-3)",padding:"1px 6px",borderRadius:20,fontWeight:600 }}>
-              {entry.refCount} ref{entry.refCount !== 1 ? "s" : ""}
+              {tr(entry.refCount !== 1 ? "history.card.refCountPlural" : "history.card.refCount").replace("{n}", String(entry.refCount))}
             </span>
           )}
         </div>
@@ -924,8 +931,8 @@ function SessionCard({
         <div style={{ display:"flex",alignItems:"center",gap:5,flexWrap:"wrap" }}>
           <span style={{ fontSize:"9px",fontWeight:700,color: isRunning ? "#C026D3" : genStatus === "partial" ? "#D97706" : genStatus === "failed" || isInterrupted ? "var(--app-text-muted)" : "var(--app-text-sec)" }}>
             {isRunning
-              ? `Generating ${allPins.length} / ${expectedTotal} pins`
-              : `${allPins.length} / ${expectedTotal} generated`}
+              ? tr("history.card.generatingProgress").replace("{a}", String(allPins.length)).replace("{b}", String(expectedTotal))
+              : tr("history.card.generatedProgress").replace("{a}", String(allPins.length)).replace("{b}", String(expectedTotal))}
           </span>
           <GenStatusBadge status={genStatus}/>
         </div>
@@ -947,13 +954,13 @@ function SessionCard({
           <div style={{ display:"flex",alignItems:"center",gap:4 }}>
             <span style={{ fontSize:"9px",color:"var(--app-text-muted)" }}>·</span>
             {planStatus === "all" ? (
-              <span style={{ fontSize:"9px",fontWeight:700,color:"#059669" }}>✓ Added to plan</span>
+              <span style={{ fontSize:"9px",fontWeight:700,color:"#059669" }}>{tr("history.card.addedToPlan")}</span>
             ) : planStatus === "partial" ? (
               <span style={{ fontSize:"9px",fontWeight:600,color:"#D97706" }}>
-                {allPins.length - notAdded.length}/{allPins.length} added
+                {tr("history.card.partialAdded").replace("{a}", String(allPins.length - notAdded.length)).replace("{b}", String(allPins.length))}
               </span>
             ) : (
-              <span style={{ fontSize:"9px",color:"var(--app-text-muted)" }}>Not added</span>
+              <span style={{ fontSize:"9px",color:"var(--app-text-muted)" }}>{tr("history.card.notAdded")}</span>
             )}
           </div>
         )}
@@ -961,12 +968,12 @@ function SessionCard({
         {/* Error type notice — shown on failed/partial/interrupted with no images */}
         {(isInterrupted || genStatus === "failed" || (genStatus === "partial" && allPins.length === 0)) && entry.errorType && (
           <p style={{ margin:0,fontSize:"9px",color:"#EF4444",lineHeight:1.4,fontWeight:600 }}>
-            {getErrorCopy(entry.errorType).label}
+            {getErrorCopy(entry.errorType, tr).label}
           </p>
         )}
         {isInterrupted && !entry.errorType && allPins.length === 0 && (
           <p style={{ margin:0,fontSize:"9px",color:"var(--app-text-muted)",lineHeight:1.4 }}>
-            Page was refreshed or connection lost.
+            {tr("history.card.interruptedHint")}
           </p>
         )}
 
@@ -976,43 +983,43 @@ function SessionCard({
             // Running: view progress only; no Add to Plan
             <Link href="/app/history"
               style={{ flex:1,padding:"5px 0",borderRadius:7,border:"1px solid rgba(192,38,211,0.25)",background:"rgba(192,38,211,0.06)",color:"#C026D3",fontSize:"10px",fontWeight:700,textDecoration:"none",textAlign:"center" }}>
-              View progress →
+              {tr("history.card.viewProgress")}
             </Link>
           ) : isInterrupted && allPins.length === 0 ? (
             // Interrupted with no images: retry only
             <Link href={buildStudioUrl(entry, "retry")}
               style={{ flex:1,padding:"5px 0",borderRadius:7,border:"none",background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"10px",fontWeight:700,textDecoration:"none",textAlign:"center" }}>
-              Retry generation
+              {tr("history.card.retryGeneration")}
             </Link>
           ) : planStatus === "all" ? (
             // All added
             <Link href="/app/plan"
               style={{ flex:1,padding:"5px 0",borderRadius:7,border:"1px solid rgba(5,150,105,0.25)",background:"rgba(5,150,105,0.06)",color:"#059669",fontSize:"10px",fontWeight:700,textDecoration:"none",textAlign:"center" }}>
-              View in Plan →
+              {tr("history.card.viewInPlan")}
             </Link>
           ) : canAddToPlan ? (
             // Has generated pins that aren't all added yet
             <button type="button" onClick={addAllToPlan}
               style={{ flex:1,padding:"5px 0",borderRadius:7,border:"none",background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"10px",fontWeight:700,cursor:"pointer" }}>
-              {planStatus === "partial" ? `Add remaining ${notAdded.length}` : "Add all to Plan"}
+              {planStatus === "partial" ? tr("history.card.addRemaining").replace("{n}", String(notAdded.length)) : tr("history.card.addAllToPlan")}
             </button>
           ) : (
             // Failed/interrupted 0 images: retry
             <Link href={buildStudioUrl(entry, "retry")}
               style={{ flex:1,padding:"5px 0",borderRadius:7,border:"1px solid var(--app-border)",background:"var(--app-bg)",color:"var(--app-text-sec)",fontSize:"10px",fontWeight:600,textDecoration:"none",textAlign:"center" }}>
-              Retry setup →
+              {tr("history.card.retrySetup")}
             </Link>
           )}
           {/* Show retry-failed alongside add-to-plan for partial sessions with known failed refs */}
           {hasRetriable && canAddToPlan && (
             <Link href={buildStudioUrl(entry, "retry")} onClick={e => e.stopPropagation()}
               style={{ padding:"5px 8px",borderRadius:7,border:"1px solid rgba(217,119,6,0.3)",background:"rgba(217,119,6,0.06)",color:"#D97706",fontSize:"9px",fontWeight:700,textDecoration:"none",whiteSpace:"nowrap" }}>
-              Retry failed
+              {tr("history.card.retryFailed")}
             </Link>
           )}
           <button type="button" onClick={e => { e.stopPropagation(); onOpen(); }}
             style={{ padding:"5px 10px",borderRadius:7,border:"1px solid var(--app-border)",background:"var(--app-bg)",color:"var(--app-text-sec)",fontSize:"10px",fontWeight:600,cursor:"pointer" }}>
-            Open
+            {tr("history.card.open")}
           </button>
         </div>
       </div>
@@ -1167,7 +1174,7 @@ export default function GeneratedPinsPage() {
           </div>
           <Link href="/app/studio"
             style={{ padding:"7px 16px",borderRadius:8,background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"12px",fontWeight:700,textDecoration:"none",whiteSpace:"nowrap" }}>
-            + Create Pins
+            {tr("history.header.createPins")}
           </Link>
         </div>
 
@@ -1175,17 +1182,17 @@ export default function GeneratedPinsPage() {
         {selected.size > 0 ? (
           <div style={{ display:"flex",gap:10,alignItems:"center",paddingBottom:14,flexWrap:"wrap" }}>
             <span style={{ fontSize:"12px",fontWeight:600,color:"var(--app-text-sec)" }}>
-              {selected.size} session{selected.size !== 1 ? "s" : ""} selected
+              {tr(selected.size !== 1 ? "history.header.sessionsSelectedPlural" : "history.header.sessionsSelected").replace("{n}", String(selected.size))}
             </span>
             {selHasUnadded && (
               <button type="button" data-testid="add-selected-to-plan-button" onClick={bulkAddToPlan}
                 style={{ padding:"6px 16px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"11px",fontWeight:700,cursor:"pointer" }}>
-                Add selected to Plan
+                {tr("history.header.addSelectedToPlan")}
               </button>
             )}
             <button type="button" onClick={() => setSelected(new Set())}
               style={{ padding:"6px 16px",borderRadius:8,border:"1px solid var(--app-border)",background:"var(--app-surface)",color:"var(--app-text-muted)",fontSize:"11px",fontWeight:600,cursor:"pointer" }}>
-              Clear selection
+              {tr("history.header.clearSelection")}
             </button>
           </div>
         ) : (
@@ -1196,19 +1203,19 @@ export default function GeneratedPinsPage() {
                 <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" strokeLinecap="round"/>
               </svg>
               <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search by keyword or opportunity…"
+                placeholder={tr("history.header.searchPlaceholder")}
                 style={{ width:"100%",boxSizing:"border-box",paddingLeft:32,paddingRight:12,paddingTop:8,paddingBottom:8,borderRadius:8,border:"1px solid var(--app-border)",fontSize:"12px",outline:"none",background:"var(--app-bg)" }}/>
             </div>
             <div style={{ display:"flex",gap:5,flexWrap:"wrap" }}>
               {([
-                { key: "all",         label: `All ${entries.length}`                                                          },
-                { key: "in_progress", label: inProgressCount  > 0 ? `In progress ${inProgressCount}` : null                   },
-                { key: "pending",     label: pendingCount      > 0 ? `Pending ${pendingCount}`        : null                   },
-                { key: "completed",   label: `Completed ${completedCount}`                                                     },
-                { key: "partial",     label: partialCount      > 0 ? `Partial ${partialCount}`        : null                   },
-                { key: "failed",      label: failedCount       > 0 ? `Failed ${failedCount}`          : null                   },
-                { key: "interrupted", label: interruptedCount  > 0 ? `Interrupted ${interruptedCount}`: null                   },
-                { key: "added",       label: `Added to Plan ${addedCount}`                                          },
+                { key: "all",         label: tr("history.tab.all").replace("{n}", String(entries.length))                                                          },
+                { key: "in_progress", label: inProgressCount  > 0 ? tr("history.tab.inProgress").replace("{n}", String(inProgressCount)) : null                   },
+                { key: "pending",     label: pendingCount      > 0 ? tr("history.tab.pending").replace("{n}", String(pendingCount))        : null                   },
+                { key: "completed",   label: tr("history.tab.completed").replace("{n}", String(completedCount))                                                     },
+                { key: "partial",     label: partialCount      > 0 ? tr("history.tab.partial").replace("{n}", String(partialCount))        : null                   },
+                { key: "failed",      label: failedCount       > 0 ? tr("history.tab.failed").replace("{n}", String(failedCount))          : null                   },
+                { key: "interrupted", label: interruptedCount  > 0 ? tr("history.tab.interrupted").replace("{n}", String(interruptedCount)): null                   },
+                { key: "added",       label: tr("history.tab.addedToPlan").replace("{n}", String(addedCount))                                          },
               ] as { key: GenTab; label: string | null }[])
                 .filter(t => t.label !== null)
                 .map(t => (
@@ -1227,7 +1234,7 @@ export default function GeneratedPinsPage() {
             {filtered.length > 0 && (
               <button type="button" onClick={selectAll}
                 style={{ padding:"5px 12px",borderRadius:20,border:"1px solid var(--app-border)",background:"var(--app-surface)",color:"var(--app-text-sec)",fontSize:"11px",fontWeight:600,cursor:"pointer",whiteSpace:"nowrap" }}>
-                {selected.size === filtered.length && filtered.length > 0 ? "Deselect all" : "Select all"}
+                {selected.size === filtered.length && filtered.length > 0 ? tr("history.header.deselectAll") : tr("history.header.selectAll")}
               </button>
             )}
           </div>
@@ -1240,21 +1247,21 @@ export default function GeneratedPinsPage() {
           <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:200 }}>
             <div style={{ textAlign:"center" }}>
               <div style={{ width:20,height:20,border:"2px solid var(--app-border)",borderTopColor:"#7C3AED",borderRadius:"50%",animation:"spin 0.8s linear infinite",margin:"0 auto 10px" }}/>
-              <p style={{ fontSize:"12px",color:"var(--app-text-muted)" }}>Loading your generation history…</p>
+              <p style={{ fontSize:"12px",color:"var(--app-text-muted)" }}>{tr("history.loading")}</p>
             </div>
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign:"center",padding:"60px 0" }}>
             <p style={{ fontSize:"14px",color:"var(--app-text-muted)",fontWeight:600 }}>
-              {search || tab !== "all" ? "No sessions match" : "No generated pins yet"}
+              {search || tab !== "all" ? tr("history.noSessionsMatch") : tr("history.noGeneratedPinsYet")}
             </p>
             <p style={{ fontSize:"12px",color:"#CBD5E1",marginTop:4 }}>
-              {search || tab !== "all" ? "Try a different filter" : "Generated pins will appear here after your first creation"}
+              {search || tab !== "all" ? tr("history.tryDifferentFilter") : tr("history.emptyHint")}
             </p>
             {!search && tab === "all" && (
               <Link href="/app/studio"
                 style={{ display:"inline-block",marginTop:16,padding:"8px 20px",borderRadius:8,background:"linear-gradient(135deg,#FF4D8D,#7C3AED)",color:"#fff",fontSize:"12px",fontWeight:700,textDecoration:"none" }}>
-                Create your first Pins →
+                {tr("history.createFirstPins")}
               </Link>
             )}
           </div>
@@ -1272,7 +1279,7 @@ export default function GeneratedPinsPage() {
               ))}
             </div>
             <p style={{ marginTop:20,fontSize:"11px",color:"var(--app-text-muted)",textAlign:"center" }}>
-              Showing {filtered.length} of {entries.length} session{entries.length !== 1 ? "s" : ""}
+              {tr(entries.length !== 1 ? "history.showingCountPlural" : "history.showingCount").replace("{a}", String(filtered.length)).replace("{b}", String(entries.length))}
             </p>
           </>
         )}

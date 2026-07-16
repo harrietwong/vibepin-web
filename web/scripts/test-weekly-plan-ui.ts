@@ -117,7 +117,7 @@ test("missing optional publish fields do not create a lifecycle status", () => {
 
 test("Weekly Plan page shows added-needs-date section", () => {
   assert(planSource.includes("added-needs-date-section"), "added needs date section missing");
-  assert(planSource.includes("plan.needsDate.heading"), "added needs date header missing");
+  assert(planSource.includes("Added to plan · assign a date"), "added needs date header missing");
 });
 
 test("published count uses postedAt", () => {
@@ -150,14 +150,14 @@ test("Weekly Plan page shows compact summary bar not large KPI cards", () => {
   assert(!planSource.includes('"weekly-plan-stats"'), "old large KPI stats container must be removed");
   assert(!planSource.includes("Ready to post manually"), "Ready tooltip must be removed");
   assert(!planSource.includes("Marked as posted manually"), "Posted tooltip must be removed");
-  assert(planSource.includes("plan.unscheduledSection.heading"), "renamed queue header missing");
+  assert(planSource.includes("Generated Pins · Not added to plan"), "renamed queue header missing");
 });
 
 test("Weekly Plan calendar always renders 7 day columns", () => {
   assert(planSource.includes("weekly-plan-calendar"), "calendar test id missing");
   assert(planSource.includes("calendar-empty-slot"), "empty slot missing");
   // Empty future Smart Schedule slots are drop targets ("Drop pin here").
-  assert(planSource.includes("plan.slot.dropHere"), "empty slot drop affordance missing");
+  assert(planSource.includes("Drop pin here"), "empty slot drop affordance missing");
 });
 
 test("Weekly Plan delegates publish UI to shared Pin Details modal", () => {

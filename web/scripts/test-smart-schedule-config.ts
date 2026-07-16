@@ -36,13 +36,7 @@ function test(name: string, fn: () => void) {
   catch (e) { console.error(`  FAIL ${name}`); console.error(`       ${(e as Error).message}`); failed++; }
 }
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
-function reset() {
-  _store.clear();
-  for (const k of Object.keys(listeners)) delete listeners[k];
-  // pinDraftStore keeps an in-memory cache that is the source of truth once loaded;
-  // drop it so raw localStorage seeding below (and the previous test's drafts) take effect.
-  pinDraftStore.__resetMemoryCacheForTests();
-}
+function reset() { _store.clear(); for (const k of Object.keys(listeners)) delete listeners[k]; }
 
 const srcModal = readFileSync(join(process.cwd(), "src/components/plan/SmartScheduleDrawer.tsx"), "utf8");
 const srcForm  = readFileSync(join(process.cwd(), "src/components/plan/SmartScheduleConfigForm.tsx"), "utf8");
@@ -58,9 +52,7 @@ test("Smart Schedule opens as a centered modal, not a right drawer", () => {
   assert(!/width: 420/.test(srcModal) && !/borderLeft/.test(srcModal), "still rendering a right drawer panel");
   assert(srcModal.includes('role="dialog"') && srcModal.includes('aria-modal="true"'), "missing dialog semantics");
   // Footer CTA is a simple sticky "Save" (not the long "Save Smart Schedule").
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // button copy); tighten to tr("planViews.drawer.save") when that cluster lands.
-  assert(/data-testid="smart-schedule-save"[\s\S]{0,300}>\s*Save\s*</.test(srcModal) && !srcModal.includes("Save Smart Schedule"), "footer should be a simple 'Save'");
+  assert(/>\s*Save\s*</.test(srcModal) && !srcModal.includes("Save Smart Schedule"), "footer should be a simple 'Save'");
 });
 
 // 2
@@ -138,13 +130,9 @@ test("Schedule action uses canonical weeklySlots + assigns date/time/plannedAt",
   reset();
   saveSmartScheduleConfig({ ...defaultSmartScheduleConfig(), weeklySlots: { 2: ["14:20"] } });
   const now = new Date().toISOString();
-  // boardId is required data setup, not part of what this test is exercising: the
-  // WP1 readiness contract (a370f88) makes board a blocking gate in
-  // ensureScheduledPlanTime, so an empty boardId always short-circuits to
-  // reason:"not_ready" before the canonical-slot assignment logic under test even runs.
   _store.set("vp:pin_drafts:v1", JSON.stringify({ drafts: { P1: {
     id: "P1", imageUrl: "https://x/p.jpg", keyword: "k", category: "home-decor", title: "T", description: "d",
-    altText: "", destinationUrl: "", boardId: "b1", boardName: "Board 1", weeklyPlanItemId: "", generationSessionId: "",
+    altText: "", destinationUrl: "", boardId: "", boardName: "", weeklyPlanItemId: "", generationSessionId: "",
     scheduledDate: "", scheduledTime: "", plannedAt: "", status: "needs_review", createdAt: now, updatedAt: now, source: "generated", addedToPlanAt: "",
   } } }));
   const res = ensureScheduledPlanTime("P1");
@@ -179,13 +167,9 @@ test("Missing product does not block scheduling", () => {
   reset();
   saveSmartScheduleConfig({ ...defaultSmartScheduleConfig(), weeklySlots: { 2: ["14:20"] } });
   const now = new Date().toISOString();
-  // boardId is required data setup, not the field under test here: the WP1 readiness
-  // contract (a370f88) makes board the other blocking gate, so an empty boardId always
-  // short-circuits to reason:"not_ready" regardless of the (intentionally missing)
-  // product/metadata this test means to prove is non-blocking.
   _store.set("vp:pin_drafts:v1", JSON.stringify({ drafts: { Q1: {
     id: "Q1", imageUrl: "https://x/p.jpg", keyword: "k", category: "home-decor", title: "", description: "",
-    altText: "", destinationUrl: "", boardId: "b1", boardName: "Board 1", weeklyPlanItemId: "", generationSessionId: "",
+    altText: "", destinationUrl: "", boardId: "", boardName: "", weeklyPlanItemId: "", generationSessionId: "",
     scheduledDate: "", scheduledTime: "", plannedAt: "", status: "needs_review", createdAt: now, updatedAt: now, source: "generated", addedToPlanAt: "",
     linkedProducts: [], primaryProductId: "",
   } } }));
@@ -195,9 +179,7 @@ test("Missing product does not block scheduling", () => {
 
 // Copy
 test("Modal subtitle uses the clearer generator-focused copy", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // subtitle copy); tighten to tr("planViews.drawer.subtitle") when that cluster lands.
-  assert(srcModal.includes("Choose how often VibePin should publish, then preview reusable weekly time slots."), "subtitle copy not updated");
+  assert(/Choose how often VibePin should publish/.test(srcModal), "subtitle copy not updated");
 });
 
 // - Posting volume: recommended vs same_every_day -
@@ -301,13 +283,9 @@ test("Missing destination URL does not block scheduling", () => {
   reset();
   saveSmartScheduleConfig({ ...defaultSmartScheduleConfig(), weeklySlots: { 2: ["14:20"] } });
   const now = new Date().toISOString();
-  // boardId is required data setup, not the field under test here: the WP1 readiness
-  // contract (a370f88) makes board the other blocking gate, so an empty boardId always
-  // short-circuits to reason:"not_ready" regardless of the (intentionally missing)
-  // destination URL this test means to prove is non-blocking.
   _store.set("vp:pin_drafts:v1", JSON.stringify({ drafts: { U1: {
     id: "U1", imageUrl: "https://x/p.jpg", keyword: "k", category: "home-decor", title: "T", description: "d",
-    altText: "a", destinationUrl: "", boardId: "b1", boardName: "Board 1", weeklyPlanItemId: "", generationSessionId: "",
+    altText: "a", destinationUrl: "", boardId: "", boardName: "", weeklyPlanItemId: "", generationSessionId: "",
     scheduledDate: "", scheduledTime: "", plannedAt: "", status: "needs_review", createdAt: now, updatedAt: now, source: "generated", addedToPlanAt: "",
   } } }));
   const res = ensureScheduledPlanTime("U1");

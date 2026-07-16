@@ -34,6 +34,7 @@ const FOOTER_COLUMNS = [
     links: [
       { label: "Privacy Policy", href: "/privacy" },
       { label: "Terms of Service", href: "/terms" },
+      { label: "Refund Policy", href: "/refund-policy" },
       { label: "Pinterest App", href: "/pinterest-app" },
     ],
   },
@@ -79,10 +80,17 @@ export function LandingFooter() {
             <BrandLogo size={28} />
             <span className="font-black text-white text-sm tracking-tight">VibePin</span>
           </div>
-          <p className="text-[11px] leading-relaxed" style={{ color: "#4B5563" }}>
+          <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#4B5563" }}>
             Pinterest growth intelligence for creators, sellers, affiliate marketers, and
             Pinterest teams.
           </p>
+          <a
+            href="mailto:support@vibepin.co"
+            className="text-[12px] font-semibold transition-colors hover:text-gray-300"
+            style={{ color: "#8B93A1" }}
+          >
+            support@vibepin.co
+          </a>
         </div>
         {FOOTER_COLUMNS.map(col => (
           <div key={col.title}>

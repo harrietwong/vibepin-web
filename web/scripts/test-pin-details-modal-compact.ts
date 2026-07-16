@@ -55,7 +55,7 @@ test("4. no numbered form sections", () => {
 
 // 5. Quiet header (Edit Pin / Edit scheduled Pin), no heavy header.
 test("5. quiet header, no Changes-saved banner / subtitle", () => {
-  assert(/t\("pinDetails\.editScheduledTitle"\)/.test(modal) && /t\("pinDetails\.editTitle"\)/.test(modal), "header titles missing");
+  assert(/Edit scheduled Pin/.test(modal) && /"Edit Pin"/.test(modal), "header titles missing");
   assert(!/Edit publishing details/.test(modal), "heavy subtitle still present");
 });
 
@@ -76,18 +76,18 @@ test("7. Schedule editor reachable via date/time action", () => {
 test("8. No Save changes button; Pin now in overflow", () => {
   assert(!modal.includes('data-testid="draft-edit-save"'), "Save changes button should be removed (auto-save)");
   assert(!/Save changes/.test(modal), "'Save changes' label should be gone");
-  assert(modal.includes('data-testid="draft-overflow-pin-now"') && /t\("pinDetails\.publishNow"\)/.test(modal), "Pin now should live in the overflow menu");
+  assert(modal.includes('data-testid="draft-overflow-pin-now"') && /Pin now/.test(modal), "Pin now should live in the overflow menu");
   assert(!/Publish to Pinterest/.test(modal), "old 'Publish to Pinterest' CTA still present");
 });
 
 // 9. Footer has ONE primary CTA + a non-clickable save indicator; no Cancel/Add to Plan.
 test("9. single primary CTA footer with auto-save indicator", () => {
   assert(modal.includes('data-testid="draft-cta-schedule"'), "single Schedule/Update CTA missing");
-  assert(/t\("pinDetails\.updateSchedule"\)/.test(modal) && /t\("pinDetails\.schedule"\)/.test(modal), "Schedule / Update schedule labels missing");
+  assert(/Update schedule/.test(modal) && /"Schedule"/.test(modal), "Schedule / Update schedule labels missing");
   assert(modal.includes('data-testid="draft-save-state"'), "auto-save indicator missing");
   assert(!modal.includes('data-testid="draft-details-cancel"'), "Cancel must be removed (X closes)");
   assert(!modal.includes('data-testid="pin-details-add-to-plan"'), "Add to Plan must be removed from the modal");
-  assert(/t\("pinDetails\.savingState"\)/.test(modal) && /t\("pinDetails\.failedToSave"\)/.test(modal), "Saving/Failed save states missing");
+  assert(/Saving…/.test(modal) && /Failed to save/.test(modal), "Saving/Failed save states missing");
 });
 
 // schedule summary: Not scheduled vs date/time + GMT.
@@ -98,9 +98,9 @@ test("schedule summary shows Not scheduled or date + time(GMT)", () => {
 
 // Website URL placeholder + lightweight product row + no Catalog CTA.
 test("compact fields: Website URL placeholder, lightweight product, no Catalog CTA", () => {
-  assert(/t\("pinDetails\.urlPlaceholder"\)/.test(modal), "Website URL placeholder missing");
-  assert(/\{t\("pinDetails\.websiteUrl"\)\}/.test(modal), "Website URL label missing");
-  assert(/t\("pinDetails\.products\.noLinked"\)/.test(product) && /t\("pinDetails\.products\.add"\)/.test(product), "lightweight product row missing");
+  assert(/Where should this Pin link\?/.test(modal), "Website URL placeholder missing");
+  assert(/>Website URL</.test(modal), "Website URL label missing");
+  assert(/No linked product/.test(product) && /> Add\b/.test(product), "lightweight product row missing");
   assert(!/Set up Pinterest catalog/i.test(product), "Pinterest Catalog CTA must be removed");
 });
 

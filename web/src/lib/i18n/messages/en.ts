@@ -500,20 +500,6 @@ const en = {
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
 
-  // ── AI content-language keys (RETAINED) ──
-  // The full i18n refactor removed these, but SettingsModal / LanguageRegionModal /
-  // DraftDetailsDrawer (tracked, still on their HEAD versions here) reference them.
-  // Deleting them belongs with the component changes that stop using them — a later
-  // RC0 cluster — not with this i18n base. Keep until then.
-  "ai.contentLanguage": "AI content language",
-  "ai.contentLanguageHint": "Language used in AI-generated Pin copy. Changing this does not affect the app UI language.",
-  "lang.contentLanguage": "AI content language",
-  "lang.sameAsApp": "Same as app language",
-  "language.aiContentLanguage": "AI content language",
-  "language.aiContentLanguageHint": "Used for generated Pin titles, descriptions, keywords, trends, and opportunity suggestions.",
-  "language.contentExistingNote": "AI content language affects newly generated titles, descriptions, keywords, and suggestions. Existing saved Pins are not changed automatically.",
-  "pinDetails.overflow.pinNow": "Pin now",
-
   // ── Merged namespace modules (see ./en/*.ts) ──
   ...connectPageMessages,
   ...dashboardMessages,

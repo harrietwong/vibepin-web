@@ -50,7 +50,7 @@ test("Pin Ideas picker uses shared usePinIdeas hook", () => {
 
 test("Pin Ideas picker has loading and error states", () => {
   assert(pickerSource.includes("pinIdeasLoading"), "picker missing loading state");
-  assert(pickerSource.includes("studioModals.picker.couldNotLoadPinIdeas"), "picker missing error state");
+  assert(pickerSource.includes("Could not load Pin Ideas"), "picker missing error state");
   assert(pickerSource.includes("pin-ideas-retry"), "picker missing retry button");
 });
 

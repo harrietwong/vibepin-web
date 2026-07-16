@@ -90,26 +90,11 @@ test("every translated locale localizes the settings tab labels", () => {
 // Fallback to English
 
 test("missing keys fall back to English in getMessages()", () => {
-  // Every shipped locale is now fully translated (validate:i18n-coverage enforces
-  // it), so no real key can serve as the "untranslated" fixture. Assert the
-  // fallback MECHANISM instead: temporarily drop a key from a locale catalog and
-  // confirm getMessages() still resolves it to the English source of truth.
-  const itCatalog = PARTIAL["it"] as Record<string, string>;
-  const probe: MessageKey = "billing.noUsage";
-  const saved = itCatalog[probe];
-  assert(typeof saved === "string", `fixture key ${probe} is absent from the Italian catalog`);
-
-  delete itCatalog[probe];
-  try {
-    const it = getMessages("it");
-    assert(it[probe] === en[probe],
-      "untranslated key should fall back to English text");
-  } finally {
-    itCatalog[probe] = saved;
-  }
-
-  // A translated key should differ from English ("Salva" vs "Save").
   const it = getMessages("it");
+  // "billing.noUsage" is intentionally untranslated in the core-chrome locales.
+  assert(it["billing.noUsage"] === en["billing.noUsage"],
+    "untranslated key should fall back to English text");
+  // A translated key should differ from English ("Salva" vs "Save").
   assert(it["common.save"] !== en["common.save"],
     "translated key should not equal English");
 });
@@ -133,19 +118,17 @@ test("switching app language selects a different catalog without touching conten
   assert(enMsgs["settings.title"] !== zhMsgs["settings.title"], "app language must change UI text");
 });
 
-test("AI content language resolves from the user's stored preference, independent of app language", () => {
-  // Current committed behaviour: the AI content-language selector still exists in
-  // Settings, and resolveContentLanguage honours the stored preference — "same"
-  // means follow the app language, otherwise use the chosen content language.
-  // (A future "always default to English" product change must land together with the
-  // removal of that selector and this test — not before.)
+test("AI-generated Pin copy always defaults to English (resolveContentLanguage), independent of app language", () => {
+  // Product decision: generation always defaults to English regardless of app
+  // language or any stored contentLanguage preference (per-generation language
+  // picker on Create Pins is the only override). See config.ts resolveContentLanguage.
   const prefs = normalizeLocalePreferences({ appLanguage: "en", contentLanguage: "zh-CN", pinterestRegion: "US" });
   assert(getMessages(prefs.appLanguage)["settings.title"] === "Settings",
     "changing content language must not change UI language");
-  assert(resolveContentLanguage(prefs) === "zh-CN", "resolveContentLanguage should honour the chosen content language");
+  assert(resolveContentLanguage(prefs) === "en", "resolveContentLanguage should always default to English");
 
   const samePrefs = normalizeLocalePreferences({ appLanguage: "ja", contentLanguage: "same", pinterestRegion: "JP" });
-  assert(resolveContentLanguage(samePrefs) === "ja", "\"same\" content language should follow the app language");
+  assert(resolveContentLanguage(samePrefs) === "en", "resolveContentLanguage should always default to English regardless of app language");
 });
 
 // Persistence
@@ -194,13 +177,11 @@ test("Settings modal shell uses translation keys (title, tabs, save/cancel)", ()
   assert(settingsSrc.includes("tabItem.labelKey"), "tab labels not driven by translation keys");
 });
 
-test("Settings has a dedicated Language tab with App language (and the current AI content-language selector)", () => {
+test("Settings has a dedicated Language tab with App language (AI content language setting removed)", () => {
   assert(settingsSrc.includes("settings-tab-language"), "no Language tab in the sidebar");
   assert(settingsSrc.includes("function LanguageTab"), "LanguageTab component missing");
   assert(settingsSrc.includes("language-app-language"), "App language selector missing from Language tab");
-  // The AI content-language selector still exists in the committed UI. Removing it is a
-  // product change that must land with its resolver + test change, not be pre-asserted here.
-  assert(settingsSrc.includes("language-content-language"), "AI content language selector expected in the current Language tab");
+  assert(!settingsSrc.includes("language-content-language"), "AI content language selector should no longer exist in the Language tab");
   assert(settingsSrc.includes('t("language.appLanguage")'), "App language label not translated");
   assert(settingsSrc.includes('t("language.appLanguageHint")'), "App language hint not translated");
 });

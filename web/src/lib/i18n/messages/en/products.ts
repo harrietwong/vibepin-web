@@ -11,25 +11,19 @@ export const productsMessages = {
   "products.source.productLink": "Product link",
   "products.source.amazon": "Amazon",
 
-  // ── Pinterest Interest / Keyword Trend chips (on-image glass) ──
-  // PRD v3.1 §7.6: the badge formerly called "Demand" is "Pinterest Interest" (Pinterest
-  // save heat, NOT market demand) and the one called "Trend" is "Keyword Trend" (keyword
-  // content heat, NOT sales). The Competition chip is DELETED (§7.6.4) — it was
-  // marketplace evaluation and kept dragging the product back into being a scoring tool.
-  "products.chip.demandHigh": "High Pinterest interest",
-  "products.chip.demandMedium": "Medium Pinterest interest",
-  "products.chip.demandLow": "Low Pinterest interest",
-  "products.chip.demandNoData": "Pinterest interest: no data",
-  "products.chip.trendRising": "↑ Keyword rising",
-  "products.chip.trendStable": "→ Keyword stable",
-  "products.chip.trendDeclining": "↓ Keyword declining",
-  "products.chip.trendNoData": "Keyword trend: no data",
-
-  // ── Product details availability (PRD v3.1 §7.3 / §6.3) ──
-  // ONE string for every internal state (blocked / not_found / not_attempted). The
-  // technical reason is NEVER shown to the user — no "Merchant blocks preview", no 403.
-  "products.details.unavailable": "Product details unavailable",
-  "products.details.viewSourceProduct": "View source product",
+  // ── Demand / Trend / Competition chips (on-image glass) ──
+  "products.chip.demandHigh": "High demand",
+  "products.chip.demandMedium": "Medium demand",
+  "products.chip.demandLow": "Low demand",
+  "products.chip.demandNoData": "Demand: no data",
+  "products.chip.trendRising": "↑ Rising",
+  "products.chip.trendStable": "→ Stable",
+  "products.chip.trendDeclining": "↓ Declining",
+  "products.chip.trendNoData": "Trend: no data",
+  "products.chip.compLow": "Low comp.",
+  "products.chip.compMedium": "Medium comp.",
+  "products.chip.compHigh": "High comp.",
+  "products.chip.compNoData": "Comp.: no data",
 
   // ── Source type labels (sourceTypeLabel) ──
   "products.sourceType.shopTheLook": "Shop the Look",
@@ -70,11 +64,10 @@ export const productsMessages = {
   "products.card.savedToLibrary": "Saved to Product Library",
 
   // ── Drawer signal rows ──
-  // "products.drawer.competition" is DELETED (v3.1 §7.6.4) — Competition is removed from
-  // the Detail view too, not merely hidden from the card.
   "products.drawer.signals": "Signals",
-  "products.drawer.demand": "Pinterest Interest",
-  "products.drawer.trend": "Keyword Trend",
+  "products.drawer.demand": "Demand",
+  "products.drawer.trend": "Trend",
+  "products.drawer.competition": "Competition",
   "products.drawer.notEnoughData": "Not enough data",
   "products.drawer.levelHigh": "High",
   "products.drawer.levelMedium": "Medium",
@@ -124,7 +117,7 @@ export const productsMessages = {
   "products.sort.relevance": "Relevance",
   "products.sort.mostSaved": "Most saved",
   "products.sort.rising": "Rising trend",
-  // "products.sort.lowCompetition" is DELETED (v3.1 §7.6.4 — the sort goes with the badge).
+  "products.sort.lowCompetition": "Low competition",
   "products.sort.newest": "Newest found",
   "products.sort.price": "Price",
   "products.filters.button": "Filters",

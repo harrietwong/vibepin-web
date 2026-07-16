@@ -93,4 +93,44 @@ test("rankKeywords: candidates capped at 20 and generic bare terms rejected", ()
   assert.ok(!recommended.includes("inspiration"));
 });
 
+// ── Product + direction input dimensions (A1) ─────────────────────────────────
+
+test("buildQueryTerms: product type + title feed query terms", () => {
+  const terms = buildQueryTerms({ ...livingRoom, productType: "table lamp", productTitle: "Brass Arc Floor Lamp" });
+  assert.ok(terms.includes("table lamp"), "product type should be a query term");
+  assert.ok(terms.includes("floor lamp"), "product title 2-word tail should be a query term");
+});
+
+test("buildQueryTerms: direction words are appended as query terms", () => {
+  const terms = buildQueryTerms({
+    imageSummary: "a potted plant on a wooden shelf", visibleObjects: ["potted plant"], style: "",
+    directionTitle: "Styled tabletop", directionTerms: ["editorial mood"],
+  });
+  assert.ok(["styled", "tabletop", "editorial", "mood"].some(w => terms.includes(w)), "direction words should appear in query terms");
+});
+
+test("rankKeywords: product context lifts a product-specific keyword absent from the image", () => {
+  const rows = [row("soy candle gift", { category: "home-decor", priority_score: 40 })];
+  const withoutProduct = rankKeywords(rows, livingRoom);
+  assert.ok(!withoutProduct.recommended.includes("soy candle gift"), "off-image keyword rejected without product context");
+  const withProduct = rankKeywords(rows, { ...livingRoom, productTitle: "Scented Soy Candle", productType: "soy candle", productTags: ["candle"] });
+  assert.ok(withProduct.recommended.includes("soy candle gift"), "product context makes the product keyword relevant");
+});
+
+test("rankKeywords: product context does not change scoring when absent (no regression)", () => {
+  const rows = [row("living room decor ideas", { priority_score: 116 })];
+  const a = rankKeywords(rows, livingRoom).candidates[0];
+  const b = rankKeywords(rows, { ...livingRoom, productTitle: undefined, productTags: [], directionTerms: [] }).candidates[0];
+  assert.equal(a.finalScore, b.finalScore, "empty product/direction inputs leave scores identical");
+});
+
+test("rankKeywords: a matching direction never lowers a relevant keyword's score", () => {
+  const rows = [row("side table styling", { category: "home-decor", priority_score: 30 })];
+  const base = rankKeywords(rows, livingRoom).candidates.find(c => c.keyword === "side table styling");
+  const withDir = rankKeywords(rows, { ...livingRoom, directionTitle: "Styled decor vignette", directionTerms: ["styling"] })
+    .candidates.find(c => c.keyword === "side table styling");
+  assert.ok(base && withDir, "keyword present in both candidate sets");
+  assert.ok(withDir!.relevanceScore >= base!.relevanceScore, "direction overlap is a non-negative nudge");
+});
+
 console.log(`\nAll ${passed} keyword-context tests passed.`);

@@ -104,9 +104,9 @@ test("Create Pins + Plan batch mappers use resolveCanonicalPinProducts", () => {
 test("Batch Edit product cell shows summary when products exist, else Add product", () => {
   const batch = readFileSync("src/components/studio/BatchEditDrawer.tsx", "utf8");
   // "+ Add product" only in the empty branch (prodCount === 0).
-  assert.match(batch, /prodCount === 0 \? \([\s\S]*?studioModals\.cell\.addProduct/);
+  assert.match(batch, /prodCount === 0 \? \([\s\S]*?Add product/);
   // Non-empty branch renders the primary title + "+N" summary.
-  assert.match(batch, /primary\?\.title \?\? tr\("studioModals\.product\.productFallback"\)/);
+  assert.match(batch, /primary\?\.title \?\? "Product"/);
   assert.match(batch, /\+\{prodCount - 1\}/);
 });
 

@@ -3,12 +3,13 @@
  *
  * Shared by Weekly Plan counts and the Batch Edit publish gate so both surfaces
  * agree on what "Ready" / "Needs details" means. A Pin is Ready when it has a
- * publishable image and a REAL Pinterest board selected (boardId). Copy, alt text,
- * Website URL, and product metadata remain editable recommendations, but never
- * block scheduling or publishing. Pure functions — safe in render and on server.
+ * publishable image, title, description, alt text, and a REAL Pinterest board
+ * selected (boardId). The Website URL / destination link is OPTIONAL (recommended
+ * for product Pins) and never blocks readiness. Pure functions — safe in render
+ * and on server.
  */
 
-export type RequiredField = "image" | "board";
+export type RequiredField = "image" | "title" | "description" | "altText" | "board";
 export type PinDetailsStatus = "ready" | "need_details";
 export type PinPlanStatus = "not_planned" | "needs_date" | "scheduled" | "posted";
 
@@ -31,10 +32,13 @@ export type ReadinessInput = {
 
 export const REQUIRED_FIELD_LABELS: Record<RequiredField, string> = {
   image:          "Image",
+  title:          "Title",
+  description:    "Description",
+  altText:        "Alt text",
   board:          "Pinterest board",
 };
 
-const REQUIRED_ORDER: RequiredField[] = ["image", "board"];
+const REQUIRED_ORDER: RequiredField[] = ["image", "title", "description", "altText", "board"];
 
 function clean(v: string | null | undefined): string {
   const s = (v ?? "").trim();
@@ -50,41 +54,32 @@ export function isPublishableImage(url: string | null | undefined): boolean {
   return true;
 }
 
-// Hosts Pinterest's servers can never reach — kept in sync with the server gate in
-// server/pinterest/validatePublish.ts (validateOptionalLink). A client-side check that
-// were more lax than the server would let a Pin look schedulable, then fail at publish.
-const PRIVATE_HOST_RE =
-  /^(localhost$|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|::1$|\[::1\]|172\.(1[6-9]|2\d|3[0-1])\.)/i;
-
 /**
- * The optional Website URL (destination link). EMPTY is valid — the link is never
- * required and never blocks scheduling or publishing. When present it must be a public
- * http(s) URL, matching the server's validateOptionalLink so the client can't schedule
- * a destination the server will reject.
+ * Website / destination URL format check (PRD §10.3.6 / §14.2): must be a syntactically
+ * valid http(s) URL. An EMPTY value is valid here — the destination link is optional
+ * (PRD §10) — this only rejects a non-empty value that is malformed or non-http(s).
  */
 export function isValidDestinationUrl(url: string | null | undefined): boolean {
-  // NB: deliberately NOT clean() — that treats the literal strings "undefined"/"null"
-  // as empty, but the server's validateOptionalLink does not, so routing them through
-  // clean() would pass here and fail at publish. Only a real null/undefined/blank is
-  // the empty (optional) case; "undefined"/"null" fall through to URL parsing (rejected).
-  const value = String(url ?? "").trim();
-  if (!value) return true; // empty is allowed (optional field)
-  let parsed: URL;
+  const u = clean(url);
+  if (!u) return true; // optional field — empty is not an error
+  if (!/^https?:\/\//i.test(u)) return false;
   try {
-    parsed = new URL(value);
+    // eslint-disable-next-line no-new
+    new URL(u);
+    return true;
   } catch {
     return false;
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-  if (PRIVATE_HOST_RE.test(parsed.hostname)) return false;
-  return true;
 }
 
 /** Required publishing fields that are still missing, in display order. */
 export function pinMissingFields(d: ReadinessInput): RequiredField[] {
   const missing: RequiredField[] = [];
   if (!isPublishableImage(d.imageUrl))   missing.push("image");
-  // Copy, alt text, Website URL, and product metadata are recommendations only.
+  if (!clean(d.title))                   missing.push("title");
+  if (!clean(d.description))             missing.push("description");
+  if (!clean(d.altText))                 missing.push("altText");
+  // Website URL / destination link is optional — never a blocker (recommended only).
   if (!clean(d.boardId))                 missing.push("board");
   return REQUIRED_ORDER.filter(f => missing.includes(f));
 }

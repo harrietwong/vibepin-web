@@ -40,6 +40,8 @@ import {
 } from "@/lib/social/socialClient";
 import { startPinterestConnect, disconnectPinterest } from "@/lib/pinterestClient";
 import { isMultiSocialAccountsEnabled } from "@/lib/socialFeatureFlags";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 
 const UI = {
   surface: "var(--app-surface, #161D2E)",
@@ -57,39 +59,39 @@ const UI = {
 
 type StatusChip = { label: string; color: string; bg: string; border: string };
 
-function statusChip(summary: PlatformConnectionSummary): StatusChip {
+function statusChip(summary: PlatformConnectionSummary, tr: (key: MessageKey) => string): StatusChip {
   switch (summary.status) {
     case "connected":
       return {
-        label: "Connected",
+        label: tr("publishDestinations.connected"),
         color: UI.success,
         bg: "rgba(16,185,129,0.12)",
         border: "rgba(16,185,129,0.3)",
       };
     case "expired":
       return {
-        label: "Reconnect needed",
+        label: tr("socialPanel.status.reconnectNeeded"),
         color: UI.warning,
         bg: "rgba(245,158,11,0.12)",
         border: "rgba(245,158,11,0.35)",
       };
     case "revoked":
       return {
-        label: "Disconnected",
+        label: tr("socialPanel.status.disconnected"),
         color: UI.warning,
         bg: "rgba(245,158,11,0.12)",
         border: "rgba(245,158,11,0.35)",
       };
     case "error":
       return {
-        label: "Connection error",
+        label: tr("socialPanel.status.connectionError"),
         color: UI.error,
         bg: "rgba(239,68,68,0.12)",
         border: "rgba(239,68,68,0.3)",
       };
     default:
       return {
-        label: summary.liveConnect ? "Not connected" : "Setup pending",
+        label: summary.liveConnect ? tr("publishDestinations.notConnected") : tr("socialPanel.status.setupPending"),
         color: UI.textSec,
         bg: "rgba(255,255,255,0.05)",
         border: UI.border,
@@ -136,8 +138,9 @@ function PlatformCard({
   onConnect: () => void;
   onDisconnect: () => void;
 }) {
+  const { t: tr } = useLocale();
   const meta = PLATFORMS[summary.provider];
-  const chip = statusChip(summary);
+  const chip = statusChip(summary, tr);
   const connected = summary.connected;
   // A degraded connection (token invalid) is the ONLY case that shows Reconnect.
   const degraded = summary.status === "expired" || summary.status === "revoked" || summary.status === "error";
@@ -164,11 +167,11 @@ function PlatformCard({
           <p style={{ margin: "3px 0 0", fontSize: 12, color: UI.textSec }}>
             {connected
               ? summary.accountName
-                ? `${summary.accountName}${summary.accountCount > 1 ? ` · ${summary.accountCount} accounts` : ""}`
-                : "Account connected"
+                ? `${summary.accountName}${summary.accountCount > 1 ? ` · ${summary.accountCount}${tr("socialPanel.card.accountsCountSuffix")}` : ""}`
+                : tr("socialPanel.card.accountConnected")
               : meta.liveConnect
-                ? "Connect to publish approved content here."
-                : "Connection setup pending — coming soon."}
+                ? tr("socialPanel.card.connectToPublish")
+                : tr("socialPanel.card.setupPendingComingSoon")}
           </p>
         </div>
       </div>
@@ -216,7 +219,7 @@ function PlatformCard({
                   cursor: (busy || connecting) ? "not-allowed" : "pointer", opacity: (busy || connecting) ? 0.6 : 1,
                 }}
               >
-                <Plus size={13} /> Add another {meta.name} account
+                <Plus size={13} /> {tr("socialPanel.action.addAnotherAccountPrefix")}{meta.name}{tr("socialPanel.action.addAnotherAccountSuffix")}
               </button>
             )}
           </>
@@ -237,7 +240,9 @@ function PlatformCard({
               }}
             >
               {connecting ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-              {connecting ? `Redirecting to ${meta.name}...` : `Reconnect ${meta.name}`}
+              {connecting
+                ? `${tr("socialPanel.action.redirectingToPrefix")}${meta.name}${tr("socialPanel.action.redirectingToSuffix")}`
+                : `${tr("socialPanel.action.reconnectPrefix")}${meta.name}`}
             </button>
             <DisconnectButton provider={summary.provider} busy={busy} onClick={onDisconnect} />
           </>
@@ -266,10 +271,10 @@ function PlatformCard({
           >
             {busy ? <Loader2 size={13} className="animate-spin" /> : <LinkIcon size={13} />}
             {connecting
-              ? `Redirecting to ${meta.name}...`
+              ? `${tr("socialPanel.action.redirectingToPrefix")}${meta.name}${tr("socialPanel.action.redirectingToSuffix")}`
               : meta.liveConnect
-                ? "Connect"
-                : "Coming soon"}
+                ? tr("socialPanel.action.connect")
+                : tr("publishDestinations.comingSoon")}
           </button>
         )}
       </div>
@@ -279,6 +284,7 @@ function PlatformCard({
 
 /** Shared destructive Disconnect button used in both healthy and degraded states. */
 function DisconnectButton({ provider, busy, onClick }: { provider: SocialProvider; busy: boolean; onClick: () => void }) {
+  const { t: tr } = useLocale();
   return (
     <button
       type="button"
@@ -294,12 +300,13 @@ function DisconnectButton({ provider, busy, onClick }: { provider: SocialProvide
       }}
     >
       {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-      Disconnect {PLATFORMS[provider].name}
+      {tr("socialPanel.action.disconnectPrefix")}{PLATFORMS[provider].name}
     </button>
   );
 }
 
 export function SocialAccountsPanel() {
+  const { t: tr } = useLocale();
   const [summaries, setSummaries] = useState<PlatformConnectionSummary[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [busyProvider, setBusyProvider] = useState<SocialProvider | null>(null);
@@ -337,9 +344,9 @@ export function SocialAccountsPanel() {
         window.location.assign(result.url);
         return;
       }
-      toast.info(result.message || `${PLATFORMS[provider].name} connection is coming soon.`);
+      toast.info(result.message || `${PLATFORMS[provider].name}${tr("socialPanel.toast.connectionComingSoonSuffix")}`);
     } catch (e) {
-      toast.error((e as Error).message || "Could not start connection");
+      toast.error((e as Error).message || tr("socialPanel.toast.couldNotStartConnection"));
     } finally {
       setBusyProvider(null);
       setConnectingProvider(null);
@@ -357,9 +364,9 @@ export function SocialAccountsPanel() {
         setSummaries(prev => prev?.map(s => (s.provider === "pinterest"
           ? { ...s, status: "not_connected" as const, connected: false, accountCount: 0, accountName: null, accounts: [] }
           : s)) ?? prev);
-        toast.success("Pinterest disconnected");
+        toast.success(tr("socialPanel.toast.pinterestDisconnected"));
         disconnectPinterest()
-          .catch(() => { toast.error("Could not disconnect Pinterest. Please try again."); })
+          .catch(() => { toast.error(tr("socialPanel.toast.pinterestDisconnectFailed")); })
           .finally(() => { void load(); });
         return;
       } else {
@@ -369,11 +376,11 @@ export function SocialAccountsPanel() {
         if (res.usePinterestFlow) {
           await disconnectPinterest();
         }
-        toast.success(`${PLATFORMS[provider].name} disconnected`);
+        toast.success(`${PLATFORMS[provider].name}${tr("socialPanel.toast.disconnectedSuffix")}`);
       }
       await load();
     } catch (e) {
-      toast.error((e as Error).message || "Could not disconnect");
+      toast.error((e as Error).message || tr("socialPanel.toast.couldNotDisconnect"));
     } finally {
       setBusyProvider(null);
     }
@@ -382,10 +389,9 @@ export function SocialAccountsPanel() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 800, color: UI.text }}>Social accounts</h2>
+        <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 800, color: UI.text }}>{tr("socialPanel.title")}</h2>
         <p style={{ margin: 0, fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
-          Connect the channels you want to repurpose approved product posts across. You publish only
-          after reviewing and approving the content — nothing posts automatically.
+          {tr("socialPanel.description")}
         </p>
       </div>
 
@@ -404,7 +410,7 @@ export function SocialAccountsPanel() {
           }}
         >
           <p style={{ margin: 0, fontSize: 12, color: UI.warning, lineHeight: 1.5 }}>
-            Couldn&apos;t refresh your connection status. Showing platforms as not connected.
+            {tr("socialPanel.loadError")}
           </p>
           <button
             type="button"
@@ -421,7 +427,7 @@ export function SocialAccountsPanel() {
               cursor: "pointer",
             }}
           >
-            Try again
+            {tr("publishDestinations.tryAgain")}
           </button>
         </div>
       )}
@@ -440,7 +446,7 @@ export function SocialAccountsPanel() {
             gap: 8,
           }}
         >
-          <Loader2 size={16} className="animate-spin" /> Loading social accounts…
+          <Loader2 size={16} className="animate-spin" /> {tr("socialPanel.loading")}
         </div>
       )}
 

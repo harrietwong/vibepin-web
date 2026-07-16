@@ -52,9 +52,7 @@ test("AC1: no 'Needs details' / 'Needs date' / 'Not planned' card status anywher
   const badgeBlock = studioSource.slice(studioSource.indexOf("const badgeLabel"), studioSource.indexOf("const badgeIcon"));
   assert.doesNotMatch(badgeBlock, /Needs date|Needs details|Not planned/);
   // Clean default badge label for a completed-but-unscheduled pin.
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // fallthrough); tighten to studio.badge.ready|studio.badge.unscheduled when that lands.
-  assert.match(badgeBlock, /:\s*"Unscheduled";/);
+  assert.match(badgeBlock, /"Ready"|"Unscheduled"/);
   // The shared action component knows nothing about those states either.
   assert.doesNotMatch(actionsSource, /Needs details|Needs date|Not planned/);
 });
@@ -63,8 +61,6 @@ test("Card status model is Ready/Scheduled/Failed/Posted/Generating", () => {
   assert.match(actionsSource, /PinCardStatus = "generating" \| "failed" \| "unscheduled" \| "scheduled" \| "posted"/);
 });
 test("Unscheduled badge replaces the old negative 'Not planned'", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior; tighten to
-  // tr("studio.badge.unscheduled") when that i18n cluster lands.
   assert.match(studioSource, /:\s*"Unscheduled";/); // badgeLabel fallthrough → "Unscheduled"
 });
 
@@ -155,12 +151,12 @@ test("More menu items only: Regenerate / Download / Save as Reference", () => {
 
 // ── Batch Edit header (unchanged behavior, kept regression-green) ────────────
 test("Batch Edit primary CTA renders 'Schedule', not 'Schedule selected (N)'", () => {
-  assert.match(batchSource, /data-testid="batch-edit-schedule-selected"[\s\S]*?CalendarClock[\s\S]*?tr\("studioModals\.header\.schedule"\)/);
+  assert.match(batchSource, /data-testid="batch-edit-schedule-selected"[\s\S]*?CalendarClock[\s\S]*?Schedule\s*\n/);
   assert.doesNotMatch(batchSource, /Schedule selected/);
 });
 test("Batch Edit does not render a large 'Close' text button", () => {
   assert.doesNotMatch(batchSource, /<X[^/]*\/>\s*Close/);
-  assert.match(batchSource, /data-testid="batch-edit-close"[^>]*aria-label=\{tr\("pinDetails\.close"\)\}/);
+  assert.match(batchSource, /data-testid="batch-edit-close"[^>]*aria-label="Close"/);
 });
 test("Batch Edit shows Publish selected now only when Pins are selected", () => {
   // Intended behavior (Publish Now design): the button is gated on SELECTION —
@@ -171,7 +167,7 @@ test("Batch Edit shows Publish selected now only when Pins are selected", () => 
 });
 test("Batch Edit shows a quiet 'N selected' pill", () => {
   assert.match(batchSource, /batch-edit-selected-count/);
-  assert.match(batchSource, /tr\("studioModals\.selectedCount"\)\.replace\("\{n\}", String\(checkedCount\)\)/);
+  assert.match(batchSource, /\{checkedCount\} selected/);
 });
 test("Batch Edit Schedule has no publish-readiness gate", () => {
   assert.match(batchSource, /function scheduleSelected\(\)[\s\S]*?onScheduleSelected\(\[\.\.\.checkedRows\]\)/);

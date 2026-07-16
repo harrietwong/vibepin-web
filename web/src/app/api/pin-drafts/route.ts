@@ -16,6 +16,12 @@
 
 import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
+import {
+  buildPromotedColumns,
+  PROMOTED_COLUMN_KEYS,
+  buildScheduleColumns,
+  SCHEDULE_COLUMN_KEYS,
+} from "./promote";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +56,27 @@ function isMissingTableError(err: { code?: string; message?: string } | null): b
     || (message.includes("relation") && message.includes("does not exist"))
   );
 }
+
+/** v41 promoted columns not applied yet → strip them and retry (PostgREST PGRST204 /
+ *  "Could not find the '<col>' column of '<table>' in the schema cache"). */
+function isMissingColumnError(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  const message = err.message ?? "";
+  return (
+    err.code === "PGRST204"
+    || err.code === "42703"
+    || (message.includes("Could not find the") && message.includes("column"))
+    || (message.includes("column") && message.includes("does not exist"))
+  );
+}
+
+/** Process-lifetime latch: once we learn the v41 promoted columns are absent, skip
+ *  them on subsequent writes (self-heals on the next deploy/restart after apply). */
+let _promotedColumnsMissing = false;
+
+/** Same latch for the v42 scheduling column (scheduled_at). Independent of v41 so a
+ *  partial migration (one set applied, the other not) still degrades correctly. */
+let _scheduleColumnsMissing = false;
 
 function deferred(): Response {
   return Response.json({ deferred: true }, { status: 202 });
@@ -206,13 +233,39 @@ export async function PUT(req: Request) {
       created_at:      parseMs(p.createdAt) !== null ? (p.createdAt as string) : new Date().toISOString(),
       archived_at:     parseMs(p.archivedAt) !== null ? (p.archivedAt as string) : null,
       deleted_at:      null, // a newer PUT revives a tombstoned draft
+      // v41 promoted Creative-Intelligence columns (payload stays authority).
+      ...(_promotedColumnsMissing ? {} : buildPromotedColumns(p)),
+      // v42 promoted scheduling column. NOTE: publish_claimed_at is intentionally NOT
+      // written here — it is a cron-only claim lock. Because this is a partial-column
+      // upsert (PostgREST only updates the keys present in each row object), omitting
+      // publish_claimed_at leaves any existing lock on the row untouched.
+      ...(_scheduleColumnsMissing ? {} : buildScheduleColumns(p)),
     });
   }
 
   if (rows.length > 0) {
-    const { error: upsertError } = await db
+    let { error: upsertError } = await db
       .from(TABLE)
       .upsert(rows, { onConflict: "vibepin_user_id,draft_id" });
+
+    // v41/v42 not applied yet: strip the promoted columns and retry once so the base
+    // draft sync keeps working unchanged until the migration lands. A single missing
+    // column raises PGRST204 for whichever column PostgREST checks first, so latch BOTH
+    // uncertain sets on any missing-column error and strip both before the retry — the
+    // one that actually exists is simply re-derived and re-added on the next request
+    // after a restart (the latches self-heal on redeploy).
+    if (upsertError && (!_promotedColumnsMissing || !_scheduleColumnsMissing) && isMissingColumnError(upsertError)) {
+      _promotedColumnsMissing = true;
+      _scheduleColumnsMissing = true;
+      for (const row of rows) {
+        for (const key of PROMOTED_COLUMN_KEYS) delete (row as Record<string, unknown>)[key];
+        for (const key of SCHEDULE_COLUMN_KEYS) delete (row as Record<string, unknown>)[key];
+      }
+      ({ error: upsertError } = await db
+        .from(TABLE)
+        .upsert(rows, { onConflict: "vibepin_user_id,draft_id" }));
+    }
+
     if (upsertError) {
       if (isMissingTableError(upsertError)) return deferred();
       console.error("[pin-drafts PUT] upsert error:", upsertError.message);

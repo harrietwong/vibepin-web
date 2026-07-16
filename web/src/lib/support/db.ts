@@ -7,8 +7,12 @@
 
 import { createServerClient } from "@/lib/supabase";
 import type {
+  EscalationState,
+  ResolutionMode,
   SupportAttachment,
   SupportCategory,
+  SupportEmail,
+  SupportEmailStatus,
   SupportEvent,
   SupportEventType,
   SupportMessage,
@@ -41,6 +45,12 @@ type TicketRow = {
   customer_language?: string | null;
   ai_summary?: string | null;
   ai_summary_at?: string | null;
+  // migrate_v43. Optional on the row type so this module still compiles
+  // against a pre-v43 schema (the columns just come back undefined).
+  resolution_mode?: string | null;
+  escalation_state?: string | null;
+  escalation_reason?: string | null;
+  escalated_at?: string | null;
 };
 
 function mapTicket(row: TicketRow): SupportTicket {
@@ -64,6 +74,10 @@ function mapTicket(row: TicketRow): SupportTicket {
     customerLanguage: row.customer_language ?? null,
     aiSummary: row.ai_summary ?? null,
     aiSummaryAt: row.ai_summary_at ?? null,
+    resolutionMode: (row.resolution_mode as ResolutionMode | null | undefined) ?? null,
+    escalationState: (row.escalation_state as EscalationState | null | undefined) ?? "none",
+    escalationReason: row.escalation_reason ?? null,
+    escalatedAt: row.escalated_at ?? null,
   };
 }
 
@@ -186,6 +200,9 @@ export type AdminTicketFilters = {
   status?: SupportStatus;
   priority?: SupportPriority;
   category?: SupportCategory;
+  // Support Inbox tab filter (PRD §6.2) — e.g. ["needs_email_reply",
+  // "email_failed"] for the 待回复 tab. Undefined/empty = no filter.
+  escalationStates?: string[];
 };
 
 export async function listTicketsForAdmin(filters: AdminTicketFilters): Promise<SupportTicket[]> {
@@ -193,6 +210,7 @@ export async function listTicketsForAdmin(filters: AdminTicketFilters): Promise<
   if (filters.status) query = query.eq("status", filters.status);
   if (filters.priority) query = query.eq("priority", filters.priority);
   if (filters.category) query = query.eq("category", filters.category);
+  if (filters.escalationStates && filters.escalationStates.length > 0) query = query.in("escalation_state", filters.escalationStates);
   // Newest first; the API layer re-sorts client-side to also float Open+High first.
   const { data, error } = await query.order("created_at", { ascending: false });
   if (error) throw new Error(`listTicketsForAdmin: ${error.message}`);
@@ -208,6 +226,10 @@ export async function updateTicket(
     closedAt: string | null;
     customerLanguage: string | null;
     aiSummary: string | null;
+    resolutionMode: ResolutionMode | null;
+    escalationState: EscalationState;
+    escalationReason: string | null;
+    escalatedAt: string | null;
   }>,
 ): Promise<SupportTicket> {
   const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -220,6 +242,10 @@ export async function updateTicket(
     row.ai_summary = patch.aiSummary;
     row.ai_summary_at = new Date().toISOString();
   }
+  if (patch.resolutionMode !== undefined) row.resolution_mode = patch.resolutionMode;
+  if (patch.escalationState !== undefined) row.escalation_state = patch.escalationState;
+  if (patch.escalationReason !== undefined) row.escalation_reason = patch.escalationReason;
+  if (patch.escalatedAt !== undefined) row.escalated_at = patch.escalatedAt;
 
   const { data, error } = await db().from("support_tickets").update(row).eq("id", id).select("*").single();
   if (error) throw new Error(`updateTicket: ${error.message}`);
@@ -375,4 +401,138 @@ export async function getAiFeedbackVerdict(ticketId: string): Promise<"helped" |
   if (!data) return null;
   const eventType = (data as { event_type: string }).event_type;
   return eventType === "ai_resolved" ? "helped" : "not_helpful";
+}
+
+// ── support_emails (migrate_v43) — admin-only email-send audit log ─────────
+
+type SupportEmailRow = {
+  id: string;
+  ticket_id: string;
+  to_email: string;
+  from_email: string;
+  reply_to_email: string | null;
+  subject: string;
+  admin_source_text_zh: string | null;
+  translated_text: string;
+  target_language: string | null;
+  translation_engine: string | null;
+  translation_edited: boolean;
+  status: string;
+  provider_message_id: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  idempotency_key: string;
+  retry_count: number;
+  sent_at: string | null;
+  created_at: string;
+};
+
+function mapSupportEmail(row: SupportEmailRow): SupportEmail {
+  return {
+    id: row.id,
+    ticketId: row.ticket_id,
+    toEmail: row.to_email,
+    fromEmail: row.from_email,
+    replyToEmail: row.reply_to_email,
+    subject: row.subject,
+    adminSourceTextZh: row.admin_source_text_zh,
+    translatedText: row.translated_text,
+    targetLanguage: row.target_language,
+    translationEngine: row.translation_engine,
+    translationEdited: row.translation_edited,
+    status: row.status as SupportEmailStatus,
+    providerMessageId: row.provider_message_id,
+    failureCode: row.failure_code,
+    failureMessage: row.failure_message,
+    idempotencyKey: row.idempotency_key,
+    retryCount: row.retry_count,
+    sentAt: row.sent_at,
+    createdAt: row.created_at,
+  };
+}
+
+export async function insertSupportEmail(input: {
+  ticketId: string;
+  toEmail: string;
+  fromEmail: string;
+  replyToEmail?: string | null;
+  subject: string;
+  adminSourceTextZh?: string | null;
+  translatedText: string;
+  targetLanguage?: string | null;
+  translationEngine?: string | null;
+  translationEdited?: boolean;
+  status: SupportEmailStatus;
+  idempotencyKey: string;
+}): Promise<SupportEmail> {
+  const { data, error } = await db()
+    .from("support_emails")
+    .insert({
+      ticket_id: input.ticketId,
+      to_email: input.toEmail,
+      from_email: input.fromEmail,
+      reply_to_email: input.replyToEmail ?? null,
+      subject: input.subject,
+      admin_source_text_zh: input.adminSourceTextZh ?? null,
+      translated_text: input.translatedText,
+      target_language: input.targetLanguage ?? null,
+      translation_engine: input.translationEngine ?? null,
+      translation_edited: input.translationEdited ?? false,
+      status: input.status,
+      idempotency_key: input.idempotencyKey,
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(`insertSupportEmail: ${error.message}`);
+  return mapSupportEmail(data as SupportEmailRow);
+}
+
+export async function updateSupportEmail(
+  id: string,
+  patch: Partial<{
+    status: SupportEmailStatus;
+    providerMessageId: string | null;
+    failureCode: string | null;
+    failureMessage: string | null;
+    retryCount: number;
+    sentAt: string | null;
+  }>,
+): Promise<SupportEmail> {
+  const row: Record<string, unknown> = {};
+  if (patch.status !== undefined) row.status = patch.status;
+  if (patch.providerMessageId !== undefined) row.provider_message_id = patch.providerMessageId;
+  if (patch.failureCode !== undefined) row.failure_code = patch.failureCode;
+  if (patch.failureMessage !== undefined) row.failure_message = patch.failureMessage;
+  if (patch.retryCount !== undefined) row.retry_count = patch.retryCount;
+  if (patch.sentAt !== undefined) row.sent_at = patch.sentAt;
+
+  const { data, error } = await db().from("support_emails").update(row).eq("id", id).select("*").single();
+  if (error) throw new Error(`updateSupportEmail: ${error.message}`);
+  return mapSupportEmail(data as SupportEmailRow);
+}
+
+export async function listEmailsForTicket(ticketId: string): Promise<SupportEmail[]> {
+  const { data, error } = await db()
+    .from("support_emails")
+    .select("*")
+    .eq("ticket_id", ticketId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`listEmailsForTicket: ${error.message}`);
+  return (data as SupportEmailRow[]).map(mapSupportEmail);
+}
+
+export async function getEmailByIdempotencyKey(idempotencyKey: string): Promise<SupportEmail | null> {
+  const { data, error } = await db()
+    .from("support_emails")
+    .select("*")
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+  if (error) throw new Error(`getEmailByIdempotencyKey: ${error.message}`);
+  return data ? mapSupportEmail(data as SupportEmailRow) : null;
+}
+
+export async function getSupportEmailById(id: string): Promise<SupportEmail | null> {
+  const { data, error } = await db().from("support_emails").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(`getSupportEmailById: ${error.message}`);
+  return data ? mapSupportEmail(data as SupportEmailRow) : null;
 }

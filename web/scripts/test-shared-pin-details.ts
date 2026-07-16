@@ -48,17 +48,13 @@ test("Debug requires env flag and internal role", () => {
   assert(canViewGenerationDebug({ user_metadata: { role: "internal_tester" } }, true), "internal tester cannot see enabled debug");
 });
 
-test("Publish readiness (WP1): only image + board block; copy/alt/URL are optional", () => {
+test("Publish readiness requires core fields + real boardId; destination URL is OPTIONAL", () => {
   const missing = getPinReadiness({ imageUrl: "https://cdn.example.com/pin.jpg", title: "Title", description: "Description", altText: "Alt", destinationUrl: "", boardId: "" });
-  assert(!missing.canPublish, "a Pin with no board must not be publishable");
-  // WP1 contract: the missing set is now exactly image | boardId. destinationUrl is
-  // optional by TYPE (it can no longer even appear in the set) — assert via string[]
-  // so the intent stays visible in the test.
-  assert(!(missing.missing as string[]).includes("destinationUrl"), "destination URL must never be required");
-  assert(missing.missing.includes("boardId"), "a missing board must block publishing");
-  // Copy and alt text are recommendations — a Pin with only image + board is ready.
-  const noCopy = getPinReadiness({ imageUrl: "https://cdn.example.com/pin.jpg", title: "", description: "", altText: "", destinationUrl: "", boardId: "board_123" });
-  assert(noCopy.canPublish && noCopy.detailsStatus === "ready", "image + board with no copy/alt must be ready");
+  assert(!missing.canPublish, "incomplete Pin is publishable");
+  // Product decision (Website URL optional): destination link is recommended but
+  // NEVER blocks publish — it must not appear in the required/missing set.
+  assert(!missing.missing.includes("destinationUrl"), "destination URL must be optional");
+  assert(missing.missing.includes("boardId"), "Pinterest boardId not required");
   // A complete Pin WITHOUT a destination URL is publish-ready.
   const ready = getPinReadiness({ imageUrl: "https://cdn.example.com/pin.jpg", title: "Title", description: "Description", altText: "Alt", destinationUrl: "", boardId: "board_123" });
   assert(ready.canPublish && ready.detailsStatus === "ready", "complete Pin without URL is not ready");
