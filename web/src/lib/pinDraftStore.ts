@@ -137,6 +137,10 @@ export interface PinDraft {
   assetError?:         string;
   /** Explicit dedup key for board creation (upload / generation / migration). */
   idempotencyKey?:     string;
+  /** WP3-P1: generation_jobs row id when this placeholder was created via the
+   *  worker-mode enqueue path. Used to resume polling after a refresh (P2 reconcile);
+   *  P1 only sets/clears it during the live in-page poll. */
+  generationJobId?:    string;
   /** Set when the card is archived off the active board (recoverable). */
   archivedAt?:         string;
   // ── Async image analysis (AI Copy v5 — computed at upload time) ─────────────
@@ -461,6 +465,8 @@ export function createBoardDraft(input: {
   assetError?:      string;
   /** "generating" creates a placeholder card (AI Image run in flight). */
   generationStatus?: string;
+  /** WP3-P1: generation_jobs row id (worker-mode enqueue path only). */
+  generationJobId?: string;
 }): PinDraft {
   const data = load();
 
@@ -500,6 +506,7 @@ export function createBoardDraft(input: {
     pinCreatedAt:        input.pinCreatedAt,
     assetError:          input.assetError,
     generationStatus:    input.generationStatus,
+    generationJobId:     input.generationJobId,
   };
 
   data.drafts[draft.id] = draft;

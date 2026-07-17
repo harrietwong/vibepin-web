@@ -29,7 +29,7 @@ import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
-import { generateAiVersions } from "@/lib/studio/generateAiVersions";
+import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { PinBoardCard } from "@/components/studio/PinBoardCard";
@@ -408,8 +408,51 @@ export function StudioBoard() {
     setAiGenerating(false);
     toast.success(requested === 1 ? tr("studioBoard.toast.generatingOne") : tr("studioBoard.toast.generatingMany").replace("{n}", String(requested)));
 
-    // 2) Run generation; resolve/fail each placeholder. A closed drawer or a
-    //    partial failure never rolls back successful results.
+    // 2) WP3-P1: try the worker enqueue path first (response-shape probe — a jobId
+    //    means the server is in GENERATION_MODE=worker). null means inline mode; fall
+    //    back to the original synchronous generateAiVersions() path unchanged below.
+    let enqueued: Awaited<ReturnType<typeof enqueueGeneration>> = null;
+    try {
+      enqueued = await enqueueGeneration({ source: parent, setup: opts });
+    } catch {
+      // Worker path errored (e.g. 503 generation_unavailable) — fail these placeholders
+      // outright rather than silently falling back to the (likely also broken) inline path.
+      placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
+      toast.error(tr("studioBoard.toast.couldNotGenerate"));
+      return;
+    }
+
+    if (enqueued) {
+      // Stamp the job id on each placeholder (slot i ↔ placeholders[i], 1:1 by index —
+      // no new cards are ever created in this path, matching the P1 contract).
+      placeholders.forEach(p => pinDraftStore.updateDraft(p.id, { generationJobId: enqueued!.jobId }));
+      let doneCount = 0, failCount = 0;
+      pollGenerationJob(enqueued.jobId, {
+        onSlot: (slot, status, url) => {
+          const placeholder = placeholders[slot];
+          if (!placeholder) return;
+          if (status === "done" && url) {
+            pinDraftStore.completeGeneratedDraft(placeholder.id, url);
+            void startImageAnalysis(placeholder.id);
+            doneCount++;
+          } else {
+            pinDraftStore.failGeneratedDraft(placeholder.id);
+            failCount++;
+          }
+        },
+        onEnd: () => {
+          if (doneCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(doneCount)).replace("{okPlural}", doneCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
+          else if (doneCount) toast.success(parent
+            ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s")
+            : tr("studioBoard.toast.createdAiPins").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s"));
+          else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+        },
+      });
+      return;
+    }
+
+    // 2b) Inline mode (unchanged): run generation; resolve/fail each placeholder.
+    //    A closed drawer or a partial failure never rolls back successful results.
     try {
       const result = await generateAiVersions({ source: parent, setup: opts });
       result.urls.slice(0, placeholders.length).forEach((url, i) => {
