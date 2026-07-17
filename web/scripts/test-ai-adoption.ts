@@ -37,12 +37,45 @@ test("extractOutputUrls: handles missing/garbage shapes", () => {
 });
 
 // ── computeAdoption: linkage precedence + published gate ──────────────────────
-const gen = (id: string, urls: string[], status = "completed", createdAt = daysAgo(1)): GenerationLite => ({ id, createdAt, status, outputUrls: urls });
+const gen = (id: string, urls: string[], status = "completed", createdAt = daysAgo(1), generationRequestId: string | null = null): GenerationLite => ({ id, createdAt, status, generationRequestId, outputUrls: urls });
 const draft = (o: Partial<DraftLite>): DraftLite => ({ draftId: "d", sourceGenerationId: null, imageUrls: [], published: false, ...o });
 
 test("computeAdoption: EXACT link via sourceGenerationId, draft published by event", () => {
   const r = computeAdoption([gen("g1", ["https://x/1.png"])], [draft({ draftId: "d1", sourceGenerationId: "g1", published: true })]);
   assert.equal(r.completed, 1);
+  assert.equal(r.adopted, 1);
+  assert.equal(r.exactLinks, 1);
+  assert.equal(r.inferredLinks, 0);
+});
+
+test("computeAdoption: EXACT link joins on generation_request_id, NOT the DB id", () => {
+  // The REAL production relationship: the draft's sourceGenerationId is the
+  // generationRequestId the client sent to /api/generate — which is the row's
+  // generation_request_id, a DIFFERENT value from the DB-generated `id`. A join
+  // on `id` alone (the pre-v52 bug) would score this as 0 adopted; the fix must
+  // link via generation_request_id. This test fails against the old id-only key.
+  const g: GenerationLite = {
+    id: "db-uuid-abc",                 // DB-generated primary key
+    generationRequestId: "sess_123",   // what the client sent + wrote onto the draft
+    createdAt: daysAgo(1), status: "completed", outputUrls: ["https://x/1.png"],
+  };
+  const r = computeAdoption(
+    [g],
+    [draft({ draftId: "d1", sourceGenerationId: "sess_123", published: true })],
+  );
+  assert.equal(r.completed, 1);
+  assert.equal(r.adopted, 1, "must adopt via generation_request_id, not the DB id");
+  assert.equal(r.exactLinks, 1);
+  assert.equal(r.inferredLinks, 0);
+});
+
+test("computeAdoption: pre-v52 rows (null generation_request_id) still exact-link via id", () => {
+  // Belt-and-suspenders: older rows carry no request id; a draft that happened to
+  // store the DB id must still resolve exactly (unchanged legacy behavior).
+  const r = computeAdoption(
+    [gen("g1", ["https://x/1.png"])], // generationRequestId defaults to null
+    [draft({ draftId: "d1", sourceGenerationId: "g1", published: true })],
+  );
   assert.equal(r.adopted, 1);
   assert.equal(r.exactLinks, 1);
   assert.equal(r.inferredLinks, 0);
@@ -89,12 +122,14 @@ test("computeAdoption: non-completed generations excluded from the denominator",
 test("getAiAdoption: rate + link split + published-by-event", async () => {
   const { db } = makeMockDb({
     pin_generations: { rows: [
-      { id: "g1", created_at: daysAgo(1), status: "completed", pin_urls: ["https://x/1.png"], groups_json: [] },
-      { id: "g2", created_at: daysAgo(1), status: "completed", pin_urls: ["https://x/2.png"], groups_json: [] },
+      // g1's DB id differs from its generation_request_id — the draft references the
+      // request id (real production shape), so the exact link must join on that.
+      { id: "db-g1", generation_request_id: "req-g1", created_at: daysAgo(1), status: "completed", pin_urls: ["https://x/1.png"], groups_json: [] },
+      { id: "db-g2", generation_request_id: "req-g2", created_at: daysAgo(1), status: "completed", pin_urls: ["https://x/2.png"], groups_json: [] },
     ] },
-    // d1 → g1 by id, published via event; d2 → g2 by URL, published via postedAt.
+    // d1 → g1 by generation_request_id, published via event; d2 → g2 by URL, published via postedAt.
     pin_drafts: { rows: [
-      { draft_id: "d1", vibepin_user_id: "u1", payload: { sourceGenerationId: "g1" }, deleted_at: null, updated_at: daysAgo(1) },
+      { draft_id: "d1", vibepin_user_id: "u1", payload: { sourceGenerationId: "req-g1" }, deleted_at: null, updated_at: daysAgo(1) },
       { draft_id: "d2", vibepin_user_id: "u1", payload: { imageUrl: "https://x/2.png", postedAt: daysAgo(1) }, deleted_at: null, updated_at: daysAgo(1) },
     ] },
     analytics_events: { rows: [
