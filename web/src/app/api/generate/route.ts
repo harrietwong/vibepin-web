@@ -20,6 +20,7 @@ import os                            from "os";
 import crypto                        from "crypto";
 import { promises as fs }            from "fs";
 import { getUserIdFromBearer, getUserIdFromCookies } from "@/lib/server/authUser";
+import { createServerClient }        from "@/lib/supabase";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -44,6 +45,19 @@ const MAX_IMAGES_PER_REQUEST = Math.max(1, Math.min(
   Number(process.env.MAX_IMAGES_PER_REQUEST ?? 2) || 2,
 ));
 const USER_GENERATION_LOCK_TTL_MS = Number(process.env.USER_GENERATION_LOCK_TTL_MS ?? GENERATOR_TIMEOUT_MS + 60_000);
+
+// ── WP3-P1: DB-as-queue enqueue mode ────────────────────────────────────────────
+// See docs/设计/WP3-生图后端迁移设计.md. GENERATION_MODE=worker enqueues a
+// generation_jobs row and returns {jobId, slots} immediately; a VPS worker (not this
+// process) claims + fulfills it. Unset / "inline" keeps the existing spawn-generator.py
+// behavior below completely unchanged (grey-out fallback — this switch does not remove
+// the spawn path; that removal is WP3-P3).
+const GENERATION_MODE = process.env.GENERATION_MODE ?? "inline";
+// A worker is considered dead if its heartbeat row is missing or older than this —
+// enqueuing onto a dead worker would create a job nobody will ever claim (a zombie),
+// so POST fails honestly with 503 instead.
+const WORKER_HEARTBEAT_STALE_MS = Number(process.env.GENERATION_WORKER_HEARTBEAT_STALE_MS ?? 90_000);
+const WORKER_STATUS_NAME = process.env.GENERATION_WORKER_STATUS_NAME ?? "generator";
 
 type ResponseMeta = {
   requested_image_count?: number;
@@ -311,6 +325,62 @@ function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}
   });
 }
 
+// ── WP3-P1: enqueue path (GENERATION_MODE=worker) ───────────────────────────────
+// Contract shared byte-for-byte with the VPS worker (package A): table
+// generation_jobs(id, vibepin_user_id, status, params, results, claimed_at,
+// worker_heartbeat_at, created_at, updated_at, finished_at) and
+// generation_worker_status(name PK, last_seen). See design doc §4-5.
+type GenerationJobResult = { slot: number; status: "pending" | "done" | "failed"; imageUrl: string | null; error: string | null };
+
+async function isWorkerHealthy(): Promise<boolean> {
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("generation_worker_status")
+    .select("last_seen")
+    .eq("name", WORKER_STATUS_NAME)
+    .maybeSingle();
+  if (error || !data?.last_seen) return false;
+  const lastSeenMs = Date.parse(data.last_seen as string);
+  if (Number.isNaN(lastSeenMs)) return false;
+  return Date.now() - lastSeenMs <= WORKER_HEARTBEAT_STALE_MS;
+}
+
+/**
+ * Enqueue a generation_jobs row and return immediately (<1s). Honest-failure gate:
+ * if the worker's heartbeat is missing/stale we return null WITHOUT inserting a row —
+ * inserting anyway would create a job nobody will ever claim (a zombie task).
+ */
+async function enqueueGenerationJob(
+  slotCount: number,
+  params: Record<string, unknown>,
+  userId: string,
+): Promise<{ jobId: string; slots: number } | null> {
+  const healthy = await isWorkerHealthy();
+  if (!healthy) return null;
+
+  const results: GenerationJobResult[] = Array.from({ length: slotCount }, (_, i) => ({
+    slot: i, status: "pending", imageUrl: null, error: null,
+  }));
+
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("generation_jobs")
+    .insert({
+      vibepin_user_id: userId,
+      status: "queued",
+      params,
+      results,
+    })
+    .select("id")
+    .single();
+
+  if (error || !data?.id) {
+    console.error("[generate] enqueue insert failed:", error?.message);
+    return null;
+  }
+  return { jobId: data.id as string, slots: slotCount };
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -421,6 +491,59 @@ export async function POST(req: NextRequest) {
     mockProviderBehavior: providerMode === "mock" ? mockProviderBehavior : undefined,
     mockProviderDelayMs: providerMode === "mock" ? mockProviderDelayMs : undefined,
   }));
+
+  // Path 0: WP3-P1 worker enqueue (GENERATION_MODE=worker). Short-circuits everything
+  // below — the VPS worker fulfills the job, this process never spawns generator.py.
+  if (GENERATION_MODE === "worker") {
+    const bearerUser = await getUserIdFromBearer(req).catch(() => null);
+    const cookieUser = bearerUser ? null : await getUserIdFromCookies().catch(() => null);
+    const userId = bearerUser ?? cookieUser;
+    if (!userId) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+
+    const promptWithLangForQueue = contentLanguage !== "en"
+      ? `${prompt}\n\n[Important: Generate any on-image text and descriptive copy in ${contentLanguage}. Keep Pinterest-native tone.]`
+      : prompt;
+    const jobParams: GeneratorPayload = {
+      keyword, style, count, prompt: promptWithLangForQueue, style_ref: styleRef, product_images: productImages, image_inputs: imageInputs, category,
+      text_overlay: textOverlay, reference_strength: referenceStrength,
+      output_type: outputType, format: pinFormat, product_metadata: productMetadata,
+      model_key: modelKey, content_language: contentLanguage,
+      prompt_mode: promptMode, prompt_version: promptVersion,
+      creative_direction_meta: creativeDirectionMeta,
+      selectedTags,
+      primaryFormatTag,
+      directionBrief,
+      briefManuallyEdited,
+      inferredCategory,
+      selectedOpportunity,
+      productImageCountRequested,
+      referenceImageCountRequested,
+      outputCount,
+      variationMode,
+      outputVariants,
+      requestedImageCount: imageCountClamp.requested,
+      actualImageCount: count,
+      countClamped: imageCountClamp.clamped,
+      generationRequestId,
+      generationOwnerId: `user:${userId}`,
+      studioClientId,
+      providerMode,
+      mockProviderBehavior,
+      mockProviderDelayMs,
+      mode: isRetrySingleOutput ? "retry_single_output" : undefined,
+      retryOfOutputId: body.retryOfOutputId,
+      retryOutputIndex: body.retryOutputIndex,
+    };
+
+    const enqueued = await enqueueGenerationJob(count, jobParams as unknown as Record<string, unknown>, userId);
+    if (!enqueued) {
+      return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
+    }
+    console.log(`[/api/generate] enqueued job=${enqueued.jobId} slots=${enqueued.slots} user=${userId}`);
+    return NextResponse.json({ jobId: enqueued.jobId, slots: enqueued.slots });
+  }
 
   // Path 1: FastAPI (async task queue — only when server is running)
   const requiresFullPayload = promptMode === "creative_direction_v2" || productImages.length > 0 || !!styleRef;
