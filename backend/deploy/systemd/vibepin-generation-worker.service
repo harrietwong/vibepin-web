@@ -1,0 +1,48 @@
+# VibePin durable AI-generation worker (WP3-P1). Long-running polling loop.
+# DISABLED by default — enable only AFTER the VPS credential rotation hard
+# prerequisite (this process holds LINAPI_KEY + the Supabase service-role key).
+#
+# Entry:  python -m app.worker  (from /opt/vibepin/api). Pure poll loop — it
+# exposes NO HTTP port; the FastAPI app is left untouched. It claims
+# generation_jobs rows (CAS), generates each slot via backend/generator.py,
+# uploads to Supabase Storage, and keeps a heartbeat + worker_status row.
+[Unit]
+Description=VibePin durable AI generation worker (DB-as-queue, no HTTP port)
+After=network-online.target
+Wants=network-online.target
+# Throttle restart storms if the process crash-loops on a bad env/DB.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# The worker package lives under api/ (python -m app.worker). Keep backend/ on
+# PYTHONPATH so generator.py (the shared prompt engine) imports cleanly.
+WorkingDirectory=/opt/vibepin/api
+Environment=PYTHONPATH=/opt/vibepin/api:/opt/vibepin/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+# EnvironmentFile provides the worker's secrets. It MUST define, at minimum:
+#   LINAPI_KEY, LINAPI_BASE_URL, LINAPI_IMAGE_MODEL (+ optional gpt/gemini ids),
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_PROMPT_ENHANCER_MODEL (optional),
+#   GENERATION_WORKER_NAME (optional; defaults to 'generation-worker').
+EnvironmentFile=-/opt/vibepin/api/.env
+EnvironmentFile=-/opt/vibepin/backend/.env
+ExecStart=/usr/bin/env python3 -m app.worker
+
+# Long-running service: restart on failure, but never turn a fatal config error
+# into a tight loop (StartLimit* above trips after 5 restarts / 5 min).
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+KillMode=control-group
+# IO-bound HTTP forwarder on a 1.6G / 0-swap box — keep it low priority so a
+# generation burst never starves the crawler/scheduler timers.
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vibepin-generation-worker
+
+[Install]
+WantedBy=multi-user.target
