@@ -122,6 +122,7 @@ export const STUDIO: string[] = [
   "test-optional-website-url",
   "test-schedule-publish-validation",
   "test-generation-jobs",
+  "test-generation-recovery",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */

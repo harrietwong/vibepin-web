@@ -30,6 +30,7 @@ import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
+import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { PinBoardCard } from "@/components/studio/PinBoardCard";
@@ -147,9 +148,11 @@ export function StudioBoard() {
     // when we actually landed on the failed filter — a stray/stale flag must never
     // silently seed "publish" the next time the user happens to land elsewhere.
     setFailedSubFilter(restored === "failed" ? consumeFailedSubEntryDefault() : "all");
-    // Client-driven generation can't survive a reload — any draft still marked
-    // "generating" now is unrecoverable. Fail it so cards never stick in Generating.
-    pinDraftStore.failStaleGeneratingDrafts();
+    // WP3-P2: reconcile in-flight generation jobs instead of blindly failing every
+    // "generating" card. Worker-mode placeholders (generationJobId set) resume
+    // polling or apply their already-terminal result; only jobId-less (inline-mode)
+    // leftovers are judged dead, matching the pre-P2 behavior for that partition.
+    void reconcileGeneratingDrafts();
   }, []);
 
   const [uploading, setUploading] = useState(false);
@@ -401,6 +404,11 @@ export function StudioBoard() {
         generationSessionId: requestId,
         promptSnapshot: opts.directionBrief,
         setupSnapshot,
+        // WP3-P2: this index IS the worker-mode results[] slot (placeholders[i] ↔
+        // slot i, 1:1 — see the enqueue block below). Stamped unconditionally, even
+        // in what may turn out to be the inline-mode fallback, since it's a stable
+        // per-card fact and harmless when unused.
+        generationSlot: i,
       }),
     );
     // Close the drawer right away — generation continues and the cards update.

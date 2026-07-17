@@ -18,7 +18,8 @@ function browser() {
   return _client;
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
+/** Exported for generationRecovery.ts's own GET /api/generation-jobs/[id] probe. */
+export async function authHeaders(): Promise<Record<string, string>> {
   const { data: { session } } = await browser().auth.getSession();
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (session?.access_token) h.Authorization = `Bearer ${session.access_token}`;
@@ -186,6 +187,23 @@ const POLL_INTERVAL_MS = 4_000;
 const POLL_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
+ * WP3-P2: module-level registry of jobIds currently being polled. Both the normal
+ * enqueue-time call and generationRecovery.ts's reconcileGeneratingDrafts() (on
+ * mount, after a reload) call pollGenerationJob — without this guard, a page
+ * reload that races the in-flight poll (or two reconcile passes) would start a
+ * second poll loop for the same job, double-firing onSlot/onEnd against the same
+ * placeholders. Registered when polling starts, cleared on any terminal outcome
+ * (finish()) or an explicit stop(), so a job can always be re-polled later once
+ * the previous run has genuinely ended.
+ */
+const activePolls = new Map<string, true>();
+
+/** True if `jobId` currently has a live pollGenerationJob() loop registered. */
+export function isPollingJob(jobId: string): boolean {
+  return activePolls.has(jobId);
+}
+
+/**
  * Poll GET /api/generation-jobs/[id] every 4s, diffing `results` against the last
  * seen snapshot so each slot's terminal callback fires exactly once. Stops on a
  * terminal job status (done/partial/failed) or after a 15-minute wall-clock cap —
@@ -194,13 +212,21 @@ const POLL_TIMEOUT_MS = 15 * 60 * 1000;
  * left alone; this is a client-side give-up, not a server mutation).
  *
  * Returns a `stop()` function the caller can invoke to cancel polling early
- * (e.g. component unmount) without firing onEnd.
+ * (e.g. component unmount) without firing onEnd. If `jobId` is already being
+ * polled (see `activePolls`), this is a no-op that returns an inert stop() —
+ * the caller silently joins the existing loop's eventual callbacks instead of
+ * starting a duplicate one.
  */
 export function pollGenerationJob(
   jobId: string,
   cb: PollGenerationCallbacks,
   opts?: { intervalMs?: number; timeoutMs?: number },
 ): { stop: () => void } {
+  if (activePolls.has(jobId)) {
+    return { stop: () => {} };
+  }
+  activePolls.set(jobId, true);
+
   const intervalMs = opts?.intervalMs ?? POLL_INTERVAL_MS;
   const timeoutMs = opts?.timeoutMs ?? POLL_TIMEOUT_MS;
   const startedAt = Date.now();
@@ -217,6 +243,7 @@ export function pollGenerationJob(
     if (stopped) return;
     stopped = true;
     clear();
+    activePolls.delete(jobId);
     cb.onEnd(status);
   }
 
@@ -280,6 +307,6 @@ export function pollGenerationJob(
   void tick();
 
   return {
-    stop: () => { stopped = true; clear(); },
+    stop: () => { stopped = true; clear(); activePolls.delete(jobId); },
   };
 }

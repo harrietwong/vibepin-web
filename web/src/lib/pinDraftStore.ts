@@ -148,6 +148,12 @@ export interface PinDraft {
    *  worker-mode enqueue path. Used to resume polling after a refresh (P2 reconcile);
    *  P1 only sets/clears it during the live in-page poll. */
   generationJobId?:    string;
+  /** WP3-P2: this placeholder's index into the generation_jobs row's `results[]`
+   *  array. Stamped at creation time (StudioBoard's worker-mode enqueue maps
+   *  placeholders[i] ↔ slot i 1:1). Reconcile-after-reload matches a reloaded
+   *  draft back to its job result by this field, not by array order — order is
+   *  not stable across a localStorage reload. */
+  generationSlot?:     number;
   /** Set when the card is archived off the active board (recoverable). */
   archivedAt?:         string;
   // ── Async image analysis (AI Copy v5 — computed at upload time) ─────────────
@@ -474,6 +480,8 @@ export function createBoardDraft(input: {
   generationStatus?: string;
   /** WP3-P1: generation_jobs row id (worker-mode enqueue path only). */
   generationJobId?: string;
+  /** WP3-P2: this placeholder's slot index in the job's results[] array. */
+  generationSlot?: number;
   /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
   sourceGenerationId?: string;
   sourceAssetKey?:     string;
@@ -517,6 +525,7 @@ export function createBoardDraft(input: {
     assetError:          input.assetError,
     generationStatus:    input.generationStatus,
     generationJobId:     input.generationJobId,
+    generationSlot:      input.generationSlot,
     sourceGenerationId:  input.sourceGenerationId,
     sourceAssetKey:      input.sourceAssetKey,
   };
@@ -562,16 +571,24 @@ export function failGeneratedDraft(id: string): PinDraft | null {
 }
 
 /**
- * Refresh recovery: client-driven generation cannot survive a page reload (the
- * awaiting promise is gone, so results can never be delivered). Any board draft
- * still marked "generating" on mount is dead — mark it failed so cards never
- * stay stuck in Generating forever (PRD 12.1).
+ * Refresh recovery: client-driven (inline-mode) generation cannot survive a page
+ * reload (the awaiting promise is gone, so results can never be delivered). Any
+ * board draft still marked "generating" on mount is dead — mark it failed so
+ * cards never stay stuck in Generating forever (PRD 12.1).
+ *
+ * WP3-P2: worker-mode placeholders carry a `generationJobId` — the task lives
+ * server-side and a reload does NOT kill it, so those must NOT be judged here.
+ * `onlyWithoutJobId` (default false, preserving the original call sites/tests)
+ * restricts this sweep to drafts with no jobId; generationRecovery.ts's
+ * reconcileGeneratingDrafts() is the only caller that passes `true`, and it
+ * handles the jobId-bearing drafts itself via the job-status API.
  */
-export function failStaleGeneratingDrafts(): number {
+export function failStaleGeneratingDrafts(onlyWithoutJobId = false): number {
   const data = load();
   let changed = 0;
   for (const d of Object.values(data.drafts)) {
     const s = (d.generationStatus ?? "").toLowerCase();
+    if (onlyWithoutJobId && d.generationJobId) continue;
     if (isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued")) {
       data.drafts[d.id] = { ...d, generationStatus: "failed", updatedAt: new Date().toISOString() };
       changed++;
@@ -579,6 +596,15 @@ export function failStaleGeneratingDrafts(): number {
   }
   if (changed) { persist(data); emit(); }
   return changed;
+}
+
+/** Board drafts currently in a "generating" lifecycle state (any board source). */
+export function generatingDrafts(): PinDraft[] {
+  const data = load();
+  return Object.values(data.drafts).filter(d => {
+    const s = (d.generationStatus ?? "").toLowerCase();
+    return isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued");
+  });
 }
 
 /**
