@@ -1204,8 +1204,6 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Pinterest 连接尚未完成。请重新选择该 Pin。",
   "plan.error.pinNotFound": "找不到这个 Pin。",
   "plan.error.needsImage": "该 Pin 需要一张图片才能排期。",
-  "plan.error.needsTitle": "该 Pin 需要一个标题才能排期。",
-  "plan.error.needsDescription": "该 Pin 需要一段描述才能排期。",
   "plan.error.needsBoard": "发布前请先添加画板。",
   "plan.dropBlock.editSmartSchedule": "编辑智能排期",
   "plan.dropBlock.allPastTitle": "{date} 已没有剩余时间。",
@@ -1216,7 +1214,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "这一天已有 {n} 个已排期的 Pin{plural} 占满了所有智能排期时间段。请增加每天的 Pin 数量，或选择其他日期。",
   "plan.toast.timeLocked": "时间已锁定 — 重新平衡时将保留。",
   "plan.toast.timeUnlocked": "时间已解锁。",
-  "plan.toast.blockedNeedsDetails": "{n} 个 Pin{plural} 需要先补充图片、标题或描述才能排期。",
+  "plan.toast.blockedNeedsDetails": "{n} 个 Pin{plural} 需要先补充图片、画板，或缩短标题/描述才能排期。",
   "plan.toast.alreadyScheduled": "{n} 个 Pin{plural} 已排期",
   "plan.toast.couldNotSchedule": "无法为所选的 Pin 排期。",
   "plan.toast.scheduledCount": "已排期 {n} 个 Pin{plural}{alreadySuffix}",
@@ -1224,7 +1222,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "已生成缺失的详情",
   "plan.toast.movedPins": "已将 {n} 个 Pin{plural} 移动到 {date}",
   "plan.toast.removedPins": "已从计划中移除 {n} 个 Pin{plural}",
-  "plan.toast.selectedNeedDetails": "所选的 Pin 需要先补充图片、标题或描述才能排期。",
+  "plan.toast.selectedNeedDetails": "所选的 Pin 需要先补充图片、画板，或缩短标题/描述才能排期。",
   "plan.toast.noUnscheduledSelected": "未选择任何未排期的 Pin — 已排期的 Pin 会被跳过。",
   // ── planViews ──
   "planViews.list.status.scheduled": "已排期",
@@ -2596,6 +2594,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "language.aiContentLanguageHint": "用于生成 Pin 标题、描述、关键词、趋势和机会建议。",
   "language.contentExistingNote": "AI 内容语言只影响新生成的标题、描述、关键词和建议。已保存的 Pin 不会自动改写。",
   "pinDetails.overflow.pinNow": "立即发布",
+
+  "studioBoard.toast.fieldTooLong": "请缩短标题或描述后再排期或发布。",
 
 };
 

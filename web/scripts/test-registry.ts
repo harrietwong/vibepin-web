@@ -76,6 +76,7 @@ export const CORE: string[] = [
   // Sync / storage
   "test-pin-draft-sync",
   "test-pin-draft-promote",
+  "test-schedule-timezone",
   "test-publish-due-claim",
   "test-publish-events",
   "test-user-store-sync",
@@ -119,6 +120,7 @@ export const STUDIO: string[] = [
   "test-pin-details-phase3",
   "test-pin-details-modal-compact",
   "test-optional-website-url",
+  "test-schedule-publish-validation",
 ];
 
 /** Weekly Plan calendar + Smart Schedule. */

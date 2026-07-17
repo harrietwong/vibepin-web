@@ -1297,8 +1297,6 @@ const ar: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "لم يكتمل ربط Pinterest. يرجى تحديد الـ Pin مرة أخرى.",
   "plan.error.pinNotFound": "تعذّر العثور على هذا الـ Pin.",
   "plan.error.needsImage": "يحتاج هذا الـ Pin إلى صورة قبل جدولته.",
-  "plan.error.needsTitle": "يحتاج هذا الـ Pin إلى عنوان قبل جدولته.",
-  "plan.error.needsDescription": "يحتاج هذا الـ Pin إلى وصف قبل جدولته.",
   "plan.error.needsBoard": "أضف لوحة قبل النشر.",
   "plan.dropBlock.editSmartSchedule": "تعديل الجدولة الذكية",
   "plan.dropBlock.allPastTitle": "لا وقت متاح متبقٍ في {date}.",
@@ -1309,7 +1307,7 @@ const ar: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "هذا اليوم يحتوي بالفعل على {n} Pin{plural} مجدولة تملأ جميع أوقات الجدولة الذكية. زد عدد الـ Pins يوميًا أو اختر يومًا آخر.",
   "plan.toast.timeLocked": "الوقت مقفل — يُحتفظ به أثناء إعادة التوازن.",
   "plan.toast.timeUnlocked": "تم فتح قفل الوقت.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} تحتاج إلى صورة أو عنوان أو وصف قبل الجدولة.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} تحتاج إلى صورة أو لوحة أو عنوان/وصف أقصر قبل الجدولة.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} مجدولة بالفعل",
   "plan.toast.couldNotSchedule": "تعذّرت جدولة الـ Pins المحددة.",
   "plan.toast.scheduledCount": "تمت جدولة {n} Pin{plural}{alreadySuffix}",
@@ -1317,7 +1315,7 @@ const ar: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "تم إنشاء التفاصيل الناقصة",
   "plan.toast.movedPins": "تم نقل {n} Pin{plural} إلى {date}",
   "plan.toast.removedPins": "تمت إزالة {n} Pin{plural} من الخطة",
-  "plan.toast.selectedNeedDetails": "تحتاج الـ Pins المحددة إلى صورة أو عنوان أو وصف قبل الجدولة.",
+  "plan.toast.selectedNeedDetails": "تحتاج الـ Pins المحددة إلى صورة أو لوحة أو عنوان/وصف أقصر قبل الجدولة.",
   "plan.toast.noUnscheduledSelected": "لم يتم تحديد أي Pins غير مجدولة — سيتم تخطي الـ Pins المجدولة بالفعل.",
 
   // ── planViews ──
@@ -2598,6 +2596,8 @@ const ar: Partial<Record<MessageKey, string>> = {
   "language.aiContentLanguageHint": "تُستخدم لإنشاء عناوين Pin وأوصافها وكلماتها المفتاحية واتجاهاتها واقتراحاتها.",
   "language.contentExistingNote": "لغة محتوى الذكاء الاصطناعي تؤثر على العناوين والأوصاف والكلمات المفتاحية والاقتراحات المُنشأة حديثًا. أما الـ Pins المحفوظة فلا تتغيّر تلقائيًا.",
   "pinDetails.overflow.pinNow": "نص الواجهة",
+
+  "studioBoard.toast.fieldTooLong": "اختصر العنوان أو الوصف قبل الجدولة أو النشر.",
 
 };
 

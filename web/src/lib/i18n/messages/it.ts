@@ -1958,8 +1958,6 @@ const it: Partial<Record<MessageKey, string>> = {
   // ── plan: Errors / validation ──
   "plan.error.pinNotFound": "Impossibile trovare questo Pin.",
   "plan.error.needsImage": "Questo Pin necessita di un'immagine prima di poter essere pianificato.",
-  "plan.error.needsTitle": "Questo Pin necessita di un titolo prima di poter essere pianificato.",
-  "plan.error.needsDescription": "Questo Pin necessita di una descrizione prima di poter essere pianificato.",
   "plan.error.needsBoard": "Aggiungi una bacheca prima di pubblicare.",
 
   // ── plan: Drop-block toasts ──
@@ -1974,7 +1972,7 @@ const it: Partial<Record<MessageKey, string>> = {
   // ── plan: Other toasts ──
   "plan.toast.timeLocked": "Orario bloccato — mantenuto durante il ribilanciamento.",
   "plan.toast.timeUnlocked": "Orario sbloccato.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin necessita{plural} di un'immagine, un titolo o una descrizione prima della pianificazione.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin necessita{plural} di un'immagine, una bacheca o un titolo/una descrizione più breve prima della pianificazione.",
   "plan.toast.alreadyScheduled": "{n} Pin già pianificat{plural}",
   "plan.toast.couldNotSchedule": "Impossibile pianificare i Pin selezionati.",
   "plan.toast.scheduledCount": "Pianificat{plural} {n} Pin{alreadySuffix}",
@@ -1982,7 +1980,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Dettagli mancanti generati",
   "plan.toast.movedPins": "Spostat{plural} {n} Pin a {date}",
   "plan.toast.removedPins": "Rimoss{plural} {n} Pin dal piano",
-  "plan.toast.selectedNeedDetails": "I Pin selezionati necessitano di un'immagine, un titolo o una descrizione prima della pianificazione.",
+  "plan.toast.selectedNeedDetails": "I Pin selezionati necessitano di un'immagine, una bacheca o un titolo/una descrizione più breve prima della pianificazione.",
   "plan.toast.noUnscheduledSelected": "Nessun Pin non pianificato selezionato — i Pin già pianificati vengono saltati.",
 
   // ── history: Shared fallbacks ──
@@ -2963,6 +2961,8 @@ const it: Partial<Record<MessageKey, string>> = {
   "language.aiContentLanguageHint": "Usata per generare titoli, descrizioni, parole chiave, tendenze e suggerimenti dei Pin.",
   "language.contentExistingNote": "La lingua dei contenuti IA si applica a titoli, descrizioni, parole chiave e suggerimenti appena generati. I Pin salvati non vengono modificati automaticamente.",
   "pinDetails.overflow.pinNow": "Testo dell'interfaccia",
+
+  "studioBoard.toast.fieldTooLong": "Accorcia il titolo o la descrizione prima di programmare o pubblicare.",
 
 };
 

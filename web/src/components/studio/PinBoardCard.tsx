@@ -143,6 +143,9 @@ export type PinBoardCardProps = {
   onRetryBoards?: () => void;
   /** In-place board validation error (set when Schedule fails on a missing board). */
   boardFieldError?: string;
+  /** In-place title/description validation error (set when Schedule/Publish fails on an over-limit field). */
+  titleFieldError?: string;
+  descriptionFieldError?: string;
   onPersist: (id: string, patch: Partial<PinDraft>) => void;
   onSchedule: (id: string) => void;
   onGenerateAiImage: (draft: PinDraft) => void;
@@ -646,6 +649,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
         <PinFieldsForm value={fields} boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
           needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={onRetryBoards}
           boardFieldError={props.boardFieldError}
+          titleFieldError={props.titleFieldError} descriptionFieldError={props.descriptionFieldError}
           disabled={publishing} onChange={handleChange}
           onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect} />
 

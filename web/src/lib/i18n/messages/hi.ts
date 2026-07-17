@@ -1679,8 +1679,6 @@ const hi: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Pinterest कनेक्शन पूरा नहीं हुआ। कृपया Pin को फिर से चुनें।",
   "plan.error.pinNotFound": "यह Pin नहीं मिल सका।",
   "plan.error.needsImage": "शेड्यूल करने से पहले इस Pin में एक इमेज होनी चाहिए।",
-  "plan.error.needsTitle": "शेड्यूल करने से पहले इस Pin में एक शीर्षक होना चाहिए।",
-  "plan.error.needsDescription": "शेड्यूल करने से पहले इस Pin में एक विवरण होना चाहिए।",
   "plan.error.needsBoard": "प्रकाशित करने से पहले एक बोर्ड जोड़ें।",
   "plan.dropBlock.editSmartSchedule": "स्मार्ट शेड्यूल संपादित करें",
   "plan.dropBlock.allPastTitle": "{date} पर अब कोई समय शेष नहीं है।",
@@ -1691,7 +1689,7 @@ const hi: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "इस दिन पहले से {n} शेड्यूल्ड Pin{plural} हैं जो सभी स्मार्ट शेड्यूल स्लॉट भर चुके हैं। प्रतिदिन Pin की संख्या बढ़ाएँ, या कोई अन्य दिन चुनें।",
   "plan.toast.timeLocked": "समय लॉक्ड — पुनः संतुलन के दौरान बना रहेगा।",
   "plan.toast.timeUnlocked": "समय अनलॉक्ड हो गया।",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} को शेड्यूल करने से पहले एक इमेज, शीर्षक, या विवरण चाहिए।",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} को शेड्यूल करने से पहले एक इमेज, बोर्ड, या छोटा शीर्षक/विवरण चाहिए।",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} पहले से शेड्यूल्ड",
   "plan.toast.couldNotSchedule": "चयनित Pins को शेड्यूल नहीं किया जा सका।",
   "plan.toast.scheduledCount": "{n} Pin{plural}{alreadySuffix} शेड्यूल किए गए",
@@ -1699,7 +1697,7 @@ const hi: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "अनुपलब्ध विवरण जनरेट किए गए",
   "plan.toast.movedPins": "{n} Pin{plural} को {date} पर ले जाया गया",
   "plan.toast.removedPins": "{n} Pin{plural} प्लान से हटाए गए",
-  "plan.toast.selectedNeedDetails": "चयनित Pins को शेड्यूल करने से पहले एक इमेज, शीर्षक, या विवरण चाहिए।",
+  "plan.toast.selectedNeedDetails": "चयनित Pins को शेड्यूल करने से पहले एक इमेज, बोर्ड, या छोटा शीर्षक/विवरण चाहिए।",
   "plan.toast.noUnscheduledSelected": "कोई अनशेड्यूल्ड Pin चयनित नहीं है — पहले से शेड्यूल्ड Pins छोड़ दिए जाते हैं।",
 
   // pinDrawer
@@ -2594,6 +2592,8 @@ const hi: Partial<Record<MessageKey, string>> = {
   "language.aiContentLanguageHint": "पिन शीर्षक, विवरण, कीवर्ड, ट्रेंड और सुझाव बनाने के लिए उपयोग की जाती है।",
   "language.contentExistingNote": "AI सामग्री भाषा नए बनाए गए शीर्षक, विवरण, कीवर्ड और सुझावों पर लागू होती है। सहेजे गए Pin स्वतः नहीं बदले जाते।",
   "pinDetails.overflow.pinNow": "इंटरफ़ेस पाठ",
+
+  "studioBoard.toast.fieldTooLong": "शेड्यूल या प्रकाशित करने से पहले शीर्षक या विवरण छोटा करें।",
 
 };
 

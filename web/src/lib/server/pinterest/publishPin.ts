@@ -85,9 +85,14 @@ export async function publishPinForUser(input: PublishPinInput): Promise<Publish
     return { ok: false, kind: "validation", error: link.message, code: "invalid_link", status: 422 };
   }
 
+  // Title ≤100 / description ≤500 is enforced as a hard client-side block (pinFieldErrors
+  // in pinReadiness.ts) before Schedule/Publish is even reachable, so a live user request
+  // should never arrive here over-length. This slice() is a SERVER-SIDE FALLBACK ONLY —
+  // it exists so a draft that was scheduled before this validation shipped (or edited by
+  // some future path that skips the client gate) does not permanently fail every cron
+  // auto-publish attempt; it silently truncates instead of blocking. PRD product cap:
+  // description ≤500 (Pinterest allows 800; the product promise is 500).
   const title = typeof input.title === "string" ? input.title.trim().slice(0, 100) : undefined;
-  // PRD product cap: description ≤500 (Pinterest allows 800; the product promise is
-  // 500, so the publish path must never send more).
   const description = typeof input.description === "string" ? input.description.trim().slice(0, 500) : undefined;
   const altText = typeof input.altText === "string" ? input.altText.trim().slice(0, 500) : undefined;
 

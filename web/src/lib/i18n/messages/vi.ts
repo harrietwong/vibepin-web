@@ -1744,8 +1744,6 @@ const vi: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Kết nối Pinterest chưa hoàn tất. Vui lòng chọn lại Pin.",
   "plan.error.pinNotFound": "Không tìm thấy Pin này.",
   "plan.error.needsImage": "Pin này cần có ảnh trước khi có thể lên lịch.",
-  "plan.error.needsTitle": "Pin này cần có tiêu đề trước khi có thể lên lịch.",
-  "plan.error.needsDescription": "Pin này cần có mô tả trước khi có thể lên lịch.",
   "plan.error.needsBoard": "Thêm một bảng trước khi đăng.",
   "plan.dropBlock.editSmartSchedule": "Sửa Lịch thông minh",
   "plan.dropBlock.allPastTitle": "Không còn thời gian trống vào {date}.",
@@ -1756,7 +1754,7 @@ const vi: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Ngày này đã có {n} Pin{plural} đã lên lịch lấp đầy mọi khung giờ Lịch thông minh. Hãy tăng số Pin mỗi ngày hoặc chọn ngày khác.",
   "plan.toast.timeLocked": "Đã khóa giờ — giữ nguyên khi cân bằng lại.",
   "plan.toast.timeUnlocked": "Đã mở khóa giờ.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} cần có ảnh, tiêu đề hoặc mô tả trước khi lên lịch.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} cần có ảnh, bảng hoặc tiêu đề/mô tả ngắn hơn trước khi lên lịch.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} đã lên lịch",
   "plan.toast.couldNotSchedule": "Không thể lên lịch các Pin đã chọn.",
   "plan.toast.scheduledCount": "Đã lên lịch {n} Pin{plural}{alreadySuffix}",
@@ -1764,7 +1762,7 @@ const vi: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Đã tạo chi tiết còn thiếu",
   "plan.toast.movedPins": "Đã chuyển {n} Pin{plural} đến {date}",
   "plan.toast.removedPins": "Đã xóa {n} Pin{plural} khỏi kế hoạch",
-  "plan.toast.selectedNeedDetails": "Pin đã chọn cần có ảnh, tiêu đề hoặc mô tả trước khi lên lịch.",
+  "plan.toast.selectedNeedDetails": "Pin đã chọn cần có ảnh, bảng hoặc tiêu đề/mô tả ngắn hơn trước khi lên lịch.",
   "plan.toast.noUnscheduledSelected": "Không có Pin chưa lên lịch nào được chọn — Pin đã lên lịch sẽ bị bỏ qua.",
 
   // ── history (Generation History) ──
@@ -2604,6 +2602,8 @@ const vi: Partial<Record<MessageKey, string>> = {
   "language.aiContentLanguageHint": "Dùng để tạo tiêu đề, mô tả, từ khóa, xu hướng và gợi ý Pin.",
   "language.contentExistingNote": "Ngôn ngữ nội dung AI áp dụng cho tiêu đề, mô tả, từ khóa và gợi ý mới được tạo. Các Pin đã lưu không tự động thay đổi.",
   "pinDetails.overflow.pinNow": "Văn bản giao diện",
+
+  "studioBoard.toast.fieldTooLong": "Rút ngắn tiêu đề hoặc mô tả trước khi lên lịch hoặc đăng.",
 
 };
 
