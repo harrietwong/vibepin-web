@@ -7,10 +7,10 @@ const FOOTER_COLUMNS = [
     title: "Product",
     links: [
       { label: "Intelligence", href: "#create" },
-      { label: "Pin Ideas", href: "/app/discover?demo=true" },
-      { label: "Product Opportunities", href: "/app/products?demo=true" },
-      { label: "Create Pins", href: "/app/studio?demo=true" },
-      { label: "Weekly Plan", href: "/app/plan?demo=true" },
+      { label: "Pin Ideas", href: "/app/discover" },
+      { label: "Product Opportunities", href: "/app/products" },
+      { label: "Create Pins", href: "/app/studio" },
+      { label: "Weekly Plan", href: "/app/plan" },
       { label: "Pricing", href: "/pricing" },
     ],
   },
@@ -18,7 +18,7 @@ const FOOTER_COLUMNS = [
     title: "Resources",
     links: [
       { label: "Help Center", href: "mailto:support@vibepin.co" },
-      { label: "Pinterest Guide", href: "/app/discover?demo=true" },
+      { label: "Pinterest Guide", href: "/app/discover" },
     ],
   },
   {

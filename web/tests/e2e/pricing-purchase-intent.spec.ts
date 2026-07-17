@@ -19,12 +19,25 @@ import { PRICING_TIERS } from "../../src/lib/pricingPlans";
  *
  * Requires a dev server started WITHOUT E2E_TEST_MODE=true, otherwise the proxy
  * auth guard is bypassed and the redirect assertions are meaningless.
- * Signed-in cases need E2E_USER_EMAIL / E2E_USER_PASSWORD.
+ *
+ * The signed-in ("signed-in resume") cases need E2E_USER_EMAIL /
+ * E2E_USER_PASSWORD env vars pointing at a real Supabase account — without
+ * them those tests are skipped rather than faked.
  *
  * Load with `waitUntil: "networkidle"`, not "domcontentloaded": the CTA is
  * server-rendered and becomes *visible* long before React hydrates it, so an
  * early click lands on an unbound button and is silently lost. In dev that
  * window is seconds wide.
+ *
+ * LESSON LEARNED: do not try to fake a Supabase login with a seeded session
+ * cookie + a page.route() intercept on /auth/v1/user. It looks plausible
+ * (getUser() docs say it re-verifies the JWT against the server) but in
+ * practice getUser() rejects a malformed/non-JWT access_token locally and
+ * returns null WITHOUT ever issuing the network request — so the route
+ * handler never fires and the page renders as anonymous. A test built on
+ * this pattern can "pass" once by accident and then reliably fail; the only
+ * trustworthy way to cover a signed-in flow here is a real account via
+ * loginViaForm() + E2E_USER_EMAIL/PASSWORD.
  */
 
 type CheckoutCall = {
@@ -97,59 +110,6 @@ const CREDS = {
   email: process.env.E2E_USER_EMAIL,
   password: process.env.E2E_USER_PASSWORD,
 };
-
-// ── Faked-login helper (no real Supabase account needed) ──────────────────────
-//
-// pricing-client.tsx's `supabase` is a @supabase/ssr createBrowserClient()
-// singleton whose session lives in a cookie named `sb-<project-ref>-auth-token`
-// (base64url JSON, "base64-" prefixed — see node_modules/@supabase/ssr/dist/
-// module/cookies.js). Seeding that cookie is necessary but NOT sufficient: the
-// page calls `supabase.auth.getUser()`, not `getSession()`, and getUser()
-// always re-verifies the JWT against the server — it issues a real GET to
-// `${SUPABASE_URL}/auth/v1/user` and trusts whatever comes back, ignoring the
-// cookie's embedded user object for that trust decision. So a cookie alone
-// (garbage access_token, no matching route) makes getUser() reject and the
-// page renders "anonymous". The working combination — already proven in
-// account-sync.spec.ts's seedFakeSession()/setupDevice() — is BOTH:
-//   1. context.addCookies() with a well-formed session cookie so the
-//      @supabase/ssr client believes a local session exists at all and calls
-//      getUser() instead of short-circuiting on "no session"; AND
-//   2. page.route("**/auth/v1/user**") fulfilling a fake user JSON body with
-//      our chosen id — this is what getUser()'s resolved data.user actually
-//      comes from.
-// The route must be registered before page.goto() (Playwright routes apply to
-// requests made after registration, and the auth call fires during the first
-// effect on mount).
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
-const SUPABASE_REF = "jaxteelkecvlozdrdoog";
-const AUTH_COOKIE_NAME = `sb-${SUPABASE_REF}-auth-token`;
-const APP_ORIGIN = "http://localhost:3000";
-
-async function signInAs(page: Page, userId: string, email: string): Promise<void> {
-  const session = {
-    access_token: `e2e-fake-access-token-${userId}`,
-    refresh_token: `e2e-fake-refresh-token-${userId}`,
-    token_type: "bearer",
-    expires_at: Math.floor(Date.now() / 1000) + 3600, // 1h out — never triggers a refresh
-    expires_in: 3600,
-    user: {
-      id: userId, aud: "authenticated", role: "authenticated", email,
-      app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString(),
-    },
-  };
-  const encoded = Buffer.from(JSON.stringify(session), "utf8").toString("base64url");
-  await page.context().addCookies([
-    { name: AUTH_COOKIE_NAME, value: `base64-${encoded}`, url: APP_ORIGIN, sameSite: "Lax" },
-  ]);
-
-  const fakeUser = {
-    id: userId, aud: "authenticated", role: "authenticated", email,
-    app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString(),
-  };
-  await page.route(`${SUPABASE_URL}/auth/v1/user**`, async route => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fakeUser) });
-  });
-}
 
 async function loginViaForm(page: Page) {
   const emailInput = page.locator('input[type="email"]');
@@ -261,73 +221,6 @@ test('plain "Log in" from pricing carries no checkout intent', async ({ page }) 
   expect(url.searchParams.get("next")).toBe("/pricing");
   // No checkout param anywhere — a plain login must not resume a purchase.
   expect(url.searchParams.get("next")).not.toContain("checkout");
-});
-
-// ── Scenarios B + C + D end-to-end with a FAKED session (no real Supabase
-//    account needed — see signInAs() above) ────────────────────────────────────
-
-test.describe("signed-in resume (faked session)", () => {
-  const FAKE_USER_ID = "e2e00000-0000-4000-8000-00000000f4ke";
-  const FAKE_EMAIL = "e2e-pricing-fake@example.com";
-
-  for (const [label, period, priceKey] of [
-    ["monthly", "month", "month"],
-    ["yearly", "year", "year"],
-  ] as const) {
-    test(`direct /pricing?checkout=pro&period=${period} auto-opens checkout with the faked userId (${label})`, async ({ page }) => {
-      await stubPaddle(page);
-      await signInAs(page, FAKE_USER_ID, FAKE_EMAIL);
-
-      await page.goto(`/pricing?checkout=pro&period=${period}`, { waitUntil: "networkidle" });
-
-      // Auto-checkout fires once Paddle + auth are both ready.
-      await expect
-        .poll(async () => (await checkoutCalls(page)).length, { timeout: 20_000 })
-        .toBe(1);
-
-      const calls = await checkoutCalls(page);
-
-      // THE assertion this whole change exists for: the real (here, faked)
-      // Supabase user id reaches Paddle's customData.
-      expect(calls[0].customData?.userId).toBe(FAKE_USER_ID);
-
-      // Period fidelity: the yearly intent must not silently become monthly.
-      const pro = PRICING_TIERS.find(t => t.id === "pro")!;
-      expect(calls[0].items[0].priceId).toBe(pro.paddlePriceIds![priceKey]);
-
-      // Fired exactly once, and the URL is scrubbed by router.replace.
-      expect(calls).toHaveLength(1);
-      await expect.poll(() => new URL(page.url()).search, { timeout: 10_000 }).toBe("");
-    });
-  }
-
-  test("signed-in visitor with no checkout intent does not auto-open checkout", async ({ page }) => {
-    await stubPaddle(page);
-    await signInAs(page, FAKE_USER_ID, FAKE_EMAIL);
-
-    await page.goto("/pricing", { waitUntil: "networkidle" });
-    await page.waitForTimeout(4_000); // give any stray auto-checkout a chance to fire
-
-    expect(await checkoutCalls(page)).toHaveLength(0);
-  });
-
-  test('signed-in "Start Pro" click opens checkout directly with the faked userId (no signup detour)', async ({ page }) => {
-    await stubPaddle(page);
-    await signInAs(page, FAKE_USER_ID, FAKE_EMAIL);
-
-    await page.goto("/pricing", { waitUntil: "networkidle" });
-    await clickStartPro(page);
-
-    await expect
-      .poll(async () => (await checkoutCalls(page)).length, { timeout: 15_000 })
-      .toBe(1);
-
-    // Never detoured to /signup.
-    expect(new URL(page.url()).pathname).toBe("/pricing");
-
-    const calls = await checkoutCalls(page);
-    expect(calls[0].customData?.userId).toBe(FAKE_USER_ID);
-  });
 });
 
 // ── Security: `next` must not become an open redirect ─────────────────────────

@@ -8,15 +8,13 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Allow unauthenticated access for demo mode
-  if (
-    request.nextUrl.pathname === "/app/discover" &&
-    request.nextUrl.searchParams.get("demo") === "true"
-  ) {
-    return NextResponse.next();
-  }
-
   try {
+    if (request.nextUrl.searchParams.has("demo")) {
+      const url = request.nextUrl.clone();
+      url.searchParams.delete("demo");
+      return NextResponse.redirect(url, 308);
+    }
+
     let supabaseResponse = NextResponse.next({ request });
 
     const supabase = createServerClient(

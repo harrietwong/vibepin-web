@@ -96,7 +96,7 @@ function EvidenceShell({ n, accent, title, question, desc, children, footer }: {
       <p className="text-[11px] font-semibold mb-2" style={{ color: accent }}>{question}</p>
       <p className="text-[12.5px] leading-relaxed mb-4" style={{ color: "#8B93A1" }}>{desc}</p>
       <div className="flex-1">{children}</div>
-      <Link href="/app/discover?demo=true" className="inline-flex items-center gap-1.5 text-[12px] font-bold mt-4" style={{ color: accent }}>{footer} <ArrowRight className="w-3.5 h-3.5" /></Link>
+      <Link href="/app/discover" className="inline-flex items-center gap-1.5 text-[12px] font-bold mt-4" style={{ color: accent }}>{footer} <ArrowRight className="w-3.5 h-3.5" /></Link>
     </div>
   );
 }
@@ -212,8 +212,8 @@ export default function OpportunityIntelligence({ pinSamples, products }: { pinS
                 ))}
               </div>
               <div className="flex flex-col sm:flex-row gap-2.5">
-                <button type="button" className={`${VibeBtn} px-6 py-3 text-[13px] flex items-center justify-center gap-2`}><Sparkles className="w-4 h-4" /> Generate 7 Pins</button>
-                <button type="button" className="rounded-full px-6 py-3 text-[13px] font-semibold border flex items-center justify-center gap-2 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><CalendarDays className="w-4 h-4" /> Add to weekly plan</button>
+                <div className={`${VibeBtn} px-6 py-3 text-[13px] flex items-center justify-center gap-2`}><Sparkles className="w-4 h-4" /> Generate 7 Pins</div>
+                <div className="rounded-full px-6 py-3 text-[13px] font-semibold border flex items-center justify-center gap-2 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><CalendarDays className="w-4 h-4" /> Add to weekly plan</div>
               </div>
             </div>
 

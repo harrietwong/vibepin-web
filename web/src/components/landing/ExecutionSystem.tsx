@@ -60,7 +60,7 @@ function CreatePinsFeature({ product, refs, outputs }: { product?: LandingAsset;
             </li>
           ))}
         </ul>
-        <Link href="/app/studio?demo=true" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px]`}>Start creating Pins <ArrowRight className="w-4 h-4" /></Link>
+        <Link href="/app/studio" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px]`}>Start creating Pins <ArrowRight className="w-4 h-4" /></Link>
       </div>
 
       {/* Create Pins preview */}
@@ -90,7 +90,7 @@ function CreatePinsFeature({ product, refs, outputs }: { product?: LandingAsset;
             <p className="text-[9px] font-bold uppercase tracking-wider mb-2" style={{ color: "#6B7280" }}>AI Direction <span style={{ color: "#4B5563" }}>(Style &amp; Composition)</span></p>
             <div className="flex flex-wrap gap-1.5 mb-4">{AI_CHIPS.map(c => <span key={c} className="rounded-full px-2 py-0.5 text-[9px] font-semibold" style={{ background: "rgba(217,70,239,0.12)", color: "#E879F9", border: "1px solid rgba(217,70,239,0.22)" }}>{c}</span>)}<span className="rounded-full h-5 w-5 flex items-center justify-center text-[11px]" style={{ background: "rgba(255,255,255,0.05)", color: "#6B7280" }}>+</span></div>
 
-            <button type="button" className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-1.5`}><Sparkles className="w-3.5 h-3.5" /> Generate 7 Pins</button>
+            <div className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-1.5`}><Sparkles className="w-3.5 h-3.5" /> Generate 7 Pins</div>
           </div>
 
           {/* generated outputs */}
@@ -162,7 +162,7 @@ function WeeklyPlanFeature({ pins }: { pins: LandingAsset[] }) {
             </div>
           ))}
         </div>
-        <Link href="/app/plan?demo=true" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px] mb-3`}>Build my weekly plan <ArrowRight className="w-4 h-4" /></Link>
+        <Link href="/app/plan" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px] mb-3`}>Build my weekly plan <ArrowRight className="w-4 h-4" /></Link>
         <p className="flex items-center gap-1.5 text-[11px]" style={{ color: "#6B7280" }}><Check className="w-3.5 h-3.5" style={{ color: "#10B981" }} /> Everything in one place. Always on track.</p>
       </div>
 
