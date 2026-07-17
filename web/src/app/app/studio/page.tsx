@@ -2727,6 +2727,10 @@ function CreatePinsContent() {
       status: "running", expectedTotal: totalPins, mode,
       opportunity: opportunity?.keyword, imagesPerRef: count,
       promptExcerpt: briefForGeneration.slice(0, 120), promptFull: briefForGeneration, setupSnapshot: snap,
+      // sessionId is the generationRequestId sent to /api/generate (see requestGenerate
+      // below) — persisting it as generation_request_id lets AI-adoption exact-link
+      // this generation to the draft that carries sourceGenerationId === sessionId.
+      generationRequestId: sessionId,
     };
     addHistory(runningEntry);
     devLogSnapshot("[GenerateSetup] persisted local history", {

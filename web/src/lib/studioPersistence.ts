@@ -241,6 +241,11 @@ export type HistoryEntry = {
   productIds?:    string[];           // product DB IDs (for "Create More" navigation)
   promptExcerpt?: string;             // first ~120 chars (short preview)
   promptFull?:    string;             // full generation prompt (stored for audit/reuse)
+  // ── Generation → draft linkage key ────────────────────────────────────────
+  // The generationRequestId echoed by /api/generate. In the Studio page flow this
+  // equals the session id, and drafts persist it as payload.sourceGenerationId, so
+  // it is the EXACT join key for admin AI-adoption (see adminAiAdoption.ts).
+  generationRequestId?: string;
   // ── Failure diagnostics ───────────────────────────────────────────────────
   errorType?:     GenerationErrorType;  // classified failure reason
   errorMessage?:  string;               // human-readable detail
@@ -490,6 +495,7 @@ function rowToEntry(row: Record<string, unknown>): HistoryEntry {
     productIds,
     promptExcerpt: row.prompt_excerpt != null ? String(row.prompt_excerpt) : undefined,
     promptFull:    row.prompt_full    != null ? String(row.prompt_full)    : undefined,
+    generationRequestId: row.generation_request_id != null ? String(row.generation_request_id) : undefined,
     errorType:     row.error_type     != null ? row.error_type as GenerationErrorType : undefined,
     errorMessage:  row.error_message  != null ? String(row.error_message) : undefined,
     setupSnapshot: rawSetup ?? syntheticSetup,
@@ -537,6 +543,7 @@ export async function insertGenerationToDb(
       category_audit: entry.categoryAudit ?? null,
       error_type:     entry.errorType,
       error_message:  entry.errorMessage,
+      generation_request_id: entry.generationRequestId,
     };
 
     const result = await sb.from("pin_generations").insert(insertPayload);
@@ -559,7 +566,7 @@ export async function fetchGenerationsFromDb(
     if (!user) return [];
 
     const minimalSelect = "id,session_id,created_at,keyword,category,source,groups_json,pin_urls,ref_urls,ref_count,product_count,total_pins";
-    const baseSelect = `${minimalSelect},status,expected_total,mode,opportunity,images_per_ref,product_names,product_ids,prompt_excerpt,prompt_full,error_type,error_message,setup_snapshot`;
+    const baseSelect = `${minimalSelect},status,expected_total,mode,opportunity,images_per_ref,product_names,product_ids,prompt_excerpt,prompt_full,error_type,error_message,setup_snapshot,generation_request_id`;
     let { data, error } = await sb
       .from("pin_generations")
       .select(`${baseSelect},category_audit`)
@@ -661,6 +668,7 @@ export async function createRunningSessionInDb(
       prompt_excerpt: entry.promptExcerpt,
       prompt_full:    entry.promptFull,
       setup_snapshot: compactSetup,
+      generation_request_id: entry.generationRequestId,
     };
 
     const result = await sb.from("pin_generations").insert(insertPayload);
