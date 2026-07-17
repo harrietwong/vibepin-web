@@ -868,6 +868,8 @@ export function PinDetailsModal({
         link: destinationUrl.trim() || undefined,
         altText: altText.trim() || undefined,
         sourcePinId: activeDraft.id,
+        draftId: activeDraft.id,
+        source: "immediate",
         attachedProducts: products.length ? products : undefined,
         primaryProductUrl: primaryProduct?.productUrl,
         productAttachmentMode: products.length ? "vibepin_metadata_v1" : undefined,

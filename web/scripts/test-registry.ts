@@ -45,6 +45,11 @@ export const CORE: string[] = [
   "test-pinterest-client-dedupe",
   "test-published-pin-summary",
   "test-social-provider-status",
+  // Admin operator console (derivation layer + UI i18n)
+  "test-admin-action-center",
+  "test-activation-funnel",
+  "test-ai-adoption",
+  "test-admin-today-i18n",
   // AI copy / creative intelligence
   "test-ai-copy-keyword-context",
   "test-ai-copy-language-guardrail",
@@ -73,6 +78,7 @@ export const CORE: string[] = [
   "test-pin-draft-promote",
   "test-schedule-timezone",
   "test-publish-due-claim",
+  "test-publish-events",
   "test-user-store-sync",
   "test-user-store-route",
   "test-user-store-adapters",

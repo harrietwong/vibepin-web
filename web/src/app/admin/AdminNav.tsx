@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Database, ImageIcon, Users, ScrollText, Workflow, ShieldCheck, LifeBuoy } from "lucide-react";
+import { Sun, LayoutDashboard, Database, ImageIcon, Users, ScrollText, Workflow, ShieldCheck, LifeBuoy } from "lucide-react";
 import { useAdminChrome } from "./AdminChromeProvider";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
@@ -18,6 +18,13 @@ type AdminNavItem = {
 // workspace controls, token badge, or Ask VibePin here — this is a separate
 // control plane rendered outside the customer /app shell.
 const ADMIN_NAV: AdminNavItem[] = [
+  {
+    id: "today",
+    href: "/admin/today",
+    labelKey: "nav.today",
+    icon: Sun,
+    matchFn: (p) => p === "/admin/today" || p.startsWith("/admin/today/"),
+  },
   {
     id: "overview",
     href: "/admin",

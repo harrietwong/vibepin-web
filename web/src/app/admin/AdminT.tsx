@@ -14,3 +14,9 @@ export function AdminT({ k }: { k: AdminMessageKey }) {
   const { t } = useAdminChrome();
   return <>{t(k)}</>;
 }
+
+/** Like AdminT but interpolates `{token}` placeholders from `vars`. */
+export function AdminTFmt({ k, vars }: { k: AdminMessageKey; vars: Record<string, string | number> }) {
+  const { tFmt } = useAdminChrome();
+  return <>{tFmt(k, vars)}</>;
+}

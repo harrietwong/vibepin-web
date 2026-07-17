@@ -1247,6 +1247,10 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           title: input.title || undefined, description: input.description || undefined,
           link: input.destinationUrl || undefined, altText: input.altText || undefined,
           sourcePinId: p.pinId,
+          // p.pinId is the pinDraftStore draft id in the Weekly-Plan context (joins to a
+          // draft) but NOT in the Studio context — draftId is best-effort, so a non-draft
+          // id simply won't join downstream. source is the immediate batch publish.
+          draftId: p.pinId, source: "immediate",
         });
         results.push({ pinId: p.pinId, title, status: "published", url: res.pin.url });
         publishedIds.push(p.pinId);

@@ -27,6 +27,14 @@ import { createServerClient } from "@/lib/supabase";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
 import {
+  recordPublishEvent,
+  recordFailedPublishEvent,
+  newPublishAttemptId,
+  PUBLISH_EVENT_ATTEMPTED,
+  PUBLISH_EVENT_SUCCEEDED,
+  type PublishEventBase,
+} from "@/lib/server/publishEvents";
+import {
   staleClaimCutoffIso,
   payloadToPublishInput,
   payloadAfterSuccess,
@@ -138,11 +146,27 @@ export async function GET(req: Request): Promise<Response> {
   let failed = 0;
 
   for (const row of claimed) {
+    // Per-row publish attempt: one publishAttemptId ties this row's attempted →
+    // succeeded/failed events. boardId comes from the stored payload (may be "" if the
+    // payload is unpublishable). Analytics is best-effort — see lib/server/publishEvents.ts.
+    const eventBase: PublishEventBase = {
+      publishAttemptId: newPublishAttemptId(),
+      userId: row.vibepin_user_id,
+      draftId: typeof row.draft_id === "string" && row.draft_id ? row.draft_id : null,
+      boardId: typeof row.payload?.boardId === "string" ? row.payload.boardId : "",
+      source: "scheduled-cron",
+    };
+    const rowStartedMs = Date.now();
+    void recordPublishEvent(db, PUBLISH_EVENT_ATTEMPTED, eventBase);
     try {
       const input = payloadToPublishInput(row.vibepin_user_id, row.payload);
       if (!input) {
         // Unpublishable payload (missing image/board): record a content failure, don't call Pinterest.
         await persistFailure(db, row, { message: "Missing image or board — cannot publish", code: "bad_request" }, nowIso);
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+          code: "bad_request",
+          message: "Missing image or board — cannot publish",
+        });
         failed++;
         continue;
       }
@@ -150,10 +174,20 @@ export async function GET(req: Request): Promise<Response> {
       const result = await publishPinForUser(input);
       if (result.ok) {
         await persistSuccess(db, row, result.pin, nowIso);
+        void recordPublishEvent(db, PUBLISH_EVENT_SUCCEEDED, {
+          ...eventBase,
+          durationMs: Date.now() - rowStartedMs,
+          remotePinId: result.pin.id,
+          remotePinUrl: result.pin.url,
+        });
         published++;
       } else {
         // Typed validation failure (bad board / image / link) — NOT thrown.
         await persistFailure(db, row, { message: result.error, code: result.code }, nowIso);
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+          code: result.code,
+          message: result.error,
+        });
         failed++;
       }
     } catch (err) {
@@ -167,6 +201,11 @@ export async function GET(req: Request): Promise<Response> {
         // now given small trial-user pin volumes; revisit if this ever blocks scan
         // throughput for other due rows.
         await releaseClaim(db, row);
+        // Draft-wise this is a skip (row stays scheduled, no failure written), but the
+        // publish ATTEMPT did terminate — Pinterest refused it. Record the terminal event
+        // (code pinterest_trial_access) so this attempt's `attempted` never dangles like a
+        // process death; the eventual post-approval publish is a new attempt id.
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, err);
         skipped++;
         continue;
       }
@@ -175,6 +214,7 @@ export async function GET(req: Request): Promise<Response> {
       // a single expired account never aborts the batch, and no retry storm (scheduling
       // is cleared so the row leaves the due scan).
       await persistFailure(db, row, describeThrown(err), nowIso);
+      void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, err);
       failed++;
     }
   }
