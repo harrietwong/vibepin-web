@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { ArrowRight, Check, Minus } from "lucide-react";
-import type { Paddle } from "@paddle/paddle-js";
 import BrandLogo from "@/components/BrandLogo";
 import {
   ACCOUNTS_HELPER_TEXT,
@@ -15,9 +14,7 @@ import {
   PRICING_REASSURANCE,
   PRICING_TIERS,
   type PlanKey,
-  type PricingTier,
 } from "@/lib/pricingPlans";
-import { getPaddle } from "@/lib/paddle/paddleClient";
 import { CONTAINER, GradientText, SectionLabel, VibeBtn } from "@/components/landing/conversion/shared";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
@@ -31,27 +28,34 @@ const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
-/** Map of Paddle price id → localized, currency-formatted total string. */
-type PriceMap = Record<string, string>;
+/** Only the paid tiers can be purchased; free routes to signup. */
+type PaidPlan = Exclude<PlanKey, "free">;
+const PAID_PLANS: readonly PaidPlan[] = ["starter", "pro", "business"];
+function isPaidPlan(id: PlanKey): id is PaidPlan {
+  return (PAID_PLANS as readonly PlanKey[]).includes(id);
+}
 
-function openCheckout(
-  paddle: Paddle,
-  priceId: string,
-  email: string | null,
-  userId: string | null,
-) {
-  paddle.Checkout.open({
-    items: [{ priceId, quantity: 1 }],
-    settings: {
-      displayMode: "overlay",
-      variant: "one-page",
-      successUrl: `${window.location.origin}/welcome`,
+/**
+ * Start an authenticated Creem checkout for the signed-in buyer. Resolves to the
+ * hosted checkout URL, or throws so the caller can surface the retryable banner.
+ */
+async function startCreemCheckout(plan: PaidPlan, interval: "month" | "year"): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const res = await fetch("/api/billing/creem/checkout", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    ...(email ? { customer: { email } } : {}),
-    // Server webhook prefers custom_data.userId to link the Paddle customer to
-    // this VibePin user. Only sent when signed in; anonymous checkout omits it.
-    ...(userId ? { customData: { userId } } : {}),
+    body: JSON.stringify({ plan, interval }),
   });
+  if (!res.ok) {
+    throw new Error(`checkout endpoint returned ${res.status}`);
+  }
+  const json = (await res.json()) as { url?: string };
+  if (!json.url) throw new Error("checkout endpoint returned no url");
+  return json.url;
 }
 
 function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: boolean) => void }) {
@@ -92,33 +96,22 @@ function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: bo
 
 function PlanCards({
   yearly,
-  priceMap,
   onPlanCta,
   selectedPlanId,
   pendingPlanId,
 }: {
   yearly: boolean;
-  priceMap: PriceMap;
-  onPlanCta: (planId: PlanKey, priceId: string) => void;
+  onPlanCta: (planId: PlanKey) => void;
   selectedPlanId: PlanKey | null;
   pendingPlanId: PlanKey | null;
 }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 items-stretch">
       {PRICING_TIERS.map(plan => {
-        // Static USD fallback (also used for the Free card and whenever the
-        // Paddle preview hasn't loaded).
+        // Static USD prices from pricingPlans (single source of truth).
         const staticPrice = yearly ? plan.priceYearly : plan.priceMonthly;
-
-        // Localized price string from Paddle, when available for this toggle.
-        const paddlePriceId = plan.paddlePriceIds
-          ? yearly
-            ? plan.paddlePriceIds.year
-            : plan.paddlePriceIds.month
-          : undefined;
-        const localizedTotal = paddlePriceId ? priceMap[paddlePriceId] : undefined;
-
         const isSelected = selectedPlanId === plan.id;
+        const purchasable = isPaidPlan(plan.id);
 
         return (
           <div
@@ -160,41 +153,21 @@ function PlanCards({
               {plan.name}
             </p>
 
-            {localizedTotal ? (
-              // Localized: show Paddle's formatted total verbatim + period label.
-              <>
-                <div className="flex items-end gap-1 mb-1">
-                  <span className="text-4xl font-black text-white" style={MONO}>
-                    {localizedTotal}
-                  </span>
-                  <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
-                    {yearly ? "/yr" : "/mo"}
-                  </span>
-                </div>
-                <p className="text-[11px] mb-3 min-h-[1em]" style={{ color: "#6B7280" }}>
-                  {yearly ? "billed annually" : ""}
-                </p>
-              </>
-            ) : (
-              // Static USD fallback (unchanged from the pre-Paddle rendering).
-              <>
-                <div className="flex items-end gap-1 mb-1">
-                  <span className="text-4xl font-black text-white" style={MONO}>
-                    ${staticPrice}
-                  </span>
-                  <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
-                    /mo
-                  </span>
-                </div>
-                <p className="text-[11px] mb-3 min-h-[1em]" style={{ color: "#6B7280" }}>
-                  {plan.priceMonthly > 0
-                    ? yearly
-                      ? "billed annually"
-                      : `$${plan.priceYearly}/mo billed annually`
-                    : "free forever"}
-                </p>
-              </>
-            )}
+            <div className="flex items-end gap-1 mb-1">
+              <span className="text-4xl font-black text-white" style={MONO}>
+                ${staticPrice}
+              </span>
+              <span className="pb-1.5 text-sm" style={{ color: "#4B5563" }}>
+                /mo
+              </span>
+            </div>
+            <p className="text-[11px] mb-3 min-h-[1em]" style={{ color: "#6B7280" }}>
+              {plan.priceMonthly > 0
+                ? yearly
+                  ? "billed annually"
+                  : `$${plan.priceYearly}/mo billed annually`
+                : "free forever"}
+            </p>
 
             <p className="text-[12px] mb-5 leading-relaxed" style={{ color: "#8B93A1" }}>
               {plan.description}
@@ -211,10 +184,10 @@ function PlanCards({
               ))}
             </ul>
 
-            {plan.paddlePriceIds && paddlePriceId ? (
+            {purchasable ? (
               <button
                 type="button"
-                onClick={() => onPlanCta(plan.id, paddlePriceId)}
+                onClick={() => onPlanCta(plan.id)}
                 disabled={pendingPlanId === plan.id}
                 className={`w-full rounded-full py-3 text-[13px] font-bold text-center transition-all disabled:opacity-60 disabled:cursor-wait ${
                   plan.highlighted ? VibeBtn : "border hover:text-white hover:border-white/30"
@@ -371,38 +344,29 @@ function ComparisonTable() {
   );
 }
 
-function PricingPageContent({ country }: { country?: string }) {
+function PricingPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [yearly, setYearly] = useState(false);
-  const [paddle, setPaddle] = useState<Paddle | null>(null);
-  const [paddleError, setPaddleError] = useState(false);
-  const [priceMap, setPriceMap] = useState<PriceMap>({});
-  const [email, setEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState<PlanKey | null>(null);
   const [checkoutUnavailable, setCheckoutUnavailable] = useState(false);
-  // A CTA click that arrived before we knew enough to act on it yet (auth
-  // still loading, or signed-in but Paddle still initializing). Consumed by
-  // the effect below the instant readiness catches up; times out to the
-  // "unavailable" banner rather than spinning forever.
-  const [pendingIntent, setPendingIntent] = useState<{ planId: PlanKey; priceId: string } | null>(null);
+  // The plan a signed-in buyer is currently launching checkout for (button spinner).
+  const [pendingPlanId, setPendingPlanId] = useState<PlanKey | null>(null);
+  // A CTA click that arrived before auth resolved. Consumed by the effect below
+  // the instant `authReady` catches up.
+  const [pendingIntent, setPendingIntent] = useState<{ planId: PaidPlan } | null>(null);
 
-  // Prefill checkout email + link the Paddle customer to this VibePin user
-  // (anonymous is normal — both stay null). `authReady` distinguishes "session
-  // still loading" from "confirmed logged out" so the auto-checkout effect
-  // below never mistakes a not-yet-resolved session for an anonymous visitor.
+  // Resolve the session so we know whether to checkout directly or route through
+  // signup. `authReady` distinguishes "still loading" from "confirmed logged out".
   useEffect(() => {
     let active = true;
     supabase.auth
       .getUser()
       .then(({ data }) => {
-        if (active) {
-          setEmail(data.user?.email ?? null);
-          setUserId(data.user?.id ?? null);
-        }
+        if (active) setUserId(data.user?.id ?? null);
       })
       .catch(() => {
         /* anonymous visitor — ignore */
@@ -415,151 +379,73 @@ function PricingPageContent({ country }: { country?: string }) {
     };
   }, []);
 
-  // Initialize Paddle + fetch localized price previews. On any failure
-  // (missing env, load error, preview error) we stay in static fallback mode:
-  // the page renders exactly as before with static USD prices and /signup CTAs.
-  useEffect(() => {
-    let active = true;
-
-    (async () => {
-      let instance: Paddle;
+  // Launch a signed-in buyer's checkout. On any failure, surface the retryable
+  // banner (never leave a dead button).
+  const launchCheckout = useCallback(
+    async (planId: PaidPlan) => {
+      setPendingPlanId(planId);
+      setCheckoutUnavailable(false);
+      const interval = yearly ? "year" : "month";
       try {
-        instance = await getPaddle();
+        const url = await startCreemCheckout(planId, interval);
+        window.location.assign(url);
+        // Navigation follows — keep the spinner until the page unloads.
       } catch (err) {
-        console.error(
-          err instanceof Error ? err.message : "Paddle failed to initialize.",
-        );
-        if (active) setPaddleError(true);
-        return; // fallback mode
+        console.error(err instanceof Error ? err.message : "checkout failed");
+        setPendingPlanId(null);
+        setSelectedPlanId(planId);
+        setCheckoutUnavailable(true);
       }
-      if (!active) return;
-      setPaddle(instance);
+    },
+    [yearly],
+  );
 
-      // Every catalog price id across the paid tiers (month + year).
-      const items = PRICING_TIERS.flatMap((plan: PricingTier) =>
-        plan.paddlePriceIds
-          ? [
-              { priceId: plan.paddlePriceIds.month, quantity: 1 },
-              { priceId: plan.paddlePriceIds.year, quantity: 1 },
-            ]
-          : [],
-      );
-      if (items.length === 0) return;
-
-      try {
-        const preview = await instance.PricePreview({
-          items,
-          ...(country ? { address: { countryCode: country } } : {}),
-        });
-        if (!active) return;
-        const map: PriceMap = {};
-        for (const lineItem of preview.data.details.lineItems) {
-          map[lineItem.price.id] = lineItem.formattedTotals.total;
-        }
-        setPriceMap(map);
-      } catch (err) {
-        console.error(
-          err instanceof Error ? err.message : "Paddle PricePreview failed.",
-        );
-        // Keep priceMap empty → static prices remain shown; checkout still works.
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [country]);
-
-  // Actually perform the CTA action once we know for certain what the buyer's
-  // state is — either "definitely signed in with Paddle ready" or
-  // "definitely signed out". Never call this while a signal is still loading.
-  const runPlanCta = useCallback(
-    (planId: PlanKey, priceId: string) => {
-      if (userId && paddle) {
-        openCheckout(paddle, priceId, email, userId);
-        return;
-      }
+  // Route a signed-out buyer to signup carrying plan + period so we can resume
+  // checkout automatically once they return signed in.
+  const routeToSignup = useCallback(
+    (planId: PaidPlan) => {
       const period = yearly ? "year" : "month";
       const resumeNext = `/pricing?checkout=${encodeURIComponent(planId)}&period=${period}`;
       router.push(`/signup?plan=${encodeURIComponent(planId)}&next=${encodeURIComponent(resumeNext)}`);
     },
-    [userId, paddle, yearly, email, router],
+    [yearly, router],
   );
 
-  // Decide what a plan CTA click does. This is the single entry point for
-  // both the plan cards and the bottom Pro CTA.
-  //  - authReady is still false → we don't yet know who the user is. Do NOT
-  //    guess "anonymous" — record the intent and show a loading state; the
-  //    resume effect below fires the instant auth resolves.
-  //  - confirmed signed out → send the buyer to signup carrying the intended
-  //    plan + period, so we can resume checkout automatically once they land
-  //    back here signed in.
-  //  - confirmed signed in + Paddle ready → open checkout directly.
-  //  - confirmed signed in but Paddle still initializing (no error yet) →
-  //    record the intent and wait; the resume effect fires once Paddle
-  //    finishes loading (or degrades to the banner on paddleError/timeout).
-  //  - confirmed signed in + Paddle failed (or plan has no catalog id) → a
-  //    real, permanent failure: mark the plan selected and show the banner.
+  // The single entry point for both the plan cards and the bottom Pro CTA.
+  //  - auth still loading → record the intent + show a spinner; the effect below
+  //    fires the instant auth resolves.
+  //  - confirmed signed out → send to signup carrying the intended plan/period.
+  //  - confirmed signed in → launch checkout directly.
   const handlePlanCta = useCallback(
-    (planId: PlanKey, priceId: string) => {
+    (planId: PlanKey) => {
+      if (!isPaidPlan(planId)) return; // free routes via <Link>, never here
       if (!authReady) {
-        setPendingIntent({ planId, priceId });
+        setPendingIntent({ planId });
         return;
       }
-      if (!userId) {
-        runPlanCta(planId, priceId);
-        return;
+      if (userId) {
+        void launchCheckout(planId);
+      } else {
+        routeToSignup(planId);
       }
-      if (paddle) {
-        runPlanCta(planId, priceId);
-        return;
-      }
-      if (!paddleError) {
-        setPendingIntent({ planId, priceId });
-        return;
-      }
-      // Signed in, Paddle confirmed-failed (or no catalog id for this plan) —
-      // never silently no-op: mark the selection and surface the banner.
-      setSelectedPlanId(planId);
-      setCheckoutUnavailable(true);
     },
-    [userId, paddle, paddleError, authReady, runPlanCta],
+    [authReady, userId, launchCheckout, routeToSignup],
   );
 
-  // Consume a pending intent the instant readiness catches up. Mirrors the
-  // same decision order as handlePlanCta, minus the "still unknown" branch
-  // (which is exactly the condition that keeps this effect from firing).
+  // Consume a pending intent the instant auth resolves.
   useEffect(() => {
-    if (!pendingIntent) return;
-    if (!authReady) return;
-
-    if (!userId) {
-      const { planId, priceId } = pendingIntent;
-      setPendingIntent(null);
-      runPlanCta(planId, priceId);
-      return;
+    if (!pendingIntent || !authReady) return;
+    const { planId } = pendingIntent;
+    setPendingIntent(null);
+    if (userId) {
+      void launchCheckout(planId);
+    } else {
+      routeToSignup(planId);
     }
+  }, [pendingIntent, authReady, userId, launchCheckout, routeToSignup]);
 
-    if (paddle) {
-      const { planId, priceId } = pendingIntent;
-      setPendingIntent(null);
-      runPlanCta(planId, priceId);
-      return;
-    }
-
-    if (paddleError) {
-      // Paddle confirmed-failed while we were waiting — degrade instead of
-      // hanging forever.
-      setPendingIntent(null);
-      setSelectedPlanId(pendingIntent.planId);
-      setCheckoutUnavailable(true);
-    }
-    // else: signed in, Paddle still initializing, no error yet — keep waiting.
-  }, [pendingIntent, authReady, userId, paddle, paddleError, runPlanCta]);
-
-  // Timeout fallback: if a pending intent never resolves (Paddle CDN
-  // blocked, getUser() hangs, ...), don't leave the button spinning forever —
-  // degrade to the "unavailable" banner after a bounded wait.
+  // Timeout fallback: if auth never resolves, don't spin forever — degrade to
+  // the "unavailable" banner after a bounded wait.
   useEffect(() => {
     if (!pendingIntent) return;
     const planId = pendingIntent.planId;
@@ -571,22 +457,19 @@ function PricingPageContent({ country }: { country?: string }) {
     return () => window.clearTimeout(timer);
   }, [pendingIntent]);
 
-  // Resume an intent-carrying return from signup/login: `?checkout=<planId>&period=<month|year>`.
+  // Resume an intent-carrying return from signup/login:
+  // `?checkout=<planId>&period=<month|year>`. Fire the checkout once, then clean
+  // the URL. Mirrors the previous autoCheckoutFired logic, minus Paddle.
   const autoCheckoutFired = useRef(false);
   useEffect(() => {
     const checkoutPlanId = searchParams.get("checkout");
     if (!checkoutPlanId || autoCheckoutFired.current) return;
-    // Wait for both async-ready signals before deciding anything — treating a
-    // still-loading session as "logged out" would wrongly drop the intent.
+    // Wait for the auth signal — treating a still-loading session as "logged
+    // out" would wrongly drop the intent.
     if (!authReady) return;
 
     const period = searchParams.get("period") === "year" ? "year" : "month";
     const plan = PRICING_TIERS.find(t => t.id === checkoutPlanId);
-    const priceId = plan?.paddlePriceIds
-      ? period === "year"
-        ? plan.paddlePriceIds.year
-        : plan.paddlePriceIds.month
-      : undefined;
 
     if (!userId) {
       // Landed back here still not signed in (e.g. direct link) — nothing to
@@ -594,33 +477,20 @@ function PricingPageContent({ country }: { country?: string }) {
       return;
     }
 
-    // Plan/catalog id missing is a permanent condition — degrade immediately.
-    // Paddle itself may still be initializing (paddle === null, paddleError
-    // === false): keep waiting rather than misreading "not ready yet" as
-    // "failed forever". Only degrade once initialization has confirmed-failed.
-    if (!plan || !priceId || paddleError) {
-      autoCheckoutFired.current = true;
+    autoCheckoutFired.current = true;
+    setYearly(period === "year");
+
+    if (!plan || !isPaidPlan(plan.id)) {
+      // Unknown / non-purchasable plan is a permanent condition — degrade.
       setSelectedPlanId((plan?.id as PlanKey | undefined) ?? (checkoutPlanId as PlanKey));
       setCheckoutUnavailable(true);
-      setYearly(period === "year");
       router.replace("/pricing", { scroll: false });
       return;
     }
 
-    if (!paddle) return; // still initializing — wait for the next effect run
-
-    autoCheckoutFired.current = true;
-    setYearly(period === "year");
-    openCheckout(paddle, priceId, email, userId);
+    void launchCheckout(plan.id);
     router.replace("/pricing", { scroll: false });
-  }, [searchParams, authReady, userId, paddle, paddleError, email, router]);
-
-  const proTier = PRICING_TIERS.find(t => t.id === "pro");
-  const proPriceId = proTier?.paddlePriceIds
-    ? yearly
-      ? proTier.paddlePriceIds.year
-      : proTier.paddlePriceIds.month
-    : undefined;
+  }, [searchParams, authReady, userId, launchCheckout, router]);
 
   return (
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -698,10 +568,9 @@ function PricingPageContent({ country }: { country?: string }) {
           <div className="mb-6">
             <PlanCards
               yearly={yearly}
-              priceMap={priceMap}
               onPlanCta={handlePlanCta}
               selectedPlanId={selectedPlanId}
-              pendingPlanId={pendingIntent?.planId ?? null}
+              pendingPlanId={pendingPlanId ?? pendingIntent?.planId ?? null}
             />
           </div>
 
@@ -787,25 +656,15 @@ function PricingPageContent({ country }: { country?: string }) {
             <Link href="/app/studio" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
               Get started free <ArrowRight className="w-4 h-4" />
             </Link>
-            {proTier?.paddlePriceIds && proPriceId ? (
-              <button
-                type="button"
-                onClick={() => handlePlanCta("pro", proPriceId)}
-                disabled={pendingIntent?.planId === "pro"}
-                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30 disabled:opacity-60 disabled:cursor-wait"
-                style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
-              >
-                {pendingIntent?.planId === "pro" ? "Loading…" : "Start Pro"}
-              </button>
-            ) : (
-              <Link
-                href="/signup?plan=pro&next=/pricing"
-                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30"
-                style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
-              >
-                Start Pro
-              </Link>
-            )}
+            <button
+              type="button"
+              onClick={() => handlePlanCta("pro")}
+              disabled={(pendingPlanId ?? pendingIntent?.planId) === "pro"}
+              className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30 disabled:opacity-60 disabled:cursor-wait"
+              style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
+            >
+              {(pendingPlanId ?? pendingIntent?.planId) === "pro" ? "Loading…" : "Start Pro"}
+            </button>
           </div>
         </div>
       </section>
@@ -815,10 +674,10 @@ function PricingPageContent({ country }: { country?: string }) {
   );
 }
 
-export default function PricingPageClient({ country }: { country?: string }) {
+export default function PricingPageClient() {
   return (
     <Suspense fallback={null}>
-      <PricingPageContent country={country} />
+      <PricingPageContent />
     </Suspense>
   );
 }
