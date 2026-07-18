@@ -1,7 +1,7 @@
 # 后台运营驾驶舱 PRD v1.2
 
-**状态：** P0 已实施（branch `feat/admin-cockpit`，见 §8 实施记录），待终审合并 + 部署
-**日期：** 2026-07-16（初稿 2026-07-14）
+**状态：** P0 已实施。核心 5 提交已随生产化统一合并进 `master`（当前 `master` HEAD `b6f935f`）；`feat/admin-cockpit` 分支是 `master` 的超集，额外多带两个尚未进 master 的修复（`3d4180b` v52 上下文列持久化 + `1514eae` 采用率精确关联键）。待这两个修复合并进 master + v52 迁移应用 + §7.4 浏览器实测。详见 §8。
+**日期：** 2026-07-16（初稿 2026-07-14；§8 topology 于 2026-07-17 复核订正）
 **作者：** Fable 5（基于创始人确认的产品方向）
 **取代：** `【后台系统未实施 优先级不高】.txt`（定位文档，其"不做清单"与最终定位在本文档中继承并展开）
 **关联文档：**
@@ -92,7 +92,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 - ❌ "给管理员看的"复杂图表页——图表不能告诉你今天帮谁，就是装饰
 - ❌ 提前的自动化干预（自动邮件、自动送 credit）——用户量小，**手动干预本身就是用户调研**
 - ❌ 调研报告中的 P1/P2 项在用户量过 500 或有专职客服前一律不动：feedback 投票门户、segments、raw event inspector、可配置 pinned fields、细粒度角色权限
-- ❌ 独立 orders 抽象、在后台重建 Paddle 计费面板（只读镜像 + 深链，Paddle 为唯一事实源）
+- ❌ 独立 orders 抽象、在后台重建 Creem 计费面板（只读镜像 + 深链，Creem 为唯一事实源）
 
 ## 5. 衡量后台本身是否成功
 
@@ -108,7 +108,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 |---|---|---|
 | **P0（现在）** | 今日阻塞名单 + 激活漏斗视图；Customer 360 加 Alert Strip + 健康标记 | 无新基建，现有表派生 |
 | **P1** | 成功创作者周报卡片 + 路径归因；AI 采用率按品类拆分 | P0 上线后观察 2 周 |
-| **P2** | `customer_events` 事件底座（真实 timeline 替换合成 activity）；Paddle webhook mirror 完成后补 billing snapshot；error_incidents 归一化 | Paddle 履约层上线 |
+| **P2** | `customer_events` 事件底座（真实 timeline 替换合成 activity）；Creem webhook mirror 完成后补 billing snapshot；error_incidents 归一化 | Creem 履约层上线 |
 | **不排期** | 第 4 节全部 | 用户 >500 或有专职客服 |
 
 ## 7. 技术方案（P0，实施时核实数据源）
@@ -128,7 +128,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
   - **发布失败**：❌ GAP（见上）。P0 fallback：不做"发布失败"独立判定，改用**间接信号**——`pin_drafts.payload` 中 `plannedAt`/`scheduled_at` 已过期但 `postedAt`/`remotePinId` 仍为空（"过期未发布"），配合客户端此前上报的 `draft_published` analytics 事件（`web/src/lib/analytics.ts`，落 `analytics_events` 表，v41）缺失来交叉推断。UI 必须标注"基于草稿状态推断，非服务端发布日志"。P1 应把 `publishPinForUser()` 改为发布前后各写一行（成功写 `pin_drafts` 促升列或新 `publish_attempts` 表，失败必须落库 `error_message`），这是最值得优先做的instrumentation。
   - **Pinterest 断连**：⚠️ PARTIAL。`pinterest_connections`（`web/src/lib/server/pinterest/connectionStore.ts`）有 `needs_reconnect`（boolean）+ `disconnected_at`，够判定"断连"，但没有 `last_error`/`last_refresh_error` 文本列——只知道"需要重连"，不知道"为什么"。P0 用 `needs_reconnect=true OR disconnected_at IS NOT NULL` 判定，原因摘要退化为固定文案"token 已过期或被撤销"，不展示具体错误。多平台的 `social_connections`（v32）有 `connection_status`（含 error）更细，但当前只服务 IG/FB/TikTok，Pinterest 不经过这张表。
   - **注册未激活/连接未创作**：✅ VERIFIED。Supabase `auth.users`（service role，`db.auth.admin.listUsers`，`adminOverview.ts`/`customer360.ts` 已有先例）联查 `pinterest_connections` + `pin_generations`（`user_id`, `created_at`）。
-  - **付费用户置顶**：⚠️ PARTIAL，好于原判断。v44 `billing_customers`/`billing_subscriptions` 迁移已编写（Paddle webhook 履约镜像，`web/src/app/api/paddle/webhook`），但 webhook 是否已在生产实际收到并落库事件，只读代码审查无法确认。同时 `auth.users.app_metadata.plan` / `user_metadata.plan` 已被 `customer360.ts` 的 `planOf()` 读取并在 Customer 360 现有页面展示——这是一个更轻量、已经在跑的 plan 信号。P0 用 `user_metadata.plan`/`app_metadata.plan` 做置顶排序（付费 tier 名不为空/不为 free 即置顶），`billing_subscriptions.status='active'` 作为存在时的更强信号叠加使用；两者都拿不到时不排序，不阻塞上线。
+  - **付费用户置顶**：⚠️ PARTIAL，好于原判断。计费履约已切到 Creem（`creem_*` 表 v45 已应用，webhook 履约层 `web/src/app/api/webhooks/creem`），但 webhook 是否已在生产实际收到并落库事件，只读代码审查无法确认（`feat/admin-cockpit` 分支本身尚未包含 Creem 代码，仅含更早的 v44 billing scaffolding）。同时 `auth.users.app_metadata.plan` / `user_metadata.plan` 已被 `customer360.ts` 的 `planOf()` 读取并在 Customer 360 现有页面展示——这是一个更轻量、已经在跑的 plan 信号。P0 用 `user_metadata.plan`/`app_metadata.plan` 做置顶排序（付费 tier 名不为空/不为 free 即置顶），`billing_subscriptions.status='active'` 作为存在时的更强信号叠加使用；两者都拿不到时不排序，不阻塞上线。
 - **激活漏斗** `adminActivationFunnel.ts`：按用户聚合五个里程碑时间戳（注册=`auth.users.created_at` / 首连=`pinterest_connections.created_at` / 首生成=`pin_generations` 最早 `created_at` / 首发布=见下 / 7 天复发布=见下），近 30 天注册用户为统计口径。**"首发布"和"7 天复发布"两个里程碑继承上面的发布落库 GAP**：P0 用 `pin_drafts.payload.postedAt` 存在性近似（需要客户端已同步该 draft 到服务端，`pin_drafts` v38 表），漏斗这两段的人数标注"近似（基于草稿同步状态）"。
 - **健康标记与 Alert Strip**：与阻塞名单共用同一判定函数，单用户版本供 Customer 360 调用（`getUserBlockers(userId)`），保证两处口径永远一致。"14 天内有成功发布"信号继承同一个 `postedAt` 近似口径。
 - **AI 采用率**：⚠️ PARTIAL。`pin_generations` 有 `draft_id` 列，但它引用的是旧的 `composer_drafts` 表（`migrate_v22.sql` SECTION 10，`REFERENCES composer_drafts(id)`），不是当前的 `pin_drafts`（v38，主键是 `(vibepin_user_id, draft_id)` 且 `draft_id` 是 text 而非 uuid）——**generation 和当前草稿系统之间没有可 join 的外键**。P0 近似口径：`total_pins`/`pin_urls`（generation 产出的图片 URL 集合）与 `pin_drafts.payload` 中引用的图片 URL 做字符串匹配，判定"该 generation 的产物是否出现在一个 `postedAt` 非空的 draft 里"，UI 必须标注"按图片 URL 近似关联，非精确外键"。P1 修复：在 studio 端生成 draft 时把 `pin_generations.id`（或 `session_id`）写入 `pin_drafts.payload.generationId`，一次性打通链路，之后 P0 的近似口径可退役。
@@ -160,7 +160,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 | 3. 生成→草稿→发布关联 | `pin_generations.draft_id` 指向旧表 `composer_drafts`（`migrate_v22.sql`），与现行 `pin_drafts`（v38）无外键 | ⚠️ PARTIAL（近似口径：图片 URL 匹配） | 按生成产物图片 URL 与 draft payload 图片 URL 匹配近似关联，UI 标注"近似关联" |
 | 4. Pinterest 连接状态 | ✅/⚠️ `pinterest_connections.needs_reconnect/disconnected_at`（`web/src/lib/server/pinterest/connectionStore.ts`），有状态列但无 `last_error` 文本 | ⚠️ PARTIAL | 判定用 `needs_reconnect OR disconnected_at`；原因摘要用固定文案，不展示具体错误 |
 | 5. 注册与活跃信号 | ✅ `auth.users`（service role listUsers，`adminOverview.ts`/`customer360.ts` 先例）；7 天活跃 = `last_sign_in_at` + `pin_generations.created_at` 等合成 activity（`customer360.ts` 已有"synthesized activity"模式） | ✅ VERIFIED | 直接复用 `customer360.ts` 现有合成逻辑 |
-| 6. Plan / 付费状态 | ⚠️ `auth.users.user_metadata.plan`/`app_metadata.plan`（`customer360.ts` `planOf()` 已读）；v44 `billing_customers`/`billing_subscriptions` 已建表但生产 webhook 落库状态未核实 | ⚠️ PARTIAL（好于预期，非纯 GAP） | 用 `user_metadata.plan` 做置顶排序，`billing_subscriptions.status` 存在时叠加增强 |
+| 6. Plan / 付费状态 | ⚠️ `auth.users.user_metadata.plan`/`app_metadata.plan`（`customer360.ts` `planOf()` 已读）；计费已切 Creem（`creem_*` 表 v45），生产 webhook 落库状态未核实 | ⚠️ PARTIAL（好于预期，非纯 GAP） | 用 `user_metadata.plan` 做置顶排序，Creem 订阅状态存在时叠加增强 |
 | 7. Support 工单 | ✅ `support_tickets.status`（'Open'/'In progress'/...）+ `user_id`，`backend/db/migrate_v35_support_tickets.sql`，`web/src/app/api/admin/support/tickets/route.ts` | ✅ VERIFIED | 直接用，按 user_id 聚合未关闭工单数 |
 | 8. v33/v34 迁移 | `backend/db/migrate_v33_admin_support_notes.sql`（建表 `admin_support_notes`：客服内部备注）；`backend/db/migrate_v34_admin_audit_events.sql`（建表 `admin_audit_events`：管理员敏感操作审计日志） | 文件存在，生产应用状态未核实 | 实施前用 `run_migration.py --apply` 确认/应用 |
 | 9. Admin i18n + 主题 | `web/src/lib/admin/adminMessages.ts`（catalog）；`--admin-*` CSS token 约定（现有 admin 页面统一遵守） | ✅ VERIFIED | 新增文案沿用同一 catalog + token 体系 |
@@ -168,24 +168,36 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 
 ---
 
-## 8. 实施记录（P0，2026-07-16）
+## 8. 实施记录（P0，2026-07-16；topology 2026-07-17 复核订正）
 
-创始人决策采用**方案 B**：发布事件服务端落库作为 P0 instrumentation 先行（admin 仍全只读），随后构建派生层与 UI。实施在 `feat/admin-cockpit` 分支（自 master 45b825c 切出，独立 worktree），提交序列：
+创始人决策采用**方案 B**：发布事件服务端落库作为 P0 instrumentation 先行（admin 仍全只读），随后构建派生层与 UI。实施在 `feat/admin-cockpit` 分支（自 master `45b825c` 切出，独立 worktree）。
 
-| 提交 | 内容 |
-|---|---|
-| `2cca984` | 三事件落库：`pinterest_publish_attempted/succeeded/failed` 写入 `analytics_events`（即时路由 + 排期 cron 双路径；`publishAttemptId` 贯穿；错误消息脱敏 ≤300 字符；best-effort 永不影响发布）。同时打通 `pin_drafts.payload.sourceGenerationId/sourceAssetKey`（生成→草稿精确关联，零迁移） |
-| `3687213` | cron trial-access 跳过时补终结事件，杜绝 attempted 悬挂 |
-| `f76c624` | 派生层：`adminActionCenter.ts`（5 类阻塞 + `getUserBlockers` + 健康分）/ `adminActivationFunnel.ts` / `adminAiAdoption.ts` / `adminQueryUtils.ts`（分页防 1000 行陷阱，无 per-user N+1） |
-| `05e0563` | UI：`/admin/today`（阻塞名单/漏斗/Top 创作者占位/采用率）+ AdminNav "Today" 首项 + Customer 360 Alert Strip & 健康标记；admin i18n 新增 65 key（EN+中文）+ `adminTFmt` 插值 |
+**Git 拓扑（2026-07-17 现场 `git log` 复核，不沿用早前描述）：**
+- `master` HEAD = `b6f935f`（`merge: unify feat/pinterest-production-transition into master`）。本节前 5 个提交已经随这次生产化统一并入 `master`，即 master 现已包含驾驶舱的 P0 核心。
+- `feat/admin-cockpit` 是 `master` 的**超集**：它在 `49f6525` 把 master 合了进来，再叠加两个尚未回流 master 的修复（`3d4180b`、`1514eae`）。`git log master..feat/admin-cockpit` 当前恰好只列这两个。
+- 因此本分支相对 master 的**净增量 = `3d4180b` + `1514eae`**；其余 5 个提交是共享历史，不是"待合并"。
+
+**本分支相关的全部 7 个提交（真实 commit message 摘要，非杜撰）：**
+
+| 提交 | 是否已在 master | 内容 |
+|---|---|---|
+| `2cca984` | ✅ 已在 master | `feat(observability): server-side pinterest publish events (attempted/succeeded/failed)` — 三事件落库 `analytics_events`（即时路由 + 排期 cron 双路径；`publishAttemptId` 贯穿；错误消息脱敏 ≤300 字符；best-effort 永不影响发布）；同时打通 `pin_drafts.payload.sourceGenerationId/sourceAssetKey` |
+| `3687213` | ✅ 已在 master | `fix(observability): terminal publish event for the cron trial-access skip` — cron trial-access 跳过时补终结事件，杜绝 attempted 悬挂 |
+| `f76c624` | ✅ 已在 master | `feat(admin): server-side derivation layer for the operator console` — 派生层 `adminActionCenter.ts`（5 类阻塞 + `getUserBlockers` + 健康分）/ `adminActivationFunnel.ts` / `adminAiAdoption.ts` / `adminQueryUtils.ts`（分页防 1000 行陷阱，无 per-user N+1） |
+| `05e0563` | ✅ 已在 master | `feat(admin): /admin/today operator console UI + Customer 360 alert strip` — UI `/admin/today`（阻塞名单/漏斗/Top 创作者占位/采用率）+ AdminNav "Today" 首项 + Customer 360 Alert Strip & 健康标记；admin i18n 新增文案（EN+中文）+ `adminTFmt` 插值 |
+| `2a4f9ec` | ✅ 已在 master | `fix(observability): analytics client construction is best-effort too` — 分析客户端构造失败也降级为 best-effort，杜绝其反噬发布路径 |
+| `3d4180b` | ❌ 仅在 `feat/admin-cockpit` | `fix(studio): persist generation context columns + request id (v52)` — 修复自 ~2026-06-14 起的 schema drift：`pin_generations` 缺 13 个扩展上下文列，PostgREST 拒整条 INSERT 且写入方 `catch {}` 吞错，导致一个月的生成历史**从未落库**（只活在 localStorage）。v52 迁移补 13 列 + `generation_request_id`（+ 部分索引）；HistoryEntry 携带 `generationRequestId`，Studio 主生成流把 `sessionId` 写为 request id |
+| `1514eae` | ❌ 仅在 `feat/admin-cockpit` | `fix(admin): adoption exact-link keys on generation_request_id` — 采用率精确关联原本拿 `draft.sourceGenerationId` 去比 `generation.id`（草稿从不存的 DB uuid），生产里精确链路永远无法命中；改为优先比 `generation_request_id`（DB id 留作兜底），`loadGenerations` SELECT 该列并在缺列时回退，兼容 pre-v52 库 |
 
 **口径落地（较 §7.5 的演进）：**
 - 发布成功/失败从"❌ GAP 纯推断"升级为**双口径**：新数据走精确事件（EXACT），历史数据继续 `postedAt`/`publishError` 推断（INFERRED），UI 强制标注 inferred 徽标
-- AI 采用率关联从"图片 URL 字符串匹配"升级为 `sourceGenerationId` 精确关联（新草稿），URL 匹配仅作历史数据回退
+- AI 采用率关联从"图片 URL 字符串匹配"升级为 `sourceGenerationId` ↔ `generation_request_id` 精确关联（新草稿，`1514eae` 修正关联键），URL 匹配仅作历史数据回退
 - 事件口径：409 去重与请求体校验失败**不算** attempt（attempt 从提交给 Pinterest 起算）；每个 attempted 必有恰一个终结事件
 
 **待办（合并/上线前）：**
-- [ ] `backend/db/migrate_v51_publish_events_index.sql`（`analytics_events` 补 `(user_id, event_name, created_at desc)` 索引）——已编写未应用，创始人签字后走 `run_migration.py --apply`
+- [ ] 把 `3d4180b` / `1514eae` 回流合并进 `master`（本分支的净增量）
+- [ ] **v52 迁移未应用**：`backend/db/migrate_v52_pin_generations_context_columns.sql`（`pin_generations` 补 13 个扩展上下文列 + `generation_request_id` + 部分索引）——已编写、生产**未应用**（只读检查未见任何已应用记录，最高在库迁移号为 v52 但仅文件存在）。在此之前生产 `pin_generations` 自 ~2026-06-14 起因 schema drift **静默丢失整月生成行**，须由 `3d4180b` + 应用 v52 共同修复。走 `run_migration.py --apply`。
+- [ ] `backend/db/migrate_v51_publish_events_index.sql`（`analytics_events` 补 `(user_id, event_name, created_at desc)` 索引）——已编写未应用，同一通道应用
 - [ ] v33/v34 生产应用状态确认（同上通道）
 - [ ] §7.4 验收清单的浏览器实测项（真实数据下的名单/漏斗/Alert Strip 一致性）
 - [ ] 已知局限：BatchEditDrawer 在 Studio 上下文的 `pinId` 非草稿 ID（join 不上，无害）；事件仅从部署起累积
@@ -197,3 +209,4 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 | v1.0 | 2026-07-14 | 初版：四支柱定位 + P0/P1/P2 节奏 + P0 技术方案 |
 | v1.1 | 2026-07-14 | 数据源核实结果写入 §7.2/§7.5 |
 | v1.2 | 2026-07-16 | 方案 B 实施记录（§8）：事件落库 + 派生层 + UI 四提交；Paddle→Creem 订正 |
+| v1.3 | 2026-07-17 | §8 topology 复核订正：列全 7 个相关提交（含 `2a4f9ec`/`3d4180b`/`1514eae`），厘清 5 已入 master + 2 仅在分支的真实关系；补 v52 未应用 + 整月 `pin_generations` 静默丢行；清剩余 Paddle 引用 → Creem |
