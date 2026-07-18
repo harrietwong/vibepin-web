@@ -8,18 +8,27 @@
  * import from client code.
  *
  * Out-of-order guard: Creem delivers webhooks AT-LEAST-ONCE and OUT OF ORDER.
- * Every upsert is read-compare-write against the row's `last_event_at`: we only
- * apply an incoming event whose occurredAt >= the stored last_event_at. NOTE:
- * there is a small read-compare-write race window (two events for the same id
- * landing concurrently could both read the same prior last_event_at and race on
- * the write). This is acceptable — Creem retries deliveries and the mirror
- * converges to the newest event; the guard rejects clearly-stale replays, it is
- * not a strict serializer. Event-level exactly-once is handled separately by
- * markWebhookEventSeen (the creem_webhook_events ledger).
+ * We only apply an incoming subscription event whose occurredAt >= the stored
+ * `last_event_at`. For subscriptions this guard is now ATOMIC (a compare-and-set
+ * done inside the database), so a replayed old `canceled` can never demote a
+ * member between our read and our write: upsertCreemSubscription first tries an
+ * insert that does-nothing on conflict, and otherwise runs a SINGLE conditional
+ * UPDATE whose WHERE clause carries the staleness test
+ * (last_event_at IS NULL OR last_event_at <= occurredAt). Zero affected rows =
+ * stale (skip provisioning); ≥1 = applied. It returns "applied" | "stale" so the
+ * route only touches the plan for applied events. (creem_customers keeps its
+ * read-compare-write merge — it never drives entitlement changes, only linkage.)
+ * Event-level exactly-once is handled separately by markWebhookEventSeen.
  */
 
 import { createServerClient } from "../../supabase";
 import type { PlanKey } from "@/lib/pricingPlans";
+
+/**
+ * The subset of the Supabase client this module uses. Injectable so webhook
+ * ordering tests can drive the store with an in-memory fake (no live DB).
+ */
+export type CreemDbClient = ReturnType<typeof createServerClient>;
 
 // ── Row types ──────────────────────────────────────────────────────────────────
 
@@ -136,57 +145,94 @@ export async function upsertCreemCustomer(
 
 // ── creem_subscriptions ─────────────────────────────────────────────────────────
 
+/** Outcome of a guarded subscription write. */
+export type UpsertOutcome = "applied" | "stale";
+
 /**
- * Insert-or-update a creem_subscriptions row, applying the out-of-order guard.
- * A subscription event is a full snapshot, so the fresh path overwrites the whole
- * row; user_id is preserved from the existing row when the incoming event has none
- * (it is never null-ed by a later event that lacks metadata.userId).
+ * Insert-or-update a creem_subscriptions row with an ATOMIC out-of-order guard.
+ * A subscription event is a full snapshot; user_id is preserved from the existing
+ * row when the incoming event has none (never null-ed by a later event lacking
+ * metadata.userId).
+ *
+ * Returns:
+ *   "applied" — the row now reflects THIS event; the caller may touch the plan.
+ *   "stale"   — an equal-or-newer event already won; the caller must NOT change
+ *               the plan (this is what stops a replayed old `canceled` from
+ *               demoting an active member).
+ *
+ * Atomicity: the staleness decision lives in a single conditional UPDATE's WHERE
+ * clause (`last_event_at IS NULL OR last_event_at <= occurredAt`), not in a
+ * read-then-write. The prior row is read ONLY to compute the merged user_id —
+ * never to decide staleness — so there is no read-compare-write race.
+ *
+ * `db` is injectable so tests can supply an in-memory fake; production passes none.
  */
 export async function upsertCreemSubscription(
   input: UpsertCreemSubscriptionInput,
-): Promise<void> {
-  const db = createServerClient();
+  db: CreemDbClient = createServerClient(),
+): Promise<UpsertOutcome> {
   const { subscriptionId, occurredAt } = input;
 
+  // Read the current row ONLY to compute merged fields (user_id preservation).
+  // This read does NOT gate staleness — the WHERE clause below does.
   const { data: existing, error: readErr } = await db
     .from("creem_subscriptions")
-    .select("creem_subscription_id,user_id,last_event_at")
+    .select("creem_subscription_id,user_id")
     .eq("creem_subscription_id", subscriptionId)
     .maybeSingle();
   if (readErr) throw new Error(`creem_subscriptions read failed: ${readErr.message}`);
 
-  if (existing && !isNotStale(existing.last_event_at, occurredAt)) {
-    // Stale replay: keep the newer snapshot. Only backfill user_id if still null.
-    if (existing.user_id == null && input.userId != null) {
-      const { error } = await db
-        .from("creem_subscriptions")
-        .update({ user_id: input.userId })
-        .eq("creem_subscription_id", subscriptionId);
-      if (error) throw new Error(`creem_subscriptions backfill failed: ${error.message}`);
-    }
-    return;
+  const userId = input.userId != null ? input.userId : (existing?.user_id ?? null);
+  const row = {
+    creem_subscription_id: subscriptionId,
+    provider: "creem",
+    creem_customer_id: input.customerId,
+    user_id: userId,
+    status: input.status,
+    creem_product_id: input.productId,
+    plan: input.plan,
+    billing_interval: input.billingInterval,
+    current_period_end: input.currentPeriodEnd ?? null,
+    scheduled_cancel: input.scheduledCancel,
+    last_event_at: occurredAt,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (!existing) {
+    // First sighting: insert, doing nothing on a concurrent conflict. The
+    // returned rows tell us whether WE inserted (applied) or lost the race.
+    const { data: inserted, error: insErr } = await db
+      .from("creem_subscriptions")
+      .upsert(row, { onConflict: "creem_subscription_id", ignoreDuplicates: true })
+      .select("creem_subscription_id");
+    if (insErr) throw new Error(`creem_subscriptions insert failed: ${insErr.message}`);
+    if (inserted && inserted.length > 0) return "applied";
+    // Lost the insert race — fall through to the conditional update below.
   }
 
-  const userId = input.userId != null ? input.userId : (existing?.user_id ?? null);
+  // Atomic compare-and-set: update ONLY when this event is at least as recent as
+  // the stored one. Zero affected rows ⇒ a newer event already won ⇒ stale.
+  const { data: updated, error: updErr } = await db
+    .from("creem_subscriptions")
+    .update(row)
+    .eq("creem_subscription_id", subscriptionId)
+    .or(`last_event_at.is.null,last_event_at.lte.${occurredAt}`)
+    .select("creem_subscription_id");
+  if (updErr) throw new Error(`creem_subscriptions update failed: ${updErr.message}`);
 
-  const { error } = await db.from("creem_subscriptions").upsert(
-    {
-      creem_subscription_id: subscriptionId,
-      provider: "creem",
-      creem_customer_id: input.customerId,
-      user_id: userId,
-      status: input.status,
-      creem_product_id: input.productId,
-      plan: input.plan,
-      billing_interval: input.billingInterval,
-      current_period_end: input.currentPeriodEnd ?? null,
-      scheduled_cancel: input.scheduledCancel,
-      last_event_at: occurredAt,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "creem_subscription_id" },
-  );
-  if (error) throw new Error(`creem_subscriptions upsert failed: ${error.message}`);
+  if (updated && updated.length > 0) return "applied";
+
+  // Stale: the row exists with a newer last_event_at. Still backfill a missing
+  // user_id (monotonic null→value linkage), but do NOT touch entitlement fields.
+  if (input.userId != null) {
+    const { error: bfErr } = await db
+      .from("creem_subscriptions")
+      .update({ user_id: input.userId })
+      .eq("creem_subscription_id", subscriptionId)
+      .is("user_id", null);
+    if (bfErr) throw new Error(`creem_subscriptions backfill failed: ${bfErr.message}`);
+  }
+  return "stale";
 }
 
 /**

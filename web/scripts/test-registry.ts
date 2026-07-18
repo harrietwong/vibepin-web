@@ -71,6 +71,7 @@ export const CORE: string[] = [
   // Billing (Creem)
   "test-entitlements-security",
   "test-creem-checkout-api",
+  "test-creem-webhook-ordering",
   // Settings / support
   "test-settings-p0",
   "test-support-ai-responder",
