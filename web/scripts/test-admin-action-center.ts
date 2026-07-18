@@ -41,9 +41,9 @@ function facts(partial: {
   return {
     user: { id: partial.id ?? "u1", email: "e@x.com", created_at: partial.createdAt ?? hoursAgo(1), last_sign_in_at: partial.lastSignIn ?? null },
     publish: { lastFailedAt: null, lastFailedCode: null, lastFailedDraftId: null, failedCountInWindow: 0, lastSucceededAt: null, firstSucceededAt: null, ...partial.publish },
-    draft: { publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null, overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null, hasAnyDraft: false, lastDraftUpdatedAt: null, ...partial.draft },
+    draft: { publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null, overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null, hasAnyDraft: false, hasAnyDraftEver: false, lastDraftUpdatedAt: null, ...partial.draft },
     conn: { createdAt: null, needsReconnect: false, disconnectedAt: null, hasRow: false, ...partial.conn },
-    gen: { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, ...partial.gen },
+    gen: { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false, ...partial.gen },
   } as AnyFacts;
 }
 
@@ -137,17 +137,57 @@ test("signup_not_connected NEGATIVE: has a connection row", () => {
 });
 
 // ── 5. connected_not_creating ─────────────────────────────────────────────────
-test("connected_not_creating POSITIVE: connected >72h, zero gen + zero drafts", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { totalCount: 0 }, draft: { hasAnyDraft: false } }));
+test("connected_not_creating POSITIVE: connected >72h, never created gen or draft", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { hasAnyGenEver: false }, draft: { hasAnyDraftEver: false } }));
   assert.ok(has(t, "connected_not_creating"));
 });
-test("connected_not_creating NEGATIVE: has generations", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { totalCount: 4 } }));
+test("connected_not_creating NEGATIVE: has generations (ever)", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { hasAnyGenEver: true } }));
   assert.ok(!has(t, "connected_not_creating"));
 });
-test("connected_not_creating NEGATIVE: has a draft", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, draft: { hasAnyDraft: true } }));
+test("connected_not_creating NEGATIVE: has a draft (ever)", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, draft: { hasAnyDraftEver: true } }));
   assert.ok(!has(t, "connected_not_creating"));
+});
+// ── REGRESSION (Fix 3): existence is ALL-TIME, not the 30d scan window ─────────
+// A user who created content 45+ days ago and NOTHING in the last 30d has
+// totalCount === 0 / hasAnyDraft === false (both window-bound), but hasAnyGenEver /
+// hasAnyDraftEver are true. The old code read the window fields and WRONGLY flagged
+// them as "never created". This proves the predicate now consults the all-time
+// existence signal instead.
+test("connected_not_creating REGRESSION: 45d-old draft, nothing in 30d window → NOT flagged", () => {
+  const t = typesOf(facts({
+    conn: { hasRow: true, createdAt: hoursAgo(24 * 60) },
+    gen: { totalCount: 0, hasAnyGenEver: false },          // no generations in window, none ever
+    draft: { hasAnyDraft: false, hasAnyDraftEver: true },  // no draft touched in 30d, but one exists all-time
+  }));
+  assert.ok(!has(t, "connected_not_creating"), "a user who created 45d ago must NOT be flagged 'never created'");
+});
+test("connected_not_creating REGRESSION: 45d-old generation, nothing in 30d window → NOT flagged", () => {
+  const t = typesOf(facts({
+    conn: { hasRow: true, createdAt: hoursAgo(24 * 60) },
+    gen: { totalCount: 0, hasAnyGenEver: true },           // no generations in the 30d window, but one exists all-time
+    draft: { hasAnyDraft: false, hasAnyDraftEver: false },
+  }));
+  assert.ok(!has(t, "connected_not_creating"), "a user who generated 45d ago must NOT be flagged 'never created'");
+});
+// End-to-end proof through the DB layer: an all-time-only row (outside the 30d
+// scan window) must set hasAnyDraftEver and suppress the blocker. The window scans
+// (updated_at/created_at gte since) return nothing; the existence scan finds it.
+test("getActionCenter REGRESSION: draft older than 30d window suppresses connected_not_creating", async () => {
+  const authUsers = [{ id: "u1", email: "e@x.com", created_at: hoursAgo(24 * 60), last_sign_in_at: null, app_metadata: {}, user_metadata: {} }];
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [] },
+      // draft updated 45d ago → excluded from the 30d window scan, included in the all-time existence scan.
+      pin_drafts: { rows: [{ vibepin_user_id: "u1", draft_id: "old1", payload: {}, updated_at: hoursAgo(24 * 45), scheduled_at: null, deleted_at: null }] },
+      pinterest_connections: { rows: [{ vibepin_user_id: "u1", needs_reconnect: false, disconnected_at: null, created_at: hoursAgo(24 * 60) }] },
+      pin_generations: { rows: [] },
+    },
+    authUsers,
+  );
+  const res = await getActionCenter(db);
+  assert.ok(!res.items.some(i => i.blockerType === "connected_not_creating"), "old-but-existing draft must suppress the 'never created' blocker");
 });
 
 // ── health banding ────────────────────────────────────────────────────────────

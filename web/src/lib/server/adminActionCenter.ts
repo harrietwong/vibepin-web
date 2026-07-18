@@ -20,9 +20,12 @@
 //
 // Efficiency: bounded, aggregate scans (a handful of round-trips), NOT per-user
 // query loops. auth listUsers is paginated (loop pages). Row scans that could
-// exceed supabase-js's silent 1000-row cap use paginated .range() loops.
+// exceed supabase-js's silent 1000-row cap use paginated .range() loops. Each of
+// pin_drafts / pin_generations also gets one extra all-time id-only existence scan
+// (no date filter) so connected_not_creating's "never created" check is not
+// truncated to the 30d window — still aggregate, never per-user.
 
-import type { SupabaseLikeDb, PgError } from "./adminQueryUtils";
+import type { SupabaseLikeDb, PgError, SelectBuilder } from "./adminQueryUtils";
 import {
   createAdminDb,
   isMissingSchema,
@@ -129,8 +132,14 @@ interface DraftFacts {
   firstPostedAt: string | null;
   /** most recent postedAt (inferred recent publish activity). */
   lastPostedAt: string | null;
-  /** any live (non-deleted) draft exists at all. */
+  /** any live (non-deleted) draft touched in the recent scan window. */
   hasAnyDraft: boolean;
+  /**
+   * any live (non-deleted) draft exists AT ALL TIME (not window-bound). Drives
+   * the connected_not_creating "never created anything" existence check — a user
+   * who last touched a draft 45d ago has NOT "never created."
+   */
+  hasAnyDraftEver: boolean;
   /** most recent draft updated_at (activity signal). */
   lastDraftUpdatedAt: string | null;
 }
@@ -147,7 +156,13 @@ interface GenFacts {
   lastSucceededAt: string | null;
   failedCountInWindow: number;
   lastCreatedAt: string | null;
+  /** generations created within the recent scan window. */
   totalCount: number;
+  /**
+   * any generation exists AT ALL TIME (not window-bound). Drives the
+   * connected_not_creating existence check alongside hasAnyDraftEver.
+   */
+  hasAnyGenEver: boolean;
 }
 
 interface UserFacts {
@@ -305,8 +320,10 @@ function evalConnectedNotCreating(f: UserFacts): BlockerItem | null {
   if (!c.hasRow || c.disconnectedAt || !c.createdAt) return null;
   const ageH = hoursSince(c.createdAt);
   if (ageH === undefined || ageH < CONNECTED_NOT_CREATING_HOURS) return null;
-  if (f.gen.totalCount > 0) return null;
-  if (f.draft.hasAnyDraft) return null;
+  // Existence must be ALL-TIME, not window-bound: a user who created content 45d
+  // ago (and nothing since) has NOT "never created" and must not be flagged.
+  if (f.gen.hasAnyGenEver) return null;
+  if (f.draft.hasAnyDraftEver) return null;
   return {
     userId: f.user.id,
     email: f.user.email,
@@ -456,6 +473,7 @@ async function loadDraftFacts(
     firstPostedAt: null,
     lastPostedAt: null,
     hasAnyDraft: false,
+    hasAnyDraftEver: false,
     lastDraftUpdatedAt: null,
   });
   const nowIso = new Date().toISOString();
@@ -510,7 +528,49 @@ async function loadDraftFacts(
     }
     byUser.set(uid, f);
   }
+
+  // All-time existence pass (no date filter) — feeds connected_not_creating's
+  // "never created anything" check, which must NOT be limited to the 30d window.
+  // Cheap: id column only, mirrors loadConnFacts' unfiltered full scan.
+  await markEverExists(db, "pin_drafts", "vibepin_user_id", qb => qb.is("deleted_at", null), warnings, uid => {
+    const f = byUser.get(uid) ?? empty();
+    f.hasAnyDraftEver = true;
+    byUser.set(uid, f);
+  });
+
   return byUser;
+}
+
+/**
+ * Lightweight all-time existence scan: pages the id column only (no date filter)
+ * and calls `mark(uid)` for each distinct owner. Used to answer "has this user
+ * ever created a row of this kind?" without the per-user round-trips the header
+ * comment forbids. On missing table/error it warns and no-ops (existence stays
+ * false, which can only make connected_not_creating MORE eager — acceptable, and
+ * the same table would already have warned in the primary window scan).
+ */
+async function markEverExists(
+  db: SupabaseLikeDb,
+  table: string,
+  userColumn: string,
+  filters: (qb: SelectBuilder<Record<string, unknown>>) => SelectBuilder<Record<string, unknown>>,
+  warnings: string[],
+  mark: (uid: string) => void,
+): Promise<void> {
+  const { rows, error, missing } = await paginateRows<Record<string, unknown>>(db, table, {
+    columns: userColumn,
+    filters,
+    orderColumn: userColumn,
+    ascending: true,
+  });
+  if (missing || error) {
+    warnings.push(`${table} all-time existence scan unavailable — connected_not_creating may over-flag.`);
+    return;
+  }
+  for (const r of rows) {
+    const uid = r[userColumn];
+    if (typeof uid === "string" && uid) mark(uid);
+  }
 }
 
 interface ConnRow {
@@ -569,6 +629,7 @@ async function loadGenFacts(
     failedCountInWindow: 0,
     lastCreatedAt: null,
     totalCount: 0,
+    hasAnyGenEver: false,
   });
 
   // Try with status; fall back to a status-less scan (older DBs) so totalCount /
@@ -614,6 +675,15 @@ async function loadGenFacts(
     }
     byUser.set(uid, f);
   }
+
+  // All-time existence pass (no date filter) — feeds connected_not_creating's
+  // "never created anything" check, which must NOT be limited to the 30d window.
+  await markEverExists(db, "pin_generations", "user_id", qb => qb, warnings, uid => {
+    const f = byUser.get(uid) ?? empty();
+    f.hasAnyGenEver = true;
+    byUser.set(uid, f);
+  });
+
   if (!statusAvailable) {
     warnings.push("pin_generations.status column not present — generation_failures blocker cannot fire.");
   }
@@ -629,10 +699,10 @@ const EMPTY_PUBLISH: PublishFacts = {
 const EMPTY_DRAFT: DraftFacts = {
   publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null,
   overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null,
-  hasAnyDraft: false, lastDraftUpdatedAt: null,
+  hasAnyDraft: false, hasAnyDraftEver: false, lastDraftUpdatedAt: null,
 };
 const EMPTY_CONN: ConnFacts = { createdAt: null, needsReconnect: false, disconnectedAt: null, hasRow: false };
-const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0 };
+const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false };
 
 function assembleFacts(
   user: AuthUserLite,
