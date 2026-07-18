@@ -22,6 +22,7 @@ import type {
 import type { WorkspaceTier } from "@/lib/workspaceStatics";
 import { CATEGORIES, catEmoji } from "@/lib/categories";
 import { usePinterestRegion, useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 import { markDataReady } from "@/lib/navTiming";
 
 // Lazily loaded — recharts is a heavy dependency, and this chart only ever
@@ -78,31 +79,33 @@ function dedupeByKeyword<T extends { keyword: string }>(rows: T[]): T[] {
 }
 
 function EstimatedBadge() {
+  const { t: tr } = useLocale();
   return (
     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
-      Estimated
+      {tr("trends.badge.estimated")}
     </span>
   );
 }
 
 function DataSourceBadge({ label }: { label?: DataSourceLabel }) {
+  const { t: tr } = useLocale();
   if (!label || label === "Derived") {
     return (
       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
-        Estimated
+        {tr("trends.badge.estimated")}
       </span>
     );
   }
   if (label === "Official") {
     return (
       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
-        Official
+        {tr("trends.badge.official")}
       </span>
     );
   }
   return (
     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
-      Estimated
+      {tr("trends.badge.estimated")}
     </span>
   );
 }
@@ -121,6 +124,7 @@ function competitionColor(band: CompetitionBand): string {
 
 /** Compact value/100 bar — number above, muted track + colored fill below. */
 function MetricBar({ value, color, emphasis }: { value?: number; color: string; emphasis?: boolean }) {
+  const { t: tr } = useLocale();
   const v = value == null ? null : Math.max(0, Math.min(100, Math.round(value)));
   return (
     <div className="w-full pr-3">
@@ -129,7 +133,7 @@ function MetricBar({ value, color, emphasis }: { value?: number; color: string; 
           style={{ color: v == null ? "var(--app-text-muted)" : emphasis ? color : "var(--app-text)" }}>
           {v ?? "—"}
         </span>
-        {v != null && <span className="text-[9px] tabular-nums" style={{ color: "var(--app-text-muted)" }}>/100</span>}
+        {v != null && <span className="text-[9px] tabular-nums" style={{ color: "var(--app-text-muted)" }}>{tr("trends.metric.per100")}</span>}
       </div>
       <div className="rounded-full w-full overflow-hidden" style={{ height: emphasis ? 4 : 3, background: "var(--app-inset-hi)" }}>
         <div className="h-full rounded-full" style={{ width: `${v ?? 0}%`, background: color, opacity: v == null ? 0 : 0.9 }} />
@@ -252,6 +256,7 @@ function TrendChip({ state }: { state: TrendState }) {
 }
 
 function ConfidenceBadge({ confidence }: { confidence: "High" | "Medium" | "Low" }) {
+  const { t: tr } = useLocale();
   const cfg = {
     High:   { color: "#059669", bg: "rgba(5,150,105,0.10)" },
     Medium: { color: "#D97706", bg: "rgba(245,158,11,0.10)" },
@@ -260,7 +265,7 @@ function ConfidenceBadge({ confidence }: { confidence: "High" | "Medium" | "Low"
   return (
     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shrink-0"
       style={{ background: cfg.bg, color: cfg.color }}>
-      {confidence} confidence
+      {confidence} {tr("trends.confidenceSuffix")}
     </span>
   );
 }
@@ -274,6 +279,7 @@ function SummaryCard({
   color: string; bg: string; icon: React.ReactNode;
   relativeIndex?: number; sourceNote?: string;
 }) {
+  const { t: tr } = useLocale();
   return (
     <div data-testid="keyword-summary-card" className="bg-white border border-gray-200 rounded-xl p-4 flex items-start gap-3">
       <div className="shrink-0 h-9 w-9 rounded-lg flex items-center justify-center" style={{ background: bg }}>
@@ -285,13 +291,13 @@ function SummaryCard({
           <p className="text-[16px] font-black leading-none" style={{ color }}>{value}</p>
           {relativeIndex != null && (
             <span className="text-[12px] font-mono text-gray-400 leading-none">
-              {relativeIndex}<span className="text-[9px] text-gray-300">/100</span>
+              {relativeIndex}<span className="text-[9px] text-gray-400">{tr("trends.metric.per100")}</span>
             </span>
           )}
         </div>
         <p className="text-[10px] text-gray-400 mt-1.5 leading-relaxed">{subtitle}</p>
         {sourceNote && (
-          <p className="text-[9px] text-gray-300 mt-0.5 leading-relaxed">{sourceNote}</p>
+          <p className="text-[9px] text-gray-400 mt-0.5 leading-relaxed">{sourceNote}</p>
         )}
       </div>
     </div>
@@ -299,6 +305,7 @@ function SummaryCard({
 }
 
 function KeywordSummaryCards({ s }: { s: KeywordSummary }) {
+  const { t: tr } = useLocale();
   const iC = INTEREST_COLOR[s.pinterestInterestBand];
   const cC = COMP_COLOR[s.competitionBand];
   const sC = s.saveSignalBand ? SAVE_COLOR[s.saveSignalBand] : SAVE_COLOR.Weak;
@@ -313,23 +320,23 @@ function KeywordSummaryCards({ s }: { s: KeywordSummary }) {
   return (
     <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-5">
       <SummaryCard
-        title="Pinterest Interest" value={iM?.label ?? s.pinterestInterestBand} color={iC.text} bg={iC.bg}
-        subtitle={iM?.sourceNote ?? (s.interestIndexCurrent != null ? `Index ${s.interestIndexCurrent} · Past 12 months` : "Past 12 months")}
+        title={tr("trends.summary.pinterestInterest")} value={iM?.label ?? s.pinterestInterestBand} color={iC.text} bg={iC.bg}
+        subtitle={iM?.sourceNote ?? (s.interestIndexCurrent != null ? tr("trends.summary.indexPastTwelveMonths").replace("{n}", String(s.interestIndexCurrent)) : tr("trends.summary.pastTwelveMonths"))}
         relativeIndex={iM?.relativeIndex}
         icon={<TrendingUp className="h-4 w-4" style={{ color: iC.text }} />}
       />
       <SummaryCard
-        title="Save Signal" value={sM?.label ?? s.saveSignalBand ?? "—"} color={sC.text} bg={sC.bg}
-        subtitle={s.saveSignalBand === "Strong" ? "Recent viral Pins" : s.saveSignalBand === "Medium" ? "Moderate engagement" : "Limited evidence yet"}
+        title={tr("trends.summary.saveSignal")} value={sM?.label ?? s.saveSignalBand ?? "—"} color={sC.text} bg={sC.bg}
+        subtitle={s.saveSignalBand === "Strong" ? tr("trends.summary.viralPins") : s.saveSignalBand === "Medium" ? tr("trends.summary.moderateEngagement") : tr("trends.summary.limitedEvidence")}
         relativeIndex={sM?.relativeIndex}
         sourceNote={sM?.sourceNote}
         icon={<Heart className="h-4 w-4" style={{ color: sC.text }} />}
       />
       <SummaryCard
-        title="Content Saturation" value={cM?.label ?? s.competitionBand} color={cC.text} bg={cC.bg}
-        subtitle={s.competitionBand === "High" ? "Many similar pins already published" : s.competitionBand === "Medium" ? "Some similar content exists" : "Few similar pins so far"}
+        title={tr("trends.summary.contentSaturation")} value={cM?.label ?? s.competitionBand} color={cC.text} bg={cC.bg}
+        subtitle={s.competitionBand === "High" ? tr("trends.summary.manySimilarPins") : s.competitionBand === "Medium" ? tr("trends.summary.someSimilarContent") : tr("trends.summary.fewSimilarPins")}
         relativeIndex={cM?.relativeIndex}
-        sourceNote={cM?.sourceNote ?? "Visual content density — not market competition"}
+        sourceNote={cM?.sourceNote ?? tr("trends.summary.saturationSourceNote")}
         icon={<Users className="h-4 w-4" style={{ color: cC.text }} />}
       />
     </div>
@@ -341,6 +348,7 @@ function KeywordSummaryCards({ s }: { s: KeywordSummary }) {
 // Ordered by dropdown rank (migrate_v36) when available; pre-v36 rows fall back
 // to insertion order and simply show no rank number.
 function SearchSuggestionsStrip({ keyword, onSearch }: { keyword: string; onSearch: (kw: string) => void }) {
+  const { t: tr } = useLocale();
   const { data: suggestions } = useSWR(
     ["kw-suggestions", keyword],
     async () => {
@@ -367,8 +375,8 @@ function SearchSuggestionsStrip({ keyword, onSearch }: { keyword: string; onSear
     <div data-testid="search-suggestions-strip" className="bg-white border border-gray-200 rounded-xl p-4 mb-5">
       <div className="flex items-center justify-between mb-2.5">
         <div>
-          <p className="text-[12px] font-bold text-gray-900">Pinterest Search Suggestions</p>
-          <p className="text-[10px] text-gray-400">Real dropdown suggestions captured for this keyword — click to research</p>
+          <p className="text-[12px] font-bold text-gray-900">{tr("trends.suggestions.title")}</p>
+          <p className="text-[10px] text-gray-400">{tr("trends.suggestions.subtitle")}</p>
         </div>
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -388,6 +396,7 @@ function SearchSuggestionsStrip({ keyword, onSearch }: { keyword: string; onSear
 
 // ── Popular Pins preview — real pin_samples discovered via this keyword ────────
 function PopularPinsStrip({ keyword }: { keyword: string }) {
+  const { t: tr } = useLocale();
   const { data: pins } = useSWR(
     ["popular-pins", keyword],
     async () => {
@@ -407,12 +416,12 @@ function PopularPinsStrip({ keyword }: { keyword: string }) {
     <div data-testid="popular-pins-strip" className="bg-white border border-gray-200 rounded-xl p-4 mb-5">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <p className="text-[12px] font-bold text-gray-900">Popular Pins</p>
-          <p className="text-[10px] text-gray-400">Top-saved pins discovered via this keyword</p>
+          <p className="text-[12px] font-bold text-gray-900">{tr("trends.popularPins.title")}</p>
+          <p className="text-[10px] text-gray-400">{tr("trends.popularPins.subtitle")}</p>
         </div>
         <a href={`/app/discover?keyword=${encodeURIComponent(keyword)}`}
           className="text-[11px] font-bold no-underline" style={{ color: "#C026D3" }}>
-          View Pin Ideas →
+          {tr("trends.popularPins.viewPinIdeas")}
         </a>
       </div>
       <div className="flex gap-2.5 overflow-x-auto pb-1">
@@ -423,7 +432,7 @@ function PopularPinsStrip({ keyword }: { keyword: string }) {
             <Image src={pin.image_url} alt={pin.title ?? ""} fill className="object-cover" sizes="92px" unoptimized />
             <div className="absolute inset-x-0 bottom-0 px-1.5 py-1"
               style={{ background: "linear-gradient(to top, rgba(0,0,0,0.72), transparent)" }}>
-              <p className="text-[8px] font-bold text-white">{(pin.save_count ?? 0).toLocaleString()} saves</p>
+              <p className="text-[8px] font-bold text-white">{(pin.save_count ?? 0).toLocaleString()} {tr("trends.savesSuffix")}</p>
             </div>
           </a>
         ))}
@@ -435,6 +444,7 @@ function PopularPinsStrip({ keyword }: { keyword: string }) {
 // ── Source-aware trend insight (no fake 12-month chart for estimated data) ─────
 
 function TrendInsightSection({ s }: { s: KeywordSummary }) {
+  const { t: tr } = useLocale();
   const display = s.trendDisplay ?? s.provenance.trendSeries;
   const mode = display?.displayMode ?? (s.provenance.isEstimated ? "estimated_signal" : "unavailable");
   const showOfficialChart = mode === "official_chart" && s.timeSeries.length >= 6;
@@ -449,26 +459,26 @@ function TrendInsightSection({ s }: { s: KeywordSummary }) {
             <>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <p className="text-[13px] font-bold text-gray-900">Search Trend · Past 12 months</p>
-                  <p className="text-[10px] text-gray-400" data-testid="trend-source-line">Pinterest Trends API</p>
+                  <p className="text-[13px] font-bold text-gray-900">{tr("trends.insight.searchTrend12mo")}</p>
+                  <p className="text-[10px] text-gray-400" data-testid="trend-source-line">{tr("trends.insight.pinterestTrendsApi")}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Official</span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{tr("trends.badge.official")}</span>
                   <TrendChip state={s.trendState} />
                 </div>
               </div>
               <TrendHistoryChart trendHistory={s.timeSeries} label="" />
-              <p className="text-[9px] text-gray-300 mt-1.5">
-                Interest index from Pinterest Trends API · normalized 0–100, not raw search volume
+              <p className="text-[9px] text-gray-400 mt-1.5">
+                {tr("trends.insight.indexNormalizedNote")}
               </p>
             </>
           ) : (
             <>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <p className="text-[13px] font-bold text-gray-900">Estimated Trend Signal</p>
+                  <p className="text-[13px] font-bold text-gray-900">{tr("trends.insight.estimatedTrendSignal")}</p>
                   <p className="text-[10px] text-gray-400" data-testid="trend-source-line">
-                    {display?.displaySourceLine ?? "Estimated from Pinterest autocomplete and saved Pin signals"}
+                    {display?.displaySourceLine ?? tr("trends.insight.estimatedDefaultSource")}
                   </p>
                 </div>
                 <TrendChip state={s.trendState} />
@@ -481,19 +491,19 @@ function TrendInsightSection({ s }: { s: KeywordSummary }) {
               >
                 <div className="flex items-center gap-2 flex-wrap">
                   <EstimatedBadge />
-                  <span className="text-[11px] font-semibold text-gray-700">Relative interest only</span>
+                  <span className="text-[11px] font-semibold text-gray-700">{tr("trends.insight.relativeInterestOnly")}</span>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">Trend state</p>
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">{tr("trends.insight.trendState")}</p>
                     <TrendChip state={s.trendState} />
                   </div>
                   <div>
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">Interest</p>
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">{tr("trends.insight.interest")}</p>
                     <InterestBand band={s.pinterestInterestBand} />
                   </div>
                   <div>
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">Data quality</p>
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">{tr("trends.insight.dataQuality")}</p>
                     <ConfidenceBadge confidence={s.provenance.confidence} />
                   </div>
                 </div>
@@ -511,15 +521,14 @@ function TrendInsightSection({ s }: { s: KeywordSummary }) {
 
                 {(s.pctGrowthYoY != null || s.pctGrowthMoM != null) && (
                   <p className="text-[10px] text-gray-500">
-                    {s.pctGrowthYoY != null && <>YoY direction: {Math.round(s.pctGrowthYoY)}%</>}
+                    {s.pctGrowthYoY != null && <>{tr("trends.insight.yoyDirection").replace("{n}", String(Math.round(s.pctGrowthYoY)))}</>}
                     {s.pctGrowthYoY != null && s.pctGrowthMoM != null && " · "}
-                    {s.pctGrowthMoM != null && <>MoM direction: {Math.round(s.pctGrowthMoM)}%</>}
+                    {s.pctGrowthMoM != null && <>{tr("trends.insight.momDirection").replace("{n}", String(Math.round(s.pctGrowthMoM)))}</>}
                   </p>
                 )}
 
                 <p className="text-[9px] text-gray-400 border-t border-gray-100 pt-2">
-                  Directional signal only — not official Pinterest search volume.
-                  No 12-month chart available for this keyword.
+                  {tr("trends.insight.directionalOnlyNote")}
                 </p>
               </div>
             </>
@@ -531,7 +540,7 @@ function TrendInsightSection({ s }: { s: KeywordSummary }) {
           {showOfficialChart ? (
             // Already shown in left panel — show evidence bullets on right
             <div className="space-y-3">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Evidence from cloud signals</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{tr("trends.insight.evidenceFromCloudSignals")}</p>
               {(s.insightBullets ?? []).map((b, i) => {
                 const icons = ["↑", "🏠", "⭐"];
                 return (
@@ -542,8 +551,8 @@ function TrendInsightSection({ s }: { s: KeywordSummary }) {
                 );
               })}
               {s.provenance.lastFetchedAt && (
-                <p className="text-[9px] text-gray-300 pt-2 border-t border-gray-100">
-                  Data updated: {formatFreshnessDate(s.provenance.lastFetchedAt)}
+                <p className="text-[9px] text-gray-400 pt-2 border-t border-gray-100">
+                  {tr("trends.insight.dataUpdated").replace("{date}", formatFreshnessDate(s.provenance.lastFetchedAt))}
                 </p>
               )}
             </div>
@@ -554,9 +563,9 @@ function TrendInsightSection({ s }: { s: KeywordSummary }) {
                 <BarChart2 className="h-4.5 w-4.5 text-gray-400" />
               </div>
               <div>
-                <p className="text-[12px] font-semibold text-gray-600 mb-1">Official trend data unavailable</p>
+                <p className="text-[12px] font-semibold text-gray-600 mb-1">{tr("trends.insight.officialUnavailableTitle")}</p>
                 <p className="text-[10px] text-gray-400 leading-relaxed max-w-[200px]">
-                  Pinterest Trends API data will appear here when an official time series is available for this keyword and region.
+                  {tr("trends.insight.officialUnavailableBody")}
                 </p>
               </div>
             </div>
@@ -570,22 +579,28 @@ function TrendInsightSection({ s }: { s: KeywordSummary }) {
 
 // ── Workflow actions & opportunity snapshot (keyword-to-workflow bridge) ───────
 
-const WORKFLOW_PIN_ANGLES   = ["Tutorial", "Product Roundup", "Styling Guide", "Before / After", "Mood Board", "Checklist"];
-const WORKFLOW_PRODUCT_IDEAS = ["Printable wall art", "Digital planner", "Starter checklist", "Curated bundle", "Style guide", "How-to ebook"];
+const WORKFLOW_PIN_ANGLES = [
+  "trends.workflow.pinAngle.tutorial", "trends.workflow.pinAngle.productRoundup",
+  "trends.workflow.pinAngle.stylingGuide", "trends.workflow.pinAngle.beforeAfter",
+  "trends.workflow.pinAngle.moodBoard", "trends.workflow.pinAngle.checklist",
+] as const;
+const WORKFLOW_PRODUCT_IDEAS = [
+  "trends.workflow.productIdea.printableWallArt", "trends.workflow.productIdea.digitalPlanner",
+  "trends.workflow.productIdea.starterChecklist", "trends.workflow.productIdea.curatedBundle",
+  "trends.workflow.productIdea.styleGuide", "trends.workflow.productIdea.howToEbook",
+] as const;
 
-function seasonalityText(state: TrendState): string {
-  if (state === "Seasonal") return "Seasonal demand — interest peaks at specific times of year. Plan content ahead of peak windows.";
-  if (state === "Rising")   return "Rising demand — interest has built over recent months. A good time to establish presence early.";
-  return "Evergreen demand — steady interest year-round. Reliable for ongoing content.";
+// tr is passed in — these are plain helpers, not components, so they cannot call useLocale() themselves.
+function seasonalityText(state: TrendState, tr: (key: MessageKey) => string): string {
+  if (state === "Seasonal") return tr("trends.workflow.seasonalitySeasonal");
+  if (state === "Rising")   return tr("trends.workflow.seasonalityRising");
+  return tr("trends.workflow.seasonalityEvergreen");
 }
 
-function intentSummaryText(s: KeywordSummary): string {
-  const cat = s.category ? s.category.replace(/-/g, " ") : "this niche";
-  return `People searching "${s.keyword}" want ideas, inspiration, and styling direction for ${cat}. They save Pins to plan, shop, or recreate a look.`;
+function intentSummaryText(s: KeywordSummary, tr: (key: MessageKey) => string): string {
+  const cat = s.category ? s.category.replace(/-/g, " ") : tr("trends.workflow.intentSummaryDefaultCategory");
+  return tr("trends.workflow.intentSummaryText").replace("{keyword}", s.keyword).replace("{category}", cat);
 }
-
-const AUDIENCE_FIT_TEXT =
-  "Pinterest planners, DIY-ers, and shoppers who save ideas before buying or creating — a strong fit for creators selling templates, products, or guides.";
 
 function SnapshotField({ label, text }: { label: string; text: string }) {
   return (
@@ -630,32 +645,33 @@ function KeywordWorkflowSection({
   onViewRelated: () => void;
   planned: boolean;
 }) {
+  const { t: tr } = useLocale();
   return (
     <div className="mt-6" data-testid="keyword-workflow-section">
       <div className="mb-3">
-        <p className="text-[14px] font-black text-gray-900">Keyword Actions &amp; Saved Opportunities</p>
-        <p className="text-[11px] text-gray-400">Put this keyword to work across your VibePin workflow.</p>
+        <p className="text-[14px] font-black text-gray-900">{tr("trends.workflow.heading")}</p>
+        <p className="text-[11px] text-gray-400">{tr("trends.workflow.subtitle")}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,320px)_1fr] gap-4">
         {/* Left — Opportunity Snapshot */}
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">Opportunity Snapshot</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">{tr("trends.workflow.opportunitySnapshot")}</p>
 
-          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">Keyword</p>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">{tr("trends.workflow.keyword")}</p>
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             <p className="text-[15px] font-black text-gray-900 capitalize">{s.keyword}</p>
             <DataSourceBadge label={s.dataSourceLabel} />
           </div>
 
-          <SnapshotField label="Intent Summary" text={intentSummaryText(s)} />
-          <SnapshotField label="Audience Fit" text={AUDIENCE_FIT_TEXT} />
-          <SnapshotField label="Seasonality" text={seasonalityText(s.trendState)} />
+          <SnapshotField label={tr("trends.workflow.intentSummary")} text={intentSummaryText(s, tr)} />
+          <SnapshotField label={tr("trends.workflow.audienceFit")} text={tr("trends.workflow.audienceFitText")} />
+          <SnapshotField label={tr("trends.workflow.seasonality")} text={seasonalityText(s.trendState, tr)} />
 
-          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1.5 mt-3">Recommended Pin Angles</p>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1.5 mt-3">{tr("trends.workflow.recommendedPinAngles")}</p>
           <div className="flex flex-wrap gap-1.5">
             {WORKFLOW_PIN_ANGLES.map(a => (
-              <span key={a} className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{a}</span>
+              <span key={a} className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{tr(a)}</span>
             ))}
           </div>
         </div>
@@ -663,45 +679,45 @@ function KeywordWorkflowSection({
         {/* Right — action grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 content-start">
           <WorkflowActionCard icon={<Lightbulb className="h-4 w-4" />} accent="#D946EF" primary
-            title="View Pin Ideas" desc="Browse real high-save pins discovered via this keyword." onClick={onCreatePinIdeas} />
+            title={tr("trends.workflow.action.viewPinIdeasTitle")} desc={tr("trends.workflow.action.viewPinIdeasDesc")} onClick={onCreatePinIdeas} />
           <WorkflowActionCard icon={<ShoppingBag className="h-4 w-4" />} accent="#7C3AED"
-            title="View Product Opportunities" desc="Browse products validated by Pinterest saves for this keyword." onClick={onCreateProductIdeas} />
+            title={tr("trends.workflow.action.viewProductOppsTitle")} desc={tr("trends.workflow.action.viewProductOppsDesc")} onClick={onCreateProductIdeas} />
           <WorkflowActionCard icon={<Sparkles className="h-4 w-4" />} accent="#FF4D8D"
-            title="Use in Create Pins" desc="Open Create Pins with this keyword as creative direction." onClick={onUseInCreatePins} />
+            title={tr("trends.workflow.action.useInCreatePinsTitle")} desc={tr("trends.workflow.action.useInCreatePinsDesc")} onClick={onUseInCreatePins} />
           <WorkflowActionCard icon={<Calendar className="h-4 w-4" />} accent="#3B82F6"
-            title={planned ? "In Weekly Plan" : "Add to Weekly Plan"} desc="Add this keyword to your weekly content plan." onClick={onAddToPlan} />
+            title={planned ? tr("trends.workflow.action.inWeeklyPlan") : tr("trends.workflow.action.addToWeeklyPlanTitle")} desc={tr("trends.workflow.action.addToWeeklyPlanDesc")} onClick={onAddToPlan} />
           <WorkflowActionCard icon={<Target className="h-4 w-4" />} accent="#10B981"
-            title="Save to Opportunities" desc="Track this keyword and prioritize it later." onClick={onSaveOpportunity} />
+            title={tr("trends.workflow.action.saveToOpportunitiesTitle")} desc={tr("trends.workflow.action.saveToOpportunitiesDesc")} onClick={onSaveOpportunity} />
           <WorkflowActionCard icon={<Search className="h-4 w-4" />} accent="#6B7280"
-            title="View Related Keywords" desc="Explore more keyword segments below." onClick={onViewRelated} />
+            title={tr("trends.workflow.action.viewRelatedTitle")} desc={tr("trends.workflow.action.viewRelatedDesc")} onClick={onViewRelated} />
         </div>
       </div>
 
       {/* Suggested chips */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
         <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <p className="text-[11px] font-bold text-gray-700 mb-2">Suggested Pin Angles</p>
+          <p className="text-[11px] font-bold text-gray-700 mb-2">{tr("trends.workflow.suggestedPinAngles")}</p>
           <div className="flex flex-wrap gap-1.5">
             {WORKFLOW_PIN_ANGLES.map(a => (
               <button key={a} type="button" onClick={onCreatePinIdeas}
-                className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-[#D946EF]/10 hover:text-[#D946EF] transition-colors">{a}</button>
+                className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-[#D946EF]/10 hover:text-[#D946EF] transition-colors">{tr(a)}</button>
             ))}
           </div>
         </div>
         <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <p className="text-[11px] font-bold text-gray-700 mb-2">Suggested Product Ideas</p>
+          <p className="text-[11px] font-bold text-gray-700 mb-2">{tr("trends.workflow.suggestedProductIdeas")}</p>
           <div className="flex flex-wrap gap-1.5">
             {WORKFLOW_PRODUCT_IDEAS.map(a => (
               <button key={a} type="button" onClick={onCreateProductIdeas}
-                className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-[#7C3AED]/10 hover:text-[#7C3AED] transition-colors">{a}</button>
+                className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-[#7C3AED]/10 hover:text-[#7C3AED] transition-colors">{tr(a)}</button>
             ))}
           </div>
         </div>
       </div>
 
-      <p className="text-[9px] text-gray-300 mt-4 text-center flex items-center justify-center gap-1.5">
+      <p className="text-[9px] text-gray-400 mt-4 text-center flex items-center justify-center gap-1.5">
         <Sparkles className="h-3 w-3" />
-        The VibePin Keyword Tool feeds directly into your content, product, and planning workflows.
+        {tr("trends.workflow.footerNote")}
       </p>
     </div>
   );
@@ -710,6 +726,7 @@ function KeywordWorkflowSection({
 // ── Evidence drawer ───────────────────────────────────────────────────────────
 
 function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () => void }) {
+  const { t: tr } = useLocale();
   const { data: pins, isLoading } = useSWR(
     ["ev-pins", row.id],
     async () => {
@@ -725,10 +742,10 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
   );
 
   // Plain factual summary from the three real signals — no unified verdict.
-  const whyText =
-    `Pinterest interest is ${row.pinterestInterestBand.toLowerCase()}, ` +
-    `content saturation is ${row.competitionBand.toLowerCase()}, ` +
-    `and the trend is ${row.trendState.toLowerCase()}.`;
+  const whyText = tr("trends.evidence.summaryText")
+    .replace("{interest}", row.pinterestInterestBand.toLowerCase())
+    .replace("{saturation}", row.competitionBand.toLowerCase())
+    .replace("{trend}", row.trendState.toLowerCase());
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -740,10 +757,10 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
         {/* Header */}
         <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100 shrink-0 sticky top-0 bg-white z-10">
           <div className="min-w-0 pr-4">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">Keyword Evidence</p>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">{tr("trends.evidence.heading")}</p>
             <h3 className="text-[15px] font-black text-gray-900 leading-snug capitalize">{row.keyword}</h3>
           </div>
-          <button type="button" onClick={onClose}
+          <button type="button" onClick={onClose} aria-label={tr("trends.evidence.closeAria")}
             className="rounded-full p-2 hover:bg-gray-100 transition-colors shrink-0">
             <X className="h-4 w-4 text-gray-400" />
           </button>
@@ -754,14 +771,14 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
           <div className="min-w-0">
             <p className="text-[9px] text-gray-500 leading-relaxed">
               {row.provenance.sources.includes("pinterest_search_sample")
-                ? "Pinterest trend signals + sampled search results"
+                ? tr("trends.evidence.sourceSampled")
                 : row.provenance.isEstimated
-                ? "Pinterest trend signals · trend curve reconstructed from growth metrics"
-                : "Pinterest trend signals"}
+                ? tr("trends.evidence.sourceEstimated")
+                : tr("trends.evidence.sourceDefault")}
             </p>
             {row.provenance.lastFetchedAt && (
               <p className="text-[9px] text-gray-400 mt-0.5">
-                Data updated: {formatFreshnessDate(row.provenance.lastFetchedAt)}
+                {tr("trends.insight.dataUpdated").replace("{date}", formatFreshnessDate(row.provenance.lastFetchedAt))}
               </p>
             )}
           </div>
@@ -772,10 +789,10 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
         <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: "Pinterest Interest",  node: <InterestBand band={row.pinterestInterestBand} /> },
-              { label: "Content Saturation",  node: <CompBand band={row.competitionBand} /> },
-              { label: "Trend State",         node: <TrendChip state={row.trendState} /> },
-              { label: "Save Signal",         node: <SaveBand band={row.saveSignalBand} /> },
+              { label: tr("trends.evidence.pinterestInterest"), node: <InterestBand band={row.pinterestInterestBand} /> },
+              { label: tr("trends.evidence.contentSaturation"), node: <CompBand band={row.competitionBand} /> },
+              { label: tr("trends.evidence.trendState"),        node: <TrendChip state={row.trendState} /> },
+              { label: tr("trends.evidence.saveSignal"),        node: <SaveBand band={row.saveSignalBand} /> },
             ].map(({ label, node }) => (
               <div key={label}>
                 <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1">{label}</p>
@@ -796,22 +813,22 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
         {/* Mini trend chart — official series only */}
         {row.trendDisplay?.displayMode === "official_chart" && row.timeSeries && row.timeSeries.length >= 6 && (
           <div className="px-6 py-4 border-b border-gray-100">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Search Trend · Past 12 months</p>
-            <p className="text-[9px] text-gray-400 mb-3">Pinterest Trends API</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">{tr("trends.insight.searchTrend12mo")}</p>
+            <p className="text-[9px] text-gray-400 mb-3">{tr("trends.insight.pinterestTrendsApi")}</p>
             <TrendHistoryChart trendHistory={row.timeSeries} label={row.keyword} />
           </div>
         )}
         {row.trendDisplay?.displayMode === "estimated_signal" && (
           <div className="px-6 py-4 border-b border-gray-100 bg-white" style={{ borderLeft: "3px solid #F59E0B" }}>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">Estimated trend signal</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">{tr("trends.evidence.estimatedTrendSignal")}</p>
             <TrendChip state={row.trendState} />
-            <p className="text-[9px] text-gray-400 mt-2">Directional signal only — no official 12-month chart for this keyword.</p>
+            <p className="text-[9px] text-gray-400 mt-2">{tr("trends.evidence.estimatedDirectionalNote")}</p>
           </div>
         )}
 
         {/* Viral pins */}
         <div className="flex-1 px-5 py-5">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">Top Pins</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">{tr("trends.evidence.topPins")}</p>
           {isLoading && (
             <div className="grid grid-cols-2 gap-3">
               {Array.from({ length: 4 }).map((_, i) => (
@@ -828,7 +845,7 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
                     <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
                     <div className="absolute bottom-0 left-0 right-0 p-2">
                       {pin.title && <p className="text-[9px] font-semibold text-white line-clamp-2 mb-0.5">{pin.title}</p>}
-                      <p className="text-[8px] text-white/80 font-bold">{(pin.save_count ?? 0).toLocaleString()} saves</p>
+                      <p className="text-[8px] text-white/80 font-bold">{(pin.save_count ?? 0).toLocaleString()} {tr("trends.savesSuffix")}</p>
                     </div>
                     {pin.pin_id && (
                       <a href={`https://www.pinterest.com/pin/${pin.pin_id}/`} target="_blank" rel="noopener noreferrer"
@@ -847,9 +864,9 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
           {!isLoading && (pins?.length ?? 0) === 0 && (
             <div className="flex flex-col items-center py-12 text-center">
               <p className="text-3xl mb-3">🔭</p>
-              <p className="text-[12px] font-semibold text-gray-500">No linked pins yet</p>
+              <p className="text-[12px] font-semibold text-gray-500">{tr("trends.evidence.noLinkedPinsTitle")}</p>
               <p className="text-[10px] text-gray-400 mt-1 max-w-[180px] leading-relaxed">
-                Pins appear once linked to this keyword in the database.
+                {tr("trends.evidence.noLinkedPinsBody")}
               </p>
             </div>
           )}
@@ -860,11 +877,11 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
           <div className="grid grid-cols-2 gap-2">
             <a href={`/app/discover?keyword=${encodeURIComponent(row.keyword)}`}
               className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[11px] font-bold no-underline border border-gray-200 text-gray-700 hover:border-[#C026D3] hover:text-[#C026D3] transition-colors">
-              <Lightbulb className="h-3.5 w-3.5" /> View Pin Ideas
+              <Lightbulb className="h-3.5 w-3.5" /> {tr("trends.evidence.viewPinIdeas")}
             </a>
             <a href={`/app/products?keyword=${encodeURIComponent(row.keyword)}`}
               className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[11px] font-bold no-underline border border-gray-200 text-gray-700 hover:border-[#7C3AED] hover:text-[#7C3AED] transition-colors">
-              <ShoppingBag className="h-3.5 w-3.5" /> View Products
+              <ShoppingBag className="h-3.5 w-3.5" /> {tr("trends.evidence.viewProducts")}
             </a>
           </div>
           <button type="button"
@@ -872,7 +889,7 @@ function EvidenceDrawer({ row, onClose }: { row: RelatedKeywordRow; onClose: () 
             className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-[12px] font-bold text-white"
             style={{ background: "linear-gradient(135deg,#FF4D8D 0%,#D946EF 52%,#7C3AED 100%)", border: "none", cursor: "pointer" }}>
             <Sparkles className="h-3.5 w-3.5" />
-            Create Pins for this keyword
+            {tr("trends.evidence.createPinsForKeyword")}
           </button>
         </div>
       </div>
@@ -886,6 +903,7 @@ function FilterSelect({ label, value, options, onChange }: {
   label: string; value: string;
   options: string[]; onChange: (v: string) => void;
 }) {
+  const { t: tr } = useLocale();
   const active = value !== "All";
   return (
     <div className="relative">
@@ -893,7 +911,7 @@ function FilterSelect({ label, value, options, onChange }: {
         className="appearance-none text-[11px] font-semibold pr-6 pl-3 py-1.5 rounded-lg border bg-white transition-colors cursor-pointer focus:outline-none"
         style={{ borderColor: active ? "#C026D3" : "#E5E7EB", color: active ? "#C026D3" : "#6B7280" }}>
         {options.map(opt => (
-          <option key={opt} value={opt}>{opt === "All" ? `${label}: All` : opt}</option>
+          <option key={opt} value={opt}>{opt === "All" ? tr("trends.filter.allSuffix").replace("{label}", label) : opt}</option>
         ))}
       </select>
       <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-gray-400" />
@@ -903,12 +921,12 @@ function FilterSelect({ label, value, options, onChange }: {
 
 type OpportunityFocus = "physical" | "digital" | "content" | "boards" | "seasonal";
 
-const OPPORTUNITY_FOCUS_LABELS: Record<OpportunityFocus, string> = {
-  physical: "Physical Products",
-  digital:  "Digital Products",
-  content:  "Blog Content",
-  boards:   "Pinterest Boards",
-  seasonal: "Seasonal Campaigns",
+const OPPORTUNITY_FOCUS_LABEL_KEYS: Record<OpportunityFocus, MessageKey> = {
+  physical: "trends.filter.physicalProducts",
+  digital:  "trends.filter.digitalProducts",
+  content:  "trends.filter.blogContent",
+  boards:   "trends.filter.pinterestBoards",
+  seasonal: "trends.filter.seasonalCampaigns",
 };
 
 const OPPORTUNITY_FOCUS_ICONS: Record<OpportunityFocus, React.ReactNode> = {
@@ -928,12 +946,13 @@ function FilterRow({
   trendFilter: "All" | TrendState; setTrendFilter: (v: "All" | TrendState) => void;
   onReset: () => void;
 }) {
+  const { t: tr } = useLocale();
   const hasFilter = demandFilter !== "All" || trendFilter !== "All";
   return (
     <div className="space-y-2.5 mb-4">
       <div>
         <span className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 block mb-1.5">
-          Ideas for
+          {tr("trends.filter.ideasFor")}
         </span>
         <div className="flex flex-wrap gap-1.5">
           {(["physical", "digital", "content", "boards", "seasonal"] as const).map(mode => (
@@ -943,20 +962,20 @@ function FilterRow({
                 ? { background: "#C026D3", color: "#fff", borderColor: "#C026D3" }
                 : { background: "#fff", color: "#6B7280", borderColor: "#E5E7EB" }}>
               {OPPORTUNITY_FOCUS_ICONS[mode]}
-              {OPPORTUNITY_FOCUS_LABELS[mode]}
+              {tr(OPPORTUNITY_FOCUS_LABEL_KEYS[mode])}
             </button>
           ))}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <FilterSelect label="Demand" value={demandFilter} options={["All", "High", "Medium", "Low"]}
+        <FilterSelect label={tr("trends.filter.demand")} value={demandFilter} options={["All", "High", "Medium", "Low"]}
           onChange={v => setDemandFilter(v as "All" | Band)} />
-        <FilterSelect label="Trend State" value={trendFilter} options={["All", "Rising", "Evergreen", "Seasonal"]}
+        <FilterSelect label={tr("trends.filter.trendState")} value={trendFilter} options={["All", "Rising", "Evergreen", "Seasonal"]}
           onChange={v => setTrendFilter(v as "All" | TrendState)} />
         {hasFilter && (
           <button type="button" onClick={onReset}
             className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 transition-colors px-1">
-            Reset
+            {tr("trends.filter.reset")}
           </button>
         )}
       </div>
@@ -970,7 +989,11 @@ function FilterRow({
 // No Competition / Opportunity columns (v2.0 final: keyword page shows trend,
 // interest and save signals only; saturation lives in the detail drawer).
 const TABLE_COLS = "24px 1fr 90px 108px 84px 94px 72px 176px";
-const TABLE_HDR  = ["Keyword","Category","Interest","Save Signal","Trend State","Source","Actions"];
+const TABLE_HDR_KEYS = [
+  "trends.table.colKeyword", "trends.table.colCategory", "trends.table.colInterest",
+  "trends.table.colSaveSignal", "trends.table.colTrendState", "trends.table.colSource",
+  "trends.table.colActions",
+] as const;
 
 function RelatedKeywordsTable({
   rows, loading, onEvidence, onAddToPlan, onCreatePins,
@@ -983,6 +1006,7 @@ function RelatedKeywordsTable({
   addedKwIds: Set<string>; addingId: string | null;
   overflowId: string | null; setOverflowId: (id: string | null) => void;
 }) {
+  const { t: tr } = useLocale();
   return (
     <div data-testid="related-keywords-table"
       className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden">
@@ -994,8 +1018,8 @@ function RelatedKeywordsTable({
           <div className="grid items-center px-4 py-3 border-b border-gray-100 bg-gray-50"
             style={{ gridTemplateColumns: TABLE_COLS }}>
             <span />
-            {TABLE_HDR.map(h => (
-              <span key={h} className="text-[10px] font-bold uppercase tracking-wide text-gray-500 last:text-right whitespace-nowrap">{h}</span>
+            {TABLE_HDR_KEYS.map(h => (
+              <span key={h} className="text-[10px] font-bold uppercase tracking-wide text-gray-500 last:text-right whitespace-nowrap">{tr(h)}</span>
             ))}
           </div>
 
@@ -1028,7 +1052,7 @@ function RelatedKeywordsTable({
                     style={{ gridTemplateColumns: TABLE_COLS }}>
 
                     {/* # */}
-                    <span className="text-[9px] font-mono text-gray-300 tabular-nums select-none">{idx + 1}</span>
+                    <span className="text-[9px] font-mono text-gray-400 tabular-nums select-none">{idx + 1}</span>
 
                     {/* Keyword */}
                     <div className="min-w-0 pr-3">
@@ -1064,7 +1088,7 @@ function RelatedKeywordsTable({
                       <button type="button" data-testid="view-evidence-button"
                         onClick={() => onEvidence(row)}
                         className="rounded px-2.5 py-1.5 text-[10px] font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors whitespace-nowrap">
-                        Analyze
+                        {tr("trends.table.analyze")}
                       </button>
 
                       {/* Create dropdown */}
@@ -1073,7 +1097,7 @@ function RelatedKeywordsTable({
                           onClick={e => { e.stopPropagation(); setOverflowId(menuOpen ? null : row.id); }}
                           className="flex items-center gap-1 rounded px-2.5 py-1.5 text-[10px] font-bold text-white transition-colors whitespace-nowrap"
                           style={{ background: "linear-gradient(135deg,#D946EF 0%,#7C3AED 100%)" }}>
-                          Create
+                          {tr("trends.table.create")}
                           <ChevronDown className="h-3 w-3 shrink-0" />
                         </button>
 
@@ -1083,17 +1107,17 @@ function RelatedKeywordsTable({
                             <a data-testid="keyword-view-pin-ideas-link"
                               href={`/app/discover?keyword=${encodeURIComponent(row.keyword)}`}
                               className="w-full flex items-center gap-2.5 text-left px-3.5 py-2.5 text-[11px] text-gray-700 hover:bg-gray-50 no-underline">
-                              <Lightbulb className="h-3.5 w-3.5 text-[#D946EF] shrink-0" /> View Pin Ideas
+                              <Lightbulb className="h-3.5 w-3.5 text-[#D946EF] shrink-0" /> {tr("trends.table.viewPinIdeas")}
                             </a>
                             <a data-testid="keyword-view-products-link"
                               href={`/app/products?keyword=${encodeURIComponent(row.keyword)}`}
                               className="w-full flex items-center gap-2.5 text-left px-3.5 py-2.5 text-[11px] text-gray-700 hover:bg-gray-50 no-underline">
-                              <ShoppingBag className="h-3.5 w-3.5 text-[#7C3AED] shrink-0" /> View Product Opportunities
+                              <ShoppingBag className="h-3.5 w-3.5 text-[#7C3AED] shrink-0" /> {tr("trends.table.viewProductOpportunities")}
                             </a>
                             <button type="button" data-testid="keyword-create-pins-button"
                               onClick={() => { onCreatePins(row); setOverflowId(null); }}
                               className="w-full flex items-center gap-2.5 text-left px-3.5 py-2.5 text-[11px] font-semibold text-[#7C3AED] hover:bg-purple-50">
-                              <Sparkles className="h-3.5 w-3.5 shrink-0" /> Use in Create Pins
+                              <Sparkles className="h-3.5 w-3.5 shrink-0" /> {tr("trends.table.useInCreatePins")}
                             </button>
                             <div className="border-t border-gray-100 mt-1 pt-1">
                               <button type="button" data-testid="keyword-add-to-plan-button"
@@ -1101,7 +1125,7 @@ function RelatedKeywordsTable({
                                 onClick={() => { onAddToPlan(row); setOverflowId(null); }}
                                 className="w-full flex items-center gap-2.5 text-left px-3.5 py-2 text-[11px] text-gray-600 hover:bg-gray-50 disabled:opacity-40">
                                 <Plus className="h-3.5 w-3.5 shrink-0" />
-                                {isAdded ? "In Weekly Plan" : isAdding ? "Adding…" : "Add to Weekly Plan"}
+                                {isAdded ? tr("trends.table.inWeeklyPlan") : isAdding ? tr("trends.table.adding") : tr("trends.table.addToWeeklyPlan")}
                               </button>
                             </div>
                           </div>
@@ -1117,8 +1141,8 @@ function RelatedKeywordsTable({
 
           {!loading && rows.length === 0 && (
             <div className="flex flex-col items-center py-14 text-center gap-2">
-              <p className="text-[13px] font-semibold text-gray-500">No keywords match the current filters</p>
-              <p className="text-[11px] text-gray-400">Try clearing a filter or search a different term</p>
+              <p className="text-[13px] font-semibold text-gray-500">{tr("trends.table.emptyTitle")}</p>
+              <p className="text-[11px] text-gray-400">{tr("trends.table.emptySub")}</p>
             </div>
           )}
 
@@ -1133,12 +1157,16 @@ function RelatedKeywordsTable({
 // Trending table grid: Keyword | Category | Trend | Interest | Save | Source | Updated | Actions
 // No Competition / Opportunity columns (v2.0 final).
 const TRENDING_COLS = "minmax(180px,1.4fr) 118px 98px 84px 84px 86px 78px 150px";
-const TRENDING_HDR  = ["Keyword","Category","Trend","Interest","Save Signal","Source","Updated","Actions"];
+const TRENDING_HDR_KEYS = [
+  "trends.trending.colKeyword", "trends.trending.colCategory", "trends.trending.colTrend",
+  "trends.trending.colInterest", "trends.trending.colSaveSignal", "trends.trending.colSource",
+  "trends.trending.colUpdated", "trends.trending.colActions",
+] as const;
 // Honest full names surfaced as header tooltips.
-const TRENDING_HDR_TITLE: Record<string, string> = {
-  Interest:      "Interest Index — directional, not search volume",
-  "Save Signal": "Save Signal — save activity of linked Pins",
-  Source:        "Data Source — Official / Estimated / Derived",
+const TRENDING_HDR_TITLE_KEYS: Record<string, MessageKey> = {
+  "trends.trending.colInterest":   "trends.trending.colInterestTitle",
+  "trends.trending.colSaveSignal": "trends.trending.colSaveSignalTitle",
+  "trends.trending.colSource":     "trends.trending.colSourceTitle",
 };
 
 function DefaultView({
@@ -1156,6 +1184,7 @@ function DefaultView({
   loadingMore: boolean;
   hasMore: boolean;
 }) {
+  const { t: tr } = useLocale();
   const [openCreate, setOpenCreate] = useState<string | null>(null);
 
   function fireCreate(row: RelatedKeywordRow) {
@@ -1169,12 +1198,12 @@ function DefaultView({
       <div>
         <div className="flex items-end justify-between mb-3">
           <div>
-            <p className="text-[14px] font-black text-gray-900">Trending This Week</p>
-            <p className="text-[11px] text-gray-400">Real cloud pipeline keywords — click any to research</p>
+            <p className="text-[14px] font-black text-gray-900">{tr("trends.trending.title")}</p>
+            <p className="text-[11px] text-gray-400">{tr("trends.trending.subtitle")}</p>
           </div>
           {meta?.total != null && (
             <p className="text-[11px] text-gray-400 shrink-0">
-              <span className="font-semibold text-gray-300">{meta.total.toLocaleString()}</span> keywords found
+              <span className="font-semibold text-gray-400">{meta.total.toLocaleString()}</span> {tr("trends.trending.countSuffix")}
             </p>
           )}
         </div>
@@ -1182,21 +1211,21 @@ function DefaultView({
         {loading && (
           <div className="rounded-xl bg-white border border-gray-200 p-8 flex flex-col items-center gap-3">
             <div className="h-7 w-7 rounded-full border-2 border-[#C026D3] border-t-transparent animate-spin" />
-            <p className="text-[12px] text-gray-400">Loading trending keywords…</p>
+            <p className="text-[12px] text-gray-400">{tr("trends.trending.loading")}</p>
           </div>
         )}
 
         {!loading && error && (
           <div data-testid="keyword-trending-error" className="rounded-xl bg-white border border-red-200 p-8 text-center">
-            <p className="text-[13px] font-semibold text-red-600">Could not load keyword data</p>
+            <p className="text-[13px] font-semibold text-red-600">{tr("trends.trending.loadErrorTitle")}</p>
             <p className="text-[11px] text-gray-400 mt-1">{error}</p>
           </div>
         )}
 
         {!loading && !error && trendingRows.length === 0 && (
           <div className="rounded-xl bg-white border border-gray-200 p-8 text-center">
-            <p className="text-[13px] font-semibold text-gray-500">No trending keywords yet</p>
-            <p className="text-[11px] text-gray-400 mt-1">Cloud pipeline has not populated trend data. Check back after the daily run.</p>
+            <p className="text-[13px] font-semibold text-gray-500">{tr("trends.trending.emptyTitle")}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{tr("trends.trending.emptySub")}</p>
           </div>
         )}
 
@@ -1207,10 +1236,10 @@ function DefaultView({
                 {/* Header */}
                 <div className="grid items-center px-4 py-2.5 border-b border-gray-100 bg-gray-50"
                   style={{ gridTemplateColumns: TRENDING_COLS }}>
-                  {TRENDING_HDR.map(h => (
-                    <span key={h} title={TRENDING_HDR_TITLE[h]}
-                      className={`text-[10px] font-bold uppercase tracking-wide whitespace-nowrap last:text-right ${h === "Opportunity" ? "text-gray-300" : "text-gray-500"}`}>
-                      {h}
+                  {TRENDING_HDR_KEYS.map(h => (
+                    <span key={h} title={TRENDING_HDR_TITLE_KEYS[h] ? tr(TRENDING_HDR_TITLE_KEYS[h]) : undefined}
+                      className="text-[10px] font-bold uppercase tracking-wide whitespace-nowrap last:text-right text-gray-500">
+                      {tr(h)}
                     </span>
                   ))}
                 </div>
@@ -1230,7 +1259,7 @@ function DefaultView({
                         {/* Keyword + bookmark */}
                         <div className="min-w-0 flex items-center gap-2 pr-3">
                           <button type="button" onClick={() => onSave(row)}
-                            title={saved ? "Saved" : "Save keyword"}
+                            title={saved ? tr("trends.trending.saved") : tr("trends.trending.saveKeyword")}
                             className="shrink-0 transition-colors"
                             style={{ color: saved ? "#C026D3" : "var(--app-text-muted)" }}>
                             <Bookmark className="h-3.5 w-3.5" fill={saved ? "currentColor" : "none"} />
@@ -1269,14 +1298,14 @@ function DefaultView({
                         <div className="flex items-center justify-end gap-1.5">
                           <button type="button" onClick={() => onSearch(row.keyword)}
                             className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[10px] font-bold text-gray-600 border border-gray-200 hover:border-[#C026D3] hover:text-[#C026D3] transition-colors whitespace-nowrap">
-                            <BarChart2 className="h-3 w-3" /> Analyze
+                            <BarChart2 className="h-3 w-3" /> {tr("trends.trending.analyze")}
                           </button>
                           <div className="relative">
                             <button type="button"
                               onClick={e => { e.stopPropagation(); setOpenCreate(menuOpen ? null : row.id); }}
                               className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[10px] font-bold text-white transition-colors whitespace-nowrap"
                               style={{ background: "linear-gradient(135deg,#D946EF 0%,#7C3AED 100%)" }}>
-                              Create <ChevronDown className="h-3 w-3 shrink-0" />
+                              {tr("trends.trending.create")} <ChevronDown className="h-3 w-3 shrink-0" />
                             </button>
                             {menuOpen && (
                               <>
@@ -1285,15 +1314,15 @@ function DefaultView({
                                   onClick={e => e.stopPropagation()}>
                                   <a href={`/app/discover?keyword=${encodeURIComponent(row.keyword)}`}
                                     className="w-full flex items-center gap-2.5 text-left px-3.5 py-2 text-[11px] text-gray-700 hover:bg-gray-50 no-underline">
-                                    <Lightbulb className="h-3.5 w-3.5 text-[#D946EF] shrink-0" /> View Pin Ideas
+                                    <Lightbulb className="h-3.5 w-3.5 text-[#D946EF] shrink-0" /> {tr("trends.trending.viewPinIdeas")}
                                   </a>
                                   <a href={`/app/products?keyword=${encodeURIComponent(row.keyword)}`}
                                     className="w-full flex items-center gap-2.5 text-left px-3.5 py-2 text-[11px] text-gray-700 hover:bg-gray-50 no-underline">
-                                    <ShoppingBag className="h-3.5 w-3.5 text-[#7C3AED] shrink-0" /> View Product Opportunities
+                                    <ShoppingBag className="h-3.5 w-3.5 text-[#7C3AED] shrink-0" /> {tr("trends.trending.viewProductOpportunities")}
                                   </a>
                                   <button type="button" onClick={() => { fireCreate(row); setOpenCreate(null); }}
                                     className="w-full flex items-center gap-2.5 text-left px-3.5 py-2 text-[11px] font-semibold text-[#7C3AED] hover:bg-purple-50">
-                                    <Sparkles className="h-3.5 w-3.5 shrink-0" /> Use in Create Pins
+                                    <Sparkles className="h-3.5 w-3.5 shrink-0" /> {tr("trends.trending.useInCreatePins")}
                                   </button>
                                 </div>
                               </>
@@ -1312,7 +1341,7 @@ function DefaultView({
               <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 text-center">
                 <button type="button" data-testid="keyword-load-more" onClick={onLoadMore} disabled={loadingMore}
                   className="text-[11px] font-bold text-[#C026D3] hover:underline disabled:opacity-50">
-                  {loadingMore ? "Loading…" : `Load more (${trendingRows.length} of ${meta?.total ?? "?"})`}
+                  {loadingMore ? tr("trends.trending.loading2") : tr("trends.trending.loadMore").replace("{n}", String(trendingRows.length)).replace("{total}", String(meta?.total ?? "?"))}
                 </button>
               </div>
             )}
@@ -1323,7 +1352,7 @@ function DefaultView({
         {!loading && !error && trendingRows.length > 0 && (
           <p data-testid="keyword-estimated-disclaimer" className="text-[10px] text-gray-400 mt-3 flex items-start gap-1.5 leading-relaxed">
             <span className="shrink-0 mt-px">ⓘ</span>
-            Estimated metrics are directional signals based on Pinterest activity, save behavior, and content density. They are not exact search volume.
+            {tr("trends.trending.disclaimer")}
           </p>
         )}
       </div>
@@ -1459,14 +1488,14 @@ export default function TrendsPage() {
     setAddingId(null);
     if (err === "Already in your plan") {
       setAddedKwIds(prev => new Set([...prev, row.id]));
-      toast.info("Already in your plan");
+      toast.info(tr("trends.toast.alreadyInPlan"));
     } else if (err) {
       toast.error(err);
     } else {
       setAddedKwIds(prev => new Set([...prev, row.id]));
-      toast.success(`"${row.keyword}" added to weekly plan`, {
+      toast.success(tr("trends.toast.addedToPlan").replace("{keyword}", row.keyword), {
         action: {
-          label: "View Plan",
+          label: tr("trends.toast.viewPlan"),
           onClick: () => { window.location.href = `/app/plan?category=${row.category ?? ""}`; },
         },
       });
@@ -1594,7 +1623,7 @@ export default function TrendsPage() {
   }
 
   function handleSaveSeed() {
-    if (!seedRow) { toast.error("Sign in to save this keyword"); return; }
+    if (!seedRow) { toast.error(tr("trends.toast.signInToSave")); return; }
     void handleAddToPlan(seedRow);
   }
 
@@ -1639,7 +1668,7 @@ export default function TrendsPage() {
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="#E60023">
                 <path d="M12 0C5.373 0 0 5.373 0 12c0 5.084 3.163 9.426 7.627 11.174-.105-.949-.2-2.405.042-3.441.218-.937 1.407-5.965 1.407-5.965s-.359-.719-.359-1.782c0-1.668.967-2.914 2.171-2.914 1.023 0 1.518.769 1.518 1.69 0 1.029-.655 2.568-.994 3.995-.283 1.194.599 2.169 1.777 2.169 2.133 0 3.772-2.249 3.772-5.495 0-2.873-2.064-4.882-5.012-4.882-3.414 0-5.418 2.561-5.418 5.207 0 1.031.397 2.138.893 2.738a.36.36 0 0 1 .083.345l-.333 1.36c-.053.22-.174.267-.402.161-1.499-.698-2.436-2.889-2.436-4.649 0-3.785 2.75-7.262 7.929-7.262 4.163 0 7.398 2.967 7.398 6.931 0 4.136-2.607 7.464-6.227 7.464-1.216 0-2.359-.632-2.75-1.378l-.748 2.853c-.271 1.043-1.002 2.35-1.492 3.146C9.57 23.812 10.763 24 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0z" />
               </svg>
-              <span className="text-[11px] font-semibold text-gray-700">Pinterest</span>
+              <span className="text-[11px] font-semibold text-gray-700">{tr("trends.search.pinterest")}</span>
             </div>
 
             {/* Input */}
@@ -1651,12 +1680,12 @@ export default function TrendsPage() {
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") handleSearch(); }}
-                placeholder="Search a Pinterest keyword…"
+                placeholder={tr("trends.search.placeholder")}
                 className="w-full rounded-lg border border-gray-200 bg-white pl-9 pr-9 py-2 text-[13px] text-gray-900 focus:border-[#C026D3] focus:outline-none placeholder:text-gray-400"
               />
               {searchInput && (
-                <button type="button" onClick={handleClear}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 transition-colors">
+                <button type="button" onClick={handleClear} aria-label={tr("trends.search.clearAria")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-500 transition-colors">
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}
@@ -1665,7 +1694,7 @@ export default function TrendsPage() {
             {/* Region */}
             <div className="flex items-center gap-1 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 shrink-0">
               <span className="text-[11px]">🇺🇸</span>
-              <span className="text-[11px] font-semibold text-gray-700">USA</span>
+              <span className="text-[11px] font-semibold text-gray-700">{tr("trends.search.usa")}</span>
             </div>
 
             {/* Search button */}
@@ -1673,14 +1702,14 @@ export default function TrendsPage() {
               className="flex items-center gap-2 px-5 py-2 rounded-lg text-[12px] font-bold text-white whitespace-nowrap shrink-0 hover:brightness-105 transition-all"
               style={{ background: "linear-gradient(135deg,#FF4D8D 0%,#D946EF 52%,#7C3AED 100%)" }}>
               <Search className="h-3.5 w-3.5" />
-              Search Keywords
+              {tr("trends.search.button")}
             </button>
           </div>
 
           {/* Recent searches (inline below bar, only if State A or just after typing) */}
           {!searchedKeyword && recentSearches.length > 0 && (
             <div className="flex items-center gap-2 mt-2.5 pt-2.5 border-t border-gray-100">
-              <span className="text-[10px] text-gray-400 font-medium shrink-0">Recent:</span>
+              <span className="text-[10px] text-gray-400 font-medium shrink-0">{tr("trends.search.recent")}</span>
               <div className="flex flex-wrap gap-1.5">
                 {recentSearches.map(kw => (
                   <button key={kw} type="button" onClick={() => handleSearch(kw)}
@@ -1715,13 +1744,13 @@ export default function TrendsPage() {
             {searchLoading && (
               <div className="flex flex-col items-center py-16 text-center gap-3">
                 <div className="h-8 w-8 rounded-full border-2 border-[#C026D3] border-t-transparent animate-spin" />
-                <p className="text-[13px] text-gray-400">Looking up "{searchedKeyword}"…</p>
+                <p className="text-[13px] text-gray-400">{tr("trends.result.lookingUp").replace("{keyword}", searchedKeyword)}</p>
               </div>
             )}
 
             {!searchLoading && searchError && (
               <div data-testid="keyword-search-error" className="flex flex-col items-center py-16 text-center gap-3 bg-white border border-red-200 rounded-xl">
-                <p className="text-[14px] font-semibold text-red-600">Could not load keyword data</p>
+                <p className="text-[14px] font-semibold text-red-600">{tr("trends.result.loadErrorTitle")}</p>
                 <p className="text-[11px] text-gray-400">{(searchError as Error).message}</p>
               </div>
             )}
@@ -1729,25 +1758,25 @@ export default function TrendsPage() {
             {!searchLoading && !searchError && searchData && !summary && (
               <div className="flex flex-col items-center py-16 text-center gap-3 bg-white border border-gray-200 rounded-xl">
                 <p className="text-4xl">🔍</p>
-                <p className="text-[14px] font-semibold text-gray-700">No keyword data found yet</p>
+                <p className="text-[14px] font-semibold text-gray-700">{tr("trends.result.notFoundTitle")}</p>
                 <p className="text-[11px] text-gray-400 max-w-[300px] leading-relaxed">
-                  {searchData.message ?? "Try another keyword or browse trending keywords."}
+                  {searchData.message ?? tr("trends.result.notFoundDefaultMsg")}
                 </p>
                 <div className="flex items-center gap-2 mt-1 flex-wrap justify-center">
                   <button type="button" onClick={handleClear}
                     className="px-4 py-2 rounded-xl text-[11px] font-bold"
                     style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>
-                    Browse trending keywords
+                    {tr("trends.result.browseTrending")}
                   </button>
                   <a
                     data-testid="keyword-create-anyway-button"
                     href={`/app/studio?keyword=${encodeURIComponent(searchedKeyword)}&from=keyword_trends&unvalidated=true`}
                     className="px-4 py-2 rounded-xl text-[11px] font-bold border border-gray-200 text-gray-600 hover:bg-gray-50 no-underline">
-                    Create Pins anyway
+                    {tr("trends.result.createAnyway")}
                   </a>
                 </div>
-                <p className="text-[9px] text-gray-300 max-w-[260px]">
-                  "Create Pins anyway" uses the raw keyword without verified trend data.
+                <p className="text-[9px] text-gray-400 max-w-[260px]">
+                  {tr("trends.result.createAnywayNote")}
                 </p>
               </div>
             )}
@@ -1759,7 +1788,7 @@ export default function TrendsPage() {
                   {/* Breadcrumb */}
                   <div className="flex items-center gap-1.5 text-[10px] text-gray-400 mb-3">
                     <button type="button" onClick={handleClear}
-                      className="hover:text-[#C026D3] transition-colors">Keyword Trends</button>
+                      className="hover:text-[#C026D3] transition-colors">{tr("trends.result.breadcrumbKeywordTrends")}</button>
                     <ChevronRight className="h-3 w-3" />
                     <span className="text-gray-600 capitalize">{summary.keyword}</span>
                   </div>
@@ -1770,7 +1799,7 @@ export default function TrendsPage() {
                       {!summary.isExactMatch && summary.matchedKeyword && (
                         <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2 inline-flex items-center gap-1.5">
                           <span>⚠</span>
-                          Closest match for "{searchedKeyword}"
+                          {tr("trends.result.closestMatch").replace("{keyword}", searchedKeyword)}
                         </p>
                       )}
                       <h2 className="text-[20px] font-black text-gray-900 capitalize leading-tight mb-1">{summary.keyword}</h2>
@@ -1783,15 +1812,15 @@ export default function TrendsPage() {
                           </span>
                         )}
                         <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                          🇺🇸 US / USA
+                          🇺🇸 {tr("trends.result.usRegion")}
                         </span>
                         {summary.updatedAt ? (
                           <span className="text-gray-400">
-                            Data updated: {formatFreshnessDate(summary.updatedAt)}
+                            {tr("trends.result.dataUpdated").replace("{date}", formatFreshnessDate(summary.updatedAt))}
                           </span>
                         ) : summary.firstSeenAt ? (
                           <span className="text-gray-400">
-                            First seen: {formatFreshnessDate(summary.firstSeenAt)}
+                            {tr("trends.result.firstSeen").replace("{date}", formatFreshnessDate(summary.firstSeenAt))}
                           </span>
                         ) : null}
                         <DataSourceBadge label={summary.dataSourceLabel} />
@@ -1807,20 +1836,20 @@ export default function TrendsPage() {
                           ? { borderColor: "#C026D3", color: "#C026D3" }
                           : { borderColor: "#E5E7EB", color: "#4B5563" }}>
                         <Bookmark className="h-3 w-3" fill={seedPlanned ? "currentColor" : "none"} />
-                        {seedPlanned ? "Saved" : "Save keyword"}
+                        {seedPlanned ? tr("trends.result.savedButton") : tr("trends.result.saveKeywordButton")}
                       </button>
                       <a data-testid="summary-view-pin-ideas" href={`/app/discover?keyword=${encodeURIComponent(summary.keyword)}`}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-[11px] font-semibold text-gray-600 hover:border-[#C026D3] hover:text-[#C026D3] transition-colors bg-white whitespace-nowrap no-underline">
-                        <Lightbulb className="h-3 w-3" /> View Pin Ideas
+                        <Lightbulb className="h-3 w-3" /> {tr("trends.result.viewPinIdeas")}
                       </a>
                       <a data-testid="summary-view-products" href={`/app/products?keyword=${encodeURIComponent(summary.keyword)}`}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-[11px] font-semibold text-gray-600 hover:border-[#C026D3] hover:text-[#C026D3] transition-colors bg-white whitespace-nowrap no-underline">
-                        <ShoppingBag className="h-3 w-3" /> View Product Opportunities
+                        <ShoppingBag className="h-3 w-3" /> {tr("trends.result.viewProductOpportunities")}
                       </a>
                       <button type="button" onClick={handleCreatePinsFromSummary}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold text-white whitespace-nowrap"
                         style={{ background: "linear-gradient(135deg,#FF4D8D 0%,#D946EF 52%,#7C3AED 100%)" }}>
-                        <Sparkles className="h-3 w-3" /> Use in Create Pins
+                        <Sparkles className="h-3 w-3" /> {tr("trends.result.useInCreatePins")}
                       </button>
                     </div>
                   </div>
@@ -1835,16 +1864,16 @@ export default function TrendsPage() {
                 <div className="mb-2" ref={relatedSectionRef}>
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <p className="text-[14px] font-black text-gray-900">Related Keywords</p>
+                      <p className="text-[14px] font-black text-gray-900">{tr("trends.related.heading")}</p>
                       <p className="text-[11px] text-gray-400">
                         {summary.category
-                          ? `${summary.category.replace(/-/g, " ")} keywords`
-                          : "Keywords in same category"}
+                          ? `${summary.category.replace(/-/g, " ")} ${tr("trends.related.categoryKeywordsSuffix")}`
+                          : tr("trends.related.sameCategory")}
                         {searchData?.meta
-                          ? ` · Showing ${filteredRelated.length} of ${searchData.meta.total} keywords`
+                          ? ` · ${tr("trends.related.showingCount").replace("{shown}", String(filteredRelated.length)).replace("{total}", String(searchData.meta.total))}`
                           : ""}
                         {searchData?.meta?.lastUpdated
-                          ? ` · Updated ${formatFreshnessDate(searchData.meta.lastUpdated)}`
+                          ? ` · ${tr("trends.related.updatedSuffix").replace("{date}", formatFreshnessDate(searchData.meta.lastUpdated))}`
                           : ""}
                       </p>
                     </div>
@@ -1875,14 +1904,14 @@ export default function TrendsPage() {
                         disabled={searchLoading && relatedOffset > 0}
                         className="text-[11px] font-bold text-[#C026D3] hover:underline disabled:opacity-50">
                         {searchLoading && relatedOffset > 0
-                          ? "Loading…"
-                          : `Load more related keywords (${relatedRows.length} of ${searchData?.meta?.total ?? "?"})`}
+                          ? tr("trends.related.loading")
+                          : tr("trends.related.loadMore").replace("{n}", String(relatedRows.length)).replace("{total}", String(searchData?.meta?.total ?? "?"))}
                       </button>
                     </div>
                   )}
 
-                  <p className="text-[9px] text-gray-300 mt-2 text-center">
-                    Data: Pinterest trend signals · Qualitative bands only — no exact search volume shown
+                  <p className="text-[9px] text-gray-400 mt-2 text-center">
+                    {tr("trends.related.disclaimer")}
                   </p>
                 </div>
 

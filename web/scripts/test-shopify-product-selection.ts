@@ -274,9 +274,8 @@ async function main() {
   await test("ProductPickerModal: shopify tab is wired (flag-gated, source badge, sourceBadge label)", () => {
     const src = readFileSync("src/components/studio/ProductPickerModal.tsx", "utf8");
     assert.match(src, /shopifyEnabled = isShopifyIntegrationEnabled\(\)/);
-    // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-    // label); tighten to `labelKey: "studioModals.source.shopify"` when that cluster lands.
-    assert.match(src, /label: "Shopify",\s*bg: "rgba\(149,191,71/);
+    // i18n-ified: source badge now resolves its label from studioModals.source.shopify.
+    assert.match(src, /labelKey: "studioModals\.source\.shopify",\s*bg: "rgba\(149,191,71/);
   });
 
   await test("InlineCreateAssetPicker: \"From Shopify\" source is wired for the product role only", () => {

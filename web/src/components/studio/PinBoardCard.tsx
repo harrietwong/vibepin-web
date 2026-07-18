@@ -18,10 +18,10 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
-import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle, ImageOff } from "lucide-react";
-import { toProxyUrl } from "@/lib/imageProxy";
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { getSourceBadge, getStatusBadge, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
+import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
@@ -179,10 +179,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // never leaks across drafts.
   const [hoveredKw, setHoveredKw] = useState<string | null>(null);
   const [copiedKw, setCopiedKw] = useState<string | null>(null);
-  // Image that fails to load (dead/expired URL) must NOT leave the container's bare
-  // surface colour showing as a solid block — render an explicit "unavailable" state.
-  const [imgError, setImgError] = useState(false);
-  useEffect(() => { setImgError(false); }, [draft.imageUrl]);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selfEdit = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -325,21 +321,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const failed = lifecycle === "failed";
   const scheduled = lifecycle === "scheduled";
   const generating = lifecycle === "generating";
-
-  // Hover intent (compact card only): schedule an expand after HOVER_EXPAND_DELAY; a
-  // quick pass-over (mouse leaves before the timer fires) cancels it via
-  // onCardMouseLeave, so scanning/scrolling across many cards never triggers one.
-  // Guarded on `active` (nothing to do — already expanded) and `generating` (no
-  // fields to edit yet, and hover-expanding a placeholder card would be surprising).
-  const onCardMouseEnter = useCallback(() => {
-    if (active || generating) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => { hoverTimer.current = null; expand(); }, HOVER_EXPAND_DELAY);
-  }, [active, generating, expand]);
-  const onCardMouseLeave = useCallback(() => {
-    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
-  }, []);
-
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
   // remotePinId only for legacy drafts published before remotePinUrl existed.
   const pinUrl = draft.remotePinUrl || (draft.remotePinId ? `https://www.pinterest.com/pin/${draft.remotePinId}/` : "");
@@ -348,6 +329,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // Recommended high-search Pinterest keywords (only real, ready results — no empty
   // shell, no loading state, capped at 8). NEVER labeled "Trending" (data honesty).
   const keywordChips = draft.keywordStatus === "ready" ? (draft.recommendedKeywords ?? []).slice(0, 8) : [];
+
+  // Hover intent (compact card only): schedule an expand after HOVER_EXPAND_DELAY; a
+  // quick pass-over (mouse leaves before the timer fires) cancels it via
+  // onCardMouseLeave, so scanning/scrolling across many cards never triggers one.
+  // Guarded on `active` (nothing to do — already expanded) and `generating` (no
+  // editable content yet).
+  const onCardMouseEnter = useCallback(() => {
+    if (active || generating) return;
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => { hoverTimer.current = null; expand(); }, HOVER_EXPAND_DELAY);
+  }, [active, generating, expand]);
+  const onCardMouseLeave = useCallback(() => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+  }, []);
 
   const badges = (
     <div style={{ position: "absolute", top: 8, left: 8, display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
@@ -415,21 +410,22 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
         onMouseEnter={onCardMouseEnter} onMouseLeave={onCardMouseLeave}
         style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
         <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 5", background: BUI.surface3 }}>
-          {draft.imageUrl && !imgError ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
-              onError={() => setImgError(true)}
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block",
-                opacity: generating ? 0.55 : hiddenByQuality ? 0.35 : 1,
-                filter: hiddenByQuality ? "blur(10px)" : "none" }} />
-          ) : draft.imageUrl && imgError ? (
-            // Dead/expired image URL — centered icon on the neutral surface, matching the
-            // existing studio thumbnail fallback (PinDetailsDrawer). Never a bare colour block.
-            <div data-testid="card-image-unavailable" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <ImageOff style={{ width: 28, height: 28, color: BUI.textMuted }} />
-            </div>
+          {failed && !isPublishFailure ? (
+            // Generation-failure card: walk the original-image fallback chain
+            // (generated → source → parent) instead of the raw draft.imageUrl, which
+            // may be empty (scratch mode) or a dead snapshot. Never blank/broken.
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="generationFailed" generating={generating} hiddenByQuality={hiddenByQuality} />
+          ) : resolveInitialFailureMediaUrl(draft) ? (
+            // Publish-failed / healthy cards: same chain, starting at draft.imageUrl
+            // (so a genuinely valid final image is always preferred) but falling
+            // through source/product/reference/parent — and ultimately the neutral
+            // "No image" placeholder — instead of a broken image or a solid-color
+            // junk block when imageUrl is dead or degenerate.
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="noImage" generating={generating} hiddenByQuality={hiddenByQuality} />
           ) : (
-            // Scratch-mode Generating placeholder — no source image yet.
+            // Scratch-mode Generating placeholder — no candidate anywhere in the chain yet.
             <div data-testid="card-generating-placeholder" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Loader2 style={{ width: 26, height: 26, color: BUI.textMuted }} className="animate-spin" />
             </div>
@@ -591,15 +587,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)", gridColumn: "span 2", maxWidth: 760 }}>
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
         <div style={{ width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
-          {draft.imageUrl && !imgError ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img src={toProxyUrl(draft.imageUrl)} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")} loading="lazy"
-              onError={() => setImgError(true)}
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-          ) : draft.imageUrl && imgError ? (
-            <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <ImageOff style={{ width: 18, height: 18, color: BUI.textMuted }} />
-            </div>
+          {failed && !isPublishFailure ? (
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="generationFailed" />
+          ) : resolveInitialFailureMediaUrl(draft) ? (
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="noImage" />
           ) : (
             <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: BUI.textMuted, fontSize: 10, fontWeight: 700 }}>{tr("studioBoard.card.noImage")}</div>
           )}

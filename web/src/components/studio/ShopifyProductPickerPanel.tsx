@@ -23,6 +23,7 @@ import { ChevronDown, ChevronUp, ExternalLink, Loader2, Package, RefreshCw, Sear
 import { getShopifyStatus, listShopifyProducts, getShopifyProduct } from "@/lib/shopifyClient";
 import type { ShopifyProductListItem, ShopifyProductDetail } from "@/lib/shopifyClient";
 import { SETTINGS_SHOPIFY_PATH } from "@/lib/settingsPaths";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const UI = {
   card:      "var(--app-surface, #161D2E)",
@@ -71,11 +72,13 @@ export type ShopifyProductPickerPanelProps = (SelectProductModeProps | SelectIma
 };
 
 type StatusFilter = "all" | "active" | "draft" | "archived";
-const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "active", label: "Active" },
-  { id: "draft", label: "Draft" },
-  { id: "archived", label: "Archived" },
+// labelKey is an i18n key, resolved via useLocale() at render time — id stays the
+// canonical (untranslated) filter value used in comparisons.
+const STATUS_FILTERS: { id: StatusFilter; labelKey: "studioModals.shopify.all" | "studioModals.shopify.active" | "studioModals.shopify.draft" | "studioModals.shopify.archived" }[] = [
+  { id: "all", labelKey: "studioModals.shopify.all" },
+  { id: "active", labelKey: "studioModals.shopify.active" },
+  { id: "draft", labelKey: "studioModals.shopify.draft" },
+  { id: "archived", labelKey: "studioModals.shopify.archived" },
 ];
 
 type ConnState = "checking" | "not_connected" | "ready";
@@ -95,11 +98,13 @@ function formatPrice(price: ShopifyProductListItem["price"]): string | null {
   return price.currency ? `${price.currency} ${amount}` : amount;
 }
 
-function statusLabel(status: string): string {
-  if (status === "active") return "Active";
-  if (status === "draft") return "Draft";
-  if (status === "archived") return "Archived";
-  return status;
+// Returns an i18n key for known statuses; unknown statuses pass through as-is
+// (raw server value — no key exists to translate them).
+function statusLabelKey(status: string): "studioModals.shopify.active" | "studioModals.shopify.draft" | "studioModals.shopify.archived" | null {
+  if (status === "active") return "studioModals.shopify.active";
+  if (status === "draft") return "studioModals.shopify.draft";
+  if (status === "archived") return "studioModals.shopify.archived";
+  return null;
 }
 
 /**
@@ -164,10 +169,11 @@ function RowDetail({
   onToggleImage: (url: string) => void;
   onRetry: () => void;
 }) {
+  const { t: tr } = useLocale();
   if (loading) {
     return (
       <div style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 8, color: UI.textMuted, fontSize: 11 }}>
-        <Loader2 style={{ width: 13, height: 13, animation: "spin 0.8s linear infinite" }} /> Loading details…
+        <Loader2 style={{ width: 13, height: 13, animation: "spin 0.8s linear infinite" }} /> {tr("studioModals.shopify.loadingDetails")}
       </div>
     );
   }
@@ -176,7 +182,7 @@ function RowDetail({
       <div style={{ padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <p style={{ margin: 0, fontSize: 11, color: UI.error }}>{error}</p>
         <button type="button" onClick={onRetry} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${UI.borderStr}`, borderRadius: 7, padding: "4px 9px", color: UI.text, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-          <RefreshCw style={{ width: 11, height: 11 }} /> Retry
+          <RefreshCw style={{ width: 11, height: 11 }} /> {tr("pinDetails.retry")}
         </button>
       </div>
     );
@@ -216,7 +222,7 @@ function RowDetail({
       {detail.adminUrl && (
         <a href={detail.adminUrl} target="_blank" rel="noopener noreferrer"
           style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700, color: "#818CF8", textDecoration: "none", width: "fit-content" }}>
-          View in Shopify <ExternalLink style={{ width: 10, height: 10 }} />
+          {tr("studioModals.shopify.viewInShopify")} <ExternalLink style={{ width: 10, height: 10 }} />
         </a>
       )}
     </div>
@@ -226,6 +232,7 @@ function RowDetail({
 // ── Main panel ──────────────────────────────────────────────────────────────────
 
 export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps) {
+  const { t: tr } = useLocale();
   const [connState, setConnState] = useState<ConnState>("checking");
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 300);
@@ -275,11 +282,11 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
       setNextCursor(result.nextCursor);
     } catch (e) {
       if (seq !== requestSeq.current) return;
-      setError((e as Error).message || "Could not load products.");
+      setError((e as Error).message || tr("studioModals.shopify.couldNotLoadProducts"));
     } finally {
       if (seq === requestSeq.current) { setLoading(false); setLoadingMore(false); }
     }
-  }, [debouncedSearch, statusFilter]);
+  }, [debouncedSearch, statusFilter, tr]);
 
   useEffect(() => {
     if (connState !== "ready") return;
@@ -312,7 +319,7 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
         return { ...prev, [id]: new Set(first ? [first] : []) };
       });
     } catch (e) {
-      setDetailError(prev => ({ ...prev, [id]: (e as Error).message || "Could not load product details." }));
+      setDetailError(prev => ({ ...prev, [id]: (e as Error).message || tr("studioModals.shopify.couldNotLoadProductDetails") }));
     } finally {
       setDetailLoading(prev => ({ ...prev, [id]: false }));
     }
@@ -340,7 +347,7 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
     if (props.mode === "select-product") {
       props.onSelectProduct(shopifyProductToSelection(product, props.storeLabel), images);
     } else {
-      props.onSelectImages(images, { title: product.title || "Product", productUrl: product.productUrl ?? undefined });
+      props.onSelectImages(images, { title: product.title || tr("studioModals.product.productFallback"), productUrl: product.productUrl ?? undefined });
     }
   }
 
@@ -360,7 +367,7 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
               data-testid="shopify-picker-search"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search your Shopify products…"
+              placeholder={tr("studioModals.shopify.searchProductsPlaceholder")}
               style={{
                 width: "100%", boxSizing: "border-box", padding: "8px 10px 8px 30px", borderRadius: 8,
                 border: `1px solid ${UI.borderStr}`, fontSize: 11, color: UI.text, background: UI.bg2, outline: "none",
@@ -376,7 +383,7 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
                   background: statusFilter === f.id ? "rgba(124,58,237,0.16)" : "transparent",
                   color: statusFilter === f.id ? "#C4B5FD" : UI.textSec, fontSize: 10.5, fontWeight: 700, cursor: "pointer",
                 }}>
-                {f.label}
+                {tr(f.labelKey)}
               </button>
             ))}
           </div>
@@ -387,11 +394,11 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
         <div data-testid="shopify-picker-disconnected" style={{ padding: "24px 16px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
           <Package style={{ width: 28, height: 28, color: UI.textMuted }} />
           <p style={{ margin: 0, fontSize: 12, color: UI.textSec, lineHeight: 1.6 }}>
-            Connect your Shopify store in Settings to pick products here.
+            {tr("studioModals.shopify.connectStoreHint")}
           </p>
           <Link href={SETTINGS_SHOPIFY_PATH} data-testid="shopify-picker-open-settings"
             style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 14px", borderRadius: 8, border: "none", background: UI.gradient, color: "#fff", fontSize: 11.5, fontWeight: 700, textDecoration: "none" }}>
-            Open Settings
+            {tr("studioModals.shopify.openSettings")}
           </Link>
         </div>
       )}
@@ -407,7 +414,7 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
           <p style={{ margin: 0, fontSize: 12, color: UI.textSec }}>{error}</p>
           <button type="button" data-testid="shopify-picker-retry" onClick={() => void runQuery(null)}
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 8, border: `1px solid ${UI.borderStr}`, background: UI.cardElev, color: UI.text, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
-            <RefreshCw style={{ width: 12, height: 12 }} /> Retry
+            <RefreshCw style={{ width: 12, height: 12 }} /> {tr("pinDetails.retry")}
           </button>
         </div>
       )}
@@ -416,18 +423,18 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
         <div data-testid="shopify-picker-empty-store" style={{ padding: "24px 16px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
           <Package style={{ width: 28, height: 28, color: UI.textMuted }} />
           <p style={{ margin: 0, fontSize: 12, color: UI.textSec, lineHeight: 1.6 }}>
-            No products synced yet — Sync now in Settings.
+            {tr("studioModals.shopify.noProductsSyncedYet")}
           </p>
           <Link href={SETTINGS_SHOPIFY_PATH} data-testid="shopify-picker-open-settings-sync"
             style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 14px", borderRadius: 8, border: `1px solid ${UI.borderStr}`, background: UI.cardElev, color: UI.text, fontSize: 11.5, fontWeight: 700, textDecoration: "none" }}>
-            Open Settings
+            {tr("studioModals.shopify.openSettings")}
           </Link>
         </div>
       )}
 
       {isEmptyFiltered && (
         <p data-testid="shopify-picker-empty-filtered" style={{ margin: 0, padding: "18px 12px", textAlign: "center", fontSize: 11.5, color: UI.textMuted }}>
-          No products match your search.
+          {tr("studioModals.picker.noProductsMatchSearch")}
         </p>
       )}
 
@@ -443,23 +450,23 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
                   <Thumb src={product.primaryImageUrl} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ margin: "0 0 3px", fontSize: 12, fontWeight: 700, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {product.title || "Product"}
+                      {product.title || tr("studioModals.product.productFallback")}
                     </p>
                     <p style={{ margin: 0, fontSize: 10.5, color: UI.textMuted }}>
-                      <span style={{ color: UI.green, fontWeight: 700 }}>Shopify</span>
-                      {" · "}{statusLabel(product.status)}
+                      <span style={{ color: UI.green, fontWeight: 700 }}>{tr("studioModals.source.shopify")}</span>
+                      {" · "}{(() => { const k = statusLabelKey(product.status); return k ? tr(k) : product.status; })()}
                       {price && <>{" · "}{price}</>}
-                      {" · "}{product.imageCount} image{product.imageCount === 1 ? "" : "s"}
+                      {" · "}{product.imageCount === 1 ? tr("studioModals.shopify.imageCountOne") : tr("studioModals.shopify.imageCountMany").replace("{n}", String(product.imageCount))}
                     </p>
                   </div>
                   <button type="button" data-testid="shopify-picker-expand" onClick={() => toggleExpand(product)}
-                    aria-label={expanded ? "Hide details" : "Show details"}
+                    aria-label={expanded ? tr("studioModals.shopify.hideDetails") : tr("studioModals.shopify.showDetails")}
                     style={{ background: "none", border: "none", cursor: "pointer", color: UI.textMuted, padding: 4, flexShrink: 0 }}>
                     {expanded ? <ChevronUp style={{ width: 14, height: 14 }} /> : <ChevronDown style={{ width: 14, height: 14 }} />}
                   </button>
                   <button type="button" data-testid="shopify-picker-select" onClick={() => handleQuickSelect(product)}
                     style={{ flexShrink: 0, padding: "6px 14px", borderRadius: 7, border: "none", background: UI.gradient, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                    {props.mode === "select-product" ? "Select" : `Add${checked.size > 1 ? ` (${checked.size})` : ""}`}
+                    {props.mode === "select-product" ? tr("studioModals.picker.select") : (checked.size > 1 ? `${tr("studioModals.shopify.add")} (${checked.size})` : tr("studioModals.shopify.add"))}
                   </button>
                 </div>
                 {expanded && (
@@ -479,7 +486,7 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
             <button type="button" data-testid="shopify-picker-load-more" onClick={() => void runQuery(nextCursor)} disabled={loadingMore}
               style={{ alignSelf: "center", marginTop: 4, padding: "7px 16px", borderRadius: 8, border: `1px solid ${UI.borderStr}`, background: UI.cardElev, color: UI.text, fontSize: 11.5, fontWeight: 700, cursor: loadingMore ? "default" : "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
               {loadingMore ? <Loader2 style={{ width: 12, height: 12, animation: "spin 0.8s linear infinite" }} /> : null}
-              {loadingMore ? "Loading…" : "Load more"}
+              {loadingMore ? tr("common.loading") : tr("studioModals.shopify.loadMore")}
             </button>
           )}
         </div>

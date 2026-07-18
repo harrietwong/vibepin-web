@@ -8,6 +8,8 @@ import { MarketTagBadge, MomentumIcon, MOMENTUM_LABEL } from "@/components/ui/Op
 import { mapPinToOpportunity, mapProductToOpportunity } from "@/lib/dataMapping";
 import { MARKET_TAG_META } from "@/types/opportunity";
 import type { KeywordOpportunity, OpportunityAssessment } from "@/types/opportunity";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { excludeRetired } from "@/lib/productTopTiers";
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -31,6 +33,7 @@ function MiniBlock({
   domain?:   string | null;
   pinId?:    string | null;
 }) {
+  const { t: tr } = useLocale();
   const mom = MOMENTUM_LABEL[meta.momentum];
   return (
     <div className="flex items-start gap-3 py-3.5 border-b border-gray-50 last:border-0">
@@ -60,11 +63,11 @@ function MiniBlock({
           </span>
           <span className="flex items-center gap-1">
             <MomentumIcon level={meta.momentum} />
-            <span className="text-[9px] font-semibold" style={{ color: mom.color }}>{mom.label}</span>
+            <span className="text-[9px] font-semibold" style={{ color: mom.color }}>{tr(mom.labelKey)}</span>
           </span>
         </div>
         <p className="text-[10px] text-gray-400 mt-1">
-          Data: <span className="font-semibold text-gray-600">{fmt(saves)} saves</span>
+          {tr("opportunity.detail.dataPrefix")} <span className="font-semibold text-gray-600">{fmt(saves)} {tr("opportunity.detail.savesLower")}</span>
           {domain && <> · <span>{domain.replace(/^www\./, "")}</span></>}
         </p>
       </div>
@@ -93,6 +96,7 @@ export function OpportunityDetailDrawer({
   item:    KeywordOpportunity;
   onClose: () => void;
 }) {
+  const { t: tr } = useLocale();
   const tagMeta = MARKET_TAG_META[item.meta.marketTag];
   const mom     = MOMENTUM_LABEL[item.meta.momentum];
 
@@ -113,10 +117,11 @@ export function OpportunityDetailDrawer({
   const { data: products, isLoading: productsLoading } = useSWR(
     ["detail_products", item.keyword],
     async () => {
-      const { data } = await supabase
+      // excludeRetired: soft-retired product rows (migrate_v46) never surface.
+      const { data } = await excludeRetired(supabase
         .from("pin_products")
         .select("id,product_name,image_url,save_count,source_pin_save_count,domain,seed_keyword")
-        .ilike("seed_keyword", `%${item.keyword}%`)
+        .ilike("seed_keyword", `%${item.keyword}%`))
         .order("save_count", { ascending: false })
         .limit(6);
       return (data ?? []).map(p => mapProductToOpportunity(p));
@@ -157,18 +162,18 @@ export function OpportunityDetailDrawer({
 
           {/* Keyword Assessment */}
           <div className="px-6 py-4 border-b border-gray-100">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-3">Niche Intelligence</p>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-3">{tr("opportunity.detail.nicheIntelligence")}</p>
 
             {/* Key stats grid */}
             <div className="grid grid-cols-2 gap-2 mb-3">
               <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
-                <p className="text-[9px] text-gray-400 uppercase tracking-widest mb-1">Est. Monthly Volume</p>
+                <p className="text-[9px] text-gray-400 uppercase tracking-widest mb-1">{tr("opportunity.detail.estMonthlyVolume")}</p>
                 <p className="text-[15px] font-black tabular-nums" style={{ color: tagMeta.color }}>
                   👁️ {fmtVol(item.meta.estMonthlyVolume)}
                 </p>
               </div>
               <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
-                <p className="text-[9px] text-gray-400 uppercase tracking-widest mb-1">Commercial Density</p>
+                <p className="text-[9px] text-gray-400 uppercase tracking-widest mb-1">{tr("opportunity.detail.commercialDensity")}</p>
                 <p className="text-[15px] font-black tabular-nums text-gray-800">
                   {item.meta.commercialRatio > 0
                     ? `${Math.round(item.meta.commercialRatio * 100)}%`
@@ -179,26 +184,26 @@ export function OpportunityDetailDrawer({
 
             {/* Momentum row */}
             <div className="flex items-center gap-2 mb-3 px-1">
-              <span className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 w-20 shrink-0">Momentum</span>
+              <span className="text-[9px] font-semibold uppercase tracking-widest text-gray-400 w-20 shrink-0">{tr("opportunity.card.momentum")}</span>
               <MomentumIcon level={item.meta.momentum} />
-              <span className="text-[11px] font-bold" style={{ color: mom.color }}>{mom.label}</span>
+              <span className="text-[11px] font-bold" style={{ color: mom.color }}>{tr(mom.labelKey)}</span>
             </div>
 
             <p className="text-[11px] text-gray-500 leading-relaxed">💡 {item.meta.insight}</p>
 
             {item.saves > 0 && (
               <p className="text-[10px] text-gray-400 mt-2">
-                Raw data:{" "}
-                <span className="font-semibold text-gray-600">{fmt(item.saves)} saves</span>
-                {item.pin_count > 0 && <> · {item.pin_count} pins</>}
-                {item.linked_products > 0 && <> · {item.linked_products} products</>}
+                {tr("opportunity.detail.rawDataPrefix")}{" "}
+                <span className="font-semibold text-gray-600">{fmt(item.saves)} {tr("opportunity.detail.savesSuffix")}</span>
+                {item.pin_count > 0 && <> · {item.pin_count} {tr("opportunity.detail.pinsSuffix")}</>}
+                {item.linked_products > 0 && <> · {item.linked_products} {tr("opportunity.detail.productsSuffix")}</>}
               </p>
             )}
           </div>
 
           {/* Linked Viral Pins */}
           <SectionHeader
-            title="Linked Viral Pins"
+            title={tr("opportunity.detail.linkedViralPins")}
             count={pinsLoading ? null : (pins?.length ?? 0)}
           />
           <div className="px-6">
@@ -212,7 +217,7 @@ export function OpportunityDetailDrawer({
             {!pinsLoading && (pins?.length ?? 0) === 0 && (
               <div className="py-8 text-center">
                 <p className="text-[11px] text-gray-400">
-                  No linked pins yet — run the scraper to link pins to this keyword.
+                  {tr("opportunity.detail.noLinkedPins")}
                 </p>
               </div>
             )}
@@ -230,7 +235,7 @@ export function OpportunityDetailDrawer({
 
           {/* Linked Products */}
           <SectionHeader
-            title="Linked Products"
+            title={tr("opportunity.detail.linkedProducts")}
             count={productsLoading ? null : (products?.length ?? 0)}
           />
           <div className="px-6">
@@ -243,7 +248,7 @@ export function OpportunityDetailDrawer({
             )}
             {!productsLoading && (products?.length ?? 0) === 0 && (
               <div className="py-8 text-center">
-                <p className="text-[11px] text-gray-400">No linked products found for this keyword.</p>
+                <p className="text-[11px] text-gray-400">{tr("opportunity.detail.noLinkedProducts")}</p>
               </div>
             )}
             {!productsLoading && products && products.map(prod => (
@@ -269,7 +274,7 @@ export function OpportunityDetailDrawer({
             style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}
           >
             <Sparkles className="w-4 h-4" />
-            Create Pin for &ldquo;{item.keyword}&rdquo;
+            {tr("opportunity.detail.createPinForPrefix")}{item.keyword}{tr("opportunity.detail.createPinForSuffix")}
           </a>
         </div>
       </div>

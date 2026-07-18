@@ -221,7 +221,6 @@ const ZH_PAGES: { name: string; path: string }[] = [
       await page.waitForSelector("[data-testid='settings-modal']", { timeout: 45000 });
       await page.click("[data-testid='settings-tab-ai-settings']").catch(() => {});
       await sleep(300);
-      await page.selectOption("[data-testid='ai-settings-language']", "ja").catch(() => {});
       await page.click("[data-testid='settings-save']").catch(() => {});
       await sleep(800);
       await page.keyboard.press("Escape").catch(() => {});

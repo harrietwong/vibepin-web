@@ -8,7 +8,9 @@ import { createServerClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
-const adminDb = createServerClient();
+// Lazy: a clean `next build` collects page data without Supabase env vars.
+let _adminDb: ReturnType<typeof createServerClient> | null = null;
+const adminDb = () => (_adminDb ??= createServerClient());
 
 async function getUserId(req: Request): Promise<string | null> {
   const auth  = req.headers.get("authorization") ?? "";
@@ -26,7 +28,7 @@ async function getUserId(req: Request): Promise<string | null> {
 
 async function resolveReferences(referenceIds: string[] | null) {
   if (!referenceIds || referenceIds.length === 0) return [];
-  const { data } = await adminDb
+  const { data } = await adminDb()
     .from("pin_samples")
     .select("id,image_url,save_count,seed_keyword,category,visual_format")
     .in("id", referenceIds)
@@ -36,7 +38,7 @@ async function resolveReferences(referenceIds: string[] | null) {
 
 async function resolveProducts(productIds: string[] | null) {
   if (!productIds || productIds.length === 0) return [];
-  const { data } = await adminDb
+  const { data } = await adminDb()
     .from("pin_products")
     .select("id,product_name,domain,image_url,source_url,product_type")
     .in("id", productIds)
@@ -46,7 +48,7 @@ async function resolveProducts(productIds: string[] | null) {
 
 async function resolveOpportunity(opportunityId: string | null) {
   if (!opportunityId) return null;
-  const { data } = await adminDb
+  const { data } = await adminDb()
     .from("opportunities")
     .select("id,title,canonical_keyword,category,primary_label,trend_state,evidence_sentence,score")
     .eq("id", opportunityId)
@@ -67,7 +69,7 @@ export async function GET(
 
   const { id: draftId } = await params;
 
-  const { data: draft, error } = await adminDb
+  const { data: draft, error } = await adminDb()
     .from("composer_drafts")
     .select("*")
     .eq("id", draftId)
@@ -119,7 +121,7 @@ export async function PATCH(
     return Response.json({ error: "No valid fields to update" }, { status: 400 });
   }
 
-  const { data: existing } = await adminDb
+  const { data: existing } = await adminDb()
     .from("composer_drafts")
     .select("id")
     .eq("id", id)
@@ -128,7 +130,7 @@ export async function PATCH(
 
   if (!existing) return Response.json({ error: "Draft not found" }, { status: 404 });
 
-  const { data, error } = await adminDb
+  const { data, error } = await adminDb()
     .from("composer_drafts")
     .update(updates)
     .eq("id", id)

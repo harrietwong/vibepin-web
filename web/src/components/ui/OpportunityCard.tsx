@@ -4,6 +4,8 @@ import { TrendingUp, TrendingDown, Minus, Sparkles, ChevronRight } from "lucide-
 import type { KeywordOpportunity, MomentumLevel, MarketTag } from "@/types/opportunity";
 import { MARKET_TAG_META } from "@/types/opportunity";
 import { BookmarkButton } from "@/components/ui/BookmarkButton";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 
 // ── Volume formatter ──────────────────────────────────────────────────────────
 function fmtVol(n: number): string {
@@ -19,34 +21,36 @@ export function MomentumIcon({ level }: { level: MomentumLevel }) {
   return                            <Minus        className="w-3.5 h-3.5 text-gray-400" />;
 }
 
-export const MOMENTUM_LABEL: Record<MomentumLevel, { label: string; color: string }> = {
-  surging:   { label: "Surging",   color: "#059669" },
-  steady:    { label: "Steady",    color: "#9CA3AF" },
-  declining: { label: "Declining", color: "#EF4444" },
+export const MOMENTUM_LABEL: Record<MomentumLevel, { labelKey: MessageKey; color: string }> = {
+  surging:   { labelKey: "opportunity.momentum.surging",   color: "#059669" },
+  steady:    { labelKey: "opportunity.momentum.steady",    color: "#9CA3AF" },
+  declining: { labelKey: "opportunity.momentum.declining", color: "#EF4444" },
 };
 
 // ── MarketTag tooltip copy ────────────────────────────────────────────────────
-const TAG_TOOLTIP: Record<MarketTag, { explain: string; action: string }> = {
+// Wording preserved verbatim (Opportunity/Score/Fit compliance) — only made translatable.
+const TAG_TOOLTIP: Record<MarketTag, { explainKey: MessageKey; actionKey: MessageKey }> = {
   hidden_supply: {
-    explain: "High audience interest, but almost no sellers have pins here yet.",
-    action:  "Create now — first-mover advantage before others catch on.",
+    explainKey: "opportunity.tag.hiddenSupply.explain",
+    actionKey:  "opportunity.tag.hiddenSupply.action",
   },
   new_account_friendly: {
-    explain: "Trending up fast and not yet crowded with competing sellers.",
-    action:  "Ideal for new accounts — post consistently to ride the growth curve.",
+    explainKey: "opportunity.tag.newAccountFriendly.explain",
+    actionKey:  "opportunity.tag.newAccountFriendly.action",
   },
   oversaturated: {
-    explain: "Too many sellers already targeting this with similar-looking content.",
-    action:  "Find a sub-niche angle or use a very distinctive visual style.",
+    explainKey: "opportunity.tag.oversaturated.explain",
+    actionKey:  "opportunity.tag.oversaturated.action",
   },
   low_volume: {
-    explain: "Small, consistent audience with limited reach potential.",
-    action:  "Good for testing or supporting content — not your main focus.",
+    explainKey: "opportunity.tag.lowVolume.explain",
+    actionKey:  "opportunity.tag.lowVolume.action",
   },
 };
 
 // ── Market tag badge with tooltip ─────────────────────────────────────────────
 export function MarketTagBadge({ tag }: { tag: MarketTag }) {
+  const { t: tr } = useLocale();
   const m   = MARKET_TAG_META[tag];
   const tip = TAG_TOOLTIP[tag];
   return (
@@ -62,8 +66,8 @@ export function MarketTagBadge({ tag }: { tag: MarketTag }) {
         className="pointer-events-none absolute bottom-full left-0 mb-2 z-[60] w-56 rounded-xl p-3 shadow-xl opacity-0 group-hover/tag:opacity-100 transition-opacity duration-150"
         style={{ background: "#111827", border: "1px solid #1F2937" }}
       >
-        <p className="text-[11px] font-semibold text-white leading-snug mb-1.5">{tip.explain}</p>
-        <p className="text-[10px] font-bold" style={{ color: m.color }}>→ {tip.action}</p>
+        <p className="text-[11px] font-semibold text-white leading-snug mb-1.5">{tr(tip.explainKey)}</p>
+        <p className="text-[10px] font-bold" style={{ color: m.color }}>→ {tr(tip.actionKey)}</p>
         {/* Arrow */}
         <span
           className="absolute left-3 top-full w-0 h-0"
@@ -104,6 +108,7 @@ export function OpportunityCard({
   studioHref,
   compact = false,
 }: OpportunityCardProps) {
+  const { t: tr } = useLocale();
   const { meta } = item;
   const tagMeta  = MARKET_TAG_META[meta.marketTag];
   const momentum = MOMENTUM_LABEL[meta.momentum];
@@ -151,23 +156,23 @@ export function OpportunityCard({
 
         {/* ── Metrics ───────────────────────────────────────────────────── */}
         <div className="mb-3">
-          <MetricRow label="Est. Volume">
+          <MetricRow label={tr("opportunity.card.estVolume")}>
             <span className="text-[11px] font-bold tabular-nums" style={{ color: tagMeta.color }}>
               👁️ {fmtVol(meta.estMonthlyVolume)}/mo
             </span>
           </MetricRow>
 
-          <MetricRow label="Momentum">
+          <MetricRow label={tr("opportunity.card.momentum")}>
             <MomentumIcon level={meta.momentum} />
             <span className="text-[11px] font-bold" style={{ color: momentum.color }}>
-              {momentum.label}
+              {tr(momentum.labelKey)}
             </span>
           </MetricRow>
 
           {meta.commercialRatio > 0 && (
-            <MetricRow label="Commercial">
+            <MetricRow label={tr("opportunity.card.commercial")}>
               <span className="text-[11px] font-bold tabular-nums text-gray-600">
-                {Math.round(meta.commercialRatio * 100)}% density
+                {Math.round(meta.commercialRatio * 100)}{tr("opportunity.card.densitySuffix")}
               </span>
             </MetricRow>
           )}
@@ -188,7 +193,7 @@ export function OpportunityCard({
               onClick={() => onAnalyze(item)}
               className="flex items-center gap-1 rounded-full px-3 py-2 text-[11px] font-semibold transition-colors border border-gray-200 text-gray-500 hover:border-gray-300 hover:bg-gray-50"
             >
-              Analyze
+              {tr("opportunity.card.analyze")}
               <ChevronRight className="w-3 h-3" />
             </button>
           )}
@@ -198,7 +203,7 @@ export function OpportunityCard({
             style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}
           >
             <Sparkles className="w-3 h-3" />
-            Create Pin
+            {tr("opportunity.card.createPin")}
           </a>
         </div>
       </div>

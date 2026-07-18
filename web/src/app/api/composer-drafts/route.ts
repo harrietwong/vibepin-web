@@ -34,8 +34,10 @@ import { createServerClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
-// Service-role client for server-side writes (bypasses RLS on insert)
-const adminDb = createServerClient();
+// Service-role client for server-side writes (bypasses RLS on insert).
+// Lazy: a clean `next build` collects page data without Supabase env vars.
+let _adminDb: ReturnType<typeof createServerClient> | null = null;
+const adminDb = () => (_adminDb ??= createServerClient());
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
@@ -114,7 +116,7 @@ export async function POST(req: Request) {
     ? body.draft_snapshot as Record<string, unknown>
     : null;
 
-  const { data, error } = await adminDb
+  const { data, error } = await adminDb()
     .from("composer_drafts")
     .insert({
       user_id:                userId,
@@ -151,7 +153,7 @@ export async function GET(req: Request) {
   const url   = new URL(req.url);
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "10", 10), 50);
 
-  const { data, error } = await adminDb
+  const { data, error } = await adminDb()
     .from("composer_drafts")
     .select("id,source_page,opportunity_id,status,created_at,updated_at")
     .eq("user_id", userId)

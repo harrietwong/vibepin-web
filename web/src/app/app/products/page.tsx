@@ -2,6 +2,7 @@
 import Image from "next/image";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 import {
   Tag, ExternalLink, Search, ChevronDown, Package, X,
   RefreshCw, SlidersHorizontal, Bookmark, Activity, Box, Monitor, ArrowRight,
@@ -21,6 +22,7 @@ import * as assetStore from "@/lib/assetStore";
 import { toast } from "sonner";
 import { buildPrefillFromProductSignal, openCreatePins } from "@/lib/createPinsPrefill";
 import { type ProductIdea } from "@/lib/productIdeas";
+import { OUTBOUND_DISCOVERY_METHODS, type ProductSourceTypeCode } from "@/lib/productTopTiers";
 import { useProductIdeas, useProductIdeasCategoryMap } from "@/lib/useProductIdeas";
 import { cleanProductTitle } from "@/lib/productTitle";
 import type { PickerSelection } from "@/components/products/ProductOpportunityPicker";
@@ -69,8 +71,8 @@ function fmtPrice(price: number | null, currency: string | null): string {
   const sym = currency === "EUR" ? "EUR " : currency === "GBP" ? "GBP " : "$";
   return `${sym}${price.toFixed(0)}`;
 }
-function merchantLabel(domain: string | null): string {
-  if (!domain) return "Shop";
+function merchantLabel(domain: string | null, tr: (key: MessageKey) => string): string {
+  if (!domain) return tr("products.merchantFallback");
   const clean = domain.replace(/^www\./, "").split(".")[0];
   return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
@@ -97,8 +99,9 @@ const MARKETPLACE_DOMAINS = ["amazon", "etsy", "ebay", "walmart", "target", "ali
 // + Amazon as an external-marketplace quick toggle. Other external platforms are
 // covered by the dedicated Platform filter.
 type SourceFilter = "all" | "product_pin" | "stl" | "product_link" | "amazon";
-const SOURCE_FILTER_LABELS: Record<SourceFilter, string> = {
-  all: "All", product_pin: "Product Pin", stl: "Shop the Look", product_link: "Product link", amazon: "Amazon",
+const SOURCE_FILTER_KEYS: Record<SourceFilter, MessageKey> = {
+  all: "products.source.all", product_pin: "products.source.productPin", stl: "products.source.stl",
+  product_link: "products.source.productLink", amazon: "products.source.amazon",
 };
 
 // Amazon detection from existing pin_products fields (domain / source_url / merchant).
@@ -109,20 +112,33 @@ function isAmazonProduct(p: PinProduct): boolean {
 function matchesSourceFilter(p: PinProduct, f: SourceFilter): boolean {
   if (f === "all") return true;
   if (f === "amazon") return isAmazonProduct(p);
-  const label = sourceTypeLabel(p);
-  if (f === "product_pin") return label === "Product Pin";
-  if (f === "stl") return label === "Shop the Look";
-  return label === "Product link Pin";
+  const code = sourceTypeCode(p);
+  if (f === "product_pin") return code === "product_pin";
+  if (f === "stl") return code === "shop_the_look";
+  return code === "product_link_pin";
 }
 
-// ── Source type + validation evidence (user-language labels, never raw fields) ──
-function sourceTypeLabel(p: PinProduct): string {
+// ── Source type + validation evidence (stable codes; mapped to user-language
+// labels via sourceTypeLabelKey + tr(), never raw upstream fields) ──
+type SourceTypeCode = ProductSourceTypeCode;
+function sourceTypeCode(p: PinProduct): SourceTypeCode {
+  // The API derives this server-side from provenance (raw discovery_method is never
+  // sent to the client). Trust it when present; otherwise fall back to the local
+  // heuristic below (Supabase fallback path / older cached rows).
+  if (p.source_type) return p.source_type;
   if (p.discovery_method === "stl" || p.section_type === "shop_the_look" || p.section_type === "shop_similar")
-    return "Shop the Look";
-  if (p.product_pin_id || p.target_product_pin_id) return "Product Pin";
-  if (p.discovery_method === "outbound_link_bootstrap") return "Product link Pin";
-  return "Pinterest Pin";
+    return "shop_the_look";
+  if (p.discovery_method && OUTBOUND_DISCOVERY_METHODS.includes(p.discovery_method as (typeof OUTBOUND_DISCOVERY_METHODS)[number]))
+    return "product_link_pin";
+  if (p.product_pin_id || p.target_product_pin_id) return "product_pin";
+  return "pinterest_pin";
 }
+const SOURCE_TYPE_LABEL_KEYS: Record<SourceTypeCode, MessageKey> = {
+  shop_the_look: "products.sourceType.shopTheLook",
+  product_pin: "products.sourceType.productPin",
+  product_link_pin: "products.sourceType.productLinkPin",
+  pinterest_pin: "products.sourceType.pinterestPin",
+};
 
 function validatingSourceCount(p: PinProduct): number {
   return p.product_metrics?.productSourcePinCount ?? (p.parent_pin_id && p.parent_pin_id !== "0" ? 1 : 0);
@@ -135,23 +151,23 @@ const CHIP_YELLOW = { color: "#FDE047" };
 const CHIP_RED    = { color: "#F87171" };
 const CHIP_GRAY   = { color: "#D1D5DB" };
 
-function demandChip(m: ProductOpportunityPublicMetrics["demand"]) {
-  if (m.label === "high")   return { text: "High demand",   ...CHIP_GREEN };
-  if (m.label === "medium") return { text: "Medium demand", ...CHIP_YELLOW };
-  if (m.label === "low")    return { text: "Low demand",    ...CHIP_RED };
-  return { text: "Demand: no data", ...CHIP_GRAY };
+function demandChip(m: ProductOpportunityPublicMetrics["demand"], tr: (key: MessageKey) => string) {
+  if (m.label === "high")   return { text: tr("products.chip.demandHigh"),   ...CHIP_GREEN };
+  if (m.label === "medium") return { text: tr("products.chip.demandMedium"), ...CHIP_YELLOW };
+  if (m.label === "low")    return { text: tr("products.chip.demandLow"),    ...CHIP_RED };
+  return { text: tr("products.chip.demandNoData"), ...CHIP_GRAY };
 }
-function trendChip(m: ProductOpportunityPublicMetrics["trend"]) {
-  if (m.label === "rising")    return { text: "↑ Rising",    ...CHIP_GREEN };
-  if (m.label === "stable")    return { text: "→ Stable",    ...CHIP_YELLOW };
-  if (m.label === "declining") return { text: "↓ Declining", ...CHIP_RED };
-  return { text: "Trend: no data", ...CHIP_GRAY };
+function trendChip(m: ProductOpportunityPublicMetrics["trend"], tr: (key: MessageKey) => string) {
+  if (m.label === "rising")    return { text: tr("products.chip.trendRising"),    ...CHIP_GREEN };
+  if (m.label === "stable")    return { text: tr("products.chip.trendStable"),    ...CHIP_YELLOW };
+  if (m.label === "declining") return { text: tr("products.chip.trendDeclining"), ...CHIP_RED };
+  return { text: tr("products.chip.trendNoData"), ...CHIP_GRAY };
 }
-function competitionChip(m: ProductOpportunityPublicMetrics["competition"]) {
-  if (m.label === "low")    return { text: "Low comp.",    ...CHIP_GREEN };
-  if (m.label === "medium") return { text: "Medium comp.", ...CHIP_YELLOW };
-  if (m.label === "high")   return { text: "High comp.",   ...CHIP_RED };
-  return { text: "Comp.: no data", ...CHIP_GRAY };
+function competitionChip(m: ProductOpportunityPublicMetrics["competition"], tr: (key: MessageKey) => string) {
+  if (m.label === "low")    return { text: tr("products.chip.compLow"),    ...CHIP_GREEN };
+  if (m.label === "medium") return { text: tr("products.chip.compMedium"), ...CHIP_YELLOW };
+  if (m.label === "high")   return { text: tr("products.chip.compHigh"),   ...CHIP_RED };
+  return { text: tr("products.chip.compNoData"), ...CHIP_GRAY };
 }
 
 function MetricChip({ text, color, title }: { text: string; color: string; title?: string }) {
@@ -184,37 +200,42 @@ function productPinUrlOf(p: PinProduct): string | null {
   return pinId ? `https://www.pinterest.com/pin/${pinId}/` : null;
 }
 function sourcePinUrlOf(p: PinProduct): string | null {
-  return p.parent_pin_id && p.parent_pin_id !== "0"
-    ? `https://www.pinterest.com/pin/${p.parent_pin_id}/`
-    : null;
+  // parent_pin_id is the row's own source pin. source_pin_ids (server-aggregated
+  // across the product's URL-identity group) is the fallback — never a Product Pin,
+  // so it can't impersonate one.
+  const pinId = (p.parent_pin_id && p.parent_pin_id !== "0")
+    ? p.parent_pin_id
+    : p.source_pin_ids?.find(id => id && id !== "0") ?? null;
+  return pinId ? `https://www.pinterest.com/pin/${pinId}/` : null;
 }
 
 function createdOrFoundAt(p: PinProduct): string | null {
   return p.created_at ?? p.scraped_at ?? null;
 }
 
-function relativeTimeLabel(iso: string | null): string | null {
+// tr is threaded in (these are pure module-level helpers, not components/hooks).
+function relativeTimeLabel(iso: string | null, tr: (key: MessageKey) => string): string | null {
   if (!iso) return null;
   const time = Date.parse(iso);
   if (!Number.isFinite(time)) return null;
   const diffMs = Date.now() - time;
-  if (diffMs < 0) return "just found";
+  if (diffMs < 0) return tr("products.time.justFound");
   const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "just found";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return tr("products.time.justFound");
+  if (mins < 60) return tr("products.time.minsAgo").replace("{n}", String(mins));
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return tr("products.time.hoursAgo").replace("{n}", String(hours));
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (days < 30) return tr(days === 1 ? "products.time.dayAgo" : "products.time.daysAgo").replace("{n}", String(days));
   const months = Math.floor(days / 30);
-  if (months < 12) return `${months} mo ago`;
+  if (months < 12) return tr("products.time.moAgo").replace("{n}", String(months));
   const years = Math.floor(months / 12);
-  return `${years} yr ago`;
+  return tr("products.time.yrAgo").replace("{n}", String(years));
 }
 
-function productSavesLabel(p: PinProduct): string {
+function productSavesLabel(p: PinProduct, tr: (key: MessageKey) => string): string {
   const saves = productSavesValue(p);
-  return saves == null ? "Saves unavailable" : `${fmt(saves)} saves`;
+  return saves == null ? tr("products.saves.unavailable") : tr("products.saves.count").replace("{n}", fmt(saves));
 }
 
 function productSavesShortLabel(p: PinProduct): string {
@@ -222,23 +243,23 @@ function productSavesShortLabel(p: PinProduct): string {
   return saves == null ? "-" : fmt(saves);
 }
 
-function compactFoundLabel(iso: string | null): string | null {
+function compactFoundLabel(iso: string | null, tr: (key: MessageKey) => string): string | null {
   if (!iso) return null;
   const time = Date.parse(iso);
   if (!Number.isFinite(time)) return null;
   const diffMs = Date.now() - time;
-  if (diffMs < 0) return "now";
+  if (diffMs < 0) return tr("products.time.compactNow");
   const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
+  if (mins < 1) return tr("products.time.compactNow");
+  if (mins < 60) return tr("products.time.compactMins").replace("{n}", String(mins));
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return tr("products.time.compactHours").replace("{n}", String(hours));
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d`;
+  if (days < 30) return tr("products.time.compactDays").replace("{n}", String(days));
   const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo`;
+  if (months < 12) return tr("products.time.compactMonths").replace("{n}", String(months));
   const years = Math.floor(months / 12);
-  return `${years}y`;
+  return tr("products.time.compactYears").replace("{n}", String(years));
 }
 
 function saveProductToLibrary(p: PinProduct, title: string) {
@@ -269,13 +290,14 @@ function ProductCard({
   p: PinProduct; metrics: ProductOpportunityPublicMetrics; onClick: () => void;
   isSelected?: boolean; onToggle: () => void; onUseForPins?: () => void;
 }) {
+  const { t: tr } = useLocale();
   const [imgError, setImgError] = useState(false);
   const title  = cleanProductTitle(p.product_name);
   const foundAt = createdOrFoundAt(p);
-  const foundLabel = compactFoundLabel(foundAt);
-  const foundTitle = relativeTimeLabel(foundAt);
+  const foundLabel = compactFoundLabel(foundAt, tr);
+  const foundTitle = relativeTimeLabel(foundAt, tr);
   const savesText = productSavesShortLabel(p);
-  const savesTitle = productSavesLabel(p);
+  const savesTitle = productSavesLabel(p, tr);
 
   // Save Product → Product Library (assetStore, role "product"); available in the
   // Create Pins Product Picker. Deduped by image+role.
@@ -289,11 +311,11 @@ function ProductCard({
     e.stopPropagation();
     if (saved) {
       const found = assetStore.getByRole("product").find(a => a.imageUrl === p.image_url);
-      if (found) { assetStore.removeAsset(found.id); toast.success("Removed from Product Library"); }
+      if (found) { assetStore.removeAsset(found.id); toast.success(tr("products.card.removedFromLibrary")); }
       return;
     }
     saveProductToLibrary(p, title);
-    toast.success("Saved to Product Library");
+    toast.success(tr("products.card.savedToLibrary"));
   }
 
   return (
@@ -317,7 +339,7 @@ function ProductCard({
 
       <button
         type="button" role="checkbox" aria-checked={isSelected}
-        aria-label={isSelected ? "Deselect product for Create Pins" : "Select this product for Create Pins"}
+        aria-label={isSelected ? tr("products.card.deselect") : tr("products.card.select")}
         data-testid="product-checkbox"
         onClick={e => { e.stopPropagation(); onToggle(); }}
         className="absolute left-3 top-3 z-20 flex h-5 w-5 items-center justify-center rounded-md transition-all"
@@ -337,8 +359,8 @@ function ProductCard({
       >
         <span
           data-testid="product-card-saves"
-          title={`Pinterest saves: ${savesTitle}`}
-          aria-label={`Pinterest saves: ${savesTitle}`}
+          title={tr("products.card.savesTitle").replace("{n}", savesTitle)}
+          aria-label={tr("products.card.savesTitle").replace("{n}", savesTitle)}
           className="inline-flex flex-col items-start gap-1 text-[15px] font-black leading-none drop-shadow"
         >
           <PinterestGlyph />
@@ -347,8 +369,8 @@ function ProductCard({
         {foundLabel && (
           <span
             data-testid="product-card-found"
-            title={foundTitle ? `Found ${foundTitle}` : "Found date unavailable"}
-            aria-label={foundTitle ? `Found ${foundTitle}` : "Found date unavailable"}
+            title={foundTitle ? tr("products.card.foundTitle").replace("{time}", foundTitle) : tr("products.card.foundTitleUnavailable")}
+            aria-label={foundTitle ? tr("products.card.foundTitle").replace("{time}", foundTitle) : tr("products.card.foundTitleUnavailable")}
             className="inline-flex flex-col items-start gap-1 text-[14px] font-black leading-none drop-shadow"
           >
             <CalendarDays className="h-4 w-4" />
@@ -362,26 +384,26 @@ function ProductCard({
       <div data-testid="product-card-signals"
         className="absolute left-3 right-3 bottom-3 z-10 pointer-events-none flex flex-col items-start gap-1 pr-[88px]">
         <div className="flex flex-wrap gap-1">
-          <MetricChip {...demandChip(metrics.demand)} title={demandExplanation(metrics.demand)} />
-          <MetricChip {...trendChip(metrics.trend)} title={trendExplanation(metrics.trend)} />
-          <MetricChip {...competitionChip(metrics.competition)} title={competitionExplanation(metrics.competition)} />
+          <MetricChip {...demandChip(metrics.demand, tr)} title={demandExplanation(metrics.demand)} />
+          <MetricChip {...trendChip(metrics.trend, tr)} title={trendExplanation(metrics.trend)} />
+          <MetricChip {...competitionChip(metrics.competition, tr)} title={competitionExplanation(metrics.competition)} />
         </div>
         <span className="inline-flex items-center rounded-lg px-1.5 py-0.5 text-[9px] font-semibold text-white/90 whitespace-nowrap"
           style={{ background: "rgba(10,15,25,0.55)", border: "1px solid rgba(255,255,255,0.10)", backdropFilter: "blur(6px)" }}>
-          {sourceTypeLabel(p)}{validatingSourceCount(p) > 1 ? ` · ${validatingSourceCount(p)} source pins` : ""}
+          {tr(SOURCE_TYPE_LABEL_KEYS[sourceTypeCode(p)])}{validatingSourceCount(p) > 1 ? ` · ${tr("products.sourceType.sourcePinsSuffix").replace("{n}", String(validatingSourceCount(p)))}` : ""}
         </span>
       </div>
 
       <div className="absolute bottom-4 right-4 z-20 flex items-center gap-2">
-        <button type="button" data-testid="product-card-generate" title="Generate Pin" aria-label="Generate Pin"
+        <button type="button" data-testid="product-card-generate" title={tr("products.card.generatePin")} aria-label={tr("products.card.generatePin")}
           onClick={e => { e.stopPropagation(); onUseForPins?.(); }}
           className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[#C026D3] shadow-lg transition-transform hover:scale-[1.06]"
           style={{ background: "rgba(255,255,255,0.92)", border: "1px solid rgba(255,255,255,0.75)", backdropFilter: "blur(10px)" }}>
           <Sparkles className="h-4 w-4" />
         </button>
         <button type="button" data-testid="product-card-save" role="switch" aria-checked={saved}
-          title={saved ? "Remove from Product Library" : "Save Product"}
-          aria-label={saved ? "Remove from Product Library" : "Save Product"}
+          title={saved ? tr("products.card.removeFromLibrary") : tr("products.card.saveProduct")}
+          aria-label={saved ? tr("products.card.removeFromLibrary") : tr("products.card.saveProduct")}
           onClick={toggleSave}
           className="inline-flex h-9 w-9 items-center justify-center rounded-lg shadow-lg transition-transform hover:scale-[1.06]"
           style={{ background: saved ? "rgba(8,145,178,0.94)" : "rgba(255,255,255,0.92)", color: saved ? "#FFFFFF" : "#111827", border: "1px solid rgba(255,255,255,0.75)", backdropFilter: "blur(10px)" }}>
@@ -424,14 +446,14 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
   const [imgError, setImgError] = useState(false);
   const title = cleanProductTitle(p.product_name);
   const price = fmtPrice(p.price, p.currency);
-  const merch = merchantLabel(p.domain);
+  const merch = merchantLabel(p.domain, tr);
   const productUrl = p.source_url;
   const productPinUrl = productPinUrlOf(p);
   const sourcePinUrl = sourcePinUrlOf(p);
   // Normalized (display-only) category + platform for the drawer chips.
   const drawerCategory = normalizeCategoryLabel(p.category, isDigitalProduct(p) ? "digital" : "physical");
   const drawerPlatform = normalizePlatformLabel({ sourceUrl: p.source_url, domain: p.domain });
-  const foundLabel = relativeTimeLabel(createdOrFoundAt(p));
+  const foundLabel = relativeTimeLabel(createdOrFoundAt(p), tr);
   const productSaves = productSavesValue(p);
   const sourcePinSaves = sourcePinSavesValue(p);
   const [saved, setSaved] = useState(false);
@@ -446,11 +468,11 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
   function handleDrawerSave() {
     if (saved) {
       const found = assetStore.getByRole("product").find(a => a.imageUrl === p.image_url);
-      if (found) { assetStore.removeAsset(found.id); toast.success("Removed from Product Library"); }
+      if (found) { assetStore.removeAsset(found.id); toast.success(tr("products.card.removedFromLibrary")); }
       return;
     }
     saveProductToLibrary(p, title);
-    toast.success("Saved to Product Library");
+    toast.success(tr("products.card.savedToLibrary"));
   }
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -507,17 +529,17 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
           {/* Demand / Trend / Competition — each with a plain-language explanation.
               No unified opportunity conclusion: the user judges from the three. */}
           <div data-testid="drawer-signals" className="rounded-xl p-3.5 space-y-3 bg-gray-50 border border-gray-100">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Signals</p>
-            <DrawerSignalRow name="Demand"
-              label={metrics.demand.label === "unknown" ? "Not enough data" : `${metrics.demand.label[0].toUpperCase()}${metrics.demand.label.slice(1)}`}
+            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">{tr("products.drawer.signals")}</p>
+            <DrawerSignalRow name={tr("products.drawer.demand")}
+              label={metrics.demand.label === "unknown" ? tr("products.drawer.notEnoughData") : tr(metrics.demand.label === "high" ? "products.drawer.levelHigh" : metrics.demand.label === "medium" ? "products.drawer.levelMedium" : "products.drawer.levelLow")}
               tone={metrics.demand.label === "high" ? "green" : metrics.demand.label === "medium" ? "yellow" : metrics.demand.label === "low" ? "red" : "gray"}
               explanation={demandExplanation(metrics.demand)} />
-            <DrawerSignalRow name="Trend"
-              label={metrics.trend.label === "unknown" ? "Not enough data" : `${metrics.trend.label[0].toUpperCase()}${metrics.trend.label.slice(1)}`}
+            <DrawerSignalRow name={tr("products.drawer.trend")}
+              label={metrics.trend.label === "unknown" ? tr("products.drawer.notEnoughData") : tr(metrics.trend.label === "rising" ? "products.drawer.trendRising" : metrics.trend.label === "stable" ? "products.drawer.trendStable" : "products.drawer.trendDeclining")}
               tone={metrics.trend.label === "rising" ? "green" : metrics.trend.label === "stable" ? "yellow" : metrics.trend.label === "declining" ? "red" : "gray"}
               explanation={trendExplanation(metrics.trend)} />
-            <DrawerSignalRow name="Competition"
-              label={metrics.competition.label === "unknown" ? "Not enough data" : `${metrics.competition.label[0].toUpperCase()}${metrics.competition.label.slice(1)}`}
+            <DrawerSignalRow name={tr("products.drawer.competition")}
+              label={metrics.competition.label === "unknown" ? tr("products.drawer.notEnoughData") : tr(metrics.competition.label === "high" ? "products.drawer.levelHigh" : metrics.competition.label === "medium" ? "products.drawer.levelMedium" : "products.drawer.levelLow")}
               tone={metrics.competition.label === "low" ? "green" : metrics.competition.label === "medium" ? "yellow" : metrics.competition.label === "high" ? "red" : "gray"}
               explanation={competitionExplanation(metrics.competition)} />
           </div>
@@ -525,13 +547,13 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
           <div className="rounded-xl p-3.5 space-y-2.5 bg-gray-50 border border-gray-100">
             <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">{tr("page.products.drawer.evidence")}</p>
             {[
-              { label: tr("page.products.drawer.productSaves"),    value: productSaves == null ? "Saves unavailable" : fmt(productSaves) },
-              { label: tr("page.products.drawer.sourcePinSaves"), value: sourcePinSaves == null ? "Saves unavailable" : fmt(sourcePinSaves) },
-              { label: "Source type", value: sourceTypeLabel(p) },
-              ...(validatingSourceCount(p) > 0 ? [{ label: "Validating source pins", value: String(validatingSourceCount(p)) }] : []),
-              ...(p.seed_keyword ? [{ label: "Trend keyword", value: p.seed_keyword }] : []),
-              ...(p.search_keyword ? [{ label: "Search keyword", value: p.search_keyword }] : []),
-              ...(foundLabel ? [{ label: "Found", value: foundLabel }] : []),
+              { label: tr("page.products.drawer.productSaves"),    value: productSaves == null ? tr("products.saves.unavailable") : fmt(productSaves) },
+              { label: tr("page.products.drawer.sourcePinSaves"), value: sourcePinSaves == null ? tr("products.saves.unavailable") : fmt(sourcePinSaves) },
+              { label: tr("products.drawer.sourceType"), value: tr(SOURCE_TYPE_LABEL_KEYS[sourceTypeCode(p)]) },
+              ...(validatingSourceCount(p) > 0 ? [{ label: tr("products.drawer.validatingSourcePins"), value: String(validatingSourceCount(p)) }] : []),
+              ...(p.seed_keyword ? [{ label: tr("products.drawer.trendKeyword"), value: p.seed_keyword }] : []),
+              ...(p.search_keyword ? [{ label: tr("products.drawer.searchKeyword"), value: p.search_keyword }] : []),
+              ...(foundLabel ? [{ label: tr("products.drawer.found"), value: foundLabel }] : []),
             ].map(row => (
               <div key={row.label} className="flex items-center justify-between gap-3">
                 <span className="text-[11px] text-gray-500 shrink-0">{row.label}</span>
@@ -544,19 +566,19 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
             <div data-testid="drawer-provenance" className="rounded-xl p-3.5 space-y-2.5 bg-gray-50 border border-gray-100">
               {productPinUrl && (
                 <div className="min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Product Pin URL</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{tr("products.drawer.productPinUrl")}</p>
                   <p className="mt-1 truncate text-[11px] font-semibold text-gray-700" title={productPinUrl}>{productPinUrl}</p>
                 </div>
               )}
               {sourcePinUrl && (
                 <div className="min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Source Pin URL</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{tr("products.drawer.sourcePinUrl")}</p>
                   <p className="mt-1 truncate text-[11px] font-semibold text-gray-700" title={sourcePinUrl}>{sourcePinUrl}</p>
                 </div>
               )}
               {productUrl && (
                 <div className="min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">External Product URL</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{tr("products.drawer.externalProductUrl")}</p>
                   <p className="mt-1 truncate text-[11px] font-semibold text-gray-700" title={productUrl}>{productUrl}</p>
                 </div>
               )}
@@ -564,14 +586,14 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
               {(p.source_pin_ids?.length ?? 0) > 1 && (
                 <div className="min-w-0" data-testid="drawer-validating-sources">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
-                    Validating source pins ({p.source_pin_ids!.length})
+                    {tr("products.drawer.validatingSourcePinsCount").replace("{n}", String(p.source_pin_ids!.length))}
                   </p>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {p.source_pin_ids!.map((id, i) => (
                       <a key={id} href={`https://www.pinterest.com/pin/${id}/`} target="_blank" rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold no-underline"
                         style={{ background: "rgba(192,38,211,0.07)", color: "#C026D3", border: "1px solid rgba(192,38,211,0.18)" }}>
-                        <ExternalLink className="h-2.5 w-2.5" /> Pin {i + 1}
+                        <ExternalLink className="h-2.5 w-2.5" /> {tr("products.drawer.pinIndex").replace("{n}", String(i + 1))}
                       </a>
                     ))}
                   </div>
@@ -583,7 +605,7 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
           {/* Similar products — same keyword/category within the loaded set */}
           {similar.length >= 3 && (
             <div data-testid="drawer-similar-products">
-              <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2">Similar Products</p>
+              <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2">{tr("products.drawer.similarProducts")}</p>
               <div className="grid grid-cols-3 gap-2">
                 {similar.slice(0, 6).map(sp => (
                   <button key={sp.id} type="button" onClick={() => onSelectSimilar(sp)}
@@ -594,13 +616,13 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
                     )}
                     <div className="absolute inset-x-0 bottom-0 px-1.5 py-1"
                       style={{ background: "linear-gradient(to top, rgba(0,0,0,0.72), transparent)" }}>
-                      <p className="text-[8px] font-bold text-white">{productSavesShortLabel(sp)} saves</p>
+                      <p className="text-[8px] font-bold text-white">{tr("products.drawer.savesSuffix").replace("{n}", productSavesShortLabel(sp))}</p>
                     </div>
                   </button>
                 ))}
               </div>
               <p className="mt-1.5 text-[9px] text-gray-400 leading-snug">
-                Products sharing this item&apos;s keyword or category, from the currently loaded set.
+                {tr("products.drawer.similarProductsHint")}
               </p>
             </div>
           )}
@@ -619,14 +641,14 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
               <a href={productPinUrl} target="_blank" rel="noopener noreferrer"
                 className="flex items-center justify-center gap-2 rounded-full py-2.5 text-[11px] font-bold no-underline transition-colors"
                 style={{ background: "rgba(107,114,128,0.06)", color: "#6B7280", border: "1px solid rgba(107,114,128,0.15)" }}>
-                <ExternalLink className="h-3.5 w-3.5" /> Open Product Pin
+                <ExternalLink className="h-3.5 w-3.5" /> {tr("products.drawer.openProductPin")}
               </a>
             )}
             {sourcePinUrl && (
               <a href={sourcePinUrl} target="_blank" rel="noopener noreferrer"
                 className="flex items-center justify-center gap-2 rounded-full py-2.5 text-[11px] font-bold no-underline transition-colors"
                 style={{ background: "rgba(107,114,128,0.06)", color: "#6B7280", border: "1px solid rgba(107,114,128,0.15)" }}>
-                <ExternalLink className="h-3.5 w-3.5" /> Open Source Pin
+                <ExternalLink className="h-3.5 w-3.5" /> {tr("products.drawer.openSourcePin")}
               </a>
             )}
             <button type="button" onClick={handleDrawerCreatePin}
@@ -640,7 +662,7 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
                 ? { background: "rgba(8,145,178,0.08)", color: "#0891B2", border: "1px solid rgba(8,145,178,0.24)" }
                 : { background: "rgba(107,114,128,0.06)", color: "#374151", border: "1px solid rgba(107,114,128,0.16)" }}>
               <Bookmark className="h-3.5 w-3.5" style={{ fill: saved ? "#0891B2" : "transparent" }} />
-              {saved ? "Saved Product" : "Save Product"}
+              {saved ? tr("products.drawer.savedProduct") : tr("products.drawer.saveProduct")}
             </button>
           </div>
         </div>
@@ -655,12 +677,13 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
 // only surfaces a small CTA ({@link PinIdeasCta}) pointing to that dedicated area.
 // This avoids conflating Product Opportunity filters with Pin Ideas filters.
 function PinIdeasCta() {
+  const { t: tr } = useLocale();
   return (
     <div data-testid="pin-ideas-cta" className="mt-8 flex justify-center">
       <a href="/app/discover"
         className="inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold transition-colors"
         style={{ background: "rgba(192,38,211,0.07)", color: "#C026D3", border: "1px solid rgba(192,38,211,0.18)" }}>
-        Need visual inspiration? Browse Pin Ideas <ArrowRight className="h-3.5 w-3.5" />
+        {tr("products.pinIdeasCta")} <ArrowRight className="h-3.5 w-3.5" />
       </a>
     </div>
   );
@@ -824,11 +847,11 @@ export default function ProductsPage() {
 
   // Active filter chips
   const activeChips: { key: string; label: string; onRemove: () => void }[] = [];
-  if (catFilter !== "All") activeChips.push({ key: "cat", label: `Category: ${catFilter}`, onRemove: () => setCatFilter("All") });
-  if (isFiltering) activeChips.push({ key: "niche", label: `Niche: ${selectedNiches.map(id => NICHES.find(n => n.id === id)?.label).filter(Boolean).join(", ") || "Selected"}`, onRemove: () => setScope("all_trends") });
-  if (platformFilter !== "All") activeChips.push({ key: "plat", label: `Platform: ${platformFilter}`, onRemove: () => setPlatformFilter("All") });
-  if (priceFilter !== "all") activeChips.push({ key: "price", label: `Price: ${priceFilter === "under25" ? "Under $25" : priceFilter === "25to100" ? "$25-100" : "$100+"}`, onRemove: () => setPriceFilter("all") });
-  if (subType !== "all") activeChips.push({ key: "type", label: `Type: ${subType === "url_imported" ? "URL Imported" : subType.charAt(0).toUpperCase() + subType.slice(1)}`, onRemove: () => setSubType("all") });
+  if (catFilter !== "All") activeChips.push({ key: "cat", label: tr("products.chipLabel.category").replace("{value}", catFilter), onRemove: () => setCatFilter("All") });
+  if (isFiltering) activeChips.push({ key: "niche", label: tr("products.chipLabel.niche").replace("{value}", selectedNiches.map(id => NICHES.find(n => n.id === id)?.label).filter(Boolean).join(", ") || tr("products.chipLabel.nicheSelected")), onRemove: () => setScope("all_trends") });
+  if (platformFilter !== "All") activeChips.push({ key: "plat", label: tr("products.chipLabel.platform").replace("{value}", platformFilter), onRemove: () => setPlatformFilter("All") });
+  if (priceFilter !== "all") activeChips.push({ key: "price", label: tr("products.chipLabel.price").replace("{value}", priceFilter === "under25" ? tr("products.filters.under25") : priceFilter === "25to100" ? tr("products.filters.25to100") : tr("products.filters.over100")), onRemove: () => setPriceFilter("all") });
+  if (subType !== "all") activeChips.push({ key: "type", label: tr("products.chipLabel.type").replace("{value}", subType === "url_imported" ? tr("products.filters.urlImported") : tr(subType === "printables" ? "products.filters.printables" : subType === "templates" ? "products.filters.templates" : "products.filters.affiliate")), onRemove: () => setSubType("all") });
   const filterCount = activeChips.length;
   // Any product-scoped filter narrowing the grid (chips + source + search). Used to
   // explain a reduced grid and offer a one-click reset.
@@ -841,7 +864,7 @@ export default function ProductsPage() {
   const filterSummary = summarizeActiveFilters([
     ...activeChips.map(c => c.label),
     search.trim() ? `Search: ${search.trim()}` : null,
-    sourceFilter !== "all" ? `Source: ${SOURCE_FILTER_LABELS[sourceFilter]}` : null,
+    sourceFilter !== "all" ? `Source: ${tr(SOURCE_FILTER_KEYS[sourceFilter])}` : null,
   ]);
 
   function clearAllFilters() {
@@ -932,12 +955,12 @@ export default function ProductsPage() {
             <p className="text-[13px] text-gray-500 mt-1">
               {tr("page.products.subtitle")}
               <a href="/app/discover" className="ml-2 font-semibold inline-flex items-center gap-1" style={{ color: "#C026D3" }}>
-                <Activity className="h-3 w-3" /> How it works
+                <Activity className="h-3 w-3" /> {tr("products.header.howItWorks")}
               </a>
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button type="button" onClick={() => mutate()} title="Refresh"
+            <button type="button" onClick={() => mutate()} title={tr("products.header.refresh")}
               className="flex items-center justify-center h-9 w-9 rounded-full bg-white border border-gray-200 text-gray-500 hover:text-gray-800 hover:border-gray-300 transition-colors">
               <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             </button>
@@ -953,8 +976,8 @@ export default function ProductsPage() {
               : { background: "#FFFFFF", border: "1px solid #E5E7EB" }}>
             <div className="flex items-center justify-center h-10 w-10 rounded-xl shrink-0" style={{ background: "rgba(192,38,211,0.12)", color: "#C026D3" }}><Box className="h-5 w-5" /></div>
             <div>
-              <p className="text-[13px] font-black text-gray-900">Physical Products</p>
-              <p className="text-[11px] text-gray-500" data-testid="physical-total">{physicalCount.toLocaleString()} total opportunities</p>
+              <p className="text-[13px] font-black text-gray-900">{tr("products.typeCard.physical")}</p>
+              <p className="text-[11px] text-gray-500" data-testid="physical-total">{tr("products.typeCard.totalOpportunities").replace("{n}", physicalCount.toLocaleString())}</p>
             </div>
           </button>
           <button type="button" onClick={() => { setProductClass("digital"); setPage(1); }}
@@ -964,8 +987,8 @@ export default function ProductsPage() {
               : { background: "#FFFFFF", border: "1px solid #E5E7EB" }}>
             <div className="flex items-center justify-center h-10 w-10 rounded-xl shrink-0" style={{ background: "rgba(37,99,235,0.12)", color: "#2563EB" }}><Monitor className="h-5 w-5" /></div>
             <div>
-              <p className="text-[13px] font-black text-gray-900">Digital Products</p>
-              <p className="text-[11px] text-gray-500" data-testid="digital-total">{digitalCount.toLocaleString()} total opportunities</p>
+              <p className="text-[13px] font-black text-gray-900">{tr("products.typeCard.digital")}</p>
+              <p className="text-[11px] text-gray-500" data-testid="digital-total">{tr("products.typeCard.totalOpportunities").replace("{n}", digitalCount.toLocaleString())}</p>
             </div>
           </button>
         </div>
@@ -975,14 +998,14 @@ export default function ProductsPage() {
           <div data-testid="keyword-breadcrumb" className="mb-3 flex flex-wrap items-center gap-2 rounded-xl px-4 py-2.5"
             style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.15)" }}>
             <span className="text-[12px] text-gray-600">
-              From <a href="/app/trends" className="font-semibold" style={{ color: "#2563EB" }}>Keyword Trends</a>:
+              {tr("products.breadcrumb.from")} <a href="/app/trends" className="font-semibold" style={{ color: "#2563EB" }}>{tr("products.breadcrumb.keywordTrends")}</a>:
               {" "}<strong className="text-gray-900">{linkedKeyword}</strong>
-              {" "}— showing matching product opportunities.
+              {" "}{tr("products.breadcrumb.showingMatches")}
             </span>
             <button type="button" onClick={() => setSearch("")}
               className="ml-auto rounded-full px-3 py-1 text-[11px] font-semibold"
               style={{ background: "rgba(37,99,235,0.10)", color: "#2563EB" }}>
-              Clear
+              {tr("products.breadcrumb.clear")}
             </button>
           </div>
         )}
@@ -992,34 +1015,34 @@ export default function ProductsPage() {
           <div className="relative min-w-[220px] max-w-[360px] flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
             <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
-              placeholder="Search products, keywords, or niches..."
+              placeholder={tr("products.search.placeholder")}
               className="w-full rounded-xl border border-gray-200 bg-white pl-9 pr-4 py-2 text-[12px] text-gray-800 shadow-sm focus:border-[#C026D3] focus:outline-none placeholder:text-gray-400" />
           </div>
 
           {/* Source segmented filter — Pinterest source types + Amazon quick toggle */}
           <div data-testid="source-filter" className="flex items-center rounded-lg border border-gray-200 bg-white p-0.5">
-            {(Object.entries(SOURCE_FILTER_LABELS) as [SourceFilter, string][]).map(([id, label]) => (
+            {(Object.entries(SOURCE_FILTER_KEYS) as [SourceFilter, MessageKey][]).map(([id, key]) => (
               <button key={id} type="button" data-testid={`source-filter-${id}`}
                 onClick={() => { setSourceFilter(id); setPage(1); }}
                 className="rounded-md px-3 py-1.5 text-[11px] font-bold transition-colors whitespace-nowrap"
                 style={sourceFilter === id
                   ? { background: "#1A2235", color: "#fff" }
                   : { background: "transparent", color: "#6b7280" }}>
-                {label}
+                {tr(key)}
               </button>
             ))}
           </div>
           <label className="flex items-center gap-1.5 ml-auto">
-            <span className="text-[11px] font-semibold text-gray-500">Sort by</span>
+            <span className="text-[11px] font-semibold text-gray-500">{tr("products.sort.label")}</span>
             <div className="relative">
               <select value={effectiveSort} onChange={e => { setSortKey(e.target.value as SortKey); setSortTouched(true); }}
                 className="appearance-none rounded-lg border border-gray-200 bg-white pl-3 pr-7 py-1.5 text-[11px] font-semibold text-gray-700 cursor-pointer focus:outline-none">
-                <option value="relevance">Relevance</option>
-                <option value="most_saved">Most saved</option>
-                <option value="rising">Rising trend</option>
-                <option value="low_competition">Low competition</option>
-                <option value="newest">Newest found</option>
-                <option value="price">Price</option>
+                <option value="relevance">{tr("products.sort.relevance")}</option>
+                <option value="most_saved">{tr("products.sort.mostSaved")}</option>
+                <option value="rising">{tr("products.sort.rising")}</option>
+                <option value="low_competition">{tr("products.sort.lowCompetition")}</option>
+                <option value="newest">{tr("products.sort.newest")}</option>
+                <option value="price">{tr("products.sort.price")}</option>
               </select>
               <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400 pointer-events-none" />
             </div>
@@ -1027,58 +1050,58 @@ export default function ProductsPage() {
           <div className="relative">
             <button type="button" onClick={() => setFiltersOpen(o => !o)}
               className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold bg-white border border-gray-200 text-gray-600 hover:border-gray-300 transition-colors">
-              <SlidersHorizontal className="h-3.5 w-3.5" /> Filters
+              <SlidersHorizontal className="h-3.5 w-3.5" /> {tr("products.filters.button")}
               {filterCount > 0 && <span className="rounded-full px-1.5 text-[9px] font-bold text-white" style={{ background: "#C026D3" }}>{filterCount}</span>}
             </button>
             {filtersOpen && (
               <>
-                <button type="button" aria-label="close" className="fixed inset-0 z-40" onClick={() => setFiltersOpen(false)} />
+                <button type="button" aria-label={tr("products.filters.closeAria")} className="fixed inset-0 z-40" onClick={() => setFiltersOpen(false)} />
                 <div className="absolute right-0 top-full mt-1 z-50 w-[260px] rounded-xl bg-white border border-gray-200 shadow-xl p-3 space-y-3">
-                  <FilterRow label="Category">
+                  <FilterRow label={tr("products.filters.category")}>
                     <select value={catFilter} onChange={e => { setCatFilter(e.target.value); setPage(1); }} className={FILTER_SELECT_CLASS}>
-                      <option value="All">All categories</option>
+                      <option value="All">{tr("products.filters.allCategories")}</option>
                       {PRODUCT_VISIBLE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </FilterRow>
-                  <FilterRow label="Platform">
+                  <FilterRow label={tr("products.filters.platform")}>
                     <select value={platformFilter} onChange={e => { setPlatformFilter(e.target.value); setPage(1); }} className={FILTER_SELECT_CLASS}>
-                      <option value="All">All platforms</option>
+                      <option value="All">{tr("products.filters.allPlatforms")}</option>
                       {platformOptions.map(d => <option key={d} value={d}>{d}</option>)}
                     </select>
                   </FilterRow>
-                  <FilterRow label="Price">
+                  <FilterRow label={tr("products.filters.price")}>
                     <select value={priceFilter} onChange={e => { setPriceFilter(e.target.value as PriceBand); setPage(1); }} className={FILTER_SELECT_CLASS}>
-                      <option value="all">All prices</option>
-                      <option value="under25">Under $25</option>
-                      <option value="25to100">$25-$100</option>
-                      <option value="over100">$100+</option>
+                      <option value="all">{tr("products.filters.allPrices")}</option>
+                      <option value="under25">{tr("products.filters.under25")}</option>
+                      <option value="25to100">{tr("products.filters.25to100")}</option>
+                      <option value="over100">{tr("products.filters.over100")}</option>
                     </select>
                   </FilterRow>
-                  <FilterRow label="Type">
+                  <FilterRow label={tr("products.filters.type")}>
                     <select value={subType} onChange={e => { setSubType(e.target.value as SubType); setPage(1); }} className={FILTER_SELECT_CLASS}>
-                      <option value="all">All types</option>
-                      <option value="printables">Printables</option>
-                      <option value="templates">Templates</option>
-                      <option value="affiliate">Affiliate</option>
-                      <option value="url_imported">URL Imported</option>
+                      <option value="all">{tr("products.filters.allTypes")}</option>
+                      <option value="printables">{tr("products.filters.printables")}</option>
+                      <option value="templates">{tr("products.filters.templates")}</option>
+                      <option value="affiliate">{tr("products.filters.affiliate")}</option>
+                      <option value="url_imported">{tr("products.filters.urlImported")}</option>
                     </select>
                   </FilterRow>
                   <button type="button" onClick={() => { setShowNiche(true); setFiltersOpen(false); }}
                     className="w-full flex items-center justify-center gap-1.5 rounded-lg py-2 text-[11px] font-semibold text-gray-600 border border-gray-200 hover:bg-gray-50">
-                    <SlidersHorizontal className="h-3.5 w-3.5" /> Edit niches
+                    <SlidersHorizontal className="h-3.5 w-3.5" /> {tr("products.filters.editNiches")}
                   </button>
                 </div>
               </>
             )}
           </div>
-          <button type="button" onClick={() => toast.success("View saved")}
+          <button type="button" onClick={() => toast.success(tr("products.saveViewToast"))}
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold bg-white border border-gray-200 text-gray-600 hover:border-gray-300 transition-colors">
-            <Bookmark className="h-3.5 w-3.5" /> Save View
+            <Bookmark className="h-3.5 w-3.5" /> {tr("products.saveView")}
           </button>
           <button type="button" onClick={() => setPickerOpen(true)}
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold text-white transition-opacity hover:opacity-90"
             style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-            <Package className="h-3.5 w-3.5" /> Product Picker
+            <Package className="h-3.5 w-3.5" /> {tr("products.productPicker")}
           </button>
         </div>
 
@@ -1092,7 +1115,7 @@ export default function ProductsPage() {
                 <button type="button" onClick={chip.onRemove} className="hover:opacity-70"><X className="h-3 w-3" /></button>
               </span>
             ))}
-            <button type="button" onClick={clearAllFilters} className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 ml-1">Clear all</button>
+            <button type="button" onClick={clearAllFilters} className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 ml-1">{tr("products.clearAll")}</button>
           </div>
         )}
 
@@ -1111,15 +1134,15 @@ export default function ProductsPage() {
             <Package className="h-10 w-10 text-gray-300 mb-4" />
             <p className="text-[14px] font-semibold text-gray-500">
               {sourceFilter !== "all" && classTotal === 0
-                ? `No ${SOURCE_FILTER_LABELS[sourceFilter]} products found yet.`
+                ? tr("products.empty.noSourceProducts").replace("{source}", tr(SOURCE_FILTER_KEYS[sourceFilter]))
                 : reducedResultsMessage(productClass, 0, classTotal, filterSummary)}
             </p>
             {classTotal > 0 && anyFilterActive && (
               <p className="text-[12px] text-gray-400 mt-1" data-testid="empty-total-hint">
-                {classTotal.toLocaleString()} {productClass} products exist - clearing filters will show them.
+                {tr("products.empty.totalHint").replace("{n}", classTotal.toLocaleString()).replace("{class}", productClass)}
               </p>
             )}
-            <button type="button" data-testid="clear-filters-empty" onClick={clearAllFilters} className="mt-3 px-4 py-2 rounded-full text-[11px] font-semibold" style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>Clear filters</button>
+            <button type="button" data-testid="clear-filters-empty" onClick={clearAllFilters} className="mt-3 px-4 py-2 rounded-full text-[11px] font-semibold" style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>{tr("products.empty.clearFilters")}</button>
           </div>
         ) : (
           <>
@@ -1136,7 +1159,7 @@ export default function ProductsPage() {
                 <button type="button" data-testid="clear-filters" onClick={clearAllFilters}
                   className="shrink-0 text-[11px] font-bold rounded-full px-3 py-1 text-white transition-opacity hover:opacity-90"
                   style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-                  Clear filters
+                  {tr("products.results.clearFilters")}
                 </button>
               </div>
             )}
@@ -1157,14 +1180,14 @@ export default function ProductsPage() {
             {/* Pagination */}
             <div className="flex items-center justify-between gap-4 mt-6 flex-wrap">
               <span className="text-[12px] text-gray-500" data-testid="grid-count-footer">
-                {selectedIds.size > 0 ? `${selectedIds.size} selected - ` : ""}
+                {selectedIds.size > 0 ? tr("products.pagination.selectedPrefix").replace("{n}", String(selectedIds.size)) : ""}
                 {anyFilterActive
                   ? resultsSummary.line
-                  : `${products.length.toLocaleString()} ${productClass} products`}
+                  : tr("products.pagination.productsCount").replace("{n}", products.length.toLocaleString()).replace("{class}", productClass)}
               </span>
               <div className="flex items-center gap-1">
                 <button type="button" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}
-                  className="rounded-lg px-2.5 py-1.5 text-[12px] font-semibold border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">Prev</button>
+                  className="rounded-lg px-2.5 py-1.5 text-[12px] font-semibold border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">{tr("products.pagination.prev")}</button>
                 {pageWindow(safePage, pageCount).map((n, i) => n === "..." ? (
                   <span key={`e${i}`} className="px-1.5 text-[12px] text-gray-400">...</span>
                 ) : (
@@ -1173,10 +1196,10 @@ export default function ProductsPage() {
                     style={n === safePage ? { background: "#C026D3", borderColor: "#C026D3", color: "#fff" } : { borderColor: "#E5E7EB", color: "#6b7280" }}>{n}</button>
                 ))}
                 <button type="button" disabled={safePage >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}
-                  className="rounded-lg px-2.5 py-1.5 text-[12px] font-semibold border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">Next</button>
+                  className="rounded-lg px-2.5 py-1.5 text-[12px] font-semibold border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50">{tr("products.pagination.next")}</button>
               </div>
               <label className="flex items-center gap-1.5 text-[12px] text-gray-500">
-                Show
+                {tr("products.pagination.show")}
                 <select value={perPage} onChange={e => { setPerPage(Number(e.target.value)); setPage(1); }}
                   className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-[12px] font-semibold text-gray-700 cursor-pointer focus:outline-none">
                   {PER_PAGE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
@@ -1187,7 +1210,7 @@ export default function ProductsPage() {
         )}
 
         <p className="text-center text-[10px] text-gray-400 mt-6">
-          Product Opportunities use product-level Pinterest saves when available. Source Pin saves stay separate in details.
+          {tr("products.footerNote")}
         </p>
 
         {/* Lightweight link to the dedicated Pin Ideas page -no cards, tabs, or filters. */}
@@ -1214,16 +1237,16 @@ export default function ProductsPage() {
             )}
           </div>
           <span className="text-[13px] font-bold text-gray-900 shrink-0">
-            {selectedIds.size} product{selectedIds.size !== 1 ? "s" : ""} selected
+            {tr("products.actionBar.selectedCount").replace("{n}", String(selectedIds.size)).replace("{plural}", selectedIds.size !== 1 ? "s" : "")}
           </span>
           <button type="button" onClick={clearSelection}
             className="rounded-full px-3 py-2 text-[11px] font-semibold text-gray-400 hover:text-gray-600 shrink-0">
-            Clear
+            {tr("products.actionBar.clear")}
           </button>
           <button type="button" data-testid="create-pins-with-selected-products" onClick={useSelectedInCreatePins}
             className="flex items-center gap-1.5 rounded-full px-5 py-2 text-[12px] font-bold text-white transition-opacity hover:opacity-90 shrink-0"
             style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-            Create Pins <ArrowRight className="h-3.5 w-3.5" />
+            {tr("products.actionBar.createPins")} <ArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>
       )}

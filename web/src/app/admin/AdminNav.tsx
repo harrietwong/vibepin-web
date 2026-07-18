@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sun, LayoutDashboard, Database, ImageIcon, Users, ScrollText, Workflow, ShieldCheck, LifeBuoy } from "lucide-react";
+import { Sun, LayoutDashboard, Database, ImageIcon, Users, ScrollText, Workflow, ShieldCheck, LifeBuoy, Sparkles } from "lucide-react";
 import { useAdminChrome } from "./AdminChromeProvider";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
@@ -73,6 +73,13 @@ const ADMIN_NAV: AdminNavItem[] = [
     labelKey: "nav.visualReview",
     icon: ImageIcon,
     matchFn: (p) => p === "/admin/visual-review" || p.startsWith("/admin/visual-review/"),
+  },
+  {
+    id: "creative-intelligence",
+    href: "/admin/creative-intelligence",
+    labelKey: "nav.creativeIntelligence",
+    icon: Sparkles,
+    matchFn: (p) => p === "/admin/creative-intelligence" || p.startsWith("/admin/creative-intelligence/"),
   },
 ];
 

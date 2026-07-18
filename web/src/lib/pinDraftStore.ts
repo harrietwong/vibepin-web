@@ -20,6 +20,7 @@ import {
 } from "./weeklyPlanHandoff";
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
+import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
 
 const STORE_KEY       = "vp:pin_drafts:v1";
 const MAX_DRAFTS      = 500;
@@ -187,18 +188,6 @@ export interface PinDraft {
   // shown to users); only an `invalid` verdict changes the card (collapsed/dimmed).
   qualityJudge?:           QualityJudge;
 }
-
-// The Quality Judge grader (lib/ai-copy/judgeVerdict.ts, its startQualityJudge runner,
-// and /api/quality-judge) is a separate RC0 cluster and is not yet committed. The draft
-// only ever STORES a judge result and PinBoardCard only READS verdict/status/userOverride,
-// so these result types are inlined here rather than imported — that keeps the persisted
-// shape and the card's display gate intact without pulling the grader in. Keep in sync
-// with judgeVerdict.ts when that cluster lands.
-export type QualityScoreKey =
-  | "productPreservation" | "realism" | "creatorLikeness" | "sceneFit"
-  | "pinterestFit" | "composition" | "artifacts" | "safety";
-export type QualityScores = Partial<Record<QualityScoreKey, number>>;
-export type QualityVerdict = "ok" | "borderline" | "invalid";
 
 /**
  * Quality Judge result cached on a generated draft. `status` mirrors the async

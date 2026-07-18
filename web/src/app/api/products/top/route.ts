@@ -1,7 +1,14 @@
 import { createServerClient } from "@/lib/supabase";
 import type { ProductWithScore, ProductMetrics } from "@/lib/supabase";
 import { classifyDestination, shouldShowInProductIdeas } from "@/lib/assetClassification";
-import { mergeProductTiers, resolveProductCategory, STL_BOOTSTRAP_DETAIL } from "@/lib/productTopTiers";
+import {
+  mergeProductTiers,
+  resolveProductCategory,
+  deriveProductSourceType,
+  excludeRetired,
+  OUTBOUND_DISCOVERY_METHODS,
+  STL_BOOTSTRAP_DETAIL,
+} from "@/lib/productTopTiers";
 import {
   buildDemandThresholds,
   deriveProductOpportunityPublicMetrics,
@@ -20,6 +27,20 @@ const MAX_LIMIT = 600;
 // discovery_method_detail label set by shop_the_look_expand; source_category is
 // surfaced only as the derived (non-provenance) `category` filter field.
 const BOOTSTRAP_DETAIL_LIMIT = 300;
+// Every pin_products read below is wrapped in excludeRetired() — soft-retired rows
+// (lifecycle_status='retired', migrate_v46) must never surface in ANY product surface
+// or count. This is a STATE filter, not a time filter: it replaced the old
+// created_at >= OUTBOUND_CLEAN_CORPUS_SINCE floor, which could only fence off the
+// legacy dirty outbound batch by date. See productTopTiers.ts for the rationale.
+
+// Dedicated tier for outbound-link product rows (discovery_method in
+// OUTBOUND_DISCOVERY_METHODS). These rows are structurally unreachable through the
+// three legacy tiers: the scored tier ranks by source_pin_save_count (the legacy STL
+// corpus saturates its head), the STL bootstrap tier filters discovery_method='stl',
+// and the bootstrap-detail tier filters discovery_method_detail=STL_BOOTSTRAP_DETAIL
+// (NULL on outbound rows). Newest-first, same image/source gating, identity-deduped
+// on merge. The STL tiers above are untouched.
+const OUTBOUND_LIMIT = 300;
 
 // In-memory cache so that dev-mode (where revalidate is ignored) still serves fast repeat requests.
 // Cache key: full URL search param string → { body, expiresAt }
@@ -73,9 +94,13 @@ export async function GET(request: Request) {
     seed_keyword,
     scraped_at,
     created_at,
+    discovery_method,
     discovery_method_detail,
     source_category
   `;
+  // NOTE: discovery_method / discovery_method_detail / source_category are fetched for
+  // server-side derivation only (source_type, category). They are never echoed back to
+  // the client — see enrichRow's returned shape.
 
   // Primary fetch: top product rows by direct Pinterest signal. product_scores is
   // an OPTIONAL embed (left join) — Product Opportunity v1 does not depend on it,
@@ -83,7 +108,7 @@ export async function GET(request: Request) {
   // opportunity_score via ?min_score=N, which upgrades the embed to an inner join
   // (!inner) and re-applies the legacy score filter for backward compatibility.
   const wantScoreFilter = minScore > 0;
-  let scoredQuery = db
+  let scoredQuery = excludeRetired(db
     .from("pin_products")
     .select(`${BASE_COLS}, product_scores${wantScoreFilter ? "!inner" : ""} (
         opportunity_score,
@@ -93,7 +118,7 @@ export async function GET(request: Request) {
         competition_score,
         scored_at
       )`, { count: "exact" })
-    .not("image_url", "is", null)
+    .not("image_url", "is", null))
     .range(offset, offset + limit - 1);
   if (wantScoreFilter) {
     scoredQuery = scoredQuery.gte("product_scores.opportunity_score", minScore);
@@ -115,12 +140,12 @@ export async function GET(request: Request) {
   // discovery_method_detail (available after v28) for forward-compatibility.
   // save_count=0 is explicitly allowed — these products inherit save evidence
   // from the source pin, not the product row itself.
-  const bootstrapQuery = db
+  const bootstrapQuery = excludeRetired(db
     .from("pin_products")
     .select(BASE_COLS)
     .eq("discovery_method", "stl")
     .not("image_url", "is", null)
-    .not("source_url", "is", null)
+    .not("source_url", "is", null))
     .order("source_pin_save_count", { ascending: false })
     .limit(300);
 
@@ -129,29 +154,47 @@ export async function GET(request: Request) {
   // rows surface even when their inherited source_pin_save_count ranks below the
   // legacy top-300 window above. Same image_url / source_url gating; deduped on
   // merge by row id AND product identity so nothing is duplicated across tiers.
-  const bootstrapDetailQuery = db
+  const bootstrapDetailQuery = excludeRetired(db
     .from("pin_products")
     .select(BASE_COLS)
     .eq("discovery_method_detail", STL_BOOTSTRAP_DETAIL)
     .not("image_url", "is", null)
-    .not("source_url", "is", null)
+    .not("source_url", "is", null))
     .order("created_at", { ascending: false })
     .order("source_pin_save_count", { ascending: false })
     .limit(BOOTSTRAP_DETAIL_LIMIT);
 
+  // Outbound fetch: product rows discovered through a Pin's outbound product link
+  // (discovery_method 'outbound_link' — current standard — or the historical
+  // 'outbound_link_bootstrap'). Newest-first; see OUTBOUND_LIMIT above for why this
+  // needs its own tier. Non-fatal.
+  // The legacy dirty rows are excluded by lifecycle_status (excludeRetired), NOT by a
+  // created_at floor: the 798-row T10 batch was soft-retired, so state — not time —
+  // now fences it off. Clean 'outbound_link_bootstrap' rows (if any are ever written)
+  // would still surface here, which is the correct behavior.
+  const outboundQuery = excludeRetired(db
+    .from("pin_products")
+    .select(BASE_COLS)
+    .in("discovery_method", [...OUTBOUND_DISCOVERY_METHODS])
+    .not("image_url", "is", null)
+    .not("source_url", "is", null))
+    .order("created_at", { ascending: false })
+    .limit(OUTBOUND_LIMIT);
+
   // Aggregation fetch: lightweight scan of all product rows to dedup product
   // identity (by product_url_hash → canonical_product_url) and count distinct
   // source Pins / product Pins and sum genuine product-Pin saves. Non-fatal.
-  const aggQuery = db
+  const aggQuery = excludeRetired(db
     .from("pin_products")
-    .select("product_url_hash,canonical_product_url,parent_pin_id,product_pin_id,save_count");
+    .select("product_url_hash,canonical_product_url,parent_pin_id,product_pin_id,save_count"));
 
   const [
     { data: scoredData, error: scoredError, count },
     { data: bootstrapData, error: bootstrapError },
     { data: bootstrapDetailData, error: bootstrapDetailError },
+    { data: outboundData, error: outboundError },
     { data: aggData, error: aggError },
-  ] = await Promise.all([scoredQuery, bootstrapQuery, bootstrapDetailQuery, aggQuery]);
+  ] = await Promise.all([scoredQuery, bootstrapQuery, bootstrapDetailQuery, outboundQuery, aggQuery]);
 
   if (scoredError) {
     console.error("[products/top] Supabase scored error:", scoredError.message);
@@ -164,6 +207,10 @@ export async function GET(request: Request) {
   if (bootstrapDetailError) {
     // Bootstrap-detail fetch is non-fatal — log and continue without that tier.
     console.warn("[products/top] Supabase bootstrap-detail error (non-fatal):", bootstrapDetailError.message);
+  }
+  if (outboundError) {
+    // Outbound fetch is non-fatal — log and continue without that tier.
+    console.warn("[products/top] Supabase outbound error (non-fatal):", outboundError.message);
   }
   if (aggError) {
     console.warn("[products/top] Supabase aggregation error (non-fatal):", aggError.message);
@@ -271,8 +318,17 @@ export async function GET(request: Request) {
       save_count:           row.save_count,
       source_pin_save_count: row.source_pin_save_count,
       product_pin_id:       productPinId,
+      // Source Pin provenance. Selected in BASE_COLS but previously dropped here, which
+      // blanked the Source Pin URL and the search-keyword join below.
+      parent_pin_id:        rowParent,
       product_metrics,
       source_pin_ids,
+      // User-facing, derived source type (Product Pin / Shop the Look / Product link
+      // Pin). Raw discovery_method stays server-side.
+      source_type:          deriveProductSourceType({
+        discovery_method: row.discovery_method as string | null | undefined,
+        product_pin_id:   productPinId,
+      }),
       seed_keyword:         row.seed_keyword,
       // Derived, non-provenance category for filtering (see comment above).
       category,
@@ -294,8 +350,9 @@ export async function GET(request: Request) {
     };
   }
 
-  // Merge the three tiers (scored → legacy bootstrap → newest bootstrap-detail),
-  // deduped by row id and product identity, imageless rows dropped. product_scores
+  // Merge the four tiers (scored → legacy bootstrap → newest bootstrap-detail →
+  // newest outbound), deduped by row id and product identity, imageless rows dropped.
+  // Tier origin does not decide final order — everything is re-sorted below. product_scores
   // live only on scored rows, so capture them before the merge erases tier origin.
   const scoresById = new Map<unknown, Record<string, unknown> | null>();
   for (const row of scoredData ?? []) {
@@ -306,6 +363,7 @@ export async function GET(request: Request) {
     scored: (scoredData ?? []) as Record<string, unknown>[],
     bootstrap: (bootstrapData ?? []) as Record<string, unknown>[],
     bootstrapDetail: (bootstrapDetailData ?? []) as Record<string, unknown>[],
+    outbound: (outboundData ?? []) as Record<string, unknown>[],
   });
   const enrichedRows = mergedRows.map(r => enrichRow(r, scoresById.get(r.id) ?? null));
 
@@ -430,7 +488,9 @@ export async function GET(request: Request) {
       return null;
     }
   };
-  const pp = () => db.from("pin_products").select("*", { count: "exact", head: true });
+  // Retired rows are excluded from these counters too — they describe the corpus the
+  // product surfaces actually draw from, so a retired row must not inflate them.
+  const pp = () => excludeRetired(db.from("pin_products").select("*", { count: "exact", head: true }));
   const [
     totalPinProducts,
     productRowsLast24h,
@@ -468,12 +528,12 @@ export async function GET(request: Request) {
   try {
     const platformRows: Array<{ sourceUrl?: string | null; domain?: string | null }> = [];
     for (let from = 0; from <= 100_000; from += PLATFORM_PAGE) {
-      const { data, error } = await db
+      const { data, error } = await excludeRetired(db
         .from("pin_products")
         .select("source_url,domain")
         .not("image_url", "is", null)
         .not("source_url", "is", null)
-        .neq("parent_pin_id", "0")
+        .neq("parent_pin_id", "0"))
         .range(from, from + PLATFORM_PAGE - 1);
       if (error) throw error;
       const batch = (data ?? []) as Array<{ source_url: string | null; domain: string | null }>;

@@ -84,6 +84,7 @@ export const studioBoardMessages = {
   "studioBoard.card.moreActionsAria": "More actions",
   "studioBoard.card.pinImageAlt": "Pin image",
   "studioBoard.card.noImage": "No image",
+  "studioBoard.card.generationFailedPlaceholder": "Generation failed",
 
   // ── PinBoardCard: recommended fix copy ──
   "studioBoard.card.fix.auth": "Your Pinterest connection needs to be reconnected before this Pin can publish.",

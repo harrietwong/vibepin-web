@@ -60,7 +60,7 @@ test("Smart Schedule opens as a centered modal, not a right drawer", () => {
   // Footer CTA is a simple sticky "Save" (not the long "Save Smart Schedule").
   // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
   // button copy); tighten to tr("planViews.drawer.save") when that cluster lands.
-  assert(/data-testid="smart-schedule-save"[\s\S]{0,300}>\s*Save\s*</.test(srcModal) && !srcModal.includes("Save Smart Schedule"), "footer should be a simple 'Save'");
+  assert(/data-testid="smart-schedule-save"[\s\S]{0,300}\{tr\("planViews\.drawer\.save"\)\}/.test(srcModal) && !srcModal.includes("Save Smart Schedule"), "footer should be a simple 'Save'");
 });
 
 // 2
@@ -197,7 +197,7 @@ test("Missing product does not block scheduling", () => {
 test("Modal subtitle uses the clearer generator-focused copy", () => {
   // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
   // subtitle copy); tighten to tr("planViews.drawer.subtitle") when that cluster lands.
-  assert(srcModal.includes("Choose how often VibePin should publish, then preview reusable weekly time slots."), "subtitle copy not updated");
+  assert(srcModal.includes("planViews.drawer.subtitle"), "subtitle copy not updated");
 });
 
 // - Posting volume: recommended vs same_every_day -

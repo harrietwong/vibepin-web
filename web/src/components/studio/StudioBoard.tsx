@@ -22,6 +22,7 @@ import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { publishPin, startPinterestConnect } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
+import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
 import { beginPublish, endPublish, countPublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
@@ -33,6 +34,7 @@ import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
+import { deriveTopPickIds } from "@/lib/studio/topPick";
 import { PinBoardCard } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
@@ -120,9 +122,9 @@ export function StudioBoard() {
   // so Retry/Move to Unscheduled/Delete are reflected immediately via re-render.
   const publishFailureCount = useMemo(() => countPublishFailures(allItems.map(x => x.draft)), [allItems]);
   const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount);
-  // The "Top pick" badge (derived across the full board) is part of the Creative
-  // Intelligence cluster, deferred out of RC0 Create Pins — PinBoardCard's topPick prop
-  // stays optional and simply goes untold here until that cluster lands.
+  // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
+  // depends on the current filter view; the badge transfers automatically as cards change.
+  const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
   // scheduling/publishing (distinct from a transient boards API failure).
@@ -245,18 +247,14 @@ export function StudioBoard() {
   // ── Schedule = smart auto-assign (no pickers) ──────────────────────────────
   const handleSchedule = useCallback((id: string) => {
     const d = pinDraftStore.getDraft(id); if (!d) return;
-    const missingImage = d.assetError || !isPublishableImage(d.imageUrl);
-    const missingBoard = noBoardAccess || !d.boardId?.trim();
-    if (missingImage || missingBoard) {
+    if (noBoardAccess || !isPinReady(draftReadiness(d))) {
       setActiveId(id);
-      // Scheduling has its own minimal guard. It deliberately does not use the
-      // publish-readiness gate or require copy/alt text/URL metadata.
+      // Field-level error for the board (the one pickable field that most often
+      // blocks scheduling); other gaps are listed in the toast. Lifecycle stays
+      // Unscheduled — validation failure never creates a Scheduled state.
       if (!d.boardId?.trim() && !noBoardAccess) {
         setScheduleErrors(prev => ({ ...prev, [id]: tr("studioBoard.toast.chooseBoardToSchedule") }));
       }
-      // WP1 gate: only image + board block scheduling. The message already says exactly
-      // that ("Add an image and choose a board…") — no copy/alt/URL requirement — and a
-      // missing board also gets the field-level chooseBoardToSchedule hint above.
       toast.error(tr("studioBoard.toast.completeDetailsToSchedule"));
       return;
     }
@@ -471,6 +469,8 @@ export function StudioBoard() {
           assetKey: `gen:${requestId}:${i}`,
         });
         void startImageAnalysis(placeholders[i].id);
+        // Phase C: grade AI results in parallel (independent of copy analysis).
+        void startQualityJudge(placeholders[i].id);
       });
       // Requested more than came back → the unfilled placeholders failed.
       placeholders.slice(result.urls.length).forEach(p => pinDraftStore.failGeneratedDraft(p.id));
@@ -485,6 +485,7 @@ export function StudioBoard() {
           sourceGenerationId: result.generationRequestId, sourceAssetKey: `gen:${requestId}:extra:${i}`,
         });
         void startImageAnalysis(extra.id);
+        void startQualityJudge(extra.id);
       });
       const okCount = Math.min(result.urls.length, placeholders.length) + Math.max(0, result.urls.length - placeholders.length);
       const failCount = Math.max(0, placeholders.length - result.urls.length);
@@ -733,6 +734,7 @@ export function StudioBoard() {
             {items.map(({ draft, lifecycle }) => (
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}
+                topPick={topPickIds.has(draft.id)}
                 active={activeId === draft.id} onSetActive={setActiveId}
                 boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}

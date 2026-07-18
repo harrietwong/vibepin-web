@@ -477,6 +477,21 @@ const en = {
   "pinDetails.schedule.scheduleForLater": "Schedule for later",
   "pinDetails.schedule.notScheduled": "Not scheduled",
 
+  // ── Pin details: Custom time picker ──
+  "pinDetails.customTime.selectButton": "Select a custom time",
+  "pinDetails.customTime.modalTitle": "Custom time",
+  "pinDetails.customTime.close": "Close",
+  "pinDetails.customTime.prevMonth": "Previous month",
+  "pinDetails.customTime.nextMonth": "Next month",
+  "pinDetails.customTime.hour": "Hour",
+  "pinDetails.customTime.minute": "Minute",
+  "pinDetails.customTime.am": "AM",
+  "pinDetails.customTime.pm": "PM",
+  "pinDetails.customTime.saveButton": "Save time",
+  "pinDetails.customTime.timezoneNote": "Times are shown in {timezone}.",
+  "pinDetails.customTime.pastTimeError": "Choose a time in the future.",
+  "pinDetails.customTime.boardChangedNotice": "Board selection changed. Please choose a new time.",
+
   // ── Publish destinations ──
   "publishDestinations.title": "Publishing accounts",
   "publishDestinations.subtitle": "Choose which connected accounts can publish this approved post.",
@@ -499,20 +514,6 @@ const en = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
-
-  // ── AI content-language keys (RETAINED) ──
-  // The full i18n refactor removed these, but SettingsModal / LanguageRegionModal /
-  // DraftDetailsDrawer (tracked, still on their HEAD versions here) reference them.
-  // Deleting them belongs with the component changes that stop using them — a later
-  // RC0 cluster — not with this i18n base. Keep until then.
-  "ai.contentLanguage": "AI content language",
-  "ai.contentLanguageHint": "Language used in AI-generated Pin copy. Changing this does not affect the app UI language.",
-  "lang.contentLanguage": "AI content language",
-  "lang.sameAsApp": "Same as app language",
-  "language.aiContentLanguage": "AI content language",
-  "language.aiContentLanguageHint": "Used for generated Pin titles, descriptions, keywords, trends, and opportunity suggestions.",
-  "language.contentExistingNote": "AI content language affects newly generated titles, descriptions, keywords, and suggestions. Existing saved Pins are not changed automatically.",
-  "pinDetails.overflow.pinNow": "Pin now",
 
   // ── Merged namespace modules (see ./en/*.ts) ──
   ...connectPageMessages,

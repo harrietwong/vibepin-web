@@ -6,6 +6,15 @@
  * Body:
  *   { boardId, title?, description?, link?, altText?, imageUrl, sourcePinId? }
  *
+ * This route is a thin HTTP shell around `publishPinForUser` (lib/server/pinterest/
+ * publishPin.ts) so a scheduler/cron worker can reuse the exact same publish logic
+ * without any Request/Response coupling. This shell owns only:
+ *   - authentication (Bearer / cookie session),
+ *   - JSON body parsing,
+ *   - the per-process duplicate-publish in-flight lock (publish_in_progress),
+ *   - mapping the typed PublishResult / thrown errors onto HTTP responses,
+ *   - best-effort publish analytics (attempted / succeeded / failed events).
+ *
  * Security:
  *   - Requires the authenticated VibePin user (Bearer).
  *   - The board MUST belong to the connected account. Pinterest itself enforces
@@ -17,10 +26,8 @@
  */
 
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
-import { PinterestApiError, PinterestClient } from "@/lib/server/pinterest/service";
-import { getPinterestApiEnv, canAttemptSandboxPublish } from "@/lib/server/pinterest/config";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
-import { validatePublicImageUrl, validateOptionalLink } from "@/lib/server/pinterest/validatePublish";
+import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { createServerClient } from "@/lib/supabase";
 import {
   recordPublishEvent,
@@ -32,8 +39,6 @@ import {
 } from "@/lib/server/publishEvents";
 
 export const dynamic = "force-dynamic";
-
-const MAX_BOARD_PAGES = 5; // fallback scan up to ~500 boards to confirm ownership
 
 // Best-effort duplicate-publish guard, keyed by `${userId}:${sourcePinId}`.
 // Per-process, in-memory only — NOT durable idempotency: it does not survive
@@ -55,31 +60,11 @@ export async function POST(req: Request) {
   }
 
   const boardId = typeof body.boardId === "string" ? body.boardId.trim() : "";
-  if (!boardId) {
-    return Response.json({ error: "boardId is required", code: "bad_request" }, { status: 400 });
-  }
-
-  const img = validatePublicImageUrl(body.imageUrl);
-  if (!img.ok) {
-    return Response.json({ error: img.message, code: "invalid_image_url" }, { status: 422 });
-  }
-
-  const link = validateOptionalLink(body.link);
-  if (!link.ok) {
-    return Response.json({ error: link.message, code: "invalid_link" }, { status: 422 });
-  }
-
-  const title = typeof body.title === "string" ? body.title.trim().slice(0, 100) : undefined;
-  // PRD product cap: description ≤500 (Pinterest allows 800; the product promise is
-  // 500, so the publish path must never send more).
-  const description = typeof body.description === "string" ? body.description.trim().slice(0, 500) : undefined;
-  const altText = typeof body.altText === "string" ? body.altText.trim().slice(0, 500) : undefined;
-
   const sourcePinId = typeof body.sourcePinId === "string" ? body.sourcePinId.trim() : "";
 
   // Optional instrumentation fields — plumbed from client call sites, never required and
   // never block publish (missing draftId is a valid, nullable event field; an unrecognised
-  // source degrades to "unknown"). See lib/server/publishEvents.ts for the contract.
+  // source degrades to "immediate"). See lib/server/publishEvents.ts for the contract.
   const draftId = typeof body.draftId === "string" && body.draftId.trim() ? body.draftId.trim() : null;
   const source =
     body.source === "immediate" || body.source === "scheduled-cron" ? body.source : "immediate";
@@ -119,72 +104,38 @@ export async function POST(req: Request) {
   void recordPublishEvent(analyticsDb, PUBLISH_EVENT_ATTEMPTED, eventBase);
 
   try {
-    // Sandbox mode publishes with the SANDBOX token against the sandbox API (the real
-    // OAuth connection's production token is rejected there). Gated on
-    // canAttemptSandboxPublish() → production is unchanged and uses the real connection.
-    const client = canAttemptSandboxPublish()
-      ? await PinterestClient.forSandboxDemo(uid)
-      : await PinterestClient.forUser(uid);
+    const result = await publishPinForUser({
+      uid,
+      boardId,
+      imageUrl: body.imageUrl,
+      title: body.title,
+      description: body.description,
+      link: body.link,
+      altText: body.altText,
+    });
 
-    // Ownership is enforced by Pinterest (same token creates the pin), so the
-    // board lookup doesn't need to gate — and serialize a full Pinterest round
-    // trip in front of — every publish. Run both concurrently; the lookup only
-    // feeds the response's board name and the friendly error below.
-    const boardPromise = findOwnedBoard(client, boardId);
-    boardPromise.catch(() => {}); // consumed via .catch below — never an unhandled rejection
-
-    let pin: Awaited<ReturnType<typeof client.createPin>>;
-    try {
-      pin = await client.createPin({
-        boardId,
-        title,
-        description,
-        link: link.url,
-        altText,
-        imageUrl: img.url,
+    if (!result.ok) {
+      // A request-shaped failure (validation / board_not_owned) — one best-effort failed
+      // event covers all of them; the typed result carries a stable code + message.
+      void recordFailedPublishEvent(analyticsDb, eventBase, Date.now() - publishStartedMs, {
+        code: result.code,
+        message: result.error,
       });
-    } catch (err) {
-      // A board-shaped rejection (403/404) with no owned board found is our
-      // clearer board_not_owned error; anything else forwards as-is.
-      if (err instanceof PinterestApiError && (err.status === 403 || err.status === 404)) {
-        const board = await boardPromise.catch(() => null);
-        if (!board) {
-          void recordFailedPublishEvent(analyticsDb, eventBase, Date.now() - publishStartedMs, {
-            code: "board_not_owned",
-            message: "Board not found on the connected Pinterest account",
-          });
-          return Response.json(
-            { error: "Board not found on the connected Pinterest account", code: "board_not_owned" },
-            { status: 403 },
-          );
-        }
-      }
-      throw err;
+      return Response.json({ error: result.error, code: result.code }, { status: result.status });
     }
 
-    // The lookup only feeds the response's board name and callers prefer their
-    // locally-selected name anyway — never serialize a slow board fetch (getBoard
-    // miss → up to 5 listBoards pages ≈ many seconds through a proxy) behind an
-    // already-successful publish. Take the result if it settled (it ran while
-    // createPin was in flight), otherwise respond now with the id-only fallback.
-    const board = await Promise.race([
-      boardPromise.catch(() => null),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
-    ]);
     void recordPublishEvent(analyticsDb, PUBLISH_EVENT_SUCCEEDED, {
       ...eventBase,
       durationMs: Date.now() - publishStartedMs,
-      remotePinId: pin.id,
-      remotePinUrl: pin.url,
+      remotePinId: result.pin.id,
+      remotePinUrl: result.pin.url,
     });
     return Response.json(
       {
         ok: true,
-        pin: { id: pin.id, url: pin.url },
-        // Lookup hiccup after a successful publish: fall back to the id — the
-        // drawer prefers its locally-selected board name anyway.
-        board: board ?? { id: boardId, name: "" },
-        environment: getPinterestApiEnv(),
+        pin: result.pin,
+        board: result.board,
+        environment: result.environment,
       },
       { status: 201 },
     );
@@ -200,23 +151,4 @@ export async function POST(req: Request) {
 
 export async function OPTIONS() {
   return new Response(null, { status: 204 });
-}
-
-/** Find a board by id across up to MAX_BOARD_PAGES pages of the user's boards. */
-async function findOwnedBoard(
-  client: PinterestClient,
-  boardId: string,
-): Promise<{ id: string; name: string } | null> {
-  const byId = await client.getBoard(boardId);
-  if (byId) return { id: byId.id, name: byId.name };
-
-  let bookmark: string | undefined;
-  for (let page = 0; page < MAX_BOARD_PAGES; page++) {
-    const { items, bookmark: next } = await client.listBoards(bookmark);
-    const match = items.find((b) => b.id === boardId);
-    if (match) return { id: match.id, name: match.name };
-    if (!next) break;
-    bookmark = next;
-  }
-  return null;
 }

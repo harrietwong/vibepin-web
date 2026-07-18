@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase";
 import { mockKeywordScore } from "@/components/OpportunityScore";
 import { ScoreBadge, ScorePill } from "@/components/ui/signals";
 import { buildOpportunityBrief, stageBadgeStyle } from "@/lib/opportunityMocks";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type TrendKeyword = {
@@ -75,6 +76,7 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
   onClose: () => void;
   onCreatePin?: (keyword: string, category: string, idea?: string) => void;
 }) {
+  const { t: tr } = useLocale();
   // ── 1. Real intelligence from /api/opportunities ──────────────────────────
   const { data: oppsResp, isLoading: oppsLoading } = useSWR(
     ["api-opportunities-drawer"],
@@ -130,25 +132,25 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
   // Stat grid — prefer real API fields, fallback to kw fields
   const statsGrid = [
     {
-      label: "Weekly Δ",
+      label: tr("opportunity.brief.statWeeklyDelta"),
       value: fmtPct(kw.weekly_change),
       color: kw.weekly_change >= 0 ? "#4ade80" : "#f87171",
       isReal: false,
     },
     {
-      label: "YoY Δ",
+      label: tr("opportunity.brief.statYoyDelta"),
       value: apiRecord ? fmtPct(apiRecord.pct_growth_yoy ?? kw.yearly_change) : fmtPct(kw.yearly_change),
       color: (apiRecord?.pct_growth_yoy ?? kw.yearly_change) >= 0 ? "#00F2FE" : "#f87171",
       isReal: !!apiRecord,
     },
     {
-      label: "Total Saves",
+      label: tr("opportunity.brief.statTotalSaves"),
       value: apiRecord ? fmt(apiRecord.total_source_saves) : String(kw.priority_score),
       color: "#A78BFA",
       isReal: !!apiRecord,
     },
     {
-      label: apiRecord ? "Save Velocity" : "Volume",
+      label: apiRecord ? tr("opportunity.brief.statSaveVelocity") : tr("opportunity.brief.statVolume"),
       value: apiRecord ? `${fmt(apiRecord.avg_velocity_score)}/d` : (kw.search_volume_level ?? "High"),
       color: "#FBBF24",
       isReal: !!apiRecord,
@@ -167,11 +169,11 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
         <div className="flex items-center justify-between px-6 pt-5 pb-4 shrink-0 border-b border-white/[0.06]">
           <div>
             <div className="flex items-center gap-2 mb-0.5">
-              <p className="text-[10px] font-black uppercase tracking-widest text-[#00F2FE]">Keyword Opportunity Brief</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-[#00F2FE]">{tr("opportunity.brief.eyebrow")}</p>
               {hasRealData && (
                 <span className="rounded-full px-2 py-0.5 text-[9px] font-black"
                   style={{ background: "rgba(74,222,128,0.12)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.25)" }}>
-                  ✓ Scored
+                  {tr("opportunity.brief.scoredBadge")}
                 </span>
               )}
             </div>
@@ -198,9 +200,9 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
               style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.2)" }}>
               <AlertCircle className="h-4 w-4 text-[#FBBF24] shrink-0 mt-0.5" />
               <div>
-                <p className="text-[11px] font-bold text-[#FBBF24]">Intelligence data not available yet</p>
+                <p className="text-[11px] font-bold text-[#FBBF24]">{tr("opportunity.brief.notAvailableTitle")}</p>
                 <p className="text-[10px] text-neutral-500 mt-0.5">
-                  Run pipeline scoring to unlock full opportunity intelligence. Showing trend data below.
+                  {tr("opportunity.brief.notAvailableBody")}
                 </p>
               </div>
             </div>
@@ -219,7 +221,7 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
                     </span>
                     {hasRealData && (
                       <span className="text-[9px] text-neutral-600">
-                        {fmt(apiRecord!.linked_pins_count)} pins · {fmt(apiRecord!.linked_products_count)} products
+                        {fmt(apiRecord!.linked_pins_count)} {tr("opportunity.brief.pinsSeparatorProducts")} · {fmt(apiRecord!.linked_products_count)} {tr("opportunity.brief.productsLabel")}
                       </span>
                     )}
                   </div>
@@ -250,7 +252,7 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
 
           {/* ── 2. Why Rising ── */}
           <div className="px-6 py-4 border-b border-white/[0.05]">
-            <SectionTitle icon={<Zap className="h-3.5 w-3.5" />}>Why This Is Rising</SectionTitle>
+            <SectionTitle icon={<Zap className="h-3.5 w-3.5" />}>{tr("opportunity.brief.whyRising")}</SectionTitle>
             <div className="rounded-xl px-4 py-3.5" style={{ background: "rgba(0,242,254,0.04)", border: "1px solid rgba(0,242,254,0.12)" }}>
               <p className="text-[12px] text-neutral-200 leading-relaxed">{brief.whyRising}</p>
             </div>
@@ -258,7 +260,7 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
 
           {/* ── 3. Top Viral Pins ── */}
           <div className="px-6 py-4 border-b border-white/[0.05]">
-            <SectionTitle icon={<span className="text-[14px]">📌</span>}>Top Viral Pins</SectionTitle>
+            <SectionTitle icon={<span className="text-[14px]">📌</span>}>{tr("opportunity.brief.topViralPins")}</SectionTitle>
 
             {pinsLoading && (
               <div className="grid grid-cols-2 gap-2">
@@ -296,7 +298,7 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
                             className="rounded-full px-2 py-0.5 text-[9px] font-bold transition-all hover:opacity-80 no-underline"
                             style={{ background: "linear-gradient(135deg,#00F2FE,#4FACFE)", color: "#0A0F1A" }}
                           >
-                            Similar
+                            {tr("opportunity.brief.similar")}
                           </a>
                           {pinUrl && (
                             <a href={pinUrl} target="_blank" rel="noopener noreferrer"
@@ -318,23 +320,23 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
 
             {!pinsLoading && (pins ?? []).length === 0 && (
               <div className="rounded-xl py-6 text-center" style={{ background: "#161A18", border: "1px solid rgba(255,255,255,0.06)" }}>
-                <p className="text-[11px] text-neutral-600">No linked pins yet — scraper will populate these automatically.</p>
+                <p className="text-[11px] text-neutral-600">{tr("opportunity.brief.noLinkedPins")}</p>
               </div>
             )}
 
             <a href="/app/discover" className="mt-2 w-full flex items-center justify-center gap-1.5 rounded-full py-2 text-[11px] font-bold no-underline transition-all hover:opacity-80" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#9ca3af" }}>
-              View all viral pins <ArrowRight className="h-3 w-3" />
+              {tr("opportunity.brief.viewAllViralPins")} <ArrowRight className="h-3 w-3" />
             </a>
           </div>
 
           {/* ── 4. Product Opportunities ── */}
           <div className="px-6 py-4 border-b border-white/[0.05]">
-            <SectionTitle icon={<ShoppingBag className="h-3.5 w-3.5" />}>Product Opportunities</SectionTitle>
+            <SectionTitle icon={<ShoppingBag className="h-3.5 w-3.5" />}>{tr("opportunity.brief.productOpportunities")}</SectionTitle>
             {hasRealData && (
               <div className="rounded-xl px-3 py-2 mb-2 flex items-center gap-2"
                 style={{ background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.15)" }}>
-                <span className="text-[9px] font-black text-[#A78BFA]">● LIVE</span>
-                <p className="text-[10px] text-neutral-500">{apiRecord!.linked_products_count} products linked to this keyword in database</p>
+                <span className="text-[9px] font-black text-[#A78BFA]">{tr("opportunity.brief.liveBadge")}</span>
+                <p className="text-[10px] text-neutral-500">{apiRecord!.linked_products_count} {tr("opportunity.brief.productsLinkedSuffix")}</p>
               </div>
             )}
             <div className="space-y-2">
@@ -347,20 +349,20 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
                     <p className="text-[10px] text-neutral-500 mb-1.5">{p.platform}</p>
                     <p className="text-[10px] text-neutral-300 leading-snug">{p.commercialAngle}</p>
                     <div className="flex items-center gap-1 mt-2">
-                      <span className="text-[9px] text-neutral-600 uppercase tracking-widest">Signal:</span>
+                      <span className="text-[9px] text-neutral-600 uppercase tracking-widest">{tr("opportunity.brief.signalLabel")}</span>
                       <span className="text-[9px] text-neutral-500">{p.sourceSignal}</span>
                     </div>
                   </div>
               ))}
             </div>
             <a href="/app/products" className="mt-2 w-full flex items-center justify-center gap-1.5 rounded-full py-2 text-[11px] font-bold no-underline transition-all hover:opacity-80" style={{ background: "rgba(167,139,250,0.07)", border: "1px solid rgba(167,139,250,0.15)", color: "#A78BFA" }}>
-              Shop Signals <ArrowRight className="h-3 w-3" />
+              {tr("opportunity.brief.shopSignals")} <ArrowRight className="h-3 w-3" />
             </a>
           </div>
 
           {/* ── 5. Content Ideas ── */}
           <div className="px-6 py-4 pb-28">
-            <SectionTitle icon={<Lightbulb className="h-3.5 w-3.5" />}>Recommended Content Ideas</SectionTitle>
+            <SectionTitle icon={<Lightbulb className="h-3.5 w-3.5" />}>{tr("opportunity.brief.recommendedContentIdeas")}</SectionTitle>
             <div className="space-y-2">
               {brief.contentIdeas.map((idea: string, i: number) => (
                 <div key={i} className="flex items-center gap-3 rounded-xl px-3.5 py-3 group"
@@ -372,7 +374,7 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
                     className="rounded-full px-2.5 py-1 text-[10px] font-bold no-underline transition-all hover:scale-105 shrink-0 opacity-0 group-hover:opacity-100"
                     style={{ background: "linear-gradient(135deg,#00F2FE,#4FACFE)", color: "#0A0F1A" }}
                   >
-                    Use Idea
+                    {tr("opportunity.brief.useIdea")}
                   </a>
                 </div>
               ))}
@@ -389,7 +391,7 @@ export function OpportunityBriefDrawer({ kw, onClose, onCreatePin }: {
               style={{ background: "linear-gradient(90deg,#00F2FE,#4FACFE)", color: "#0A0F1A", boxShadow: "0 0 16px rgba(0,242,254,0.2)" }}
             >
               <Sparkles className="h-3.5 w-3.5 shrink-0" />
-              Create Pin From This Opportunity
+              {tr("opportunity.brief.createPinFromOpportunity")}
             </a>
             <a
               href="/app/discover"

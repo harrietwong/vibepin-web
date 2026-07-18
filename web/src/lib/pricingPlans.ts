@@ -48,7 +48,7 @@ export const PRICING_TIERS: PricingTier[] = [
       "10 AI image credits / month",
     ],
     cta: "Get started free",
-    ctaHref: "/app/discover?demo=true",
+    ctaHref: "/signup?plan=free",
   },
   {
     id: "starter",

@@ -8,6 +8,7 @@
 
 import { useRef } from "react";
 import { SmartScheduleConfigForm } from "./SmartScheduleConfigForm";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const C = {
   text: "var(--app-text)", sec: "var(--app-text-sec)", muted: "var(--app-text-muted)",
@@ -17,6 +18,7 @@ const C = {
 type Props = { open: boolean; onClose: () => void };
 
 export function SmartScheduleModal({ open, onClose }: Props) {
+  const { t: tr } = useLocale();
   const saveRef = useRef<(() => void) | null>(null);
   if (!open) return null;
   return (
@@ -28,19 +30,19 @@ export function SmartScheduleModal({ open, onClose }: Props) {
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Smart Schedule"
+        aria-label={tr("planViews.drawer.ariaLabel")}
         data-testid="smart-schedule-drawer"
         style={{ width: "min(800px, calc(100vw - 40px))", maxHeight: "85vh", display: "flex", flexDirection: "column", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 18, boxShadow: "0 24px 64px rgba(0,0,0,0.5)", overflow: "hidden" }}
       >
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "18px 22px 14px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: C.text }}>Smart Schedule</h2>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: C.text }}>{tr("planViews.drawer.title")}</h2>
             <p style={{ margin: "4px 0 0", fontSize: 12, color: C.sec }}>
-              Choose how often VibePin should publish, then preview reusable weekly time slots.
+              {tr("planViews.drawer.subtitle")}
             </p>
           </div>
-          <button type="button" data-testid="smart-schedule-close" onClick={onClose} aria-label="Close"
+          <button type="button" data-testid="smart-schedule-close" onClick={onClose} aria-label={tr("planViews.drawer.closeAria")}
             style={{ background: "none", border: "none", color: C.muted, fontSize: 22, lineHeight: 1, cursor: "pointer", padding: 0 }}>✕</button>
         </div>
 
@@ -54,11 +56,11 @@ export function SmartScheduleModal({ open, onClose }: Props) {
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 22px", borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
           <button type="button" onClick={onClose}
             style={{ padding: "9px 16px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface2, color: C.sec, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
-            Cancel
+            {tr("planViews.drawer.cancel")}
           </button>
           <button type="button" data-testid="smart-schedule-save" onClick={() => saveRef.current?.()}
             style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
-            Save
+            {tr("planViews.drawer.save")}
           </button>
         </div>
       </div>

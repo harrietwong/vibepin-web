@@ -11,6 +11,7 @@ import {
   type VisualReviewTag,
   VISUAL_REVIEW_TAGS,
 } from "@/lib/visualReview";
+import { excludeRetired } from "@/lib/productTopTiers";
 
 export const dynamic = "force-dynamic";
 
@@ -37,10 +38,13 @@ async function loadProductCandidates(
   limit: number,
   warnings: string[],
 ): Promise<VisualReviewCandidate[]> {
-  const { data, error } = await db
+  // Soft-retired rows (lifecycle_status='retired', migrate_v46) are NOT review
+  // candidates: they are never shown to a user, so scoring their images is wasted work
+  // (and the T10 batch's images are known-fake Pin screenshots by definition).
+  const { data, error } = await excludeRetired(db
     .from("pin_products")
     .select("id, product_name, image_url, seed_keyword, product_pin_id, created_at")
-    .not("image_url", "is", null)
+    .not("image_url", "is", null))
     .order("created_at", { ascending: false })
     .limit(limit);
 

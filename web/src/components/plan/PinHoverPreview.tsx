@@ -68,7 +68,7 @@ export type PinHoverPreviewActions = {
   onRemove?: (id: string) => void;
   /** Toggle whether a planned Pin keeps its time during a Smart Schedule rebalance. */
   onToggleLock?: (draft: PinDraft, locked: boolean) => void;
-  /** Publish now / Pin now 鈥?distinct from scheduling; respects publish readiness. */
+  /** Publish now — distinct from scheduling; respects publish readiness. */
   onPublishNow?: (draft: PinDraft) => void;
 };
 

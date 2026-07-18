@@ -636,7 +636,7 @@ function PricingPageContent({ country }: { country?: string }) {
           </Link>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>
             <Link href="/#create" className="hover:text-white transition-colors">How it works</Link>
-            <Link href="/app/products?demo=true" className="hover:text-white transition-colors">Product Opportunities</Link>
+            <Link href="/app/products" className="hover:text-white transition-colors">Product Opportunities</Link>
             <span className="text-white font-semibold">Pricing</span>
           </div>
           <div className="flex items-center gap-2.5">
@@ -647,7 +647,7 @@ function PricingPageContent({ country }: { country?: string }) {
             >
               Log in
             </Link>
-            <Link href="/app/discover?demo=true" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>
+            <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>
               Get started <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
@@ -784,7 +784,7 @@ function PricingPageContent({ country }: { country?: string }) {
             Instagram, TikTok, and Facebook.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <Link href="/app/discover?demo=true" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
+            <Link href="/app/studio" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
               Get started free <ArrowRight className="w-4 h-4" />
             </Link>
             {proTier?.paddlePriceIds && proPriceId ? (

@@ -65,9 +65,10 @@ async function main() {
     const missing = readiness.pinMissingFields({ imageUrl: "https://example.com/a.jpg", boardId: "" });
     assert.ok(missing.includes("board"));
   });
-  await test("3b. StudioBoard.handleSchedule blocks on missingBoard (noBoardAccess || !boardId)", () => {
+  await test("3b. StudioBoard.handleSchedule blocks via noBoardAccess || !isPinReady (board is a hard gate)", () => {
     const src = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
-    assert.match(src, /const missingBoard = noBoardAccess \|\| !d\.boardId\?\.trim\(\)/);
+    assert.match(src, /const handleSchedule = useCallback[\s\S]*?if \(noBoardAccess \|\| !isPinReady\(draftReadiness\(d\)\)\)/);
+    assert.match(src, /if \(!d\.boardId\?\.trim\(\) && !noBoardAccess\)/);
   });
   await test("3c. ensureScheduledPlanTime (canonical Schedule/Add-to-Plan entry) blocks on empty boardId", () => {
     const src = readFileSync(join(root, "src/lib/smartSchedule.ts"), "utf8");

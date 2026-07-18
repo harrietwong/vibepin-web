@@ -1,0 +1,450 @@
+下面这份可以直接交给 Claude。建议严格按顺序实施，每个工作包单独提交，不要同时重构 UI。
+
+# MVP 上线开发计划
+
+## 总原则
+
+1. 不重写 Create Pins、Plan 页面。
+2. 不实施完整 Admin 后台。
+3. 不扩展 Instagram、TikTok、Facebook。
+4. 不把 Product Opportunity 重构混入 Create Pins/Plan 修复。
+5. 每个工作包单独 Commit，便于最终审查和回滚。
+6. 先冻结当前工作树，确保没有多人同时修改同一批文件。
+7. 所有新增数据库迁移只编写文件，不擅自执行生产数据库。
+8. Pinterest、Paddle 未获批期间使用 Sandbox，但代码路径必须与生产一致。
+
+---
+
+## WP0：恢复可信的发布门禁
+
+优先级：P0，必须最先完成。
+
+目标：让仓库重新达到“当前代码可以被可靠验证”的状态。
+
+开发内容：
+
+1. 修复当前 TypeScript 错误。
+2. 修复 Product Opportunity 正在进行中的类型不一致。
+3. 修复 i18n missing-key 英文回退测试。
+4. 修复排程测试的内存缓存污染。
+5. 更新已过期的源码正则测试。
+6. 将新版 Studio E2E 从旧 `studio-interactive` 改为 `studio-board`。
+7. 避免一个测试失败后阻止其他测试执行，至少提供分组测试命令。
+8. 将 `E2E_TEST_MODE` 示例默认值改成 `false`。
+9. 修复或排除无法编译的 `vps_patch_login.py` 工具脚本。
+10. 记录目前无法运行 Python pytest 的依赖要求。
+
+重点文件：
+
+- `web/src/components/products/ProductOpportunityPicker.tsx`
+- `web/src/lib/productOpportunityCounts.ts`
+- `web/scripts/test-i18n.ts`
+- `web/scripts/test-scheduling-consistency.ts`
+- `web/scripts/test-batch-edit-planning.ts`
+- `web/tests/e2e/studio-initial-state.spec.ts`
+- `web/package.json`
+- `web/.env.example`
+- `backend/scripts/vps_patch_login.py`
+
+验收标准：
+
+```powershell
+cd web
+npm run typecheck
+npm run build
+npm test
+npm run verify:sync
+npx tsx scripts/qa-prd-workflow-v1.ts
+```
+
+要求：
+
+- TypeScript 0 错误。
+- Build 成功。
+- Create Pins/Plan 关键测试全部执行，而不是中途退出。
+- 不允许通过删除失败测试来“变绿”。
+- 新版 Studio 必须有真实浏览器回归。
+
+---
+
+## WP1：统一 Schedule 和 Publish 校验
+
+优先级：P0。
+
+目标：防止非法 Draft 进入 Scheduled，统一 Create Pins、Plan、Batch Edit 的校验逻辑。
+
+开发内容：
+
+1. 建立共享 `validatePinForSchedule`。
+2. 建立共享 `validatePinForPublish`。
+3. Create Pins、Plan、Batch Edit、自动发布复用相同规则。
+4. Schedule 时校验公开图片 URL。
+5. Schedule 时校验 Pinterest Board。
+6. Schedule 时校验 Pinterest 连接和 token 状态。
+7. 非空 Website URL 必须是合法 HTTP/HTTPS。
+8. Title 最大 100 字符。
+9. Description 最大 500 字符。
+10. Alt Text 是否必填按当前产品裁决统一，不得代码和测试各用一套。
+11. 字段错误显示在字段附近，Toast 只做汇总。
+12. Schedule 失败不得修改 Draft 生命周期。
+13. Publish 失败不得丢失用户刚编辑的字段。
+14. Publish/Schedule 前必须读取 store 最新 Draft，不能使用旧 React closure 快照。
+15. 重复点击只允许产生一次请求。
+
+建议产品裁决：
+
+- Pinterest API 硬必填：图片、Board。
+- VibePin 内容质量必填：Title、Description。
+- Alt Text 推荐但不阻塞发布。
+- Website URL 可空，但非空必须合法。
+
+重点文件：
+
+- `web/src/lib/pinReadiness.ts`
+- `web/src/lib/weeklyPlanStats.ts`
+- `web/src/components/studio/StudioBoard.tsx`
+- `web/src/components/studio/BatchEditDrawer.tsx`
+- `web/src/components/plan/DraftDetailsDrawer.tsx`
+- `web/src/lib/smartSchedule.ts`
+- `web/src/lib/studio/pinLifecycle.ts`
+- `web/src/lib/server/pinterest/validatePublish.ts`
+
+必须增加的测试：
+
+1. 非法 Website URL 无法 Schedule。
+2. 非法 Website URL 无法 Publish。
+3. Board 缺失无法 Schedule。
+4. 非公开图片无法 Schedule。
+5. 编辑后立即 Schedule 使用最新字段。
+6. 编辑后立即 Publish 使用最新字段。
+7. 双击 Publish 只有一次 API 请求。
+8. Batch 中一项失败不影响其他项。
+9. Schedule 校验失败后仍是 Unscheduled。
+10. 自动发布使用相同校验规则。
+
+---
+
+## WP2：修复自动发布时区和基础设施
+
+优先级：P0；如果 MVP 不承诺自动发布，可改为暂缓并删除相关宣传。
+
+目标：用户设置几点，就按用户所在时区几点发布。
+
+开发内容：
+
+1. 将 IANA timezone 持久化到 Smart Schedule 配置。
+2. Pin Draft 排期时保存 timezone 或直接保存规范化 UTC `scheduledAt`。
+3. 服务端不得再把本地墙钟字符串直接当 UTC。
+4. 处理夏令时切换。
+5. 明确不存在时间、无效 timezone、过去时间的行为。
+6. 应用前检查 v38、v42 migration 是否存在。
+7. 配置 `CRON_SECRET`。
+8. 部署每五分钟运行的 Cron。
+9. 增加 Cron 健康状态和最近成功时间。
+10. 增加失败数、发布数、跳过数日志。
+11. 对进程崩溃后的重复发布风险增加保护。
+12. 自动发布失败写入与手动发布相同的 failure 字段。
+13. 自动发布成功清理 schedule 并写入 remote Pin 信息。
+14. Pinterest Standard Access 未获得时，不应把权限不足记录成普通内容失败。
+
+重点文件：
+
+- `web/src/app/api/pin-drafts/promote.ts`
+- `web/src/app/api/pin-drafts/route.ts`
+- `web/src/app/api/cron/publish-due/route.ts`
+- `web/src/app/api/cron/publish-due/publishDueLogic.ts`
+- `web/src/lib/smartScheduleStore.ts`
+- `web/src/lib/smartSchedule.ts`
+- `backend/db/migrate_v42_scheduled_publish.sql`
+- `docs/运维/自动发布-cron配置.md`
+
+验收场景：
+
+1. 洛杉矶上午 9 点按洛杉矶上午 9 点发布。
+2. 纽约上午 9 点按纽约上午 9 点发布。
+3. 夏令时前后时间正确。
+4. 两个 Cron 同时执行不会重复发布。
+5. 新鲜 claim 不会被第二个 worker 获取。
+6. 过期 claim 可以恢复。
+7. 已 Posted 的 Draft 永远不会再次发布。
+8. 失败 Draft 不会每五分钟无限重试。
+9. 手动 Publish 与 Cron 不会同时发布同一 Draft。
+10. Cron 未配置时有明确健康告警。
+
+---
+
+## WP3：迁移 AI 生图到稳定后端
+
+优先级：P0。
+
+目标：生产环境不再依赖 Vercel Node Route 启动本地 Python 进程。
+
+推荐方案：
+
+`Next.js → FastAPI generation endpoint → durable worker/job → LinAPI → Supabase Storage → Pin Draft Sync`
+
+开发内容：
+
+1. Next.js `/api/generate` 不再直接 `spawn generator.py`。
+2. FastAPI 接收完整多模态生成参数。
+3. 支持 Product Images、References、Creative Direction、Model、Count、Ratio。
+4. 创建持久化 generation job。
+5. 返回 jobId，不阻塞请求等待完整生成。
+6. 前端通过轮询、SSE 或现有同步机制获取结果。
+7. 用户关闭 Drawer 后任务继续。
+8. 页面刷新后能恢复 Generating 状态。
+9. Worker 崩溃后任务能够进入 Failed 或重试。
+10. 部分生成成功时保留成功结果。
+11. 每个结果仍创建独立 Pin Draft。
+12. 成功图片必须上传稳定公共 URL。
+13. 图片分析、关键词、Quality Judge 在生成成功后异步启动。
+14. 生成锁不能依赖单机临时目录。
+15. 去掉 Next Build 的全仓库文件追踪警告。
+
+重点文件：
+
+- `web/src/app/api/generate/route.ts`
+- `web/src/lib/studio/generateAiVersions.ts`
+- `web/src/components/studio/StudioBoard.tsx`
+- `web/src/components/studio/AiVersionDrawer.tsx`
+- `api/app/main.py`
+- `api/app/workers/task_worker.py`
+- `api/app/services/image_gen.py`
+- `backend/generator.py`
+
+验收标准：
+
+1. 连续生成 50 个任务无永久 Generating。
+2. Drawer 关闭后生成继续。
+3. 页面刷新后任务恢复。
+4. 两张请求返回一张时显示一成功、一失败。
+5. Provider 超时产生可重试失败。
+6. Worker 重启不会遗失任务。
+7. 同一请求不会重复建立结果卡。
+8. 图片 URL 可被匿名请求。
+9. Pinterest 能读取最终图片 URL。
+10. Vercel 不需要 Python 环境。
+
+---
+
+## WP4：Pinterest 真实接口验收
+
+优先级：P0，等待 Standard Access 后执行。
+
+目标：证明 Sandbox 中通过的功能在真实 Pinterest 账号上成立。
+
+开发内容：
+
+1. 核对 OAuth scopes。
+2. 核对 Redirect URI。
+3. 验证 Token 加密和刷新/重连。
+4. 验证 Boards 分页。
+5. 处理无 Board。
+6. 处理 Board 被删除。
+7. 处理 token expired。
+8. 处理权限不足。
+9. 验证真实 Create Pin。
+10. 验证 destination URL。
+11. 验证 Alt Text。
+12. 验证 remotePinId 和 remotePinUrl。
+13. 验证立即发布。
+14. 验证自动发布。
+15. 验证 Retry publish。
+16. 验证跨设备状态同步。
+
+必须保留的错误分类：
+
+- not connected
+- reconnect required
+- boards load failed
+- board not owned
+- invalid image URL
+- invalid destination URL
+- trial/access pending
+- provider temporary failure
+- publish already in progress
+
+验收标准：
+
+- 至少两个真实 Pinterest Business 账号。
+- 每个账号至少发布 10 个测试 Pin。
+- 没有重复 Pin。
+- 刷新后 Posted 状态不丢失。
+- 失败恢复后 Banner 数量正确。
+- Create Pins、Plan、Batch Edit 的 Board 数据一致。
+
+---
+
+## WP5：Paddle 支付履约闭环
+
+优先级：P0，先在 Sandbox 完成。
+
+目标：用户付款后套餐一定正确开通，取消和欠费后状态正确变化。
+
+开发内容：
+
+1. 为 Paddle Webhook 增加自动测试。
+2. 测试签名验证。
+3. 测试重复事件。
+4. 测试乱序事件。
+5. 测试 Subscription Created。
+6. 测试 Subscription Updated。
+7. 测试 Subscription Canceled。
+8. 测试 Transaction Completed。
+9. 测试 paused、past_due、trialing。
+10. 验证 plan 与 priceId 映射。
+11. 验证 Customer Portal。
+12. 验证取消到期前仍有权限。
+13. 验证退款策略对应的人工处理入口。
+14. 增加 Webhook 失败告警。
+15. 增加无法关联 userId 的待处理记录。
+16. 核对 v44 migration 是否已执行。
+
+重点文件：
+
+- `web/src/app/api/paddle/webhook/route.ts`
+- `web/src/lib/server/paddle/billingStore.ts`
+- `web/src/lib/server/paddle/paddleServer.ts`
+- `web/src/app/api/paddle/portal/route.ts`
+- `web/src/app/pricing/pricing-client.tsx`
+- `web/src/lib/pricingPlans.ts`
+- `backend/db/migrate_v44_paddle_billing.sql`
+
+验收标准：
+
+1. 匿名用户选择套餐后登录，购买意图不丢失。
+2. 完成付款后套餐自动开通。
+3. 重复 Webhook 不重复履约。
+4. 旧事件不能覆盖新状态。
+5. 取消后到期前仍可使用。
+6. 到期后降级为 Free。
+7. 欠费状态按产品规则处理。
+8. Portal 能打开正确 Customer。
+9. Webhook 数据库失败返回非 2xx，以便 Paddle 重试。
+10. 所有套餐限制和 Pricing 文案一致。
+
+---
+
+## WP6：收口旧路由和未上线能力
+
+优先级：P0。
+
+目标：用户只能看到真实可用的 MVP。
+
+开发内容：
+
+1. 将旧 `/dashboard` 重定向到 `/app/studio`。
+2. 将旧 `/settings` 重定向到 `/app/settings/pinterest`。
+3. 处理旧 `/preview/[taskId]`。
+4. 处理旧 `/products`、`/sourcing` 等历史入口。
+5. 删除或隐藏旧 Instagram Connect。
+6. 删除或隐藏旧 Pinterest + Instagram 默认发布设置。
+7. 删除或隐藏“生成后立即自动发布”旧开关。
+8. 非 Pinterest Social provider 为 mock 时不得展示为已实现。
+9. 未实现 Workspace category 使用清楚的不可用状态。
+10. 检查 Landing、Pricing、FAQ 中的 auto-publish 承诺。
+11. 配置 `metadataBase`。
+12. 最终确认生产 `E2E_TEST_MODE=false`。
+13. 确认 debug API 和 debug UI 不对普通用户开放。
+14. Terms、Privacy、Refund、Support email 使用最终信息。
+15. README 更新为当前 Next.js 16、Pin Draft、Pinterest-first 架构。
+
+重点文件：
+
+- `web/src/proxy.ts`
+- `web/src/app/dashboard/page.tsx`
+- `web/src/app/settings/page.tsx`
+- `web/src/app/preview/[taskId]/page.tsx`
+- `web/src/app/layout.tsx`
+- `web/src/app/page.tsx`
+- `web/src/components/landing/**`
+- `web/src/lib/landing/conversionData.ts`
+- `web/.env.example`
+- `README.md`
+
+验收标准：
+
+- 旧链接不会打开过时产品。
+- 未实现平台不会出现可操作按钮。
+- 未登录用户不能访问 `/app/*`。
+- 生产环境不能通过 E2E 开关绕过认证。
+- Landing 不承诺当前无法兑现的自动发布。
+- 社交分享链接不指向 localhost。
+
+---
+
+## WP7：跨设备和数据迁移验收
+
+优先级：P0。
+
+目标：Pin Draft、Plan、失败状态和商品关联跟随账号。
+
+开发内容：
+
+1. 核对 v38 Pin Draft migration。
+2. 核对 v41 Creative Intelligence migration。
+3. 核对 v42 Scheduled Publish migration。
+4. 核对 v44 Paddle migration。
+5. 验证 Pin Draft server sync。
+6. 验证删除 tombstone。
+7. 验证旧 Draft 第一次登录迁移。
+8. 验证同步断线恢复。
+9. 验证超过 localStorage quota 的恢复提示。
+10. 验证 Product 关联同步。
+11. 验证 scheduled/failed/posted 状态同步。
+12. 验证两个浏览器同时编辑的 LWW 行为。
+13. 增加生产同步错误指标。
+
+验收标准：
+
+- 浏览器 A 创建 Draft，浏览器 B 能看到。
+- 浏览器 B 修改标题，浏览器 A 刷新后能看到。
+- Schedule、Failed、Posted 跨设备一致。
+- 删除后另一设备不会复活旧 Draft。
+- 离线编辑恢复联网后可以同步。
+- 同步失败时 UI 不得显示云端 Saved。
+
+---
+
+## P1：P0 完成后处理
+
+1. 修复 Shopify Flag 浏览器测试。
+2. 完成 Shopify Picker 生产验收。
+3. 完成 Product Opportunity v3.1 重构。
+4. 删除 Competition 和 marketplace evaluation 残留。
+5. 完善 Product/Source Pin provenance。
+6. 完成 Support Chat 邮件发送实测。
+7. 增加 Sentry 和关键漏斗指标。
+8. 完成响应式、键盘和焦点测试。
+9. 完成所有语言的运行时 QA。
+10. 增加自动发布重复检测和补偿任务。
+
+---
+
+## P2：暂不实施
+
+1. 完整 Admin Intelligence 后台。
+2. CRM。
+3. Sales Pipeline。
+4. Revenue Analytics。
+5. Etsy 官方 API。
+6. 多平台自动发布。
+7. 团队审批。
+8. Embedding Reference Search。
+9. 训练自有 Ranker。
+10. 复杂 Creative Intelligence Analytics。
+
+---
+
+## 建议 Claude 的提交顺序
+
+1. `fix: restore release verification baseline`
+2. `fix: unify schedule and publish validation`
+3. `fix: persist timezone-aware scheduled instants`
+4. `refactor: move image generation behind backend jobs`
+5. `test: add Pinterest production contract coverage`
+6. `test: add Paddle webhook fulfillment coverage`
+7. `fix: retire legacy routes and unavailable platform UI`
+8. `test: verify cross-device draft lifecycle sync`
+
+Claude 完成后，不要立即合并或发布。保留每个 Commit，我会按 Commit 逐项复审代码、数据库迁移、测试结果和真实浏览器流程。

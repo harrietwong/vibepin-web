@@ -91,9 +91,8 @@ test("Clicking generating PinCard opens drawer", () => {
 
 test("Drawer displays status badge", () => {
   assert(drawerSource.includes('data-testid="pin-details-status-badge"'), "status badge test id missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // aria-label); tighten to the i18n key when that cluster lands.
-  assert(drawerSource.includes('aria-label="Pin Details"'), "drawer header title missing");
+  // i18n-ified: dialog aria-label resolves via tr("pinDrawer.dialogAriaLabel").
+  assert(drawerSource.includes('aria-label={tr("pinDrawer.dialogAriaLabel")}'), "drawer header title missing");
 });
 
 test("Drawer displays prompt snapshot", () => {
@@ -108,9 +107,8 @@ test("Drawer displays setup snapshot context", () => {
 
 test("Failed drawer displays error reason or Unknown generation error fallback", () => {
   assert(drawerSource.includes('data-testid="pin-details-error-reason"'), "error reason test id missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // fallback); tighten to the i18n key when that cluster lands.
-  assert(drawerSource.includes("Unknown generation error."), "error fallback missing");
+  // i18n-ified: fallback resolves via tr("pinDrawer.unknownGenerationError").
+  assert(drawerSource.includes("pinDrawer.unknownGenerationError"), "error fallback missing");
   const failed = resolvePinDetail(baseSession, {
     key: "fail-1", sessionId: "sess_001", groupIdx: 0, status: "failed",
     refLabel: "Reference 1", createdAt: baseSession.savedAt, placeholderVariant: "failed",
@@ -131,10 +129,9 @@ test("Shared modal auto-saves + owns Schedule / Pin now / readiness", () => {
 test("Failed drawer shows Try again / Edit and retry", () => {
   assert(drawerSource.includes('data-testid="pin-details-retry-pin"'), "retry pin testId missing");
   assert(drawerSource.includes('data-testid="pin-details-edit-and-retry"'), "edit-and-retry testId missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // labels); tighten to the i18n keys when that cluster lands.
-  assert(drawerSource.includes(">Try again</button>"), "Try again label missing");
-  assert(drawerSource.includes(">Edit and retry</button>"), "Edit and retry label missing");
+  // i18n-ified: labels resolve via tr("pinDetails.tryAgain") / tr("pinDrawer.plan.editAndRetry").
+  assert(drawerSource.includes('{tr("pinDetails.tryAgain")}'), "Try again label missing");
+  assert(drawerSource.includes('{tr("pinDrawer.plan.editAndRetry")}'), "Edit and retry label missing");
   assert(!drawerSource.includes("Retry this Pin"), "Old 'Retry this Pin' label must be gone");
   assert(!drawerSource.includes("Retry this group"), "Old 'Retry this group' label must be gone");
 });
@@ -276,24 +273,21 @@ test("UI does not expose metadata text to users", () => {
   const userCopy = quotedStrings.join(" ");
   assert(!/\bmetadata\b/i.test(userCopy), `drawer user copy exposes metadata: ${userCopy}`);
   assert(!studioSource.includes(">Generate metadata<") && !studioSource.includes('"Generate metadata"'), "studio still says Generate metadata");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // button copy); tighten to the i18n keys when that cluster lands.
-  assert(studioSource.includes(">Generate Pin Details</button>"), "batch toolbar should say Generate Pin Details");
-  assert(studioSource.includes(">Batch Edit Details</button>"), "batch toolbar should say Batch Edit Details");
+  // i18n-ified: buttons resolve via tr("studio.batch.generatePinDetails") / tr("studio.batch.editDetails").
+  assert(studioSource.includes("studio.batch.generatePinDetails"), "batch toolbar should say Generate Pin Details");
+  assert(studioSource.includes("studio.batch.editDetails"), "batch toolbar should say Batch Edit Details");
 });
 
 test("Drawer shows loading state while generating Pin details", () => {
   assert(drawerSource.includes('data-testid="pin-details-generating"'), "generating state missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // copy); tighten to the i18n key when that cluster lands.
-  assert(drawerSource.includes("Generating Pin details…"), "generating copy missing");
+  // i18n-ified: copy resolves via tr("pinDrawer.plan.generatingDetails").
+  assert(drawerSource.includes("pinDrawer.plan.generatingDetails"), "generating copy missing");
 });
 
 test("Failed Pin Details generation shows retry", () => {
   assert(drawerSource.includes('data-testid="pin-details-generate-error"'), "error state missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // copy); tighten to the i18n key when that cluster lands.
-  assert(drawerSource.includes("Could not generate Pin details."), "error copy missing");
+  // i18n-ified: copy resolves via tr("pinDrawer.plan.couldNotGenerateDetails").
+  assert(drawerSource.includes("pinDrawer.plan.couldNotGenerateDetails"), "error copy missing");
   assert(drawerSource.includes('data-testid="pin-details-retry-generate"'), "retry button missing");
 });
 
@@ -305,16 +299,14 @@ test("Save changes disabled until user edits", () => {
 test("Title candidates show source labels", () => {
   assert(drawerSource.includes("pin-details-title-source"), "title source label test id missing");
   assert(drawerSource.includes("sourceLabel"), "suggested title source labels missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // "View N more" / data-testid toggle); tighten to the i18n key when that cluster lands.
-  assert(drawerSource.includes('data-testid="pin-details-toggle-suggestions"') && drawerSource.includes("View ${others.length} more"), "compact suggestion reveal missing");
+  // i18n-ified: "View N more" resolves via tr("pinDrawer.titleSuggestions.viewMore").
+  assert(drawerSource.includes('data-testid="pin-details-toggle-suggestions"') && drawerSource.includes("pinDrawer.titleSuggestions.viewMore"), "compact suggestion reveal missing");
 });
 
 test("Low confidence hint shown in drawer", () => {
   assert(drawerSource.includes('data-testid="pin-details-low-confidence-hint"'), "low confidence hint missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // hint copy); tighten to the i18n key when that cluster lands.
-  assert(drawerSource.includes("Add an opportunity or keyword to generate more search-informed titles."), "hint copy missing");
+  // i18n-ified: hint copy resolves via tr("pinDrawer.content.lowConfidenceHint").
+  assert(drawerSource.includes("pinDrawer.content.lowConfidenceHint"), "hint copy missing");
 });
 
 test("Studio auto-generates Pin Details when drawer opens with missing fields", () => {
@@ -360,9 +352,8 @@ test("handleReuseSetup no longer hard-fails on missing snapshot", () => {
   const reuseBlock = studioSource.slice(studioSource.indexOf("function handleReuseSetup"), studioSource.indexOf("function handleReuseSetup") + 1800);
   assert(!reuseBlock.includes("toast.error"), "handleReuseSetup must not toast.error for missing snapshot");
   assert(reuseBlock.includes("if (snap)"), "handleReuseSetup guards snap-specific ops");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // toast message); tighten to studio.toast.promptLoadedLegacy when that cluster lands.
-  assert(reuseBlock.includes("Prompt loaded — original assets unavailable for this older generation"), "handleReuseSetup always shows success with appropriate message");
+  // i18n-ified: toast message resolves via tr("studio.toast.promptLoadedLegacy").
+  assert(reuseBlock.includes("studio.toast.promptLoadedLegacy"), "handleReuseSetup always shows success with appropriate message");
 });
 
 test("onPinDetailRegenerateWithRemix calls handleGenerateFromRemix (no composer mutation)", () => {
@@ -396,9 +387,8 @@ test("Remix prompt is never gated behind snapshot availability", () => {
 
 test("Recovery notice is calm and quality-aware (no alarming legacy banner)", () => {
   assert(drawerSource.includes('data-testid="pin-details-remix-recovery-notice"'), "calm recovery notice present");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // text_only recovery copy); tighten to pinDrawer.recovery.textOnly.body when that cluster lands.
-  assert(drawerSource.includes("Some original inputs are unavailable. We recovered the prompt and settings we could find."), "calm text_only copy present");
+  // i18n-ified: text_only recovery copy resolves via tr("pinDrawer.recovery.textOnly.body").
+  assert(drawerSource.includes("pinDrawer.recovery.textOnly.body"), "calm text_only copy present");
   assert(!drawerSource.includes("Older generation"), "alarming 'Older generation' banner must be gone");
   assert(!drawerSource.includes("Setup snapshot unavailable for this older"), "old blunt message removed from remix tab");
 });
@@ -446,11 +436,9 @@ test("Remix tab has editable prompt, settings, and simplified action buttons", (
   assert(drawerSource.includes('"pin-details-setup-settings"'), "settings section missing");
   assert(drawerSource.includes('"pin-details-regenerate-with-remix"'), "Generate again button testId missing");
   assert(drawerSource.includes('"pin-details-remix-reset"'), "Reset button testId missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // button copy, each on its own line inside the <button>); tighten to the i18n keys
-  // when that cluster lands.
-  assert(/pin-details-regenerate-with-remix[\s\S]{0,400}Generate again/.test(drawerSource), "Generate again label missing");
-  assert(/pin-details-remix-reset[\s\S]{0,300}Reset/.test(drawerSource), "Reset label missing");
+  // i18n-ified: button copy resolves via tr("pinDrawer.setup.generateAgain") / tr("pinDrawer.setup.reset").
+  assert(/pin-details-regenerate-with-remix[\s\S]{0,400}pinDrawer\.setup\.generateAgain/.test(drawerSource), "Generate again label missing");
+  assert(/pin-details-remix-reset[\s\S]{0,300}pinDrawer\.setup\.reset/.test(drawerSource), "Reset label missing");
   assert(!drawerSource.includes("Regenerate with changes"), "Old label must be gone");
   assert(!drawerSource.includes('"pin-details-remix-cancel"'), "Old Cancel button must be gone");
 });

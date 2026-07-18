@@ -52,9 +52,8 @@ test("AC1: no 'Needs details' / 'Needs date' / 'Not planned' card status anywher
   const badgeBlock = studioSource.slice(studioSource.indexOf("const badgeLabel"), studioSource.indexOf("const badgeIcon"));
   assert.doesNotMatch(badgeBlock, /Needs date|Needs details|Not planned/);
   // Clean default badge label for a completed-but-unscheduled pin.
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // fallthrough); tighten to studio.badge.ready|studio.badge.unscheduled when that lands.
-  assert.match(badgeBlock, /:\s*"Unscheduled";/);
+  // i18n-ified: badgeLabel fallthrough resolves via tr("studio.badge.unscheduled").
+  assert.match(badgeBlock, /:\s*tr\("studio\.badge\.unscheduled"\);/);
   // The shared action component knows nothing about those states either.
   assert.doesNotMatch(actionsSource, /Needs details|Needs date|Not planned/);
 });
@@ -63,9 +62,8 @@ test("Card status model is Ready/Scheduled/Failed/Posted/Generating", () => {
   assert.match(actionsSource, /PinCardStatus = "generating" \| "failed" \| "unscheduled" \| "scheduled" \| "posted"/);
 });
 test("Unscheduled badge replaces the old negative 'Not planned'", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior; tighten to
-  // tr("studio.badge.unscheduled") when that i18n cluster lands.
-  assert.match(studioSource, /:\s*"Unscheduled";/); // badgeLabel fallthrough → "Unscheduled"
+  // i18n-ified: badgeLabel fallthrough → tr("studio.badge.unscheduled") ("Unscheduled" in English).
+  assert.match(studioSource, /:\s*tr\("studio\.badge\.unscheduled"\);/);
 });
 
 // ── AC8: all actions come from one shared PinCardActions ────────────────────
