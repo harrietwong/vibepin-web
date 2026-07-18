@@ -283,7 +283,17 @@ export async function POST(request: Request): Promise<Response> {
         break;
       }
 
+      case "subscription.update": {
+        // Re-evaluate from the event's own status field: an active/trialing
+        // update grants (plan may have changed on an upgrade), a terminal status
+        // revokes. Never assume — read the reported status.
+        await handleSubscriptionUpdate(object as CreemSubscriptionObject, occurredAt);
+        break;
+      }
+
       case "subscription.past_due":
+      case "subscription.paused":
+      case "subscription.unpaid":
       case "subscription.expired":
       case "subscription.canceled": {
         await handleRevoke(object as CreemSubscriptionObject, occurredAt);
@@ -363,7 +373,7 @@ async function handleSubscriptionActive(
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
-  await upsertCreemSubscription({
+  const outcome = await upsertCreemSubscription({
     subscriptionId: subId,
     customerId,
     userId: metaUserId,
@@ -377,7 +387,8 @@ async function handleSubscriptionActive(
   });
 
   // If this event knows the user, make sure the customer row exists + is linked
-  // (order-independent) so portal/lookups resolve for a paying user.
+  // (order-independent) so portal/lookups resolve for a paying user. Linkage is
+  // monotonic and safe to run even for a stale event.
   if (metaUserId) {
     await upsertCreemCustomer({
       customerId,
@@ -386,6 +397,15 @@ async function handleSubscriptionActive(
       occurredAt,
     });
     await linkCustomerToUser(customerId, metaUserId);
+  }
+
+  // ONLY an applied (non-stale) event may change the plan — a replayed old event
+  // must never re-grant/override a newer state.
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale active/paid event skipped for provisioning.`,
+    );
+    return;
   }
 
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
@@ -427,7 +447,7 @@ async function handleScheduledCancel(
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
-  await upsertCreemSubscription({
+  const outcome = await upsertCreemSubscription({
     subscriptionId: subId,
     customerId,
     userId: metaUserId,
@@ -450,6 +470,13 @@ async function handleScheduledCancel(
     await linkCustomerToUser(customerId, metaUserId);
   }
 
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale scheduled_cancel event skipped for provisioning.`,
+    );
+    return;
+  }
+
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
   if (userId && plan && creemStatusGrantsAccess(status)) {
     await setUserPlan(userId, plan);
@@ -457,9 +484,10 @@ async function handleScheduledCancel(
 }
 
 /**
- * subscription.past_due / expired / canceled: mirror the terminal/lapsed status
- * and revoke the plan (set "free") for the resolvable user. Mirror regardless of
- * whether a user is resolvable.
+ * subscription.past_due / paused / unpaid / expired / canceled: mirror the
+ * terminal/lapsed status and revoke the plan (set "free") for the resolvable
+ * user — but ONLY when the event is applied (not a stale replay). Mirror
+ * regardless of whether a user is resolvable.
  */
 async function handleRevoke(
   o: CreemSubscriptionObject,
@@ -480,7 +508,7 @@ async function handleRevoke(
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
-  await upsertCreemSubscription({
+  const outcome = await upsertCreemSubscription({
     subscriptionId: subId,
     customerId,
     userId: metaUserId,
@@ -493,8 +521,89 @@ async function handleRevoke(
     occurredAt,
   });
 
+  // ONLY revoke on an applied event. This is the guard that stops a replayed old
+  // `canceled` from demoting a member whose subscription is currently active.
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale revoke event skipped (member keeps current plan).`,
+    );
+    return;
+  }
+
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
   if (userId) {
     await setUserPlan(userId, "free"); // revoke
   }
+}
+
+/**
+ * subscription.update: a catch-all change event. Re-evaluate entitlement from the
+ * event's OWN status — grant (active/trialing) or revoke (any terminal status).
+ * The plan may have changed (e.g. an upgrade), so we always source it from the
+ * event's product mapping. Only an applied (non-stale) event touches the plan.
+ */
+async function handleSubscriptionUpdate(
+  o: CreemSubscriptionObject,
+  occurredAt: string,
+): Promise<void> {
+  const subId = asString(o.id);
+  const customerId = idOf(o.customer);
+  if (!subId || !customerId) {
+    console.warn(
+      `[creem/webhook] subscription.update missing sub/customer id — skipping mirror.`,
+    );
+    return;
+  }
+  const productId =
+    idOf(o.product) ?? asString(o.items?.[0]?.product_id) ?? null;
+  const mapping = productId ? resolveCreemProduct(productId) : null;
+  if (productId && !mapping) {
+    console.warn(
+      `[creem/webhook] subscription ${subId}: product ${productId} not in CREEM_PRODUCT_* map — mirroring with null plan.`,
+    );
+  }
+  const plan: PlanKey | null = mapping?.plan ?? null;
+  const status = asString(o.status) ?? "active";
+  const grants = creemStatusGrantsAccess(status);
+  const currentPeriodEnd = asString(o.current_period_end_date);
+  const metaUserId = userIdFromMetadata(o.metadata);
+
+  const outcome = await upsertCreemSubscription({
+    subscriptionId: subId,
+    customerId,
+    userId: metaUserId,
+    status,
+    productId: productId ?? "",
+    plan,
+    billingInterval: mapping?.interval ?? null,
+    currentPeriodEnd,
+    scheduledCancel: false,
+    occurredAt,
+  });
+
+  if (metaUserId) {
+    await upsertCreemCustomer({
+      customerId,
+      email: emailOf(o.customer),
+      userId: metaUserId,
+      occurredAt,
+    });
+    await linkCustomerToUser(customerId, metaUserId);
+  }
+
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale update event skipped for provisioning.`,
+    );
+    return;
+  }
+
+  const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
+  if (!userId) return;
+  if (grants && plan) {
+    await setUserPlan(userId, plan); // grant / re-grant (possibly changed plan)
+  } else if (!grants) {
+    await setUserPlan(userId, "free"); // terminal status → revoke
+  }
+  // grants && !plan (unknown product) → never grant; leave plan unchanged.
 }
