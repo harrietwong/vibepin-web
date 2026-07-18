@@ -77,6 +77,7 @@ export const CORE: string[] = [
   "test-entitlements-security",
   "test-creem-checkout-api",
   "test-creem-webhook-ordering",
+  "test-creem-billing-status",
   // Settings / support
   "test-settings-p0",
   "test-support-ai-responder",
