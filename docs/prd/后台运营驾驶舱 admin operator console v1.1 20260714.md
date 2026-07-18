@@ -1,6 +1,6 @@
 # 后台运营驾驶舱 PRD v1.2
 
-**状态：** P0 已实施。核心 5 提交已随生产化统一合并进 `master`（当前 `master` HEAD `b6f935f`）；`feat/admin-cockpit` 分支是 `master` 的超集，额外多带两个尚未进 master 的修复（`3d4180b` v52 上下文列持久化 + `1514eae` 采用率精确关联键）。待这两个修复合并进 master + v52 迁移应用 + §7.4 浏览器实测。详见 §8。
+**状态：** P0 已实施。核心 5 提交已随生产化统一合并进 `master`（`b6f935f`）；`feat/admin-cockpit` 是 `master` 的超集（已追合至 `2d35edf`），净增量 = `3d4180b`/`1514eae` + 二次评审 4 修复（`48622b3`/`6123cae`/`22b24fa`/`1c8d118`）。**v33/v34/v51/v52 四个迁移均已于 2026-07-16 应用生产并逐列复核**。剩余：净增量回流 master + §7.4 浏览器实测。详见 §8。
 **日期：** 2026-07-16（初稿 2026-07-14；§8 topology 于 2026-07-17 复核订正）
 **作者：** Fable 5（基于创始人确认的产品方向）
 **取代：** `【后台系统未实施 优先级不高】.txt`（定位文档，其"不做清单"与最终定位在本文档中继承并展开）
@@ -195,11 +195,11 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 - 事件口径：409 去重与请求体校验失败**不算** attempt（attempt 从提交给 Pinterest 起算）；每个 attempted 必有恰一个终结事件
 
 **待办（合并/上线前）：**
-- [ ] 把 `3d4180b` / `1514eae` 回流合并进 `master`（本分支的净增量）
-- [ ] **v52 迁移未应用**：`backend/db/migrate_v52_pin_generations_context_columns.sql`（`pin_generations` 补 13 个扩展上下文列 + `generation_request_id` + 部分索引）——已编写、生产**未应用**（只读检查未见任何已应用记录，最高在库迁移号为 v52 但仅文件存在）。在此之前生产 `pin_generations` 自 ~2026-06-14 起因 schema drift **静默丢失整月生成行**，须由 `3d4180b` + 应用 v52 共同修复。走 `run_migration.py --apply`。
-- [ ] `backend/db/migrate_v51_publish_events_index.sql`（`analytics_events` 补 `(user_id, event_name, created_at desc)` 索引）——已编写未应用，同一通道应用
-- [ ] v33/v34 生产应用状态确认（同上通道）
-- [ ] §7.4 验收清单的浏览器实测项（真实数据下的名单/漏斗/Alert Strip 一致性）
+- [ ] 把净增量回流合并进 `master`：`3d4180b`（v52 列持久化）、`1514eae`（采用率关联键）+ 二次评审 4 修复 `48622b3`（连接未创作全历史判定）/`6123cae`（相对时间 i18n）/`22b24fa`（0/0 口径不隐藏）/`1c8d118`（本文档订正）
+- [x] ~~v52 迁移应用~~ **已应用**（2026-07-16，`run_migration.py --apply` HTTP 201 + PostgREST 逐列复核 status/generation_request_id/setup_snapshot 存在）。schema drift 造成的 ~2026-06-14 起整月生成行静默丢失自此止血；历史丢失行不可从 DB 恢复（各浏览器 localStorage 50 条/设备 + storage bucket 可部分重建）
+- [x] ~~v51 迁移应用~~ **已应用**（2026-07-16，同通道，HTTP 201）
+- [x] ~~v33/v34 状态确认~~ **已确认并应用**（2026-07-16：探测确认原先未应用 → 应用 → PostgREST 复核 `admin_support_notes`/`admin_audit_events` 存在）
+- [ ] §7.4 验收清单的浏览器实测项（真实数据下的名单/漏斗/Alert Strip 一致性）——首轮目视验收发现的 3 个 P1 已由上述 4 修复解决，待复验
 - [ ] 已知局限：BatchEditDrawer 在 Studio 上下文的 `pinId` 非草稿 ID（join 不上，无害）；事件仅从部署起累积
 
 ## 文档历史
