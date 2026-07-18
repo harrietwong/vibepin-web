@@ -73,6 +73,9 @@ export const CORE: string[] = [
   "test-product-top-tiers",
   "test-amazon-affiliate",
   "test-amazon-affiliate-wiring",
+  // Billing (Creem)
+  "test-entitlements-security",
+  "test-creem-checkout-api",
   // Settings / support
   "test-settings-p0",
   "test-support-ai-responder",

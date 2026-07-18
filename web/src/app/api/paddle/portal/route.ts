@@ -1,3 +1,4 @@
+// LEGACY (Paddle rejected; Creem is MoR) — retained for legacy webhook/history only.
 /**
  * Paddle customer portal session (POST /api/paddle/portal).
  *
