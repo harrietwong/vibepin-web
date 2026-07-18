@@ -39,9 +39,16 @@ function assertEq(a: unknown, b: unknown, msg: string) {
   if (a !== b) throw new Error(`${msg} (expected ${JSON.stringify(b)}, got ${JSON.stringify(a)})`);
 }
 
-type MockUser = { email: string | null; plan: unknown };
+// Post-security-fix deps: resolvePlan reads app_metadata.plan (never
+// user_metadata) plus a live creem_subscriptions lookup. These tests exercise
+// the app_metadata + whitelist paths with an empty subscription set; the
+// subscription-vs-cache precedence is covered in test-entitlements-security.ts.
+type MockUser = { email: string | null; appPlan: unknown };
 function deps(user: MockUser | null) {
-  return { getUserById: async (_userId: string) => user };
+  return {
+    getUserById: async (_userId: string) => user,
+    getActiveSubscriptions: async (_userId: string) => [],
+  };
 }
 
 async function main() {
@@ -121,23 +128,23 @@ async function main() {
     assertEq(ent.normalizePlanKey(undefined), null, "undefined");
   });
 
-  // ── resolvePlan: metadata plan ─────────────────────────────────────────────
-  await test("resolvePlan reads user_metadata.plan for all four plans", async () => {
-    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", plan: "free" })), "free", "free");
-    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", plan: "starter" })), "starter", "starter");
-    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", plan: "pro" })), "pro", "pro");
-    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", plan: "business" })), "business", "business");
+  // ── resolvePlan: app_metadata plan cache ───────────────────────────────────
+  await test("resolvePlan reads app_metadata.plan for all four plans", async () => {
+    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: "free" })), "free", "free");
+    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: "starter" })), "starter", "starter");
+    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: "pro" })), "pro", "pro");
+    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: "business" })), "business", "business");
   });
 
-  await test("resolvePlan: unknown metadata plan falls back to free", async () => {
-    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", plan: "enterprise" })), "free", "unknown → free");
-    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", plan: 7 })), "free", "non-string → free");
+  await test("resolvePlan: unknown app_metadata plan falls back to free", async () => {
+    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: "enterprise" })), "free", "unknown → free");
+    assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: 7 })), "free", "non-string → free");
   });
 
   // ── resolvePlan: whitelist mapping (aligned with useUserTier.ts) ───────────
   await test("resolvePlan maps the useUserTier email whitelist to pro", async () => {
     assertEq(
-      await ent.resolvePlan("u1", deps({ email: "zhihuihuang321@gmail.com", plan: undefined })),
+      await ent.resolvePlan("u1", deps({ email: "zhihuihuang321@gmail.com", appPlan: undefined })),
       "pro",
       "whitelisted email → pro",
     );
@@ -145,7 +152,7 @@ async function main() {
 
   await test("resolvePlan whitelist match is case/space-insensitive", async () => {
     assertEq(
-      await ent.resolvePlan("u1", deps({ email: " ZhiHuiHuang321@Gmail.com ", plan: undefined })),
+      await ent.resolvePlan("u1", deps({ email: " ZhiHuiHuang321@Gmail.com ", appPlan: undefined })),
       "pro",
       "case-insensitive whitelist",
     );
@@ -153,12 +160,12 @@ async function main() {
 
   await test("resolvePlan: whitelist floors the plan at pro but never downgrades", async () => {
     assertEq(
-      await ent.resolvePlan("u1", deps({ email: "zhihuihuang321@gmail.com", plan: "starter" })),
+      await ent.resolvePlan("u1", deps({ email: "zhihuihuang321@gmail.com", appPlan: "starter" })),
       "pro",
       "starter + whitelist → pro",
     );
     assertEq(
-      await ent.resolvePlan("u1", deps({ email: "zhihuihuang321@gmail.com", plan: "business" })),
+      await ent.resolvePlan("u1", deps({ email: "zhihuihuang321@gmail.com", appPlan: "business" })),
       "business",
       "business + whitelist stays business",
     );
@@ -166,8 +173,8 @@ async function main() {
 
   // ── resolvePlan: defaults ──────────────────────────────────────────────────
   await test("resolvePlan defaults to free (no metadata, not whitelisted)", async () => {
-    assertEq(await ent.resolvePlan("u1", deps({ email: "nobody@example.com", plan: undefined })), "free", "default free");
-    assertEq(await ent.resolvePlan("u1", deps({ email: null, plan: undefined })), "free", "no email");
+    assertEq(await ent.resolvePlan("u1", deps({ email: "nobody@example.com", appPlan: undefined })), "free", "default free");
+    assertEq(await ent.resolvePlan("u1", deps({ email: null, appPlan: undefined })), "free", "no email");
   });
 
   await test("resolvePlan: missing user or lookup failure → free", async () => {
@@ -177,6 +184,7 @@ async function main() {
         getUserById: async () => {
           throw new Error("admin API down");
         },
+        getActiveSubscriptions: async () => [],
       }),
       "free",
       "lookup throws → free",
