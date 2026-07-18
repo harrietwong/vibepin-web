@@ -3,8 +3,8 @@
  *
  * Creem is the merchant of record after Paddle was rejected. This route mirrors
  * Creem webhook events into creem_customers / creem_subscriptions (source of
- * truth) and refreshes user_metadata.plan (the derived cache read by
- * resolvePlan/useUserTier). It mirrors the proven Paddle webhook structure but
+ * truth) and refreshes app_metadata.plan (the derived, service-role-only cache
+ * read by resolvePlan). It mirrors the proven Paddle webhook structure but
  * hand-rolls the HMAC verification (Creem's contract) — no Creem SDK.
  *
  * Flow: read the RAW body (never JSON.parse before verification) → verify the
@@ -143,9 +143,14 @@ function createdAtToIso(createdAt: unknown): string {
 }
 
 /**
- * Refresh a user's cached user_metadata.plan without wiping other metadata keys.
- * GoTrue shallow-merges top-level user_metadata, but we read-merge defensively so
- * unrelated keys are provably preserved. (Mirrors the Paddle webhook's setUserPlan.)
+ * Refresh a user's cached plan in `app_metadata` without wiping other keys.
+ *
+ * SECURITY: the plan cache lives in app_metadata — which is service-role-writable
+ * ONLY — never user_metadata, which a user can edit for themselves and thereby
+ * self-grant a paid plan. resolvePlan reads the live creem_subscriptions row as
+ * the source of truth and falls back to THIS app_metadata cache. GoTrue
+ * shallow-merges top-level app_metadata, but we read-merge defensively so
+ * unrelated keys are provably preserved.
  */
 async function setUserPlan(userId: string, plan: string): Promise<void> {
   const admin = createServerClient();
@@ -156,10 +161,10 @@ async function setUserPlan(userId: string, plan: string): Promise<void> {
     );
   }
   const existingMeta =
-    (data.user.user_metadata as Record<string, unknown> | null) ?? {};
+    (data.user.app_metadata as Record<string, unknown> | null) ?? {};
   if (existingMeta.plan === plan) return; // no-op: cache already correct
   const { error } = await admin.auth.admin.updateUserById(userId, {
-    user_metadata: { ...existingMeta, plan },
+    app_metadata: { ...existingMeta, plan },
   });
   if (error) throw new Error(`updateUserById(${userId}) failed: ${error.message}`);
 }

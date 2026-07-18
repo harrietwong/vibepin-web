@@ -60,9 +60,13 @@ export function isPaidPlan(planName: string): boolean {
 }
 
 export function deriveAccountBillingSummary(user: UserLike | null | undefined): AccountBillingSummary {
-  const metadata = { ...(user?.app_metadata ?? {}), ...(user?.user_metadata ?? {}) };
+  const appMeta = (user?.app_metadata ?? {}) as Record<string, unknown>;
+  const metadata = { ...appMeta, ...(user?.user_metadata ?? {}) };
+  // Plan is security-sensitive: read it ONLY from app_metadata (service-role
+  // writable) so a user-forged user_metadata.plan can never inflate the plan
+  // shown in Settings. All other display fields keep the merged view.
   return {
-    planName: firstString(metadata, ["plan_name", "planName", "plan"]),
+    planName: firstString(appMeta, ["plan_name", "planName", "plan"]),
     planStatus: firstString(metadata, ["subscription_status", "subscriptionStatus", "plan_status"]),
     renewalAt: firstString(metadata, ["renewal_at", "renewalAt", "current_period_end"]),
     tokenBalance: firstNumber(metadata, ["token_balance", "tokenBalance", "credits"]) ?? EXISTING_APP_TOKEN_BALANCE,
