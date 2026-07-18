@@ -31,12 +31,23 @@ test("Billing has Current plan and Credits sections without fake subscription da
   assert.match(billing, /t\("billing\.manageBilling"\)/);
 });
 
-test("Billing reads real metadata when available", () => {
-  const value = deriveAccountBillingSummary({ user_metadata: { plan_name: "Pro", subscription_status: "active", token_balance: 91, tokens_used_this_month: 9 } });
+test("Billing reads the plan from app_metadata (trusted); other fields from merged metadata", () => {
+  // Plan is security-sensitive: it must come from app_metadata (service-role
+  // writable), never user_metadata. Display fields (status, tokens) stay merged.
+  const value = deriveAccountBillingSummary({
+    app_metadata: { plan_name: "Pro" },
+    user_metadata: { subscription_status: "active", token_balance: 91, tokens_used_this_month: 9 },
+  });
   assert.equal(value.planName, "Pro");
   assert.equal(value.planStatus, "active");
   assert.equal(value.tokenBalance, 91);
   assert.equal(value.usedThisMonth, 9);
+});
+
+test("Billing IGNORES a forged user_metadata plan (only app_metadata is trusted)", () => {
+  // A user can edit their own user_metadata — a plan forged there must not show.
+  const value = deriveAccountBillingSummary({ user_metadata: { plan_name: "Business", plan: "business" } });
+  assert.equal(value.planName, null);
 });
 
 test("Billing preserves the existing app token balance when metadata is unavailable", () => {
