@@ -16,8 +16,17 @@ import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import { toProxyUrl } from "@/lib/imageProxy";
 import { toast } from "sonner";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 
 type ListStatus = "Scheduled" | "Unscheduled" | "Published" | "Failed";
+
+const STATUS_KEY = {
+  Scheduled: "planViews.list.status.scheduled",
+  Unscheduled: "planViews.list.status.unscheduled",
+  Published: "planViews.list.status.published",
+  Failed: "planViews.list.status.failed",
+} as const;
 
 export type PlanListHandlers = {
   onOpenDetails: (d: PinDraft) => void;
@@ -41,9 +50,9 @@ function listStatus(d: PinDraft): ListStatus {
   return "Unscheduled";
 }
 
-function publishTimeLabel(d: PinDraft): string {
+function publishTimeLabel(d: PinDraft, tr: (key: MessageKey) => string): string {
   const ev = mapPlanDraftToCalendarEvent(d);
-  if (!ev.plannedDate || !ev.plannedTime) return "Unscheduled";
+  if (!ev.plannedDate || !ev.plannedTime) return tr("planViews.list.status.unscheduled");
   const date = new Date(`${ev.plannedDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return `${date} · ${ev.plannedTime}`;
 }
@@ -61,14 +70,15 @@ function shortUrl(url: string): string {
   }
 }
 
-function productLabel(d: PinDraft): string {
+function productLabel(d: PinDraft, tr: (key: MessageKey) => string): string {
   const n = (d.linkedProducts ?? []).length;
-  return n === 0 ? "No product" : n === 1 ? "1 product" : `${n} products`;
+  return n === 0 ? tr("planViews.list.noProduct") : n === 1 ? tr("planViews.list.oneProduct") : tr("planViews.list.nProducts").replace("{n}", String(n));
 }
 
 const STATUS_OPTIONS: Array<"All" | ListStatus> = ["All", "Scheduled", "Published", "Unscheduled", "Failed"];
 
 export function PlanListView({ category, handlers }: { category: string; handlers: PlanListHandlers }) {
+  const { t: tr } = useLocale();
   const [drafts, setDrafts] = useState<PinDraft[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -121,7 +131,7 @@ export function PlanListView({ category, handlers }: { category: string; handler
       const res = ensureScheduledPlanTime(d.id, { extraOccupied: occupied });
       if (res.ok) { occupied.add(`${res.slot.plannedDate}|${res.slot.plannedTime}`); n++; }
     }
-    if (n > 0) toast.success(`Scheduled ${n} Pin${n === 1 ? "" : "s"} to upcoming Smart Schedule slots.`);
+    if (n > 0) toast.success(n === 1 ? tr("planViews.list.toast.scheduledOne") : tr("planViews.list.toast.scheduledMany").replace("{n}", String(n)));
     setSelected(new Set());
   }
 
@@ -148,7 +158,7 @@ export function PlanListView({ category, handlers }: { category: string; handler
               data-testid="plan-list-search"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search pins"
+              placeholder={tr("planViews.list.searchPlaceholder")}
               style={{ flex: "1 1 220px", maxWidth: 300, padding: "7px 11px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface2, color: C.text, fontSize: 12, outline: "none" }}
             />
             <select
@@ -157,21 +167,21 @@ export function PlanListView({ category, handlers }: { category: string; handler
               onChange={e => setStatusFilter(e.target.value as "All" | ListStatus)}
               style={{ padding: "7px 9px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface2, color: C.text, fontSize: 12, cursor: "pointer", outline: "none" }}
             >
-              {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s === "All" ? "All statuses" : s}</option>)}
+              {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s === "All" ? tr("planViews.list.status.allStatuses") : tr(STATUS_KEY[s])}</option>)}
             </select>
             <div style={{ marginLeft: "auto", position: "relative" }}>
               <button type="button" data-testid="plan-list-columns" onClick={() => setColsOpen(o => !o)}
                 style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.sec, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                Columns
+                {tr("planViews.list.columns")}
               </button>
               {colsOpen && (
                 <>
                   <div onClick={() => setColsOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
                   <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 41, width: 170, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 12px 40px rgba(0,0,0,0.4)", padding: 8 }}>
-                    {([["board", "Board"], ["url", "Destination URL"], ["product", "Product"]] as const).map(([k, label]) => (
+                    {([["board", "planViews.list.columnBoard"], ["url", "planViews.list.columnUrl"], ["product", "planViews.list.columnProduct"]] as const).map(([k, labelKey]) => (
                       <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", fontSize: 12, color: C.text, cursor: "pointer" }}>
                         <input type="checkbox" checked={cols[k]} onChange={() => setCols(c => ({ ...c, [k]: !c[k] }))} />
-                        {label}
+                        {tr(labelKey)}
                       </label>
                     ))}
                   </div>
@@ -181,25 +191,25 @@ export function PlanListView({ category, handlers }: { category: string; handler
           </>
         ) : (
           <div data-testid="plan-list-selection-toolbar" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", flexWrap: "wrap" }}>
-            <span data-testid="plan-list-selected-count" style={{ fontSize: 12, fontWeight: 600, color: C.sec }}>{selected.size} selected</span>
+            <span data-testid="plan-list-selected-count" style={{ fontSize: 12, fontWeight: 600, color: C.sec }}>{tr("planViews.list.selectedCount").replace("{n}", String(selected.size))}</span>
             {/* Primary: Batch edit → shared Batch Edit workspace with exactly the selected rows */}
             <button type="button" data-testid="plan-list-edit-selected" onClick={() => handlers.onBatchEdit ? handlers.onBatchEdit([...selected]) : (selectedDrafts[0] && handlers.onOpenDetails(selectedDrafts[0]))}
               style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              Batch edit
+              {tr("planViews.list.batchEdit")}
             </button>
             <button type="button" data-testid="plan-list-schedule-selected" onClick={scheduleSelected}
               style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface2, color: C.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              Schedule
+              {tr("planViews.list.schedule")}
             </button>
             <button type="button" data-testid="plan-list-publish-selected" disabled={!canPublishSelected}
               onClick={() => { const r = selectedDrafts.find(d => !sanitizeHandoffField(d.postedAt)); if (r) handlers.onPublish(r); }}
-              title={canPublishSelected ? "Publish selected Pins" : "No selected Pin can be published"}
+              title={canPublishSelected ? tr("planViews.list.publishSelectedTitle") : tr("planViews.list.publishSelectedDisabledTitle")}
               style={{ padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(5,150,105,0.45)", background: canPublishSelected ? "rgba(5,150,105,0.10)" : "transparent", color: canPublishSelected ? "#10B981" : C.muted, fontSize: 12, fontWeight: 700, cursor: canPublishSelected ? "pointer" : "not-allowed", opacity: canPublishSelected ? 1 : 0.6 }}>
-              Publish now
+              {tr("pinDetails.publishNow")}
             </button>
             <button type="button" onClick={() => setSelected(new Set())}
               style={{ marginLeft: "auto", padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer" }}>
-              Clear
+              {tr("planViews.list.clear")}
             </button>
           </div>
         )}
@@ -208,21 +218,21 @@ export function PlanListView({ category, handlers }: { category: string; handler
       {/* Header */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "8px 12px", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: "var(--app-bg)", zIndex: 1 }}>
         <div style={{ display: "flex", alignItems: "center" }}>
-          <input type="checkbox" data-testid="plan-list-select-all" checked={allVisibleSelected} onChange={toggleAll} aria-label="Select all" />
+          <input type="checkbox" data-testid="plan-list-select-all" checked={allVisibleSelected} onChange={toggleAll} aria-label={tr("planViews.list.selectAllAria")} />
         </div>
-        <HeaderCell>Pin</HeaderCell>
-        <HeaderCell>Publish time</HeaderCell>
-        <HeaderCell>Status</HeaderCell>
-        {cols.board && <HeaderCell>Board</HeaderCell>}
-        {cols.url && <HeaderCell>Destination URL</HeaderCell>}
-        {cols.product && <HeaderCell>Product</HeaderCell>}
-        <HeaderCell>Actions</HeaderCell>
+        <HeaderCell>{tr("planViews.list.headerPin")}</HeaderCell>
+        <HeaderCell>{tr("planViews.list.headerPublishTime")}</HeaderCell>
+        <HeaderCell>{tr("planViews.list.headerStatus")}</HeaderCell>
+        {cols.board && <HeaderCell>{tr("planViews.list.headerBoard")}</HeaderCell>}
+        {cols.url && <HeaderCell>{tr("planViews.list.headerDestinationUrl")}</HeaderCell>}
+        {cols.product && <HeaderCell>{tr("planViews.list.headerProduct")}</HeaderCell>}
+        <HeaderCell>{tr("planViews.list.headerActions")}</HeaderCell>
       </div>
 
       {/* Rows */}
       {rows.length === 0 ? (
         <div data-testid="plan-list-empty" style={{ padding: "40px 12px", textAlign: "center", color: C.muted, fontSize: 13 }}>
-          No Pins match. Create Pins or adjust filters.
+          {tr("planViews.list.emptyState")}
         </div>
       ) : rows.map(({ d, ev }) => {
         const status = listStatus(d);
@@ -237,7 +247,7 @@ export function PlanListView({ category, handlers }: { category: string; handler
               borderBottom: `1px solid ${C.border}`, background: isSel ? "rgba(192,38,211,0.05)" : "transparent" }}>
             {/* 1. Checkbox */}
             <div style={{ display: "flex", alignItems: "center" }}>
-              <input type="checkbox" data-testid="plan-list-row-checkbox" checked={isSel} onChange={() => toggle(d.id)} aria-label="Select pin" />
+              <input type="checkbox" data-testid="plan-list-row-checkbox" checked={isSel} onChange={() => toggle(d.id)} aria-label={tr("planViews.list.selectPinAria")} />
             </div>
             {/* 2. Pin */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, cursor: "pointer" }} onClick={() => handlers.onOpenDetails(d)}>
@@ -252,15 +262,15 @@ export function PlanListView({ category, handlers }: { category: string; handler
             </div>
             {/* 3. Publish time */}
             <div data-testid="plan-list-time" style={{ ...cellBase, color: scheduled ? C.text : C.muted, fontVariantNumeric: "tabular-nums" }}>
-              {publishTimeLabel(d)}
+              {publishTimeLabel(d, tr)}
             </div>
             {/* 4. Status (plain text) */}
-            <div data-testid="plan-list-status" style={{ ...cellBase, color: status === "Published" ? C.muted : C.sec }}>{status}</div>
+            <div data-testid="plan-list-status" style={{ ...cellBase, color: status === "Published" ? C.muted : C.sec }}>{tr(STATUS_KEY[status])}</div>
             {/* 5. Board */}
             {cols.board && (
               <div data-testid="plan-list-board" style={{ ...cellBase, cursor: "pointer" }} onClick={() => handlers.onOpenDetails(d)}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: board ? C.sec : C.muted }}>
-                  {board || "Select board"}
+                  {board || tr("planViews.list.selectBoard")}
                 </span>
               </div>
             )}
@@ -268,35 +278,35 @@ export function PlanListView({ category, handlers }: { category: string; handler
             {cols.url && (
               <div data-testid="plan-list-url" style={{ ...cellBase, cursor: "pointer" }} onClick={() => handlers.onOpenDetails(d)}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: url ? "#60A5FA" : C.muted }}>
-                  {url ? shortUrl(url) : "Add URL"}
+                  {url ? shortUrl(url) : tr("planViews.list.addUrl")}
                 </span>
               </div>
             )}
             {/* 7. Product (neutral) */}
             {cols.product && (
-              <div data-testid="plan-list-product" style={{ ...cellBase, color: C.muted }}>{productLabel(d)}</div>
+              <div data-testid="plan-list-product" style={{ ...cellBase, color: C.muted }}>{productLabel(d, tr)}</div>
             )}
             {/* 8. Actions */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
               <button type="button" data-testid="plan-list-edit" onClick={() => handlers.onOpenDetails(d)}
                 style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface2, color: C.sec, fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                Edit details
+                {tr("planViews.list.editDetails")}
               </button>
               {posted ? (
                 <button type="button" data-testid="plan-list-view-btn" onClick={() => handlers.onOpenDetails(d)}
                   style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.sec, fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                  View
+                  {tr("planViews.list.view")}
                 </button>
               ) : scheduled ? (
                 <button type="button" data-testid="plan-list-reschedule" onClick={() => handlers.onReschedule(d)}
                   style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.sec, fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                  Reschedule
+                  {tr("planViews.list.reschedule")}
                 </button>
               ) : (
                 <button type="button" data-testid="plan-list-schedule" onClick={() => scheduleOne(d.id)}
-                  title="Schedule into the next available Smart Schedule slot"
+                  title={tr("planViews.list.scheduleSlotTitle")}
                   style={{ padding: "5px 10px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-                  Schedule
+                  {tr("planViews.list.schedule")}
                 </button>
               )}
             </div>

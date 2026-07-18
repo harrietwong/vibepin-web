@@ -8,6 +8,8 @@
 // null metric, never a crash). Day buckets are UTC to match the crawler's
 // pin_save_snapshots.captured_on convention.
 
+import { excludeRetired } from "@/lib/productTopTiers";
+
 type CountQuery = PromiseLike<{ count: number | null; error: unknown }>;
 
 export type DailyActivityRow = {
@@ -91,6 +93,12 @@ export async function getDailyCrawlActivity(days = 7): Promise<DailyCrawlActivit
       return Promise.all([
         countRows(db.from("pin_samples").select("id", { count: "exact", head: true })
           .gte("scraped_at", startIso).lt("scraped_at", endIso)),
+        // DELIBERATELY NOT excludeRetired(): this row is a historical CRAWL-ACTIVITY log
+        // ("how many product rows did the pipeline write on day X"). Soft-retiring a row
+        // later does not un-write it, so filtering retired rows out here would falsify
+        // the crawl history. The user-facing product counters (adminOverview /
+        // dataFreshness / productOpportunityAdminStatus) DO exclude them — those measure
+        // usable supply, this measures pipeline output.
         countRows(db.from("pin_products").select("id", { count: "exact", head: true })
           .gte("created_at", startIso).lt("created_at", endIso)),
         countRows(db.from("trend_keywords").select("id", { count: "exact", head: true })
@@ -121,10 +129,13 @@ export async function getDailyCrawlActivity(days = 7): Promise<DailyCrawlActivit
 
   let latestProducts: LatestProduct[] = [];
   try {
-    const { data } = await db
+    // excludeRetired: unlike the per-day activity counts above, this strip is a
+    // CURRENT-STATE image preview of usable product rows — a retired row's image is a
+    // known-fake Pin screenshot and must not be shown as product evidence.
+    const { data } = await excludeRetired(db
       .from("pin_products")
       .select("id,image_url,product_name,seed_keyword,save_count,source_pin_save_count,created_at")
-      .not("image_url", "is", null)
+      .not("image_url", "is", null))
       .order("created_at", { ascending: false })
       .limit(12);
     latestProducts = (data ?? []) as LatestProduct[];

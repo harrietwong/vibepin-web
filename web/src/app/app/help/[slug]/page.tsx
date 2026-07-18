@@ -10,8 +10,9 @@ import { use, useState } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
-import { ContactSupportModal } from "@/components/support/ContactSupportModal";
+import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { getHelpArticle } from "@/lib/support/helpArticles";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const UI = {
   card: "var(--app-surface, #161D2E)",
@@ -22,6 +23,7 @@ const UI = {
 };
 
 export default function HelpArticlePage({ params }: { params: Promise<{ slug: string }> }) {
+  const { t: tr } = useLocale();
   const { slug } = use(params);
   const article = getHelpArticle(slug);
   const [contactOpen, setContactOpen] = useState(false);
@@ -32,7 +34,7 @@ export default function HelpArticlePage({ params }: { params: Promise<{ slug: st
     <div style={{ flex: 1, overflowY: "auto", background: "var(--app-bg, #0B0E17)", padding: "28px 20px 60px", display: "flex", justifyContent: "center" }}>
       <div style={{ width: "min(640px, 100%)", display: "flex", flexDirection: "column", gap: 18 }}>
         <Link href="/app/help" data-testid="help-article-back" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: UI.textSec, textDecoration: "none" }}>
-          <ArrowLeft size={14} /> Help &amp; Support
+          <ArrowLeft size={14} /> {tr("help.pageTitle")}
         </Link>
 
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: UI.text }}>{article.title}</h1>
@@ -43,7 +45,7 @@ export default function HelpArticlePage({ params }: { params: Promise<{ slug: st
 
         {article.commonCauses.length > 0 && (
           <section>
-            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 800, color: UI.textSec, textTransform: "uppercase", letterSpacing: "0.04em" }}>Common causes</p>
+            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 800, color: UI.textSec, textTransform: "uppercase", letterSpacing: "0.04em" }}>{tr("help.commonCauses")}</p>
             <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
               {article.commonCauses.map((c) => <li key={c} style={{ fontSize: 13.5, color: UI.text, lineHeight: 1.5 }}>{c}</li>)}
             </ul>
@@ -52,7 +54,7 @@ export default function HelpArticlePage({ params }: { params: Promise<{ slug: st
 
         {article.whatToTry.length > 0 && (
           <section>
-            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 800, color: UI.textSec, textTransform: "uppercase", letterSpacing: "0.04em" }}>What you can try</p>
+            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 800, color: UI.textSec, textTransform: "uppercase", letterSpacing: "0.04em" }}>{tr("help.whatYouCanTry")}</p>
             <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
               {article.whatToTry.map((c) => <li key={c} style={{ fontSize: 13.5, color: UI.text, lineHeight: 1.5 }}>{c}</li>)}
             </ul>
@@ -67,17 +69,15 @@ export default function HelpArticlePage({ params }: { params: Promise<{ slug: st
             onClick={() => setContactOpen(true)}
             style={{ alignSelf: "flex-start", padding: "9px 16px", borderRadius: 9, border: "none", background: UI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}
           >
-            Contact Support
+            {tr("help.contactSupport")}
           </button>
         </section>
       </div>
 
-      <ContactSupportModal
+      <SupportChatModal
         open={contactOpen}
         onClose={() => setContactOpen(false)}
-        source="help_center"
-        defaultCategory={article.supportCategory}
-        defaultSubject={article.title}
+        initialContext={{ source: "help_center" }}
       />
     </div>
   );

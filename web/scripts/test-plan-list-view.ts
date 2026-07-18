@@ -85,24 +85,21 @@ test("List rows show plannedDate + plannedTime", () => {
 
 // 7
 test("Missing time shows 'Unscheduled' (not empty/undefined)", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // fallback); tighten to tr("planViews.list.status.unscheduled") when that cluster lands.
-  assert(/if \(!ev\.plannedDate \|\| !ev\.plannedTime\) return "Unscheduled"/.test(listSrc), "Unscheduled fallback missing");
+  // i18n-ified: fallback resolves via tr("planViews.list.status.unscheduled").
+  assert(/if \(!ev\.plannedDate \|\| !ev\.plannedTime\) return tr\("planViews\.list\.status\.unscheduled"\)/.test(listSrc), "Unscheduled fallback missing");
 });
 
 // 8
 test("Product missing shows 'No product' (not an error)", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // label); tighten to tr("planViews.list.noProduct") when that cluster lands.
-  assert(listSrc.includes('"No product"'), "No product label missing");
+  // i18n-ified: label resolves via tr("planViews.list.noProduct").
+  assert(listSrc.includes("planViews.list.noProduct"), "No product label missing");
   assert(!/Missing product|Product error|Product issue/i.test(listSrc), "product shown as an error");
 });
 
 // 9
 test("Missing URL shows 'Add URL' (neutral, not blocking error)", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // placeholder); tighten to tr("planViews.list.addUrl") when that cluster lands.
-  assert(listSrc.includes('"Add URL"'), "Add URL placeholder missing");
+  // i18n-ified: placeholder resolves via tr("planViews.list.addUrl").
+  assert(listSrc.includes("planViews.list.addUrl"), "Add URL placeholder missing");
   assert(!/Missing URL|url-error|#EF4444.*url/i.test(listSrc), "missing URL styled as error");
 });
 
@@ -138,10 +135,8 @@ test("Scheduled from List shows same time as Calendar (one mapper)", () => {
 
 // 12
 test("Multi-select toolbar shows 'N selected' and primary Schedule", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // "{n} selected" template); tighten to tr("planViews.list.selectedCount") when that
-  // cluster lands.
-  assert(listSrc.includes("{selected.size} selected"), "quiet 'N selected' text missing");
+  // i18n-ified: "{n} selected" resolves via tr("planViews.list.selectedCount").
+  assert(listSrc.includes("planViews.list.selectedCount"), "quiet 'N selected' text missing");
   assert(listSrc.includes('data-testid="plan-list-schedule-selected"'), "selection Schedule button missing");
 });
 

@@ -129,7 +129,7 @@ function HeroComposer({ products, refs }: { products: LandingAsset[]; refs: Land
           <div className="rounded-lg px-3 py-2.5 mb-4 text-[11px] leading-relaxed" style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.07)", color: "#8B93A1" }}>
             Modern boho living room, warm natural light, earthy tones, cozy minimal style.<span className="block text-right mt-1 text-[9px]" style={{ color: "#374151", ...MONO }}>84 / 300</span>
           </div>
-          <button type="button" className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-2`}>Generate Pins <Sparkles className="w-3.5 h-3.5" /></button>
+          <div className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-2`}>Generate Pins <Sparkles className="w-3.5 h-3.5" /></div>
         </div>
         <div className="p-4 relative">
           <div className="flex items-center justify-between mb-3"><p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "#4B5563" }}>Generated Pins</p><span className="text-[9px] font-semibold" style={{ color: "#38BDF8" }}>View all drafts →</span></div>
@@ -195,8 +195,8 @@ function HeroOpportunityCard({ mainImg, signals, refs }: { mainImg?: LandingAsse
           <p className="text-[11px] leading-relaxed" style={{ color: "#C8CDD6" }}>Warm neutrals, natural textures, layered lighting. Lifestyle angles showing cozy, lived-in spaces.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
-          <button type="button" className={`${VibeBtn} flex-1 py-2.5 text-[12px] flex items-center justify-center gap-1.5`}><Sparkles className="w-3.5 h-3.5" /> Generate 7 Pins</button>
-          <button type="button" className="flex-1 rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><CalendarDays className="w-3.5 h-3.5" /> Add to weekly plan</button>
+          <div className={`${VibeBtn} flex-1 py-2.5 text-[12px] flex items-center justify-center gap-1.5`}><Sparkles className="w-3.5 h-3.5" /> Generate 7 Pins</div>
+          <div className="flex-1 rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><CalendarDays className="w-3.5 h-3.5" /> Add to weekly plan</div>
         </div>
       </div>
     </div>
@@ -500,13 +500,13 @@ export default function HomePage() {
           <div className="flex items-center gap-2"><BrandLogo size={28} /><span className="font-black text-white tracking-tight text-[17px]">VibePin</span></div>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>
             <a href="#create" className="hover:text-white transition-colors">How it works</a>
-            <Link href="/app/products?demo=true" className="hover:text-white transition-colors">Product Opportunities</Link>
-            <a href="#create" className="hover:text-white transition-colors">Create Pins</a>
+            <Link href="/app/products" className="hover:text-white transition-colors">Product Opportunities</Link>
+            <Link href="/app/studio" className="hover:text-white transition-colors">Create Pins</Link>
             <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
           </div>
           <div className="flex items-center gap-2.5">
             <Link href="/login" className="hidden sm:inline text-[13px] font-medium border rounded-full px-4 py-1.5 transition-colors hover:text-white" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.12)" }}>Log in</Link>
-            <Link href="/app/discover?demo=true" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>Build my next 7 Pins <ArrowRight className="w-3.5 h-3.5" /></Link>
+            <Link href="/app/studio" className={`${VibeBtn} px-4 py-2 text-[13px] flex items-center gap-1.5`}>Build my next 7 Pins <ArrowRight className="w-3.5 h-3.5" /></Link>
           </div>
         </div>
       </nav>
@@ -520,8 +520,8 @@ export default function HomePage() {
             <h1 className="text-[2.6rem] sm:text-[3.3rem] lg:text-[3.6rem] font-black text-white leading-[1.03] tracking-[-0.045em] mb-5">Pinterest growth starts with signals.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>VibePin turns demand into content.</span></h1>
             <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[460px]" style={{ color: "#8B93A1" }}>VibePin discovers what people want, shows which products and Pin formats are already working, then turns them into ready-to-publish Pins and a weekly content plan.</p>
             <div className="flex flex-col sm:flex-row gap-3 mb-6">
-              <Link href="/app/discover?demo=true" className={`${VibeBtn} px-7 py-3.5 text-[14px] flex items-center justify-center gap-2`}>Build my next 7 Pins <ArrowRight className="w-4 h-4" /></Link>
-              <a href="#create" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>See this week&apos;s opportunities</a>
+              <Link href="/app/studio" className={`${VibeBtn} px-7 py-3.5 text-[14px] flex items-center justify-center gap-2`}>Build my next 7 Pins <ArrowRight className="w-4 h-4" /></Link>
+              <Link href="/app/products" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>See this week&apos;s opportunities</Link>
             </div>
             <div className="flex items-center gap-3 mb-5">
               <div className="flex -space-x-2">{["#FF4D8D", "#D946EF", "#A855F7", "#7C3AED"].map((g, i) => <span key={i} className="h-8 w-8 rounded-full border-2" style={{ borderColor: "var(--bg)", background: `linear-gradient(135deg,${g},#0C1018)` }} />)}</div>

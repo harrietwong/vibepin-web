@@ -23,7 +23,7 @@ import {
   canAttemptSandboxPublish,
   getPinterestApiEnv,
   isPinterestSandboxEnv,
-  PINTEREST_REQUIRED_SCOPES,
+  pinterestRequestScopes,
 } from "@/lib/server/pinterest/config";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
 
@@ -54,7 +54,7 @@ export async function GET(req: Request) {
       return Response.json({
         connected: true,
         account: { id: "sandbox", username: "sandbox", accountType: "SANDBOX" },
-        scopes: [...PINTEREST_REQUIRED_SCOPES],
+        scopes: [...pinterestRequestScopes()],
         needsReconnect: false,
         lastSyncedAt: null,
         connectionSource: "sandbox_demo",

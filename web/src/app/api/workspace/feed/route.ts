@@ -6,6 +6,7 @@ import {
   type WorkspaceTier,
 } from "@/lib/workspaceStatics";
 import { getDbCategory } from "@/lib/categories";
+import { excludeRetired } from "@/lib/productTopTiers";
 
 // Force dynamic rendering — never serve a cached response for paginated requests
 export const dynamic  = "force-dynamic";
@@ -172,11 +173,14 @@ export async function GET(request: Request) {
   if (kpmRows.length > 0) {
     const productIds = [...new Set(kpmRows.map(r => r.product_id))];
 
-    const { data: productsData } = await db
+    // excludeRetired: a keyword_product_map row may still point at a soft-retired
+    // product (the map was not rewritten — retirement is expressed on pin_products
+    // only). Such a product must not surface as a shop signal.
+    const { data: productsData } = await excludeRetired(db
       .from("pin_products")
       .select("id, product_name, domain, merchant, image_url, source_url")
       .in("id", productIds)
-      .not("product_name", "is", null);
+      .not("product_name", "is", null));
 
     const productById: Record<string, ShopSignal> = {};
     for (const p of (productsData ?? []) as RawProduct[]) {

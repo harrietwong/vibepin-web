@@ -21,9 +21,13 @@
 import { createClient }    from "@supabase/supabase-js";
 import { createServerClient } from "@/lib/supabase";
 
+export const dynamic = "force-dynamic";
+
 // Browser-facing writes use the service role so the server can write on behalf
 // of the authenticated user without needing cookie-based SSR clients.
-const adminDb = createServerClient();
+// Lazy: a clean `next build` collects page data without Supabase env vars.
+let _adminDb: ReturnType<typeof createServerClient> | null = null;
+const adminDb = () => (_adminDb ??= createServerClient());
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -105,7 +109,7 @@ export async function POST(req: Request) {
   const platform =
     typeof body.platform === "string" ? body.platform.trim() : "pinterest";
 
-  const { data, error } = await adminDb
+  const { data, error } = await adminDb()
     .from("publish_jobs")
     .insert({
       user_id:            userId,
@@ -149,7 +153,7 @@ export async function PATCH(req: Request) {
     return Response.json({ error: "id is required" }, { status: 400 });
   }
 
-  const { error } = await adminDb
+  const { error } = await adminDb()
     .from("publish_jobs")
     .update({
       status:       "published" satisfies PublishJobStatus,
@@ -183,7 +187,7 @@ export async function GET(req: Request) {
     100,
   );
 
-  let query = adminDb
+  let query = adminDb()
     .from("publish_jobs")
     .select(
       "id, user_id, generated_asset_id, platform, mock_board_id, scheduled_at, status, " +

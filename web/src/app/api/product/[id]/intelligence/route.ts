@@ -1,5 +1,6 @@
 import { createServerClient } from "@/lib/supabase";
 import type { ProductIntelligence } from "@/lib/supabase";
+import { excludeRetired } from "@/lib/productTopTiers";
 
 export const revalidate = 120;
 
@@ -19,7 +20,11 @@ export async function GET(
   const db = createServerClient();
 
   // ── 1. Product base + score ─────────────────────────────────────────────
-  const { data: product, error: prodErr } = await db
+  // Soft-retired rows (lifecycle_status='retired', migrate_v46) are NOT resolvable
+  // here: a retired product must 404 rather than render a detail page for a row that
+  // no discovery surface lists. maybeSingle() so the excluded case is a clean "not
+  // found" instead of a PostgREST 0-rows error.
+  const { data: product, error: prodErr } = await excludeRetired(db
     .from("pin_products")
     .select(`
       id,
@@ -46,8 +51,8 @@ export async function GET(
         scored_at
       )
     `)
-    .eq("id", id)
-    .single();
+    .eq("id", id))
+    .maybeSingle();
 
   if (prodErr || !product) {
     return Response.json({ error: prodErr?.message ?? "Product not found" }, { status: 404 });
@@ -81,11 +86,12 @@ export async function GET(
     .limit(10);
 
   // ── 4. Sibling products from same source pin ────────────────────────────
-  const { data: siblings } = await db
+  // Retired siblings must not surface in the source-relationship section either.
+  const { data: siblings } = await excludeRetired(db
     .from("pin_products")
     .select("id,product_name,price,domain,image_url,save_count")
     .eq("parent_pin_id", (product as any).parent_pin_id)
-    .neq("id", id)
+    .neq("id", id))
     .order("save_count", { ascending: false })
     .limit(5);
 

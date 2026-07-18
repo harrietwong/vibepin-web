@@ -5,7 +5,7 @@
  */
 
 import { createBrowserClient } from "@supabase/ssr";
-import type { CreateTicketInput, CreateTicketResult, SupportAttachment, SupportMessage, SupportTicket } from "./types";
+import type { CreateTicketInput, CreateTicketResult, SenderType, SupportAttachment, SupportMessage, SupportTicket } from "./types";
 
 let _client: ReturnType<typeof createBrowserClient> | null = null;
 function browser() {
@@ -61,4 +61,52 @@ export async function sendAiFeedback(id: string, helped: boolean): Promise<"help
   const res = await fetch(`/api/support/tickets/${id}/ai-feedback`, { method: "POST", headers: await authHeaders(), body: JSON.stringify({ helped }) });
   const data = await asJson<{ verdict: "helped" | "not_helpful" }>(res);
   return data.verdict;
+}
+
+// ── Help-page chat (migrate_v43) ────────────────────────────────────────────
+// The chat-first Help page surface — one support_tickets row IS the
+// conversation record under the hood, but user-facing responses here never
+// carry a ticket number. See docs/prd/客服系统简化版v1.1.txt §5/§10.
+
+export type SupportChatMessage = {
+  id: string;
+  senderType: SenderType;
+  body: string;
+  createdAt: string;
+};
+
+export type SupportChatTurnResult = {
+  messages: SupportChatMessage[];
+  escalated: boolean;
+  accountEmail: string | null;
+};
+
+export async function startSupportConversation(
+  firstMessage: string,
+  clientContext?: Record<string, unknown>,
+): Promise<SupportChatTurnResult & { conversationId: string }> {
+  const res = await fetch("/api/support/conversations", {
+    method: "POST",
+    headers: await authHeaders(),
+    body: JSON.stringify({ firstMessage, clientContext }),
+  });
+  return asJson<SupportChatTurnResult & { conversationId: string }>(res);
+}
+
+export async function sendSupportChatMessage(id: string, text: string): Promise<SupportChatTurnResult> {
+  const res = await fetch(`/api/support/conversations/${id}/messages`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: JSON.stringify({ text }),
+  });
+  return asJson<SupportChatTurnResult>(res);
+}
+
+export async function escalateSupportConversation(id: string, reason?: string): Promise<{ escalated: boolean; accountEmail: string | null }> {
+  const res = await fetch(`/api/support/conversations/${id}/escalate`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: JSON.stringify(reason ? { reason } : {}),
+  });
+  return asJson<{ escalated: boolean; accountEmail: string | null }>(res);
 }

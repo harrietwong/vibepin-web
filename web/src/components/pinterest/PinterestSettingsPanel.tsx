@@ -33,7 +33,7 @@ import {
   type PinterestStatus,
 } from "@/lib/pinterestClient";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
-import { ContactSupportModal } from "@/components/support/ContactSupportModal";
+import { SupportChatModal } from "@/components/support/SupportChatModal";
 
 const UI = {
   surface: "var(--app-surface, #161D2E)",
@@ -628,13 +628,12 @@ export function PinterestSettingsPanel() {
           </NextLink>
         )}
       </div>
-      <ContactSupportModal
+      <SupportChatModal
         open={supportOpen}
         onClose={() => setSupportOpen(false)}
-        source="pinterest_connection"
-        defaultCategory="pinterest_connection_issue"
-        defaultSubject="Pinterest connection issue"
-        extraContext={{
+        seedText="I'm having trouble connecting Pinterest"
+        initialContext={{
+          source: "pinterest_connection",
           connectedAccountId: status?.account?.id ?? null,
           connectionStatus: status?.needsReconnect ? "expired" : status?.connected ? "connected" : "disconnected",
           tokenExpired: !!status?.needsReconnect,

@@ -11,6 +11,71 @@
 
 export const STL_BOOTSTRAP_DETAIL = "pinterest_product_card_bootstrap";
 
+/** discovery_method values that mean "found via the Pin's outbound product link".
+ *  'outbound_link' is the current standard written by the product-supply expander;
+ *  'outbound_link_bootstrap' is the historical label and stays supported. */
+export const OUTBOUND_DISCOVERY_METHODS = ["outbound_link", "outbound_link_bootstrap"] as const;
+
+/** Lifecycle column (pin_products, migrate_v46) + the ONE value that hides a row.
+ *
+ *  Soft retirement is orthogonal to discovery_method: a retired row keeps its
+ *  provenance (discovery_method / parent_pin_id / source_url / source_pin_save_count
+ *  / created_at are never rewritten) and stays in the table as evidence — it just
+ *  must never surface in a product-discovery surface.
+ *
+ *  T10 retired the 798 historical 'outbound_link_bootstrap' rows: image_url was an
+ *  i.pinimg.com Pin screenshot (a fake product image) on 798/798, and save_count was
+ *  the SOURCE Pin's saves copied verbatim on 798/798. Salvage rate was ~17.8%, so the
+ *  batch was retired rather than repaired. This replaces the old created_at-based
+ *  containment (OUTBOUND_CLEAN_CORPUS_SINCE), which could only isolate them by TIME —
+ *  unsafe, since the dirty batch spans 2026-06-01 → 2026-07-09 with no clean boundary.
+ */
+export const LIFECYCLE_STATUS_COLUMN = "lifecycle_status";
+export const LIFECYCLE_RETIRED = "retired";
+
+/** The PostgREST `or=` expression that keeps every row EXCEPT the soft-retired ones.
+ *
+ *  Semantics: `lifecycle_status IS DISTINCT FROM 'retired'`.
+ *  It MUST be expressed as an OR (`is.null` OR `neq.retired`), NOT as a bare `.neq()`:
+ *  PostgREST's `neq` on a NULL column does not match NULL rows, and every non-T10 row
+ *  has lifecycle_status = NULL — a plain `.neq('retired')` would therefore hide the
+ *  ENTIRE active corpus and surface nothing. Do not "simplify" this. */
+export const NOT_RETIRED_FILTER =
+  `${LIFECYCLE_STATUS_COLUMN}.is.null,${LIFECYCLE_STATUS_COLUMN}.neq.${LIFECYCLE_RETIRED}`;
+
+/** Apply the NULL-safe "not retired" filter to a pin_products query.
+ *
+ *  Typed structurally (not with a self-referential `T extends { or: (f) => T }`, which
+ *  makes tsc re-expand Supabase's deeply-recursive builder generics and blows the
+ *  instantiation depth limit — TS2589). The cast is confined to this one helper so every
+ *  call site stays fully typed.
+ *
+ *  Works for both the server and browser Supabase clients; this module stays DB-free. */
+export function excludeRetired<T>(query: T): T {
+  return (query as unknown as { or: (f: string) => T }).or(NOT_RETIRED_FILTER);
+}
+
+/** Public, user-facing source-type code. Derived server-side from provenance so the
+ *  raw discovery_method / discovery_method_detail fields are never sent to the client. */
+export type ProductSourceTypeCode =
+  | "shop_the_look"
+  | "product_pin"
+  | "product_link_pin"
+  | "pinterest_pin";
+
+export function deriveProductSourceType(row: {
+  discovery_method?: string | null;
+  product_pin_id?: string | null;
+}): ProductSourceTypeCode {
+  const method = row.discovery_method ?? null;
+  if (method === "stl") return "shop_the_look";
+  if (method && (OUTBOUND_DISCOVERY_METHODS as readonly string[]).includes(method)) {
+    return "product_link_pin";
+  }
+  if (row.product_pin_id) return "product_pin";
+  return "pinterest_pin";
+}
+
 export type RawProductRow = Record<string, unknown> & {
   id?: unknown;
   image_url?: string | null;
@@ -58,6 +123,11 @@ export function mergeProductTiers(tiers: {
   scored: RawProductRow[];
   bootstrap: RawProductRow[];
   bootstrapDetail: RawProductRow[];
+  /** Outbound-link product rows (discovery_method in OUTBOUND_DISCOVERY_METHODS),
+   *  newest-first. Structurally unreachable through the three legacy tiers, so it
+   *  gets its own tier. Identity-deduped on merge like bootstrapDetail. Optional so
+   *  existing callers/tests keep working. */
+  outbound?: RawProductRow[];
 }): RawProductRow[] {
   const seenIds = new Set<unknown>();
   const seenIdentity = new Set<string>();
@@ -76,5 +146,6 @@ export function mergeProductTiers(tiers: {
   for (const r of tiers.scored) consider(r, false);
   for (const r of tiers.bootstrap) consider(r, false);
   for (const r of tiers.bootstrapDetail) consider(r, true);
+  for (const r of tiers.outbound ?? []) consider(r, true);
   return out;
 }

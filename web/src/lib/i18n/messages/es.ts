@@ -1579,16 +1579,18 @@ const es: Partial<Record<MessageKey, string>> = {
   "products.source.amazon": "Amazon",
 
   // ── products: Demand / Trend / Competition chips (on-image glass) ──
-  "products.chip.demandHigh": "Interés alto en Pinterest",
-  "products.chip.demandMedium": "Interés medio en Pinterest",
-  "products.chip.demandLow": "Interés bajo en Pinterest",
-  "products.chip.demandNoData": "Interés en Pinterest: sin datos",
-  "products.chip.trendRising": "↑ Palabra clave en alza",
-  "products.chip.trendStable": "→ Palabra clave estable",
-  "products.chip.trendDeclining": "↓ Palabra clave en declive",
-  "products.chip.trendNoData": "Tendencia de palabra clave: sin datos",
-  "products.details.unavailable": "Detalles del producto no disponibles",
-  "products.details.viewSourceProduct": "Ver producto de origen",
+  "products.chip.demandHigh": "Demanda alta",
+  "products.chip.demandMedium": "Demanda media",
+  "products.chip.demandLow": "Demanda baja",
+  "products.chip.demandNoData": "Demanda: sin datos",
+  "products.chip.trendRising": "↑ En alza",
+  "products.chip.trendStable": "→ Estable",
+  "products.chip.trendDeclining": "↓ En declive",
+  "products.chip.trendNoData": "Tendencia: sin datos",
+  "products.chip.compLow": "Comp. baja",
+  "products.chip.compMedium": "Comp. media",
+  "products.chip.compHigh": "Comp. alta",
+  "products.chip.compNoData": "Comp.: sin datos",
 
   // ── products: source type labels (sourceTypeLabel) ──
   "products.sourceType.shopTheLook": "Shop the Look",
@@ -1630,8 +1632,9 @@ const es: Partial<Record<MessageKey, string>> = {
 
   // ── products: drawer signal rows ──
   "products.drawer.signals": "Señales",
-  "products.drawer.demand": "Interés en Pinterest",
-  "products.drawer.trend": "Tendencia de palabra clave",
+  "products.drawer.demand": "Demanda",
+  "products.drawer.trend": "Tendencia",
+  "products.drawer.competition": "Competencia",
   "products.drawer.notEnoughData": "Datos insuficientes",
   "products.drawer.levelHigh": "Alta",
   "products.drawer.levelMedium": "Media",
@@ -1681,6 +1684,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "products.sort.relevance": "Relevancia",
   "products.sort.mostSaved": "Más guardados",
   "products.sort.rising": "Tendencia en alza",
+  "products.sort.lowCompetition": "Baja competencia",
   "products.sort.newest": "Más reciente",
   "products.sort.price": "Precio",
   "products.filters.button": "Filtros",
@@ -2025,10 +2029,10 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.uploadFailedAndMore": " y {n} más",
   "studioBoard.toast.uploadFailedSuffix": ". Vuelve a intentarlo con esos archivos.",
   "studioBoard.toast.chooseBoardToSchedule": "Elige un tablero de Pinterest para programar este Pin.",
-  "studioBoard.toast.completeDetailsToSchedule": "Añade una imagen y elige un tablero para programar este Pin.",
+  "studioBoard.toast.completeDetailsToSchedule": "Completa los detalles del Pin (título, descripción, texto alternativo y tablero) para programarlo.",
   "studioBoard.toast.openInPlan": "Abrir en el Plan",
   "studioBoard.toast.imageUnavailable": "Imagen no disponible — vuelve a subir la imagen antes de publicar.",
-  "studioBoard.toast.completeDetailsToPublish": "Añade una imagen y elige un tablero para publicar este Pin.",
+  "studioBoard.toast.completeDetailsToPublish": "Completa los detalles del Pin para publicarlo.",
   "studioBoard.toast.publishSuccess": "Pin publicado correctamente.",
   "studioBoard.toast.publishFailed": "No se pudo publicar. Inténtalo de nuevo.",
   "studioBoard.toast.productNoImage": "Ese producto aún no tiene una imagen para usar.",
@@ -2068,6 +2072,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Más acciones",
   "studioBoard.card.pinImageAlt": "Imagen del Pin",
   "studioBoard.card.noImage": "Sin imagen",
+  "studioBoard.card.generationFailedPlaceholder": "Error al generar",
 
   // ── studioBoard: PinBoardCard — recommended fix copy ──
   "studioBoard.card.fix.auth": "Tu conexión con Pinterest debe reconectarse antes de que este Pin pueda publicarse.",
@@ -2844,15 +2849,6 @@ const es: Partial<Record<MessageKey, string>> = {
   "trends.toast.addedToPlan": "\"{keyword}\" añadido al plan semanal",
   "trends.toast.viewPlan": "Ver Plan",
   "trends.toast.signInToSave": "Inicia sesión para guardar esta palabra clave",
-  // AI content-language keys (retained; see en.ts)
-  "ai.contentLanguage": "Idioma de contenido IA",
-  "ai.contentLanguageHint": "Idioma usado en los textos de Pin generados por IA. Cambiarlo no afecta al idioma de la interfaz.",
-  "lang.contentLanguage": "Idioma de contenido IA",
-  "lang.sameAsApp": "Igual que la app",
-  "language.aiContentLanguage": "Idioma de contenido IA",
-  "language.aiContentLanguageHint": "Se usa para generar títulos, descripciones, keywords, tendencias y sugerencias de Pins.",
-  "language.contentExistingNote": "El idioma de contenido IA afecta a los títulos, descripciones, keywords y sugerencias recién generados. Los Pines guardados no se modifican automáticamente.",
-  "pinDetails.overflow.pinNow": "Texto de interfaz",
 
   "studioBoard.toast.fieldTooLong": "Acorta el título o la descripción antes de programar o publicar.",
 

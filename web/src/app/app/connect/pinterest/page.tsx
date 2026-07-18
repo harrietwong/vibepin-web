@@ -16,6 +16,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const UI = {
   bg: "var(--app-bg, #0B0F1A)",
@@ -43,6 +44,7 @@ function safeNext(value: string | null): string {
 }
 
 function ConnectInterstitial() {
+  const { t: tr } = useLocale();
   const searchParams = useSearchParams();
   const next = safeNext(searchParams.get("next"));
   const connectUrl = `/api/auth/pinterest/connect?next=${encodeURIComponent(next)}`;
@@ -93,24 +95,24 @@ function ConnectInterstitial() {
 
         {timedOut ? (
           <>
-            <p data-testid="connect-timeout-title" style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 800, color: UI.text }}>Continue connecting Pinterest?</p>
-            <p style={{ margin: "0 0 20px", fontSize: 12.5, color: UI.textSec, lineHeight: 1.55 }}>You can continue to Pinterest, or go back to VibePin and try again later.</p>
+            <p data-testid="connect-timeout-title" style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 800, color: UI.text }}>{tr("connectPage.timeoutTitle")}</p>
+            <p style={{ margin: "0 0 20px", fontSize: 12.5, color: UI.textSec, lineHeight: 1.55 }}>{tr("connectPage.timeoutBody")}</p>
             <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
               <button type="button" data-testid="connect-retry" onClick={go}
                 style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: UI.gradient, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>
-                Continue to Pinterest
+                {tr("connectPage.continueToPinterest")}
               </button>
               <button type="button" data-testid="connect-cancel" onClick={() => { window.location.replace(next); }}
                 style={{ padding: "11px 20px", borderRadius: 10, border: `1px solid ${UI.border}`, background: "transparent", color: UI.text, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                Back to app
+                {tr("connectPage.backToApp")}
               </button>
             </div>
           </>
         ) : (
           <>
             <div style={{ width: 34, height: 34, margin: "0 auto 16px", border: "3px solid rgba(255,255,255,0.15)", borderTopColor: "#D946EF", borderRadius: "50%", animation: "vp-connect-spin 0.7s linear infinite" }} />
-            <p style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 800, color: UI.text }}>Opening Pinterest…</p>
-            <p style={{ margin: 0, fontSize: 12.5, color: UI.textSec, lineHeight: 1.55 }}>You&apos;ll return to your Pin after connecting your account.</p>
+            <p style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 800, color: UI.text }}>{tr("connectPage.openingPinterest")}</p>
+            <p style={{ margin: 0, fontSize: 12.5, color: UI.textSec, lineHeight: 1.55 }}>{tr("connectPage.returnHint")}</p>
           </>
         )}
       </div>
@@ -119,13 +121,18 @@ function ConnectInterstitial() {
   );
 }
 
+function PinterestConnectFallback() {
+  const { t: tr } = useLocale();
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: UI.bg, color: UI.textSec }}>
+      {tr("connectPage.openingPinterest")}
+    </div>
+  );
+}
+
 export default function PinterestConnectPage() {
   return (
-    <Suspense fallback={
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: UI.bg, color: UI.textSec }}>
-        Opening Pinterest…
-      </div>
-    }>
+    <Suspense fallback={<PinterestConnectFallback />}>
       <ConnectInterstitial />
     </Suspense>
   );

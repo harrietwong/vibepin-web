@@ -7,10 +7,10 @@ const FOOTER_COLUMNS = [
     title: "Product",
     links: [
       { label: "Intelligence", href: "#create" },
-      { label: "Pin Ideas", href: "/app/discover?demo=true" },
-      { label: "Product Opportunities", href: "/app/products?demo=true" },
-      { label: "Create Pins", href: "/app/studio?demo=true" },
-      { label: "Weekly Plan", href: "/app/plan?demo=true" },
+      { label: "Pin Ideas", href: "/app/discover" },
+      { label: "Product Opportunities", href: "/app/products" },
+      { label: "Create Pins", href: "/app/studio" },
+      { label: "Weekly Plan", href: "/app/plan" },
       { label: "Pricing", href: "/pricing" },
     ],
   },
@@ -18,7 +18,7 @@ const FOOTER_COLUMNS = [
     title: "Resources",
     links: [
       { label: "Help Center", href: "mailto:support@vibepin.co" },
-      { label: "Pinterest Guide", href: "/app/discover?demo=true" },
+      { label: "Pinterest Guide", href: "/app/discover" },
     ],
   },
   {
@@ -34,6 +34,7 @@ const FOOTER_COLUMNS = [
     links: [
       { label: "Privacy Policy", href: "/privacy" },
       { label: "Terms of Service", href: "/terms" },
+      { label: "Refund Policy", href: "/refund-policy" },
       { label: "Pinterest App", href: "/pinterest-app" },
     ],
   },
@@ -79,10 +80,17 @@ export function LandingFooter() {
             <BrandLogo size={28} />
             <span className="font-black text-white text-sm tracking-tight">VibePin</span>
           </div>
-          <p className="text-[11px] leading-relaxed" style={{ color: "#4B5563" }}>
+          <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#4B5563" }}>
             Pinterest growth intelligence for creators, sellers, affiliate marketers, and
             Pinterest teams.
           </p>
+          <a
+            href="mailto:support@vibepin.co"
+            className="text-[12px] font-semibold transition-colors hover:text-gray-300"
+            style={{ color: "#8B93A1" }}
+          >
+            support@vibepin.co
+          </a>
         </div>
         {FOOTER_COLUMNS.map(col => (
           <div key={col.title}>

@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Search, TrendingUp, Sparkles, Plus, Copy, Check, ExternalLink, X } from "lucide-react";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import {
   DIGITAL_PRODUCT_IDEAS,
   NICHE_META,
@@ -59,6 +60,7 @@ function planUrl(idea: DigitalProductIdea): string {
 // ── Trend Validation Drawer ───────────────────────────────────────────────────
 
 function TrendDrawer({ idea, onClose, onPlan }: { idea: DigitalProductIdea; onClose: () => void; onPlan: () => void }) {
+  const { t: tr } = useLocale();
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   const nMeta = NICHE_META[idea.niche];
@@ -83,9 +85,9 @@ function TrendDrawer({ idea, onClose, onPlan }: { idea: DigitalProductIdea; onCl
         {/* Header */}
         <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3 shrink-0">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-widest text-[#C026D3] mb-0.5">Check Pinterest Trends</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-[#C026D3] mb-0.5">{tr("products.trendDrawer.title")}</p>
             <p className="text-[13px] font-bold text-gray-900 leading-snug">
-              Use query variants to validate demand before creating pins.
+              {tr("products.trendDrawer.subtitle")}
             </p>
           </div>
           <button
@@ -114,7 +116,7 @@ function TrendDrawer({ idea, onClose, onPlan }: { idea: DigitalProductIdea; onCl
         {/* Query variants */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">
-            Pinterest search queries
+            {tr("products.trendDrawer.searchQueries")}
           </p>
           <div className="space-y-2">
             {idea.trend_variants.map((v, i) => (
@@ -128,7 +130,7 @@ function TrendDrawer({ idea, onClose, onPlan }: { idea: DigitalProductIdea; onCl
                 <button
                   type="button"
                   onClick={() => copyQuery(v, i)}
-                  title="Copy query"
+                  title={tr("products.trendDrawer.copyQuery")}
                   className="p-1 rounded-md hover:bg-gray-100 transition-colors shrink-0"
                 >
                   {copiedIdx === i
@@ -141,7 +143,7 @@ function TrendDrawer({ idea, onClose, onPlan }: { idea: DigitalProductIdea; onCl
                   href={trendUrl(v)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  title="Open in Pinterest Trends"
+                  title={tr("products.trendDrawer.openInTrends")}
                   className="p-1 rounded-md hover:bg-[#C026D3]/10 transition-colors shrink-0 no-underline"
                 >
                   <ExternalLink className="h-3.5 w-3.5 text-[#C026D3]" />
@@ -153,7 +155,7 @@ function TrendDrawer({ idea, onClose, onPlan }: { idea: DigitalProductIdea; onCl
           {/* Copy feedback toast */}
           {copiedIdx !== null && (
             <p className="text-[11px] text-green-600 font-semibold mt-3 text-center">
-              Copied query
+              {tr("products.trendDrawer.copiedQuery")}
             </p>
           )}
         </div>
@@ -165,14 +167,14 @@ function TrendDrawer({ idea, onClose, onPlan }: { idea: DigitalProductIdea; onCl
             className="flex items-center justify-center gap-2 w-full rounded-xl py-2.5 text-[12px] font-bold text-white no-underline transition-all hover:brightness-105"
             style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}
           >
-            <Sparkles className="h-3.5 w-3.5" /> Create Pins with this idea
+            <Sparkles className="h-3.5 w-3.5" /> {tr("products.trendDrawer.createWithIdea")}
           </a>
           <button
             type="button"
             onClick={() => { onClose(); onPlan(); }}
             className="flex items-center justify-center gap-2 w-full rounded-xl py-2.5 text-[12px] font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
           >
-            <Plus className="h-3.5 w-3.5" /> Add to Plan
+            <Plus className="h-3.5 w-3.5" /> {tr("products.trendDrawer.addToPlan")}
           </button>
         </div>
       </div>
@@ -193,6 +195,7 @@ function IdeaRow({
   onPlan: (idea: DigitalProductIdea) => void;
   seedMode?: boolean;
 }) {
+  const { t: tr } = useLocale();
   const badge    = intentToBadge(idea.digital_intent_score);
   const bMeta    = PRIMARY_BADGE_META[badge];
   const chipMeta = TREND_CHIP_META["evergreen"];
@@ -235,7 +238,7 @@ function IdeaRow({
         <div>
           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
             style={{ background: "rgba(245,158,11,0.08)", color: "#D97706", border: "1px solid rgba(245,158,11,0.2)" }}>
-            ● Not validated
+            {tr("products.digital.notValidated")}
           </span>
         </div>
       ) : (
@@ -258,16 +261,16 @@ function IdeaRow({
       <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <button type="button" onClick={() => onCheckTrend(idea)}
           className="flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] font-semibold border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors whitespace-nowrap">
-          <TrendingUp className="h-3 w-3" /> Check Trends
+          <TrendingUp className="h-3 w-3" /> {tr("products.digital.checkTrends")}
         </button>
         <a href={studioUrl(idea)}
           className="flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] font-bold text-white no-underline whitespace-nowrap transition-all hover:brightness-105"
           style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-          <Sparkles className="h-3 w-3" /> Create
+          <Sparkles className="h-3 w-3" /> {tr("products.digital.create")}
         </a>
         <button type="button" onClick={() => onPlan(idea)}
           className="flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] font-semibold border border-gray-200 text-gray-600 hover:bg-gray-100 whitespace-nowrap transition-colors">
-          <Plus className="h-3 w-3" /> Plan
+          <Plus className="h-3 w-3" /> {tr("products.digital.plan")}
         </button>
       </div>
     </div>
@@ -283,6 +286,7 @@ function IdeaCard({
   idea: typeof DIGITAL_PRODUCT_IDEAS[number];
   onCheckTrend: (idea: DigitalProductIdea) => void;
 }) {
+  const { t: tr } = useLocale();
   const badge    = intentToBadge(idea.digital_intent_score);
   const bMeta    = PRIMARY_BADGE_META[badge];
   const fMeta    = FORMAT_META[idea.format];
@@ -315,14 +319,14 @@ function IdeaCard({
           onClick={() => onCheckTrend(idea)}
           className="flex-1 flex items-center justify-center gap-1 rounded-lg py-1.5 text-[10px] font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
         >
-          <TrendingUp className="h-3 w-3" /> Trends
+          <TrendingUp className="h-3 w-3" /> {tr("products.digital.trends")}
         </button>
         <a
           href={studioUrl(idea)}
           className="flex-1 flex items-center justify-center gap-1 rounded-lg py-1.5 text-[10px] font-bold text-white no-underline"
           style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}
         >
-          <Sparkles className="h-3 w-3" /> Create
+          <Sparkles className="h-3 w-3" /> {tr("products.digital.create")}
         </a>
       </div>
     </div>
@@ -332,6 +336,7 @@ function IdeaCard({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean }) {
+  const { t: tr } = useLocale();
   const router = useRouter();
   const [selectedNiche,  setSelectedNiche]  = useState<DigitalNiche | "all">("all");
   const [selectedFormat, setSelectedFormat] = useState<DigitalFormat | "all">("all");
@@ -341,7 +346,7 @@ export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean })
 
   function handlePlan(idea: DigitalProductIdea) {
     router.push(planUrl(idea));
-    toast.info("Opened in Workspace for planning", {
+    toast.info(tr("products.digital.planToastTitle"), {
       description: idea.keyword,
     });
   }
@@ -365,32 +370,32 @@ export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean })
       {!seedMode && (
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-[18px] font-black text-gray-900">Digital Product Ideas</h2>
+            <h2 className="text-[18px] font-black text-gray-900">{tr("products.digital.heading")}</h2>
             <p className="text-[12px] text-gray-500 mt-0.5">
-              Downloadable, printable & template products by niche
+              {tr("products.digital.subtitle")}
             </p>
           </div>
           <div className="flex rounded-xl overflow-hidden border border-gray-200 bg-white shrink-0">
             <button type="button" onClick={() => setViewMode("table")}
               className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${viewMode === "table" ? "text-white" : "text-gray-500"}`}
-              style={viewMode === "table" ? { background: "#C026D3" } : {}}>Table</button>
+              style={viewMode === "table" ? { background: "#C026D3" } : {}}>{tr("products.digital.viewTable")}</button>
             <button type="button" onClick={() => setViewMode("cards")}
               className={`px-3 py-1.5 text-[11px] font-semibold transition-colors ${viewMode === "cards" ? "text-white" : "text-gray-500"}`}
-              style={viewMode === "cards" ? { background: "#C026D3" } : {}}>Cards</button>
+              style={viewMode === "cards" ? { background: "#C026D3" } : {}}>{tr("products.digital.viewCards")}</button>
           </div>
         </div>
       )}
 
       {/* Niche filter */}
       <div>
-        <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2">Niche</p>
+        <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2">{tr("products.digital.nicheLabel")}</p>
         <div className="flex flex-wrap gap-1.5">
           <button type="button" onClick={() => setSelectedNiche("all")}
             className="rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap"
             style={selectedNiche === "all"
               ? { background: "#C026D3", color: "#fff" }
               : { background: "#fff", border: "1px solid #E5E7EB", color: "#6B7280" }}>
-            All niches
+            {tr("products.digital.allNiches")}
           </button>
           {ALL_NICHES.map(n => {
             const m = NICHE_META[n];
@@ -417,7 +422,7 @@ export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean })
             style={selectedFormat === "all"
               ? { background: "rgba(124,58,237,0.12)", color: "#7C3AED", border: "1px solid rgba(124,58,237,0.2)" }
               : { background: "#F9FAFB", border: "1px solid #E5E7EB", color: "#6B7280" }}>
-            All formats
+            {tr("products.digital.allFormats")}
           </button>
           {ALL_FORMATS.map(f => {
             const m = FORMAT_META[f];
@@ -438,13 +443,13 @@ export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean })
         <div className="relative ml-auto">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
           <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search ideas…"
+            placeholder={tr("products.digital.searchPlaceholder")}
             className="rounded-xl border border-gray-200 bg-white pl-9 pr-4 py-2 text-[12px] text-gray-800 focus:border-[#C026D3] focus:outline-none placeholder:text-gray-400 shadow-sm w-52" />
         </div>
 
         {!seedMode && (
           <span className="text-[11px] text-gray-400 tabular-nums shrink-0">
-            {filtered.length} ideas
+            {tr("products.digital.ideasCount").replace("{n}", String(filtered.length))}
           </span>
         )}
       </div>
@@ -455,12 +460,12 @@ export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean })
           {/* Header */}
           <div className="grid px-4 py-2.5 border-b border-gray-100 bg-gray-50"
             style={{ gridTemplateColumns: seedMode ? "minmax(200px,2fr) 110px 130px 130px 180px" : "minmax(200px,2fr) 110px 130px 100px 130px 180px" }}>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Idea</span>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Niche</span>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Format</span>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">{seedMode ? "Validation" : "Signal"}</span>
-            {!seedMode && <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Trend</span>}
-            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500 text-right">Actions</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">{tr("products.digital.colIdea")}</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">{tr("products.digital.colNiche")}</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">{tr("products.digital.colFormat")}</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">{seedMode ? tr("products.digital.colValidation") : tr("products.digital.colSignal")}</span>
+            {!seedMode && <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">{tr("products.digital.colTrend")}</span>}
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500 text-right">{tr("products.digital.colActions")}</span>
           </div>
           {filtered.length > 0 ? (
             <div className="divide-y divide-gray-100">
@@ -470,7 +475,7 @@ export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean })
             </div>
           ) : (
             <div className="py-16 text-center">
-              <p className="text-[13px] font-semibold text-gray-500">No ideas match your filter</p>
+              <p className="text-[13px] font-semibold text-gray-500">{tr("products.digital.noMatch")}</p>
             </div>
           )}
         </div>
@@ -486,7 +491,7 @@ export function DigitalProductsTab({ seedMode = false }: { seedMode?: boolean })
           </div>
         ) : (
           <div className="py-16 text-center">
-            <p className="text-[13px] font-semibold text-gray-500">No ideas match your filter</p>
+            <p className="text-[13px] font-semibold text-gray-500">{tr("products.digital.noMatch")}</p>
           </div>
         )
       )}

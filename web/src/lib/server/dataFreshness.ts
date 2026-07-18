@@ -16,6 +16,7 @@ import {
   getProductOpportunityAdminStatus,
   type FreshnessStatus,
 } from "@/lib/server/productOpportunityAdminStatus";
+import { excludeRetired } from "@/lib/productTopTiers";
 
 type PgError = { code?: string; message?: string } | null;
 
@@ -150,22 +151,25 @@ export async function getDataFreshness(): Promise<DataFreshness> {
     countRows(db.from("pin_samples").select("id", { count: "exact", head: true }).gte("scraped_at", b.last24h)),
     countRows(db.from("pin_samples").select("id", { count: "exact", head: true }).gte("scraped_at", b.last48h)),
     countRows(db.from("pin_samples").select("id", { count: "exact", head: true }).gte("scraped_at", b.last5d)),
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true })),
+    // Every pin_products counter excludes soft-retired rows (lifecycle_status='retired',
+    // migrate_v46): these numbers describe the corpus the product surfaces can actually
+    // draw from, so a row that can never surface must not inflate them.
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }))),
     countRows(db.from("product_scores").select("id", { count: "exact", head: true })),
     countRows(db.from("visual_asset_reviews").select("id", { count: "exact", head: true })),
     countRows(db.from("product_ideas").select("id", { count: "exact", head: true })),
     countRows(db.from("pin_samples").select("id", { count: "exact", head: true }).is("image_url", null)),
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true }).is("image_url", null)),
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).is("image_url", null))),
     countRows(db.from("visual_asset_reviews").select("id", { count: "exact", head: true }).eq("decision_label", "PASS")),
     countRows(db.from("visual_asset_reviews").select("id", { count: "exact", head: true }).eq("decision_label", "REVIEW")),
     countRows(db.from("visual_asset_reviews").select("id", { count: "exact", head: true }).eq("decision_label", "REJECT")),
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true }).not("image_url", "is", null)),
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).not("image_url", "is", null))),
     countRows(db.from("pin_samples").select("id", { count: "exact", head: true }).not("image_url", "is", null)),
     // Product Opportunity v1 coverage counters (pin_products only).
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true }).is("source_url", null)),
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true }).not("product_pin_id", "is", null)),
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true }).gt("source_pin_save_count", 0)),
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true }).is("source_category", null).is("seed_keyword", null)),
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).is("source_url", null))),
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).not("product_pin_id", "is", null))),
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).gt("source_pin_save_count", 0))),
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).is("source_category", null).is("seed_keyword", null))),
   ]);
 
   const [samplesLatestScraped, samplesLatestSource, reviewsLatest, scoresUpdated] = await Promise.all([

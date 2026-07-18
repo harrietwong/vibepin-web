@@ -20,6 +20,7 @@ import {
 } from "./weeklyPlanHandoff";
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
+import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
 
 const STORE_KEY       = "vp:pin_drafts:v1";
 const MAX_DRAFTS      = 500;
@@ -144,6 +145,16 @@ export interface PinDraft {
   assetError?:         string;
   /** Explicit dedup key for board creation (upload / generation / migration). */
   idempotencyKey?:     string;
+  /** WP3-P1: generation_jobs row id when this placeholder was created via the
+   *  worker-mode enqueue path. Used to resume polling after a refresh (P2 reconcile);
+   *  P1 only sets/clears it during the live in-page poll. */
+  generationJobId?:    string;
+  /** WP3-P2: this placeholder's index into the generation_jobs row's `results[]`
+   *  array. Stamped at creation time (StudioBoard's worker-mode enqueue maps
+   *  placeholders[i] ↔ slot i 1:1). Reconcile-after-reload matches a reloaded
+   *  draft back to its job result by this field, not by array order — order is
+   *  not stable across a localStorage reload. */
+  generationSlot?:     number;
   /** Set when the card is archived off the active board (recoverable). */
   archivedAt?:         string;
   // ── Async image analysis (AI Copy v5 — computed at upload time) ─────────────
@@ -177,18 +188,6 @@ export interface PinDraft {
   // shown to users); only an `invalid` verdict changes the card (collapsed/dimmed).
   qualityJudge?:           QualityJudge;
 }
-
-// The Quality Judge grader (lib/ai-copy/judgeVerdict.ts, its startQualityJudge runner,
-// and /api/quality-judge) is a separate RC0 cluster and is not yet committed. The draft
-// only ever STORES a judge result and PinBoardCard only READS verdict/status/userOverride,
-// so these result types are inlined here rather than imported — that keeps the persisted
-// shape and the card's display gate intact without pulling the grader in. Keep in sync
-// with judgeVerdict.ts when that cluster lands.
-export type QualityScoreKey =
-  | "productPreservation" | "realism" | "creatorLikeness" | "sceneFit"
-  | "pinterestFit" | "composition" | "artifacts" | "safety";
-export type QualityScores = Partial<Record<QualityScoreKey, number>>;
-export type QualityVerdict = "ok" | "borderline" | "invalid";
 
 /**
  * Quality Judge result cached on a generated draft. `status` mirrors the async
@@ -468,6 +467,10 @@ export function createBoardDraft(input: {
   assetError?:      string;
   /** "generating" creates a placeholder card (AI Image run in flight). */
   generationStatus?: string;
+  /** WP3-P1: generation_jobs row id (worker-mode enqueue path only). */
+  generationJobId?: string;
+  /** WP3-P2: this placeholder's slot index in the job's results[] array. */
+  generationSlot?: number;
   /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
   sourceGenerationId?: string;
   sourceAssetKey?:     string;
@@ -510,6 +513,8 @@ export function createBoardDraft(input: {
     pinCreatedAt:        input.pinCreatedAt,
     assetError:          input.assetError,
     generationStatus:    input.generationStatus,
+    generationJobId:     input.generationJobId,
+    generationSlot:      input.generationSlot,
     sourceGenerationId:  input.sourceGenerationId,
     sourceAssetKey:      input.sourceAssetKey,
   };
@@ -555,16 +560,24 @@ export function failGeneratedDraft(id: string): PinDraft | null {
 }
 
 /**
- * Refresh recovery: client-driven generation cannot survive a page reload (the
- * awaiting promise is gone, so results can never be delivered). Any board draft
- * still marked "generating" on mount is dead — mark it failed so cards never
- * stay stuck in Generating forever (PRD 12.1).
+ * Refresh recovery: client-driven (inline-mode) generation cannot survive a page
+ * reload (the awaiting promise is gone, so results can never be delivered). Any
+ * board draft still marked "generating" on mount is dead — mark it failed so
+ * cards never stay stuck in Generating forever (PRD 12.1).
+ *
+ * WP3-P2: worker-mode placeholders carry a `generationJobId` — the task lives
+ * server-side and a reload does NOT kill it, so those must NOT be judged here.
+ * `onlyWithoutJobId` (default false, preserving the original call sites/tests)
+ * restricts this sweep to drafts with no jobId; generationRecovery.ts's
+ * reconcileGeneratingDrafts() is the only caller that passes `true`, and it
+ * handles the jobId-bearing drafts itself via the job-status API.
  */
-export function failStaleGeneratingDrafts(): number {
+export function failStaleGeneratingDrafts(onlyWithoutJobId = false): number {
   const data = load();
   let changed = 0;
   for (const d of Object.values(data.drafts)) {
     const s = (d.generationStatus ?? "").toLowerCase();
+    if (onlyWithoutJobId && d.generationJobId) continue;
     if (isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued")) {
       data.drafts[d.id] = { ...d, generationStatus: "failed", updatedAt: new Date().toISOString() };
       changed++;
@@ -572,6 +585,15 @@ export function failStaleGeneratingDrafts(): number {
   }
   if (changed) { persist(data); emit(); }
   return changed;
+}
+
+/** Board drafts currently in a "generating" lifecycle state (any board source). */
+export function generatingDrafts(): PinDraft[] {
+  const data = load();
+  return Object.values(data.drafts).filter(d => {
+    const s = (d.generationStatus ?? "").toLowerCase();
+    return isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued");
+  });
 }
 
 /**

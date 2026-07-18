@@ -110,7 +110,7 @@ export const KNOWLEDGE_BASE: KnowledgeEntry[] = [
     id: "publishing-readiness",
     keywords: ["cant publish", "cannot publish", "wont publish", "cant schedule", "cannot schedule", "why cant", "not publishing", "ready to publish", "not scheduling", "cant post"],
     answer:
-      "A Pin can be scheduled or published once it has a usable image and a real Pinterest board. Title, description, alt text, and Website URL are recommended but optional. Ask me to “check my setup” and I'll pinpoint exactly what's blocking it.",
+      "A Pin can be scheduled or published once it has an image, a title, a description, alt text, and a real Pinterest board. A Website URL is optional (recommended for product Pins). Ask me to “check my setup” and I'll pinpoint exactly what's missing.",
   },
   {
     id: "image-generation",

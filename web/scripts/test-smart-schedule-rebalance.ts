@@ -384,9 +384,8 @@ test("M2. Average + Customize removed; Recommended has NO stepper; Same keeps st
   assert(srcForm.includes('data-testid="smart-schedule-recommended-help"'), "recommended helper (no stepper) missing");
   assert(srcForm.includes('data-testid="smart-schedule-pins-value"'), "same-every-day numeric stepper missing");
   assert(srcForm.includes('data-testid="smart-schedule-reset-recommended"'), "Reset to recommended missing");
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // button copy); tighten to tr("planViews.form.regenerateTimes") when that cluster lands.
-  assert(/data-testid="smart-schedule-regenerate"[\s\S]{0,300}Regenerate times/.test(srcForm), "Regenerate times missing");
+  // i18n-ified: button copy resolves via tr("planViews.form.regenerateTimes").
+  assert(/data-testid="smart-schedule-regenerate"[\s\S]{0,300}planViews\.form\.regenerateTimes/.test(srcForm), "Regenerate times missing");
 });
 
 test("M3. Reset to recommended restores recommended mode + default days/windows", () => {
@@ -395,23 +394,21 @@ test("M3. Reset to recommended restores recommended mode + default days/windows"
 });
 
 test("M4. Rebalance dialog uses the updated lock/undo copy; no forbidden options", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // bullet copy); tighten to the i18n keys when that cluster lands.
-  assert(srcForm.includes("Only unlocked planned Pins will be updated."), "missing unlocked copy");
-  assert(srcForm.includes("Locked, posted, past, and manually scheduled Pins will not be changed."), "missing locked-skip copy");
-  assert(srcForm.includes("You can undo this after rebalancing."), "missing undo copy");
+  // i18n-ified: bullet copy resolves via the planViews.form.rebalance.* keys.
+  assert(srcForm.includes("planViews.form.rebalance.bulletUnlockedOnly"), "missing unlocked copy");
+  assert(srcForm.includes("planViews.form.rebalance.bulletExclusions"), "missing locked-skip copy");
+  assert(srcForm.includes("planViews.form.rebalance.bulletUndo"), "missing undo copy");
   assert(!/Apply from next week/.test(srcForm), "must not show 'Apply from next week'");
   assert(!/Use for future Pins only/.test(srcForm), "must not show 'Use for future Pins only'");
   assert(!/This action cannot be undone/.test(srcForm), "must not show 'This action cannot be undone'");
 });
 
 test("M5. Inline validation hints exist (lightweight, not an error wall)", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // inline hints + toast copy); tighten to the i18n keys when that cluster lands.
-  assert(srcForm.includes('data-testid="smart-schedule-validation-days"') && srcForm.includes("Select at least one active day."), "no active-days validation");
-  assert(srcForm.includes('data-testid="smart-schedule-validation-window"') && srcForm.includes("End time must be later than start time."), "no window validation");
-  assert(srcForm.includes('data-testid="smart-schedule-validation-slots"') && srcForm.includes("No publishing slots generated. Check your active days and time windows."), "no slots validation");
-  assert(srcForm.includes("Choose a publishing timezone."), "no timezone validation");
+  // i18n-ified: inline hints + toast copy resolve via the planViews.form.validation*/toast.* keys.
+  assert(srcForm.includes('data-testid="smart-schedule-validation-days"') && srcForm.includes("planViews.form.validationSelectActiveDay"), "no active-days validation");
+  assert(srcForm.includes('data-testid="smart-schedule-validation-window"') && srcForm.includes("planViews.form.validationEndAfterStart"), "no window validation");
+  assert(srcForm.includes('data-testid="smart-schedule-validation-slots"') && srcForm.includes("planViews.form.validationNoSlots"), "no slots validation");
+  assert(srcForm.includes("planViews.form.toast.chooseTimezone"), "no timezone validation");
 });
 
 // - Follow-up: saved-mode init, board removal, lock UI, lock behavior, toast copy -
@@ -481,11 +478,10 @@ test("F6. Undo restores scheduleSource + scheduleLocked too", () => {
 });
 
 test("F7. Keep-current-times toast + rebalance lock/undo copy", () => {
-  // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
-  // toast/bullet copy); tighten to the i18n keys when that cluster lands.
-  assert(srcForm.includes("Smart Schedule saved. Existing planned Pins were unchanged."), "keep-current toast copy missing");
-  assert(srcForm.includes("Only unlocked planned Pins will be updated."), "lock copy missing");
-  assert(srcForm.includes("You can undo this after rebalancing."), "undo copy missing");
+  // i18n-ified: toast/bullet copy resolve via the planViews.form.toast.*/rebalance.* keys.
+  assert(srcForm.includes("planViews.form.toast.savedUnchanged"), "keep-current toast copy missing");
+  assert(srcForm.includes("planViews.form.rebalance.bulletUnlockedOnly"), "lock copy missing");
+  assert(srcForm.includes("planViews.form.rebalance.bulletUndo"), "undo copy missing");
 });
 
 console.log(`\nSmart Schedule v3: ${passed} passed, ${failed} failed`);

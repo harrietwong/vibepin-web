@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, Suspense, useCallback } from "react";
 import Link from "next/link";
-import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Moon, Sun, Monitor, Check, LifeBuoy, TicketCheck } from "lucide-react";
+import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Moon, Sun, Monitor, Check, LifeBuoy } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
 import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
@@ -31,7 +31,7 @@ import {
   type PinterestDebugStatus,
 } from "@/lib/pinterestClient";
 import { derivePinterestSettingsState } from "@/lib/pinterest/pinterestSettingsState";
-import { ContactSupportModal } from "@/components/support/ContactSupportModal";
+import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { useTheme } from "@/lib/theme/ThemeProvider";
@@ -40,7 +40,6 @@ import {
   PINTEREST_REGIONS,
   ALL_APP_LANGUAGES,
   type PinterestRegionCode,
-  type ContentLanguageSetting,
   type LanguageCode,
 } from "@/lib/i18n/config";
 import {
@@ -429,13 +428,12 @@ function BillingTab() {
         </div>
       </SectionCard>
 
-      <ContactSupportModal
+      <SupportChatModal
         open={supportOpen}
         onClose={() => setSupportOpen(false)}
-        source="billing"
-        defaultCategory="billing_or_subscription"
-        defaultSubject="Billing question"
-        extraContext={{
+        seedText="I have a billing question"
+        initialContext={{
+          source: "billing",
           plan: planName,
           paymentStatus: summary.planStatus,
           billingPageUrl: typeof window !== "undefined" ? window.location.href : null,
@@ -817,12 +815,6 @@ function AiSettingsTab({ saveFnRef, onOpenTab }: {
 }) {
   const { draftPreferences, setDraftPreferences, savePreferences, t } = useLocale();
 
-  // "Same as app language" + every supported app language (native label).
-  const contentLanguageOptions: { value: ContentLanguageSetting; label: string }[] = [
-    { value: "same", label: t("lang.sameAsApp") },
-    ...ALL_APP_LANGUAGES.map(l => ({ value: l.code as ContentLanguageSetting, label: l.nativeLabel })),
-  ];
-
   async function handleSave() {
     await savePreferences(draftPreferences);
     toast.success(t("toast.aiSettingsSaved"));
@@ -836,22 +828,6 @@ function AiSettingsTab({ saveFnRef, onOpenTab }: {
         <p style={{ margin: "-6px 0 14px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
           {t("ai.desc")}
         </p>
-
-        <div style={{ marginBottom: 16 }}>
-          <span style={labelCss}>{t("ai.contentLanguage")}</span>
-          <select data-testid="ai-settings-language"
-            value={draftPreferences.contentLanguage}
-            onChange={e => setDraftPreferences({ contentLanguage: e.target.value as ContentLanguageSetting })}
-            style={{ ...field, cursor: "pointer" }}>
-            {contentLanguageOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <p style={{ margin: "5px 0 0", fontSize: 11, color: UI.textMuted }}>
-            {t("ai.contentLanguageHint")}
-          </p>
-          <p data-testid="ai-settings-content-existing-note" style={{ margin: "4px 0 0", fontSize: 11, color: UI.textMuted, fontStyle: "italic" }}>
-            {t("language.contentExistingNote")}
-          </p>
-        </div>
 
         <div>
           <span style={labelCss}>{t("ai.region")}</span>
@@ -898,10 +874,6 @@ function LanguageTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => P
   const { draftPreferences, setDraftPreferences, savePreferences, t } = useLocale();
 
   const appLanguageOptions = ALL_APP_LANGUAGES.map(l => ({ value: l.code, label: l.nativeLabel }));
-  const contentLanguageOptions: { value: ContentLanguageSetting; label: string }[] = [
-    { value: "same", label: t("lang.sameAsApp") },
-    ...ALL_APP_LANGUAGES.map(l => ({ value: l.code as ContentLanguageSetting, label: l.nativeLabel })),
-  ];
 
   async function handleSave() {
     // savePreferences already shows a localized "language saved" toast in the
@@ -931,22 +903,6 @@ function LanguageTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => P
           </p>
           <p data-testid="language-app-existing-note" style={{ margin: "4px 0 0", fontSize: 11, color: UI.textMuted, fontStyle: "italic" }}>
             {t("language.appLanguageExistingNote")}
-          </p>
-        </div>
-
-        <div>
-          <span style={labelCss}>{t("language.aiContentLanguage")}</span>
-          <select data-testid="language-content-language"
-            value={draftPreferences.contentLanguage}
-            onChange={e => setDraftPreferences({ contentLanguage: e.target.value as ContentLanguageSetting })}
-            style={{ ...field, cursor: "pointer" }}>
-            {contentLanguageOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <p style={{ margin: "5px 0 0", fontSize: 11, color: UI.textMuted }}>
-            {t("language.aiContentLanguageHint")}
-          </p>
-          <p data-testid="language-content-existing-note" style={{ margin: "4px 0 0", fontSize: 11, color: UI.textMuted, fontStyle: "italic" }}>
-            {t("language.contentExistingNote")}
           </p>
         </div>
       </SectionCard>
@@ -1127,18 +1083,6 @@ function SupportTab({ onClose }: { onClose: () => void }) {
           fontSize: 12, fontWeight: 800, cursor: "pointer",
         }}>
           <LifeBuoy size={13} /> Open Help &amp; Support
-        </button>
-      </SupportCard>
-
-      <SupportCard icon={<TicketCheck size={16} style={{ color: UI.textSec }} />}
-        title="My support tickets"
-        description="See the status of tickets you've already opened.">
-        <button type="button" data-testid="support-my-tickets-button" onClick={() => goTo("/app/support/tickets")} style={{
-          display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 9,
-          border: `1px solid ${UI.border}`, background: "transparent", color: UI.text,
-          fontSize: 12, fontWeight: 700, cursor: "pointer",
-        }}>
-          <TicketCheck size={13} /> View my tickets
         </button>
       </SupportCard>
 

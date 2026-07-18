@@ -4,6 +4,12 @@ import { matchesCategory } from "@/lib/productIdeasCategoryMatch";
 import type { ProductMetrics } from "@/lib/supabase";
 import type { ProductOpportunityPublicMetrics } from "@/lib/productOpportunityCounts";
 import {
+  deriveProductSourceType,
+  excludeRetired,
+  OUTBOUND_DISCOVERY_METHODS,
+  type ProductSourceTypeCode,
+} from "@/lib/productTopTiers";
+import {
   classifyDestination,
   shouldShowInProductIdeas,
   type AssetRoleV2,
@@ -50,6 +56,9 @@ export type ProductIdea = {
   // Validating source-pin ids (deduped across the product's URL identity group,
   // capped at 5) for the detail drawer's provenance list.
   source_pin_ids?:       string[];
+  // User-facing source type derived server-side from provenance (the raw
+  // discovery_method is never sent to the client). Authoritative when present.
+  source_type?:          ProductSourceTypeCode | null;
   seed_keyword:          string | null;
   // Derived category id (e.g. 'womens-fashion') resolved server-side from
   // source_category for STL bootstrap products. Used only for category filtering.
@@ -187,6 +196,7 @@ function mapApiRow(r: Record<string, unknown>): ProductIdea {
     public_metrics:        (r.public_metrics as ProductOpportunityPublicMetrics | null | undefined) ?? null,
     search_keyword:        (r.search_keyword as string | null | undefined) ?? null,
     source_pin_ids:        (r.source_pin_ids as string[] | undefined) ?? undefined,
+    source_type:           (r.source_type as ProductSourceTypeCode | null | undefined) ?? null,
     seed_keyword:          r.seed_keyword as string | null,
     category:              (r.category as string | null) ?? null,
     parent_pin_id:         (r.parent_pin_id as string | null) ?? "",
@@ -220,8 +230,14 @@ function mapApiRow(r: Record<string, unknown>): ProductIdea {
 const RECENT_MS = 7 * 24 * 60 * 60 * 1000;
 const STL_BOOTSTRAP_DETAIL = "pinterest_product_card_bootstrap";
 
+function isOutboundMethod(m: string | null | undefined): boolean {
+  return !!m && (OUTBOUND_DISCOVERY_METHODS as readonly string[]).includes(m);
+}
+
 function sourceRank(p: ProductIdea): number {
-  if (p.discovery_method === "outbound_link_bootstrap") return 0;
+  // The API path never returns discovery_method; it returns the derived source_type.
+  // The Supabase fallback path still has the raw field. Accept either.
+  if (p.source_type === "product_link_pin" || isOutboundMethod(p.discovery_method)) return 0;
   if (p.discovery_method === "stl") {
     const created = p.created_at ? Date.parse(p.created_at) : NaN;
     const isRecent = Number.isFinite(created) && (Date.now() - created) < RECENT_MS;
@@ -296,20 +312,24 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
     //   - product_scores may not exist yet (newly extracted)
     //   - Both must NOT exclude these rows.
     const [bootRes, stlRes, restRes] = await Promise.all([
-      supabase.from("pin_products").select(SELECT)
-        .eq("discovery_method", "outbound_link_bootstrap")
-        .not("image_url", "is", null)
-        .order("save_count", { ascending: false })
-        .limit(200),
-      supabase.from("pin_products").select(SELECT)
+      // Soft-retired rows are excluded by lifecycle_status (excludeRetired), the same
+      // state filter /api/products/top uses — so this fallback path cannot leak the
+      // legacy dirty outbound rows either. (This replaced a created_at floor; the
+      // dirty batch has no clean time boundary, so only state can fence it off.)
+      excludeRetired(supabase.from("pin_products").select(SELECT)
+        .in("discovery_method", [...OUTBOUND_DISCOVERY_METHODS])
+        .not("image_url", "is", null))
+        .order("created_at", { ascending: false })
+        .limit(300),
+      excludeRetired(supabase.from("pin_products").select(SELECT)
         .eq("discovery_method", "stl")
         .not("image_url", "is", null)
-        .not("source_url", "is", null)
+        .not("source_url", "is", null))
         .order("source_pin_save_count", { ascending: false })
         .limit(300),
-      supabase.from("pin_products").select(SELECT)
+      excludeRetired(supabase.from("pin_products").select(SELECT)
         .gte("save_count", 10)
-        .not("image_url", "is", null)
+        .not("image_url", "is", null))
         .order("save_count", { ascending: false })
         .limit(400),
     ]);
@@ -392,6 +412,7 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
       return {
         ...rest,
         category,
+        source_type:           deriveProductSourceType(r),
         product_metrics:       buildMetrics(r),
         opportunity_score:     null,
         trend_score:           null,

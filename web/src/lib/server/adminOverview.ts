@@ -15,6 +15,7 @@ import {
   getProductOpportunityAdminStatus,
   type FreshnessStatus,
 } from "@/lib/server/productOpportunityAdminStatus";
+import { excludeRetired } from "@/lib/productTopTiers";
 
 type Db = ReturnType<typeof import("@/lib/supabase").createServerClient>;
 
@@ -272,7 +273,9 @@ async function loadGeneration(db: Db, startToday: string, warnings: string[]): P
 async function loadInventory(db: Db, warnings: string[]): Promise<AdminOverview["inventory"]> {
   const [samples, products, scores, ideas, reviews] = await Promise.all([
     countRows(db.from("pin_samples").select("id", { count: "exact", head: true })),
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true })),
+    // Excludes soft-retired rows (migrate_v46) — this inventory number is what the
+    // product surfaces can draw from, not the raw table size.
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }))),
     countRows(db.from("product_scores").select("id", { count: "exact", head: true })),
     countRows(db.from("product_ideas").select("id", { count: "exact", head: true })),
     countRows(db.from("visual_asset_reviews").select("id", { count: "exact", head: true })),
@@ -352,8 +355,10 @@ async function loadVisualReview(
   };
 
   // Approximate candidate pool = images available to review across both sources.
+  // Retired product rows are never shown to users, so they are not review candidates
+  // (the visual-review candidates route excludes them too — keep the two in step).
   const [prodImgs, sampleImgs] = await Promise.all([
-    countRows(db.from("pin_products").select("id", { count: "exact", head: true }).not("image_url", "is", null)),
+    countRows(excludeRetired(db.from("pin_products").select("id", { count: "exact", head: true }).not("image_url", "is", null))),
     countRows(db.from("pin_samples").select("id", { count: "exact", head: true }).not("image_url", "is", null)),
   ]);
   const candidatePool = (prodImgs.n ?? 0) + (sampleImgs.n ?? 0);

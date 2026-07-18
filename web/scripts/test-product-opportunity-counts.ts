@@ -14,6 +14,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import enMessages from "../src/lib/i18n/messages/en";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -198,8 +199,8 @@ async function main() {
 
   // 鈹€鈹€ Source-structure assertions on the page (behaviors not in the module) 鈹€鈹€鈹€鈹€鈹€
   test("summary cards say 'total opportunities' (total, not filtered)", () => {
-    assert.ok(/physicalCount\.toLocaleString\(\)\} total opportunities/.test(PAGE_SRC));
-    assert.ok(/digitalCount\.toLocaleString\(\)\} total opportunities/.test(PAGE_SRC));
+    assert.ok(/products\.typeCard\.totalOpportunities.*physicalCount\.toLocaleString\(\)/.test(PAGE_SRC));
+    assert.ok(/products\.typeCard\.totalOpportunities.*digitalCount\.toLocaleString\(\)/.test(PAGE_SRC));
   });
   test("grid footer uses the 'Showing X of Y' summary line under filters", () => {
     assert.ok(PAGE_SRC.includes('data-testid="grid-count-footer"'));
@@ -231,8 +232,8 @@ async function main() {
     assert.ok(!PAGE_SRC.includes("Pipeline:"), "normal page must not show pipeline status");
     assert.ok(!PAGE_SRC.includes("Last Updated"), "normal page must not show last-updated status");
     assert.ok(!PAGE_SRC.includes("daily pipeline"), "normal page must not show pipeline provenance");
-    assert.ok(PAGE_SRC.includes("Physical Products"), "physical summary card remains");
-    assert.ok(PAGE_SRC.includes("Digital Products"), "digital summary card remains");
+    assert.ok(PAGE_SRC.includes("products.typeCard.physical"), "physical summary card remains");
+    assert.ok(PAGE_SRC.includes("products.typeCard.digital"), "digital summary card remains");
   });
 
   // 鈹€鈹€ Product Picker still opens from the Product Opportunity Finder 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -247,7 +248,7 @@ async function main() {
   test("Pin Ideas live on the dedicated /app/discover page, linked from the CTA", () => {
     // The Product page only links out 鈥?no cards/tabs/filters here.
     assert.ok(PAGE_SRC.includes('href="/app/discover"'), "CTA links to the dedicated Pin Ideas page");
-    assert.ok(PAGE_SRC.includes("Browse Pin Ideas"), "CTA copy points to Pin Ideas");
+    assert.ok(PAGE_SRC.includes("products.pinIdeasCta"), "CTA copy points to Pin Ideas");
     // The dedicated page still renders Pin Ideas + the 'use as reference' flow.
     assert.ok(DISCOVER_SRC.includes("Pin Ideas"), "discover page still surfaces Pin Ideas");
     assert.ok(
@@ -318,8 +319,8 @@ async function main() {
     assert.ok(PAGE_SRC.includes("productSavesValue(p)"), "public card must use product-level saves");
     assert.ok(PAGE_SRC.includes('data-testid="product-card-saves"'), "card shows a compact saves overlay");
     assert.ok(PAGE_SRC.includes("productSavesShortLabel(p)"), "renders short product-level save copy");
-    assert.ok(PAGE_SRC.includes("productSavesLabel(p)"), "keeps full save copy for tooltip/aria");
-    assert.ok(PAGE_SRC.includes('"Saves unavailable"'), "missing product saves -> 'Saves unavailable'");
+    assert.ok(PAGE_SRC.includes("productSavesLabel(p, tr)"), "keeps full save copy for tooltip/aria");
+    assert.ok(PAGE_SRC.includes('"products.saves.unavailable"'), "missing product saves -> 'Saves unavailable'");
     assert.ok(PAGE_SRC.includes('data-save-source={productSavesValue(p) == null ? "unknown" : "product"}'), "public save source distinguishes product vs unavailable");
     assert.ok(!PAGE_SRC.includes("deriveProductSaveCount(p)"), "public card must not fall back to source Pin saves");
     assert.ok(!PAGE_SRC.includes("publicMetrics.demand.saveCount"), "card must not read the public demand metric object");
@@ -339,10 +340,10 @@ async function main() {
     const card = PAGE_SRC.slice(PAGE_SRC.indexOf("function ProductCard("), PAGE_SRC.indexOf("function ProductDrawer("));
     assert.ok(!/product_score|opportunity_score/.test(card), "no raw score fields");
     assert.ok(card.includes('data-testid="product-card-signals"'), "card shows the public signals cluster");
-    assert.ok(card.includes("demandChip(metrics.demand)"), "demand chip from public metrics");
-    assert.ok(card.includes("trendChip(metrics.trend)"), "trend chip from public metrics");
-    assert.ok(card.includes("competitionChip(metrics.competition)"), "competition chip from public metrics");
-    assert.ok(card.includes("sourceTypeLabel(p)"), "source type shown in user language");
+    assert.ok(card.includes("demandChip(metrics.demand, tr)"), "demand chip from public metrics");
+    assert.ok(card.includes("trendChip(metrics.trend, tr)"), "trend chip from public metrics");
+    assert.ok(card.includes("competitionChip(metrics.competition, tr)"), "competition chip from public metrics");
+    assert.ok(card.includes("SOURCE_TYPE_LABEL_KEYS[sourceTypeCode(p)]"), "source type shown in user language");
     assert.ok(!/Best Opportunity|Good Opportunity|Niche Opportunity|Trending demand|Popular now|opportunityLabel/.test(card), "no unified opportunity labels");
   });
   test("drawer explains all three signals in plain language (incl. Not enough data)", () => {
@@ -350,7 +351,7 @@ async function main() {
     assert.ok(PAGE_SRC.includes("demandExplanation(metrics.demand)"), "demand explanation rendered");
     assert.ok(PAGE_SRC.includes("trendExplanation(metrics.trend)"), "trend explanation rendered");
     assert.ok(PAGE_SRC.includes("competitionExplanation(metrics.competition)"), "competition explanation rendered");
-    assert.ok(PAGE_SRC.includes('"Not enough data"'), "unknown renders Not enough data, never a forced verdict");
+    assert.ok(PAGE_SRC.includes('"products.drawer.notEnoughData"'), "unknown renders Not enough data, never a forced verdict");
   });
   test("V1 card keeps actions and evidence as image overlays only", () => {
     const card = PAGE_SRC.slice(PAGE_SRC.indexOf("function ProductCard("), PAGE_SRC.indexOf("function ProductDrawer("));
@@ -363,8 +364,8 @@ async function main() {
     assert.ok(card.includes("compactFoundLabel"), "found time uses compact visible text");
     assert.ok(card.includes('data-testid="product-card-saves"'), "product-level saves overlay");
     assert.ok(card.includes('data-testid="product-card-found"'), "found-time overlay");
-    assert.ok(card.includes('data-testid="product-card-generate"') && card.includes('aria-label="Generate Pin"'), "Generate Pin icon action");
-    assert.ok(card.includes('data-testid="product-card-save"') && card.includes('aria-label={saved ? "Remove from Product Library" : "Save Product"}'), "Save icon action");
+    assert.ok(card.includes('data-testid="product-card-generate"') && card.includes('aria-label={tr("products.card.generatePin")}'), "Generate Pin icon action");
+    assert.ok(card.includes('data-testid="product-card-save"') && card.includes('aria-label={saved ? tr("products.card.removeFromLibrary") : tr("products.card.saveProduct")}'), "Save icon action");
     assert.ok(!card.includes(">Generate Pin<"), "Generate Pin is not visible text on the public card");
     assert.ok(!card.includes(">Save Product<"), "Save Product is not visible text on the public card");
     assert.ok(card.includes("onUseForPins"), "Generate Pin wired to the create-pins flow");
@@ -489,9 +490,9 @@ async function main() {
     assert.ok(!PAGE_SRC.includes('data-testid="product-card-source"'), "public source row removed");
     assert.ok(!PAGE_SRC.includes("productSourceLabel"), "public source label helper removed");
     // v2.0 provenance: Product Pin and Source Pin are SEPARATE review CTAs/urls.
-    assert.ok(PAGE_SRC.includes("Open Product Pin"), "drawer has a Product Pin review CTA");
-    assert.ok(PAGE_SRC.includes("Open Source Pin"), "drawer has a Source Pin review CTA");
-    assert.ok(PAGE_SRC.includes("Product Pin URL") && PAGE_SRC.includes("Source Pin URL"), "provenance URLs split into two rows");
+    assert.ok(PAGE_SRC.includes("products.drawer.openProductPin"), "drawer has a Product Pin review CTA");
+    assert.ok(PAGE_SRC.includes("products.drawer.openSourcePin"), "drawer has a Source Pin review CTA");
+    assert.ok(PAGE_SRC.includes("products.drawer.productPinUrl") && PAGE_SRC.includes("products.drawer.sourcePinUrl"), "provenance URLs split into two rows");
     assert.ok(PAGE_SRC.includes("sourcePinSavesValue(p)"), "drawer separates source Pin saves");
   });
   test("API meta separates product/demand freshness from score freshness", () => {
@@ -506,8 +507,9 @@ async function main() {
   test("V1 public subtitle shows no score/demand/trend/competition provenance", () => {
     assert.ok(!PAGE_SRC.includes("scored daily"), "no 'scored daily'");
     assert.ok(!PAGE_SRC.includes("ranked by demand, trend, and internal competition"), "no demand/trend/competition provenance");
-    assert.ok(PAGE_SRC.includes("product-level Pinterest saves"), "V1 product-save evidence subtitle");
-    assert.ok(PAGE_SRC.includes("Source Pin saves stay separate in details"), "source Pin saves are described as detail-only evidence");
+    assert.ok(PAGE_SRC.includes('tr("products.footerNote")'), "footer note is rendered via translation key");
+    assert.ok(enMessages["products.footerNote"].includes("product-level Pinterest saves"), "V1 product-save evidence subtitle");
+    assert.ok(enMessages["products.footerNote"].includes("Source Pin saves stay separate in details"), "source Pin saves are described as detail-only evidence");
   });
 
   console.log(`\n${passed} passed`);

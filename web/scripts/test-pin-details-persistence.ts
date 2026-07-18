@@ -167,7 +167,7 @@ test("SmartScheduleDrawer root element has data-testid='smart-schedule-drawer'",
 test("SmartScheduleDrawer close button is accessible (aria-label='Close')", () => {
   // legacy surface not yet i18n-ified — asserts current behavior (hardcoded English
   // aria-label); tighten to tr("planViews.drawer.closeAria") when that cluster lands.
-  assert.ok(smartSource.includes('data-testid="smart-schedule-close"') && smartSource.includes('aria-label="Close"'), "Close button missing aria-label");
+  assert.ok(smartSource.includes('data-testid="smart-schedule-close"') && smartSource.includes('aria-label={tr("planViews.drawer.closeAria")}'), "Close button missing aria-label");
 });
 
 test("SmartScheduleDrawer add-slot button has stable testid", () => {

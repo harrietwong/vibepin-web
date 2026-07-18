@@ -11,6 +11,7 @@ import {
 import type { ProductUrlImportApiResponse } from "@/lib/productUrlImportClient";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { getShopifyStatus } from "@/lib/shopifyClient";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { ShopifyProductPickerPanel } from "./ShopifyProductPickerPanel";
 import type { ShopifyPanelImage, ShopifyProductSelectionCompat } from "./ShopifyProductPickerPanel";
 
@@ -65,14 +66,15 @@ export type RecommendedProduct = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function sourceBadge(source: string): { label: string; bg: string; color: string } {
+// Returns an i18n key (not literal text) — SourceChip resolves it via useLocale().
+function sourceBadge(source: string): { labelKey: "studioModals.source.urlImported" | "studioModals.source.productIdeas" | "studioModals.source.shopify" | "studioModals.source.myProducts"; bg: string; color: string } {
   if (source === "url" || source === "url_imported")
-    return { label: "URL Imported",  bg: "rgba(99,102,241,0.18)",  color: "#A5B4FC" };
+    return { labelKey: "studioModals.source.urlImported",  bg: "rgba(99,102,241,0.18)",  color: "#A5B4FC" };
   if (source === "product_signal" || source === "product_ideas")
-    return { label: "Product Ideas", bg: "rgba(16,185,129,0.15)",  color: "#6EE7B7" };
+    return { labelKey: "studioModals.source.productIdeas", bg: "rgba(16,185,129,0.15)",  color: "#6EE7B7" };
   if (source === "shopify")
-    return { label: "Shopify",       bg: "rgba(149,191,71,0.18)",  color: "#95BF47" };
-  return   { label: "My Products",   bg: "rgba(124,58,237,0.18)",  color: "#C4B5FD" };
+    return { labelKey: "studioModals.source.shopify",       bg: "rgba(149,191,71,0.18)",  color: "#95BF47" };
+  return   { labelKey: "studioModals.source.myProducts",   bg: "rgba(124,58,237,0.18)",  color: "#C4B5FD" };
 }
 
 function truncateUrl(url: string, len = 40): string {
@@ -102,10 +104,11 @@ function ProductThumb({ src, size = 40 }: { src?: string; size?: number }) {
 }
 
 function SourceChip({ source }: { source: string }) {
+  const { t: tr } = useLocale();
   const b = sourceBadge(source);
   return (
     <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: b.bg, color: b.color, display: "inline-block", flexShrink: 0 }}>
-      {b.label}
+      {tr(b.labelKey)}
     </span>
   );
 }
@@ -119,6 +122,7 @@ function CandidateCard({
   selected:  boolean;
   onSelect:  () => void;
 }) {
+  const { t: tr } = useLocale();
   const [imgErr, setImgErr] = useState(false);
   const label = reasonLabel(candidate.reason);
   const isMain = candidate.reason === "og_image" || candidate.reason === "twitter_image"
@@ -140,7 +144,7 @@ function CandidateCard({
       )}
       {isMain && !selected && (
         <div style={{ position: "absolute", top: 6, left: 6, zIndex: 2, padding: "2px 6px", borderRadius: 4, background: "rgba(16,185,129,0.85)", fontSize: 8, fontWeight: 800, color: "#fff" }}>
-          Main image
+          {tr("studioModals.picker.mainImage")}
         </div>
       )}
       <div style={{ aspectRatio: "1/1", background: "var(--app-surface-3, #0B1020)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -167,8 +171,8 @@ function CandidateCard({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function ProductPickerModal({
-  title    = "Add product",
-  subtitle = "Link a product to this Pin",
+  title:    titleProp,
+  subtitle: subtitleProp,
   bulkCount,
   recommendedProducts,
   hasPrimary = false,
@@ -187,6 +191,9 @@ export function ProductPickerModal({
   onSelect:             (p: ProductSelection) => void;
   onClose:              () => void;
 }) {
+  const { t: tr } = useLocale();
+  const title    = titleProp    ?? tr("studioModals.picker.addProduct");
+  const subtitle = subtitleProp ?? tr("studioModals.picker.linkProductToPin");
   const hasRecommended = (recommendedProducts?.length ?? 0) > 0;
   const shopifyEnabled = isShopifyIntegrationEnabled();
 
@@ -334,7 +341,7 @@ export function ProductPickerModal({
       const resp = await fetchProductUrlImport([url]);
       const result = resp.results[0];
       if (!result || result.status === "error" || result.status === "failed") {
-        setFetchError(result?.error ?? "Could not extract product data from this URL.");
+        setFetchError(result?.error ?? tr("studioModals.picker.couldNotExtractProductData"));
         setLinkStep("input");
       } else {
         setFetchedResult(result);
@@ -396,17 +403,17 @@ export function ProductPickerModal({
   // ── CTA label (changes for bulk) ─────────────────────────────────────────
 
   const ctaLabel = bulkCount != null && bulkCount > 1
-    ? (makePrimary ? `Set primary for ${bulkCount} Pins` : `Tag on ${bulkCount} Pins`)
-    : (makePrimary ? "Use as Primary Product" : "Add as Tagged Product");
+    ? (makePrimary ? tr("studioModals.picker.setPrimaryForPins").replace("{n}", String(bulkCount)) : tr("studioModals.picker.tagOnPins").replace("{n}", String(bulkCount)))
+    : (makePrimary ? tr("studioModals.picker.useAsPrimary") : tr("studioModals.picker.addAsTagged"));
 
   // ── Tab list ─────────────────────────────────────────────────────────────
 
   const TABS: { id: PickerTab; label: string; count?: number }[] = [
-    ...(hasRecommended ? [{ id: "recommended" as const, label: "Recommended", count: recommendedProducts!.length }] : []),
-    { id: "my_products", label: "Search products" },
-    ...(shopifyEnabled ? [{ id: "shopify" as const, label: "Shopify" }] : []),
-    { id: "use_link",    label: "Use a link" },
-    { id: "create",      label: "Create manually" },
+    ...(hasRecommended ? [{ id: "recommended" as const, label: tr("studioModals.picker.tabRecommended"), count: recommendedProducts!.length }] : []),
+    { id: "my_products", label: tr("studioModals.picker.tabSearchProducts") },
+    ...(shopifyEnabled ? [{ id: "shopify" as const, label: tr("studioModals.picker.tabShopify") }] : []),
+    { id: "use_link",    label: tr("studioModals.picker.tabUseALink") },
+    { id: "create",      label: tr("studioModals.picker.tabCreateManually") },
   ];
 
   const field: React.CSSProperties = {
@@ -469,10 +476,10 @@ export function ProductPickerModal({
         {/* Link-mode bar — Primary vs Tagged + (for new records) Save to My Products */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 20px", borderBottom: `1px solid ${UI.border}`, flexShrink: 0, background: "var(--app-surface-2, #0D1423)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: UI.textMuted, flexShrink: 0 }}>Link as</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: UI.textMuted, flexShrink: 0 }}>{tr("studioModals.picker.linkAs")}</span>
             <div style={{ display: "flex", border: `1px solid ${UI.borderStr}`, borderRadius: 7, overflow: "hidden", flexShrink: 0 }}>
-              {([["Primary", true], ["Tagged", false]] as const).map(([label, val]) => (
-                <button key={label} type="button" onClick={() => setMakePrimary(val)}
+              {([["Primary", tr("pinDetails.products.primary"), true], ["Tagged", tr("studioModals.picker.tagged"), false]] as const).map(([key, label, val]) => (
+                <button key={key} type="button" onClick={() => setMakePrimary(val)}
                   style={{
                     padding: "4px 11px", border: "none", cursor: "pointer", fontSize: 10, fontWeight: 700,
                     background: makePrimary === val ? UI.gradient : "transparent",
@@ -483,19 +490,19 @@ export function ProductPickerModal({
               ))}
             </div>
             {!hasPrimary && !makePrimary && (
-              <span style={{ fontSize: 9, color: UI.warning }}>No primary set yet</span>
+              <span style={{ fontSize: 9, color: UI.warning }}>{tr("studioModals.picker.noPrimarySetYet")}</span>
             )}
           </div>
           {(tab === "use_link" || tab === "create") && (
             <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: UI.textSec, cursor: "pointer", flexShrink: 0 }}>
               <input type="checkbox" checked={saveToLibrary} onChange={e => setSaveToLibrary(e.target.checked)} style={{ accentColor: UI.purple, cursor: "pointer" }} />
-              Save to My Products
+              {tr("studioModals.picker.saveToMyProducts")}
             </label>
           )}
           {tab === "shopify" && (
             <label data-testid="shopify-save-to-library" style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: UI.textSec, cursor: "pointer", flexShrink: 0 }}>
               <input type="checkbox" checked={shopifySaveToLibrary} onChange={e => setShopifySaveToLibrary(e.target.checked)} style={{ accentColor: UI.purple, cursor: "pointer" }} />
-              Save to My Products
+              {tr("studioModals.picker.saveToMyProducts")}
             </label>
           )}
         </div>
@@ -505,8 +512,8 @@ export function ProductPickerModal({
           <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px 16px" }}>
               <div style={{ marginBottom: 16 }}>
-                <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 800, color: UI.text }}>Recommended for this Pin</p>
-                <p style={{ margin: "0 0 10px", fontSize: 10, color: UI.textMuted }}>Based on selected product images and recent activity.</p>
+                <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 800, color: UI.text }}>{tr("studioModals.picker.recommendedForPin")}</p>
+                <p style={{ margin: "0 0 10px", fontSize: 10, color: UI.textMuted }}>{tr("studioModals.picker.basedOnSelectedImages")}</p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
                   {recommendedProducts!.map((r, i) => (
                     <button key={r.id ?? i} type="button" onClick={() => selectRecommended(r)}
@@ -515,13 +522,13 @@ export function ProductPickerModal({
                       onMouseLeave={e => (e.currentTarget.style.borderColor = UI.border)}
                     >
                       {r.isMostRelevant && (
-                        <div style={{ position: "absolute", top: 6, left: 6, zIndex: 1, padding: "2px 6px", borderRadius: 4, background: "rgba(124,58,237,0.85)", fontSize: 8, fontWeight: 800, color: "#fff" }}>Most relevant</div>
+                        <div style={{ position: "absolute", top: 6, left: 6, zIndex: 1, padding: "2px 6px", borderRadius: 4, background: "rgba(124,58,237,0.85)", fontSize: 8, fontWeight: 800, color: "#fff" }}>{tr("studioModals.picker.mostRelevant")}</div>
                       )}
                       <div style={{ aspectRatio: "1/1", background: "var(--app-surface-3, #0B1020)", overflow: "hidden" }}>
                         <ProductThumb src={r.imageUrl} size={160} />
                       </div>
                       <div style={{ padding: "8px 10px" }}>
-                        <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 700, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title || "Product"}</p>
+                        <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 700, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title || tr("studioModals.product.productFallback")}</p>
                         <SourceChip source={r.source} />
                         {r.url && <p style={{ margin: "3px 0 0", fontSize: 9, color: UI.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{truncateUrl(r.url)}</p>}
                       </div>
@@ -532,16 +539,16 @@ export function ProductPickerModal({
               {recentsForDisplay.length > 0 && (
                 <>
                   <div style={{ height: 1, background: UI.border, margin: "0 0 12px" }} />
-                  <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 800, color: UI.text }}>Recently used</p>
+                  <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 800, color: UI.text }}>{tr("studioModals.picker.recentlyUsed")}</p>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {recentsForDisplay.map(p => (
                       <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, background: UI.card }}>
                         <ProductThumb src={p.imageUrl} size={36} />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title || "Product"}</p>
+                          <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title || tr("studioModals.product.productFallback")}</p>
                           <SourceChip source={p.source} />
                         </div>
-                        <button type="button" onClick={() => selectFromAsset(p)} style={{ ...actionBtn, flexShrink: 0 }}>Select</button>
+                        <button type="button" onClick={() => selectFromAsset(p)} style={{ ...actionBtn, flexShrink: 0 }}>{tr("studioModals.picker.select")}</button>
                       </div>
                     ))}
                   </div>
@@ -550,12 +557,12 @@ export function ProductPickerModal({
             </div>
             <div style={{ padding: "10px 20px", borderTop: `1px solid ${UI.border}`, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", background: UI.card }}>
               <p style={{ margin: 0, fontSize: 10, color: UI.textMuted }}>
-                Need another?{" "}
-                <button type="button" onClick={() => setTab("use_link")} style={{ background: "none", border: "none", cursor: "pointer", color: "#818CF8", fontSize: 10, padding: 0 }}>Use a link</button>
-                {" "}or{" "}
-                <button type="button" onClick={() => setTab("my_products")} style={{ background: "none", border: "none", cursor: "pointer", color: "#818CF8", fontSize: 10, padding: 0 }}>search My Products</button>.
+                {tr("studioModals.picker.needAnother")}{" "}
+                <button type="button" onClick={() => setTab("use_link")} style={{ background: "none", border: "none", cursor: "pointer", color: "#818CF8", fontSize: 10, padding: 0 }}>{tr("studioModals.picker.tabUseALink")}</button>
+                {" "}{tr("studioModals.picker.or")}{" "}
+                <button type="button" onClick={() => setTab("my_products")} style={{ background: "none", border: "none", cursor: "pointer", color: "#818CF8", fontSize: 10, padding: 0 }}>{tr("studioModals.picker.searchMyProducts")}</button>.
               </p>
-              <button type="button" onClick={onClose} style={{ ...actionBtn, color: UI.textSec }}>Cancel</button>
+              <button type="button" onClick={onClose} style={{ ...actionBtn, color: UI.textSec }}>{tr("common.cancel")}</button>
             </div>
           </div>
         )}
@@ -565,18 +572,18 @@ export function ProductPickerModal({
           <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: "10px 20px 8px", flexShrink: 0, position: "relative" }}>
               <Search style={{ position: "absolute", left: 31, top: "50%", transform: "translateY(-50%)", width: 13, height: 13, color: UI.textMuted, pointerEvents: "none" }} />
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by title, URL, or store…"
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder={tr("studioModals.picker.searchByTitleUrlStore")}
                 style={{ ...field, paddingLeft: 32 }} />
             </div>
             {filtered.length === 0 ? (
               <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px", gap: 10 }}>
                 <Package style={{ width: 32, height: 32, color: UI.textMuted }} />
                 <p style={{ margin: 0, fontSize: 12, color: UI.textMuted, textAlign: "center" }}>
-                  {allProducts.length === 0 ? "No saved products yet." : "No products match your search."}
+                  {allProducts.length === 0 ? tr("studioModals.picker.noSavedProductsYet") : tr("studioModals.picker.noProductsMatchSearch")}
                 </p>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button type="button" onClick={() => setTab("use_link")} style={actionBtn}>Use a link</button>
-                  <button type="button" onClick={() => setTab("create")} style={actionBtn}>Create manually</button>
+                  <button type="button" onClick={() => setTab("use_link")} style={actionBtn}>{tr("studioModals.picker.tabUseALink")}</button>
+                  <button type="button" onClick={() => setTab("create")} style={actionBtn}>{tr("studioModals.picker.tabCreateManually")}</button>
                 </div>
               </div>
             ) : (
@@ -587,7 +594,7 @@ export function ProductPickerModal({
                       <ProductThumb src={p.imageUrl} size={44} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 700, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {p.title || "Product"}
+                          {p.title || tr("studioModals.product.productFallback")}
                         </p>
                         <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
                           <SourceChip source={p.source} />
@@ -602,7 +609,7 @@ export function ProductPickerModal({
                       </div>
                       <button type="button" onClick={() => selectFromAsset(p)}
                         style={{ ...actionBtn, flexShrink: 0, padding: "5px 14px", background: UI.gradient, border: "none", color: "#fff" }}>
-                        Select
+                        {tr("studioModals.picker.select")}
                       </button>
                     </div>
                   ))}
@@ -633,7 +640,7 @@ export function ProductPickerModal({
                 <div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                     <Link2 style={{ width: 13, height: 13, color: UI.textMuted }} />
-                    <label style={{ fontSize: 10, fontWeight: 700, color: UI.textSec }}>Product URL</label>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: UI.textSec }}>{tr("studioModals.product.productUrl")}</label>
                   </div>
                   <input value={linkUrl} onChange={e => setLinkUrl(e.target.value)}
                     placeholder="https://example.com/product"
@@ -651,7 +658,7 @@ export function ProductPickerModal({
 
                 <div style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)" }}>
                   <p style={{ margin: 0, fontSize: 10, color: "#A5B4FC", lineHeight: 1.5 }}>
-                    We&apos;ll extract product images, title, price, and store from this link.
+                    {tr("studioModals.picker.willExtractHint")}
                   </p>
                 </div>
 
@@ -665,9 +672,9 @@ export function ProductPickerModal({
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
                   }}>
                   {linkStep === "fetching" ? (
-                    <><Loader2 style={{ width: 14, height: 14, animation: "spin 0.8s linear infinite" }} /> Fetching product…</>
+                    <><Loader2 style={{ width: 14, height: 14, animation: "spin 0.8s linear infinite" }} /> {tr("studioModals.picker.fetchingProduct")}</>
                   ) : (
-                    "Fetch product"
+                    tr("studioModals.picker.fetchProduct")
                   )}
                 </button>
               </div>
@@ -686,13 +693,13 @@ export function ProductPickerModal({
                   <div style={{ padding: "8px 20px", borderBottom: `1px solid ${UI.border}`, flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
                     <button type="button" onClick={() => { setLinkStep("input"); setFetchedResult(null); }}
                       style={{ background: "none", border: "none", cursor: "pointer", color: UI.textMuted, display: "flex", alignItems: "center", gap: 4, fontSize: 10, padding: 0 }}>
-                      <ArrowLeft style={{ width: 12, height: 12 }} /> Back
+                      <ArrowLeft style={{ width: 12, height: 12 }} /> {tr("studioModals.picker.back")}
                     </button>
                     <span style={{ fontSize: 10, color: UI.textMuted }}>·</span>
                     {fetchedResult.status === "success" ? (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: UI.success }}>Extracted successfully</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: UI.success }}>{tr("studioModals.picker.extractedSuccessfully")}</span>
                     ) : (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: UI.warning }}>Partial data — some fields missing</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: UI.warning }}>{tr("studioModals.picker.partialDataMissing")}</span>
                     )}
                   </div>
 
@@ -731,9 +738,9 @@ export function ProductPickerModal({
                     {candidates.length > 0 && (
                       <div>
                         <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 800, color: UI.text }}>
-                          Choose product image
+                          {tr("studioModals.picker.chooseProductImage")}
                           <span style={{ fontSize: 10, fontWeight: 400, color: UI.textMuted, marginLeft: 6 }}>
-                            {candidates.length} image{candidates.length !== 1 ? "s" : ""} found
+                            {candidates.length === 1 ? tr("studioModals.picker.imageFoundOne") : tr("studioModals.picker.imagesFoundMany").replace("{n}", String(candidates.length))}
                           </span>
                         </p>
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 7 }}>
@@ -744,14 +751,14 @@ export function ProductPickerModal({
                           ))}
                         </div>
                         {candidates.length === 1 && (
-                          <p style={{ margin: "6px 0 0", fontSize: 9, color: UI.textMuted }}>Only one image was found at this URL.</p>
+                          <p style={{ margin: "6px 0 0", fontSize: 9, color: UI.textMuted }}>{tr("studioModals.picker.onlyOneImageFound")}</p>
                         )}
                       </div>
                     )}
 
                     {candidates.length === 0 && (
                       <div style={{ padding: "12px", borderRadius: 8, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)" }}>
-                        <p style={{ margin: 0, fontSize: 10, color: "#FCD34D" }}>No product images found. The product record will be saved without an image thumbnail.</p>
+                        <p style={{ margin: 0, fontSize: 10, color: "#FCD34D" }}>{tr("studioModals.picker.noProductImagesFound")}</p>
                       </div>
                     )}
                   </div>
@@ -764,7 +771,7 @@ export function ProductPickerModal({
                     </button>
                     <button type="button" onClick={onClose}
                       style={{ ...actionBtn, color: UI.textSec, flexShrink: 0 }}>
-                      Cancel
+                      {tr("common.cancel")}
                     </button>
                   </div>
                 </div>
@@ -778,16 +785,16 @@ export function ProductPickerModal({
           <div style={{ flex: 1, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
             <div>
               <label style={{ fontSize: 10, fontWeight: 700, color: UI.textSec, display: "block", marginBottom: 5 }}>
-                Product title <span style={{ color: UI.error, marginLeft: 2 }}>*</span>
+                {tr("studioModals.picker.productTitle")} <span style={{ color: UI.error, marginLeft: 2 }}>*</span>
               </label>
               <input value={createTitle} onChange={e => setCreateTitle(e.target.value)}
-                placeholder="e.g. Rattan Hanging Chair"
+                placeholder={tr("studioModals.picker.productTitlePlaceholder")}
                 style={field}
               />
             </div>
             <div>
               <label style={{ fontSize: 10, fontWeight: 700, color: UI.textSec, display: "block", marginBottom: 5 }}>
-                Product URL <span style={{ color: UI.textMuted, fontWeight: 400 }}>(optional)</span>
+                {tr("studioModals.product.productUrl")} <span style={{ color: UI.textMuted, fontWeight: 400 }}>{tr("studioModals.picker.optionalParen")}</span>
               </label>
               <input value={createUrl} onChange={e => setCreateUrl(e.target.value)}
                 placeholder="https://…" style={field}
@@ -795,7 +802,7 @@ export function ProductPickerModal({
             </div>
             <div>
               <label style={{ fontSize: 10, fontWeight: 700, color: UI.textSec, display: "block", marginBottom: 5 }}>
-                Image URL <span style={{ color: UI.textMuted, fontWeight: 400 }}>(optional)</span>
+                {tr("studioModals.picker.imageUrl")} <span style={{ color: UI.textMuted, fontWeight: 400 }}>{tr("studioModals.picker.optionalParen")}</span>
               </label>
               <input value={createImg} onChange={e => setCreateImg(e.target.value)}
                 placeholder="https://…/image.jpg" style={field}
@@ -809,7 +816,7 @@ export function ProductPickerModal({
                 cursor: !createTitle.trim() ? "not-allowed" : "pointer",
                 display: "flex", alignItems: "center", gap: 6,
               }}>
-              <Plus style={{ width: 14, height: 14 }} /> Create & Link
+              <Plus style={{ width: 14, height: 14 }} /> {tr("studioModals.picker.createAndLink")}
             </button>
           </div>
         )}

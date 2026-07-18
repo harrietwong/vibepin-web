@@ -52,6 +52,15 @@ export type SupportSource = (typeof SUPPORT_SOURCES)[number];
 
 export type SenderType = "user" | "admin" | "ai" | "system";
 
+// migrate_v43 — chat resolution/escalation state (see
+// docs/prd/客服系统简化版v1.1.txt §9.1). A support_tickets row now doubles
+// as a chat "conversation" record; these fields track how it ends.
+export const RESOLUTION_MODES = ["ai_active", "resolved_by_ai", "email_escalated"] as const;
+export type ResolutionMode = (typeof RESOLUTION_MODES)[number];
+
+export const ESCALATION_STATES = ["none", "processing", "needs_email_reply", "email_sent", "email_failed", "closed"] as const;
+export type EscalationState = (typeof ESCALATION_STATES)[number];
+
 export type SupportTicket = {
   id: string;
   ticketNumber: string;
@@ -78,6 +87,12 @@ export type SupportTicket = {
   // shown to the user.
   aiSummary?: string | null;
   aiSummaryAt?: string | null;
+  // migrate_v43 (admin/chat-internal). Never exposed on user-facing routes
+  // beyond the derived `escalated: boolean` the chat APIs compute from it.
+  resolutionMode?: ResolutionMode | null;
+  escalationState?: EscalationState;
+  escalationReason?: string | null;
+  escalatedAt?: string | null;
 };
 
 export type SupportMessage = {
@@ -138,7 +153,10 @@ export type SupportEventType =
   | "ticket_closed"
   | "ai_resolved"
   | "ai_not_helpful"
-  | "ai_declined";
+  | "ai_declined"
+  | "escalated"
+  | "email_sent"
+  | "email_failed";
 
 export type SupportEvent = {
   id: string;
@@ -171,4 +189,32 @@ export type CreateTicketResult = {
   // (no LINAPI_KEY configured, or the AI wasn't confident) — a human still
   // always follows up either way.
   aiReplied?: boolean;
+};
+
+// ── support_emails (migrate_v43) — admin-only email-send audit log ─────────
+// Not a ticket system: one row per send/retry attempt. See
+// backend/db/migrate_v43_support_chat_email.sql for full column semantics.
+
+export type SupportEmailStatus = "sending" | "sent" | "failed";
+
+export type SupportEmail = {
+  id: string;
+  ticketId: string;
+  toEmail: string;
+  fromEmail: string;
+  replyToEmail: string | null;
+  subject: string;
+  adminSourceTextZh: string | null;
+  translatedText: string;
+  targetLanguage: string | null;
+  translationEngine: string | null;
+  translationEdited: boolean;
+  status: SupportEmailStatus;
+  providerMessageId: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  idempotencyKey: string;
+  retryCount: number;
+  sentAt: string | null;
+  createdAt: string;
 };

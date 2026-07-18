@@ -67,7 +67,7 @@ function PinIdeasFeature({ pins }: { pins: LandingAsset[] }) {
         <h3 className="text-3xl font-black text-white tracking-tight mb-4 leading-[1.1]">See what&apos;s already<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>earning saves.</span></h3>
         <p className="text-[14px] leading-relaxed mb-5" style={{ color: "#8B93A1" }}>Explore high-performing Pinterest Pins, understand why they work, and use the strongest ideas as creative references.</p>
         <ul className="space-y-3 mb-6">{["Spot high-demand, low-competition ideas", "Understand why a Pin is performing", "Create from the idea or use it as a reference"].map(t => <li key={t} className="flex items-center gap-2.5 text-[13px]" style={{ color: "#C8CDD6" }}><span className="h-5 w-5 rounded-full flex items-center justify-center shrink-0" style={{ background: "rgba(217,70,239,0.16)", color: "#E879F9" }}><Check className="w-3 h-3" /></span>{t}</li>)}</ul>
-        <Link href="/app/discover?demo=true" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px]`}>Explore Pin Ideas <ArrowRight className="w-4 h-4" /></Link>
+        <Link href="/app/discover" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px]`}>Explore Pin Ideas <ArrowRight className="w-4 h-4" /></Link>
       </div>
 
       {/* UI: panel + evidence drawer */}
@@ -121,8 +121,8 @@ function PinIdeasFeature({ pins }: { pins: LandingAsset[] }) {
               <div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold" style={{ background: "rgba(217,70,239,0.10)", color: "#E879F9" }}><TrendingUp className="w-3.5 h-3.5" /> Rising</div>
             </div>
             <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#8B93A1" }}>💡 Users are saving this heavily while commercial competition remains low.</p>
-            <Link href="/app/studio?demo=true" className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-1.5 mb-2`}><Sparkles className="w-3.5 h-3.5" /> Create Pin from this idea</Link>
-            <Link href="/app/discover?demo=true" className="w-full rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><Bookmark className="w-3.5 h-3.5" /> Use as Pin Reference</Link>
+            <Link href="/app/studio" className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-1.5 mb-2`}><Sparkles className="w-3.5 h-3.5" /> Create Pin from this idea</Link>
+            <Link href="/app/discover" className="w-full rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><Bookmark className="w-3.5 h-3.5" /> Use as Pin Reference</Link>
           </div>
         </div>
       </div>
@@ -214,8 +214,8 @@ function ProductOpportunitiesFeature({ products }: { products: LandingAsset[] })
               </div>
             </div>
             <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#8B93A1" }}>💡 Strong Pinterest interest with limited commercial competition creates a clear opportunity to promote.</p>
-            <Link href="#" className="w-full rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 mb-2 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}>View on {selProd.marketplace}</Link>
-            <Link href="/app/studio?demo=true" className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-1.5`}><Sparkles className="w-3.5 h-3.5" /> Use in Create Pins</Link>
+            <span className="w-full rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 mb-2" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}>View on {selProd.marketplace}</span>
+            <Link href="/app/studio" className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-1.5`}><Sparkles className="w-3.5 h-3.5" /> Use in Create Pins</Link>
           </div>
         </div>
       </div>
@@ -226,7 +226,7 @@ function ProductOpportunitiesFeature({ products }: { products: LandingAsset[] })
         <h3 className="text-3xl font-black text-white tracking-tight mb-4 leading-[1.1]">Find products<br /><span style={{ background: "linear-gradient(100deg,#38BDF8,#818CF8 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>people already want.</span></h3>
         <p className="text-[14px] leading-relaxed mb-5" style={{ color: "#8B93A1" }}>Discover physical and digital products connected to real Pinterest demand—not random marketplace listings.</p>
         <ul className="space-y-3 mb-6">{["Match products to Pinterest interest", "See demand and competition evidence", "Send products directly into Create Pins"].map(t => <li key={t} className="flex items-center gap-2.5 text-[13px]" style={{ color: "#C8CDD6" }}><span className="h-5 w-5 rounded-full flex items-center justify-center shrink-0" style={{ background: "rgba(56,189,248,0.16)", color: "#38BDF8" }}><Check className="w-3 h-3" /></span>{t}</li>)}</ul>
-        <Link href="/app/products?demo=true" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px]`}>Explore Product Opportunities <ArrowRight className="w-4 h-4" /></Link>
+        <Link href="/app/products" className={`${VibeBtn} inline-flex items-center gap-2 px-6 py-3 text-[13px]`}>Explore Product Opportunities <ArrowRight className="w-4 h-4" /></Link>
       </div>
     </div>
   );

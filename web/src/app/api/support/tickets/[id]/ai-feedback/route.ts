@@ -34,8 +34,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     if (helped) {
       await addEvent({ ticketId: id, eventType: "ai_resolved", metadata: {} });
+      const patch: Parameters<typeof updateTicket>[1] = { resolutionMode: "resolved_by_ai" };
       if (ticket.status !== "Resolved" && ticket.status !== "Closed") {
-        await updateTicket(id, { status: "Resolved", resolvedAt: new Date().toISOString() });
+        patch.status = "Resolved";
+        patch.resolvedAt = new Date().toISOString();
+      }
+      try {
+        await updateTicket(id, patch);
+      } catch (err) {
+        // migrate_v43 (resolution_mode column) may not be applied yet in
+        // this environment — never let that break the older status
+        // transition that already worked pre-v43.
+        console.error("[support/tickets/:id/ai-feedback POST] resolutionMode update failed (is migrate_v43 applied?)", err);
+        if (patch.status) {
+          await updateTicket(id, { status: patch.status, resolvedAt: patch.resolvedAt }).catch((fallbackErr) =>
+            console.error("[support/tickets/:id/ai-feedback POST] status fallback update also failed", fallbackErr),
+          );
+        }
       }
       return Response.json({ verdict: "helped" });
     }

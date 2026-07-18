@@ -10,6 +10,8 @@ import {
   ExternalLink, TrendingUp, List, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { ManualPublishActions } from "@/components/ManualPublishActions";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 
 type QueueItem = {
   id: string;
@@ -28,14 +30,14 @@ type ApiResponse = { items: QueueItem[] } | { error: string };
 type PageView = "list" | "calendar";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function fmtDate(iso: string): string {
+function fmtDate(iso: string, tr: (key: MessageKey) => string): string {
   const d = new Date(iso);
   const now = new Date();
   const diffMs = d.getTime() - now.getTime();
   const diffH = Math.round(diffMs / 3_600_000);
-  if (Math.abs(diffH) < 1) return "< 1h";
-  if (diffH > 0 && diffH < 24) return `In ${diffH}h`;
-  if (diffH < 0 && diffH > -24) return `${Math.abs(diffH)}h ago`;
+  if (Math.abs(diffH) < 1) return tr("queue.time.lessThanHour");
+  if (diffH > 0 && diffH < 24) return tr("queue.time.inHours").replace("{n}", String(diffH));
+  if (diffH < 0 && diffH > -24) return tr("queue.time.hoursAgo").replace("{n}", String(Math.abs(diffH)));
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
@@ -54,26 +56,28 @@ function getMondayOf(date: Date): Date {
 }
 
 const STATUS_META = {
-  pending:    { icon: Circle,       color: "#9CA3AF", bg: "#F3F4F6",               label: "Pending",    dot: "#9CA3AF" },
-  processing: { icon: Loader2,      color: "#F59E0B", bg: "rgba(245,158,11,0.08)", label: "Processing", dot: "#F59E0B" },
-  done:       { icon: CheckCircle2, color: "#10B981", bg: "rgba(16,185,129,0.08)", label: "Published",  dot: "#10B981" },
-  failed:     { icon: XCircle,      color: "#EF4444", bg: "rgba(239,68,68,0.08)",  label: "Failed",     dot: "#EF4444" },
+  pending:    { icon: Circle,       color: "#9CA3AF", bg: "#F3F4F6",               label: "queue.status.pending"    as MessageKey, dot: "#9CA3AF" },
+  processing: { icon: Loader2,      color: "#F59E0B", bg: "rgba(245,158,11,0.08)", label: "queue.status.processing" as MessageKey, dot: "#F59E0B" },
+  done:       { icon: CheckCircle2, color: "#10B981", bg: "rgba(16,185,129,0.08)", label: "queue.status.done"       as MessageKey, dot: "#10B981" },
+  failed:     { icon: XCircle,      color: "#EF4444", bg: "rgba(239,68,68,0.08)",  label: "queue.status.failed"     as MessageKey, dot: "#EF4444" },
 };
 
 function StatusBadge({ status }: { status: QueueItem["status"] }) {
+  const { t: tr } = useLocale();
   const m = STATUS_META[status] ?? STATUS_META.pending;
   const Icon = m.icon;
   return (
     <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
       style={{ background: m.bg, color: m.color }}>
       <Icon className={`w-2.5 h-2.5 ${status === "processing" ? "animate-spin" : ""}`} />
-      {m.label}
+      {tr(m.label)}
     </span>
   );
 }
 
 // ── List row ──────────────────────────────────────────────────────────────────
 function QueueRow({ item, mutate }: { item: QueueItem; mutate: () => void }) {
+  const { t: tr } = useLocale();
   const domain = (() => {
     try { return new URL(item.product_url).hostname.replace(/^www\./, ""); }
     catch { return item.product_url; }
@@ -89,7 +93,7 @@ function QueueRow({ item, mutate }: { item: QueueItem; mutate: () => void }) {
     });
     if (!resp.ok) {
       const data = await resp.json() as { error?: string };
-      throw new Error(data.error ?? "Update failed");
+      throw new Error(data.error ?? tr("queue.row.updateFailed"));
     }
     mutate();
   }
@@ -124,7 +128,7 @@ function QueueRow({ item, mutate }: { item: QueueItem; mutate: () => void }) {
         {item.status === "done" && item.pin_id && (
           <a href={`https://www.pinterest.com/pin/${item.pin_id}/`} target="_blank" rel="noopener noreferrer"
             className="inline-flex items-center gap-0.5 text-[10px] text-[#C026D3] hover:underline mt-0.5">
-            View on Pinterest <ExternalLink className="w-2.5 h-2.5" />
+            {tr("queue.row.viewOnPinterest")} <ExternalLink className="w-2.5 h-2.5" />
           </a>
         )}
       </div>
@@ -142,7 +146,7 @@ function QueueRow({ item, mutate }: { item: QueueItem; mutate: () => void }) {
           />
         )}
         <div className="text-right">
-          <p className="text-[11px] font-semibold text-gray-600">{fmtDate(item.scheduled_at)}</p>
+          <p className="text-[11px] font-semibold text-gray-600">{fmtDate(item.scheduled_at, tr)}</p>
           <p className="text-[10px] text-gray-400 mt-0.5">
             {new Date(item.scheduled_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
           </p>
@@ -175,6 +179,7 @@ function CalendarChip({ item }: { item: QueueItem }) {
 
 // ── Calendar view ─────────────────────────────────────────────────────────────
 function CalendarView({ items }: { items: QueueItem[] }) {
+  const { t: tr } = useLocale();
   const [weekStart, setWeekStart] = useState(() => getMondayOf(new Date()));
 
   const days = Array.from({ length: 7 }, (_, i) => {
@@ -201,7 +206,10 @@ function CalendarView({ items }: { items: QueueItem[] }) {
     return `${s.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${end.getFullYear()}`;
   })();
 
-  const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const DAY_LABEL_KEYS: MessageKey[] = [
+    "queue.day.mon", "queue.day.tue", "queue.day.wed", "queue.day.thu",
+    "queue.day.fri", "queue.day.sat", "queue.day.sun",
+  ];
 
   return (
     <div className="flex-1 flex flex-col bg-white">
@@ -220,7 +228,7 @@ function CalendarView({ items }: { items: QueueItem[] }) {
           onClick={() => setWeekStart(getMondayOf(new Date()))}
           className="ml-2 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors"
           style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>
-          Today
+          {tr("queue.calendar.today")}
         </button>
       </div>
 
@@ -237,7 +245,7 @@ function CalendarView({ items }: { items: QueueItem[] }) {
               {/* Day header */}
               <div className="px-2 py-2 border-b border-gray-100 text-center shrink-0">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-                  {DAY_LABELS[i]}
+                  {tr(DAY_LABEL_KEYS[i])}
                 </p>
                 <p
                   className={`text-[15px] font-black mt-0.5 leading-none w-7 h-7 mx-auto flex items-center justify-center rounded-full ${isToday ? "text-white" : "text-gray-800"}`}
@@ -257,9 +265,9 @@ function CalendarView({ items }: { items: QueueItem[] }) {
                 <Link href={studioLink}
                   className="flex items-center justify-center gap-1 w-full rounded-lg py-1.5 mt-1 opacity-0 hover:opacity-100 transition-opacity no-underline group/add"
                   style={{ border: "1px dashed #E5E7EB" }}
-                  title="Create a pin for this day">
-                  <span className="text-[10px] font-semibold text-gray-300 group-hover/add:text-[#C026D3] transition-colors">
-                    + Create
+                  title={tr("queue.calendar.createPinForDay")}>
+                  <span className="text-[10px] font-semibold text-gray-400 group-hover/add:text-[#C026D3] transition-colors">
+                    {tr("queue.calendar.addCreate")}
                   </span>
                 </Link>
               </div>
@@ -273,6 +281,7 @@ function CalendarView({ items }: { items: QueueItem[] }) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function QueuePage() {
+  const { t: tr } = useLocale();
   const [view, setView] = useState<PageView>("calendar");
   const [tab,  setTab]  = useState<"upcoming" | "done" | "failed">("upcoming");
 
@@ -296,15 +305,15 @@ export default function QueuePage() {
       {/* Header */}
       <div className="px-6 py-5 bg-white border-b border-gray-200 flex items-center justify-between shrink-0">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Content Calendar</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Plan · Schedule · Publish</p>
+          <h1 className="text-xl font-semibold text-gray-900">{tr("queue.header.title")}</h1>
+          <p className="text-sm text-gray-500 mt-0.5">{tr("queue.header.subtitle")}</p>
         </div>
         <div className="flex items-center gap-3">
           {/* View toggle */}
           <div className="flex items-center gap-0.5 bg-gray-100 rounded-full p-0.5">
             {([
-              { id: "calendar" as PageView, Icon: CalendarDays, label: "Calendar" },
-              { id: "list"     as PageView, Icon: List,         label: "List"     },
+              { id: "calendar" as PageView, Icon: CalendarDays, label: tr("queue.header.viewCalendar") },
+              { id: "list"     as PageView, Icon: List,         label: tr("queue.header.viewList")     },
             ]).map(({ id, Icon, label }) => (
               <button key={id} type="button" onClick={() => setView(id)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold transition-all"
@@ -319,18 +328,18 @@ export default function QueuePage() {
           {pending.length > 0 && (
             <span className="text-[11px] font-bold rounded-full px-2.5 py-1"
               style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>
-              {pending.length} pending
+              {pending.length} {tr("queue.header.pendingSuffix")}
             </span>
           )}
           <button type="button" onClick={() => mutate()}
             className="rounded-full p-2 hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600"
-            title="Refresh">
+            title={tr("queue.header.refresh")}>
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
           </button>
           <Link href="/app/studio"
             className="flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] font-bold text-white no-underline transition-all hover:brightness-105"
             style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-            <Sparkles className="w-3.5 h-3.5" /> Create Pin
+            <Sparkles className="w-3.5 h-3.5" /> {tr("queue.header.createPin")}
           </Link>
         </div>
       </div>
@@ -343,13 +352,12 @@ export default function QueuePage() {
               style={{ background: "rgba(192,38,211,0.08)" }}>
               <CalendarDays className="w-8 h-8 text-[#C026D3]" />
             </div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-2">Queue not set up yet</h2>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">{tr("queue.notSetUp.title")}</h2>
             <p className="text-sm text-gray-500 mb-4 leading-relaxed">
-              The <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">publishing_queue</code> table
-              needs to be created in Supabase first.
+              {tr("queue.notSetUp.descPrefix")} <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">publishing_queue</code> {tr("queue.notSetUp.descSuffix")}
             </p>
             <p className="text-xs text-gray-400">
-              Run the SQL from the error response of <code className="bg-gray-100 px-1 py-0.5 rounded">POST /api/publish</code>.
+              {tr("queue.notSetUp.runSqlPrefix")} <code className="bg-gray-100 px-1 py-0.5 rounded">POST /api/publish</code>.
             </p>
           </div>
         </div>
@@ -359,11 +367,11 @@ export default function QueuePage() {
           {items.length === 0 && !isLoading && (
             <div className="px-6 py-3 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
               <span className="text-[11px] text-amber-700 font-semibold">
-                No scheduled pins yet — generate a pin in Studio, fill in the product URL, then click Schedule to Pinterest.
+                {tr("queue.emptyBanner.message")}
               </span>
               <Link href="/app/studio" className="ml-auto text-[11px] font-bold no-underline"
                 style={{ color: "#C026D3" }}>
-                Open Studio →
+                {tr("queue.emptyBanner.openStudio")}
               </Link>
             </div>
           )}
@@ -375,9 +383,9 @@ export default function QueuePage() {
           {/* Status tabs */}
           <div className="px-6 py-3 bg-white border-b border-gray-100 flex items-center gap-6">
             {[
-              { key: "upcoming" as const, label: "Upcoming", count: pending.length, color: "#C026D3" },
-              { key: "done"     as const, label: "Published", count: done.length,   color: "#10B981" },
-              { key: "failed"   as const, label: "Failed",    count: failed.length, color: "#EF4444" },
+              { key: "upcoming" as const, label: tr("queue.tab.upcoming"),  count: pending.length, color: "#C026D3" },
+              { key: "done"     as const, label: tr("queue.tab.published"), count: done.length,    color: "#10B981" },
+              { key: "failed"   as const, label: tr("queue.tab.failed"),    count: failed.length,  color: "#EF4444" },
             ].map(t => (
               <button key={t.key} type="button" onClick={() => setTab(t.key)}
                 className="flex items-center gap-2 text-sm font-semibold transition-colors pb-0.5"
@@ -396,7 +404,7 @@ export default function QueuePage() {
               </button>
             ))}
             <div className="ml-auto flex items-center gap-1.5 text-[10px] text-gray-400">
-              <Clock className="w-3 h-3" /> Auto-refreshes every 30s
+              <Clock className="w-3 h-3" /> {tr("queue.tab.autoRefresh")}
             </div>
           </div>
 
@@ -422,22 +430,22 @@ export default function QueuePage() {
                   <div className="max-w-sm mx-auto">
                     <CalendarDays className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm text-gray-500 mb-4">
-                      Generate a pin in Studio, fill in product URL + caption, then click Schedule.
+                      {tr("queue.listEmpty.generateHint")}
                     </p>
                     <div className="flex gap-3 justify-center">
                       <Link href="/app/studio"
                         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-bold text-white no-underline"
                         style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-                        <Sparkles className="w-3.5 h-3.5" /> Open Studio
+                        <Sparkles className="w-3.5 h-3.5" /> {tr("queue.listEmpty.openStudio")}
                       </Link>
                       <Link href="/app/trends"
                         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 transition-colors no-underline">
-                        <TrendingUp className="w-3.5 h-3.5" /> Browse Trends
+                        <TrendingUp className="w-3.5 h-3.5" /> {tr("queue.listEmpty.browseTrends")}
                       </Link>
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-400">No {tab} pins.</p>
+                  <p className="text-sm text-gray-400">{tr("queue.listEmpty.noPinsInTab").replace("{tab}", tab)}</p>
                 )}
               </div>
             )}

@@ -55,6 +55,7 @@ function DigitalIdeaBanner({
   onAdd: () => Promise<void>;
   onDismiss: () => void;
 }) {
+  const { t: tr } = useLocale();
   const [adding, setAdding] = useState(false);
 
   async function handleAdd() {
@@ -76,7 +77,7 @@ function DigitalIdeaBanner({
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <p style={{ margin: "0 0 2px", fontSize: "9px", fontWeight: 700, color: "#C026D3", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-          Digital Product Idea
+          {tr("workspace.digitalIdea.eyebrow")}
         </p>
         <p style={{ margin: "0 0 6px", fontSize: "14px", fontWeight: 800, color: "var(--app-text)", textTransform: "capitalize" }}>
           {candidate.keyword}
@@ -103,7 +104,7 @@ function DigitalIdeaBanner({
             whiteSpace: "nowrap",
           }}
         >
-          {adding ? "Adding…" : "Add to Weekly Plan"}
+          {adding ? tr("workspace.digitalIdea.adding") : tr("workspace.digitalIdea.add")}
         </button>
         <button
           type="button"
@@ -126,6 +127,7 @@ function ComingSoonState({ catDef, category, userEmail }: {
   category: string;
   userEmail: string | null;
 }) {
+  const { t: tr } = useLocale();
   const label  = catDef?.label ?? category;
   const emoji  = catDef?.emoji ?? "📌";
   const status = getCategoryStatus(category);
@@ -152,16 +154,16 @@ function ComingSoonState({ catDef, category, userEmail }: {
       <div style={{ textAlign: "center", maxWidth: "480px" }}>
         <div style={{ fontSize: "44px", marginBottom: "16px", lineHeight: 1 }}>{emoji}</div>
         <h2 style={{ margin: "0 0 12px", fontSize: "20px", fontWeight: 800, color: "var(--app-text)" }}>
-          {label} Workspace {isSoon ? "is Coming Soon" : "is Not Yet Available"}
+          {label} {tr("workspace.tabs.workspaceSuffix")} {isSoon ? tr("workspace.comingSoon.titleSoonSuffix") : tr("workspace.comingSoon.titleUnavailableSuffix")}
         </h2>
         <p style={{ margin: 0, fontSize: "13px", color: "var(--app-text-sec)", lineHeight: 1.7 }}>
-          We're still collecting enough trend, pin, and product signals to build reliable
-          weekly plans for <strong style={{ color: "var(--app-text-sec)" }}>{label}</strong>.
-          Once the data reaches our readiness threshold this workspace will activate automatically.
+          {tr("workspace.comingSoon.bodyPrefix")}{" "}
+          <strong style={{ color: "var(--app-text-sec)" }}>{label}</strong>.{" "}
+          {tr("workspace.comingSoon.bodySuffix")}
         </p>
         {isSoon && (
           <p style={{ margin: "12px 0 0", fontSize: "12px", color: "var(--app-text-muted)" }}>
-            This category is in our pipeline — check back in the next update.
+            {tr("workspace.comingSoon.pipelineNote")}
           </p>
         )}
       </div>
@@ -176,7 +178,7 @@ function ComingSoonState({ catDef, category, userEmail }: {
             whiteSpace: "nowrap",
           }}
         >
-          Go to Home Decor Workspace →
+          {tr("workspace.comingSoon.goToHomeDecor")}
         </Link>
         <a
           href={mailtoHref}
@@ -187,7 +189,7 @@ function ComingSoonState({ catDef, category, userEmail }: {
             whiteSpace: "nowrap",
           }}
         >
-          Request {label}
+          {tr("workspace.comingSoon.requestPrefix")}{label}
         </a>
       </div>
 
@@ -195,7 +197,7 @@ function ComingSoonState({ catDef, category, userEmail }: {
       {SOON_CATEGORIES.length > 0 && (
         <div style={{ textAlign: "center" }}>
           <p style={{ margin: "0 0 10px", fontSize: "10px", fontWeight: 700, color: "var(--app-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-            Coming Soon
+            {tr("workspace.comingSoon.comingSoonHeading")}
           </p>
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "center" }}>
             {SOON_CATEGORIES.map(c => (
@@ -260,7 +262,7 @@ export default function WorkspaceCategoryPage() {
 
   useEffect(() => {
     if (!authLoading && !userId) {
-      router.replace("/login");
+      router.replace(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
     }
   }, [authLoading, userId, router]);
 
@@ -314,7 +316,7 @@ export default function WorkspaceCategoryPage() {
       setHasMore(json.hasMore);
       setLoadOffset(prev => prev + json.data.length);
     } catch {
-      toast.error("Failed to load more opportunities");
+      toast.error(t("workspace.feed.loadFailedToast"));
     } finally {
       setLoadingMore(false);
     }
@@ -348,9 +350,9 @@ export default function WorkspaceCategoryPage() {
       score:      null,
     });
     if (err) {
-      toast.error(`Could not add to plan: ${err}`);
+      toast.error(`${t("workspace.digitalIdea.addErrorPrefix")}${err}`);
     } else {
-      toast.success("Added to Weekly Plan", { description: digitalCandidate.keyword });
+      toast.success(t("workspace.digitalIdea.addedToast"), { description: digitalCandidate.keyword });
       setDigitalCandidate(null);
     }
   }
@@ -367,9 +369,9 @@ export default function WorkspaceCategoryPage() {
   }
 
   function handleUpgradePrompt() {
-    toast.info("Upgrade to Pro to plan 14 or 21 keywords per week.", {
-      description: "Free plan is limited to 7 keywords.",
-      action: { label: "Upgrade", onClick: () => router.push("/settings") },
+    toast.info(t("workspace.upgrade.title"), {
+      description: t("workspace.upgrade.description"),
+      action: { label: t("workspace.upgrade.action"), onClick: () => router.push("/settings") },
     });
   }
 
@@ -403,7 +405,7 @@ export default function WorkspaceCategoryPage() {
           background: "rgba(245,158,11,0.08)", borderBottom: "1px solid rgba(245,158,11,0.15)",
           color: "#D97706", flexShrink: 0,
         }}>
-          Beta category · signals still expanding — opportunities may be limited
+          {t("workspace.betaBanner")}
         </div>
       )}
 
@@ -486,7 +488,7 @@ export default function WorkspaceCategoryPage() {
               href="/app/workspace/home-decor"
               style={{ padding: "8px 20px", fontSize: "12px", fontWeight: 700, borderRadius: "7px", background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)", color: "#fff", textDecoration: "none" }}
             >
-              Try Home Decor
+              {t("workspace.feed.tryHomeDecor")}
             </Link>
           </div>
         ) : (
@@ -531,11 +533,11 @@ export default function WorkspaceCategoryPage() {
                     transition: "background 0.15s",
                   }}
                 >
-                  {loadingMore ? "Loading…" : "Load more opportunities"}
+                  {loadingMore ? t("workspace.feed.loadingMore") : t("workspace.feed.loadMore")}
                 </button>
               ) : (
                 <p style={{ fontSize: "12px", color: "var(--app-text-dim)" }}>
-                  You&#39;ve reached the end of this week&#39;s recommendations.
+                  {t("workspace.feed.endOfList")}
                 </p>
               )}
             </div>
@@ -559,6 +561,7 @@ export default function WorkspaceCategoryPage() {
 // ── Category tabs ─────────────────────────────────────────────────────────────
 
 function CategoryTabs({ category, title }: { category: string; title?: string }) {
+  const { t: tr } = useLocale();
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: "10px",
@@ -567,7 +570,7 @@ function CategoryTabs({ category, title }: { category: string; title?: string })
     }}>
       {title && (
         <h1 style={{ margin: 0, fontSize: "15px", fontWeight: 800, color: "var(--app-text)", marginRight: "4px" }}>
-          {title} Workspace
+          {title} {tr("workspace.tabs.workspaceSuffix")}
         </h1>
       )}
 
@@ -593,7 +596,7 @@ function CategoryTabs({ category, title }: { category: string; title?: string })
         {SOON_CATEGORIES.map(c => (
           <span
             key={c.id}
-            title="Collecting signals — request early access"
+            title={tr("workspace.comingSoon.requestEarlyAccess")}
             style={{
               padding: "3px 10px", borderRadius: "20px", fontSize: "11px", fontWeight: 600,
               border: "1px solid var(--app-border)", color: "var(--app-text-dim)", whiteSpace: "nowrap",

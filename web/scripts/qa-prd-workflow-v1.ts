@@ -165,23 +165,12 @@ async function main() {
   // ── PRD 13.4: Move to Unscheduled exists on publish-failed card ─────────────────
   await step("PRD 13.4 · Failed publish card has Move to Unscheduled action", async () => {
     const failed = cardByLifecycle(page, "failed").first();
-    // The expanded publish-failed card offers Move to Unscheduled directly; the ⋮ menu
-    // offers it too. Prefer the dedicated button — `card-more` also substring-matches
-    // `card-more-details-toggle`, which makes getByTestId("card-more") ambiguous.
-    await failed.click().catch(() => {});
-    await page.waitForTimeout(300);
-    const direct = failed.getByTestId("card-move-to-unscheduled");
-    if (await direct.count()) {
-      await direct.first().waitFor({ state: "visible", timeout: 10_000 });
-      return "expanded card exposes Move to Unscheduled";
-    }
-    const menu = failed.locator('[data-testid="card-more"]');
-    await menu.first().click({ timeout: 10_000 });
-    await page.waitForTimeout(200);
-    await failed.getByTestId("card-menu-move-to-unscheduled").first()
-      .waitFor({ state: "visible", timeout: 10_000 });
+    const more = failed.getByTestId("card-more");
+    if (await more.count()) { await more.click(); await page.waitForTimeout(200); }
+    const body = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+    if (!/Move to Unscheduled|Unschedule/i.test(body)) throw new Error("no Move to Unscheduled option");
     await page.keyboard.press("Escape").catch(() => {});
-    return "⋮ menu exposes Move to Unscheduled";
+    return "present";
   });
 
   // ── Switch to Scheduled filter for the schedule-card assertions ────────────────

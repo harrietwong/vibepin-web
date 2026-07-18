@@ -57,12 +57,12 @@ export function FinalConversionCTA({ pinSamples, products }: { pinSamples: Landi
               auto-publish on schedule—all in one workflow.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 mb-6">
-              <Link href="/app/discover?demo=true" className="flex items-center justify-center gap-2 rounded-full px-8 py-4 text-[15px] font-bold transition-transform hover:scale-[1.03] active:scale-100" style={{ background: "#fff", color: "#1A0B2E" }}>
+              <Link href="/app/studio" className="flex items-center justify-center gap-2 rounded-full px-8 py-4 text-[15px] font-bold transition-transform hover:scale-[1.03] active:scale-100" style={{ background: "#fff", color: "#1A0B2E" }}>
                 Build my next 7 Pins <ArrowRight className="w-4 h-4" />
               </Link>
-              <a href="#create" className="flex items-center justify-center gap-2 rounded-full border px-8 py-4 text-[15px] font-bold transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.20)", color: "#C8CDD6" }}>
+              <Link href="/app/products" className="flex items-center justify-center gap-2 rounded-full border px-8 py-4 text-[15px] font-bold transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.20)", color: "#C8CDD6" }}>
                 Explore this week&apos;s opportunities
-              </a>
+              </Link>
             </div>
             <div className="flex flex-col sm:flex-row flex-wrap gap-x-6 gap-y-2">
               {FINAL_CTA_TRUST.map(t => (

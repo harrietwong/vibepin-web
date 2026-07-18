@@ -78,7 +78,7 @@ test("Language & Region shows App language and Pinterest region sections", () =>
 
 test("Account dropdown routes work and logout calls Supabase", () => {
   assert.match(layout, /SETTINGS_DEFAULT_PATH/);
-  assert.match(layout, /SETTINGS_SUPPORT_PATH/);
+  assert.match(layout, /\/app\/settings\/support/);
   assert.match(layout, /openSettings\("account"\)/);
   assert.match(layout, /openSettings\("billing"\)/);
   assert.match(layout, /supabase\.auth\.signOut\(\)/);

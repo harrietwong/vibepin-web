@@ -6,6 +6,8 @@ import type {
   CreativeOpportunityContext,
   GuidedControls,
 } from "@/lib/studio/creativeDirections";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 
 const UI = {
   text: "var(--app-text, #E2E8F0)",
@@ -38,17 +40,24 @@ type Props = {
   onRemoveOpportunityContext: () => void;
 };
 
+// Guided-control option values are stored/sent as English strings (used to build
+// the AI prompt downstream), so only the displayed <option> label is translated —
+// the underlying `value` sent via onChange stays the original English string.
+// Options without a mapped key (e.g. dynamic subjectOptions from the parent)
+// fall back to rendering the raw value untranslated.
 function FieldSelect({
-  label, value, options, onChange,
+  labelKey, value, options, optionLabelKeys, onChange,
 }: {
-  label: string;
+  labelKey: MessageKey;
   value?: string;
   options: string[];
+  optionLabelKeys?: Record<string, MessageKey>;
   onChange: (value: string) => void;
 }) {
+  const { t: tr } = useLocale();
   return (
     <label style={{ display: "grid", gap: 4 }}>
-      <span style={{ fontSize: 9, color: UI.subtle, fontWeight: 800, textTransform: "uppercase" }}>{label}</span>
+      <span style={{ fontSize: 9, color: UI.subtle, fontWeight: 800, textTransform: "uppercase" }}>{tr(labelKey)}</span>
       <select
         value={value ?? ""}
         onChange={e => onChange(e.target.value)}
@@ -64,12 +73,55 @@ function FieldSelect({
           outline: "none",
         }}
       >
-        <option value="">Auto</option>
-        {options.map(option => <option key={option} value={option}>{option}</option>)}
+        <option value="">{tr("studioCreative.direction.field.auto")}</option>
+        {options.map(option => (
+          <option key={option} value={option}>
+            {optionLabelKeys?.[option] ? tr(optionLabelKeys[option]) : option}
+          </option>
+        ))}
       </select>
     </label>
   );
 }
+
+const GOAL_OPTIONS = ["Saves", "Clicks", "Product showcase", "Engagement", "Traffic"];
+const GOAL_LABEL_KEYS: Record<string, MessageKey> = {
+  "Saves": "studioCreative.direction.goal.saves",
+  "Clicks": "studioCreative.direction.goal.clicks",
+  "Product showcase": "studioCreative.direction.goal.productShowcase",
+  "Engagement": "studioCreative.direction.goal.engagement",
+  "Traffic": "studioCreative.direction.goal.traffic",
+};
+
+const SUBJECT_OPTIONS_DEFAULT = ["On-model", "Product only", "Flat lay", "Lifestyle scene"];
+const SUBJECT_LABEL_KEYS: Record<string, MessageKey> = {
+  "On-model": "studioCreative.direction.subject.onModel",
+  "Product only": "studioCreative.direction.subject.productOnly",
+  "Flat lay": "studioCreative.direction.subject.flatLay",
+  "Lifestyle scene": "studioCreative.direction.subject.lifestyleScene",
+};
+
+const STRENGTH_OPTIONS = ["Subtle", "Balanced", "Strong"];
+const STRENGTH_LABEL_KEYS: Record<string, MessageKey> = {
+  "Subtle": "studioCreative.direction.strength.subtle",
+  "Balanced": "studioCreative.direction.strength.balanced",
+  "Strong": "studioCreative.direction.strength.strong",
+};
+
+const EMPHASIS_OPTIONS = ["Balanced", "Product first", "Aesthetic first"];
+const EMPHASIS_LABEL_KEYS: Record<string, MessageKey> = {
+  "Balanced": "studioCreative.direction.emphasis.balanced",
+  "Product first": "studioCreative.direction.emphasis.productFirst",
+  "Aesthetic first": "studioCreative.direction.emphasis.aestheticFirst",
+};
+
+const TEXT_OVERLAY_OPTIONS = ["None", "Light", "Headline", "Information-rich"];
+const TEXT_OVERLAY_LABEL_KEYS: Record<string, MessageKey> = {
+  "None": "studioCreative.direction.textOverlay.none",
+  "Light": "studioCreative.direction.textOverlay.light",
+  "Headline": "studioCreative.direction.textOverlay.headline",
+  "Information-rich": "studioCreative.direction.textOverlay.informationRich",
+};
 
 export function CreativeDirectionPanel({
   recommendations,
@@ -89,14 +141,15 @@ export function CreativeDirectionPanel({
   onKeepEdits,
   onRemoveOpportunityContext,
 }: Props) {
+  const { t: tr } = useLocale();
   const selected = recommendations.find(r => r.id === selectedDirectionId) ?? recommendations[0] ?? null;
 
   return (
     <section data-testid="creative-direction-panel" style={{ padding: "8px 12px", borderBottom: `1px solid ${UI.border}` }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <div>
-          <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: UI.text }}>AI Creative Direction</p>
-          <p style={{ margin: "2px 0 0", fontSize: 10, color: UI.muted }}>Choose a direction; VibePin builds the technical prompt behind the scenes.</p>
+          <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: UI.text }}>{tr("studioCreative.direction.title")}</p>
+          <p style={{ margin: "2px 0 0", fontSize: 10, color: UI.muted }}>{tr("studioCreative.direction.subtitle")}</p>
         </div>
         <Sparkles style={{ width: 15, height: 15, color: UI.purple }} />
       </div>
@@ -125,7 +178,7 @@ export function CreativeDirectionPanel({
                 {rec.confidence && (
                   <span
                     data-testid={`creative-direction-confidence-${rec.id}`}
-                    title="How well this direction matches your inputs"
+                    title={tr("studioCreative.direction.confidenceTitle")}
                     style={{
                       fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em",
                       padding: "1px 5px", borderRadius: 999,
@@ -144,12 +197,12 @@ export function CreativeDirectionPanel({
               )}
               {active && rec.whyThisDirection && (
                 <span style={{ display: "block", marginTop: 4, fontSize: 9.5, lineHeight: 1.45, color: UI.subtle }}>
-                  <b style={{ color: UI.muted }}>Why: </b>{rec.whyThisDirection}
+                  <b style={{ color: UI.muted }}>{tr("studioCreative.direction.whyLabel")}</b>{rec.whyThisDirection}
                 </span>
               )}
               {active && rec.influencedBy && rec.influencedBy.length > 0 && (
                 <span style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 5 }}>
-                  <span style={{ fontSize: 8, color: UI.subtle, alignSelf: "center" }}>Influenced by:</span>
+                  <span style={{ fontSize: 8, color: UI.subtle, alignSelf: "center" }}>{tr("studioCreative.direction.influencedByLabel")}</span>
                   {rec.influencedBy.map(tag => (
                     <span key={tag} style={{
                       fontSize: 8, fontWeight: 700, padding: "1px 5px", borderRadius: 999,
@@ -168,9 +221,9 @@ export function CreativeDirectionPanel({
       {opportunityContext.enabled && (opportunityContext.keyword || opportunityContext.title) && (
         <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderRadius: 9, background: UI.elev, border: `1px solid ${UI.border}` }}>
           <span style={{ flex: 1, minWidth: 0, fontSize: 10, color: UI.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Context: <b style={{ color: UI.text }}>{opportunityContext.keyword ?? opportunityContext.title}</b>
+            {tr("studioCreative.direction.contextLabel")}<b style={{ color: UI.text }}>{opportunityContext.keyword ?? opportunityContext.title}</b>
           </span>
-          <button type="button" onClick={onRemoveOpportunityContext} aria-label="Remove opportunity context"
+          <button type="button" onClick={onRemoveOpportunityContext} aria-label={tr("studioCreative.direction.removeContextAria")}
             style={{ border: "none", background: "none", color: UI.subtle, cursor: "pointer", display: "flex", padding: 1 }}>
             <X style={{ width: 12, height: 12 }} />
           </button>
@@ -179,21 +232,21 @@ export function CreativeDirectionPanel({
 
       <details style={{ marginTop: 8 }}>
         <summary style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", color: UI.muted, fontSize: 10, fontWeight: 800 }}>
-          <ChevronDown style={{ width: 12, height: 12 }} /> Fine-tune direction
+          <ChevronDown style={{ width: 12, height: 12 }} /> {tr("studioCreative.direction.fineTune")}
         </summary>
         <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
-          <FieldSelect label="Goal" value={guidedControls.goal} options={["Saves", "Clicks", "Product showcase", "Engagement", "Traffic"]} onChange={v => onGuidedControlsChange({ goal: v })} />
-          <FieldSelect label="Subject" value={guidedControls.subject} options={subjectOptions ?? ["On-model", "Product only", "Flat lay", "Lifestyle scene"]} onChange={v => onGuidedControlsChange({ subject: v })} />
-          <FieldSelect label="Reference strength" value={guidedControls.referenceStrength} options={["Subtle", "Balanced", "Strong"]} onChange={v => onGuidedControlsChange({ referenceStrength: v })} />
-          <FieldSelect label="Product emphasis" value={guidedControls.productEmphasis} options={["Balanced", "Product first", "Aesthetic first"]} onChange={v => onGuidedControlsChange({ productEmphasis: v })} />
-          <FieldSelect label="Text overlay" value={guidedControls.textOverlay} options={["None", "Light", "Headline", "Information-rich"]} onChange={v => onGuidedControlsChange({ textOverlay: v })} />
+          <FieldSelect labelKey="studioCreative.direction.field.goal" value={guidedControls.goal} options={GOAL_OPTIONS} optionLabelKeys={GOAL_LABEL_KEYS} onChange={v => onGuidedControlsChange({ goal: v })} />
+          <FieldSelect labelKey="studioCreative.direction.field.subject" value={guidedControls.subject} options={subjectOptions ?? SUBJECT_OPTIONS_DEFAULT} optionLabelKeys={SUBJECT_LABEL_KEYS} onChange={v => onGuidedControlsChange({ subject: v })} />
+          <FieldSelect labelKey="studioCreative.direction.field.referenceStrength" value={guidedControls.referenceStrength} options={STRENGTH_OPTIONS} optionLabelKeys={STRENGTH_LABEL_KEYS} onChange={v => onGuidedControlsChange({ referenceStrength: v })} />
+          <FieldSelect labelKey="studioCreative.direction.field.productEmphasis" value={guidedControls.productEmphasis} options={EMPHASIS_OPTIONS} optionLabelKeys={EMPHASIS_LABEL_KEYS} onChange={v => onGuidedControlsChange({ productEmphasis: v })} />
+          <FieldSelect labelKey="studioCreative.direction.field.textOverlay" value={guidedControls.textOverlay} options={TEXT_OVERLAY_OPTIONS} optionLabelKeys={TEXT_OVERLAY_LABEL_KEYS} onChange={v => onGuidedControlsChange({ textOverlay: v })} />
         </div>
       </details>
 
       <div style={{ marginTop: 10 }}>
-        <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 800, color: UI.text }}>Optional refinement</p>
+        <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 800, color: UI.text }}>{tr("studioCreative.direction.optionalRefinement")}</p>
         <p style={{ margin: "0 0 6px", fontSize: 9, color: UI.subtle, lineHeight: 1.4 }}>
-          Add anything not covered above. Example: no text overlay, urban street scene, warm natural lighting.
+          {tr("studioCreative.direction.optionalRefinementDesc")}
         </p>
       </div>
 
@@ -201,7 +254,7 @@ export function CreativeDirectionPanel({
         data-testid="creative-custom-instructions"
         value={customInstructions}
         onChange={e => onCustomInstructionsChange(e.target.value.slice(0, 600))}
-        placeholder="e.g. no text overlay, urban street scene, warm natural lighting"
+        placeholder={tr("studioCreative.direction.customInstructionsPlaceholder")}
         rows={2}
         style={{
           marginTop: 8,
@@ -226,7 +279,7 @@ export function CreativeDirectionPanel({
         data-testid="prompt-textarea"
         value={manualBrief}
         onChange={e => onManualBriefChange(e.target.value.slice(0, 1200))}
-        placeholder="Creative brief preview. You can edit it, or use the direction controls above."
+        placeholder={tr("studioCreative.direction.briefPlaceholder")}
         rows={3}
         style={{
           marginTop: 8,
@@ -250,12 +303,12 @@ export function CreativeDirectionPanel({
       <div style={{ marginTop: 5, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         {briefStale ? (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 10, color: UI.warning }}>Inputs changed.</span>
-            <button type="button" onClick={onUpdateDirection} style={{ border: "none", background: "none", color: "#C4B5FD", fontSize: 10, fontWeight: 800, cursor: "pointer", padding: 0 }}>Update direction</button>
-            <button type="button" onClick={onKeepEdits} style={{ border: "none", background: "none", color: UI.muted, fontSize: 10, fontWeight: 800, cursor: "pointer", padding: 0 }}>Keep my edits</button>
+            <span style={{ fontSize: 10, color: UI.warning }}>{tr("studioCreative.direction.inputsChanged")}</span>
+            <button type="button" onClick={onUpdateDirection} style={{ border: "none", background: "none", color: "#C4B5FD", fontSize: 10, fontWeight: 800, cursor: "pointer", padding: 0 }}>{tr("studioCreative.direction.updateDirection")}</button>
+            <button type="button" onClick={onKeepEdits} style={{ border: "none", background: "none", color: UI.muted, fontSize: 10, fontWeight: 800, cursor: "pointer", padding: 0 }}>{tr("studioCreative.direction.keepMyEdits")}</button>
           </div>
         ) : (
-          <span style={{ fontSize: 10, color: UI.subtle }}>{manualBriefEdited ? "Manual brief" : "Generated from selected direction"}</span>
+          <span style={{ fontSize: 10, color: UI.subtle }}>{manualBriefEdited ? tr("studioCreative.direction.manualBrief") : tr("studioCreative.direction.generatedFromDirection")}</span>
         )}
         <span style={{ fontSize: 10, color: UI.subtle }}>{manualBrief.length} / 1200</span>
       </div>

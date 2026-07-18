@@ -64,7 +64,7 @@ async function main() {
     assert(layoutSource.includes("account-menu-account"), "account tab testid missing in layout");
     assert(layoutSource.includes("account-menu-billing"), "billing tab testid missing in layout");
     assert(layoutSource.includes("account-menu-pinterest"), "pinterest tab testid missing in layout");
-    assert(layoutSource.includes("SETTINGS_SUPPORT_PATH"), "support path missing in layout");
+    assert(layoutSource.includes("/app/settings/support"), "support path missing in layout");
     assert(layoutSource.includes("SettingsModal"), "SettingsModal missing from layout");
     assert(!layoutSource.includes('navigate("/settings")'), "legacy /settings dropdown link remains");
   });
@@ -152,7 +152,7 @@ async function main() {
       access_token_encrypted: "v1:secret", refresh_token_encrypted: "v1:secret",
       access_token_expires_at: null, refresh_token_expires_at: null,
       scopes: [], needs_reconnect: false,
-      created_at: "", updated_at: "2026-06-22T10:30:00Z", disconnected_at: null,
+      created_at: "", updated_at: "2026-06-22T10:30:00Z", disconnected_at: null, token_version: 0,
     });
     const json = JSON.stringify(safe);
     assert(!json.includes("secret"), "token leaked in status");

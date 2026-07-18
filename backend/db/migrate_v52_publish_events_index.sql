@@ -1,4 +1,4 @@
--- v51: composite index for publish-event queries on analytics_events. Additive + idempotent.
+-- v52 (renamed from v51 at merge — number taken by v51_generation_jobs on master): composite index for publish-event queries on analytics_events. Additive + idempotent.
 -- Conventions (follow v41/v50): CREATE INDEX IF NOT EXISTS only; analytics_events already
 -- has RLS enabled with NO permissive policies (service-role only, via
 -- web/src/lib/supabase.ts createServerClient / lib/server/publishEvents.ts). Nothing here

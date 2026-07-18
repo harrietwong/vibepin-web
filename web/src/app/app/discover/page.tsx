@@ -3,6 +3,7 @@ import Image from "next/image";
 import { Suspense, useId, useState, useMemo, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 import useSWR from "swr";
 import {
   Flame, Sparkles, ChevronDown, X, ExternalLink, ShoppingBag,
@@ -31,6 +32,7 @@ import { PRIMARY_BADGE_META, type PrimaryBadge } from "@/lib/workspaceStatics";
 import type { DestinationType, ItemType, ProductSubtype, RiskFlag } from "@/lib/assetClassification";
 import { inferPinFormat, isSellableProductPin } from "@/lib/pinFormats";
 import { markDataReady } from "@/lib/navTiming";
+import { excludeRetired } from "@/lib/productTopTiers";
 
 const SHOW_PIN_IDEAS_INTERNAL_METRICS =
   process.env.NODE_ENV !== "production" ||
@@ -61,6 +63,9 @@ function commercialSignalOf(pin: ViralPin): CommercialSignal {
 }
 
 // Keyword trend badge — backed by a REAL trend_keywords row; no row → no badge.
+// `label` is an internal comparison key (compared against literals elsewhere in
+// this file), NOT the display string — translate only at render sites via
+// keywordTrendBadgeLabel() below.
 type TrendKwRow = { keyword: string; yearly_change: number | null; category: string | null };
 type KeywordTrendBadge = { label: string; color: string };
 function keywordTrendBadge(row: TrendKwRow | undefined | null): KeywordTrendBadge | null {
@@ -71,6 +76,17 @@ function keywordTrendBadge(row: TrendKwRow | undefined | null): KeywordTrendBadg
   if (yoy >= 20)  return { label: "Rising keyword",    color: "#16A34A" };
   if (yoy <= -20) return { label: "Declining keyword", color: "#DC2626" };
   return { label: "Evergreen", color: "#6B7280" };
+}
+
+// Translated display text for a KeywordTrendBadge.label comparison key.
+function keywordTrendBadgeLabel(tr: (key: MessageKey) => string, label: string): string {
+  switch (label) {
+    case "Seasonal now":      return tr("discover.badge.seasonalNow");
+    case "Rising keyword":    return tr("discover.badge.risingKeyword");
+    case "Declining keyword": return tr("discover.badge.decliningKeyword");
+    case "Evergreen":         return tr("discover.badge.evergreen");
+    default:                  return label;
+  }
 }
 
 // Backend classifier's visual format, prettified for display. Null → no badge
@@ -85,20 +101,23 @@ function displayFormat(pin: ViralPin): string | null {
 // Every bullet is derived from a REAL measured field; dimensions without data
 // are simply omitted — no canned per-category copy, no fabricated claims.
 
-const FORMAT_WHY: Record<string, string> = {
-  tutorial:      "Step-by-step content earns repeat saves and long shelf life on Pinterest.",
-  collage:       "Collage layouts pack multiple ideas into one save — high reference value.",
-  moodboard:     "Moodboard-style pins are saved as planning references, extending their lifespan.",
-  quote:         "Typographic pins read instantly at feed size and travel across boards.",
-  text_overlay:  "A clear text hook tells searchers exactly what they get before they click.",
-  product_shot:  "A clean product hero makes the subject unmistakable in a crowded feed.",
-  lifestyle:     "In-context scenes help users picture the idea in their own life — a strong save trigger.",
-  before_after:  "Transformations create instant curiosity and are highly re-saved.",
-  checklist:     "Checklist formats promise actionable value — a classic save-for-later trigger.",
-  infographic:   "Dense, skimmable information earns saves as a reference to return to.",
+const FORMAT_WHY_KEY: Record<string, MessageKey> = {
+  tutorial:      "discover.format.tutorial",
+  collage:       "discover.format.collage",
+  moodboard:     "discover.format.moodboard",
+  quote:         "discover.format.quote",
+  text_overlay:  "discover.format.textOverlay",
+  product_shot:  "discover.format.productShot",
+  lifestyle:     "discover.format.lifestyle",
+  before_after:  "discover.format.beforeAfter",
+  checklist:     "discover.format.checklist",
+  infographic:   "discover.format.infographic",
 };
 
-function buildPinInsights(pin: ViralPin, trendRow: TrendKwRow | null | undefined, fastSaving: boolean): {
+function buildPinInsights(
+  tr: (key: MessageKey) => string,
+  pin: ViralPin, trendRow: TrendKwRow | null | undefined, fastSaving: boolean,
+): {
   why: string[]; optimize: string[]; publishingTip: string | null;
 } {
   const why: string[] = [];
@@ -114,45 +133,45 @@ function buildPinInsights(pin: ViralPin, trendRow: TrendKwRow | null | undefined
   const catLabel = pinCatDisplay(pin.category).label;
 
   // ── Why it works ──
-  if (fastSaving) why.push(`Saving faster than 90% of ${catLabel} pins loaded right now (${fmt(pin.save_velocity)}/day).`);
-  else if (saves >= 10_000) why.push(`${fmt(saves)} users saved this pin — proven audience resonance.`);
+  if (fastSaving) why.push(tr("discover.insight.savingFaster").replace("{category}", catLabel).replace("{velocity}", fmt(pin.save_velocity)));
+  else if (saves >= 10_000) why.push(tr("discover.insight.provenResonance").replace("{saves}", fmt(saves)));
   if (searchKw && title && title.toLowerCase().includes(searchKw.toLowerCase()))
-    why.push(`Title contains the search term “${searchKw}” — matches real search intent.`);
-  if (FORMAT_WHY[fmtKey]) why.push(FORMAT_WHY[fmtKey]);
+    why.push(tr("discover.insight.titleMatchesIntent").replace("{keyword}", searchKw));
+  if (FORMAT_WHY_KEY[fmtKey]) why.push(tr(FORMAT_WHY_KEY[fmtKey]));
   if (ratio != null && ratio >= 0.6 && ratio <= 0.72)
-    why.push("2:3 vertical ratio — Pinterest's preferred format, gets full-height feed display.");
+    why.push(tr("discover.insight.verticalRatio"));
   if (overlay && overlay !== "none" && fmtKey !== "quote")
-    why.push("Uses a text overlay, giving searchers an instant reason to save.");
+    why.push(tr("discover.insight.textOverlay"));
   if (kwBadge?.label === "Rising keyword" && trendRow?.yearly_change != null)
-    why.push(`Its trend keyword “${pin.seed_keyword}” is rising on Pinterest (+${Math.round(trendRow.yearly_change)}% year over year).`);
+    why.push(tr("discover.insight.trendRising").replace("{keyword}", pin.seed_keyword ?? "").replace("{percent}", String(Math.round(trendRow.yearly_change))));
   if (age > 0 && age <= 30 && saves >= 1_000)
-    why.push(`Collected ${fmt(saves)} saves within its first month — early momentum.`);
+    why.push(tr("discover.insight.earlyMomentum").replace("{saves}", fmt(saves)));
 
   // ── Optimization suggestions (for publishing a similar pin) ──
   if (searchKw) {
-    if (!title) optimize.push(`Write a descriptive title (30–60 chars) that includes “${searchKw}”.`);
+    if (!title) optimize.push(tr("discover.optimize.writeDescriptiveTitle").replace("{keyword}", searchKw));
     else if (!title.toLowerCase().includes(searchKw.toLowerCase()))
-      optimize.push(`Work the search term “${searchKw}” into your title and description.`);
+      optimize.push(tr("discover.optimize.workSearchTermIntoTitle").replace("{keyword}", searchKw));
   }
   if (ratio != null && (ratio > 0.8 || ratio < 0.5))
-    optimize.push("Use a 2:3 vertical canvas (e.g. 1000×1500) — this pin's ratio loses feed real estate.");
+    optimize.push(tr("discover.optimize.useVerticalCanvas"));
   if ((!overlay || overlay === "none") && fmtKey !== "quote" && fmtKey !== "product_shot")
-    optimize.push("Consider a short text overlay — a headline or list hook lifts saves for discovery content.");
+    optimize.push(tr("discover.optimize.considerTextOverlay"));
   if (commercialSignalOf(pin) === "product")
-    optimize.push("This is a product-related pin — attach your product/destination link so demand can convert.");
+    optimize.push(tr("discover.optimize.attachProductLink"));
   if (kwBadge?.label === "Seasonal now")
-    optimize.push(`Time your publication to the seasonal window for “${pin.seed_keyword}”.`);
+    optimize.push(tr("discover.optimize.timeSeasonalWindow").replace("{keyword}", pin.seed_keyword ?? ""));
 
   // ── Publishing tip (one plain sentence; omitted when no signal) ──
   let publishingTip: string | null = null;
   if (kwBadge?.label === "Rising keyword")
-    publishingTip = "Good timing — this topic's searches are rising, publishing a similar pin now can ride the trend.";
+    publishingTip = tr("discover.publishingTip.rising");
   else if (kwBadge?.label === "Declining keyword")
-    publishingTip = "This topic's searches are declining — consider a fresher angle or a related rising keyword.";
+    publishingTip = tr("discover.publishingTip.declining");
   else if (kwBadge?.label === "Seasonal now")
-    publishingTip = "Seasonal topic — publish ahead of the peak window for the best reach.";
+    publishingTip = tr("discover.publishingTip.seasonal");
   else if (fastSaving)
-    publishingTip = "This style is gaining saves quickly right now — a strong moment to publish your version.";
+    publishingTip = tr("discover.publishingTip.fastSaving");
 
   return { why, optimize, publishingTip };
 }
@@ -247,38 +266,38 @@ async function fetchByCategories(slugs: string[]): Promise<ViralPin[]> {
 }
 
 // ── Demo mode helpers ─────────────────────────────────────────────────────────
-const MON_HINT: Record<string, string> = {
-  hidden_supply:        "Affiliate Products (Etsy + Amazon) — High ROI",
-  new_account_friendly: "Product Roundups — Growing Demand",
-  oversaturated:        "Niche Sub-category Affiliate",
-  low_volume:           "Low-volume Testing Ground",
+const MON_HINT_KEY: Record<string, MessageKey> = {
+  hidden_supply:        "discover.mon.hiddenSupply",
+  new_account_friendly: "discover.mon.newAccountFriendly",
+  oversaturated:        "discover.mon.oversaturated",
+  low_volume:           "discover.mon.lowVolume",
 };
 
-const SAT_EVIDENCE: Record<string, string> = {
-  hidden_supply:        "Blue Ocean — few sellers in feed, low competition density. Good entry window right now.",
-  new_account_friendly: "Early Trend — still accessible for new accounts. Competition will intensify within 30–60 days.",
-  oversaturated:        "Red Sea — high competition, conversion efficiency declining. Consider long-tail sub-niches instead.",
-  low_volume:           "Low volume — limited search demand. High risk, limited return.",
+const SAT_EVIDENCE_KEY: Record<string, MessageKey> = {
+  hidden_supply:        "discover.sat.hiddenSupply",
+  new_account_friendly: "discover.sat.newAccountFriendly",
+  oversaturated:        "discover.sat.oversaturated",
+  low_volume:           "discover.sat.lowVolume",
 };
 
-const MON_ROUTE: Record<string, string> = {
-  hidden_supply:        "Etsy + Amazon affiliate — high-ROI products confirmed in top-saving Pins.",
-  new_account_friendly: "Amazon product roundups — growing category, easier to rank for new accounts.",
-  oversaturated:        "Niche sub-category affiliate — avoid broad terms, go specific to convert.",
-  low_volume:           "Low-volume test market — validate interest before committing budget.",
+const MON_ROUTE_KEY: Record<string, MessageKey> = {
+  hidden_supply:        "discover.route.hiddenSupply",
+  new_account_friendly: "discover.route.newAccountFriendly",
+  oversaturated:        "discover.route.oversaturated",
+  low_volume:           "discover.route.lowVolume",
 };
 
-function demoTitleTemplate(cat: string): string {
+function demoTitleTemplate(tr: (key: MessageKey) => string, cat: string): string {
   const c = cat.toLowerCase();
   if (c.includes("home") || c.includes("decor") || c.includes("interior"))
-    return `10 ${cat} Ideas That Will Transform Your Space`;
+    return tr("discover.titleTpl.homeDecor").replace("{category}", cat);
   if (c.includes("fashion") || c.includes("style") || c.includes("outfit"))
-    return `The ${cat} Look for 2026: Everything Worth Pinning`;
+    return tr("discover.titleTpl.fashion").replace("{category}", cat);
   if (c.includes("beauty") || c.includes("makeup") || c.includes("skincare"))
-    return `${cat} Essentials: A Curated Pinterest Guide`;
+    return tr("discover.titleTpl.beauty").replace("{category}", cat);
   if (c.includes("wedding") || c.includes("bride"))
-    return `${cat} Inspiration: Ideas Every Planner Is Saving`;
-  return `The Best ${cat} Ideas Worth Pinning This Season`;
+    return tr("discover.titleTpl.wedding").replace("{category}", cat);
+  return tr("discover.titleTpl.default").replace("{category}", cat);
 }
 
 // ── Compact labeled <select> for secondary filters ────────────────────────────
@@ -309,6 +328,8 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
   pin: ViralPin; trendRow?: TrendKwRow | null; fastSaving?: boolean;
   similarPins?: ViralPin[]; onSelectSimilar?: (p: ViralPin) => void; onClose: () => void;
 }) {
+  const { t: tr } = useLocale();
+  const trd = tr;
   const age   = (pin.days_since_created ?? (pin as Record<string, unknown>).days_since_creation as number) ?? 0;
   const vel   = pin.save_velocity ?? 0;
   const saves = pin.save_count ?? 0;
@@ -319,7 +340,7 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
   const format   = displayFormat(pin);
   const searchKw = pin.source_keyword ?? null;
   const trendKw  = pin.seed_keyword ?? null;
-  const insights = buildPinInsights(pin, trendRow, fastSaving ?? false);
+  const insights = buildPinInsights(trd, pin, trendRow, fastSaving ?? false);
 
   const catDisp   = pinCatDisplay(cat);
   const pinUrl    = pin.pin_id ? `https://www.pinterest.com/pin/${pin.pin_id}/` : null;
@@ -354,11 +375,12 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
   const { data: relatedProducts } = useSWR(
     ["pin-drawer-products", relatedKw],
     async () => {
-      const { data } = await supabase
+      // excludeRetired: soft-retired product rows (migrate_v46) never surface.
+      const { data } = await excludeRetired(supabase
         .from("pin_products")
         .select("id,product_name,image_url,domain,price,source_url")
         .ilike("seed_keyword", `%${relatedKw}%`)
-        .gte("save_count", 5)
+        .gte("save_count", 5))
         .order("save_count", { ascending: false })
         .limit(4);
       return (data ?? []) as RelatedProduct[];
@@ -376,7 +398,7 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 shrink-0 sticky top-0 z-10 bg-white border-b border-gray-100">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-[#C026D3]">View Evidence</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#C026D3]">{trd("discover.drawer.viewEvidence")}</p>
             <p className="text-[11px] text-gray-500 mt-0.5 capitalize">{catDisp.emoji} {catDisp.label}</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-full p-1.5 hover:bg-gray-100 transition-colors">
@@ -394,18 +416,18 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
                 style={signal === "product"
                   ? { background: "rgba(192,38,211,0.10)", color: "#C026D3", border: "1px solid rgba(192,38,211,0.25)" }
                   : { background: "rgba(107,114,128,0.08)", color: "#6B7280", border: "1px solid rgba(107,114,128,0.18)" }}>
-                {signal === "product" ? "Product Related" : "Content Only"}
+                {signal === "product" ? trd("discover.signal.productRelated") : trd("discover.signal.contentOnly")}
               </span>
               {kwBadge && (
                 <span className="text-[10px] font-semibold px-2.5 py-1 rounded-md whitespace-nowrap"
                   style={{ background: `${kwBadge.color}14`, color: kwBadge.color, border: `1px solid ${kwBadge.color}33` }}>
-                  {kwBadge.label}
+                  {keywordTrendBadgeLabel(trd, kwBadge.label)}
                 </span>
               )}
               {fastSaving && (
                 <span className="text-[10px] font-semibold px-2.5 py-1 rounded-md whitespace-nowrap"
                   style={{ background: "rgba(22,163,74,0.10)", color: "#16A34A", border: "1px solid rgba(22,163,74,0.25)" }}>
-                  ⚡ Fast saving
+                  {trd("discover.signal.fastSaving")}
                 </span>
               )}
               {format && (
@@ -430,24 +452,24 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
           {/* Discovered via — the real keyword chain that surfaced this pin */}
           {(trendKw || searchKw) && (
             <div data-testid="drawer-discovered-via" className="rounded-xl p-3 bg-gray-50 border border-gray-100">
-              <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2">Discovered via</p>
+              <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2">{trd("discover.drawer.discoveredVia")}</p>
               <div className="space-y-1.5">
                 {trendKw && (
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-[10px] text-gray-400 shrink-0">Trend keyword</span>
+                    <span className="text-[10px] text-gray-400 shrink-0">{trd("discover.drawer.trendKeyword")}</span>
                     <span className="text-[11px] font-semibold text-gray-800 truncate" title={trendKw}>{trendKw}</span>
                   </div>
                 )}
                 {searchKw && searchKw !== trendKw && (
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-[10px] text-gray-400 shrink-0">Search keyword</span>
+                    <span className="text-[10px] text-gray-400 shrink-0">{trd("discover.drawer.searchKeyword")}</span>
                     <span className="text-[11px] font-semibold text-gray-800 truncate" title={searchKw}>{searchKw}</span>
                   </div>
                 )}
                 {dropdownRank != null && (
                   <div className="flex items-center justify-between gap-3" data-testid="drawer-suggestion-rank">
-                    <span className="text-[10px] text-gray-400 shrink-0">Dropdown rank</span>
-                    <span className="text-[11px] font-semibold text-gray-800">#{dropdownRank} in Pinterest search suggestions</span>
+                    <span className="text-[10px] text-gray-400 shrink-0">{trd("discover.drawer.dropdownRank")}</span>
+                    <span className="text-[11px] font-semibold text-gray-800">{trd("discover.drawer.dropdownRankValue").replace("{n}", String(dropdownRank))}</span>
                   </div>
                 )}
               </div>
@@ -457,9 +479,9 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
           {/* Stats row — measured values only; missing data shows "—" */}
           <div className="grid grid-cols-3 gap-2">
             {[
-              { label: "Saves/day", value: vel > 0 ? `${fmt(vel)}/d` : "—",                              color: "#C026D3" },
-              { label: "Age",       value: age > 0 ? `${age}d` : "—",                                    color: "#6B7280" },
-              { label: "Reactions", value: (pin.reaction_count ?? 0) > 0 ? fmt(pin.reaction_count) : "—", color: "#EF4444" },
+              { label: trd("discover.drawer.savesPerDay"), value: vel > 0 ? `${fmt(vel)}/d` : "—",                              color: "#C026D3" },
+              { label: trd("discover.drawer.age"),         value: age > 0 ? `${age}d` : "—",                                    color: "#6B7280" },
+              { label: trd("discover.drawer.reactions"),   value: (pin.reaction_count ?? 0) > 0 ? fmt(pin.reaction_count) : "—", color: "#EF4444" },
             ].map(s => (
               <div key={s.label} className="rounded-xl p-2.5 text-center bg-gray-50 border border-gray-100">
                 <p className="text-[13px] font-black" style={{ color: s.color }}>{s.value}</p>
@@ -471,7 +493,7 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
           {/* Pin title */}
           {pin.title && (
             <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Pin Title</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">{trd("discover.drawer.pinTitle")}</p>
               <p className="text-[12px] text-gray-700 leading-relaxed line-clamp-3">{pin.title}</p>
             </div>
           )}
@@ -479,7 +501,7 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
           {/* Why it works — rule-based, real fields only; empty → hidden */}
           {insights.why.length > 0 && (
             <div data-testid="drawer-why-it-works" className="rounded-xl p-3 bg-gray-50 border border-gray-100">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Why it works</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">{trd("discover.drawer.whyItWorks")}</p>
               <ul className="space-y-1">
                 {insights.why.map((line, i) => (
                   <li key={i} className="flex items-start gap-1.5 text-[11px] text-gray-600 leading-snug">
@@ -493,7 +515,7 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
           {/* Optimization suggestions — actionable steps for a similar pin */}
           {insights.optimize.length > 0 && (
             <div data-testid="drawer-optimization" className="rounded-xl p-3 bg-gray-50 border border-gray-100">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Optimization Suggestions</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">{trd("discover.drawer.optimizationSuggestions")}</p>
               <ul className="space-y-1">
                 {insights.optimize.map((line, i) => (
                   <li key={i} className="flex items-start gap-1.5 text-[11px] text-gray-600 leading-snug">
@@ -517,12 +539,12 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
             <button type="button" onClick={handleCreatePin}
               className="flex-1 flex items-center justify-center gap-1.5 rounded-full py-2.5 text-[12px] font-bold transition-all hover:opacity-90 text-white"
               style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)", border: "none", cursor: "pointer" }}>
-              <Sparkles className="h-3.5 w-3.5" /> Create Pin from this idea
+              <Sparkles className="h-3.5 w-3.5" /> {trd("discover.drawer.createPinFromIdea")}
             </button>
             <button type="button" onClick={handleCreatePin}
               className="flex items-center justify-center gap-1 rounded-full px-4 py-2.5 text-[12px] font-bold text-gray-500 border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-colors"
               style={{ cursor: "pointer" }}>
-              Use as Pin Reference
+              {trd("discover.drawer.useAsPinReference")}
             </button>
             <a href="/app/trends"
               className="flex items-center justify-center gap-1 rounded-full px-4 py-2.5 text-[12px] font-bold text-gray-500 border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-colors">
@@ -540,7 +562,7 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
           {/* Similar pins — same search keyword within the loaded set */}
           {similarPins.length >= 3 && onSelectSimilar && (
             <div data-testid="drawer-similar-pins">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">Similar Pins</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">{trd("discover.drawer.similarPins")}</p>
               <div className="grid grid-cols-3 gap-2">
                 {similarPins.slice(0, 6).map(sp => (
                   <button key={sp.id} type="button" onClick={() => onSelectSimilar(sp)}
@@ -549,13 +571,13 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
                     <Image src={sp.image_url} alt={sp.title ?? ""} fill className="object-cover" sizes="110px" unoptimized />
                     <div className="absolute inset-x-0 bottom-0 px-1.5 py-1"
                       style={{ background: "linear-gradient(to top, rgba(0,0,0,0.72), transparent)" }}>
-                      <p className="text-[8px] font-bold text-white">{fmt(sp.save_count)} saves</p>
+                      <p className="text-[8px] font-bold text-white">{fmt(sp.save_count)}{trd("discover.drawer.savesSuffix")}</p>
                     </div>
                   </button>
                 ))}
               </div>
               <p className="mt-1.5 text-[9px] text-gray-400 leading-snug">
-                Pins discovered via the same keyword, from the currently loaded set.
+                {trd("discover.drawer.similarPinsCaption")}
               </p>
             </div>
           )}
@@ -564,7 +586,7 @@ function PinDrawer({ pin, trendRow, fastSaving, similarPins = [], onSelectSimila
           {(relatedProducts ?? []).length > 0 && (
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2 flex items-center gap-1.5">
-                <ShoppingBag className="h-3 w-3" /> Related Products
+                <ShoppingBag className="h-3 w-3" /> {trd("discover.drawer.relatedProducts")}
               </p>
               <div className="grid grid-cols-2 gap-2">
                 {(relatedProducts ?? []).map(p => (
@@ -605,6 +627,8 @@ function ViralCard({ pin, onSelect, selected, onToggleSelect, fastSaving }: {
   pin: ViralPin; onSelect: (p: ViralPin) => void; selected: boolean; onToggleSelect: (p: ViralPin) => void;
   fastSaving: boolean;
 }) {
+  const { t: tr } = useLocale();
+  const trd = tr;
   const age        = pin.days_since_created ?? 0;
   const vel        = pin.save_velocity ?? 0;
   const saves      = pin.save_count ?? 0;
@@ -614,7 +638,7 @@ function ViralCard({ pin, onSelect, selected, onToggleSelect, fastSaving }: {
   const searchKw   = pin.source_keyword ?? pin.seed_keyword ?? null;
   // Never fabricate a title: fall back to the real search keyword, else a
   // neutral placeholder.
-  const title      = (pin.title ?? "").trim() || searchKw || "Untitled pin";
+  const title      = (pin.title ?? "").trim() || searchKw || trd("discover.card.untitledPin");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -629,7 +653,7 @@ function ViralCard({ pin, onSelect, selected, onToggleSelect, fastSaving }: {
       const found = assetStore.getByRole("style_reference").find(a => a.imageUrl === pin.image_url);
       if (found) {
         assetStore.removeAsset(found.id);
-        toast.success("Removed from Reference Library");
+        toast.success(trd("discover.toast.removedFromReferenceLibrary"));
       }
       return;
     }
@@ -647,7 +671,7 @@ function ViralCard({ pin, onSelect, selected, onToggleSelect, fastSaving }: {
       visualFormat: format ?? undefined,
     });
     onToggleSelect(pin);
-    toast.success("Saved to Reference Library");
+    toast.success(trd("discover.toast.savedToReferenceLibrary"));
   }
 
   return (
@@ -677,7 +701,7 @@ function ViralCard({ pin, onSelect, selected, onToggleSelect, fastSaving }: {
 
         {/* Save reference */}
         <button type="button" role="switch" aria-checked={saved}
-          aria-label={saved ? "Remove from Reference Library" : "Save to Reference Library"}
+          aria-label={saved ? trd("discover.card.removeFromReferenceLibrary") : trd("discover.card.saveToReferenceLibrary")}
           onClick={toggleSave}
           className="absolute top-2.5 right-2.5 z-10 flex items-center justify-center rounded-xl transition-all"
           style={saved || selected
@@ -702,13 +726,13 @@ function ViralCard({ pin, onSelect, selected, onToggleSelect, fastSaving }: {
               style={signal === "product"
                 ? { background: "rgba(192,38,211,0.22)", color: "#F0ABFC" }
                 : { background: "rgba(255,255,255,0.16)", color: "#E5E7EB" }}>
-              {signal === "product" ? "Product Related" : "Content Only"}
+              {signal === "product" ? trd("discover.signal.productRelated") : trd("discover.signal.contentOnly")}
             </span>
             {fastSaving && (
               <span data-testid="card-fast-saving"
                 className="inline-flex items-center rounded-lg px-2 py-1 text-[9px] font-bold"
                 style={{ background: "rgba(34,197,94,0.22)", color: "#86EFAC" }}>
-                ⚡ Fast saving
+                {trd("discover.signal.fastSaving")}
               </span>
             )}
           </div>
@@ -739,7 +763,7 @@ function ViralCard({ pin, onSelect, selected, onToggleSelect, fastSaving }: {
       <div className="px-3 py-2.5">
         <p className="line-clamp-2 min-h-[34px] text-[12px] font-semibold leading-[17px]" style={{ color: "var(--app-text)" }} title={title}>{title}</p>
         {searchKw && (
-          <p className="mt-1 truncate text-[10px]" style={{ color: "var(--app-text-muted)" }} title={`Search keyword: ${searchKw}`}>
+          <p className="mt-1 truncate text-[10px]" style={{ color: "var(--app-text-muted)" }} title={`${trd("discover.card.searchKeywordTitlePrefix")}${searchKw}`}>
             🔎 {searchKw}
           </p>
         )}
@@ -756,6 +780,8 @@ function PaginationBar({
   pageSize: number;
   onPageChange: (page: number) => void;
 }) {
+  const { t: tr } = useLocale();
+  const trd = tr;
   if (pageCount <= 1) return null;
   const pages = Array.from(new Set([1, page - 1, page, page + 1, pageCount].filter(p => p >= 1 && p <= pageCount)));
   return (
@@ -786,11 +812,11 @@ function PaginationBar({
         </button>
       </div>
       <div className="flex items-center justify-center gap-2 text-[12px]" style={{ color: "var(--app-text-sec)" }}>
-        <span>Show</span>
+        <span>{trd("discover.pagination.show")}</span>
         <span className="rounded-xl px-3 py-2 font-bold" style={{ background: "var(--app-surface)", border: "1px solid var(--app-border)", color: "var(--app-text)" }}>
           {pageSize}
         </span>
-        <span>per page</span>
+        <span>{trd("discover.pagination.perPage")}</span>
       </div>
     </div>
   );
@@ -799,6 +825,8 @@ function PaginationBar({
 // ── Analysis table row ─────────────────────────────────────────────────────────
 // Real fields only: keyword chain, DB format, commercial signal, measured saves.
 function AnalysisRow({ pin, onSelect }: { pin: ViralPin; onSelect: (p: ViralPin) => void }) {
+  const { t: tr } = useLocale();
+  const trd = tr;
   const vel      = pin.save_velocity ?? 0;
   const saves    = pin.save_count ?? 0;
   const signal   = commercialSignalOf(pin);
@@ -844,7 +872,7 @@ function AnalysisRow({ pin, onSelect }: { pin: ViralPin; onSelect: (p: ViralPin)
             style={{ background: "rgba(37,99,235,0.08)", color: "#2563EB" }}>
             {format}
           </span>
-        ) : <span className="text-[10px] text-gray-300">—</span>}
+        ) : <span className="text-[10px] text-gray-400">—</span>}
       </div>
 
       {/* Commercial signal */}
@@ -853,7 +881,7 @@ function AnalysisRow({ pin, onSelect }: { pin: ViralPin; onSelect: (p: ViralPin)
           style={signal === "product"
             ? { background: "rgba(192,38,211,0.10)", color: "#C026D3" }
             : { background: "rgba(107,114,128,0.08)", color: "#6B7280" }}>
-          {signal === "product" ? "Product Related" : "Content Only"}
+          {signal === "product" ? trd("discover.signal.productRelated") : trd("discover.signal.contentOnly")}
         </span>
       </div>
 
@@ -874,16 +902,16 @@ function AnalysisRow({ pin, onSelect }: { pin: ViralPin; onSelect: (p: ViralPin)
         <button type="button" onClick={handleAnalysisCreatePin}
           className="opacity-0 group-hover:opacity-100 transition-opacity rounded-full px-3 py-1.5 text-[10px] font-bold whitespace-nowrap text-white"
           style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)", border: "none", cursor: "pointer" }}>
-          Create Pin from this idea
+          {trd("discover.table.createPinFromIdea")}
         </button>
         <button type="button" onClick={handleAnalysisCreatePin}
           className="opacity-0 group-hover:opacity-100 transition-opacity rounded-full px-3 py-1.5 text-[10px] font-semibold whitespace-nowrap"
           style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3", border: "none", cursor: "pointer" }}>
-          Use as Pin Reference
+          {trd("discover.table.useAsPinReference")}
         </button>
         <button type="button" onClick={e => { e.stopPropagation(); onSelect(pin); }}
           className="opacity-0 group-hover:opacity-100 transition-opacity rounded-full px-3 py-1.5 text-[10px] font-semibold whitespace-nowrap text-gray-500 border border-gray-200 hover:bg-gray-50">
-          Evidence
+          {trd("discover.table.evidence")}
         </button>
         <span onClick={e => e.stopPropagation()}>
           <BookmarkButton
@@ -908,6 +936,8 @@ function CaptureModal({
 }: {
   onClose: () => void; selectedKeywords: string[]; lockedClicks: number; sessionId: string;
 }) {
+  const { t: tr } = useLocale();
+  const trd = tr;
   const [email, setEmail]   = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "done">("idle");
 
@@ -937,14 +967,14 @@ function CaptureModal({
         {status === "done" ? (
           <div className="text-center py-6">
             <p className="text-3xl mb-3">✅</p>
-            <p className="text-[16px] font-black text-gray-900 mb-2">You&apos;re on the list.</p>
+            <p className="text-[16px] font-black text-gray-900 mb-2">{trd("discover.capture.onTheList")}</p>
             <p className="text-[13px] text-gray-500 mb-5 leading-relaxed">
-              We&apos;ll use your {selectedKeywords.length} selections to prepare your weekly Pinterest plan when beta access opens.
+              {trd("discover.capture.confirmBody").replace("{n}", String(selectedKeywords.length))}
             </p>
             <button type="button" onClick={onClose}
               className="rounded-full px-5 py-2.5 text-[12px] font-bold text-white"
               style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-              Continue demo
+              {trd("discover.capture.continueDemo")}
             </button>
           </div>
         ) : (
@@ -956,27 +986,27 @@ function CaptureModal({
               </div>
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-widest mb-0.5" style={{ color: "#C026D3" }}>
-                  Weekly Pin Plan · {selectedKeywords.length} of 7 selected
+                  {trd("discover.capture.eyebrow").replace("{n}", String(selectedKeywords.length))}
                 </p>
-                <p className="text-[15px] font-black text-gray-900 leading-tight">Get your 7-day Pinterest plan</p>
+                <p className="text-[15px] font-black text-gray-900 leading-tight">{trd("discover.capture.heading")}</p>
               </div>
             </div>
             <p className="text-[12px] text-gray-500 mb-5 leading-relaxed">
-              We&apos;ll send a weekly plan with 7 trend-backed Pin ideas, title angles, and monetization signals — based on your Home Decor selections.
+              {trd("discover.capture.body")}
             </p>
             <form onSubmit={handleSubmit} className="space-y-3">
               <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
-                placeholder="your@email.com"
+                placeholder={trd("discover.capture.emailPlaceholder")}
                 className="w-full rounded-xl border border-gray-200 px-4 py-3 text-[13px] focus:outline-none focus:border-[#C026D3] focus:ring-1 focus:ring-[#C026D3] transition-colors" />
               <button type="submit" disabled={status === "loading"}
                 className="w-full rounded-full py-3 text-[13px] font-bold text-white transition-opacity hover:opacity-90"
                 style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-                {status === "loading" ? "Sending…" : "Send my weekly plan"}
+                {status === "loading" ? trd("discover.capture.sending") : trd("discover.capture.sendPlan")}
               </button>
             </form>
             <button type="button" onClick={onClose}
               className="mt-3 w-full text-center text-[12px] text-gray-400 hover:text-gray-600 transition-colors">
-              Continue demo
+              {trd("discover.capture.continueDemo")}
             </button>
           </>
         )}
@@ -986,6 +1016,8 @@ function CaptureModal({
 }
 
 function DemoBanner() {
+  const { t: tr } = useLocale();
+  const trd = tr;
   return (
     <div className="flex items-center gap-2.5 px-4 py-2 shrink-0 text-white"
       style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
@@ -993,9 +1025,9 @@ function DemoBanner() {
         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60" />
         <span className="relative inline-flex rounded-full h-2 w-2 bg-white" />
       </span>
-      <span className="text-[11px] font-semibold">Demo · Home Decor · 10 of 48 opportunities shown</span>
+      <span className="text-[11px] font-semibold">{trd("discover.demo.banner")}</span>
       <span className="text-white/40 text-[11px]">·</span>
-      <span className="text-[11px] text-white/75">Select 7 to build your weekly Pin plan</span>
+      <span className="text-[11px] text-white/75">{trd("discover.demo.bannerSelectHint")}</span>
     </div>
   );
 }
@@ -1006,6 +1038,8 @@ function DemoAnalysisRow({
   pin: ViralPin; isSelected: boolean; onSelect: () => void;
   onViewPins: (p: ViralPin) => void; rowIndex: number; sessionId: string;
 }) {
+  const { t: tr } = useLocale();
+  const trd = tr;
   const [showEvidence, setShowEvidence] = useState(false);
 
   const age        = pin.days_since_created ?? 60;
@@ -1014,17 +1048,17 @@ function DemoAnalysisRow({
   const assessment = assessPin({ save_count: saves, velocity: vel, age_days: age });
   const signalKey  = marketTagToSignalKey(assessment.marketTag);
   const signalMeta = PRIMARY_BADGE_META[signalKey];
-  const monHint    = MON_HINT[assessment.marketTag] ?? "Affiliate Products";
-  const titleTpl   = demoTitleTemplate(pin.category);
+  const monHint    = trd(MON_HINT_KEY[assessment.marketTag] ?? "discover.mon.hiddenSupply");
+  const titleTpl   = demoTitleTemplate(trd, pin.category);
 
   const demandText = saves >= 10_000
-    ? `${fmt(saves)} saves · ${fmt(vel)}/day velocity — high confirmed demand`
+    ? trd("discover.evidence.demandHigh").replace("{saves}", fmt(saves)).replace("{velocity}", fmt(vel))
     : saves >= 1_000
-    ? `${fmt(saves)} saves · ${fmt(vel)}/day velocity — growing demand`
-    : `${fmt(saves)} saves — early-stage interest, monitor for growth`;
+    ? trd("discover.evidence.demandGrowing").replace("{saves}", fmt(saves)).replace("{velocity}", fmt(vel))
+    : trd("discover.evidence.demandEarly").replace("{saves}", fmt(saves));
 
-  const satText = SAT_EVIDENCE[assessment.marketTag] ?? SAT_EVIDENCE.low_volume;
-  const monText = MON_ROUTE[assessment.marketTag]    ?? MON_ROUTE.low_volume;
+  const satText = trd(SAT_EVIDENCE_KEY[assessment.marketTag] ?? "discover.sat.lowVolume");
+  const monText = trd(MON_ROUTE_KEY[assessment.marketTag]    ?? "discover.route.lowVolume");
 
   async function handleEvidenceToggle() {
     const next = !showEvidence;
@@ -1073,12 +1107,12 @@ function DemoAnalysisRow({
             </div>
             <div className="relative rounded-lg px-3 py-2 overflow-hidden" style={{ background: "#F9FAFB", border: "1px solid #F3F4F6", minHeight: 34 }}>
               <span className="text-[11px] text-gray-300 select-none" style={{ filter: "blur(4px)" }}>
-                {`How to Style ${pin.category} on a Budget: Expert Tips`}
+                {trd("discover.demoRow.blurredTeaserTitle").replace("{category}", pin.category)}
               </span>
               <div className="absolute inset-0 flex items-center justify-center">
                 <span className="flex items-center gap-1 text-[9px] font-bold rounded-full px-2 py-0.5"
                   style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3", border: "1px solid rgba(192,38,211,0.22)" }}>
-                  <Lock className="w-2.5 h-2.5" /> Unlock
+                  <Lock className="w-2.5 h-2.5" /> {trd("discover.demoRow.unlock")}
                 </span>
               </div>
             </div>
@@ -1087,30 +1121,30 @@ function DemoAnalysisRow({
             <button type="button" onClick={() => onViewPins(pin)}
               className="flex items-center gap-1 rounded-full px-3 py-1.5 text-[10px] font-semibold transition-colors"
               style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3", border: "1px solid rgba(192,38,211,0.15)" }}>
-              🖼️ View Pins
+              {trd("discover.demoRow.viewPins")}
             </button>
             <button type="button" onClick={isSelected ? undefined : onSelect} disabled={isSelected}
               className="flex items-center gap-1 rounded-full px-3 py-1.5 text-[10px] font-semibold transition-all"
               style={isSelected
                 ? { background: "rgba(16,185,129,0.12)", color: "#059669", border: "1px solid rgba(16,185,129,0.30)", cursor: "default" }
                 : { background: "rgba(8,145,178,0.06)", color: "#374151", border: "1px solid #E5E7EB" }}>
-              {isSelected ? "✓ Selected" : "+ Select for weekly plan"}
+              {isSelected ? trd("discover.demoRow.selected") : trd("discover.demoRow.selectForPlan")}
             </button>
             <button type="button" onClick={handleEvidenceToggle}
               className="ml-auto text-[10px] font-semibold transition-colors"
               style={{ color: showEvidence ? "#C026D3" : "#9CA3AF" }}>
-              {showEvidence ? "Hide ▲" : "Why this? ▼"}
+              {showEvidence ? trd("discover.demoRow.hideEvidence") : trd("discover.demoRow.whyThis")}
             </button>
           </div>
           {showEvidence && (
             <div className="mt-2 rounded-lg overflow-hidden border" style={{ borderColor: "rgba(8,145,178,0.18)" }}>
               {([
-                { label: "Demand",       text: demandText },
-                { label: "Saturation",   text: satText    },
-                { label: "Monetization", text: monText    },
-              ] as { label: string; text: string }[]).map(row => (
-                <div key={row.label} className="flex items-start gap-2 px-3 py-2 border-b last:border-0"
-                  style={{ borderColor: "rgba(192,38,211,0.08)", background: row.label === "Demand" ? "rgba(8,145,178,0.03)" : "transparent" }}>
+                { key: "Demand",       label: trd("discover.demoRow.evidence.demand"),       text: demandText },
+                { key: "Saturation",   label: trd("discover.demoRow.evidence.saturation"),   text: satText    },
+                { key: "Monetization", label: trd("discover.demoRow.evidence.monetization"), text: monText    },
+              ] as { key: string; label: string; text: string }[]).map(row => (
+                <div key={row.key} className="flex items-start gap-2 px-3 py-2 border-b last:border-0"
+                  style={{ borderColor: "rgba(192,38,211,0.08)", background: row.key === "Demand" ? "rgba(8,145,178,0.03)" : "transparent" }}>
                   <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest pt-0.5 w-[72px]" style={{ color: "#C026D3" }}>
                     {row.label}
                   </span>
@@ -1128,13 +1162,16 @@ function DemoAnalysisRow({
 const DEMO_GOAL = 7;
 
 function DemoProgressBar({ selected, onBuild }: { selected: number; onBuild: () => void }) {
+  const { t: tr } = useLocale();
+  const trd = tr;
   const done = selected >= DEMO_GOAL;
+  const remaining = DEMO_GOAL - selected;
   return (
     <div className="px-6 py-2.5 flex items-center gap-4 border-b"
       style={{ background: done ? "rgba(16,185,129,0.04)" : "#FAFAFA", borderColor: done ? "rgba(16,185,129,0.18)" : "#F3F4F6" }}>
       <div className="flex items-center gap-2.5 flex-1 min-w-0">
         <span className="text-[11px] font-semibold shrink-0" style={{ color: done ? "#059669" : "#6B7280" }}>
-          {done ? "✅ Weekly plan complete" : "📋 Weekly plan"}
+          {done ? trd("discover.progress.complete") : trd("discover.progress.title")}
         </span>
         <div className="flex items-center gap-1">
           {Array.from({ length: DEMO_GOAL }).map((_, i) => (
@@ -1143,11 +1180,14 @@ function DemoProgressBar({ selected, onBuild }: { selected: number; onBuild: () 
           ))}
         </div>
         <span className="text-[11px] shrink-0" style={{ color: done ? "#059669" : "#9CA3AF" }}>
-          {selected}/{DEMO_GOAL} selected
+          {selected}/{DEMO_GOAL} {trd("discover.progress.selectedSuffix")}
         </span>
         {!done && (
           <span className="text-[10px] text-gray-400 truncate hidden sm:block">
-            · Select {DEMO_GOAL - selected} more {DEMO_GOAL - selected === 1 ? "opportunity" : "opportunities"} to build your plan
+            {(remaining === 1
+              ? trd("discover.progress.selectMoreOpportunity")
+              : trd("discover.progress.selectMoreOpportunities")
+            ).replace("{n}", String(remaining))}
           </span>
         )}
       </div>
@@ -1155,7 +1195,7 @@ function DemoProgressBar({ selected, onBuild }: { selected: number; onBuild: () 
         <button type="button" onClick={onBuild}
           className="shrink-0 rounded-full px-4 py-2 text-[12px] font-bold text-white transition-all hover:brightness-105"
           style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-          Get my 7-day Pin plan →
+          {trd("discover.progress.getPlan")}
         </button>
       )}
     </div>
@@ -1166,6 +1206,7 @@ function DemoProgressBar({ selected, onBuild }: { selected: number; onBuild: () 
 function DiscoverPageInner() {
   const searchParams = useSearchParams();
   const { t: tr }    = useLocale();
+  const trd = tr;
   const isDemo       = searchParams.get("demo") === "true";
   // Cross-page keyword protocol: /app/discover?keyword=<trend>&search_keyword=<suggestion>
   // (linked from Keyword Trends). Applied once as initial filters + a breadcrumb.
@@ -1388,9 +1429,9 @@ function DiscoverPageInner() {
   }, [rawRising, searchKwFilter]);
 
   const SORT_OPTIONS: { value: SortMode; label: string }[] = [
-    { value: "most_saved",     label: "Most saved" },
-    { value: "fastest_saving", label: "Fastest saving" },
-    { value: "newest",         label: "Newest found" },
+    { value: "most_saved",     label: trd("discover.sort.mostSaved") },
+    { value: "fastest_saving", label: trd("discover.sort.fastestSaving") },
+    { value: "newest",         label: trd("discover.sort.newestFound") },
   ];
 
   const hasActiveFilters =
@@ -1406,7 +1447,7 @@ function DiscoverPageInner() {
 
   const NICHE_OPTIONS = VIRAL_CATS;                      // "All" + every category
   const plainLabel = (s: string) => s.replace(/^\P{L}+/u, "").trim() || s;  // strip leading emoji
-  const currentNicheLabel = vCat === "All" ? "All Niches" : plainLabel(vCat);
+  const currentNicheLabel = vCat === "All" ? trd("discover.filter.allNiches") : plainLabel(vCat);
   const pageCount = Math.max(1, Math.ceil(viralCards.length / pageSize));
   const safePage = Math.min(page, pageCount);
   const pageCards = viralCards.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -1437,17 +1478,17 @@ function DiscoverPageInner() {
                   style={savedOnly
                     ? { background: "var(--app-brand-soft)", color: "var(--app-brand)", border: "1px solid rgba(139,92,246,0.28)" }
                     : { background: "var(--app-surface)", color: "var(--app-text)", border: "1px solid var(--app-border)" }}>
-                  <Bookmark className="h-4 w-4" /> Saved ({savedRefUrls.size})
+                  <Bookmark className="h-4 w-4" /> {trd("discover.header.saved").replace("{n}", String(savedRefUrls.size))}
                 </button>
                 <button type="button" onClick={() => setShowHelp(h => !h)}
                   className="flex h-10 items-center gap-2 rounded-xl px-3.5 text-[12px] font-semibold transition-colors"
                   style={{ background: "var(--app-surface)", color: "var(--app-text)", border: "1px solid var(--app-border)" }}>
-                  <HelpCircle className="h-4 w-4" /> How it works
+                  <HelpCircle className="h-4 w-4" /> {trd("discover.header.howItWorks")}
                 </button>
                 <button type="button" onClick={() => document.getElementById("pin-idea-filters")?.scrollIntoView({ block: "nearest" })}
                   className="relative flex h-10 items-center gap-2 rounded-xl px-3.5 text-[12px] font-semibold transition-colors"
                   style={{ background: "var(--app-surface)", color: "var(--app-text)", border: "1px solid var(--app-border)" }}>
-                  <SlidersHorizontal className="h-4 w-4" /> Filters
+                  <SlidersHorizontal className="h-4 w-4" /> {trd("discover.header.filters")}
                   {hasActiveFilters && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full" style={{ background: "var(--app-brand)" }} />}
                 </button>
                 {SHOW_PIN_IDEAS_INTERNAL_METRICS && (
@@ -1456,7 +1497,7 @@ function DiscoverPageInner() {
                     style={showTestMetrics
                       ? { background: "var(--app-brand-soft)", color: "var(--app-brand)", border: "1px solid rgba(139,92,246,0.26)" }
                       : { background: "var(--app-surface)", color: "var(--app-text-sec)", border: "1px solid var(--app-border)" }}>
-                    Test Metrics
+                    {trd("discover.header.testMetrics")}
                   </button>
                 )}
               </div>
@@ -1464,19 +1505,19 @@ function DiscoverPageInner() {
             {showHelp && (
               <div className="mt-3 rounded-xl px-4 py-3 text-[12px] leading-relaxed"
                 style={{ background: "var(--app-surface-2)", border: "1px solid var(--app-border)", color: "var(--app-text-sec)" }}>
-                <span className="font-semibold" style={{ color: "var(--app-text)" }}>Pin Ideas</span> are visual references and content angles — layouts, formats, and creative inspiration.
-                Filter by <span className="font-semibold">Format</span> to find a style, then <span className="font-semibold" style={{ color: "var(--app-brand)" }}>Use as Reference</span> to send it into Create Pins.
-                Looking for products to promote? Head to <a href="/app/products" className="font-semibold" style={{ color: "var(--app-brand)" }}>Product Ideas</a>.
+                <span className="font-semibold" style={{ color: "var(--app-text)" }}>{trd("discover.help.body1Prefix")}</span>{trd("discover.help.body1Suffix")}
+                {" "}{trd("discover.help.body2Prefix")}<span className="font-semibold">{trd("discover.help.body2Mid")}</span>{trd("discover.help.body2Mid2")}<span className="font-semibold" style={{ color: "var(--app-brand)" }}>{trd("discover.help.body2UseAsReference")}</span>{trd("discover.help.body2Suffix")}
+                {" "}{trd("discover.help.body3Prefix")}<a href="/app/products" className="font-semibold" style={{ color: "var(--app-brand)" }}>{trd("discover.help.body3Link")}</a>{trd("discover.help.body3Suffix")}
               </div>
             )}
           </div>
         ) : (
           <div className="mb-4">
             <h1 className="text-xl font-black text-gray-900 tracking-tight">
-              Pin Ideas <span className="text-gray-400 font-normal">— Home Decor · Demo</span>
+              {trd("discover.demoHeader.title")} <span className="text-gray-400 font-normal">{trd("discover.demoHeader.subtitleSuffix")}</span>
             </h1>
             <p className="text-gray-500 text-[12px] mt-0.5">
-              Top Home Decor opportunities · tier + monetization + title template per pin · 10 of 48 shown
+              {trd("discover.demoHeader.subtitle")}
             </p>
           </div>
         )}
@@ -1487,10 +1528,10 @@ function DiscoverPageInner() {
             <div className="flex items-center gap-2">
               <span className="rounded-full px-3 py-1 text-[11px] font-semibold"
                 style={{ background: "rgba(192,38,211,0.08)", border: "1px solid rgba(8,145,178,0.2)", color: "#C026D3" }}>
-                🏠 Home Decor
+                {trd("discover.demoHeader.homeDecor")}
               </span>
               <span className="flex items-center gap-1 text-[10px] text-gray-400">
-                <Lock className="w-3 h-3" /> 17 more categories locked
+                <Lock className="w-3 h-3" /> {trd("discover.demoHeader.moreLocked")}
               </span>
             </div>
           ) : (
@@ -1498,7 +1539,7 @@ function DiscoverPageInner() {
               <div className="relative min-w-0 flex-1">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none" style={{ color: "var(--app-text-muted)" }} />
                 <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                  placeholder="Search pin ideas, topics, styles, or keywords..."
+                  placeholder={trd("discover.search.placeholder")}
                   className="h-11 w-full rounded-2xl pl-11 pr-4 text-[13px] focus:outline-none"
                   style={{
                     background: "var(--app-surface)",
@@ -1511,7 +1552,7 @@ function DiscoverPageInner() {
               <button type="button" onClick={() => setShowModal(true)}
                 className="sm:ml-auto flex h-10 items-center justify-center gap-2 rounded-xl px-3.5 text-[12px] font-semibold transition-colors shrink-0"
                 style={{ background: "var(--app-surface)", border: "1px solid var(--app-border)", color: "var(--app-text-sec)" }}>
-                <SlidersHorizontal className="h-4 w-4" /> Manage niches
+                <SlidersHorizontal className="h-4 w-4" /> {trd("discover.manageNiches")}
               </button>
             </>
           )}
@@ -1522,14 +1563,14 @@ function DiscoverPageInner() {
           <div data-testid="keyword-breadcrumb" className="mb-3 flex flex-wrap items-center gap-2 rounded-xl px-4 py-2.5"
             style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.15)" }}>
             <span className="text-[12px]" style={{ color: "var(--app-text-sec)" }}>
-              From <a href="/app/trends" className="font-semibold" style={{ color: "#2563EB" }}>Keyword Trends</a>:
+              {trd("discover.breadcrumb.fromPrefix")}<a href="/app/trends" className="font-semibold" style={{ color: "#2563EB" }}>{trd("discover.breadcrumb.keywordTrends")}</a>:
               {" "}<strong style={{ color: "var(--app-text)" }}>{linkedSearchKw || linkedTrendKw}</strong>
-              {" "}— showing pins discovered via this keyword.
+              {trd("discover.breadcrumb.suffix")}
             </span>
             <button type="button" onClick={clearFilters}
               className="ml-auto rounded-full px-3 py-1 text-[11px] font-semibold"
               style={{ background: "rgba(37,99,235,0.10)", color: "#2563EB" }}>
-              Clear
+              {trd("discover.breadcrumb.clear")}
             </button>
           </div>
         )}
@@ -1542,10 +1583,10 @@ function DiscoverPageInner() {
               {SHOW_PIN_IDEAS_INTERNAL_METRICS && showTestMetrics && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 w-full xl:w-auto xl:min-w-[520px]">
                   {[
-                    { value: stats.found.toLocaleString(),          label: "Ideas found",     color: "var(--app-brand)" },
-                    { value: stats.fastSaving.toLocaleString(),     label: "Fast saving",     color: "#16A34A" },
-                    { value: stats.productRelated.toLocaleString(), label: "Product related", color: "#C026D3" },
-                    { value: stats.withKeyword.toLocaleString(),    label: "With keyword",    color: "#2563EB" },
+                    { value: stats.found.toLocaleString(),          label: trd("discover.stats.ideasFound"),     color: "var(--app-brand)" },
+                    { value: stats.fastSaving.toLocaleString(),     label: trd("discover.stats.fastSaving"),     color: "#16A34A" },
+                    { value: stats.productRelated.toLocaleString(), label: trd("discover.stats.productRelated"), color: "#C026D3" },
+                    { value: stats.withKeyword.toLocaleString(),    label: trd("discover.stats.withKeyword"),    color: "#2563EB" },
                   ].map(s => (
                     <div key={s.label} className="h-[50px] rounded-xl px-3 py-2"
                       style={{ background: "var(--app-surface-2)", border: "1px solid var(--app-border)" }}>
@@ -1562,31 +1603,31 @@ function DiscoverPageInner() {
                   style={viewMode === "gallery"
                     ? { background: "var(--app-surface)", color: "var(--app-brand)", boxShadow: "0 1px 3px var(--app-inset-hi)" }
                     : { color: "var(--app-text-sec)" }}>
-                  <LayoutGrid className="w-3.5 h-3.5" /> Gallery
+                  <LayoutGrid className="w-3.5 h-3.5" /> {trd("discover.view.gallery")}
                 </button>
                 <button type="button" onClick={() => setViewMode("analysis")}
                   className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-semibold transition-all"
                   style={viewMode === "analysis"
                     ? { background: "var(--app-surface)", color: "var(--app-brand)", boxShadow: "0 1px 3px var(--app-inset-hi)" }
                     : { color: "var(--app-text-sec)" }}>
-                  <List className="w-3.5 h-3.5" /> Analysis
+                  <List className="w-3.5 h-3.5" /> {trd("discover.view.analysis")}
                 </button>
               </div>
 
-              <FilterSelect label="Format" value={format} onChange={setFormat}
-                options={[{ value: "All", label: "All" }, ...formatOptions.map(f => ({ value: f, label: f }))]} />
+              <FilterSelect label={trd("discover.filter.format")} value={format} onChange={setFormat}
+                options={[{ value: "All", label: trd("discover.filter.all") }, ...formatOptions.map(f => ({ value: f, label: f }))]} />
 
               <div className="relative">
                 <button type="button" onClick={() => setNicheOpen(o => !o)}
                   className="flex h-9 items-center gap-2 rounded-xl px-3 text-[11px] font-semibold"
                   style={{ background: "var(--app-surface-2)", border: "1px solid var(--app-border)", color: "var(--app-text-sec)", boxShadow: "0 1px 2px var(--app-inset)" }}>
-                  <span>Niche</span>
+                  <span>{trd("discover.filter.niche")}</span>
                   <strong style={{ color: "var(--app-text)" }}>{currentNicheLabel}</strong>
                   <ChevronDown className="h-3 w-3 opacity-60" />
                 </button>
                 {nicheOpen && (
                   <>
-                    <button type="button" aria-label="Close" className="fixed inset-0 z-40 cursor-default" onClick={() => setNicheOpen(false)} />
+                    <button type="button" aria-label={tr("pinDetails.close")} className="fixed inset-0 z-40 cursor-default" onClick={() => setNicheOpen(false)} />
                     <div className="absolute left-0 top-full mt-1 z-50 rounded-xl overflow-hidden shadow-lg max-h-[300px] overflow-y-auto"
                       style={{ minWidth: 200, background: "var(--app-dropdown-bg)", border: "1px solid var(--app-dropdown-border)" }}>
                       {NICHE_OPTIONS.map(c => (
@@ -1594,7 +1635,7 @@ function DiscoverPageInner() {
                           onClick={() => { setVCat(c.label); setNicheOpen(false); }}
                           className="w-full text-left px-4 py-2 text-[12px] font-medium transition-colors"
                           style={{ color: vCat === c.label ? "var(--app-brand)" : "var(--app-dropdown-text)" }}>
-                          {c.label === "All" ? "All Niches" : c.label}
+                          {c.label === "All" ? trd("discover.filter.allNiches") : c.label}
                         </button>
                       ))}
                     </div>
@@ -1602,20 +1643,20 @@ function DiscoverPageInner() {
                 )}
               </div>
 
-              <FilterSelect label="Signal" value={signalFilter} onChange={v => setSignalFilter(v as "all" | CommercialSignal)}
-                options={[{ value: "all", label: "All" }, { value: "product", label: "Product Related" }, { value: "content", label: "Content Only" }]} />
-              <FilterSelect label="Freshness" value={freshness} onChange={v => setFreshness(v as "all" | "7" | "30" | "90")}
-                options={[{ value: "all", label: "All" }, { value: "7", label: "Last 7 days" }, { value: "30", label: "Last 30 days" }, { value: "90", label: "Last 90 days" }]} />
+              <FilterSelect label={trd("discover.filter.signal")} value={signalFilter} onChange={v => setSignalFilter(v as "all" | CommercialSignal)}
+                options={[{ value: "all", label: trd("discover.filter.all") }, { value: "product", label: trd("discover.signal.productRelated") }, { value: "content", label: trd("discover.signal.contentOnly") }]} />
+              <FilterSelect label={trd("discover.filter.freshness")} value={freshness} onChange={v => setFreshness(v as "all" | "7" | "30" | "90")}
+                options={[{ value: "all", label: trd("discover.filter.all") }, { value: "7", label: trd("discover.filter.last7Days") }, { value: "30", label: trd("discover.filter.last30Days") }, { value: "90", label: trd("discover.filter.last90Days") }]} />
               {trendKwOptions.length > 0 && (
-                <FilterSelect label="Trend keyword" value={trendKwFilter} onChange={setTrendKwFilter}
-                  options={[{ value: "All", label: "All" }, ...trendKwOptions.map(k => ({ value: k, label: k }))]} />
+                <FilterSelect label={trd("discover.filter.trendKeyword")} value={trendKwFilter} onChange={setTrendKwFilter}
+                  options={[{ value: "All", label: trd("discover.filter.all") }, ...trendKwOptions.map(k => ({ value: k, label: k }))]} />
               )}
               {searchKwOptions.length > 0 && (
-                <FilterSelect label="Search keyword" value={searchKwFilter} onChange={setSearchKwFilter}
-                  options={[{ value: "All", label: "All" }, ...searchKwOptions.map(k => ({ value: k, label: k }))]} />
+                <FilterSelect label={trd("discover.filter.searchKeyword")} value={searchKwFilter} onChange={setSearchKwFilter}
+                  options={[{ value: "All", label: trd("discover.filter.all") }, ...searchKwOptions.map(k => ({ value: k, label: k }))]} />
               )}
               <div className="xl:ml-auto">
-                <FilterSelect label="Sort by" value={sort} onChange={v => setSort(v as SortMode)} options={SORT_OPTIONS} />
+                <FilterSelect label={trd("discover.filter.sortBy")} value={sort} onChange={v => setSort(v as SortMode)} options={SORT_OPTIONS} />
               </div>
             </div>
           </div>
@@ -1638,9 +1679,9 @@ function DiscoverPageInner() {
                 {viralCards.map((pin, i) => {
                   const locked = i >= DEMO_GOAL;
                   const lockMessages = [
-                    { title: "1 more Blue Ocean hidden",             sub: "Low competition · High save velocity" },
-                    { title: "8 shoppable product signals locked",   sub: "Etsy + Amazon affiliate opportunities" },
-                    { title: "Unlock 40+ more weekly opportunities", sub: "Build 14-day and 30-day Pin plans" },
+                    { title: trd("discover.locked.blueOcean.title"),   sub: trd("discover.locked.blueOcean.sub") },
+                    { title: trd("discover.locked.shoppable.title"),   sub: trd("discover.locked.shoppable.sub") },
+                    { title: trd("discover.locked.unlockMore.title"),  sub: trd("discover.locked.unlockMore.sub") },
                   ];
                   const lm = lockMessages[Math.min(i - DEMO_GOAL, lockMessages.length - 1)];
                   return (
@@ -1657,7 +1698,7 @@ function DiscoverPageInner() {
                               className="inline-block rounded-full px-4 py-1.5 text-[11px] font-bold text-white"
                               style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}
                               onClick={e => e.stopPropagation()}>
-                              Sign up free →
+                              {trd("discover.locked.signUpFree")}
                             </a>
                           </div>
                         </div>
@@ -1695,25 +1736,25 @@ function DiscoverPageInner() {
               <Flame className="h-10 w-10 mx-auto mb-3 text-gray-200" />
               {isFiltering ? (
                 <>
-                  <p className="text-[13px] text-gray-600 font-medium">No viral pins found for your selected niches.</p>
-                  <p className="text-[11px] mt-1 mb-3 text-gray-400">Try switching to All Trends or a different category.</p>
+                  <p className="text-[13px] text-gray-600 font-medium">{trd("discover.empty.noPinsForNiches")}</p>
+                  <p className="text-[11px] mt-1 mb-3 text-gray-400">{trd("discover.empty.tryAllTrends")}</p>
                   <button type="button" onClick={() => setScope("all_trends")}
                     className="px-4 py-1.5 rounded-full text-[11px] font-semibold"
                     style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>
-                    Show All Trends
+                    {trd("discover.empty.showAllTrends")}
                   </button>
                 </>
               ) : hasActiveFilters ? (
                 <>
-                  <p className="text-[13px] text-gray-600 font-medium">No pins match the current filters.</p>
+                  <p className="text-[13px] text-gray-600 font-medium">{trd("discover.empty.noPinsMatchFilters")}</p>
                   <button type="button" onClick={clearFilters}
                     className="mt-2 px-4 py-1.5 rounded-full text-[11px] font-semibold"
                     style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3" }}>
-                    Clear Filters
+                    {trd("discover.empty.clearFilters")}
                   </button>
                 </>
               ) : (
-                <p className="text-[13px] text-gray-500">No viral pins in this category yet.</p>
+                <p className="text-[13px] text-gray-500">{trd("discover.empty.noPinsInCategory")}</p>
               )}
             </div>
           ) : viewMode === "gallery" ? (
@@ -1731,12 +1772,12 @@ function DiscoverPageInner() {
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
               <div className="flex items-center gap-3 px-4 py-2.5 bg-gray-50 border-b border-gray-200">
                 <div className="w-9 shrink-0" />
-                <div className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Category</div>
-                <div className="w-40 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Search keyword</div>
-                <div className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Format</div>
-                <div className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Signal</div>
-                <div className="w-16 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Saves</div>
-                <div className="w-20 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Saves/day</div>
+                <div className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{trd("discover.table.category")}</div>
+                <div className="w-40 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{trd("discover.table.searchKeyword")}</div>
+                <div className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{trd("discover.table.format")}</div>
+                <div className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{trd("discover.table.signal")}</div>
+                <div className="w-16 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{trd("discover.table.saves")}</div>
+                <div className="w-20 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{trd("discover.table.savesPerDay")}</div>
                 <div className="ml-auto" />
               </div>
               {pageCards.map(pin => (
@@ -1765,16 +1806,16 @@ function DiscoverPageInner() {
             )}
           </div>
           <span className="text-[13px] font-bold text-gray-900 shrink-0">
-            {selectedRefs.size} reference{selectedRefs.size !== 1 ? "s" : ""} selected
+            {selectedRefs.size} {selectedRefs.size !== 1 ? trd("discover.refBar.referencesPlural") : trd("discover.refBar.referenceSingular")}{trd("discover.refBar.selectedSuffix")}
           </span>
           <button type="button" onClick={clearRefs}
             className="rounded-full px-3 py-2 text-[11px] font-semibold text-gray-400 hover:text-gray-600 shrink-0">
-            Clear
+            {trd("discover.refBar.clear")}
           </button>
           <button type="button" data-testid="add-references-to-create-pins" onClick={addRefsToCreatePins}
             className="flex items-center gap-1.5 rounded-full px-5 py-2 text-[12px] font-bold text-white transition-opacity hover:opacity-90 shrink-0"
             style={{ background: "linear-gradient(135deg, #FF4D8D 0%, #D946EF 52%, #7C3AED 100%)" }}>
-            Add to Create Pins <ArrowRight className="h-3.5 w-3.5" />
+            {trd("discover.refBar.addToCreatePins")} <ArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>
       )}
@@ -1801,10 +1842,11 @@ function DiscoverPageInner() {
 }
 
 export default function DiscoverPage() {
+  const { t: tr } = useLocale();
   return (
     <Suspense fallback={
       <div className="app-page flex items-center justify-center h-full" style={{ color: "var(--app-text-muted)" }}>
-        <span className="text-[13px]">Loading…</span>
+        <span className="text-[13px]">{tr("common.loading")}</span>
       </div>
     }>
       <DiscoverPageInner />

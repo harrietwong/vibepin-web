@@ -1,9 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /**
- * Create Pins initial-state UI — Studio Board V2 (upload-first empty state, board
- * filter tabs). Repointed from the retired legacy composer (studio-interactive /
- * generate-btn) to the shipping board UI (studio-board / board-empty / board-filters).
+ * Create Pins initial-state UI — compact composer + generation feed fallback.
  * Run: pnpm test:e2e studio-initial-state.spec.ts
  */
 
@@ -33,7 +31,8 @@ async function gotoStudio(page: Page) {
   const url = page.url();
   expect(url, "Redirected to login — set E2E_TEST_MODE=true in .env.local and restart dev server")
     .not.toContain("/login");
-  await page.waitForSelector('[data-testid="studio-board"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="studio-interactive"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="generate-btn"]', { timeout: 15000 });
 }
 
 test.describe("Create Pins initial state", () => {
@@ -65,53 +64,71 @@ test.describe("Create Pins initial state", () => {
 
   test("page text is English on initial load", async ({ page }) => {
     await gotoStudio(page);
-    // Board-v2 has no dedicated page-header testid; the board's own <h1> carries the
-    // page title (same "Create Pins" copy the legacy header used).
-    await expect(page.getByRole("heading", { name: "Create Pins", level: 1 })).toBeVisible();
-    await expect(page.getByText("Drag and drop images here")).toBeVisible();
-    await expect(page.getByText("Upload one or more images to create editable Pin drafts.")).toBeVisible();
+    // Use the testid on the page header <p> to avoid matching the sidebar nav label.
+    await expect(page.getByTestId("page-header-title")).toBeVisible();
+    await expect(page.getByTestId("page-header-title")).toHaveText("Create Pins");
+    await expect(page.getByText("Products").first()).toBeVisible();
+    await expect(page.getByText("References").first()).toBeVisible();
+    await expect(page.getByText("Your generated Pins will appear here")).toBeVisible();
     await expect(page.getByText("图片")).toHaveCount(0);
     await expect(page.getByText("上传")).toHaveCount(0);
   });
 
-  // Legacy behavior: compact "Add product images" / "Add pin references" entry
-  // buttons sat directly on the default composer page and opened an asset picker
-  // pre-generation. Board-v2 is upload-first — there is no page-level product/
-  // reference picker before a card exists. Product/reference selection now lives
-  // inside the per-card "Generate AI Image" drawer (AiVersionDrawer), which requires
-  // an existing (or scratch) draft to open. No board-v2 equivalent at page level.
-  test.skip("compact product and reference entry buttons", async () => {});
-
-  // Legacy behavior: default page intentionally had NO large dropzone (compact
-  // entry buttons only); a big dropzone only lived inside the picker modal. Board-v2
-  // inverts this by design — the default/empty state IS a large drag-and-drop upload
-  // zone (`board-empty`, PRD "upload-first"). Asserting "no large dropzone" would
-  // directly contradict the shipping empty-state design, not just use a new selector.
-  test.skip("no large dropzone or separate Upload/Browse buttons on default page", async () => {});
-
-  // Legacy behavior: "Add product images" opened a page-level Product Images picker
-  // pre-generation. Board-v2 has no such top-level entry point — product selection
-  // only exists inside a card's AI drawer or the Shopify "Select product" flow.
-  test.skip("clicking Add product images opens Product Images picker", async () => {});
-
-  // Legacy behavior: "Add pin references" opened a page-level Pin References picker
-  // pre-generation. Board-v2 has no such top-level entry point — reference selection
-  // only exists inside a card's AI drawer (AiVersionDrawer's InlineCreateAssetPicker).
-  test.skip("clicking Add pin references opens Pin References picker", async () => {});
-
-  test("board shows empty upload-first state without any cards", async ({ page }) => {
+  test("compact product and reference entry buttons", async ({ page }) => {
     await gotoStudio(page);
-    await expect(page.getByTestId("board-empty")).toBeVisible();
-    await expect(page.getByTestId("pin-board-card")).toHaveCount(0);
-    await expect(page.getByTestId("board-upload-primary")).toBeVisible();
-    await expect(page.getByTestId("board-create-with-ai")).toBeVisible();
+    await expect(page.getByTestId("add-product-images")).toBeVisible();
+    await expect(page.getByTestId("add-pin-references")).toBeVisible();
+    await expect(page.getByTestId("add-product-images")).toContainText("Add product images");
+    await expect(page.getByTestId("add-pin-references")).toContainText("Add pin references");
+    await expect(page.getByTestId("products-asset-section-count")).toHaveText("(0)");
+    await expect(page.getByTestId("refs-asset-section-count")).toHaveText("(0)");
   });
 
-  test("board shows filter tabs", async ({ page }) => {
+  test("no large dropzone or separate Upload/Browse buttons on default page", async ({ page }) => {
     await gotoStudio(page);
-    await expect(page.getByTestId("board-filters")).toBeVisible();
-    for (const tab of ["all", "unscheduled", "scheduled", "posted", "failed"]) {
-      await expect(page.getByTestId(`board-filter-${tab}`)).toBeVisible();
+    await expect(page.getByText("Click or drag images here")).toHaveCount(0);
+    // These buttons only exist inside the picker modal — not on the default page.
+    await expect(page.locator('[data-testid="file-input-product"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="file-input-style_reference"]')).toHaveCount(0);
+  });
+
+  test("clicking Add product images opens Product Images picker", async ({ page }) => {
+    await gotoStudio(page);
+    await page.getByTestId("add-product-images").click();
+    await expect(page.getByTestId("asset-picker-modal")).toHaveCount(0);
+    await expect(page.getByTestId("product-picker")).toBeVisible({ timeout: 8000 });
+    await expect(page.getByText("Choose Product Images")).toBeVisible();
+    await expect(page.getByTestId("composer-panel")).toBeVisible();
+    await expect(page.getByTestId("picker-tab-my_products")).toHaveText("My Products");
+    await expect(page.getByTestId("picker-tab-product_ideas")).toHaveText("Product Ideas");
+    await expect(page.getByTestId("compact-upload-product")).toBeVisible();
+    await expect(page.getByTestId("compact-import-url")).toBeVisible();
+  });
+
+  test("clicking Add pin references opens Pin References picker", async ({ page }) => {
+    await gotoStudio(page);
+    await page.getByTestId("add-pin-references").click();
+    await expect(page.getByTestId("asset-picker-modal")).toHaveCount(0);
+    await expect(page.getByTestId("reference-picker")).toBeVisible({ timeout: 8000 });
+    await expect(page.getByText("Choose Pin References")).toBeVisible();
+    await expect(page.getByTestId("composer-panel")).toBeVisible();
+    await expect(page.getByTestId("picker-tab-my_references")).toHaveText("My References");
+    await expect(page.getByTestId("picker-tab-pin_ideas")).toHaveText("Pin Ideas");
+    await expect(page.getByTestId("compact-upload-reference")).toBeVisible();
+    await expect(page.getByTestId("compact-import-url")).toBeVisible();
+  });
+
+  test("generation feed shows empty fallback without history cards", async ({ page }) => {
+    await gotoStudio(page);
+    await expect(page.getByTestId("generation-feed-empty")).toBeVisible();
+    await expect(page.getByTestId("generated-pin-card")).toHaveCount(0);
+    await expect(page.getByTestId("how-it-works-btn")).toBeVisible();
+  });
+
+  test("generation feed shows filter tabs", async ({ page }) => {
+    await gotoStudio(page);
+    for (const tab of ["all", "generating", "completed", "failed", "added"]) {
+      await expect(page.getByTestId(`feed-tab-${tab}`)).toBeVisible();
     }
   });
 });

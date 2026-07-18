@@ -22,6 +22,7 @@ import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { publishPin, startPinterestConnect } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
+import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
 import { beginPublish, endPublish, countPublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
@@ -29,9 +30,11 @@ import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
-import { generateAiVersions } from "@/lib/studio/generateAiVersions";
+import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
+import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
+import { deriveTopPickIds } from "@/lib/studio/topPick";
 import { PinBoardCard } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
@@ -119,9 +122,9 @@ export function StudioBoard() {
   // so Retry/Move to Unscheduled/Delete are reflected immediately via re-render.
   const publishFailureCount = useMemo(() => countPublishFailures(allItems.map(x => x.draft)), [allItems]);
   const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount);
-  // The "Top pick" badge (derived across the full board) is part of the Creative
-  // Intelligence cluster, deferred out of RC0 Create Pins — PinBoardCard's topPick prop
-  // stays optional and simply goes untold here until that cluster lands.
+  // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
+  // depends on the current filter view; the badge transfers automatically as cards change.
+  const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
   // scheduling/publishing (distinct from a transient boards API failure).
@@ -147,9 +150,11 @@ export function StudioBoard() {
     // when we actually landed on the failed filter — a stray/stale flag must never
     // silently seed "publish" the next time the user happens to land elsewhere.
     setFailedSubFilter(restored === "failed" ? consumeFailedSubEntryDefault() : "all");
-    // Client-driven generation can't survive a reload — any draft still marked
-    // "generating" now is unrecoverable. Fail it so cards never stick in Generating.
-    pinDraftStore.failStaleGeneratingDrafts();
+    // WP3-P2: reconcile in-flight generation jobs instead of blindly failing every
+    // "generating" card. Worker-mode placeholders (generationJobId set) resume
+    // polling or apply their already-terminal result; only jobId-less (inline-mode)
+    // leftovers are judged dead, matching the pre-P2 behavior for that partition.
+    void reconcileGeneratingDrafts();
   }, []);
 
   const [uploading, setUploading] = useState(false);
@@ -242,18 +247,14 @@ export function StudioBoard() {
   // ── Schedule = smart auto-assign (no pickers) ──────────────────────────────
   const handleSchedule = useCallback((id: string) => {
     const d = pinDraftStore.getDraft(id); if (!d) return;
-    const missingImage = d.assetError || !isPublishableImage(d.imageUrl);
-    const missingBoard = noBoardAccess || !d.boardId?.trim();
-    if (missingImage || missingBoard) {
+    if (noBoardAccess || !isPinReady(draftReadiness(d))) {
       setActiveId(id);
-      // Scheduling has its own minimal guard. It deliberately does not use the
-      // publish-readiness gate or require copy/alt text/URL metadata.
+      // Field-level error for the board (the one pickable field that most often
+      // blocks scheduling); other gaps are listed in the toast. Lifecycle stays
+      // Unscheduled — validation failure never creates a Scheduled state.
       if (!d.boardId?.trim() && !noBoardAccess) {
         setScheduleErrors(prev => ({ ...prev, [id]: tr("studioBoard.toast.chooseBoardToSchedule") }));
       }
-      // WP1 gate: only image + board block scheduling. The message already says exactly
-      // that ("Add an image and choose a board…") — no copy/alt/URL requirement — and a
-      // missing board also gets the field-level chooseBoardToSchedule hint above.
       toast.error(tr("studioBoard.toast.completeDetailsToSchedule"));
       return;
     }
@@ -401,6 +402,11 @@ export function StudioBoard() {
         generationSessionId: requestId,
         promptSnapshot: opts.directionBrief,
         setupSnapshot,
+        // WP3-P2: this index IS the worker-mode results[] slot (placeholders[i] ↔
+        // slot i, 1:1 — see the enqueue block below). Stamped unconditionally, even
+        // in what may turn out to be the inline-mode fallback, since it's a stable
+        // per-card fact and harmless when unused.
+        generationSlot: i,
       }),
     );
     // Close the drawer right away — generation continues and the cards update.
@@ -408,8 +414,51 @@ export function StudioBoard() {
     setAiGenerating(false);
     toast.success(requested === 1 ? tr("studioBoard.toast.generatingOne") : tr("studioBoard.toast.generatingMany").replace("{n}", String(requested)));
 
-    // 2) Run generation; resolve/fail each placeholder. A closed drawer or a
-    //    partial failure never rolls back successful results.
+    // 2) WP3-P1: try the worker enqueue path first (response-shape probe — a jobId
+    //    means the server is in GENERATION_MODE=worker). null means inline mode; fall
+    //    back to the original synchronous generateAiVersions() path unchanged below.
+    let enqueued: Awaited<ReturnType<typeof enqueueGeneration>> = null;
+    try {
+      enqueued = await enqueueGeneration({ source: parent, setup: opts });
+    } catch {
+      // Worker path errored (e.g. 503 generation_unavailable) — fail these placeholders
+      // outright rather than silently falling back to the (likely also broken) inline path.
+      placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
+      toast.error(tr("studioBoard.toast.couldNotGenerate"));
+      return;
+    }
+
+    if (enqueued) {
+      // Stamp the job id on each placeholder (slot i ↔ placeholders[i], 1:1 by index —
+      // no new cards are ever created in this path, matching the P1 contract).
+      placeholders.forEach(p => pinDraftStore.updateDraft(p.id, { generationJobId: enqueued!.jobId }));
+      let doneCount = 0, failCount = 0;
+      pollGenerationJob(enqueued.jobId, {
+        onSlot: (slot, status, url) => {
+          const placeholder = placeholders[slot];
+          if (!placeholder) return;
+          if (status === "done" && url) {
+            pinDraftStore.completeGeneratedDraft(placeholder.id, url);
+            void startImageAnalysis(placeholder.id);
+            doneCount++;
+          } else {
+            pinDraftStore.failGeneratedDraft(placeholder.id);
+            failCount++;
+          }
+        },
+        onEnd: () => {
+          if (doneCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(doneCount)).replace("{okPlural}", doneCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
+          else if (doneCount) toast.success(parent
+            ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s")
+            : tr("studioBoard.toast.createdAiPins").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s"));
+          else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+        },
+      });
+      return;
+    }
+
+    // 2b) Inline mode (unchanged): run generation; resolve/fail each placeholder.
+    //    A closed drawer or a partial failure never rolls back successful results.
     try {
       const result = await generateAiVersions({ source: parent, setup: opts });
       result.urls.slice(0, placeholders.length).forEach((url, i) => {
@@ -420,6 +469,8 @@ export function StudioBoard() {
           assetKey: `gen:${requestId}:${i}`,
         });
         void startImageAnalysis(placeholders[i].id);
+        // Phase C: grade AI results in parallel (independent of copy analysis).
+        void startQualityJudge(placeholders[i].id);
       });
       // Requested more than came back → the unfilled placeholders failed.
       placeholders.slice(result.urls.length).forEach(p => pinDraftStore.failGeneratedDraft(p.id));
@@ -434,6 +485,7 @@ export function StudioBoard() {
           sourceGenerationId: result.generationRequestId, sourceAssetKey: `gen:${requestId}:extra:${i}`,
         });
         void startImageAnalysis(extra.id);
+        void startQualityJudge(extra.id);
       });
       const okCount = Math.min(result.urls.length, placeholders.length) + Math.max(0, result.urls.length - placeholders.length);
       const failCount = Math.max(0, placeholders.length - result.urls.length);
@@ -682,6 +734,7 @@ export function StudioBoard() {
             {items.map(({ draft, lifecycle }) => (
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}
+                topPick={topPickIds.has(draft.id)}
                 active={activeId === draft.id} onSetActive={setActiveId}
                 boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}

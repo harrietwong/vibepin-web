@@ -1,0 +1,51 @@
+diff --git a/web/src/components/studio/PinBoardCard.tsx b/web/src/components/studio/PinBoardCard.tsx
+index e97114c..3f9e5ac 100644
+--- a/web/src/components/studio/PinBoardCard.tsx
++++ b/web/src/components/studio/PinBoardCard.tsx
+@@ -27,6 +27,7 @@ import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsF
+ import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
+ import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
+ import { track } from "@/lib/analytics";
++import { HIDDEN_PROMPT_VERSION } from "@/lib/studio/hiddenPromptBuilder";
+ 
+ const PERSIST_DEBOUNCE = 400;
+ // Hover → auto-expand delay (ms). Long enough that a mouse merely passing over the
+@@ -246,7 +247,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
+     const j = draft.qualityJudge;
+     if (!j) return;
+     props.onPersist(draft.id, { qualityJudge: { ...j, userOverride: true } });
+-    track("generation_kept", { draftId: draft.id });
++    track("generation_kept", { draftId: draft.id, versions: { promptVersion: HIDDEN_PROMPT_VERSION } });
+   }, [props, draft.id, draft.qualityJudge]);
+ 
+   // ── Recommended-keyword chips (compact card) ────────────────────────────────
+diff --git a/web/src/components/studio/StudioBoard.tsx b/web/src/components/studio/StudioBoard.tsx
+index b05b131..cc1f9e5 100644
+--- a/web/src/components/studio/StudioBoard.tsx
++++ b/web/src/components/studio/StudioBoard.tsx
+@@ -23,6 +23,7 @@ import type { PinDraft } from "@/lib/pinDraftStore";
+ import { publishPin, startPinterestConnect } from "@/lib/pinterestClient";
+ import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
+ import { track } from "@/lib/analytics";
++import { HIDDEN_PROMPT_VERSION } from "@/lib/studio/hiddenPromptBuilder";
+ import { beginPublish, endPublish, countPublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+ import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
+ import { isPinReady, isPublishableImage } from "@/lib/pinReadiness";
+@@ -333,7 +334,7 @@ export function StudioBoard() {
+     const parent = aiDrawer.mode === "version" ? aiDrawer.draft : null;
+     setAiGenerating(true);
+     // Regenerating from an existing pin (version mode) is a "regenerate" action.
+-    if (parent) track("regenerate_clicked", { draftId: parent.id });
++    if (parent) track("regenerate_clicked", { draftId: parent.id, versions: { promptVersion: HIDDEN_PROMPT_VERSION } });
+ 
+     // 1) Create N Generating placeholder cards IMMEDIATELY so the user sees the
+     //    task started (PRD 8.9). Stable keys gen:{requestId}:{i}; lineage preserved;
+@@ -417,7 +418,7 @@ export function StudioBoard() {
+ 
+   const handleDelete = useCallback((d: PinDraft) => {
+     if (typeof window !== "undefined" && !window.confirm(tr("studioBoard.confirm.deleteDraft"))) return;
+-    if (d.source === "ai_generated_from_upload") track("generation_deleted", { draftId: d.id });
++    if (d.source === "ai_generated_from_upload") track("generation_deleted", { draftId: d.id, versions: { promptVersion: HIDDEN_PROMPT_VERSION } });
+     pinDraftStore.deleteDraft(d.id); toast.success(tr("studioBoard.toast.draftDeleted"));
+   }, [tr]);
+   const handleArchive = useCallback((d: PinDraft) => { pinDraftStore.archiveDraft(d.id); toast.success(tr("studioBoard.toast.archived")); }, [tr]);

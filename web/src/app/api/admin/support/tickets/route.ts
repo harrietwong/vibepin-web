@@ -2,10 +2,15 @@
  * GET /api/admin/support/tickets — list tickets for the admin console, with
  * optional status/priority/category filters. Open + High/Urgent first, then
  * newest first.
+ *
+ * `inbox` param drives the Support Inbox tabs (PRD §6.2): "pending"
+ * (needs_email_reply | email_failed), "failed" (email_failed), "sent"
+ * (email_sent), omitted/"all" = unfiltered (pre-existing behavior).
  */
 
 import { requireAdminRoleFromRequest } from "@/lib/server/superAdmin";
 import { listTicketsForAdmin } from "@/lib/support/db";
+import { escalationStatesForInboxTab } from "@/lib/support/inboxCore";
 import { SUPPORT_CATEGORIES, SUPPORT_PRIORITIES, SUPPORT_STATUSES, type SupportCategory, type SupportPriority, type SupportStatus } from "@/lib/support/types";
 
 export const dynamic = "force-dynamic";
@@ -21,13 +26,15 @@ export async function GET(req: Request) {
   const statusParam = url.searchParams.get("status");
   const priorityParam = url.searchParams.get("priority");
   const categoryParam = url.searchParams.get("category");
+  const inboxParam = url.searchParams.get("inbox");
 
   const status = statusParam && (SUPPORT_STATUSES as readonly string[]).includes(statusParam) ? (statusParam as SupportStatus) : undefined;
   const priority = priorityParam && (SUPPORT_PRIORITIES as readonly string[]).includes(priorityParam) ? (priorityParam as SupportPriority) : undefined;
   const category = categoryParam && (SUPPORT_CATEGORIES as readonly string[]).includes(categoryParam) ? (categoryParam as SupportCategory) : undefined;
+  const escalationStates = escalationStatesForInboxTab(inboxParam);
 
   try {
-    const tickets = await listTicketsForAdmin({ status, priority, category });
+    const tickets = await listTicketsForAdmin({ status, priority, category, escalationStates });
     // Default sort: open/high-priority first, newest first within each bucket.
     const sorted = [...tickets].sort((a, b) => {
       if (STATUS_RANK[a.status] !== STATUS_RANK[b.status]) return STATUS_RANK[a.status] - STATUS_RANK[b.status];

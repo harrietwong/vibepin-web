@@ -9,6 +9,8 @@ import * as lib from "@/lib/productLibraryStore";
 import * as basket from "@/lib/basketStore";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { toast } from "sonner";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { MessageKey } from "@/lib/i18n/messages/en";
 
 // ── useBasket hook ─────────────────────────────────────────────────────────────
 function useBasket() {
@@ -32,26 +34,26 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-const SOURCE_LABELS: Record<string, string> = {
-  viral_pin:   "Viral Pin",
-  opportunity: "Pin Opportunity",
-  uploaded:    "Uploaded",
-  studio:      "Studio Reference",
-};
+const SOURCE_LABEL_KEYS: Record<string, MessageKey> = {
+  viral_pin:   "productLibrary.source.viralPin" as MessageKey,
+  opportunity: "productLibrary.source.opportunity" as MessageKey,
+  uploaded:    "productLibrary.source.uploaded" as MessageKey,
+  studio:      "productLibrary.source.studio" as MessageKey,
+} as const;
 const SOURCE_COLORS: Record<string, string> = {
   viral_pin:   "#7C3AED",
   opportunity: "#2563EB",
   uploaded:    "#059669",
   studio:      "#D97706",
 };
-const VF_LABELS: Record<string, string> = {
-  flat_lay:     "Flat lay",
-  on_body:      "On-body",
-  room_scene:   "Room scene",
-  product_only: "Product only",
-  mirror:       "Mirror selfie",
-  moodboard:    "Moodboard",
-};
+const VF_LABEL_KEYS: Record<string, MessageKey> = {
+  flat_lay:     "productLibrary.visualFormat.flatLay" as MessageKey,
+  on_body:      "productLibrary.visualFormat.onBody" as MessageKey,
+  room_scene:   "productLibrary.visualFormat.roomScene" as MessageKey,
+  product_only: "productLibrary.visualFormat.productOnly" as MessageKey,
+  mirror:       "productLibrary.visualFormat.mirror" as MessageKey,
+  moodboard:    "productLibrary.visualFormat.moodboard" as MessageKey,
+} as const;
 
 // ── Upload product dialog ──────────────────────────────────────────────────────
 function UploadProductDialog({
@@ -61,6 +63,7 @@ function UploadProductDialog({
   onClose: () => void;
   onSave: (p: Omit<lib.LibraryProduct, "id" | "createdAt">) => void;
 }) {
+  const { t: tr } = useLocale();
   const fileRef = useRef<HTMLInputElement>(null);
   const [title,      setTitle]      = useState("");
   const [category,   setCategory]   = useState("");
@@ -85,7 +88,7 @@ function UploadProductDialog({
     <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "#fff", borderRadius: 16, padding: 28, width: 440, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-          <p style={{ margin: 0, fontSize: "16px", fontWeight: 800, color: "#0F172A" }}>Upload Product</p>
+          <p style={{ margin: 0, fontSize: "16px", fontWeight: 800, color: "#0F172A" }}>{tr("productLibrary.uploadDialog.title" as MessageKey)}</p>
           <button type="button" onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#94A3B8" }}>
             <X style={{ width: 18, height: 18 }}/>
           </button>
@@ -107,8 +110,8 @@ function UploadProductDialog({
           ) : (
             <>
               <ImagePlus style={{ width: 32, height: 32, color: "#CBD5E1", marginBottom: 8 }}/>
-              <p style={{ margin: 0, fontSize: "12px", color: "#94A3B8", fontWeight: 600 }}>Click to upload product image</p>
-              <p style={{ margin: "4px 0 0", fontSize: "10px", color: "#CBD5E1" }}>PNG, JPG, WebP — up to 10 MB</p>
+              <p style={{ margin: 0, fontSize: "12px", color: "#94A3B8", fontWeight: 600 }}>{tr("productLibrary.uploadDialog.clickToUpload" as MessageKey)}</p>
+              <p style={{ margin: "4px 0 0", fontSize: "10px", color: "#CBD5E1" }}>{tr("productLibrary.uploadDialog.fileHint" as MessageKey)}</p>
             </>
           )}
         </div>
@@ -116,31 +119,31 @@ function UploadProductDialog({
           onChange={e => { const f = e.target.files?.[0]; if (f) void pickFile(f); }}/>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Product title *"
+          <input value={title} onChange={e => setTitle(e.target.value)} placeholder={tr("productLibrary.uploadDialog.titlePlaceholder" as MessageKey)}
             style={{ borderRadius: 9, border: "1px solid #E5E7EB", padding: "9px 13px", fontSize: "13px", outline: "none", color: "#374151" }}/>
 
           <div style={{ display: "flex", gap: 10 }}>
-            <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category (e.g. Decor)"
+            <input value={category} onChange={e => setCategory(e.target.value)} placeholder={tr("productLibrary.uploadDialog.categoryPlaceholder" as MessageKey)}
               style={{ flex: 1, borderRadius: 9, border: "1px solid #E5E7EB", padding: "9px 13px", fontSize: "13px", outline: "none", color: "#374151" }}/>
 
             <div style={{ flex: 1, position: "relative" }}>
               <select value={collection} onChange={e => setCollection(e.target.value)}
                 style={{ width: "100%", appearance: "none", borderRadius: 9, border: "1px solid #E5E7EB", padding: "9px 32px 9px 13px", fontSize: "13px", outline: "none", color: "#374151", background: "#fff", cursor: "pointer" }}>
                 {collections.map(c => <option key={c} value={c}>{c}</option>)}
-                <option value="">No collection</option>
+                <option value="">{tr("productLibrary.uploadDialog.noCollection" as MessageKey)}</option>
               </select>
               <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "#94A3B8", pointerEvents: "none" }}>▼</span>
             </div>
           </div>
 
-          <input value={tags} onChange={e => setTags(e.target.value)} placeholder="Tags (comma-separated)"
+          <input value={tags} onChange={e => setTags(e.target.value)} placeholder={tr("productLibrary.uploadDialog.tagsPlaceholder" as MessageKey)}
             style={{ borderRadius: 9, border: "1px solid #E5E7EB", padding: "9px 13px", fontSize: "13px", outline: "none", color: "#374151" }}/>
         </div>
 
         <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
           <button type="button" onClick={onClose}
             style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1px solid #E5E7EB", background: "#F8FAFC", fontSize: "13px", fontWeight: 600, color: "#374151", cursor: "pointer" }}>
-            Cancel
+            {tr("productLibrary.uploadDialog.cancel" as MessageKey)}
           </button>
           <button type="button"
             disabled={!title.trim() || !imageUrl}
@@ -161,7 +164,7 @@ function UploadProductDialog({
               color: title.trim() && imageUrl ? "#fff" : "#94A3B8",
               cursor: title.trim() && imageUrl ? "pointer" : "not-allowed",
             }}>
-            Save to Library
+            {tr("productLibrary.uploadDialog.saveToLibrary" as MessageKey)}
           </button>
         </div>
       </div>
@@ -171,23 +174,24 @@ function UploadProductDialog({
 
 // ── New collection dialog ──────────────────────────────────────────────────────
 function NewCollectionDialog({ onClose, onSave }: { onClose: () => void; onSave: (name: string) => void }) {
+  const { t: tr } = useLocale();
   const [name, setName] = useState("");
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "#fff", borderRadius: 14, padding: 24, width: 340, boxShadow: "0 16px 40px rgba(0,0,0,0.2)" }}>
-        <p style={{ margin: "0 0 16px", fontSize: "15px", fontWeight: 800, color: "#0F172A" }}>New Collection</p>
+        <p style={{ margin: "0 0 16px", fontSize: "15px", fontWeight: 800, color: "#0F172A" }}>{tr("productLibrary.newCollectionDialog.title" as MessageKey)}</p>
         <input autoFocus value={name} onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && name.trim()) { onSave(name.trim()); onClose(); } }}
-          placeholder="Collection name…"
+          placeholder={tr("productLibrary.newCollectionDialog.namePlaceholder" as MessageKey)}
           style={{ width: "100%", boxSizing: "border-box", borderRadius: 9, border: "1px solid #E5E7EB", padding: "9px 13px", fontSize: "13px", outline: "none", color: "#374151", marginBottom: 16 }}/>
         <div style={{ display: "flex", gap: 10 }}>
           <button type="button" onClick={onClose}
             style={{ flex: 1, padding: "10px", borderRadius: 9, border: "1px solid #E5E7EB", background: "#F8FAFC", fontSize: "13px", fontWeight: 600, color: "#374151", cursor: "pointer" }}>
-            Cancel
+            {tr("productLibrary.newCollectionDialog.cancel" as MessageKey)}
           </button>
           <button type="button" disabled={!name.trim()} onClick={() => { onSave(name.trim()); onClose(); }}
             style={{ flex: 2, padding: "10px", borderRadius: 9, border: "none", background: name.trim() ? "#7C3AED" : "#F1F5F9", color: name.trim() ? "#fff" : "#94A3B8", fontSize: "13px", fontWeight: 800, cursor: name.trim() ? "pointer" : "not-allowed" }}>
-            Create
+            {tr("productLibrary.newCollectionDialog.create" as MessageKey)}
           </button>
         </div>
       </div>
@@ -205,6 +209,7 @@ function ProductCard({
   onRemove: () => void;
   inBasket: boolean;
 }) {
+  const { t: tr } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div style={{
@@ -236,7 +241,7 @@ function ProductCard({
         {/* Basket indicator */}
         {inBasket && (
           <div style={{ position: "absolute", top: 8, right: 8, padding: "2px 7px", borderRadius: 20, background: "rgba(124,58,237,0.85)", backdropFilter: "blur(4px)" }}>
-            <span style={{ fontSize: "9px", fontWeight: 700, color: "#fff" }}>In basket</span>
+            <span style={{ fontSize: "9px", fontWeight: 700, color: "#fff" }}>{tr("productLibrary.card.inBasket" as MessageKey)}</span>
           </div>
         )}
       </div>
@@ -257,7 +262,7 @@ function ProductCard({
                 <div style={{ position: "absolute", right: 0, top: "100%", zIndex: 20, background: "#fff", border: "1px solid #E5E7EB", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", minWidth: 140, overflow: "hidden" }}>
                   <button type="button" onClick={() => { setMenuOpen(false); onRemove(); }}
                     style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: "#EF4444", fontWeight: 600, textAlign: "left" }}>
-                    <Trash2 style={{ width: 12, height: 12 }}/> Remove
+                    <Trash2 style={{ width: 12, height: 12 }}/> {tr("productLibrary.card.remove" as MessageKey)}
                   </button>
                 </div>
               </>
@@ -271,7 +276,7 @@ function ProductCard({
           </span>
         )}
         {product.lastUsed && (
-          <p style={{ margin: "5px 0 0", fontSize: "9px", color: "#CBD5E1" }}>Used {formatDate(product.lastUsed)}</p>
+          <p style={{ margin: "5px 0 0", fontSize: "9px", color: "#CBD5E1" }}>{tr("productLibrary.card.usedPrefix" as MessageKey).replace("{n}", formatDate(product.lastUsed))}</p>
         )}
       </div>
     </div>
@@ -284,6 +289,7 @@ function ReferenceCard({
 }: {
   ref: lib.ReferencePin; selected: boolean; onToggle: () => void; onRemove: () => void; inBasket: boolean;
 }) {
+  const { t: tr } = useLocale();
   const labelColor = SOURCE_COLORS[r.source] ?? "#374151";
   return (
     <div style={{
@@ -308,12 +314,12 @@ function ReferenceCard({
         </div>
         {inBasket && (
           <div style={{ position: "absolute", top: 8, right: 8, padding: "2px 7px", borderRadius: 20, background: "rgba(124,58,237,0.85)", backdropFilter: "blur(4px)" }}>
-            <span style={{ fontSize: "9px", fontWeight: 700, color: "#fff" }}>In basket</span>
+            <span style={{ fontSize: "9px", fontWeight: 700, color: "#fff" }}>{tr("productLibrary.card.inBasket" as MessageKey)}</span>
           </div>
         )}
         <div style={{ position: "absolute", bottom: 6, left: 6 }}>
           <span style={{ fontSize: "9px", fontWeight: 700, color: labelColor, background: "rgba(255,255,255,0.88)", padding: "2px 7px", borderRadius: 20, backdropFilter: "blur(4px)", border: `1px solid ${labelColor}30` }}>
-            {SOURCE_LABELS[r.source] ?? r.source}
+            {SOURCE_LABEL_KEYS[r.source] ? tr(SOURCE_LABEL_KEYS[r.source]) : r.source}
           </span>
         </div>
       </div>
@@ -322,12 +328,12 @@ function ReferenceCard({
           <p style={{ margin: 0, fontSize: "11px", fontWeight: 600, color: "#374151", lineHeight: 1.3 }}>{r.keyword}</p>
         )}
         {r.visualFormat && (
-          <p style={{ margin: "3px 0 0", fontSize: "9px", color: "#94A3B8" }}>{VF_LABELS[r.visualFormat] ?? r.visualFormat}</p>
+          <p style={{ margin: "3px 0 0", fontSize: "9px", color: "#94A3B8" }}>{VF_LABEL_KEYS[r.visualFormat] ? tr(VF_LABEL_KEYS[r.visualFormat]) : r.visualFormat}</p>
         )}
         <p style={{ margin: "4px 0 0", fontSize: "9px", color: "#CBD5E1" }}>{formatDate(r.savedAt)}</p>
         <button type="button" onClick={onRemove}
           style={{ marginTop: 5, background: "none", border: "none", cursor: "pointer", fontSize: "10px", color: "#94A3B8", padding: 0, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
-          <Trash2 style={{ width: 10, height: 10 }}/> Remove
+          <Trash2 style={{ width: 10, height: 10 }}/> {tr("productLibrary.card.remove" as MessageKey)}
         </button>
       </div>
     </div>
@@ -336,13 +342,14 @@ function ReferenceCard({
 
 // ── Product Set card ───────────────────────────────────────────────────────────
 function SetCard({ set, products, onDelete }: { set: lib.ProductSet; products: lib.LibraryProduct[]; onDelete: () => void }) {
+  const { t: tr } = useLocale();
   const setProducts = products.filter(p => set.productIds.includes(p.id));
   return (
     <div style={{ borderRadius: 12, border: "1.5px solid #E5E7EB", background: "#fff", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
           <p style={{ margin: 0, fontSize: "13px", fontWeight: 700, color: "#0F172A" }}>{set.name}</p>
-          <p style={{ margin: "2px 0 0", fontSize: "10px", color: "#94A3B8" }}>{setProducts.length} product{setProducts.length !== 1 ? "s" : ""}</p>
+          <p style={{ margin: "2px 0 0", fontSize: "10px", color: "#94A3B8" }}>{setProducts.length} {setProducts.length !== 1 ? tr("productLibrary.setCard.products" as MessageKey) : tr("productLibrary.setCard.product" as MessageKey)}</p>
         </div>
         <button type="button" onClick={onDelete}
           style={{ background: "none", border: "none", cursor: "pointer", color: "#CBD5E1", padding: "2px" }}>
@@ -362,21 +369,27 @@ function SetCard({ set, products, onDelete }: { set: lib.ProductSet; products: l
           </div>
         )}
       </div>
-      <p style={{ margin: 0, fontSize: "9px", color: "#CBD5E1" }}>Updated {formatDate(set.updatedAt)}</p>
+      <p style={{ margin: 0, fontSize: "9px", color: "#CBD5E1" }}>{tr("productLibrary.setCard.updatedPrefix" as MessageKey).replace("{n}", formatDate(set.updatedAt))}</p>
     </div>
   );
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
+function ProductLibraryLoadingFallback() {
+  const { t: tr } = useLocale();
+  return <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#94A3B8", fontSize: "13px" }}>{tr("productLibrary.loading" as MessageKey)}</div>;
+}
+
 export default function ProductLibraryPage() {
   return (
-    <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#94A3B8", fontSize: "13px" }}>Loading…</div>}>
+    <Suspense fallback={<ProductLibraryLoadingFallback />}>
       <ProductLibraryContent />
     </Suspense>
   );
 }
 
 function ProductLibraryContent() {
+  const { t: tr }     = useLocale();
   const router       = useRouter();
   const searchParams = useSearchParams();
   const activeTab    = (searchParams.get("tab") ?? "products") as "products" | "references";
@@ -441,7 +454,7 @@ function ProductLibraryContent() {
       .filter(p => selectedIds.has(p.id))
       .map(p => ({ id: p.id, title: p.title, imageUrl: p.imageUrl, collection: p.collection, category: p.category }));
     basket.addProducts(toAdd);
-    toast.success(`${toAdd.length} product${toAdd.length !== 1 ? "s" : ""} added to basket`);
+    toast.success(tr((toAdd.length !== 1 ? "productLibrary.toast.productsAddedToBasketPlural" : "productLibrary.toast.productsAddedToBasket") as MessageKey).replace("{n}", String(toAdd.length)));
     setSelectedIds(new Set());
   }
 
@@ -450,15 +463,15 @@ function ProductLibraryContent() {
       .filter(r => selectedRefIds.has(r.id))
       .map(r => ({ id: r.id, imageUrl: r.imageUrl, source: r.source, keyword: r.keyword, visualFormat: r.visualFormat }));
     basket.addReferences(toAdd);
-    toast.success(`${toAdd.length} reference${toAdd.length !== 1 ? "s" : ""} added to basket`);
+    toast.success(tr((toAdd.length !== 1 ? "productLibrary.toast.referencesAddedToBasketPlural" : "productLibrary.toast.referencesAddedToBasket") as MessageKey).replace("{n}", String(toAdd.length)));
     setSelectedRefIds(new Set());
   }
 
   function createSetFromSelected() {
-    const name = prompt("Product set name:");
+    const name = prompt(tr("productLibrary.prompt.productSetName" as MessageKey));
     if (!name?.trim()) return;
     lib.createSet(name.trim(), Array.from(selectedIds));
-    toast.success(`Set "${name}" created`);
+    toast.success(`${tr("productLibrary.toast.setCreatedPrefix" as MessageKey)}${name}${tr("productLibrary.toast.setCreatedSuffix" as MessageKey)}`);
     setSelectedIds(new Set());
   }
 
@@ -468,13 +481,13 @@ function ProductLibraryContent() {
     try {
       const { publicUrl } = await uploadPinImage(file);
       lib.saveReference({ imageUrl: publicUrl, source: "uploaded" });
-      toast.success("Reference saved to library");
+      toast.success(tr("productLibrary.toast.referenceSaved" as MessageKey));
       return;
     } catch { /* fall through to local data URL */ }
     const r = new FileReader();
     r.onload = e => {
       lib.saveReference({ imageUrl: e.target?.result as string, source: "uploaded" });
-      toast.success("Reference saved to library");
+      toast.success(tr("productLibrary.toast.referenceSaved" as MessageKey));
     };
     r.readAsDataURL(file);
   }
@@ -489,14 +502,14 @@ function ProductLibraryContent() {
       {/* ── Header ── */}
       <div style={{ padding: "0 24px", background: "#fff", borderBottom: "1px solid #E5E7EB", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: "18px", fontWeight: 800, color: "#0F172A" }}>Library</h1>
-          <p style={{ margin: 0, fontSize: "11px", color: "#94A3B8" }}>Store and organize your products and reference pins for easy access.</p>
+          <h1 style={{ margin: 0, fontSize: "18px", fontWeight: 800, color: "#0F172A" }}>{tr("productLibrary.header.title" as MessageKey)}</h1>
+          <p style={{ margin: 0, fontSize: "11px", color: "#94A3B8" }}>{tr("productLibrary.header.subtitle" as MessageKey)}</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {totalCount > 0 && (
             <button type="button" onClick={() => router.push("/app/studio?fromBasket=1")}
               style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", borderRadius: 30, border: "1px solid #E5E7EB", background: "#F8FAFC", fontSize: "12px", fontWeight: 700, color: "#374151", cursor: "pointer" }}>
-              <ShoppingBag style={{ width: 14, height: 14 }}/> Create Basket
+              <ShoppingBag style={{ width: 14, height: 14 }}/> {tr("productLibrary.header.createBasket" as MessageKey)}
               <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", background: "#7C3AED", color: "#fff", fontSize: "10px", fontWeight: 800 }}>{totalCount}</span>
             </button>
           )}
@@ -516,12 +529,12 @@ function ProductLibraryContent() {
                 borderBottom: activeTab === tab ? "2px solid #7C3AED" : "2px solid transparent",
                 marginBottom: -1,
               }}>
-              {tab === "products" ? "Product Library" : "Reference Library"}
+              {tab === "products" ? tr("productLibrary.tab.products" as MessageKey) : tr("productLibrary.tab.references" as MessageKey)}
             </button>
           ))}
         </div>
         <button type="button" style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", cursor: "pointer", fontSize: "11px", color: "#94A3B8" }}>
-          How it works
+          {tr("productLibrary.howItWorks" as MessageKey)}
         </button>
       </div>
 
@@ -537,7 +550,7 @@ function ProductLibraryContent() {
                 {/* Collections */}
                 <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                    <p style={{ margin: 0, fontSize: "11px", fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.07em" }}>Collections</p>
+                    <p style={{ margin: 0, fontSize: "11px", fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.07em" }}>{tr("productLibrary.sidebar.collections" as MessageKey)}</p>
                     <button type="button" onClick={() => setShowNewCollection(true)}
                       style={{ background: "none", border: "none", cursor: "pointer", color: "#7C3AED", padding: 0 }}>
                       <Plus style={{ width: 14, height: 14 }}/>
@@ -554,7 +567,7 @@ function ProductLibraryContent() {
                         cursor: "pointer", width: "100%", textAlign: "left",
                       }}>
                       <FolderOpen style={{ width: 13, height: 13, color: activeCollection === null ? "#7C3AED" : "#9CA3AF", flexShrink: 0 }}/>
-                      <span style={{ flex: 1, fontSize: "12px", fontWeight: activeCollection === null ? 700 : 500, color: activeCollection === null ? "#7C3AED" : "#374151" }}>All Products</span>
+                      <span style={{ flex: 1, fontSize: "12px", fontWeight: activeCollection === null ? 700 : 500, color: activeCollection === null ? "#7C3AED" : "#374151" }}>{tr("productLibrary.sidebar.allProducts" as MessageKey)}</span>
                       <span style={{ fontSize: "11px", color: "#94A3B8", fontWeight: 600 }}>{products.length}</span>
                     </button>
 
@@ -574,23 +587,23 @@ function ProductLibraryContent() {
 
                     <button type="button" onClick={() => setShowNewCollection(true)}
                       style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", borderRadius: 8, border: "none", background: "none", cursor: "pointer", color: "#94A3B8", fontSize: "11px", fontWeight: 600, width: "100%", textAlign: "left" }}>
-                      <Plus style={{ width: 12, height: 12 }}/> New collection
+                      <Plus style={{ width: 12, height: 12 }}/> {tr("productLibrary.sidebar.newCollection" as MessageKey)}
                     </button>
                   </div>
                 </div>
 
                 {/* Quick actions */}
                 <div>
-                  <p style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.07em" }}>Quick actions</p>
+                  <p style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.07em" }}>{tr("productLibrary.sidebar.quickActions" as MessageKey)}</p>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <button type="button" onClick={() => { if (selCount > 0) createSetFromSelected(); else toast.info("Select products first"); }}
+                    <button type="button" onClick={() => { if (selCount > 0) createSetFromSelected(); else toast.info(tr("productLibrary.toast.selectProductsFirst" as MessageKey)); }}
                       style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#FAFAFA", cursor: "pointer", fontSize: "11px", fontWeight: 600, color: "#374151" }}>
-                      <FolderOpen style={{ width: 13, height: 13, color: "#7C3AED" }}/> Create product set
+                      <FolderOpen style={{ width: 13, height: 13, color: "#7C3AED" }}/> {tr("productLibrary.sidebar.createProductSet" as MessageKey)}
                     </button>
                     <button type="button" onClick={() => router.push("/app/studio?fromBasket=1")}
                       style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#FAFAFA", cursor: "pointer", fontSize: "11px", fontWeight: 600, color: "#374151", justifyContent: "space-between" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <ShoppingBag style={{ width: 13, height: 13, color: "#7C3AED" }}/> View create basket
+                        <ShoppingBag style={{ width: 13, height: 13, color: "#7C3AED" }}/> {tr("productLibrary.sidebar.viewCreateBasket" as MessageKey)}
                       </span>
                       {totalCount > 0 && (
                         <span style={{ fontSize: "10px", fontWeight: 800, color: "#7C3AED", background: "rgba(124,58,237,0.1)", padding: "1px 7px", borderRadius: 20 }}>{totalCount}</span>
@@ -603,10 +616,10 @@ function ProductLibraryContent() {
 
             {activeTab === "references" && (
               <div>
-                <p style={{ margin: "0 0 10px", fontSize: "11px", fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.07em" }}>Sources</p>
+                <p style={{ margin: "0 0 10px", fontSize: "11px", fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.07em" }}>{tr("productLibrary.sidebar.sources" as MessageKey)}</p>
                 {(["all", "viral_pin", "opportunity", "uploaded", "studio"] as const).map(src => {
                   const count = src === "all" ? references.length : references.filter(r => r.source === src).length;
-                  const label = src === "all" ? "All References" : SOURCE_LABELS[src];
+                  const label = src === "all" ? tr("productLibrary.source.all" as MessageKey) : tr(SOURCE_LABEL_KEYS[src]);
                   return (
                     <p key={src} style={{ margin: "0 0 5px", fontSize: "12px", color: "#374151", padding: "6px 10px", borderRadius: 8, cursor: "pointer" }}>
                       {label} <span style={{ color: "#94A3B8" }}>{count}</span>
@@ -616,7 +629,7 @@ function ProductLibraryContent() {
                 <div style={{ height: 1, background: "#F1F5F9", margin: "10px 0" }}/>
                 <button type="button" onClick={() => refFileRef.current?.click()}
                   style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#FAFAFA", cursor: "pointer", fontSize: "11px", fontWeight: 600, color: "#374151", width: "100%" }}>
-                  <Upload style={{ width: 13, height: 13, color: "#7C3AED" }}/> Upload reference
+                  <Upload style={{ width: 13, height: 13, color: "#7C3AED" }}/> {tr("productLibrary.sidebar.uploadReference" as MessageKey)}
                 </button>
                 <input ref={refFileRef} type="file" accept="image/*" className="hidden"
                   onChange={e => { const f = e.target.files?.[0]; if (f) void uploadReference(f); }}/>
@@ -637,7 +650,7 @@ function ProductLibraryContent() {
                 <div style={{ position: "relative", flexShrink: 0 }}>
                   <Search style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", width: 13, height: 13, color: "#94A3B8", pointerEvents: "none" }}/>
                   <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Search products…"
+                    placeholder={tr("productLibrary.toolbar.searchProducts" as MessageKey)}
                     style={{ paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 9, border: "1px solid #E5E7EB", fontSize: "12px", color: "#374151", outline: "none", background: "#FAFAFA", width: 200, boxSizing: "border-box" }}/>
                 </div>
 
@@ -645,7 +658,7 @@ function ProductLibraryContent() {
                 <div style={{ position: "relative" }}>
                   <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}
                     style={{ appearance: "none", borderRadius: 9, border: "1px solid #E5E7EB", background: "#fff", padding: "8px 28px 8px 12px", fontSize: "12px", color: "#374151", cursor: "pointer", outline: "none" }}>
-                    <option>All categories</option>
+                    <option value="All categories">{tr("productLibrary.toolbar.allCategories" as MessageKey)}</option>
                     {[...new Set(products.map(p => p.category))].map(c => <option key={c}>{c}</option>)}
                   </select>
                   <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 9, color: "#94A3B8", pointerEvents: "none" }}>▼</span>
@@ -655,7 +668,7 @@ function ProductLibraryContent() {
                 <div style={{ position: "relative" }}>
                   <select value={filterCollection} onChange={e => setFilterCollection(e.target.value)}
                     style={{ appearance: "none", borderRadius: 9, border: "1px solid #E5E7EB", background: "#fff", padding: "8px 28px 8px 12px", fontSize: "12px", color: "#374151", cursor: "pointer", outline: "none" }}>
-                    <option>All collections</option>
+                    <option value="All collections">{tr("productLibrary.toolbar.allCollections" as MessageKey)}</option>
                     {collections.map(c => <option key={c}>{c}</option>)}
                   </select>
                   <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 9, color: "#94A3B8", pointerEvents: "none" }}>▼</span>
@@ -664,11 +677,11 @@ function ProductLibraryContent() {
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexShrink: 0 }}>
                   <button type="button" onClick={() => setShowNewCollection(true)}
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 9, border: "1px solid #E5E7EB", background: "#fff", fontSize: "12px", fontWeight: 600, color: "#374151", cursor: "pointer" }}>
-                    <Plus style={{ width: 13, height: 13 }}/> Create collection
+                    <Plus style={{ width: 13, height: 13 }}/> {tr("productLibrary.toolbar.createCollection" as MessageKey)}
                   </button>
                   <button type="button" onClick={() => setShowUploadDialog(true)}
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", fontSize: "12px", fontWeight: 700, color: "#fff", cursor: "pointer" }}>
-                    <Plus style={{ width: 13, height: 13 }}/> Upload product
+                    <Plus style={{ width: 13, height: 13 }}/> {tr("productLibrary.toolbar.uploadProduct" as MessageKey)}
                   </button>
                 </div>
               </div>
@@ -677,18 +690,18 @@ function ProductLibraryContent() {
               {selCount > 0 && (
                 <div style={{ padding: "10px 20px", background: "rgba(124,58,237,0.05)", borderBottom: "1px solid rgba(124,58,237,0.15)", flexShrink: 0, display: "flex", alignItems: "center", gap: 10 }}>
                   <input type="checkbox" checked readOnly style={{ accentColor: "#7C3AED", width: 14, height: 14 }}/>
-                  <span style={{ fontSize: "13px", fontWeight: 700, color: "#7C3AED" }}>{selCount} selected</span>
+                  <span style={{ fontSize: "13px", fontWeight: 700, color: "#7C3AED" }}>{tr("productLibrary.selection.selected" as MessageKey).replace("{n}", String(selCount))}</span>
                   <button type="button" onClick={addSelectedToBasket}
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 20, border: "none", background: "#7C3AED", color: "#fff", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
-                    <ShoppingBag style={{ width: 13, height: 13 }}/> Add to basket
+                    <ShoppingBag style={{ width: 13, height: 13 }}/> {tr("productLibrary.selection.addToBasket" as MessageKey)}
                   </button>
                   <button type="button" onClick={createSetFromSelected}
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 20, border: "1px solid #E5E7EB", background: "#fff", color: "#374151", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>
-                    <FolderOpen style={{ width: 13, height: 13 }}/> Create product set
+                    <FolderOpen style={{ width: 13, height: 13 }}/> {tr("productLibrary.selection.createProductSet" as MessageKey)}
                   </button>
                   <button type="button" onClick={() => setSelectedIds(new Set())}
                     style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: "#94A3B8", fontWeight: 600 }}>
-                    Clear
+                    {tr("productLibrary.selection.clear" as MessageKey)}
                   </button>
                 </div>
               )}
@@ -699,9 +712,9 @@ function ProductLibraryContent() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <p style={{ margin: 0, fontSize: "15px", fontWeight: 800, color: "#0F172A" }}>
-                      {activeCollection ?? "All Products"}
+                      {activeCollection ?? tr("productLibrary.sidebar.allProducts" as MessageKey)}
                     </p>
-                    <span style={{ fontSize: "12px", color: "#94A3B8" }}>{filteredProducts.length} products</span>
+                    <span style={{ fontSize: "12px", color: "#94A3B8" }}>{filteredProducts.length} {tr("productLibrary.grid.productsCountSuffix" as MessageKey)}</span>
                   </div>
                 </div>
 
@@ -710,11 +723,11 @@ function ProductLibraryContent() {
                     <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
                       <ShoppingBag style={{ width: 28, height: 28, color: "#CBD5E1" }}/>
                     </div>
-                    <p style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: 700, color: "#374151" }}>No products yet</p>
-                    <p style={{ margin: "0 0 20px", fontSize: "12px", color: "#94A3B8" }}>Upload your product images to get started.</p>
+                    <p style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: 700, color: "#374151" }}>{tr("productLibrary.grid.emptyTitle" as MessageKey)}</p>
+                    <p style={{ margin: "0 0 20px", fontSize: "12px", color: "#94A3B8" }}>{tr("productLibrary.grid.emptySub" as MessageKey)}</p>
                     <button type="button" onClick={() => setShowUploadDialog(true)}
                       style={{ padding: "10px 24px", borderRadius: 30, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
-                      Upload your first product
+                      {tr("productLibrary.grid.uploadFirstProduct" as MessageKey)}
                     </button>
                   </div>
                 ) : (
@@ -736,21 +749,21 @@ function ProductLibraryContent() {
                   <div style={{ marginTop: 36 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                       <div>
-                        <p style={{ margin: 0, fontSize: "15px", fontWeight: 800, color: "#0F172A" }}>Product Sets</p>
-                        <p style={{ margin: "3px 0 0", fontSize: "11px", color: "#94A3B8" }}>Group products together for faster content creation.</p>
+                        <p style={{ margin: 0, fontSize: "15px", fontWeight: 800, color: "#0F172A" }}>{tr("productLibrary.sets.title" as MessageKey)}</p>
+                        <p style={{ margin: "3px 0 0", fontSize: "11px", color: "#94A3B8" }}>{tr("productLibrary.sets.subtitle" as MessageKey)}</p>
                       </div>
-                      <button type="button" style={{ fontSize: "11px", color: "#7C3AED", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}>View all sets →</button>
+                      <button type="button" style={{ fontSize: "11px", color: "#7C3AED", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}>{tr("productLibrary.sets.viewAll" as MessageKey)}</button>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
                       {sets.map(set => (
                         <SetCard key={set.id} set={set} products={products} onDelete={() => lib.deleteSet(set.id)}/>
                       ))}
                       {/* Create new set CTA */}
-                      <button type="button" onClick={() => { if (selCount > 0) createSetFromSelected(); else toast.info("Select products above to create a set"); }}
+                      <button type="button" onClick={() => { if (selCount > 0) createSetFromSelected(); else toast.info(tr("productLibrary.toast.selectProductsToCreateSet" as MessageKey)); }}
                         style={{ borderRadius: 12, border: "1.5px dashed #E5E7EB", background: "#FAFAFA", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 120, cursor: "pointer" }}>
                         <Plus style={{ width: 20, height: 20, color: "#7C3AED" }}/>
-                        <span style={{ fontSize: "12px", fontWeight: 700, color: "#7C3AED" }}>Create new set</span>
-                        <span style={{ fontSize: "10px", color: "#94A3B8" }}>Group products for your next Pins</span>
+                        <span style={{ fontSize: "12px", fontWeight: 700, color: "#7C3AED" }}>{tr("productLibrary.sets.createNewSet" as MessageKey)}</span>
+                        <span style={{ fontSize: "10px", color: "#94A3B8" }}>{tr("productLibrary.sets.createNewSetHint" as MessageKey)}</span>
                       </button>
                     </div>
                   </div>
@@ -766,13 +779,13 @@ function ProductLibraryContent() {
               <div style={{ padding: "12px 20px", background: "#fff", borderBottom: "1px solid #F1F5F9", flexShrink: 0, display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ position: "relative", flexShrink: 0 }}>
                   <Search style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", width: 13, height: 13, color: "#94A3B8", pointerEvents: "none" }}/>
-                  <input placeholder="Search references…"
+                  <input placeholder={tr("productLibrary.references.searchPlaceholder" as MessageKey)}
                     style={{ paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 9, border: "1px solid #E5E7EB", fontSize: "12px", color: "#374151", outline: "none", background: "#FAFAFA", width: 200, boxSizing: "border-box" }}/>
                 </div>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexShrink: 0 }}>
                   <button type="button" onClick={() => refFileRef.current?.click()}
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", fontSize: "12px", fontWeight: 700, color: "#fff", cursor: "pointer" }}>
-                    <Upload style={{ width: 13, height: 13 }}/> Upload reference
+                    <Upload style={{ width: 13, height: 13 }}/> {tr("productLibrary.references.uploadReference" as MessageKey)}
                   </button>
                 </div>
                 <input ref={refFileRef} type="file" accept="image/*" className="hidden"
@@ -782,14 +795,14 @@ function ProductLibraryContent() {
               {/* Multi-select action bar */}
               {selRefCount > 0 && (
                 <div style={{ padding: "10px 20px", background: "rgba(124,58,237,0.05)", borderBottom: "1px solid rgba(124,58,237,0.15)", flexShrink: 0, display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: "13px", fontWeight: 700, color: "#7C3AED" }}>{selRefCount} selected</span>
+                  <span style={{ fontSize: "13px", fontWeight: 700, color: "#7C3AED" }}>{tr("productLibrary.selection.selected" as MessageKey).replace("{n}", String(selRefCount))}</span>
                   <button type="button" onClick={addSelectedRefsToBasket}
                     style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 20, border: "none", background: "#7C3AED", color: "#fff", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
-                    <ShoppingBag style={{ width: 13, height: 13 }}/> Add to basket
+                    <ShoppingBag style={{ width: 13, height: 13 }}/> {tr("productLibrary.selection.addToBasket" as MessageKey)}
                   </button>
                   <button type="button" onClick={() => setSelectedRefIds(new Set())}
                     style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: "#94A3B8", fontWeight: 600 }}>
-                    Clear
+                    {tr("productLibrary.selection.clear" as MessageKey)}
                   </button>
                 </div>
               )}
@@ -797,8 +810,8 @@ function ProductLibraryContent() {
               {/* Reference grid */}
               <div style={{ flex: 1, overflowY: "auto", padding: "20px 20px 100px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                  <p style={{ margin: 0, fontSize: "15px", fontWeight: 800, color: "#0F172A" }}>Saved References</p>
-                  <span style={{ fontSize: "12px", color: "#94A3B8" }}>{references.length} pins</span>
+                  <p style={{ margin: 0, fontSize: "15px", fontWeight: 800, color: "#0F172A" }}>{tr("productLibrary.references.savedReferences" as MessageKey)}</p>
+                  <span style={{ fontSize: "12px", color: "#94A3B8" }}>{references.length} {tr("productLibrary.references.pinsCountSuffix" as MessageKey)}</span>
                 </div>
 
                 {references.length === 0 ? (
@@ -806,16 +819,16 @@ function ProductLibraryContent() {
                     <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
                       <BookmarkPlus style={{ width: 28, height: 28, color: "#CBD5E1" }}/>
                     </div>
-                    <p style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: 700, color: "#374151" }}>No references saved yet</p>
-                    <p style={{ margin: "0 0 8px", fontSize: "12px", color: "#94A3B8" }}>Save Viral Pins as references or upload your own.</p>
+                    <p style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: 700, color: "#374151" }}>{tr("productLibrary.references.emptyTitle" as MessageKey)}</p>
+                    <p style={{ margin: "0 0 8px", fontSize: "12px", color: "#94A3B8" }}>{tr("productLibrary.references.emptySub" as MessageKey)}</p>
                     <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
                       <button type="button" onClick={() => router.push("/app/discover")}
                         style={{ padding: "9px 18px", borderRadius: 20, border: "1px solid #E5E7EB", background: "#fff", fontSize: "12px", fontWeight: 600, color: "#374151", cursor: "pointer" }}>
-                        Browse Viral Pins
+                        {tr("productLibrary.references.browseViralPins" as MessageKey)}
                       </button>
                       <button type="button" onClick={() => refFileRef.current?.click()}
                         style={{ padding: "9px 18px", borderRadius: 20, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
-                        Upload reference
+                        {tr("productLibrary.references.uploadReference" as MessageKey)}
                       </button>
                     </div>
                     <input ref={refFileRef} type="file" accept="image/*" className="hidden"
@@ -850,16 +863,16 @@ function ProductLibraryContent() {
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <ShoppingBag style={{ width: 16, height: 16, color: "#7C3AED" }}/>
-            <span style={{ fontSize: "13px", fontWeight: 700, color: "#0F172A" }}>Create Basket</span>
+            <span style={{ fontSize: "13px", fontWeight: 700, color: "#0F172A" }}>{tr("productLibrary.basketBar.createBasket" as MessageKey)}</span>
             <div style={{ display: "flex", gap: 8 }}>
               {basketState.products.length > 0 && (
                 <span style={{ fontSize: "11px", color: "#7C3AED", fontWeight: 600, background: "rgba(124,58,237,0.08)", padding: "2px 10px", borderRadius: 20 }}>
-                  {basketState.products.length} product{basketState.products.length !== 1 ? "s" : ""}
+                  {basketState.products.length} {basketState.products.length !== 1 ? tr("productLibrary.basketBar.products" as MessageKey) : tr("productLibrary.basketBar.product" as MessageKey)}
                 </span>
               )}
               {basketState.references.length > 0 && (
                 <span style={{ fontSize: "11px", color: "#2563EB", fontWeight: 600, background: "rgba(37,99,235,0.08)", padding: "2px 10px", borderRadius: 20 }}>
-                  {basketState.references.length} reference{basketState.references.length !== 1 ? "s" : ""}
+                  {basketState.references.length} {basketState.references.length !== 1 ? tr("productLibrary.basketBar.references" as MessageKey) : tr("productLibrary.basketBar.reference" as MessageKey)}
                 </span>
               )}
               {basketState.opportunities.length > 0 && (
@@ -870,13 +883,13 @@ function ProductLibraryContent() {
             </div>
             <button type="button" onClick={() => basket.clearBasket()}
               style={{ background: "none", border: "none", cursor: "pointer", fontSize: "11px", color: "#94A3B8", fontWeight: 500 }}>
-              Clear
+              {tr("productLibrary.basketBar.clear" as MessageKey)}
             </button>
           </div>
           <button type="button" onClick={() => router.push("/app/studio?fromBasket=1")}
             style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 24px", borderRadius: 30, border: "none", background: "linear-gradient(135deg,#FF4D8D 0%,#D946EF 52%,#7C3AED 100%)", color: "#fff", fontSize: "13px", fontWeight: 800, cursor: "pointer" }}>
             <Sparkles style={{ width: 15, height: 15 }}/>
-            Create Pins with Basket ({totalCount})
+            {tr("productLibrary.basketBar.createPinsWithBasket" as MessageKey).replace("{n}", String(totalCount))}
           </button>
         </div>
       )}
@@ -886,13 +899,13 @@ function ProductLibraryContent() {
         <UploadProductDialog
           collections={collections}
           onClose={() => setShowUploadDialog(false)}
-          onSave={p => { lib.addProduct(p); toast.success("Product saved to library"); }}
+          onSave={p => { lib.addProduct(p); toast.success(tr("productLibrary.toast.productSaved" as MessageKey)); }}
         />
       )}
       {showNewCollection && (
         <NewCollectionDialog
           onClose={() => setShowNewCollection(false)}
-          onSave={name => { lib.addCollection(name); toast.success(`Collection "${name}" created`); }}
+          onSave={name => { lib.addCollection(name); toast.success(`${tr("productLibrary.toast.collectionCreatedPrefix" as MessageKey)}${name}${tr("productLibrary.toast.collectionCreatedSuffix" as MessageKey)}`); }}
         />
       )}
     </div>

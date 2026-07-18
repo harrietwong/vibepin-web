@@ -28,7 +28,7 @@ export const PERSONAS: PersonaCardData[] = [
       "Plan and auto-publish consistently",
     ],
     cta: "Create my content plan",
-    ctaHref: "/app/plan?demo=true",
+    ctaHref: "/app/plan",
     accent: "pink",
   },
   {
@@ -44,7 +44,7 @@ export const PERSONAS: PersonaCardData[] = [
       "Schedule and auto-publish product campaigns",
     ],
     cta: "Promote my products",
-    ctaHref: "/app/products?demo=true",
+    ctaHref: "/app/products",
     accent: "green",
   },
   {
@@ -60,7 +60,7 @@ export const PERSONAS: PersonaCardData[] = [
       "Turn products into scheduled Pin campaigns",
     ],
     cta: "Find product opportunities",
-    ctaHref: "/app/products?demo=true",
+    ctaHref: "/app/products",
     accent: "purple",
   },
   {
@@ -76,7 +76,7 @@ export const PERSONAS: PersonaCardData[] = [
       "Schedule and auto-publish weekly plans",
     ],
     cta: "Plan client content",
-    ctaHref: "/app/plan?demo=true",
+    ctaHref: "/app/plan",
     accent: "blue",
   },
 ];

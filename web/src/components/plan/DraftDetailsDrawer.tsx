@@ -20,9 +20,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { X, Loader2, CheckCircle2, ExternalLink, AlertCircle, Info, MoreVertical } from "lucide-react";
+import { X, Loader2, CheckCircle2, ExternalLink, AlertCircle, Info, MoreVertical, Clock } from "lucide-react";
 import { PinBoardSection } from "@/components/pin-details/PinBoardSection";
 import { PinPlannedDateTimeSection } from "@/components/pin-details/PinPlannedDateTimeSection";
+import { CustomTimeModal } from "@/components/plan/CustomTimeModal";
 import { PinProductLinksSection } from "@/components/pin-details/PinProductLinksSection";
 import { getPinDisplayContext } from "@/lib/studio/pinDisplayContext";
 import { PinTitleSection } from "@/components/pin-details/PinTitleSection";
@@ -31,7 +32,7 @@ import { toast } from "sonner";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
-import { formatEnglishDateTime } from "@/lib/dateTimeFormat";
+import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
 import { writePinProducts, type LinkedProduct } from "@/lib/pinMetadata";
 import {
   combinePlannedAt,
@@ -65,6 +66,7 @@ import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { publishToSocial } from "@/lib/social/socialClient";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
+import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const UI = {
@@ -179,9 +181,7 @@ export function PinDetailsModal({
   const [confirmReplaceUrlOpen, setConfirmReplaceUrlOpen] = useState(false);
   // Contact Support entry points (publish failed / AI generation failed). Supplements
   // Retry publish / Try again — never replaces them.
-  // The "Contact support" entry points here open ContactSupportModal, which ships with
-  // the Support cluster (deferred out of RC0 Create Pins). Until it lands the failure
-  // UI keeps its error message + retry; the support shortcut is simply not offered.
+  const [supportRequest, setSupportRequest] = useState<{ seedText: string; extra: Record<string, unknown> } | null>(null);
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
@@ -194,6 +194,22 @@ export function PinDetailsModal({
   const [keepTimeLocked, setKeepTimeLocked] = useState(false);
   // Inline date/time editor revealed by the Schedule / Reschedule action.
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
+  // "Custom time" modal (month calendar + hour/minute/AM-PM). Purely a footer
+  // affordance next to [Schedule] — it stages plannedDate/scheduledTime the same
+  // way the inline editor does; Schedule/Update schedule still does the actual
+  // persist. customTimeChosen is session/UI-only (not persisted as a new field):
+  // it decides whether the footer button reads "Select a custom time" or shows
+  // the formatted chosen value, and is derived from scheduleSource === "manual"
+  // once a draft is already scheduled manually, or set locally when the modal saves.
+  const [customTimeModalOpen, setCustomTimeModalOpen] = useState(false);
+  const [customTimeChosen, setCustomTimeChosen] = useState(false);
+  // True once the chosen custom time has actually been committed via the
+  // [Schedule]/[Update schedule] click (the drawer's one real "confirm" action —
+  // everything else here autosaves). While chosen-but-not-yet-confirmed, changing
+  // the board must reset the custom time (rule in the task spec); once confirmed,
+  // a later board change is an ordinary edit and leaves the schedule alone.
+  const [customTimeConfirmed, setCustomTimeConfirmed] = useState(false);
+  const [customTimeBoardChangedNotice, setCustomTimeBoardChangedNotice] = useState(false);
   // Overflow menu (Publish now / Unschedule) — keeps the footer to one primary CTA.
   const [overflowOpen, setOverflowOpen] = useState(false);
   // "Publish now" is irreversible and, when scheduled, drops the slot — confirm first.
@@ -561,6 +577,15 @@ export function PinDetailsModal({
     setScheduledTime(seedTime);
     setKeepTimeLocked(!!draft.scheduleLocked);
     setScheduleEditorOpen(false);
+    // A previously-scheduled draft whose time was set manually (scheduleSource
+    // "manual") reopens showing its formatted time on the custom-time button —
+    // matches "Chosen: same button shows the formatted choice". A fresh/unscheduled
+    // draft, or one on the Smart Schedule path, reopens with no custom time chosen.
+    const seededCustomTime = !!seedDate && draft.scheduleSource === "manual";
+    setCustomTimeChosen(seededCustomTime);
+    setCustomTimeConfirmed(seededCustomTime);
+    setCustomTimeModalOpen(false);
+    setCustomTimeBoardChangedNotice(false);
     setProducts(seedProducts(draft));
     setPrimaryProductId(draft.primaryProductId ?? seedProducts(draft)[0]?.id ?? "");
     setDirty(false);
@@ -1089,6 +1114,31 @@ export function PinDetailsModal({
     setPlannedDate("");
     setScheduledTime("");
     setScheduleEditorOpen(false);
+    setCustomTimeChosen(false);
+    setCustomTimeConfirmed(false);
+    setCustomTimeBoardChangedNotice(false);
+    markDirty();
+  }
+
+  // "Select a custom time" / formatted-choice button → opens the Custom time modal.
+  function openCustomTimeModal() {
+    setCustomTimeBoardChangedNotice(false);
+    setCustomTimeModalOpen(true);
+  }
+
+  // Modal "Save time" → stage plannedDate/scheduledTime locally (same fields the
+  // default Schedule path writes) and mark the choice as chosen-but-not-yet-confirmed.
+  // Does NOT itself persist — [Schedule]/[Update schedule] remains the single write
+  // path, so a custom time enters the normal Scheduled/Plan lifecycle exactly like
+  // the default path once the user clicks it.
+  function handleCustomTimeSave(date: string, time: string) {
+    setPlannedDate(date);
+    setScheduledTime(time);
+    setKeepTimeLocked(true);
+    setCustomTimeChosen(true);
+    setCustomTimeConfirmed(false);
+    setCustomTimeModalOpen(false);
+    setCustomTimeBoardChangedNotice(false);
     markDirty();
   }
 
@@ -1180,6 +1230,10 @@ export function PinDetailsModal({
     if (!plannedDate.trim()) setPlannedDate(plannableDateISO(1));
     if (!scheduledTime.trim()) setScheduledTime("09:00");
     setScheduleEditorOpen(true);
+    // Clicking Schedule/Update schedule is the drawer's one real "confirm" — a
+    // pending custom time is now committed and survives future board changes.
+    if (customTimeChosen) setCustomTimeConfirmed(true);
+    setCustomTimeBoardChangedNotice(false);
     flushSave();
     const updated = persistDraft();
     setSaveState(updated ? "saved" : "failed");
@@ -1484,6 +1538,15 @@ export function PinDetailsModal({
                   setDefaultBoard(value);
                   void savePinterestDefaultBoard(value).catch(() => {});
                 }
+                // Board interplay: a custom time chosen but not yet confirmed via
+                // [Schedule]/[Update schedule] is cleared on board change — the user
+                // must re-pick a time for the newly selected board.
+                if (customTimeChosen && !customTimeConfirmed) {
+                  setPlannedDate("");
+                  setScheduledTime("");
+                  setCustomTimeChosen(false);
+                  setCustomTimeBoardChangedNotice(true);
+                }
                 markDirty();
               }}
               onClearBoardError={() => setBoardError(false)}
@@ -1580,6 +1643,29 @@ export function PinDetailsModal({
               <p data-testid="draft-publish-error" style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11.5, color: UI.error, margin: 0 }}>
                 <AlertCircle size={13} style={{ marginTop: 1, flexShrink: 0 }} /> {publishError}
               </p>
+              <button
+                type="button"
+                data-testid="draft-publish-contact-support"
+                onClick={() => setSupportRequest({
+                  seedText: "My Pin failed to publish",
+                  extra: {
+                    source: "publish_failed",
+                    draftId: activeDraft.id,
+                    publishJobId: activeDraft.weeklyPlanItemId ?? null,
+                    boardId: boardId || null,
+                    boardName: boards.find(b => b.id === boardId)?.name ?? null,
+                    imageUrlExists: !!publicImage,
+                    destinationUrlExists: !!destinationUrl.trim(),
+                    publishErrorCode: null,
+                    publishErrorMessage: publishError,
+                    retryCount: publishAttempts,
+                    pinterestConnectionStatus: boardsStatus,
+                  },
+                })}
+                style={{ flexShrink: 0, background: "none", border: "none", padding: 0, fontSize: 11.5, fontWeight: 700, color: UI.textSec, textDecoration: "underline", cursor: "pointer" }}
+              >
+                {t("pinDetails.contactSupport")}
+              </button>
             </div>
           )}
           {/* Single primary CTA + a small non-clickable auto-save indicator.
@@ -1596,6 +1682,23 @@ export function PinDetailsModal({
                 </a>
             ) : isFailed ? (
               <>
+                <button
+                  type="button"
+                  data-testid="draft-cta-report-credits-issue"
+                  onClick={() => setSupportRequest({
+                    seedText: "I think credits were charged but I didn't get a result",
+                    extra: {
+                      source: "ai_generation",
+                      draftId: activeDraft.id,
+                      generationStatus: activeDraft.generationStatus ?? null,
+                      providerError: activeDraft.assetError ?? null,
+                      resultCount: 0,
+                    },
+                  })}
+                  style={{ ...ghostBtn }}
+                >
+                  {t("pinDetails.reportCreditsIssue")}
+                </button>
                 <button type="button" data-testid="draft-cta-try-again" onClick={requestPublish} disabled={publishing || isRedirectingToPinterest}
                   style={{ ...primaryBtn, opacity: (publishing || isRedirectingToPinterest) ? 0.6 : 1 }}>
                   {publishing ? <><Loader2 size={13} className="animate-spin" /> {t("pinDetails.publishing")}</> : t("pinDetails.tryAgain")}
@@ -1611,6 +1714,20 @@ export function PinDetailsModal({
                   style={{ ...ghostBtn, opacity: (publishing || isRedirectingToPinterest) ? 0.6 : 1, cursor: (publishing || isRedirectingToPinterest) ? "not-allowed" : "pointer" }}>
                   {publishing ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Loader2 size={13} className="animate-spin" /> {t("pinDetails.publishing")}</span> : t("pinDetails.publishNow")}
                 </button>
+                {/* Custom time: opens the CustomTimeModal (month calendar + hour/minute/
+                    AM-PM). Unchosen → clock icon + "Select a custom time"; chosen →
+                    the formatted choice, still clickable to modify. Purely stages
+                    plannedDate/scheduledTime — [Schedule] below remains the single
+                    persist path, so the default Schedule button's behavior is
+                    untouched when no custom time is chosen. */}
+                <button type="button" data-testid="draft-cta-custom-time" onClick={openCustomTimeModal}
+                  disabled={publishing}
+                  style={{ ...lightBtn, opacity: publishing ? 0.6 : 1, cursor: publishing ? "not-allowed" : "pointer" }}>
+                  <Clock size={13} />
+                  {customTimeChosen && plannedDate.trim()
+                    ? (formatEnglishDateTime(combinePlannedAt(plannedDate, scheduledTime)) ?? t("pinDetails.customTime.selectButton"))
+                    : t("pinDetails.customTime.selectButton")}
+                </button>
                 {/* Primary: save the schedule (date/time). */}
                 <button type="button" data-testid="draft-cta-schedule" onClick={handleSchedulePrimary} disabled={!canSchedule || publishing}
                   style={{ ...primaryBtn, opacity: (canSchedule && !publishing) ? 1 : 0.5, cursor: (canSchedule && !publishing) ? "pointer" : "not-allowed" }}>
@@ -1619,6 +1736,11 @@ export function PinDetailsModal({
               </>
             )}
           </div>
+          {customTimeBoardChangedNotice && (
+            <p data-testid="draft-custom-time-board-notice" style={{ margin: "6px 0 0", fontSize: 10.5, fontWeight: 600, color: UI.warning, textAlign: "right" }}>
+              {t("pinDetails.customTime.boardChangedNotice")}
+            </p>
+          )}
         </div>
         )}
 
@@ -1668,6 +1790,17 @@ export function PinDetailsModal({
           ui={{ card: UI.card, border: UI.border, text: UI.text, textSec: UI.textSec }}
         />
 
+        {/* Custom time picker — month calendar + hour/minute/AM-PM. Stages
+            plannedDate/scheduledTime only; [Schedule]/[Update schedule] persists. */}
+        <CustomTimeModal
+          open={customTimeModalOpen}
+          initialDate={plannedDate}
+          initialTime={scheduledTime}
+          timeZoneName={browserTimeZone()}
+          onClose={() => setCustomTimeModalOpen(false)}
+          onSave={handleCustomTimeSave}
+        />
+
         {/* Pinterest redirect feedback — non-blocking status only. No button click is
             ever required to "continue" the OAuth redirect: the loading state persists
             for as long as the real navigation takes (Pinterest's own authorize page can
@@ -1684,6 +1817,14 @@ export function PinDetailsModal({
         )}
 
       </div>
+      {supportRequest && (
+        <SupportChatModal
+          open
+          onClose={() => setSupportRequest(null)}
+          seedText={supportRequest.seedText}
+          initialContext={supportRequest.extra}
+        />
+      )}
     </>
   );
 }

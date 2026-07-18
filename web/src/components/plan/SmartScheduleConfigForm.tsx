@@ -31,6 +31,7 @@ import {
 } from "@/lib/smartScheduleStore";
 import { countEligibleRebalancePins, rebalancePlannedPins, undoRebalance } from "@/lib/smartScheduleRebalance";
 import { toast } from "sonner";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const C = {
   text: "var(--app-text)", sec: "var(--app-text-sec)", muted: "var(--app-text-muted)",
@@ -56,6 +57,7 @@ type Props = {
 };
 
 export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
+  const { t: tr } = useLocale();
   const [config, setConfig] = useState<SmartScheduleConfig>(() => getSmartScheduleConfig());
   const [dayTab, setDayTab] = useState<WeekdayIndex>(0);
   const [customTime, setCustomTime] = useState("09:00");
@@ -108,12 +110,12 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
   // ── Save (+ rebalance flow) ────────────────────────────────────────────────────
   const save = useCallback(() => {
     // Lightweight pre-save validation (matches the inline hints).
-    if (!config.timezone.trim()) { toast.error("Choose a publishing timezone."); return; }
-    if (config.activeDays.length === 0) { toast.error("Select at least one active day."); return; }
-    if (config.preferredTimeWindows.some(w => w.start >= w.end)) { toast.error("End time must be later than start time."); return; }
+    if (!config.timezone.trim()) { toast.error(tr("planViews.form.toast.chooseTimezone")); return; }
+    if (config.activeDays.length === 0) { toast.error(tr("planViews.form.toast.selectActiveDay")); return; }
+    if (config.preferredTimeWindows.some(w => w.start >= w.end)) { toast.error(tr("planViews.form.toast.endAfterStart")); return; }
     // Always persist FRESH slots that match the current rules — never stale.
     const fresh: SmartScheduleConfig = { ...config, weeklySlots: generateWeeklySlotsFromConfig(config) };
-    if (!hasConfiguredSlots(fresh)) { toast.error("No publishing slots generated. Check your active days and time windows."); return; }
+    if (!hasConfiguredSlots(fresh)) { toast.error(tr("planViews.form.toast.noSlotsGenerated")); return; }
     saveSmartScheduleConfig(fresh);
     const persisted = getSmartScheduleConfig();
     savedRef.current = persisted;
@@ -123,16 +125,16 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
     if (eligible > 0) {
       setRebalanceCount(eligible); // ask only about existing planned Pins
     } else {
-      toast.success("Smart Schedule saved.");
+      toast.success(tr("planViews.form.toast.saved"));
       onSaved?.();
     }
-  }, [config, onSaved]);
+  }, [config, onSaved, tr]);
 
   useEffect(() => { if (saveRef) saveRef.current = save; }, [saveRef, save]);
 
   function keepCurrentTimes() {
     setRebalanceCount(null);
-    toast.success("Smart Schedule saved. Existing planned Pins were unchanged.");
+    toast.success(tr("planViews.form.toast.savedUnchanged"));
     onSaved?.();
   }
 
@@ -140,14 +142,14 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
     const res = rebalancePlannedPins();
     setRebalanceCount(null);
     if (res.changed > 0) {
-      toast.success(`Rebalanced ${res.changed} planned Pin${res.changed === 1 ? "" : "s"}.`, {
+      toast.success(res.changed === 1 ? tr("planViews.form.toast.rebalancedOne") : tr("planViews.form.toast.rebalancedMany").replace("{n}", String(res.changed)), {
         action: {
-          label: "Undo",
-          onClick: () => { undoRebalance(res.snapshot); toast.success("Rebalance undone."); },
+          label: tr("planViews.form.toast.undoAction"),
+          onClick: () => { undoRebalance(res.snapshot); toast.success(tr("planViews.form.toast.rebalanceUndone")); },
         },
       });
     } else {
-      toast.success("Smart Schedule saved.");
+      toast.success(tr("planViews.form.toast.saved"));
     }
     onSaved?.();
   }
@@ -213,7 +215,7 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
 
   function addCustomSlot() {
     const m = /^(\d{1,2}):(\d{2})$/.exec(customTime.trim());
-    if (!m) { toast.error("Enter a valid time (HH:mm)."); return; }
+    if (!m) { toast.error(tr("planViews.form.toast.invalidTime")); return; }
     const t = `${String(Math.min(23, +m[1])).padStart(2, "0")}:${String(Math.min(59, +m[2])).padStart(2, "0")}`;
     setConfig(prev => {
       const cur = prev.customSlots[customDay] ?? [];
@@ -225,8 +227,8 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
   const daySlots = config.weeklySlots[dayTab] ?? [];
   const dayCustom = config.customSlots[dayTab] ?? [];
   const volumeSummary = config.rhythmMode === "same_every_day"
-    ? `Same every day · ${config.pinsPerDay} pins/day`
-    : "Recommended rhythm";
+    ? tr("planViews.form.volumeSameEveryDay").replace("{n}", String(config.pinsPerDay))
+    : tr("planViews.form.volumeRecommended");
 
   // ── Lightweight inline validation (no error wall) ──────────────────────────────
   const noActiveDays = config.activeDays.length === 0;
@@ -234,64 +236,64 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
   const noSlots = !hasConfiguredSlots(config);
   const noTimezone = !config.timezone.trim();
   const validationError =
-    noTimezone ? "Choose a publishing timezone."
-    : noActiveDays ? "Select at least one active day."
-    : badWindow ? "End time must be later than start time."
-    : noSlots ? "No publishing slots generated. Check your active days and time windows."
+    noTimezone ? tr("planViews.form.toast.chooseTimezone")
+    : noActiveDays ? tr("planViews.form.toast.selectActiveDay")
+    : badWindow ? tr("planViews.form.toast.endAfterStart")
+    : noSlots ? tr("planViews.form.toast.noSlotsGenerated")
     : null;
 
   return (
     <div data-testid="smart-schedule-form" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* 1. Publishing timezone */}
-      <Section title="Publishing timezone">
+      <Section title={tr("planViews.form.timezoneTitle")}>
         <select
           data-testid="smart-schedule-timezone-select"
           value={tzCustom ? "__custom__" : config.timezone}
           onChange={e => onTimezonePick(e.target.value)}
           style={selectCss}
         >
-          <option value={localTz}>Local timezone ({localTz})</option>
+          <option value={localTz}>{tr("planViews.form.localTimezone").replace("{tz}", localTz)}</option>
           {TZ_QUICK.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
           {!tzKnown && <option value={config.timezone}>{config.timezone}</option>}
-          <option value="__custom__">Custom…</option>
+          <option value="__custom__">{tr("planViews.form.customTimezone")}</option>
         </select>
         {tzCustom && (
           <input
             data-testid="smart-schedule-timezone-custom"
-            placeholder="e.g. America/New_York"
+            placeholder={tr("planViews.form.customTimezonePlaceholder")}
             defaultValue={config.timezone}
             onBlur={e => { const v = e.target.value.trim(); if (v && v !== config.timezone) patch({ timezone: v }); }}
             style={{ ...inputCss, marginTop: 8 }}
           />
         )}
-        <p style={helpCss}>Your schedule uses this timezone for future Pins.</p>
+        <p style={helpCss}>{tr("planViews.form.timezoneHelp")}</p>
       </Section>
 
       {/* 2. Posting rhythm — Recommended (system) vs. Same every day (numeric) */}
-      <Section title="Posting rhythm">
+      <Section title={tr("planViews.form.rhythmTitle")}>
         <div data-testid="smart-schedule-rhythm-mode" style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          <button type="button" data-testid="smart-schedule-mode-recommended" onClick={() => setRhythmMode("recommended")} style={modeBtn(config.rhythmMode === "recommended")}>Recommended</button>
-          <button type="button" data-testid="smart-schedule-mode-same" onClick={() => setRhythmMode("same_every_day")} style={modeBtn(config.rhythmMode === "same_every_day")}>Same every day</button>
+          <button type="button" data-testid="smart-schedule-mode-recommended" onClick={() => setRhythmMode("recommended")} style={modeBtn(config.rhythmMode === "recommended")}>{tr("planViews.form.modeRecommended")}</button>
+          <button type="button" data-testid="smart-schedule-mode-same" onClick={() => setRhythmMode("same_every_day")} style={modeBtn(config.rhythmMode === "same_every_day")}>{tr("planViews.form.modeSameEveryDay")}</button>
         </div>
         {config.rhythmMode === "recommended" ? (
           <p data-testid="smart-schedule-recommended-help" style={{ ...helpCss, marginTop: 0 }}>
-            VibePin will generate a balanced weekly posting rhythm based on your active days and preferred time windows.
+            {tr("planViews.form.recommendedHelp")}
           </p>
         ) : (
           <div>
-            <p style={{ margin: "0 0 6px", fontSize: 11.5, fontWeight: 600, color: C.sec }}>Pins per active day</p>
+            <p style={{ margin: "0 0 6px", fontSize: 11.5, fontWeight: 600, color: C.sec }}>{tr("planViews.form.pinsPerActiveDay")}</p>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button type="button" data-testid="smart-schedule-pins-dec" onClick={() => patch({ pinsPerDay: clampPinsPerDay(config.pinsPerDay - 1) })} style={stepperBtn}>–</button>
               <span data-testid="smart-schedule-pins-value" style={{ minWidth: 30, textAlign: "center", fontSize: 15, fontWeight: 800, color: C.text }}>{config.pinsPerDay}</span>
               <button type="button" data-testid="smart-schedule-pins-inc" onClick={() => patch({ pinsPerDay: clampPinsPerDay(config.pinsPerDay + 1) })} style={stepperBtn}>+</button>
             </div>
-            <p style={helpCss}>Every active day will generate exactly {config.pinsPerDay} publishing slot{config.pinsPerDay === 1 ? "" : "s"}.</p>
+            <p style={helpCss}>{(config.pinsPerDay === 1 ? tr("planViews.form.pinsPerDayHelpOne") : tr("planViews.form.pinsPerDayHelpMany")).replace("{n}", String(config.pinsPerDay))}</p>
           </div>
         )}
       </Section>
 
       {/* 3. Active days */}
-      <Section title="Active days">
+      <Section title={tr("planViews.form.activeDaysTitle")}>
         <div data-testid="smart-schedule-active-days" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {DAY_NAMES.map(d => {
             const on = config.activeDays.includes(d);
@@ -304,11 +306,11 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
             );
           })}
         </div>
-        {noActiveDays && <p data-testid="smart-schedule-validation-days" style={errCss}>Select at least one active day.</p>}
+        {noActiveDays && <p data-testid="smart-schedule-validation-days" style={errCss}>{tr("planViews.form.validationSelectActiveDay")}</p>}
       </Section>
 
       {/* 4. Preferred time windows */}
-      <Section title="Preferred time windows">
+      <Section title={tr("planViews.form.timeWindowsTitle")}>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {config.preferredTimeWindows.map((w, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -319,23 +321,23 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
             </div>
           ))}
         </div>
-        {badWindow && <p data-testid="smart-schedule-validation-window" style={errCss}>End time must be later than start time.</p>}
+        {badWindow && <p data-testid="smart-schedule-validation-window" style={errCss}>{tr("planViews.form.validationEndAfterStart")}</p>}
       </Section>
 
       {/* 5. Generated weekly slots — LIVE preview (auto-updates, no Generate needed) */}
-      <Section title="Generated weekly slots">
+      <Section title={tr("planViews.form.generatedSlotsTitle")}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
           <p data-testid="smart-schedule-volume-summary" style={{ margin: 0, fontSize: 11, fontWeight: 600, color: C.sec }}>{volumeSummary}</p>
           {dirty
-            ? <span data-testid="smart-schedule-unsaved" style={{ fontSize: 10, fontWeight: 800, color: C.pink, background: "rgba(192,38,211,0.10)", borderRadius: 20, padding: "2px 8px" }}>Unsaved changes</span>
-            : <span style={{ fontSize: 10, fontWeight: 700, color: C.muted }}>Live preview</span>}
+            ? <span data-testid="smart-schedule-unsaved" style={{ fontSize: 10, fontWeight: 800, color: C.pink, background: "rgba(192,38,211,0.10)", borderRadius: 20, padding: "2px 8px" }}>{tr("planViews.form.unsavedChanges")}</span>
+            : <span style={{ fontSize: 10, fontWeight: 700, color: C.muted }}>{tr("planViews.form.livePreview")}</span>}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
           {DAY_NAMES.map((d, i) => {
             const active = config.activeDays.includes(d);
             const n = config.weeklySlots[i as WeekdayIndex]?.length ?? 0;
             return (
-              <button key={d} type="button" data-testid={`smart-schedule-day-${d}`} title={`${d}${n ? ` · ${n} slots` : ""}`} onClick={() => setDayTab(i as WeekdayIndex)}
+              <button key={d} type="button" data-testid={`smart-schedule-day-${d}`} title={n ? tr("planViews.form.dayTabTitleWithSlots").replace("{day}", d).replace("{n}", String(n)) : tr("planViews.form.dayTabTitle").replace("{day}", d)} onClick={() => setDayTab(i as WeekdayIndex)}
                 style={{ padding: "5px 9px", borderRadius: 8, fontSize: 10.5, fontWeight: 700, cursor: "pointer",
                   border: `1px solid ${dayTab === i ? C.pink : C.border}`,
                   background: dayTab === i ? "rgba(192,38,211,0.10)" : "transparent",
@@ -347,31 +349,31 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
         </div>
         {/* Selected-day header — weekday name + slot count, never a bare "Tue 4". */}
         <p data-testid="smart-schedule-day-header" style={{ margin: "0 0 6px", fontSize: 11.5, fontWeight: 800, color: C.text }}>
-          {DAY_NAMES[dayTab]} · {daySlots.length} slot{daySlots.length === 1 ? "" : "s"}
+          {(daySlots.length === 1 ? tr("planViews.form.dayHeaderOne") : tr("planViews.form.dayHeaderMany").replace("{n}", String(daySlots.length))).replace("{day}", DAY_NAMES[dayTab])}
         </p>
         <div data-testid="smart-schedule-day-slots" style={{ display: "flex", flexWrap: "wrap", gap: 6, minHeight: 30 }}>
           {daySlots.length === 0 ? (
-            <span style={{ fontSize: 11.5, color: C.muted }}>No slots for this day.</span>
+            <span style={{ fontSize: 11.5, color: C.muted }}>{tr("planViews.form.noSlotsForDay")}</span>
           ) : daySlots.map(t => {
             const isCustom = dayCustom.includes(t);
             return (
               <span key={t} data-testid="smart-schedule-slot-chip" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 8, background: C.surface2, border: `1px solid ${isCustom ? C.pink : C.border}`, fontSize: 11.5, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>
                 {t}
-                {isCustom && <button type="button" onClick={() => removeCustomSlot(dayTab, t)} aria-label={`Remove ${t}`} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, lineHeight: 1, padding: 0 }}>✕</button>}
+                {isCustom && <button type="button" onClick={() => removeCustomSlot(dayTab, t)} aria-label={tr("planViews.form.removeSlotAria").replace("{time}", t)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, lineHeight: 1, padding: 0 }}>✕</button>}
               </span>
             );
           })}
         </div>
-        {noSlots && !noActiveDays && <p data-testid="smart-schedule-validation-slots" style={errCss}>No publishing slots generated. Check your active days and time windows.</p>}
+        {noSlots && !noActiveDays && <p data-testid="smart-schedule-validation-slots" style={errCss}>{tr("planViews.form.validationNoSlots")}</p>}
         {/* Secondary, optional actions — never required for Save (preview auto-updates). */}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           <button type="button" data-testid="smart-schedule-regenerate" onClick={regeneratePreview}
             style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface2, color: C.sec, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
-            Regenerate times
+            {tr("planViews.form.regenerateTimes")}
           </button>
           <button type="button" data-testid="smart-schedule-reset-recommended" onClick={resetToRecommended}
             style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.sec, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
-            Reset to recommended
+            {tr("planViews.form.resetToRecommended")}
           </button>
         </div>
       </Section>
@@ -380,12 +382,12 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
       <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
         <button type="button" data-testid="smart-schedule-advanced-toggle" onClick={() => setAdvancedOpen(o => !o)}
           style={{ background: "none", border: "none", color: C.sec, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0 }}>
-          {advancedOpen ? "▾" : "▸"} Advanced
+          {advancedOpen ? "▾" : "▸"} {tr("planViews.form.advanced")}
         </button>
         {advancedOpen && (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 18 }}>
             {/* Advanced: add custom slot */}
-            <Section title="Add custom slot">
+            <Section title={tr("planViews.form.addCustomSlotTitle")}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <select value={customDay} onChange={e => setCustomDay(Number(e.target.value) as WeekdayIndex)} style={{ ...selectCss, width: 90 }}>
                   {DAY_NAMES.map((d, i) => <option key={d} value={i}>{d}</option>)}
@@ -393,10 +395,10 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
                 <input type="time" value={customTime} onChange={e => setCustomTime(e.target.value)} style={{ ...inputCss, width: 120 }} />
                 <button type="button" data-testid="smart-schedule-add-slot" onClick={addCustomSlot}
                   style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface2, color: C.sec, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  Add custom slot
+                  {tr("planViews.form.addCustomSlot")}
                 </button>
               </div>
-              <p style={helpCss}>Custom slots are kept when the preview regenerates.</p>
+              <p style={helpCss}>{tr("planViews.form.customSlotsHelp")}</p>
             </Section>
             {/* Board assignment is intentionally NOT here in P0 — it lives in Pin Details /
                 Batch Edit / publish readiness. */}
@@ -408,27 +410,27 @@ export function SmartScheduleConfigForm({ saveRef, onSaved }: Props) {
       {rebalanceCount !== null && (
         <div onClick={keepCurrentTimes} style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div data-testid="smart-schedule-rebalance-confirm" onClick={e => e.stopPropagation()} style={{ width: 400, maxWidth: "92vw", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
-            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: C.text }}>Smart Schedule updated</h3>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: C.text }}>{tr("planViews.form.rebalance.title")}</h3>
             <p style={{ margin: "10px 0 0", fontSize: 12.5, color: C.sec, lineHeight: 1.5 }}>
-              Your new Smart Schedule will be used for all future scheduled Pins.
+              {tr("planViews.form.rebalance.bodyIntro")}
             </p>
             <p style={{ margin: "8px 0 0", fontSize: 12.5, color: C.sec, lineHeight: 1.5 }}>
-              You already have <strong>{rebalanceCount}</strong> planned Pin{rebalanceCount === 1 ? "" : "s"}. Do you want to update their publish dates and times to match the new schedule?
+              {(rebalanceCount === 1 ? tr("planViews.form.rebalance.bodyCountOne") : tr("planViews.form.rebalance.bodyCountMany")).replace("{n}", String(rebalanceCount))}
             </p>
             <ul style={{ margin: "10px 0 16px", paddingLeft: 16, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
-              <li>Only unlocked planned Pins will be updated.</li>
-              <li>Locked, posted, past, and manually scheduled Pins will not be changed.</li>
-              <li>Dates and times may change.</li>
-              <li>You can undo this after rebalancing.</li>
+              <li>{tr("planViews.form.rebalance.bulletUnlockedOnly")}</li>
+              <li>{tr("planViews.form.rebalance.bulletExclusions")}</li>
+              <li>{tr("planViews.form.rebalance.bulletDatesChange")}</li>
+              <li>{tr("planViews.form.rebalance.bulletUndo")}</li>
             </ul>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <button type="button" data-testid="smart-schedule-rebalance-confirm-btn" onClick={rebalanceNow}
                 style={{ padding: "10px 12px", borderRadius: 9, border: "none", background: `linear-gradient(135deg,#FF4D8D,${C.purple})`, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
-                Rebalance planned Pins
+                {tr("planViews.form.rebalance.confirmButton")}
               </button>
               <button type="button" data-testid="smart-schedule-rebalance-keep-btn" onClick={keepCurrentTimes}
                 style={{ padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface2, color: C.sec, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
-                Keep current times
+                {tr("planViews.form.rebalance.keepButton")}
               </button>
             </div>
           </div>

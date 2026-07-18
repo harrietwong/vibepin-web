@@ -1,6 +1,15 @@
 "use client";
 
 /**
+ * @deprecated Superseded by SupportChatModal (docs/prd/客服系统简化版v1.1.txt
+ * §5): the user-facing support surface is now a chat-first flow with no
+ * ticket-creation form and no ticket number shown to the user. This file is
+ * kept (not deleted) because /app/support/tickets still reads/writes
+ * classic tickets and nothing currently imports this component — do not
+ * wire it up to any new call site. Prefer
+ * `@/components/support/SupportChatModal` for any "ask for help" entry
+ * point going forward.
+ *
  * ContactSupportModal — the one and only "create a support ticket" form.
  * Compact (max ~520px), single column. Context (draftId, publishJobId,
  * generationRequestId, plan, browser, …) is gathered automatically — the user
