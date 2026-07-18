@@ -110,6 +110,11 @@ const en = {
   "today.dataQuality.inferred": "Inferred",
   "today.dataQuality.exact": "Exact",
 
+  "time.relative.justNow": "just now",
+  "time.relative.minutesAgo": "{n}m ago",
+  "time.relative.hoursAgo": "{n}h ago",
+  "time.relative.daysAgo": "{n}d ago",
+
   "blocker.publish_failure.label": "Publish failure",
   "blocker.pinterest_disconnected.label": "Pinterest disconnected",
   "blocker.generation_failures.label": "Generation failures",
@@ -218,6 +223,11 @@ const zh: Record<keyof typeof en, string> = {
 
   "today.dataQuality.inferred": "推断",
   "today.dataQuality.exact": "精确",
+
+  "time.relative.justNow": "刚刚",
+  "time.relative.minutesAgo": "{n} 分钟前",
+  "time.relative.hoursAgo": "{n} 小时前",
+  "time.relative.daysAgo": "{n} 天前",
 
   "blocker.publish_failure.label": "发布失败",
   "blocker.pinterest_disconnected.label": "Pinterest 已断开",

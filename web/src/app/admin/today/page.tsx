@@ -24,17 +24,26 @@ export const dynamic = "force-dynamic";
 
 // ── formatters ───────────────────────────────────────────────────────────────
 
-function fmtRelative(iso: string | null): string {
-  if (!iso) return "—";
+// Returns a catalog key + interpolation vars so the value renders in the admin
+// language via <AdminTFmt>, or null for an un-parseable/absent instant (caller
+// renders the em-dash placeholder). Never emits hardcoded English.
+function relativeParts(iso: string | null): { key: AdminMessageKey; vars: Record<string, number> } | null {
+  if (!iso) return null;
   const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "—";
+  if (!Number.isFinite(t)) return null;
   const diff = Date.now() - t;
   const mins = Math.round(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return { key: "time.relative.justNow", vars: {} };
+  if (mins < 60) return { key: "time.relative.minutesAgo", vars: { n: mins } };
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  if (hrs < 24) return { key: "time.relative.hoursAgo", vars: { n: hrs } };
+  return { key: "time.relative.daysAgo", vars: { n: Math.round(hrs / 24) } };
+}
+
+function Relative({ iso }: { iso: string | null }) {
+  const parts = relativeParts(iso);
+  if (!parts) return <>—</>;
+  return <AdminTFmt k={parts.key} vars={parts.vars} />;
 }
 
 function fmtNum(v: number | null | undefined): string {
@@ -154,7 +163,7 @@ function ActionCenterCard({ items, available, windowHours }: { items: BlockerIte
                         {item.dataQuality === "inferred" && <InferredChip />}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-gray-600">{fmtRelative(item.firstSeenAt)}</td>
+                    <td className="px-3 py-2.5 text-gray-600"><Relative iso={item.firstSeenAt} /></td>
                     <td className="px-3 py-2.5 text-gray-700"><BlockerReason item={item} /></td>
                     <td className="px-4 py-2.5 text-gray-500"><AdminT k={BLOCKER_ACTION_KEY[item.blockerType]} /></td>
                   </tr>
