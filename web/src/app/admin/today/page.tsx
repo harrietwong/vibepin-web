@@ -200,9 +200,13 @@ function FunnelBar({ stage, cohortSize, split }: { stage: StageCount; cohortSize
       <div className="h-2.5 w-full overflow-hidden rounded-full" style={{ background: "var(--admin-surface-2, #F1F5F9)" }}>
         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "linear-gradient(90deg,#6366F1,#4338CA)" }} />
       </div>
-      {split && (split.exact > 0 || split.inferred > 0) && (
+      {split && (
         <p className="mt-1 text-[10.5px] text-gray-400">
-          <AdminTFmt k="today.funnel.splitNote" vars={{ exact: split.exact, inferred: split.inferred }} />
+          {split.exact === 0 && split.inferred === 0 ? (
+            <AdminT k="today.funnel.splitNote.empty" />
+          ) : (
+            <AdminTFmt k="today.funnel.splitNote" vars={{ exact: split.exact, inferred: split.inferred }} />
+          )}
         </p>
       )}
     </div>
