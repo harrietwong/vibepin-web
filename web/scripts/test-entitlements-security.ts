@@ -189,6 +189,63 @@ async function main() {
     );
   });
 
+  // ── Fix 3: scheduled_cancel keeps access until period end ─────────────────────
+  const future = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+  const past = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+
+  await test("filter: scheduled_cancel with a FUTURE period end still grants", () => {
+    const grants = ent.filterAccessGrantingSubscriptions([
+      { plan: "pro", status: "scheduled_cancel", last_event_at: "2026-07-16T00:00:00.000Z", current_period_end: future },
+    ]);
+    assertEq(grants.length, 1, "kept while within period");
+    assertEq(grants[0].plan, "pro", "plan carried");
+  });
+
+  await test("filter: scheduled_cancel with a PAST period end drops out", () => {
+    const grants = ent.filterAccessGrantingSubscriptions([
+      { plan: "pro", status: "scheduled_cancel", last_event_at: "2026-07-16T00:00:00.000Z", current_period_end: past },
+    ]);
+    assertEq(grants.length, 0, "lapsed scheduled_cancel no longer grants");
+  });
+
+  await test("filter: scheduled_cancel with NO period end is treated as still entitled", () => {
+    const grants = ent.filterAccessGrantingSubscriptions([
+      { plan: "business", status: "scheduled_cancel", last_event_at: null, current_period_end: null },
+    ]);
+    assertEq(grants.length, 1, "unknown end → still entitled");
+  });
+
+  await test("filter: active/trialing kept unconditionally, revoking statuses dropped", () => {
+    const grants = ent.filterAccessGrantingSubscriptions([
+      { plan: "starter", status: "active", last_event_at: null, current_period_end: past },
+      { plan: "pro", status: "trialing", last_event_at: null, current_period_end: past },
+      { plan: "pro", status: "canceled", last_event_at: null, current_period_end: future },
+      { plan: "pro", status: "past_due", last_event_at: null, current_period_end: future },
+    ]);
+    assertEq(grants.length, 2, "only active + trialing kept");
+  });
+
+  await test("resolvePlan: scheduled_cancel (future) → grants plan; (past) → free", async () => {
+    // Model what defaultGetActiveSubscriptions returns post-filter: a future
+    // scheduled_cancel is present; a past one has already been filtered OUT.
+    const future1 = ent.filterAccessGrantingSubscriptions([
+      { plan: "pro", status: "scheduled_cancel", last_event_at: "2026-07-16T00:00:00.000Z", current_period_end: future },
+    ]);
+    assertEq(
+      await ent.resolvePlan("u1", deps({ email: "a@example.com", subs: future1 })),
+      "pro",
+      "future scheduled_cancel → pro",
+    );
+    const past1 = ent.filterAccessGrantingSubscriptions([
+      { plan: "pro", status: "scheduled_cancel", last_event_at: "2026-07-16T00:00:00.000Z", current_period_end: past },
+    ]);
+    assertEq(
+      await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: undefined, subs: past1 })),
+      "free",
+      "past scheduled_cancel → free (filtered out, no cache)",
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

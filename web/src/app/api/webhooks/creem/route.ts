@@ -458,8 +458,13 @@ async function handleScheduledCancel(
   const mapping = productId ? resolveCreemProduct(productId) : null;
   const plan: PlanKey | null = mapping?.plan ?? null;
   const interval = mapping?.interval ?? null;
-  // Keep whatever status Creem reports (likely still "active", or "scheduled_cancel").
-  const status = asString(o.status) ?? "active";
+  // Contract: the mirrored status REFLECTS the scheduled cancel — we always store
+  // status="scheduled_cancel" here (regardless of what Creem reports on the event),
+  // paired with scheduled_cancel=true. resolvePlan then honors this row until
+  // current_period_end. This keeps a single source of truth: the status field
+  // itself says "scheduled to cancel", not a status="active"+flag combination that
+  // resolvePlan's active/trialing query would (incorrectly) treat as unconditional.
+  const status = "scheduled_cancel";
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
@@ -493,8 +498,14 @@ async function handleScheduledCancel(
     return;
   }
 
+  // A scheduled_cancel keeps access until current_period_end. Grant when the
+  // period end is unknown (treat as still-entitled — a cancel was only just
+  // scheduled) or in the future. resolvePlan applies the same rule, so cache and
+  // source of truth agree.
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
-  if (userId && plan && creemStatusGrantsAccess(status)) {
+  const stillEntitled =
+    !currentPeriodEnd || new Date(currentPeriodEnd).getTime() > Date.now();
+  if (userId && plan && stillEntitled) {
     await setUserPlan(userId, plan);
   }
 }
