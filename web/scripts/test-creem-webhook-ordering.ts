@@ -144,9 +144,39 @@ function baseInput(over: Partial<Record<string, unknown>>) {
 }
 
 async function main() {
-  const { upsertCreemSubscription } = await import("../src/lib/server/creem/creemStore");
+  const { upsertCreemSubscription, creemStatusGrantsAccess } = await import(
+    "../src/lib/server/creem/creemStore"
+  );
+  const { resolvePlan } = await import("../src/lib/server/entitlements");
 
   console.log("\nCreem webhook ordering tests\n");
+
+  // ── Fix 2: subscription.trialing grants access ────────────────────────────────
+  await test("trialing status grants access (creemStatusGrantsAccess)", () => {
+    assertEq(creemStatusGrantsAccess("trialing"), true, "trialing grants");
+  });
+
+  await test("a trialing event mirrors with status=trialing and is applied", async () => {
+    const store = new Map<string, Row>();
+    const db = makeFakeDb(store);
+    const outcome = await upsertCreemSubscription(
+      baseInput({ status: "trialing", plan: "pro" }),
+      db,
+    );
+    assertEq(outcome, "applied", "trialing mirror applied");
+    assertEq(store.get("sub_1")?.status, "trialing", "row stored trialing");
+  });
+
+  await test("resolvePlan grants the plan for a trialing subscription", async () => {
+    const plan = await resolvePlan("user_1", {
+      getUserById: async () => ({ email: null, appPlan: undefined }),
+      // A trialing sub is in the access-granting set, so resolvePlan reads its plan.
+      getActiveSubscriptions: async () => [
+        { plan: "pro", lastEventAt: "2026-07-16T00:00:00.000Z" },
+      ],
+    });
+    assertEq(plan, "pro", "trialing sub → pro");
+  });
 
   await test("first event inserts and is applied", async () => {
     const store = new Map<string, Row>();
