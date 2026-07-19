@@ -295,15 +295,18 @@ export async function getCreemSubscriptionsForCustomer(
 // ── Derivations ─────────────────────────────────────────────────────────────────
 
 /**
- * Whether a Creem subscription status grants product access. TRUE only for
- * "active" and "trialing".
+ * Whether a Creem subscription status UNCONDITIONALLY grants product access. TRUE
+ * only for "active" and "trialing".
  *
  * Upstream "paid" is normalized to "active" by the route before it reaches here.
- * "scheduled_cancel" is intentionally NOT in this set — a scheduled cancel keeps
- * the subscription entitled until period end and the mirror stores that via the
- * scheduled_cancel flag while the status field stays "active" (so this returns
- * true through the flag path). The revoking statuses — canceled / expired /
- * past_due / paused / unpaid — are all false.
+ * "scheduled_cancel" is intentionally NOT in this set because its access is
+ * CONDITIONAL on current_period_end (a scheduled cancel keeps access until period
+ * end, then stops) — a boolean over the status string alone cannot decide it. The
+ * mirror stores status="scheduled_cancel" (paired with scheduled_cancel=true), and
+ * the period-end check lives where the row is available: resolvePlan's live lookup
+ * (defaultGetActiveSubscriptions) for entitlement, and the status route's
+ * pickCurrent (via the scheduled_cancel flag) for display. The revoking statuses —
+ * canceled / expired / past_due / paused / unpaid — are all false.
  */
 export function creemStatusGrantsAccess(status: string): boolean {
   return status === "active" || status === "trialing";

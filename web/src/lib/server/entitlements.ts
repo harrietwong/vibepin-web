@@ -10,8 +10,9 @@
  * Supabase users can edit their own user_metadata, so trusting it there let
  * anyone self-grant a paid plan):
  *   1. a live `creem_subscriptions` row for the user whose status grants access
- *      (active/trialing) — the newest by last_event_at wins; its `plan` is used
- *      when it is a valid PlanKey. This is the billing source of truth.
+ *      (active/trialing, or scheduled_cancel still within current_period_end) —
+ *      the newest by last_event_at wins; its `plan` is used when it is a valid
+ *      PlanKey. This is the billing source of truth.
  *   2. `app_metadata.plan` (service-role-writable only — a trusted cache the
  *      Creem webhook refreshes) when it names a valid plan.
  *   3. otherwise "free".
@@ -94,10 +95,21 @@ export function getEntitlements(plan: PlanKey): Entitlements {
 type ResolvedUser = { email: string | null; appPlan: unknown };
 
 /**
- * A single active/trialing Creem subscription grant. `lastEventAt` orders
+ * A single access-granting Creem subscription grant. `lastEventAt` orders
  * competing rows (newest wins); `plan` is the raw mirrored plan string.
+ *
+ * The grant set is: active / trialing (unconditional), plus scheduled_cancel that
+ * is still within its current_period_end (a scheduled cancel keeps access until
+ * period end). Callers that supply pre-filtered grants may omit `status`/
+ * `currentPeriodEnd`; the default DB lookup filters scheduled_cancel by period end
+ * before returning, so any grant it returns is already access-granting.
  */
-export type ActiveSubscriptionGrant = { plan: unknown; lastEventAt: string | null };
+export type ActiveSubscriptionGrant = {
+  plan: unknown;
+  lastEventAt: string | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
+};
 
 export type ResolvePlanDeps = {
   /** Fetch the auth user (email + app_metadata.plan), or null when unknown. */
@@ -117,10 +129,50 @@ async function defaultGetUserById(userId: string): Promise<ResolvedUser | null> 
   return { email: data.user.email ?? null, appPlan: appMeta?.plan };
 }
 
+/** A mirrored subscription row as read for the access-grant decision. */
+export type SubscriptionRowForGrant = {
+  plan: unknown;
+  status: string | null;
+  last_event_at: string | null;
+  current_period_end: string | null;
+};
+
 /**
- * Live billing lookup: the user's Creem subscriptions whose status grants
- * access (active/trialing). Returns [] on any error so resolvePlan degrades to
- * the app_metadata cache rather than throwing.
+ * Keep ONLY the rows that currently grant access: active / trialing
+ * (unconditional), plus scheduled_cancel still within current_period_end (a
+ * scheduled cancel keeps access until period end — an unknown end is treated as
+ * still-entitled; a past end no longer grants). `nowMs` is injectable for tests.
+ */
+export function filterAccessGrantingSubscriptions(
+  rows: SubscriptionRowForGrant[],
+  nowMs: number = Date.now(),
+): ActiveSubscriptionGrant[] {
+  return rows
+    .filter((r) => {
+      if (r.status === "active" || r.status === "trialing") return true;
+      if (r.status === "scheduled_cancel") {
+        return (
+          !r.current_period_end ||
+          new Date(r.current_period_end).getTime() > nowMs
+        );
+      }
+      return false;
+    })
+    .map((r) => ({
+      plan: r.plan,
+      lastEventAt: r.last_event_at,
+      status: r.status,
+      currentPeriodEnd: r.current_period_end,
+    }));
+}
+
+/**
+ * Live billing lookup: the user's Creem subscriptions whose status grants access.
+ * Selects active / trialing AND scheduled_cancel, then filters via
+ * filterAccessGrantingSubscriptions so a lapsed scheduled_cancel drops out. This
+ * makes the DB row the source of truth for a scheduled cancel rather than relying
+ * on the app_metadata cache surviving. Returns [] on any error so resolvePlan
+ * degrades to the app_metadata cache rather than throwing.
  */
 async function defaultGetActiveSubscriptions(
   userId: string,
@@ -129,13 +181,11 @@ async function defaultGetActiveSubscriptions(
     const db = createServerClient();
     const { data, error } = await db
       .from("creem_subscriptions")
-      .select("plan,status,last_event_at")
+      .select("plan,status,last_event_at,current_period_end")
       .eq("user_id", userId)
-      .in("status", ["active", "trialing"]);
+      .in("status", ["active", "trialing", "scheduled_cancel"]);
     if (error || !data) return [];
-    return (data as Array<{ plan: unknown; last_event_at: string | null }>).map(
-      (r) => ({ plan: r.plan, lastEventAt: r.last_event_at }),
-    );
+    return filterAccessGrantingSubscriptions(data as SubscriptionRowForGrant[]);
   } catch {
     return [];
   }
