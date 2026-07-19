@@ -114,6 +114,10 @@ const en = {
   // ── Billing tab ──
   "billing.currentPlan": "Current plan",
   "billing.statusActive": "Active",
+  "billing.statusInactive": "Inactive",
+  "billing.statusScheduledCancel": "Scheduled to cancel",
+  "billing.cancelsOn": "Cancels on",
+  "billing.previousPlan": "Previous",
   "billing.paidDesc": "Full access to all VibePin features including advanced AI and unlimited publishing.",
   "billing.freeDesc": "Free plan — up to 2 boards and limited AI credits per month.",
   "billing.manageBilling": "Manage billing",

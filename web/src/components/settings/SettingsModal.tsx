@@ -315,7 +315,12 @@ function AccountTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => Pr
 
 type CreemBillingStatus = {
   hasBillingAccount: boolean;
-  plan: string;
+  /** The plan the user CURRENTLY has access to (highest granting sub, else free). */
+  effectivePlan: string;
+  /** The newest historical plan, shown only when accessGranted is false. */
+  previousPlan?: string | null;
+  /** True only when a live subscription currently grants access. */
+  accessGranted?: boolean;
   interval?: "month" | "year" | null;
   status?: string | null;
   currentPeriodEnd?: string | null;
@@ -359,17 +364,55 @@ function BillingTab() {
     };
   }, []);
 
-  // Prefer the live Creem plan; fall back to the metadata-derived name.
-  const planName   = normalizePlanName(billing?.plan ?? summary.planName);
+  // Current plan = the EFFECTIVE plan (what the user has access to right now);
+  // fall back to the metadata-derived name only before the live status loads.
+  const planName   = normalizePlanName(billing?.effectivePlan ?? summary.planName);
   const paid       = isPaidPlan(planName);
   const hasBillingAccount = billing?.hasBillingAccount ?? false;
-  const planStatus = billing?.status ?? summary.planStatus ?? t("billing.statusActive");
+  // accessGranted decides the badge colour — never trust the raw status to be green.
+  // Before the live status loads, fall back to "granted" so a paying user isn't
+  // briefly shown as lapsed.
+  const accessGranted = billing ? (billing.accessGranted ?? false) : true;
+  const rawStatus = (billing?.status ?? "").toLowerCase();
+  const scheduledCancel = billing?.scheduledCancel ?? false;
   const intervalLabel = billing?.interval
     ? billing.interval === "year" ? t("billing.perYear") : t("billing.perMonth")
     : null;
   const periodEnd = billing?.currentPeriodEnd ? formatEnglishDateTime(billing.currentPeriodEnd) : null;
-  const scheduledCancel = billing?.scheduledCancel ?? false;
+  // The previous (historical) plan, shown muted only when access is not granted.
+  const previousPlanName = billing?.previousPlan
+    ? normalizePlanName(billing.previousPlan)
+    : null;
   const lastActivity = summary.lastCreditActivityAt ? formatEnglishDateTime(summary.lastCreditActivityAt) : null;
+
+  // Status badge: green ONLY when access is granted and the raw status is
+  // active/trialing; scheduled_cancel → amber "Cancels on <date>"; any lapsed
+  // status (canceled/expired/past_due/paused/unpaid) → grey/red, never green.
+  const isActiveGreen =
+    accessGranted && (rawStatus === "active" || rawStatus === "trialing" || rawStatus === "");
+  let badgeLabel: string;
+  let badgeColor: string;
+  let badgeBg: string;
+  let badgeBorder: string;
+  if (scheduledCancel) {
+    badgeLabel = periodEnd
+      ? `${t("billing.cancelsOn")} ${periodEnd}`
+      : t("billing.statusScheduledCancel");
+    badgeColor = UI.warning;
+    badgeBg = "rgba(245,158,11,0.12)";
+    badgeBorder = "rgba(245,158,11,0.3)";
+  } else if (isActiveGreen) {
+    badgeLabel = billing?.status ?? t("billing.statusActive");
+    badgeColor = UI.success;
+    badgeBg = "rgba(16,185,129,0.12)";
+    badgeBorder = "rgba(16,185,129,0.3)";
+  } else {
+    // Lapsed / no access — grey, never green.
+    badgeLabel = billing?.status ?? t("billing.statusInactive");
+    badgeColor = UI.textSec;
+    badgeBg = "rgba(148,163,184,0.10)";
+    badgeBorder = "rgba(148,163,184,0.25)";
+  }
 
   async function handleManageBilling() {
     setPortalPending(true);
@@ -405,15 +448,20 @@ function BillingTab() {
               )}
             </h2>
           </div>
-          <span style={{
+          <span data-testid="billing-status-badge" style={{
             display: "inline-flex", alignItems: "center", gap: 5, marginTop: 4,
             padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-            color: UI.success, background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)",
+            color: badgeColor, background: badgeBg, border: `1px solid ${badgeBorder}`,
           }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: UI.success }} />
-            {planStatus}
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: badgeColor }} />
+            {badgeLabel}
           </span>
         </div>
+        {previousPlanName && !accessGranted && (
+          <p data-testid="billing-previous-plan" style={{ margin: "0 0 6px", fontSize: 12, color: UI.textMuted }}>
+            {t("billing.previousPlan")}: <strong>{previousPlanName}</strong>
+          </p>
+        )}
         <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
           {paid ? t("billing.paidDesc") : t("billing.freeDesc")}
         </p>
