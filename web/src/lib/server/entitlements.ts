@@ -174,7 +174,7 @@ export function filterAccessGrantingSubscriptions(
  * on the app_metadata cache surviving. Returns [] on any error so resolvePlan
  * degrades to the app_metadata cache rather than throwing.
  */
-async function defaultGetActiveSubscriptions(
+export async function defaultGetActiveSubscriptions(
   userId: string,
 ): Promise<ActiveSubscriptionGrant[]> {
   try {
@@ -191,18 +191,21 @@ async function defaultGetActiveSubscriptions(
   }
 }
 
-/** Newest grant by last_event_at (nulls sort oldest), or null when empty. */
-function newestGrant(
-  grants: ActiveSubscriptionGrant[],
-): ActiveSubscriptionGrant | null {
-  let best: ActiveSubscriptionGrant | null = null;
-  let bestTs = -Infinity;
+/**
+ * Reduce a list of access-granting subscription grants to the single HIGHEST
+ * effective plan (free < starter < pro < business). Unrecognized plan strings are
+ * ignored. Returns "free" when the list is empty or holds no valid plan.
+ *
+ * This is the ONE ranking both resolvePlan and refreshUserPlanCache use, so the
+ * derived app_metadata cache is provably identical to what resolvePlan computes —
+ * a user with two active subs (e.g. an upgrade re-buy) is ranked at the higher
+ * plan by both, and neither is fooled by which event happened to land last.
+ */
+export function highestPlanFromGrants(grants: ActiveSubscriptionGrant[]): PlanKey {
+  let best: PlanKey = "free";
   for (const g of grants) {
-    const ts = g.lastEventAt ? new Date(g.lastEventAt).getTime() : -Infinity;
-    if (best === null || ts >= bestTs) {
-      best = g;
-      bestTs = ts;
-    }
+    const p = normalizePlanKey(g.plan);
+    if (p && PLAN_RANK[p] > PLAN_RANK[best]) best = p;
   }
   return best;
 }
@@ -225,12 +228,14 @@ export async function resolvePlan(userId: string, deps?: ResolvePlanDeps): Promi
     user = null;
   }
 
-  // (a) Billing source of truth: a live active/trialing subscription.
+  // (a) Billing source of truth: the HIGHEST live access-granting subscription
+  //     (active / trialing / scheduled-cancel-not-expired). Highest wins so two
+  //     coexisting subs resolve to the better plan.
   let plan: PlanKey = "free";
   try {
     const grants = await getActiveSubscriptions(userId);
-    const fromSub = normalizePlanKey(newestGrant(grants)?.plan);
-    if (fromSub) plan = fromSub;
+    const fromSub = highestPlanFromGrants(grants);
+    if (fromSub !== "free") plan = fromSub;
   } catch {
     // fall through to the app_metadata cache
   }
