@@ -86,16 +86,9 @@ const originalLoad = (Module as any)._load;
       },
     };
   }
-  if (request.includes("server/entitlements")) {
-    // Only normalizePlanKey is used by the status route.
-    return {
-      normalizePlanKey: (v: unknown) => {
-        if (typeof v !== "string") return null;
-        const t = v.trim().toLowerCase();
-        return ["free", "starter", "pro", "business"].includes(t) ? t : null;
-      },
-    };
-  }
+  // entitlements is NOT mocked: the status route uses its pure functions
+  // (filterAccessGrantingSubscriptions / highestPlanFromGrants / normalizePlanKey),
+  // which have no DB dependency — exercise the real ranking + period-end filter.
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -140,24 +133,31 @@ async function main() {
     fakes.uid = "user-1";
   });
 
-  await test("status: no billing account → { hasBillingAccount:false, plan:'free' }", async () => {
+  const future = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+  const past = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+
+  await test("status: no billing account → effectivePlan free, accessGranted false", async () => {
     fakes.customer = null;
     fakes.subs = [];
     const res = await statusRoute.GET(getReq() as never);
     assertEq(res.status, 200, "status");
-    const json = (await res.json()) as { hasBillingAccount: boolean; plan: string };
+    const json = (await res.json()) as Record<string, unknown>;
     assertEq(json.hasBillingAccount, false, "hasBillingAccount");
-    assertEq(json.plan, "free", "plan");
+    assertEq(json.effectivePlan, "free", "effectivePlan");
+    assertEq(json.accessGranted, false, "accessGranted");
+    assertEq(json.previousPlan, null, "previousPlan");
   });
 
-  await test("status: active subscription shape", async () => {
+  await test("status: active subscription → effectivePlan pro, accessGranted true", async () => {
     fakes.customer = { creem_customer_id: "cus_1" };
     fakes.subs = [sub({ status: "active", plan: "pro", billing_interval: "month" })];
     const res = await statusRoute.GET(getReq() as never);
     assertEq(res.status, 200, "status");
     const json = (await res.json()) as Record<string, unknown>;
     assertEq(json.hasBillingAccount, true, "hasBillingAccount");
-    assertEq(json.plan, "pro", "plan");
+    assertEq(json.effectivePlan, "pro", "effectivePlan");
+    assertEq(json.accessGranted, true, "accessGranted");
+    assertEq(json.previousPlan, null, "previousPlan (null while granted)");
     assertEq(json.interval, "month", "interval");
     assertEq(json.status, "active", "status field");
     assertEq(json.currentPeriodEnd, "2026-08-01T00:00:00.000Z", "currentPeriodEnd");
@@ -168,22 +168,50 @@ async function main() {
     assert(!("creem_product_id" in json), "no product id leaked");
   });
 
-  await test("status: scheduled-cancel subscription surfaces scheduledCancel=true and keeps plan", async () => {
+  await test("status: scheduled_cancel (future period) → effectivePlan kept, accessGranted true, scheduledCancel true", async () => {
     fakes.customer = { creem_customer_id: "cus_1" };
-    fakes.subs = [sub({ status: "active", scheduled_cancel: true, plan: "business" })];
+    fakes.subs = [
+      sub({ status: "scheduled_cancel", scheduled_cancel: true, plan: "business", current_period_end: future }),
+    ];
     const res = await statusRoute.GET(getReq() as never);
     const json = (await res.json()) as Record<string, unknown>;
     assertEq(json.scheduledCancel, true, "scheduledCancel");
-    assertEq(json.plan, "business", "plan retained while scheduled to cancel");
+    assertEq(json.effectivePlan, "business", "plan retained while scheduled to cancel");
+    assertEq(json.accessGranted, true, "still granted before period end");
+    assertEq(json.previousPlan, null, "no previousPlan while granted");
   });
 
-  await test("status: customer exists but no subscription → free with hasBillingAccount:true", async () => {
+  await test("status: canceled Pro → effectivePlan free, accessGranted false, previousPlan pro, status canceled", async () => {
+    fakes.customer = { creem_customer_id: "cus_1" };
+    fakes.subs = [sub({ status: "canceled", scheduled_cancel: false, plan: "pro", current_period_end: past })];
+    const res = await statusRoute.GET(getReq() as never);
+    const json = (await res.json()) as Record<string, unknown>;
+    assertEq(json.effectivePlan, "free", "effectivePlan is free (real access)");
+    assertEq(json.accessGranted, false, "accessGranted false");
+    assertEq(json.previousPlan, "pro", "previousPlan surfaces the historical plan");
+    assertEq(json.status, "canceled", "raw status still canceled");
+  });
+
+  await test("status: scheduled_cancel PAST period → lapsed (effectivePlan free, previousPlan pro)", async () => {
+    fakes.customer = { creem_customer_id: "cus_1" };
+    fakes.subs = [
+      sub({ status: "scheduled_cancel", scheduled_cancel: true, plan: "pro", current_period_end: past }),
+    ];
+    const res = await statusRoute.GET(getReq() as never);
+    const json = (await res.json()) as Record<string, unknown>;
+    assertEq(json.effectivePlan, "free", "expired scheduled_cancel no longer grants");
+    assertEq(json.accessGranted, false, "accessGranted false past period end");
+    assertEq(json.previousPlan, "pro", "previousPlan pro");
+  });
+
+  await test("status: customer exists but no subscription → effectivePlan free, accessGranted false", async () => {
     fakes.customer = { creem_customer_id: "cus_1" };
     fakes.subs = [];
     const res = await statusRoute.GET(getReq() as never);
     const json = (await res.json()) as Record<string, unknown>;
     assertEq(json.hasBillingAccount, true, "hasBillingAccount");
-    assertEq(json.plan, "free", "plan");
+    assertEq(json.effectivePlan, "free", "effectivePlan");
+    assertEq(json.accessGranted, false, "accessGranted");
   });
 
   // ── portal ──────────────────────────────────────────────────────────────────

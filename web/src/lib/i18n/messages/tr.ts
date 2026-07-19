@@ -93,6 +93,10 @@ const tr: Partial<Record<MessageKey, string>> = {
   // ── Billing tab ──
   "billing.currentPlan": "Mevcut plan",
   "billing.statusActive": "Aktif",
+  "billing.statusInactive": "Etkin değil",
+  "billing.statusScheduledCancel": "İptal edilmek üzere",
+  "billing.cancelsOn": "Bitiş",
+  "billing.previousPlan": "Önceki",
   "billing.paidDesc": "Gelişmiş AI ve sınırsız yayınlama dahil tüm VibePin özelliklerine tam erişim.",
   "billing.freeDesc": "Ücretsiz plan — ayda en fazla 2 pano ve sınırlı AI kredisi.",
   "billing.manageBilling": "Faturalandırmayı yönet",
