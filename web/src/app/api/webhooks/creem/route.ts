@@ -30,7 +30,6 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServerClient } from "@/lib/supabase";
 import { resolveCreemProduct } from "@/lib/server/creem/creemProducts";
 import {
-  creemStatusGrantsAccess,
   getCreemSubscriptionsForCustomer,
   linkCustomerToUser,
   markWebhookEventSeen,
@@ -38,6 +37,10 @@ import {
   upsertCreemCustomer,
   upsertCreemSubscription,
 } from "@/lib/server/creem/creemStore";
+import {
+  defaultGetActiveSubscriptions,
+  highestPlanFromGrants,
+} from "@/lib/server/entitlements";
 import type { PlanKey } from "@/lib/pricingPlans";
 
 export const runtime = "nodejs";
@@ -167,6 +170,26 @@ async function setUserPlan(userId: string, plan: string): Promise<void> {
     app_metadata: { ...existingMeta, plan },
   });
   if (error) throw new Error(`updateUserById(${userId}) failed: ${error.message}`);
+}
+
+/**
+ * Recompute a user's cached plan from ALL their subscriptions and write it to
+ * app_metadata. This is the ONLY provisioning primitive the handlers call after an
+ * applied mirror write: it reads the user's live access-granting subscriptions
+ * (active / trialing / scheduled-cancel-not-expired) via the SAME lookup +
+ * ranking resolvePlan uses (defaultGetActiveSubscriptions + highestPlanFromGrants),
+ * so the cache can never disagree with resolvePlan's answer.
+ *
+ * Why this replaces per-event setUserPlan(plan)/setUserPlan("free"): a single
+ * canceled event must NOT blindly demote a user who holds another active
+ * subscription (an upgrade / re-buy). Recomputing over all subs is correct in
+ * every direction — grant, upgrade, downgrade, revoke — because the mirror row for
+ * THIS event has already been written before we recompute.
+ */
+async function refreshUserPlanCache(userId: string): Promise<void> {
+  const grants = await defaultGetActiveSubscriptions(userId);
+  const plan = highestPlanFromGrants(grants); // "free" when nothing grants
+  await setUserPlan(userId, plan);
 }
 
 /**
@@ -356,12 +379,14 @@ export async function POST(request: Request): Promise<Response> {
 
 /**
  * subscription.active / subscription.paid / subscription.trialing: mirror the
- * subscription and, when a user is resolvable and the status grants access,
- * provision the plan. "paid" is stored as "active" (it is the paid/renewed signal
- * for an active sub); "trialing" keeps its own status (also access-granting).
+ * subscription and, when a user is resolvable, refresh the plan cache from all of
+ * their subscriptions. "paid" is stored as "active" (the paid/renewed signal for
+ * an active sub); "trialing" keeps its own status (also access-granting).
  *
- * `mirrorStatus` is the status persisted + used for the grant check ("active" for
- * active/paid, "trialing" for a trial). Both pass creemStatusGrantsAccess.
+ * `mirrorStatus` is the status persisted ("active" for active/paid, "trialing" for
+ * a trial). Provisioning is handled by refreshUserPlanCache (recompute-from-all),
+ * so the specific mirrored status feeds the recompute rather than a local grant
+ * check.
  */
 async function handleSubscriptionActive(
   o: CreemSubscriptionObject,
@@ -431,9 +456,9 @@ async function handleSubscriptionActive(
     );
     return;
   }
-  if (plan && creemStatusGrantsAccess(mirrorStatus)) {
-    await setUserPlan(userId, plan);
-  }
+  // Recompute from ALL subscriptions (the mirror row is written above). Handles a
+  // grant/upgrade correctly and never clobbers another still-active sub.
+  await refreshUserPlanCache(userId);
 }
 
 /**
@@ -498,15 +523,12 @@ async function handleScheduledCancel(
     return;
   }
 
-  // A scheduled_cancel keeps access until current_period_end. Grant when the
-  // period end is unknown (treat as still-entitled — a cancel was only just
-  // scheduled) or in the future. resolvePlan applies the same rule, so cache and
-  // source of truth agree.
+  // A scheduled_cancel keeps access until current_period_end. Recompute from all
+  // subs: defaultGetActiveSubscriptions filters scheduled_cancel by period end, so
+  // the cache reflects "still entitled until period end" exactly like resolvePlan.
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
-  const stillEntitled =
-    !currentPeriodEnd || new Date(currentPeriodEnd).getTime() > Date.now();
-  if (userId && plan && stillEntitled) {
-    await setUserPlan(userId, plan);
+  if (userId) {
+    await refreshUserPlanCache(userId);
   }
 }
 
@@ -557,9 +579,13 @@ async function handleRevoke(
     return;
   }
 
+  // Recompute from ALL subscriptions rather than blindly setting "free": a user
+  // with another still-active subscription (upgrade / re-buy) must NOT be demoted
+  // when the OLD sub's canceled event lands. The mirror row for this event is
+  // already written (status now terminal), so refresh sees the true remaining set.
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
   if (userId) {
-    await setUserPlan(userId, "free"); // revoke
+    await refreshUserPlanCache(userId);
   }
 }
 
@@ -591,7 +617,6 @@ async function handleSubscriptionUpdate(
   }
   const plan: PlanKey | null = mapping?.plan ?? null;
   const status = asString(o.status) ?? "active";
-  const grants = creemStatusGrantsAccess(status);
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
@@ -625,12 +650,11 @@ async function handleSubscriptionUpdate(
     return;
   }
 
+  // Recompute from ALL subscriptions — the update's new status/plan is already
+  // mirrored, so refresh grants, upgrades, downgrades, or revokes correctly, and
+  // never demotes a user who still holds another active subscription.
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
-  if (!userId) return;
-  if (grants && plan) {
-    await setUserPlan(userId, plan); // grant / re-grant (possibly changed plan)
-  } else if (!grants) {
-    await setUserPlan(userId, "free"); // terminal status → revoke
+  if (userId) {
+    await refreshUserPlanCache(userId);
   }
-  // grants && !plan (unknown product) → never grant; leave plan unchanged.
 }

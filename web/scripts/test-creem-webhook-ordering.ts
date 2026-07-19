@@ -147,7 +147,9 @@ async function main() {
   const { upsertCreemSubscription, creemStatusGrantsAccess } = await import(
     "../src/lib/server/creem/creemStore"
   );
-  const { resolvePlan } = await import("../src/lib/server/entitlements");
+  const { resolvePlan, highestPlanFromGrants } = await import(
+    "../src/lib/server/entitlements"
+  );
 
   console.log("\nCreem webhook ordering tests\n");
 
@@ -176,6 +178,57 @@ async function main() {
       ],
     });
     assertEq(plan, "pro", "trialing sub → pro");
+  });
+
+  // ── Fix 4: recompute the highest plan from ALL subscriptions ──────────────────
+  // refreshUserPlanCache and resolvePlan share highestPlanFromGrants, so the cache
+  // can never disagree with resolvePlan. Test the shared ranking directly, then
+  // prove resolvePlan uses it, so both are provably the same answer.
+  const rank = (subs: Array<{ plan: unknown; lastEventAt: string | null }>) =>
+    highestPlanFromGrants(subs);
+
+  await test("highestPlanFromGrants: two active subs (pro + business) → business", () => {
+    assertEq(
+      rank([
+        { plan: "pro", lastEventAt: "2026-07-16T00:00:00.000Z" },
+        { plan: "business", lastEventAt: "2026-07-10T00:00:00.000Z" },
+      ]),
+      "business",
+      "highest wins regardless of which is newer",
+    );
+  });
+
+  await test("highestPlanFromGrants: canceling pro leaves business → business (not free)", () => {
+    // After pro's canceled event, only business remains in the granting set.
+    assertEq(rank([{ plan: "business", lastEventAt: "2026-07-16T00:00:00.000Z" }]), "business", "keeps business");
+  });
+
+  await test("highestPlanFromGrants: canceling the only sub → free", () => {
+    assertEq(rank([]), "free", "no grants → free");
+  });
+
+  await test("highestPlanFromGrants: unknown plan strings are ignored", () => {
+    assertEq(rank([{ plan: "enterprise", lastEventAt: null }]), "free", "unknown → free");
+    assertEq(
+      rank([
+        { plan: "enterprise", lastEventAt: null },
+        { plan: "starter", lastEventAt: null },
+      ]),
+      "starter",
+      "valid plan still counts",
+    );
+  });
+
+  await test("resolvePlan reuses the SAME ranking (two active subs → highest)", async () => {
+    // Proves cache (refreshUserPlanCache → highestPlanFromGrants) equals resolvePlan.
+    const plan = await resolvePlan("user_1", {
+      getUserById: async () => ({ email: null, appPlan: undefined }),
+      getActiveSubscriptions: async () => [
+        { plan: "pro", lastEventAt: "2026-07-16T00:00:00.000Z" },
+        { plan: "business", lastEventAt: "2026-07-01T00:00:00.000Z" },
+      ],
+    });
+    assertEq(plan, "business", "resolvePlan also returns the highest (business)");
   });
 
   await test("first event inserts and is applied", async () => {
