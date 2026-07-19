@@ -35,9 +35,19 @@ function isPaidPlan(id: PlanKey): id is PaidPlan {
   return (PAID_PLANS as readonly PlanKey[]).includes(id);
 }
 
+/** Thrown when checkout is deliberately turned off (CREEM_MODE=disabled → 503). */
+class BillingDisabledError extends Error {
+  constructor() {
+    super("billing_disabled");
+    this.name = "BillingDisabledError";
+  }
+}
+
 /**
  * Start an authenticated Creem checkout for the signed-in buyer. Resolves to the
- * hosted checkout URL, or throws so the caller can surface the retryable banner.
+ * hosted checkout URL. Throws BillingDisabledError when checkout is turned off
+ * (503 billing_disabled → the CTA shows a "coming soon" state), or a plain Error
+ * on any other failure so the caller can surface the retryable banner.
  */
 async function startCreemCheckout(plan: PaidPlan, interval: "month" | "year"): Promise<string> {
   const { data } = await supabase.auth.getSession();
@@ -51,6 +61,10 @@ async function startCreemCheckout(plan: PaidPlan, interval: "month" | "year"): P
     body: JSON.stringify({ plan, interval }),
   });
   if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    if (res.status === 503 && err.error === "billing_disabled") {
+      throw new BillingDisabledError();
+    }
     throw new Error(`checkout endpoint returned ${res.status}`);
   }
   const json = (await res.json()) as { url?: string };
@@ -353,6 +367,9 @@ function PricingPageContent() {
   const [authReady, setAuthReady] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState<PlanKey | null>(null);
   const [checkoutUnavailable, setCheckoutUnavailable] = useState(false);
+  // Checkout deliberately turned off (CREEM_MODE=disabled) — a distinct, calmer
+  // "coming soon" state rather than the retryable "temporarily unavailable" banner.
+  const [checkoutComingSoon, setCheckoutComingSoon] = useState(false);
   // The plan a signed-in buyer is currently launching checkout for (button spinner).
   const [pendingPlanId, setPendingPlanId] = useState<PlanKey | null>(null);
   // A CTA click that arrived before auth resolved. Consumed by the effect below
@@ -385,6 +402,7 @@ function PricingPageContent() {
     async (planId: PaidPlan) => {
       setPendingPlanId(planId);
       setCheckoutUnavailable(false);
+      setCheckoutComingSoon(false);
       const interval = yearly ? "year" : "month";
       try {
         const url = await startCreemCheckout(planId, interval);
@@ -394,7 +412,11 @@ function PricingPageContent() {
         console.error(err instanceof Error ? err.message : "checkout failed");
         setPendingPlanId(null);
         setSelectedPlanId(planId);
-        setCheckoutUnavailable(true);
+        if (err instanceof BillingDisabledError) {
+          setCheckoutComingSoon(true);
+        } else {
+          setCheckoutUnavailable(true);
+        }
       }
     },
     [yearly],
@@ -531,6 +553,24 @@ function PricingPageContent() {
           style={{ background: "radial-gradient(circle, rgba(217,70,239,0.14), transparent 70%)" }}
         />
         <div className={`${CONTAINER} relative`}>
+          {checkoutComingSoon && (
+            <div
+              role="status"
+              className="mb-8 rounded-xl border px-5 py-3.5 text-center text-[13px] font-medium"
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                borderColor: "rgba(255,255,255,0.14)",
+                color: "#C8CDD6",
+              }}
+            >
+              Paid plans are coming soon — checkout isn&apos;t open just yet. Want early
+              access? {" "}
+              <Link href="mailto:support@vibepin.co" className="underline hover:opacity-80">
+                Contact us
+              </Link>
+              .
+            </div>
+          )}
           {checkoutUnavailable && (
             <div
               role="alert"

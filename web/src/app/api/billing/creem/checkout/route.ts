@@ -8,6 +8,11 @@
  * the webhook can provision entitlements reliably.
  *
  * Status contract:
+ *   - 503 { error: "billing_disabled" } when CREEM_MODE=disabled (default) — the
+ *     paid CTA renders a "coming soon" state instead of the retry banner.
+ *   - 500 { error: "billing_misconfigured" } when the billing mode is unusable in
+ *     this runtime (e.g. a test key / CREEM_MODE=test on production, or an
+ *     incomplete live config) — detail logged server-side only.
  *   - 401 when unauthenticated.
  *   - 400 on a bad/missing plan or interval (plan ∈ starter|pro|business;
  *     interval ∈ month|year — "free" is rejected).
@@ -24,6 +29,7 @@ import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import { creemProductIdFor } from "@/lib/server/creem/creemProducts";
 import { createCheckoutSession } from "@/lib/server/creem/creemClient";
+import { assertBillingModeUsable, getBillingMode } from "@/lib/server/creem/billingMode";
 import type { PlanKey } from "@/lib/pricingPlans";
 
 export const runtime = "nodejs";
@@ -59,6 +65,23 @@ function safeSuccessOrigin(req: NextRequest): string {
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
+  // Production release guard: an explicit billing mode gates checkout so a test
+  // key can never open real checkout on production.
+  //  - disabled (default) → 503 billing_disabled (paid CTA shows "coming soon").
+  //  - misconfigured (test key on prod, incomplete live config) → 500, no detail.
+  if (getBillingMode() === "disabled") {
+    return NextResponse.json({ error: "billing_disabled" }, { status: 503 });
+  }
+  try {
+    assertBillingModeUsable();
+  } catch (err) {
+    console.error(
+      "[billing/creem/checkout] billing misconfigured:",
+      (err as Error).message,
+    );
+    return NextResponse.json({ error: "billing_misconfigured" }, { status: 500 });
+  }
+
   const uid = await getUserIdFromBearerOrCookies(req);
   if (!uid) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });

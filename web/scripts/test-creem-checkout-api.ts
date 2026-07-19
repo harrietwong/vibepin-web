@@ -23,6 +23,10 @@ process.env.CREEM_PRODUCT_PRO_YEARLY = "prod_pro_y";
 process.env.CREEM_PRODUCT_BUSINESS_MONTHLY = "prod_business_m";
 process.env.CREEM_PRODUCT_BUSINESS_YEARLY = "prod_business_y";
 process.env.CREEM_API_KEY = "creem_test_fake";
+// Billing mode: "test" is usable in a non-production runtime (VERCEL_ENV unset,
+// NODE_ENV not "production"), so the happy-path checkout tests exercise the real
+// route logic. Individual guard tests override CREEM_MODE / runtime env locally.
+process.env.CREEM_MODE = "test";
 
 export {};
 
@@ -207,6 +211,88 @@ async function main() {
       assertEq(json.error, "plan_not_configured", "error shape");
     } finally {
       process.env.CREEM_PRODUCT_STARTER_MONTHLY = saved;
+    }
+  });
+
+  // ── Billing-mode production release guard (Fix 1) ─────────────────────────────
+
+  await test("mode=disabled → 503 billing_disabled (paid CTA shows coming soon)", async () => {
+    const saved = process.env.CREEM_MODE;
+    process.env.CREEM_MODE = "disabled";
+    try {
+      const res = await route.POST(makeReq({ plan: "pro", interval: "month" }, "https://vibepin.co") as never);
+      assertEq(res.status, 503, "status");
+      const json = (await res.json()) as { error: string };
+      assertEq(json.error, "billing_disabled", "error shape");
+    } finally {
+      process.env.CREEM_MODE = saved;
+    }
+  });
+
+  await test("mode unset defaults to disabled → 503", async () => {
+    const saved = process.env.CREEM_MODE;
+    delete process.env.CREEM_MODE;
+    try {
+      const res = await route.POST(makeReq({ plan: "pro", interval: "month" }, "https://vibepin.co") as never);
+      assertEq(res.status, 503, "status");
+      const json = (await res.json()) as { error: string };
+      assertEq(json.error, "billing_disabled", "error shape");
+    } finally {
+      process.env.CREEM_MODE = saved;
+    }
+  });
+
+  await test("production + mode=test (test key) → 500 billing_misconfigured", async () => {
+    const savedMode = process.env.CREEM_MODE;
+    const savedVercel = process.env.VERCEL_ENV;
+    process.env.CREEM_MODE = "test";
+    process.env.VERCEL_ENV = "production";
+    try {
+      const res = await route.POST(makeReq({ plan: "pro", interval: "month" }, "https://vibepin.co") as never);
+      assertEq(res.status, 500, "status");
+      const json = (await res.json()) as { error: string };
+      assertEq(json.error, "billing_misconfigured", "error shape");
+    } finally {
+      process.env.CREEM_MODE = savedMode;
+      if (savedVercel === undefined) delete process.env.VERCEL_ENV;
+      else process.env.VERCEL_ENV = savedVercel;
+    }
+  });
+
+  await test("mode=live with a test key → 500 billing_misconfigured", async () => {
+    const savedMode = process.env.CREEM_MODE;
+    process.env.CREEM_MODE = "live"; // CREEM_API_KEY is still creem_test_fake
+    try {
+      const res = await route.POST(makeReq({ plan: "pro", interval: "month" }, "https://vibepin.co") as never);
+      assertEq(res.status, 500, "status");
+      const json = (await res.json()) as { error: string };
+      assertEq(json.error, "billing_misconfigured", "live+test-key → misconfigured");
+    } finally {
+      process.env.CREEM_MODE = savedMode;
+    }
+  });
+
+  await test("mode=live missing a product env → 500 billing_misconfigured", async () => {
+    const savedMode = process.env.CREEM_MODE;
+    const savedKey = process.env.CREEM_API_KEY;
+    const savedProd = process.env.CREEM_PRODUCT_PRO_MONTHLY;
+    const savedSecret = process.env.CREEM_WEBHOOK_SECRET;
+    process.env.CREEM_MODE = "live";
+    process.env.CREEM_API_KEY = "creem_live_fake"; // non-test key
+    process.env.CREEM_WEBHOOK_SECRET = "whsec_fake";
+    delete process.env.CREEM_PRODUCT_PRO_MONTHLY; // incomplete live config
+    try {
+      const res = await route.POST(makeReq({ plan: "pro", interval: "month" }, "https://vibepin.co") as never);
+      assertEq(res.status, 500, "status");
+      const json = (await res.json()) as { error: string };
+      assertEq(json.error, "billing_misconfigured", "live+missing product → misconfigured");
+    } finally {
+      process.env.CREEM_MODE = savedMode;
+      process.env.CREEM_API_KEY = savedKey;
+      if (savedProd === undefined) delete process.env.CREEM_PRODUCT_PRO_MONTHLY;
+      else process.env.CREEM_PRODUCT_PRO_MONTHLY = savedProd;
+      if (savedSecret === undefined) delete process.env.CREEM_WEBHOOK_SECRET;
+      else process.env.CREEM_WEBHOOK_SECRET = savedSecret;
     }
   });
 
