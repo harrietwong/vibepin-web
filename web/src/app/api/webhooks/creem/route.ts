@@ -278,6 +278,17 @@ export async function POST(request: Request): Promise<Response> {
         break;
       }
 
+      case "subscription.trialing": {
+        // A trial grants access (creemStatusGrantsAccess includes "trialing").
+        // Same grant path as active, but the mirrored status stays "trialing".
+        await handleSubscriptionActive(
+          object as CreemSubscriptionObject,
+          occurredAt,
+          "trialing",
+        );
+        break;
+      }
+
       case "subscription.scheduled_cancel": {
         await handleScheduledCancel(object as CreemSubscriptionObject, occurredAt);
         break;
@@ -344,19 +355,24 @@ export async function POST(request: Request): Promise<Response> {
 // ── Handlers ──────────────────────────────────────────────────────────────────────
 
 /**
- * subscription.active / subscription.paid: mirror the subscription and, when a
- * user is resolvable and the status grants access, provision the plan. "paid" is
- * stored as "active" (it is the paid/renewed signal for an active sub).
+ * subscription.active / subscription.paid / subscription.trialing: mirror the
+ * subscription and, when a user is resolvable and the status grants access,
+ * provision the plan. "paid" is stored as "active" (it is the paid/renewed signal
+ * for an active sub); "trialing" keeps its own status (also access-granting).
+ *
+ * `mirrorStatus` is the status persisted + used for the grant check ("active" for
+ * active/paid, "trialing" for a trial). Both pass creemStatusGrantsAccess.
  */
 async function handleSubscriptionActive(
   o: CreemSubscriptionObject,
   occurredAt: string,
+  mirrorStatus: "active" | "trialing" = "active",
 ): Promise<void> {
   const subId = asString(o.id);
   const customerId = idOf(o.customer);
   if (!subId || !customerId) {
     console.warn(
-      `[creem/webhook] subscription.active missing sub/customer id — skipping mirror.`,
+      `[creem/webhook] subscription.${mirrorStatus} missing sub/customer id — skipping mirror.`,
     );
     return;
   }
@@ -377,7 +393,7 @@ async function handleSubscriptionActive(
     subscriptionId: subId,
     customerId,
     userId: metaUserId,
-    status: "active", // active + paid both normalize to "active"
+    status: mirrorStatus, // active + paid normalize to "active"; trialing kept
     productId: productId ?? "",
     plan,
     billingInterval: interval,
@@ -403,7 +419,7 @@ async function handleSubscriptionActive(
   // must never re-grant/override a newer state.
   if (outcome === "stale") {
     console.log(
-      `[creem/webhook] subscription ${subId}: stale active/paid event skipped for provisioning.`,
+      `[creem/webhook] subscription ${subId}: stale ${mirrorStatus} event skipped for provisioning.`,
     );
     return;
   }
@@ -415,7 +431,7 @@ async function handleSubscriptionActive(
     );
     return;
   }
-  if (plan && creemStatusGrantsAccess("active")) {
+  if (plan && creemStatusGrantsAccess(mirrorStatus)) {
     await setUserPlan(userId, plan);
   }
 }
