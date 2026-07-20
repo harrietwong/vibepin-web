@@ -123,7 +123,12 @@ function productStripItems(products: LatestProduct[]) {
   return products.map(p => ({
     key: p.id,
     imageUrl: p.image_url,
-    caption: (p.product_name ?? "").trim() || p.seed_keyword || "Product",
+    // product_name is nullable (v47) and NULL exactly when the merchant page could
+    // not be read. Do NOT let seed_keyword (a discovery seed, not a product name) or
+    // a fabricated "Product" impersonate the name — that is the T10 disease. Show an
+    // explicit status that plainly is NOT a product name; the seed keyword still shows
+    // truthfully in the sub-line below.
+    caption: (p.product_name ?? "").trim() || "Name unavailable",
     sub: `${((p.save_count || p.source_pin_save_count) ?? 0).toLocaleString()} saves · ${p.seed_keyword ?? ""} · ${fmtShortDate(p.created_at)}`,
     href: null,
   }));

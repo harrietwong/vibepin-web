@@ -70,6 +70,7 @@ export const CORE: string[] = [
   "test-product-link-display",
   "test-product-opportunity-counts",
   "test-product-opportunity-admin",
+  "test-product-name-honesty",
   "test-product-top-tiers",
   "test-amazon-affiliate",
   "test-amazon-affiliate-wiring",
