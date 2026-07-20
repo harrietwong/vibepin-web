@@ -71,7 +71,7 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from dotenv import dotenv_values
@@ -334,6 +334,34 @@ def _headers(extra: dict | None = None) -> dict:
     if extra:
         h.update(extra)
     return h
+
+
+def enc_ts(ts: str) -> str:
+    """Percent-encode a timestamp so it is safe to interpolate into a PostgREST
+    filter VALUE inside a URL query string.
+
+    THE BUG THIS FIXES: an ISO-8601 timestamp ends in a '+00:00' UTC offset. In a URL
+    query string a literal '+' decodes to a SPACE, so `created_at=gte.2026-07-19T04:22:21.88254+00:00`
+    reached PostgREST as `...21.88254 00:00` → 'invalid input syntax for type timestamp
+    with time zone' (HTTP 400). That 400 (a JSON error object, not a list) then crashed
+    verify_written() with AttributeError, so the post-write red-line verification never
+    ran; and the rollback window printed with the same raw timestamps could not match a
+    single row. quote(safe="") encodes '+' → %2B (and ':' etc.), so the exact instant
+    round-trips. Used for EVERY timestamp that enters a PostgREST filter value here:
+    verify read-back, the generated rollback filter, and the rollback DELETE execution.
+    """
+    return quote(ts, safe="")
+
+
+def _require_list(resp: httpx.Response, ctx: str) -> list:
+    """PostgREST returns a JSON LIST on a successful read and a JSON OBJECT
+    ({"code","message",...}) on error. Fail loudly with the server message instead of
+    letting an error object flow into code that assumes rows — that is what turned the
+    +00:00 encoding bug into an opaque AttributeError deep inside verify_written()."""
+    body = resp.json()
+    if not isinstance(body, list):
+        raise RuntimeError(f"{ctx}: expected a row list, got {resp.status_code} {body}")
+    return body
 
 
 def _page_all(c: httpx.Client, table: str, select: str, filt: str, order: str) -> list[dict]:
@@ -770,8 +798,9 @@ def verify_written(db: httpx.Client, rows: list[dict], lo: str) -> dict:
     not merely in the in-memory rows we intended to write."""
     post: dict = {}
     written = db.get(f"{SUPABASE_URL}/rest/v1/pin_products?select=*"
-                     f"&discovery_method=eq.{DISCOVERY_METHOD}&created_at=gte.{lo}",
-                     headers=_headers()).json()
+                     f"&discovery_method=eq.{DISCOVERY_METHOD}&created_at=gte.{enc_ts(lo)}",
+                     headers=_headers())
+    written = _require_list(written, "verify_written read-back")
     post["rowsReadBack"] = len(written)
 
     # ① source authenticity
@@ -803,10 +832,12 @@ def verify_written(db: httpx.Client, rows: list[dict], lo: str) -> dict:
     for i in rows:
         if i["origin"] != "retired_reclaim":
             continue
-        both = db.get(f"{SUPABASE_URL}/rest/v1/pin_products"
-                      f"?select=id,lifecycle_status,discovery_method,source_url"
-                      f"&source_url=eq.{httpx.URL(i['row']['source_url'])}",
-                      headers=_headers()).json()
+        both = _require_list(
+            db.get(f"{SUPABASE_URL}/rest/v1/pin_products"
+                   f"?select=id,lifecycle_status,discovery_method,source_url"
+                   f"&source_url=eq.{quote(i['row']['source_url'], safe='')}",
+                   headers=_headers()),
+            "coexistence read-back")
         states = sorted({(r.get("lifecycle_status") or "active") for r in both})
         coexist.append({"url": i["row"]["source_url"], "rows": len(both),
                         "lifecycleStates": states,
@@ -906,16 +937,23 @@ def main() -> int:
             return 1
 
         inserted = resp.json()
-        rollback = (f"py t2_harvest.py --rollback-window '{lo}' '{hi}'   # or SQL:\n  "
+        # Derive the rollback window from the ACTUAL DB-assigned created_at values, not
+        # the client clocks lo/hi: created_at is the server's now() at INSERT and can
+        # differ from this process's clock by seconds, so a client-clock window can miss
+        # the very rows we just wrote. The real min/max created_at bounds them exactly.
+        db_cas = sorted(r.get("created_at") for r in inserted if r.get("created_at"))
+        ca_lo = db_cas[0] if db_cas else lo
+        ca_hi = db_cas[-1] if db_cas else hi
+        rollback = (f"py t2_harvest.py --rollback-window '{ca_lo}' '{ca_hi}'   # or SQL:\n  "
                     f"DELETE FROM pin_products WHERE discovery_method='{DISCOVERY_METHOD}' "
-                    f"AND created_at BETWEEN '{lo}' AND '{hi}';")
+                    f"AND created_at BETWEEN '{ca_lo}' AND '{ca_hi}';")
         evidence.update({"written": len(inserted),
                          "insertedIds": [r.get("id") for r in inserted],
-                         "createdAtWindow": [lo, hi], "rollback": rollback})
+                         "createdAtWindow": [ca_lo, ca_hi], "rollback": rollback})
         print(f"\nINSERTED {len(inserted)} / {len(rows)} rows")
         print("ROLLBACK:\n ", rollback)
 
-        post = verify_written(db, rows, lo)
+        post = verify_written(db, rows, ca_lo)
         evidence["postWriteVerification"] = post
         OUT.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -931,10 +969,12 @@ def main() -> int:
 
         if not post["allRedLinesPass"]:
             print("\n!! POST-WRITE RED LINE FAILED — ROLLING BACK NOW")
+            # Same DB-derived, encoded window the printed rollback command uses, so the
+            # automatic rollback and the human-runnable command delete the SAME rows.
             d = db.request("DELETE", f"{SUPABASE_URL}/rest/v1/pin_products",
                            headers=_headers({"Prefer": "return=representation"}),
                            params={"discovery_method": f"eq.{DISCOVERY_METHOD}",
-                                   "created_at": f"gte.{lo}"})
+                                   "created_at": [f"gte.{ca_lo}", f"lte.{ca_hi}"]})
             print(f"  rollback → HTTP {d.status_code}, removed "
                   f"{len(d.json()) if d.status_code < 300 else '?'} rows")
             evidence["rolledBack"] = True
