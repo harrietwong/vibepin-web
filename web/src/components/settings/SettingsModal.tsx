@@ -313,11 +313,27 @@ function AccountTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => Pr
 
 // ── Billing Tab ───────────────────────────────────────────────────────────────
 
+type CreemBillingStatus = {
+  hasBillingAccount: boolean;
+  /** The plan the user CURRENTLY has access to (highest granting sub, else free). */
+  effectivePlan: string;
+  /** The newest historical plan, shown only when accessGranted is false. */
+  previousPlan?: string | null;
+  /** True only when a live subscription currently grants access. */
+  accessGranted?: boolean;
+  interval?: "month" | "year" | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
+  scheduledCancel?: boolean;
+};
+
 function BillingTab() {
   const { t } = useLocale();
   const [summary, setSummary] = useState<AccountBillingSummary>(() => deriveAccountBillingSummary(null));
   const [loaded, setLoaded] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
+  const [billing, setBilling] = useState<CreemBillingStatus | null>(null);
+  const [portalPending, setPortalPending] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -326,10 +342,98 @@ function BillingTab() {
     });
   }, []);
 
-  const planName   = normalizePlanName(summary.planName);
+  // Live billing status from the Creem mirror (source of truth for plan/renewal).
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        const res = await fetch("/api/billing/creem/status", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as CreemBillingStatus;
+        if (active) setBilling(json);
+      } catch {
+        /* leave billing null → fall back to metadata-derived display */
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Current plan = the EFFECTIVE plan (what the user has access to right now);
+  // fall back to the metadata-derived name only before the live status loads.
+  const planName   = normalizePlanName(billing?.effectivePlan ?? summary.planName);
   const paid       = isPaidPlan(planName);
-  const planStatus = summary.planStatus ?? t("billing.statusActive");
+  const hasBillingAccount = billing?.hasBillingAccount ?? false;
+  // accessGranted decides the badge colour — never trust the raw status to be green.
+  // Before the live status loads, fall back to "granted" so a paying user isn't
+  // briefly shown as lapsed.
+  const accessGranted = billing ? (billing.accessGranted ?? false) : true;
+  const rawStatus = (billing?.status ?? "").toLowerCase();
+  const scheduledCancel = billing?.scheduledCancel ?? false;
+  const intervalLabel = billing?.interval
+    ? billing.interval === "year" ? t("billing.perYear") : t("billing.perMonth")
+    : null;
+  const periodEnd = billing?.currentPeriodEnd ? formatEnglishDateTime(billing.currentPeriodEnd) : null;
+  // The previous (historical) plan, shown muted only when access is not granted.
+  const previousPlanName = billing?.previousPlan
+    ? normalizePlanName(billing.previousPlan)
+    : null;
   const lastActivity = summary.lastCreditActivityAt ? formatEnglishDateTime(summary.lastCreditActivityAt) : null;
+
+  // Status badge: green ONLY when access is granted and the raw status is
+  // active/trialing; scheduled_cancel → amber "Cancels on <date>"; any lapsed
+  // status (canceled/expired/past_due/paused/unpaid) → grey/red, never green.
+  const isActiveGreen =
+    accessGranted && (rawStatus === "active" || rawStatus === "trialing" || rawStatus === "");
+  let badgeLabel: string;
+  let badgeColor: string;
+  let badgeBg: string;
+  let badgeBorder: string;
+  if (scheduledCancel) {
+    badgeLabel = periodEnd
+      ? `${t("billing.cancelsOn")} ${periodEnd}`
+      : t("billing.statusScheduledCancel");
+    badgeColor = UI.warning;
+    badgeBg = "rgba(245,158,11,0.12)";
+    badgeBorder = "rgba(245,158,11,0.3)";
+  } else if (isActiveGreen) {
+    badgeLabel = billing?.status ?? t("billing.statusActive");
+    badgeColor = UI.success;
+    badgeBg = "rgba(16,185,129,0.12)";
+    badgeBorder = "rgba(16,185,129,0.3)";
+  } else {
+    // Lapsed / no access — grey, never green.
+    badgeLabel = billing?.status ?? t("billing.statusInactive");
+    badgeColor = UI.textSec;
+    badgeBg = "rgba(148,163,184,0.10)";
+    badgeBorder = "rgba(148,163,184,0.25)";
+  }
+
+  async function handleManageBilling() {
+    setPortalPending(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const res = await fetch("/api/billing/creem/portal", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const json = (await res.json().catch(() => ({}))) as { url?: string };
+      if (res.ok && json.url) {
+        window.location.assign(json.url);
+        return; // navigation follows — keep the spinner
+      }
+      toast.error(t("billing.manageBillingError"));
+    } catch {
+      toast.error(t("billing.manageBillingError"));
+    }
+    setPortalPending(false);
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -337,33 +441,67 @@ function BillingTab() {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
           <div>
             <p style={{ margin: "0 0 2px", fontSize: 11, color: UI.textSec, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{t("billing.currentPlan")}</p>
-            <h2 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: UI.text }}>{loaded ? planName : "…"}</h2>
+            <h2 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: UI.text }}>
+              {loaded ? planName : "…"}
+              {intervalLabel && (
+                <span style={{ fontSize: 13, fontWeight: 600, color: UI.textSec, marginLeft: 8 }}>{intervalLabel}</span>
+              )}
+            </h2>
           </div>
-          <span style={{
+          <span data-testid="billing-status-badge" style={{
             display: "inline-flex", alignItems: "center", gap: 5, marginTop: 4,
             padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-            color: UI.success, background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)",
+            color: badgeColor, background: badgeBg, border: `1px solid ${badgeBorder}`,
           }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: UI.success }} />
-            {planStatus}
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: badgeColor }} />
+            {badgeLabel}
           </span>
         </div>
-        <p style={{ margin: "0 0 14px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
+        {previousPlanName && !accessGranted && (
+          <p data-testid="billing-previous-plan" style={{ margin: "0 0 6px", fontSize: 12, color: UI.textMuted }}>
+            {t("billing.previousPlan")}: <strong>{previousPlanName}</strong>
+          </p>
+        )}
+        <p style={{ margin: "0 0 10px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>
           {paid ? t("billing.paidDesc") : t("billing.freeDesc")}
         </p>
-        {paid ? (
-          <button type="button" disabled style={{
-            padding: "9px 15px", borderRadius: 9, background: UI.surface2, border: `1px solid ${UI.border}`,
-            color: UI.textMuted, fontSize: 12, fontWeight: 700, cursor: "not-allowed",
-          }}>{t("billing.manageBilling")}</button>
+        {periodEnd && (
+          <p style={{ margin: "0 0 4px", fontSize: 12, color: UI.textSec }}>
+            {scheduledCancel ? t("billing.accessUntil") : t("billing.renews")}: <strong>{periodEnd}</strong>
+          </p>
+        )}
+        {scheduledCancel && (
+          <p data-testid="billing-scheduled-cancel" style={{ margin: "0 0 12px", fontSize: 12, color: UI.warning, lineHeight: 1.5 }}>
+            {t("billing.scheduledCancelNotice")}
+          </p>
+        )}
+        {hasBillingAccount ? (
+          <button
+            type="button"
+            data-testid="billing-manage-button"
+            onClick={handleManageBilling}
+            disabled={portalPending}
+            style={{
+              padding: "9px 15px", borderRadius: 9, background: UI.surface2, border: `1px solid ${UI.border}`,
+              color: UI.text, fontSize: 12, fontWeight: 700, cursor: portalPending ? "wait" : "pointer",
+              opacity: portalPending ? 0.6 : 1,
+            }}
+          >
+            {portalPending ? t("common.loading") : t("billing.manageBilling")}
+          </button>
         ) : (
-          <Link href={PRICING_PATH} data-testid="billing-upgrade-button" style={{
-            display: "inline-flex", alignItems: "center", gap: 7,
-            padding: "9px 16px", borderRadius: 9, background: UI.gradient,
-            color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 800,
-          }}>
-            {t("billing.upgradePlan")} <ArrowUpRight size={13} />
-          </Link>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+            <p data-testid="billing-no-account" style={{ margin: 0, fontSize: 12, color: UI.textSec }}>
+              {t("billing.noBillingAccount")}
+            </p>
+            <Link href={PRICING_PATH} data-testid="billing-upgrade-button" style={{
+              display: "inline-flex", alignItems: "center", gap: 7,
+              padding: "9px 16px", borderRadius: 9, background: UI.gradient,
+              color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 800,
+            }}>
+              {t("billing.upgradePlan")} <ArrowUpRight size={13} />
+            </Link>
+          </div>
         )}
       </SectionCard>
 

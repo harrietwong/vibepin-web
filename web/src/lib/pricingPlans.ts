@@ -23,7 +23,12 @@ export type PricingTier = {
   ctaHref: string;
   highlighted?: boolean;
   badge?: string;
-  /** Paddle Billing catalog price IDs (LIVE). Absent on the Free tier. */
+  /**
+   * @deprecated legacy Paddle — historical only, not used for checkout. Creem is
+   * the merchant of record; checkout goes through /api/billing/creem/checkout,
+   * which resolves the product id server-side from CREEM_PRODUCT_* env vars.
+   * These ids are retained only so the legacy Paddle webhook/history keep working.
+   */
   paddlePriceIds?: { month: string; year: string };
 };
 

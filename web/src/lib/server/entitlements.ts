@@ -6,9 +6,18 @@
  * (SHOPIFY_PRODUCT_LIMIT_FREE / _STARTER / _PRO / _BUSINESS); `maxStores`
  * is a fixed constant per plan.
  *
- * Plan resolution mirrors the client hook web/src/lib/useUserTier.ts:
- * `user_metadata.plan` is authoritative when it names a known plan, and the
- * email whitelist grants at least "pro". Default is "free".
+ * Plan resolution truth order (security P0 — user_metadata is NEVER trusted;
+ * Supabase users can edit their own user_metadata, so trusting it there let
+ * anyone self-grant a paid plan):
+ *   1. a live `creem_subscriptions` row for the user whose status grants access
+ *      (active/trialing, or scheduled_cancel still within current_period_end) —
+ *      the newest by last_event_at wins; its `plan` is used when it is a valid
+ *      PlanKey. This is the billing source of truth.
+ *   2. `app_metadata.plan` (service-role-writable only — a trusted cache the
+ *      Creem webhook refreshes) when it names a valid plan.
+ *   3. otherwise "free".
+ * The PRO_EMAIL_WHITELIST then floors the result at "pro" (a higher real plan
+ * always wins).
  */
 
 import { createServerClient } from "../supabase";
@@ -80,37 +89,165 @@ export function getEntitlements(plan: PlanKey): Entitlements {
 
 // ── Plan resolution ──────────────────────────────────────────────────────────
 
-type ResolvedUser = { email: string | null; plan: unknown };
+// The auth user carries the email (for the whitelist floor) and the trusted
+// `app_metadata.plan` cache. `user_metadata` is deliberately NOT part of this
+// shape — it is never read for authorization.
+type ResolvedUser = { email: string | null; appPlan: unknown };
+
+/**
+ * A single access-granting Creem subscription grant. `lastEventAt` orders
+ * competing rows (newest wins); `plan` is the raw mirrored plan string.
+ *
+ * The grant set is: active / trialing (unconditional), plus scheduled_cancel that
+ * is still within its current_period_end (a scheduled cancel keeps access until
+ * period end). Callers that supply pre-filtered grants may omit `status`/
+ * `currentPeriodEnd`; the default DB lookup filters scheduled_cancel by period end
+ * before returning, so any grant it returns is already access-granting.
+ */
+export type ActiveSubscriptionGrant = {
+  plan: unknown;
+  lastEventAt: string | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
+};
 
 export type ResolvePlanDeps = {
-  /** Fetch the auth user (email + user_metadata.plan), or null when unknown. */
+  /** Fetch the auth user (email + app_metadata.plan), or null when unknown. */
   getUserById(userId: string): Promise<ResolvedUser | null>;
+  /**
+   * Fetch the user's access-granting Creem subscription rows (status in the
+   * grant set). Order is irrelevant — resolvePlan picks the newest by
+   * lastEventAt. Return [] when none / on error.
+   */
+  getActiveSubscriptions(userId: string): Promise<ActiveSubscriptionGrant[]>;
 };
 
 async function defaultGetUserById(userId: string): Promise<ResolvedUser | null> {
   const { data, error } = await createServerClient().auth.admin.getUserById(userId);
   if (error || !data?.user) return null;
-  const meta = (data.user.user_metadata ?? null) as Record<string, unknown> | null;
-  return { email: data.user.email ?? null, plan: meta?.plan };
+  const appMeta = (data.user.app_metadata ?? null) as Record<string, unknown> | null;
+  return { email: data.user.email ?? null, appPlan: appMeta?.plan };
+}
+
+/** A mirrored subscription row as read for the access-grant decision. */
+export type SubscriptionRowForGrant = {
+  plan: unknown;
+  status: string | null;
+  last_event_at: string | null;
+  current_period_end: string | null;
+};
+
+/**
+ * Keep ONLY the rows that currently grant access: active / trialing
+ * (unconditional), plus scheduled_cancel still within current_period_end (a
+ * scheduled cancel keeps access until period end — an unknown end is treated as
+ * still-entitled; a past end no longer grants). `nowMs` is injectable for tests.
+ */
+export function filterAccessGrantingSubscriptions(
+  rows: SubscriptionRowForGrant[],
+  nowMs: number = Date.now(),
+): ActiveSubscriptionGrant[] {
+  return rows
+    .filter((r) => {
+      if (r.status === "active" || r.status === "trialing") return true;
+      if (r.status === "scheduled_cancel") {
+        return (
+          !r.current_period_end ||
+          new Date(r.current_period_end).getTime() > nowMs
+        );
+      }
+      return false;
+    })
+    .map((r) => ({
+      plan: r.plan,
+      lastEventAt: r.last_event_at,
+      status: r.status,
+      currentPeriodEnd: r.current_period_end,
+    }));
 }
 
 /**
- * Resolve a user's plan server-side:
- *   1. `user_metadata.plan` when it names a known plan;
- *   2. whitelist emails are floored at "pro" (a higher metadata plan wins);
- *   3. anything else (missing user, lookup error, unknown plan) → "free".
+ * Live billing lookup: the user's Creem subscriptions whose status grants access.
+ * Selects active / trialing AND scheduled_cancel, then filters via
+ * filterAccessGrantingSubscriptions so a lapsed scheduled_cancel drops out. This
+ * makes the DB row the source of truth for a scheduled cancel rather than relying
+ * on the app_metadata cache surviving. Returns [] on any error so resolvePlan
+ * degrades to the app_metadata cache rather than throwing.
+ */
+export async function defaultGetActiveSubscriptions(
+  userId: string,
+): Promise<ActiveSubscriptionGrant[]> {
+  try {
+    const db = createServerClient();
+    const { data, error } = await db
+      .from("creem_subscriptions")
+      .select("plan,status,last_event_at,current_period_end")
+      .eq("user_id", userId)
+      .in("status", ["active", "trialing", "scheduled_cancel"]);
+    if (error || !data) return [];
+    return filterAccessGrantingSubscriptions(data as SubscriptionRowForGrant[]);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Reduce a list of access-granting subscription grants to the single HIGHEST
+ * effective plan (free < starter < pro < business). Unrecognized plan strings are
+ * ignored. Returns "free" when the list is empty or holds no valid plan.
+ *
+ * This is the ONE ranking both resolvePlan and refreshUserPlanCache use, so the
+ * derived app_metadata cache is provably identical to what resolvePlan computes —
+ * a user with two active subs (e.g. an upgrade re-buy) is ranked at the higher
+ * plan by both, and neither is fooled by which event happened to land last.
+ */
+export function highestPlanFromGrants(grants: ActiveSubscriptionGrant[]): PlanKey {
+  let best: PlanKey = "free";
+  for (const g of grants) {
+    const p = normalizePlanKey(g.plan);
+    if (p && PLAN_RANK[p] > PLAN_RANK[best]) best = p;
+  }
+  return best;
+}
+
+/**
+ * Resolve a user's plan server-side. See the module header for the full truth
+ * order. Never reads user_metadata. Whitelist emails are floored at "pro" (a
+ * higher real plan always wins); any failure path (missing user, lookup error,
+ * unknown plan strings) resolves to "free" before the floor.
  */
 export async function resolvePlan(userId: string, deps?: ResolvePlanDeps): Promise<PlanKey> {
+  const getUserById = deps?.getUserById ?? defaultGetUserById;
+  const getActiveSubscriptions =
+    deps?.getActiveSubscriptions ?? defaultGetActiveSubscriptions;
+
   let user: ResolvedUser | null = null;
   try {
-    user = await (deps?.getUserById ?? defaultGetUserById)(userId);
+    user = await getUserById(userId);
   } catch {
     user = null;
   }
-  if (!user) return "free";
 
-  let plan: PlanKey = normalizePlanKey(user.plan) ?? "free";
-  const email = (user.email ?? "").trim().toLowerCase();
+  // (a) Billing source of truth: the HIGHEST live access-granting subscription
+  //     (active / trialing / scheduled-cancel-not-expired). Highest wins so two
+  //     coexisting subs resolve to the better plan.
+  let plan: PlanKey = "free";
+  try {
+    const grants = await getActiveSubscriptions(userId);
+    const fromSub = highestPlanFromGrants(grants);
+    if (fromSub !== "free") plan = fromSub;
+  } catch {
+    // fall through to the app_metadata cache
+  }
+
+  // (b) Trusted cache fallback: app_metadata.plan (service-role-writable only).
+  if (plan === "free" && user) {
+    const fromApp = normalizePlanKey(user.appPlan);
+    if (fromApp) plan = fromApp;
+  }
+
+  // Whitelist floor at "pro" — needs the email, which requires the user lookup.
+  const email = (user?.email ?? "").trim().toLowerCase();
   if (email && PRO_EMAIL_WHITELIST.includes(email) && PLAN_RANK[plan] < PLAN_RANK.pro) {
     plan = "pro";
   }

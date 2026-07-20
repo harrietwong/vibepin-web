@@ -57,3 +57,27 @@ export function planKeyForCreemProduct(
 ): PlanKey | null {
   return resolveCreemProduct(productId)?.plan ?? null;
 }
+
+// ── Forward map: { plan, interval } → Creem product id ────────────────────────
+
+// (plan → { month env var, year env var }). The env vars hold the prod_… ids.
+const PLAN_TO_ENV: Record<Exclude<PlanKey, "free">, { month: string; year: string }> = {
+  starter: { month: "CREEM_PRODUCT_STARTER_MONTHLY", year: "CREEM_PRODUCT_STARTER_YEARLY" },
+  pro: { month: "CREEM_PRODUCT_PRO_MONTHLY", year: "CREEM_PRODUCT_PRO_YEARLY" },
+  business: { month: "CREEM_PRODUCT_BUSINESS_MONTHLY", year: "CREEM_PRODUCT_BUSINESS_YEARLY" },
+};
+
+/**
+ * Resolve the Creem product id to charge for a paid plan + billing interval, or
+ * null when the corresponding CREEM_PRODUCT_* env var is unset (partial config).
+ * Read at call time (not module load) so a checkout route can log a precise
+ * "plan_not_configured" for the exact missing mapping. Server-only.
+ */
+export function creemProductIdFor(
+  plan: Exclude<PlanKey, "free">,
+  interval: "month" | "year",
+): string | null {
+  const envVar = PLAN_TO_ENV[plan][interval];
+  const productId = (process.env[envVar] ?? "").trim();
+  return productId || null;
+}

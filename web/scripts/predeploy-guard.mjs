@@ -14,6 +14,10 @@
  *   3. web/.vercel/project.json points at the expected Vercel project.
  *   4. E2E_TEST_MODE is not truthy.
  *   5. PINTEREST_API_ENV is not "sandbox".
+ *   6. Billing is not in test mode for production: CREEM_MODE is not "test" and
+ *      CREEM_API_KEY is not a test key (creem_test_…). A test key can never open
+ *      real checkout on production — this is the deploy-time half of the
+ *      billingMode guard.
  *
  * --override requires OVERRIDE_REASON to be set to a non-empty string. When
  * present, an override bypasses failed checks, appends an audit line to
@@ -37,6 +41,39 @@ const EXPECTED_ORG_ID = "team_6NHzK2v5iYmRl9Syvn8ulQW0";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const webDir = path.resolve(__dirname, ".."); // scripts/ -> web/
+
+/**
+ * Billing must not be in test mode for a production deploy: a test-mode Creem key
+ * must never open real checkout on production. Pure (env in → problems out) and
+ * exported at the top BEFORE any side effects, so a unit test can import and drive
+ * it with fake env without the guard's git/filesystem body running.
+ */
+export function checkBillingModeForProd(env) {
+  const problems = [];
+  const mode = String(env.CREEM_MODE ?? "").trim().toLowerCase();
+  const apiKey = String(env.CREEM_API_KEY ?? "").trim();
+  if (mode === "test") {
+    problems.push('CREEM_MODE is "test" — refusing a production deploy (a test-mode billing key must never open real checkout). Set CREEM_MODE=live or =disabled.');
+  }
+  if (apiKey.startsWith("creem_test_")) {
+    problems.push("CREEM_API_KEY is a test key (creem_test_…) — refusing a production deploy with a sandbox billing key.");
+  }
+  return problems;
+}
+
+// Only run the full guard (git + filesystem + process.exit) when invoked directly
+// as the entrypoint — importing this module for its pure export must be side-effect
+// free.
+const isMainModule =
+  process.argv[1] && path.resolve(process.argv[1]) === __filename;
+if (!isMainModule) {
+  // Imported (e.g. by the unit test) — expose the pure check and stop here.
+  // eslint-disable-next-line no-undef
+} else {
+  runGuard();
+}
+
+function runGuard() {
 
 const args = process.argv.slice(2);
 const overrideRequested = args.includes("--override");
@@ -151,6 +188,13 @@ if (process.env.PINTEREST_API_ENV === "sandbox") {
   failures.push('PINTEREST_API_ENV is "sandbox" — refusing a production deploy against the sandbox Pinterest environment');
 }
 
+// --- Check 6: billing must not be in test mode for a production deploy ---
+// See checkBillingModeForProd (top of file) — a test-mode Creem key must never
+// open real checkout on production.
+for (const problem of checkBillingModeForProd(process.env)) {
+  failures.push(problem);
+}
+
 // --- Resolve outcome ---
 function logOverrideAndExit() {
   const reason = process.env.OVERRIDE_REASON;
@@ -198,3 +242,5 @@ if (overrideRequested) {
 } else {
   process.exit(1);
 }
+
+} // end runGuard()

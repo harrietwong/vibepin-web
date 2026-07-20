@@ -19,8 +19,12 @@ export function useUserTier(): { isPro: boolean } {
     );
     supabase.auth.getUser().then(({ data }) => {
       const email = data.user?.email ?? "";
-      const metaPlan = data.user?.user_metadata?.plan;
-      setIsPro(PRO_EMAILS.includes(email) || metaPlan === "pro");
+      // Read the plan from app_metadata (service-role-writable only), NOT
+      // user_metadata (user-editable — trusting it there let anyone self-grant
+      // a paid tier). The Creem webhook refreshes app_metadata.plan after real
+      // payment; resolvePlan on the server is the authoritative check.
+      const metaPlan = data.user?.app_metadata?.plan;
+      setIsPro(PRO_EMAILS.includes(email) || metaPlan === "pro" || metaPlan === "business");
     });
   }, []);
 

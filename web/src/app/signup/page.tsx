@@ -62,12 +62,16 @@ function SignupContent() {
     if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
     setLoading(true);
     setError("");
+    // SECURITY: never write the ?plan= param into user_metadata. user_metadata
+    // is user-editable, and the plan there was previously trusted for
+    // authorization → anyone could self-grant a paid plan. The plan lives only
+    // in the URL as purchase intent; entitlements come from the Creem billing
+    // mirror (app_metadata cache), refreshed by the webhook after real payment.
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
-        data: { plan },
       },
     });
     if (error) {

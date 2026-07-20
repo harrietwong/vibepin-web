@@ -3,8 +3,8 @@
  *
  * Creem is the merchant of record after Paddle was rejected. This route mirrors
  * Creem webhook events into creem_customers / creem_subscriptions (source of
- * truth) and refreshes user_metadata.plan (the derived cache read by
- * resolvePlan/useUserTier). It mirrors the proven Paddle webhook structure but
+ * truth) and refreshes app_metadata.plan (the derived, service-role-only cache
+ * read by resolvePlan). It mirrors the proven Paddle webhook structure but
  * hand-rolls the HMAC verification (Creem's contract) — no Creem SDK.
  *
  * Flow: read the RAW body (never JSON.parse before verification) → verify the
@@ -30,7 +30,6 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServerClient } from "@/lib/supabase";
 import { resolveCreemProduct } from "@/lib/server/creem/creemProducts";
 import {
-  creemStatusGrantsAccess,
   getCreemSubscriptionsForCustomer,
   linkCustomerToUser,
   markWebhookEventSeen,
@@ -38,6 +37,10 @@ import {
   upsertCreemCustomer,
   upsertCreemSubscription,
 } from "@/lib/server/creem/creemStore";
+import {
+  defaultGetActiveSubscriptions,
+  highestPlanFromGrants,
+} from "@/lib/server/entitlements";
 import type { PlanKey } from "@/lib/pricingPlans";
 
 export const runtime = "nodejs";
@@ -143,9 +146,14 @@ function createdAtToIso(createdAt: unknown): string {
 }
 
 /**
- * Refresh a user's cached user_metadata.plan without wiping other metadata keys.
- * GoTrue shallow-merges top-level user_metadata, but we read-merge defensively so
- * unrelated keys are provably preserved. (Mirrors the Paddle webhook's setUserPlan.)
+ * Refresh a user's cached plan in `app_metadata` without wiping other keys.
+ *
+ * SECURITY: the plan cache lives in app_metadata — which is service-role-writable
+ * ONLY — never user_metadata, which a user can edit for themselves and thereby
+ * self-grant a paid plan. resolvePlan reads the live creem_subscriptions row as
+ * the source of truth and falls back to THIS app_metadata cache. GoTrue
+ * shallow-merges top-level app_metadata, but we read-merge defensively so
+ * unrelated keys are provably preserved.
  */
 async function setUserPlan(userId: string, plan: string): Promise<void> {
   const admin = createServerClient();
@@ -156,12 +164,32 @@ async function setUserPlan(userId: string, plan: string): Promise<void> {
     );
   }
   const existingMeta =
-    (data.user.user_metadata as Record<string, unknown> | null) ?? {};
+    (data.user.app_metadata as Record<string, unknown> | null) ?? {};
   if (existingMeta.plan === plan) return; // no-op: cache already correct
   const { error } = await admin.auth.admin.updateUserById(userId, {
-    user_metadata: { ...existingMeta, plan },
+    app_metadata: { ...existingMeta, plan },
   });
   if (error) throw new Error(`updateUserById(${userId}) failed: ${error.message}`);
+}
+
+/**
+ * Recompute a user's cached plan from ALL their subscriptions and write it to
+ * app_metadata. This is the ONLY provisioning primitive the handlers call after an
+ * applied mirror write: it reads the user's live access-granting subscriptions
+ * (active / trialing / scheduled-cancel-not-expired) via the SAME lookup +
+ * ranking resolvePlan uses (defaultGetActiveSubscriptions + highestPlanFromGrants),
+ * so the cache can never disagree with resolvePlan's answer.
+ *
+ * Why this replaces per-event setUserPlan(plan)/setUserPlan("free"): a single
+ * canceled event must NOT blindly demote a user who holds another active
+ * subscription (an upgrade / re-buy). Recomputing over all subs is correct in
+ * every direction — grant, upgrade, downgrade, revoke — because the mirror row for
+ * THIS event has already been written before we recompute.
+ */
+async function refreshUserPlanCache(userId: string): Promise<void> {
+  const grants = await defaultGetActiveSubscriptions(userId);
+  const plan = highestPlanFromGrants(grants); // "free" when nothing grants
+  await setUserPlan(userId, plan);
 }
 
 /**
@@ -273,12 +301,33 @@ export async function POST(request: Request): Promise<Response> {
         break;
       }
 
+      case "subscription.trialing": {
+        // A trial grants access (creemStatusGrantsAccess includes "trialing").
+        // Same grant path as active, but the mirrored status stays "trialing".
+        await handleSubscriptionActive(
+          object as CreemSubscriptionObject,
+          occurredAt,
+          "trialing",
+        );
+        break;
+      }
+
       case "subscription.scheduled_cancel": {
         await handleScheduledCancel(object as CreemSubscriptionObject, occurredAt);
         break;
       }
 
+      case "subscription.update": {
+        // Re-evaluate from the event's own status field: an active/trialing
+        // update grants (plan may have changed on an upgrade), a terminal status
+        // revokes. Never assume — read the reported status.
+        await handleSubscriptionUpdate(object as CreemSubscriptionObject, occurredAt);
+        break;
+      }
+
       case "subscription.past_due":
+      case "subscription.paused":
+      case "subscription.unpaid":
       case "subscription.expired":
       case "subscription.canceled": {
         await handleRevoke(object as CreemSubscriptionObject, occurredAt);
@@ -329,19 +378,26 @@ export async function POST(request: Request): Promise<Response> {
 // ── Handlers ──────────────────────────────────────────────────────────────────────
 
 /**
- * subscription.active / subscription.paid: mirror the subscription and, when a
- * user is resolvable and the status grants access, provision the plan. "paid" is
- * stored as "active" (it is the paid/renewed signal for an active sub).
+ * subscription.active / subscription.paid / subscription.trialing: mirror the
+ * subscription and, when a user is resolvable, refresh the plan cache from all of
+ * their subscriptions. "paid" is stored as "active" (the paid/renewed signal for
+ * an active sub); "trialing" keeps its own status (also access-granting).
+ *
+ * `mirrorStatus` is the status persisted ("active" for active/paid, "trialing" for
+ * a trial). Provisioning is handled by refreshUserPlanCache (recompute-from-all),
+ * so the specific mirrored status feeds the recompute rather than a local grant
+ * check.
  */
 async function handleSubscriptionActive(
   o: CreemSubscriptionObject,
   occurredAt: string,
+  mirrorStatus: "active" | "trialing" = "active",
 ): Promise<void> {
   const subId = asString(o.id);
   const customerId = idOf(o.customer);
   if (!subId || !customerId) {
     console.warn(
-      `[creem/webhook] subscription.active missing sub/customer id — skipping mirror.`,
+      `[creem/webhook] subscription.${mirrorStatus} missing sub/customer id — skipping mirror.`,
     );
     return;
   }
@@ -358,11 +414,11 @@ async function handleSubscriptionActive(
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
-  await upsertCreemSubscription({
+  const outcome = await upsertCreemSubscription({
     subscriptionId: subId,
     customerId,
     userId: metaUserId,
-    status: "active", // active + paid both normalize to "active"
+    status: mirrorStatus, // active + paid normalize to "active"; trialing kept
     productId: productId ?? "",
     plan,
     billingInterval: interval,
@@ -372,7 +428,8 @@ async function handleSubscriptionActive(
   });
 
   // If this event knows the user, make sure the customer row exists + is linked
-  // (order-independent) so portal/lookups resolve for a paying user.
+  // (order-independent) so portal/lookups resolve for a paying user. Linkage is
+  // monotonic and safe to run even for a stale event.
   if (metaUserId) {
     await upsertCreemCustomer({
       customerId,
@@ -383,6 +440,15 @@ async function handleSubscriptionActive(
     await linkCustomerToUser(customerId, metaUserId);
   }
 
+  // ONLY an applied (non-stale) event may change the plan — a replayed old event
+  // must never re-grant/override a newer state.
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale ${mirrorStatus} event skipped for provisioning.`,
+    );
+    return;
+  }
+
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
   if (!userId) {
     console.warn(
@@ -390,9 +456,9 @@ async function handleSubscriptionActive(
     );
     return;
   }
-  if (plan && creemStatusGrantsAccess("active")) {
-    await setUserPlan(userId, plan);
-  }
+  // Recompute from ALL subscriptions (the mirror row is written above). Handles a
+  // grant/upgrade correctly and never clobbers another still-active sub.
+  await refreshUserPlanCache(userId);
 }
 
 /**
@@ -417,12 +483,17 @@ async function handleScheduledCancel(
   const mapping = productId ? resolveCreemProduct(productId) : null;
   const plan: PlanKey | null = mapping?.plan ?? null;
   const interval = mapping?.interval ?? null;
-  // Keep whatever status Creem reports (likely still "active", or "scheduled_cancel").
-  const status = asString(o.status) ?? "active";
+  // Contract: the mirrored status REFLECTS the scheduled cancel — we always store
+  // status="scheduled_cancel" here (regardless of what Creem reports on the event),
+  // paired with scheduled_cancel=true. resolvePlan then honors this row until
+  // current_period_end. This keeps a single source of truth: the status field
+  // itself says "scheduled to cancel", not a status="active"+flag combination that
+  // resolvePlan's active/trialing query would (incorrectly) treat as unconditional.
+  const status = "scheduled_cancel";
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
-  await upsertCreemSubscription({
+  const outcome = await upsertCreemSubscription({
     subscriptionId: subId,
     customerId,
     userId: metaUserId,
@@ -445,16 +516,27 @@ async function handleScheduledCancel(
     await linkCustomerToUser(customerId, metaUserId);
   }
 
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale scheduled_cancel event skipped for provisioning.`,
+    );
+    return;
+  }
+
+  // A scheduled_cancel keeps access until current_period_end. Recompute from all
+  // subs: defaultGetActiveSubscriptions filters scheduled_cancel by period end, so
+  // the cache reflects "still entitled until period end" exactly like resolvePlan.
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
-  if (userId && plan && creemStatusGrantsAccess(status)) {
-    await setUserPlan(userId, plan);
+  if (userId) {
+    await refreshUserPlanCache(userId);
   }
 }
 
 /**
- * subscription.past_due / expired / canceled: mirror the terminal/lapsed status
- * and revoke the plan (set "free") for the resolvable user. Mirror regardless of
- * whether a user is resolvable.
+ * subscription.past_due / paused / unpaid / expired / canceled: mirror the
+ * terminal/lapsed status and revoke the plan (set "free") for the resolvable
+ * user — but ONLY when the event is applied (not a stale replay). Mirror
+ * regardless of whether a user is resolvable.
  */
 async function handleRevoke(
   o: CreemSubscriptionObject,
@@ -475,7 +557,7 @@ async function handleRevoke(
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
 
-  await upsertCreemSubscription({
+  const outcome = await upsertCreemSubscription({
     subscriptionId: subId,
     customerId,
     userId: metaUserId,
@@ -488,8 +570,91 @@ async function handleRevoke(
     occurredAt,
   });
 
+  // ONLY revoke on an applied event. This is the guard that stops a replayed old
+  // `canceled` from demoting a member whose subscription is currently active.
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale revoke event skipped (member keeps current plan).`,
+    );
+    return;
+  }
+
+  // Recompute from ALL subscriptions rather than blindly setting "free": a user
+  // with another still-active subscription (upgrade / re-buy) must NOT be demoted
+  // when the OLD sub's canceled event lands. The mirror row for this event is
+  // already written (status now terminal), so refresh sees the true remaining set.
   const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
   if (userId) {
-    await setUserPlan(userId, "free"); // revoke
+    await refreshUserPlanCache(userId);
+  }
+}
+
+/**
+ * subscription.update: a catch-all change event. Re-evaluate entitlement from the
+ * event's OWN status — grant (active/trialing) or revoke (any terminal status).
+ * The plan may have changed (e.g. an upgrade), so we always source it from the
+ * event's product mapping. Only an applied (non-stale) event touches the plan.
+ */
+async function handleSubscriptionUpdate(
+  o: CreemSubscriptionObject,
+  occurredAt: string,
+): Promise<void> {
+  const subId = asString(o.id);
+  const customerId = idOf(o.customer);
+  if (!subId || !customerId) {
+    console.warn(
+      `[creem/webhook] subscription.update missing sub/customer id — skipping mirror.`,
+    );
+    return;
+  }
+  const productId =
+    idOf(o.product) ?? asString(o.items?.[0]?.product_id) ?? null;
+  const mapping = productId ? resolveCreemProduct(productId) : null;
+  if (productId && !mapping) {
+    console.warn(
+      `[creem/webhook] subscription ${subId}: product ${productId} not in CREEM_PRODUCT_* map — mirroring with null plan.`,
+    );
+  }
+  const plan: PlanKey | null = mapping?.plan ?? null;
+  const status = asString(o.status) ?? "active";
+  const currentPeriodEnd = asString(o.current_period_end_date);
+  const metaUserId = userIdFromMetadata(o.metadata);
+
+  const outcome = await upsertCreemSubscription({
+    subscriptionId: subId,
+    customerId,
+    userId: metaUserId,
+    status,
+    productId: productId ?? "",
+    plan,
+    billingInterval: mapping?.interval ?? null,
+    currentPeriodEnd,
+    scheduledCancel: false,
+    occurredAt,
+  });
+
+  if (metaUserId) {
+    await upsertCreemCustomer({
+      customerId,
+      email: emailOf(o.customer),
+      userId: metaUserId,
+      occurredAt,
+    });
+    await linkCustomerToUser(customerId, metaUserId);
+  }
+
+  if (outcome === "stale") {
+    console.log(
+      `[creem/webhook] subscription ${subId}: stale update event skipped for provisioning.`,
+    );
+    return;
+  }
+
+  // Recompute from ALL subscriptions — the update's new status/plan is already
+  // mirrored, so refresh grants, upgrades, downgrades, or revokes correctly, and
+  // never demotes a user who still holds another active subscription.
+  const userId = metaUserId ?? (await resolveUserIdForCustomer(customerId));
+  if (userId) {
+    await refreshUserPlanCache(userId);
   }
 }
