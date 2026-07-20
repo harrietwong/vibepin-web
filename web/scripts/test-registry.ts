@@ -80,6 +80,9 @@ export const CORE: string[] = [
   "test-creem-webhook-ordering",
   "test-creem-billing-status",
   "test-predeploy-guard",
+  "test-moderate-prompt",
+  "test-generation-moderation-gate",
+  "test-aup-compliance",
   // Settings / support
   "test-settings-p0",
   "test-support-ai-responder",

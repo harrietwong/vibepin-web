@@ -2305,6 +2305,8 @@ const vi: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Giữ chỉnh sửa của tôi",
   "studioCreative.direction.manualBrief": "Tóm tắt thủ công",
   "studioCreative.direction.generatedFromDirection": "Được tạo từ hướng đi đã chọn",
+  "studioCreative.direction.moderationNotice": "Lời nhắc được sàng lọc trước khi tạo. Nội dung tình dục, NSFW, bóc lột, gây hại, bất hợp pháp, deepfake và thao túng khuôn mặt bị cấm.",
+  "studioCreative.direction.moderationNoticeLink": "Xem chính sách",
 
   // ── studioModals ──
   "studioModals.apply": "Áp dụng",

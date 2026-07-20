@@ -21,6 +21,7 @@ import crypto                        from "crypto";
 import { promises as fs }            from "fs";
 import { getUserIdFromBearer, getUserIdFromCookies } from "@/lib/server/authUser";
 import { createServerClient }        from "@/lib/supabase";
+import { moderatePrompt, type ModerationResult } from "@/lib/server/creem/moderatePrompt";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -215,6 +216,83 @@ function buildImageInputs(productImages: string[], styleRef: string | null): Gen
       label: "Reference image 1",
     }] : []),
   ];
+}
+
+// ── Prompt moderation gate (Creem AI-compliance) ──────────────────────────────
+// The moderated text is the concatenation of the USER-CONTROLLED fields on the
+// request. The Python enhancer only rewrites this text into a technical prompt —
+// it introduces NO new user intent — so moderating the originals at the route
+// entry is correct and sufficient. This is the ONE HTTP chokepoint every
+// generation path flows through (single, batch, retry, AiVersions, and the
+// Python chat fallback all sit behind this route), so a single gate here covers
+// all of them.
+export function buildModeratedText(fields: {
+  keyword: string;
+  prompt: string;
+  directionBrief: string;
+  category: string;
+  selectedTags: Array<{ label?: string }>;
+}): string {
+  return [
+    fields.keyword,
+    fields.prompt,
+    fields.directionBrief,
+    fields.category,
+    ...fields.selectedTags.map(t => t?.label ?? ""),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export type ModerationGateOutcome =
+  | { proceed: true }
+  | { proceed: false; response: NextResponse };
+
+function rejectedResponse(generationRequestId: string): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error_type: "prompt_rejected",
+      code: "prompt_rejected",
+      error:
+        "This request cannot be processed because it may violate our content policy. Please revise the prompt and try again.",
+      urls: [],
+      generation_request_id: generationRequestId,
+    },
+    { status: 400 },
+  );
+}
+
+function unavailableResponse(generationRequestId: string): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error_type: "moderation_unavailable",
+      code: "moderation_unavailable",
+      error:
+        "Prompt screening is temporarily unavailable. No generation was started. Please try again later.",
+      urls: [],
+      generation_request_id: generationRequestId,
+    },
+    { status: 503 },
+  );
+}
+
+/**
+ * Pure decision helper — maps a ModerationResult to whether the request may
+ * proceed and, if not, the exact HTTP response. Exported so the gate can be
+ * unit-tested without a live Creem call. On {ok:true} the caller continues to
+ * the dispatch branches; anything else STOPS before lock acquisition/dispatch.
+ */
+export function evaluateModerationForRequest(
+  result: ModerationResult,
+  generationRequestId: string,
+): ModerationGateOutcome {
+  if (result.ok) return { proceed: true };
+  if (result.reason === "rejected") {
+    return { proceed: false, response: rejectedResponse(generationRequestId) };
+  }
+  return { proceed: false, response: unavailableResponse(generationRequestId) };
 }
 
 function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}): Promise<NextResponse> {
@@ -445,6 +523,19 @@ export async function POST(req: NextRequest) {
 
   if (!keyword) {
     return NextResponse.json({ error: "keyword is required" }, { status: 400 });
+  }
+
+  // ── Moderation gate (Creem AI-compliance) — BEFORE both dispatch branches and
+  // BEFORE lock acquisition, so a rejected/unscreenable prompt never spawns the
+  // generator, never hits FastAPI, and never acquires the per-user lock. Runs for
+  // real AND mock-provider requests (mock is about the image provider, not
+  // compliance). The moderated text is the user's actual intent; the Python
+  // enhancer only rewrites it.
+  const moderatedText = buildModeratedText({ keyword, prompt, directionBrief, category, selectedTags });
+  const moderation = await moderatePrompt({ prompt: moderatedText, externalId: generationRequestId });
+  const gate = evaluateModerationForRequest(moderation, generationRequestId);
+  if (!gate.proceed) {
+    return gate.response;
   }
 
   console.log(

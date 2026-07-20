@@ -1019,6 +1019,8 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "保留我的編輯",
   "studioCreative.direction.manualBrief": "手動簡報",
   "studioCreative.direction.generatedFromDirection": "根據所選方向產生",
+  "studioCreative.direction.moderationNotice": "提示詞會在生成前經過審查。禁止性、NSFW、剝削性、有害、非法、深度偽造以及臉部操縱內容。",
+  "studioCreative.direction.moderationNoticeLink": "查看政策",
 
   // ── studio ──
   "studio.header.title": "建立 Pin",

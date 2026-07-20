@@ -2626,6 +2626,8 @@ const id: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Persingkat judul atau deskripsi sebelum menjadwalkan atau memublikasikan.",
 
+  "studioCreative.direction.moderationNotice": "Prompt disaring sebelum pembuatan. Konten seksual, NSFW, eksploitatif, berbahaya, ilegal, deepfake, dan manipulasi wajah dilarang.",
+  "studioCreative.direction.moderationNoticeLink": "Lihat kebijakan",
 };
 
 export default id;

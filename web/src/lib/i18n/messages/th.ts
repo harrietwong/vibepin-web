@@ -2109,6 +2109,8 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "คงการแก้ไขของฉัน",
   "studioCreative.direction.manualBrief": "สรุปด้วยตนเอง",
   "studioCreative.direction.generatedFromDirection": "สร้างจากทิศทางที่เลือก",
+  "studioCreative.direction.moderationNotice": "พรอมต์จะถูกตรวจสอบก่อนการสร้าง เนื้อหาทางเพศ NSFW การแสวงหาประโยชน์ อันตราย ผิดกฎหมาย ดีปเฟก และการดัดแปลงใบหน้าเป็นสิ่งต้องห้าม",
+  "studioCreative.direction.moderationNoticeLink": "ดูนโยบาย",
   // ── studioModals ──
   "studioModals.apply": "นำไปใช้",
   "studioModals.undo": "เลิกทำ",

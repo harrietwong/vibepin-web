@@ -541,6 +541,14 @@ export function OpportunityFirstStudio({
               placeholder={tr("studioCreative.instructions.placeholder")}
               style={{ width: "100%", borderRadius: 10, border: "1px solid #E5E7EB", padding: "12px 14px", fontSize: "12px", lineHeight: 1.6, resize: "vertical", outline: "none", color: "#374151", fontFamily: "inherit", background: "#FAFAFA", boxSizing: "border-box" }}
             />
+            {/* Prompt moderation notice (AI-compliance) */}
+            <p style={{ margin: "8px 0 0", fontSize: "10px", color: "#94A3B8", lineHeight: 1.5 }}>
+              {tr("studioCreative.direction.moderationNotice")}{" "}
+              <a href="/acceptable-use-policy" target="_blank" rel="noopener noreferrer"
+                style={{ color: "#7C3AED", fontWeight: 600, textDecoration: "underline" }}>
+                {tr("studioCreative.direction.moderationNoticeLink")}
+              </a>
+            </p>
             {/* Quick ideas */}
             <div style={{ marginTop: 8 }}>
               <span style={{ fontSize: "11px", color: "#94A3B8", fontWeight: 600 }}>{tr("studioCreative.instructions.quickIdeas")}</span>
