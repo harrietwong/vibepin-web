@@ -89,7 +89,8 @@ function accountStatusOf(u: AuthUserLite): AccountStatus {
   return "active";
 }
 
-function planOf(u: AuthUserLite): string | null {
+// Exported for regression testing (test-customer360-plan.ts). Pure function.
+export function planOf(u: AuthUserLite): string | null {
   // Trust ONLY app_metadata.plan — the service-role-writable cache the Creem webhook
   // refreshes. user_metadata is user-editable, so reading its plan would let a user
   // self-display as paid (the trust boundary security(billing) e2543f6 closed elsewhere).
