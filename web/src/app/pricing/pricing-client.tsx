@@ -113,11 +113,13 @@ function PlanCards({
   onPlanCta,
   selectedPlanId,
   pendingPlanId,
+  billingEnabled,
 }: {
   yearly: boolean;
   onPlanCta: (planId: PlanKey) => void;
   selectedPlanId: PlanKey | null;
   pendingPlanId: PlanKey | null;
+  billingEnabled: boolean;
 }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 items-stretch">
@@ -198,7 +200,24 @@ function PlanCards({
               ))}
             </ul>
 
-            {purchasable ? (
+            {purchasable && !billingEnabled ? (
+              // Checkout is turned off (CREEM_MODE=disabled): show the disabled
+              // "Coming soon" state at FIRST paint so neither anonymous nor
+              // signed-in visitors are routed through signup only to hit a 503.
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                className={`w-full rounded-full py-3 text-[13px] font-bold text-center opacity-60 cursor-not-allowed ${
+                  plan.highlighted ? VibeBtn : "border"
+                }`}
+                style={
+                  plan.highlighted ? {} : { borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }
+                }
+              >
+                Coming soon
+              </button>
+            ) : purchasable ? (
               <button
                 type="button"
                 onClick={() => onPlanCta(plan.id)}
@@ -358,7 +377,7 @@ function ComparisonTable() {
   );
 }
 
-function PricingPageContent() {
+function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -441,6 +460,14 @@ function PricingPageContent() {
   const handlePlanCta = useCallback(
     (planId: PlanKey) => {
       if (!isPaidPlan(planId)) return; // free routes via <Link>, never here
+      // Billing turned off (CREEM_MODE=disabled): surface the calm "coming soon"
+      // banner and go no further — never navigate to /signup, never call the
+      // checkout endpoint. The buttons are already disabled; this is the
+      // belt-and-braces guard for any programmatic caller.
+      if (!billingEnabled) {
+        setCheckoutComingSoon(true);
+        return;
+      }
       if (!authReady) {
         setPendingIntent({ planId });
         return;
@@ -451,7 +478,7 @@ function PricingPageContent() {
         routeToSignup(planId);
       }
     },
-    [authReady, userId, launchCheckout, routeToSignup],
+    [billingEnabled, authReady, userId, launchCheckout, routeToSignup],
   );
 
   // Consume a pending intent the instant auth resolves.
@@ -486,6 +513,14 @@ function PricingPageContent() {
   useEffect(() => {
     const checkoutPlanId = searchParams.get("checkout");
     if (!checkoutPlanId || autoCheckoutFired.current) return;
+    // Billing turned off: a crafted `/pricing?checkout=pro` return must NOT
+    // auto-open checkout. Show the "coming soon" banner and clean the URL.
+    if (!billingEnabled) {
+      autoCheckoutFired.current = true;
+      setCheckoutComingSoon(true);
+      router.replace("/pricing", { scroll: false });
+      return;
+    }
     // Wait for the auth signal — treating a still-loading session as "logged
     // out" would wrongly drop the intent.
     if (!authReady) return;
@@ -512,7 +547,7 @@ function PricingPageContent() {
 
     void launchCheckout(plan.id);
     router.replace("/pricing", { scroll: false });
-  }, [searchParams, authReady, userId, launchCheckout, router]);
+  }, [searchParams, billingEnabled, authReady, userId, launchCheckout, router]);
 
   return (
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -611,6 +646,7 @@ function PricingPageContent() {
               onPlanCta={handlePlanCta}
               selectedPlanId={selectedPlanId}
               pendingPlanId={pendingPlanId ?? pendingIntent?.planId ?? null}
+              billingEnabled={billingEnabled}
             />
           </div>
 
@@ -696,15 +732,28 @@ function PricingPageContent() {
             <Link href="/app/studio" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
               Get started free <ArrowRight className="w-4 h-4" />
             </Link>
-            <button
-              type="button"
-              onClick={() => handlePlanCta("pro")}
-              disabled={(pendingPlanId ?? pendingIntent?.planId) === "pro"}
-              className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30 disabled:opacity-60 disabled:cursor-wait"
-              style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
-            >
-              {(pendingPlanId ?? pendingIntent?.planId) === "pro" ? "Loading…" : "Start Pro"}
-            </button>
+            {!billingEnabled ? (
+              // Same first-paint "coming soon" treatment as the paid cards.
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold opacity-60 cursor-not-allowed"
+                style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
+              >
+                Coming soon
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handlePlanCta("pro")}
+                disabled={(pendingPlanId ?? pendingIntent?.planId) === "pro"}
+                className="rounded-full border px-8 py-3.5 text-[14px] font-semibold transition-colors hover:text-white hover:border-white/30 disabled:opacity-60 disabled:cursor-wait"
+                style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}
+              >
+                {(pendingPlanId ?? pendingIntent?.planId) === "pro" ? "Loading…" : "Start Pro"}
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -714,10 +763,10 @@ function PricingPageContent() {
   );
 }
 
-export default function PricingPageClient() {
+export default function PricingPageClient({ billingEnabled }: { billingEnabled: boolean }) {
   return (
     <Suspense fallback={null}>
-      <PricingPageContent />
+      <PricingPageContent billingEnabled={billingEnabled} />
     </Suspense>
   );
 }
