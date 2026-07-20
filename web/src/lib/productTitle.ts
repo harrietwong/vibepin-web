@@ -70,9 +70,19 @@ function fromAttributeDump(t: string): string | null {
 /**
  * Normalize a raw product title into a short, human, Title-Case name.
  * Safe to call on already-clean titles (they pass through largely unchanged).
+ *
+ * Returns **null** when there is no real product title to show (PRD v3.1 §4③ / §7.3).
+ *
+ * This function used to return the literal string "Product" for a null/blank input.
+ * That was fabrication: `product_name` is an OPTIONAL enrichment field (v47 made it
+ * nullable) and it is NULL precisely when the merchant page could not be read — for
+ * Etsy-class WAF-403 merchants, always. Rendering "Product" invented a product name
+ * that no merchant ever published, which is the T10 disease re-entering from the UI
+ * side. NULL is a legal, honest state: callers must render nothing rather than a
+ * placeholder, a "—", or a guess.
  */
-export function cleanProductTitle(raw: string | null | undefined): string {
-  if (!raw || !raw.trim()) return "Product";
+export function cleanProductTitle(raw: string | null | undefined): string | null {
+  if (!raw || !raw.trim()) return null;
   let t = raw.trim();
 
   // 1. Attribute dumps → reconstruct a readable noun phrase.
@@ -106,5 +116,7 @@ export function cleanProductTitle(raw: string | null | undefined): string {
   t = dedupeWords(t, 9);
   if (t.length > 70) t = t.slice(0, 70).replace(/\s+\S*$/, "").trim() + "…";
 
-  return t || "Product";
+  // Cleaning can legitimately consume the whole string (e.g. a title that was
+  // nothing but a store tail). Nothing left => nothing to show. Never "Product".
+  return t || null;
 }

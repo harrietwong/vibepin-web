@@ -262,13 +262,15 @@ function compactFoundLabel(iso: string | null, tr: (key: MessageKey) => string):
   return tr("products.time.compactYears").replace("{n}", String(years));
 }
 
-function saveProductToLibrary(p: PinProduct, title: string) {
+function saveProductToLibrary(p: PinProduct, title: string | null) {
   assetStore.saveAsset({
     role: "product", assetRole: "product_image",
     itemType: p.item_type ?? "product", productType: p.product_type ?? "physical_product",
     productSubtype: p.product_subtype ?? "unknown", destinationType: p.destination_type ?? "product_page",
     sourceContext: "saved_from_product_ideas", riskFlags: p.risk_flags, source: "product_signal",
-    imageUrl: p.image_url, title,
+    // title is optional on the asset; a NULL product_name carries through as no
+    // title rather than a fabricated "Product".
+    imageUrl: p.image_url, title: title ?? undefined,
     category: p.seed_keyword ?? undefined,
     sourceUrl: p.source_url ?? undefined, productUrl: p.source_url ?? undefined,
     sourceDomain: p.domain ?? undefined, store: p.merchant ?? p.domain ?? undefined,
@@ -331,7 +333,7 @@ function ProductCard({
       onClick={onClick}
     >
       {!imgError && p.image_url ? (
-        <Image src={p.image_url} alt={title} fill className="object-cover transition-transform duration-300 group-hover:scale-[1.03]" sizes="(max-width:640px) 48vw, 260px" unoptimized onError={() => setImgError(true)} />
+        <Image src={p.image_url} alt={title ?? ""} fill className="object-cover transition-transform duration-300 group-hover:scale-[1.03]" sizes="(max-width:640px) 48vw, 260px" unoptimized onError={() => setImgError(true)} />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center"><Package className="h-8 w-8 text-gray-300" /></div>
       )}
@@ -497,14 +499,17 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
         <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
           <div className="relative overflow-hidden rounded-2xl bg-gray-100" style={{ aspectRatio: "4 / 5" }}>
             {!imgError && p.image_url ? (
-              <Image src={p.image_url} alt={title} fill className="object-cover" sizes="400px" unoptimized onError={() => setImgError(true)} />
+              <Image src={p.image_url} alt={title ?? ""} fill className="object-cover" sizes="400px" unoptimized onError={() => setImgError(true)} />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center"><Package className="h-10 w-10 text-gray-300" /></div>
             )}
           </div>
 
           <div className="min-w-0">
-            <p className="text-[14px] font-bold text-gray-900 leading-snug line-clamp-3">{title}</p>
+            {/* NULL product_name = merchant page unreadable; render no title row
+                rather than a fabricated placeholder. Category/platform chips below
+                still convey what we honestly know. */}
+            {title && <p className="text-[14px] font-bold text-gray-900 leading-snug line-clamp-3">{title}</p>}
             {/* Normalized category + platform chips (display-only; never raw slugs).
                 Falls back to the seed keyword only when no category resolves. */}
             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
@@ -612,7 +617,7 @@ function ProductDrawer({ p, metrics, similar, onSelectSimilar, onClose }: {
                     className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-100 text-left"
                     style={{ aspectRatio: "4/5" }}>
                     {sp.image_url && (
-                      <Image src={sp.image_url} alt={cleanProductTitle(sp.product_name)} fill className="object-cover" sizes="110px" unoptimized />
+                      <Image src={sp.image_url} alt={cleanProductTitle(sp.product_name) ?? ""} fill className="object-cover" sizes="110px" unoptimized />
                     )}
                     <div className="absolute inset-x-0 bottom-0 px-1.5 py-1"
                       style={{ background: "linear-gradient(to top, rgba(0,0,0,0.72), transparent)" }}>
@@ -811,7 +816,7 @@ export default function ProductsPage() {
         if (normalized !== selectedCat) return false;
       }
       if (platformFilter !== "All" && normalizePlatformLabel({ sourceUrl: p.source_url, domain: p.domain }) !== platformFilter) return false;
-      const cleanName = cleanProductTitle(p.product_name).toLowerCase();
+      const cleanName = (cleanProductTitle(p.product_name) ?? "").toLowerCase();
       if (q && !cleanName.includes(q) && !(p.seed_keyword ?? "").toLowerCase().includes(q) && !(p.domain ?? "").toLowerCase().includes(q)) return false;
       return true;
     });
@@ -899,7 +904,8 @@ export default function ProductsPage() {
     assetStore.saveAsset({
       role: "product", assetRole: "product_image", source: "product_signal",
       itemType: "product", productType: "physical_product", productSubtype: "unknown", destinationType: "product_page",
-      sourceContext: "saved_from_product_ideas", imageUrl: p.image_url, title,
+      // NULL product_name carries through as no title, never a fabricated "Product".
+      sourceContext: "saved_from_product_ideas", imageUrl: p.image_url, title: title ?? undefined,
       category: p.seed_keyword ?? undefined,
       sourceUrl: p.source_url ?? undefined, productUrl: p.source_url ?? undefined,
       sourceDomain: p.domain ?? undefined, store: p.merchant ?? p.domain ?? undefined,
@@ -914,7 +920,7 @@ export default function ProductsPage() {
     const prefill = buildPrefillFromProductSignal({ ...prods[0], product_name: cleanProductTitle(prods[0].product_name) });
     if (prods.length > 1) {
       prefill.productImages = prods.map(p => ({
-        id: p.id, imageUrl: p.image_url, title: cleanProductTitle(p.product_name),
+        id: p.id, imageUrl: p.image_url, title: cleanProductTitle(p.product_name) ?? undefined,
         source: "product_signals" as const, category: p.seed_keyword ?? undefined,
         productUrl: p.source_url ?? undefined, sourceDomain: p.domain ?? undefined,
       }));

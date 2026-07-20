@@ -145,7 +145,9 @@ export function buildPrefillFromWorkspace(
 
 export function buildPrefillFromProductSignal(product: {
   id: string;
-  product_name: string;
+  // NULL/blank when the merchant page could not be read (Etsy-class WAF-403, etc.).
+  // We carry that absence through as an absent title — never a fabricated "Product".
+  product_name: string | null | undefined;
   image_url: string;
   seed_keyword?: string | null;
   source_url?: string | null;
@@ -156,7 +158,7 @@ export function buildPrefillFromProductSignal(product: {
     productImages: [{
       id: product.id,
       imageUrl: product.image_url,
-      title: product.product_name,
+      title: product.product_name || undefined,
       source: "product_signals",
       category: product.seed_keyword ?? undefined,
       productUrl: product.source_url ?? undefined,
