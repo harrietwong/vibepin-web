@@ -59,6 +59,45 @@ function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(msg);
 }
 
+// ── Intercept supabase insert to count WP3 worker enqueues ─────────────────────
+// The WP3-P1 worker path (GENERATION_MODE=worker) enqueues a generation_jobs row
+// via createServerClient().from("generation_jobs").insert(). We count inserts so
+// a rejected/unavailable prompt can be proven to NEVER enqueue a job (the queue
+// is the easiest background bypass — the gate must sit before it).
+let enqueueInsertCount = 0;
+function fakeServerClient() {
+  return {
+    from(table: string) {
+      return {
+        insert(_row: unknown) {
+          if (table === "generation_jobs") enqueueInsertCount++;
+          return {
+            select() {
+              return {
+                single: async () => ({
+                  data: { id: "job_fake", vibepin_user_id: "u", status: "pending", created_at: new Date().toISOString() },
+                  error: null,
+                }),
+              };
+            },
+          };
+        },
+        select() {
+          // worker-status heartbeat lookup: report a FRESH worker so enqueue proceeds.
+          return {
+            eq() {
+              return {
+                maybeSingle: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
+                single: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
 // ── Intercept child_process.spawn to count generator dispatches ────────────────
 let spawnCount = 0;
 function fakeSpawn() {
@@ -92,6 +131,23 @@ const originalLoad = (Module as any)._load;
   return real;
 };
 
+// Intercept the supabase module so the worker path's enqueue is countable and
+// never touches a real DB. Path-based match on the resolved id (…/lib/supabase).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const originalResolve = (Module as any)._resolveFilename;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
+  if (request === "child_process") {
+    const real = originalLoad.call(this, request, parent, isMain);
+    return { ...real, spawn: fakeSpawn };
+  }
+  if (/[\\/]lib[\\/]supabase(\.ts)?$/.test(request) || request === "@/lib/supabase") {
+    return { createServerClient: fakeServerClient };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+};
+void originalResolve;
+
 function makeReq(body: Record<string, unknown>): Request {
   return new Request("https://vibepin.co/api/generate", {
     method: "POST",
@@ -119,9 +175,26 @@ function fullBody(extra: Record<string, unknown> = {}): Record<string, unknown> 
 async function runWith(decision: string, body: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown> }> {
   process.env.MODERATION_MOCK_DECISION = decision;
   spawnCount = 0;
+  enqueueInsertCount = 0;
   const route = await import("../src/app/api/generate/route");
   const res = await route.POST(makeReq(body) as never);
   const json = (await res.json()) as Record<string, unknown>;
+  return { status: res.status, json };
+}
+
+// Run with GENERATION_MODE=worker so the request would take the WP3 enqueue path
+// if it reached it. The route reads GENERATION_MODE at MODULE LOAD, so set it and
+// force a fresh module import via the query cache-buster.
+async function runWorkerWith(decision: string, body: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown> }> {
+  process.env.MODERATION_MOCK_DECISION = decision;
+  process.env.GENERATION_MODE = "worker";
+  spawnCount = 0;
+  enqueueInsertCount = 0;
+  // GENERATION_MODE is captured at module top-level, so re-import a fresh copy.
+  const route = await import(`../src/app/api/generate/route?worker=${decision}_${Math.random()}`);
+  const res = await route.POST(makeReq(body) as never);
+  const json = (await res.json()) as Record<string, unknown>;
+  process.env.GENERATION_MODE = "inline";
   return { status: res.status, json };
 }
 
@@ -191,6 +264,31 @@ async function main() {
     assertEq(status, 503, "status");
     assertEq(json.error_type, "moderation_unavailable", "error_type");
   });
+
+  // ── WP3 worker enqueue path — the easiest background bypass; must be gated ─────
+  await test("WORKER: deny → 400, ZERO enqueue (no generation_jobs insert)", async () => {
+    const { status, json } = await runWorkerWith("deny", fullBody());
+    assertEq(enqueueInsertCount, 0, "no generation_jobs enqueue on a denied worker request");
+    assertEq(spawnCount, 0, "no generator dispatch either");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("WORKER: flag → 400, ZERO enqueue", async () => {
+    const { status, json } = await runWorkerWith("flag", fullBody());
+    assertEq(enqueueInsertCount, 0, "no enqueue on flagged worker request");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  for (const mode of ["unknown", "timeout", "error", "malformed", "non2xx", "missing_key"]) {
+    await test(`WORKER: ${mode} → 503, ZERO enqueue`, async () => {
+      const { status, json } = await runWorkerWith(mode, fullBody());
+      assertEq(enqueueInsertCount, 0, `no enqueue on ${mode} worker request`);
+      assertEq(status, 503, "status");
+      assertEq(json.error_type, "moderation_unavailable", "error_type");
+    });
+  }
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
