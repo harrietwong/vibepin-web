@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "db"))
 
 from classify_product_signals import DOMAIN_RULES, classify_product  # type: ignore
 from content_filters import evaluate_pin_content  # type: ignore
+from product_lifecycle import is_retired, with_not_retired  # type: ignore
 
 PROVENANCE = "outbound_link_bootstrap"
 BOOTSTRAP_SOURCES = ("manual_bootstrap", "csv_bootstrap")
@@ -92,6 +93,129 @@ def url_hash(normalized_url: str) -> str:
 
 
 # ── Acceptance / classification ─────────────────────────────────────────────
+
+# ═══ PDP GATE — "is this actually a PRODUCT DETAIL page?" ═════════════════════
+# Backfilled here from the T2 pilot (2026-07-14). The pilot dry-run proved that the
+# old accept_link() had a real PRECISION defect: it let through
+#     amazon.com/Terrific-Patio-Garden-.../s?k=patio+garden        ← a SEARCH page
+#     teacherspayteachers.com/browse/free?search=printable+pecs    ← a BROWSE page
+# because those paths matched no explicit non-product rule and the domain was on the
+# known-commerce list. A downstream fetcher then "extracted" a page title
+# ("Amazon.com : patio garden") and it would have become a product row. A search /
+# browse / category surface must NEVER become a product opportunity — that is a fake
+# product, which is exactly the class of dirty data this whole workstream exists to
+# eliminate. The gate lives in accept_link() so EVERY harvester inherits it
+# (product_harvest, product_supply_expand, product_supply_spike, shop_the_look_*,
+# t2_harvest) rather than only the one tool that discovered the bug.
+#
+# It FAILS CLOSED: a domain with no explicit PDP rule must still present a
+# recognizable product-detail path shape to qualify.
+
+# A search/keyword query string is strong evidence of a results page. BUT it is only
+# decisive when the PATH itself is not already a proven product-detail page: real PDP
+# links carry search/affiliate tracking noise all the time, e.g.
+#   amazon.com/(New-Release)-Home-Wall-Decor/dp/B09QFWX7RL?dchild=1&keywords=home-wall
+# is a genuine ASIN page. Path evidence therefore OUTRANKS query-string evidence.
+_SEARCH_QUERY_PARAM = re.compile(r"(?:^|&)(?:k|q|s|search|keywords?|query)=", re.I)
+
+# Per-domain-family canonical PDP path shapes. If the domain matches, the path MUST
+# match, otherwise it is not a product detail page — no fallbacks.
+_PDP_RULES: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
+    (re.compile(r"(^|\.)amazon\.", re.I),
+     re.compile(r"/(?:dp|gp/product)/[A-Z0-9]{10}", re.I)),
+    (re.compile(r"(^|\.)etsy\.com$", re.I),
+     re.compile(r"/listing/\d+", re.I)),
+    (re.compile(r"(^|\.)ebay\.", re.I),
+     re.compile(r"/itm/", re.I)),
+    (re.compile(r"(^|\.)teacherspayteachers\.com$", re.I),
+     re.compile(r"/(?:Product|product)/", re.I)),
+    (re.compile(r"(^|\.)canva\.com$", re.I),
+     re.compile(r"/templates/[A-Za-z0-9_-]+", re.I)),
+    (re.compile(r"(^|\.)payhip\.com$", re.I),
+     re.compile(r"/b/[A-Za-z0-9]+", re.I)),
+    (re.compile(r"(^|\.)gumroad\.com$", re.I),
+     re.compile(r"/l/[A-Za-z0-9]+", re.I)),
+    # Verified against the live corpus (2026-07-14): these are real PDP shapes that the
+    # generic rules below would otherwise reject as false negatives. Each is written as
+    # a DOMAIN rule (not a generic shape) so it stays precise: on these domains a URL
+    # that does NOT match the shape is definitively not a product detail page.
+    (re.compile(r"(^|\.)walmart\.com$", re.I),
+     re.compile(r"/ip/[^/]+", re.I)),
+    (re.compile(r"(^|\.)poshmark\.com$", re.I),
+     re.compile(r"/listing/[^/]+", re.I)),
+    (re.compile(r"(^|\.)wayfair\.", re.I),
+     re.compile(r"/pdp/[^/]+|-pdp-[^/]+", re.I)),
+    (re.compile(r"(^|\.)shein\.com$", re.I),
+     re.compile(r"-p-\d+", re.I)),
+    # Teepublic product pages are /<product-category>/<numeric-id>-<slug>
+    # (e.g. /t-shirt/77625009-..., /poster-and-art/80640861-...). accept_link()
+    # already accepts these via its own precise Teepublic rule and EXEMPTS them from
+    # the generic PDP re-gate; without a matching rule here, check_red_lines()' raw
+    # is_product_detail_url() call disagreed and failed the batch. The rule mirrors
+    # accept_link: a real product carries a numeric listing id; /user/ and /stores/
+    # profile pages (no leading id segment) correctly fall through to rejection.
+    (re.compile(r"(^|\.)teepublic\.com$", re.I),
+     re.compile(r"/[a-z0-9-]+/\d+-", re.I)),
+)
+
+# Listing / search / browse surfaces are never a PDP, on any domain.
+_NON_PDP_PATH = re.compile(
+    r"(?:^|/)(?:s|search|browse|shop|collections?|category|categories|deals|b|gp/browse)(?:/|$)",
+    re.I)
+
+
+def is_product_detail_url(url: str) -> tuple[bool, str]:
+    """Domain-aware PDP gate. Returns (ok, reason).
+
+    Answers only one question: does this URL point at ONE specific product's detail
+    page? Search/browse/category pages are rejected outright. Unknown domains fail
+    CLOSED — they must still show a product-detail path shape (Shopify /products/<h>,
+    /p/<h>, /item/<h>, /dp/<h>) to qualify.
+    """
+    parts = urlsplit(url or "")
+    domain = get_domain(url)
+    path = parts.path or ""
+    query = parts.query or ""
+
+    # 1) Domain-specific rule wins outright when the domain has one. The path is the
+    #    evidence — query-string noise (?keywords=…&dchild=1 affiliate tracking) does
+    #    NOT demote a proven ASIN/listing path.
+    for dom_re, pdp_re in _PDP_RULES:
+        if dom_re.search(domain):
+            if pdp_re.search(path):
+                return True, "pdp_path"
+            if _SEARCH_QUERY_PARAM.search(query):
+                return False, "search_query_string"
+            return False, "not_a_pdp_path"
+
+    # 2) Affirmative generic product-detail path shapes, checked BEFORE the
+    #    listing/browse rejection: a Shopify PDP is legitimately nested under a
+    #    collection — /collections/mosaics/products/3x8-athens-gray is a real product
+    #    page. Rejecting on the "collections" segment first would drop it as a browse
+    #    page. The /products/<handle> segment is the specific signal; the surrounding
+    #    collection path is just navigation context.
+    if re.search(r"/products?/[^/]+", path, re.I):
+        return True, "shopify_product_path"
+    if re.search(r"/(?:p|pd|item|ip|dp|listing)/[^/]+", path, re.I):
+        return True, "generic_product_path"
+
+    # 3) No product-detail path evidence at all → a search query string or a
+    #    listing/browse path segment is decisive.
+    if _SEARCH_QUERY_PARAM.search(query):
+        return False, "search_query_string"
+    if _NON_PDP_PATH.search(path):
+        return False, "listing_or_browse_path"
+    return False, "no_recognizable_pdp_path"
+
+
+# Domains whose accept_link() rules are ALREADY path-precise product-detail rules
+# (RETAIL_PRODUCT_PATHS + teepublic). Re-gating them through the generic PDP shapes
+# above would reject valid PDPs whose paths simply do not look like /p/ or /products/
+# (e.g. flightclub.com/air-jordan-1-retro-high-og-dz5485-612,
+#  anthropologie.com/shop/the-love-knot-slouchy-bag). The retailer rules are the
+# stricter, domain-specific gate for these — the generic gate would only add false
+# negatives, never catch a search page the retailer rule already rejects.
+_PDP_GATE_EXEMPT_REASONS = frozenset({"retailer_product_path", "teepublic_product"})
 
 # Shopify product URLs follow /products/<handle> (optionally under /collections/<c>/).
 _SHOPIFY_PRODUCT_PATH = re.compile(r"/products/[^/]+")
@@ -154,7 +278,12 @@ def _matches_domain_non_product_path(domain: str, path: str) -> bool:
 
 def accept_link(url: str) -> tuple[bool, str]:
     """Return (accepted, reason). Accepts known commerce marketplaces + a few safe,
-    path-based product patterns (Shopify /products/, Teepublic product pages)."""
+    path-based product patterns (Shopify /products/, Teepublic product pages).
+
+    Every acceptance is then re-checked by the PDP gate (is_product_detail_url), so a
+    search/browse/category page on an otherwise-legitimate commerce domain can never be
+    accepted as a product. Domains that already have a path-precise product rule
+    (RETAIL_PRODUCT_PATHS, Teepublic) are exempt — their own rule IS the PDP gate."""
     if not url or not url.startswith("http"):
         return False, "empty_or_relative"
     parts = urlsplit(url)
@@ -166,6 +295,24 @@ def accept_link(url: str) -> tuple[bool, str]:
         return False, "pinterest_internal"
     if domain in SOCIAL_DOMAINS or any(domain.endswith("." + s) for s in SOCIAL_DOMAINS):
         return False, "social_media"
+
+    accepted, reason = _accept_link_domain_rules(url, domain, path)
+    if not accepted:
+        return False, reason
+    # ── PDP GATE (the P1 backfill) ───────────────────────────────────────────
+    # The domain rules answer "is this a commerce domain / plausible product path?".
+    # They do NOT answer "is this ONE product's detail page?" — which is how Amazon
+    # /s?k=… search pages and TPT /browse pages slipped through into the supply set.
+    if reason in _PDP_GATE_EXEMPT_REASONS:
+        return True, reason
+    is_pdp, pdp_reason = is_product_detail_url(url)
+    if not is_pdp:
+        return False, f"not_product_detail_page:{pdp_reason}"
+    return True, reason
+
+
+def _accept_link_domain_rules(url: str, domain: str, path: str) -> tuple[bool, str]:
+    """The original domain/path acceptance rules (commerce-domain + path shape)."""
     # Teepublic: accept true product/listing pages, reject user/profile/store pages.
     if domain == "teepublic.com" or domain.endswith(".teepublic.com"):
         if path in ("", "/") or path.startswith("/user/") or path.startswith("/stores/"):
@@ -348,16 +495,27 @@ def harvest(*, since_hours: int, source: str | None = None,
     # legacy guard: any selected pin not from a bootstrap source?
     legacy = [p for p in pins if p.get("source_interest") not in BOOTSTRAP_SOURCES]
 
-    # projected inserts vs updates: existing pin_products by (parent_pin_id, hash)
+    # projected inserts vs updates: existing pin_products by (parent_pin_id, normalized URL).
+    #
+    # LIFECYCLE (migrate_v46 / T10): only NON-RETIRED rows count as "already exists".
+    # A soft-retired row must never (a) block re-collection of its source_url, nor
+    # (b) be classified as an "update" target — updating it would overwrite the retired
+    # evidence row in place. Retired rows are excluded server-side with the NULL-safe
+    # `or=(lifecycle_status.is.null,lifecycle_status.neq.retired)` filter (a bare
+    # neq.retired would NOT match the NULL rows that make up the whole active corpus)
+    # and re-asserted client-side below.
     parent_ids = [p["parent_pin_id"] for p in deduped if p.get("parent_pin_id")]
     existing_keys: set = set()
     if parent_ids:
         # order="id" gives a deterministic total order so the paginated read of all
         # existing rows for these parents cannot skip/duplicate across page boundaries.
         existing = select_many("pin_products",
-                               filters={"parent_pin_id": "in.(" + ",".join(parent_ids) + ")"},
+                               filters=with_not_retired(
+                                   {"parent_pin_id": "in.(" + ",".join(parent_ids) + ")"}),
                                order="id", limit=20000) or []
         for e in existing:
+            if is_retired(e):
+                continue  # belt-and-braces; the server filter should already exclude these
             existing_keys.add((e.get("parent_pin_id"), normalize_product_url(e.get("source_url") or "")))
     inserts = [r for r in deduped if (r["parent_pin_id"], r["canonical_product_url"]) not in existing_keys]
     updates = [r for r in deduped if (r["parent_pin_id"], r["canonical_product_url"]) in existing_keys]

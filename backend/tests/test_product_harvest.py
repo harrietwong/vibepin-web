@@ -29,7 +29,9 @@ class TestScopeFilters(unittest.TestCase):
 
 class TestAcceptance(unittest.TestCase):
     def test_known_commerce_accepted(self):
-        for u in ("https://www.etsy.com/listing/1/x", "https://www.amazon.com/dp/x",
+        # Amazon uses a real 10-char ASIN: the PDP gate requires /dp/[A-Z0-9]{10},
+        # so a placeholder like /dp/x is (correctly) NOT a product-detail page.
+        for u in ("https://www.etsy.com/listing/1/x", "https://www.amazon.com/dp/B0CPSBDQBR",
                   "https://payhip.com/b/abc", "https://www.ikea.com/us/en/p/x"):
             ok, reason = accept_link(u)
             self.assertTrue(ok, f"{u} should be accepted ({reason})")
@@ -112,6 +114,52 @@ class TestAcceptance(unittest.TestCase):
         for url in urls:
             ok, _reason = accept_link(url)
             self.assertFalse(ok, f"{url} should be rejected")
+
+
+class TestPdpGateGuard(unittest.TestCase):
+    """CI door: fail loudly if the domain-aware PDP gate is missing or if accept_link
+    is silently swapped back to the OLD gateless version (the stash-incident casualty
+    that let Amazon /s?k= search pages and TPT /browse pages become fake 'products').
+
+    A regression here means dirty product data can re-enter pin_products. Do not weaken.
+    """
+
+    def test_pdp_gate_symbol_exists(self):
+        # The gate function must exist AND be wired into accept_link. The old gateless
+        # product_harvest.py has neither — importing this symbol would AttributeError.
+        self.assertTrue(hasattr(ph, "is_product_detail_url"),
+                        "is_product_detail_url() is missing — PDP gate reverted to a gateless build")
+        self.assertTrue(callable(ph.is_product_detail_url))
+
+    def test_search_and_browse_pages_are_rejected(self):
+        # These are the exact URLs the gateless build wrongly accepted as products.
+        for u in ("https://www.amazon.com/Terrific-Patio-Garden/s?k=patio+garden",
+                  "https://www.teacherspayteachers.com/browse/free?search=printable",
+                  "https://www.etsy.com/search?q=wall+art"):
+            ok, reason = accept_link(u)
+            self.assertFalse(ok, f"{u} must be rejected by the PDP gate (got accept, reason={reason})")
+
+    def test_is_product_detail_url_rejects_search_query(self):
+        ok, _ = ph.is_product_detail_url("https://www.amazon.com/s?k=patio+garden")
+        self.assertFalse(ok)
+        # A real ASIN detail page (even with tracking query noise) IS a PDP.
+        ok2, _ = ph.is_product_detail_url(
+            "https://www.amazon.com/Wall-Decor/dp/B09QFWX7RL?dchild=1&keywords=home")
+        self.assertTrue(ok2)
+
+    def test_teepublic_gate_consistency(self):
+        # accept_link exempts Teepublic via its own precise rule; the raw PDP gate must
+        # AGREE (this is the inconsistency that failed the first 20-row batch pre-write).
+        for u in ("https://www.teepublic.com/t-shirt/77625009-softball-ice-cream-drip",
+                  "https://www.teepublic.com/poster-and-art/80640861-jeff-buckley"):
+            a_ok, _ = accept_link(u)
+            p_ok, _ = ph.is_product_detail_url(u)
+            self.assertTrue(a_ok, f"accept_link should accept teepublic product {u}")
+            self.assertTrue(p_ok, f"is_product_detail_url must AGREE it is a PDP: {u}")
+        # profile/store pages: both gates reject
+        for u in ("https://www.teepublic.com/user/anulf", "https://www.teepublic.com/stores/foo"):
+            self.assertFalse(accept_link(u)[0])
+            self.assertFalse(ph.is_product_detail_url(u)[0])
 
 
 class TestNormalizeDedup(unittest.TestCase):
