@@ -2207,6 +2207,8 @@ const ko: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "내 편집 유지",
   "studioCreative.direction.manualBrief": "수동 브리프",
   "studioCreative.direction.generatedFromDirection": "선택한 방향으로부터 생성됨",
+  "studioCreative.direction.moderationNotice": "프롬프트는 생성 전에 검토됩니다. 성적, NSFW, 착취적, 유해, 불법, 딥페이크 및 얼굴 조작 콘텐츠는 금지됩니다.",
+  "studioCreative.direction.moderationNoticeLink": "정책 보기",
   "studioBoard.title": "핀 만들기",
   "studioBoard.subtitle": "Pinterest 핀을 만들고, 편집하고, 예약하고, 게시하세요.",
   "studioBoard.selectProduct": "상품 선택",

@@ -1799,6 +1799,8 @@ const fr: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Conserver mes modifications",
   "studioCreative.direction.manualBrief": "Brief manuel",
   "studioCreative.direction.generatedFromDirection": "Généré à partir de la direction sélectionnée",
+  "studioCreative.direction.moderationNotice": "Les invites sont examinées avant génération. Les contenus sexuels, NSFW, d'exploitation, nuisibles, illégaux, deepfake et de manipulation de visage sont interdits.",
+  "studioCreative.direction.moderationNoticeLink": "Voir la politique",
 
   // ── studioBoard ──
   "studioBoard.title": "Créer des Pins",

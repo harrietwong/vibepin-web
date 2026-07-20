@@ -2094,6 +2094,8 @@ const ja: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "自分の編集内容を維持",
   "studioCreative.direction.manualBrief": "手動ブリーフ",
   "studioCreative.direction.generatedFromDirection": "選択した方向性から生成されました",
+  "studioCreative.direction.moderationNotice": "プロンプトは生成前に審査されます。性的、NSFW、搾取的、有害、違法、ディープフェイク、顔操作のコンテンツは禁止されています。",
+  "studioCreative.direction.moderationNoticeLink": "ポリシーを見る",
   "studioModals.col.pin": "Pin",
   "studioModals.col.destinationUrl": "遷移先URL",
   "studioModals.col.description": "説明",

@@ -912,6 +912,8 @@ const nl: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Mijn bewerkingen behouden",
   "studioCreative.direction.manualBrief": "Handmatige briefing",
   "studioCreative.direction.generatedFromDirection": "Gegenereerd op basis van gekozen richting",
+  "studioCreative.direction.moderationNotice": "Prompts worden gescreend vóór generatie. Seksuele, NSFW-, uitbuitende, schadelijke, illegale, deepfake- en gezichtsmanipulatie-inhoud is verboden.",
+  "studioCreative.direction.moderationNoticeLink": "Beleid bekijken",
 
   // ── studio ──
   "studio.header.title": "Pins maken",

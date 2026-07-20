@@ -2131,6 +2131,8 @@ const pt: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Manter minhas edições",
   "studioCreative.direction.manualBrief": "Brief manual",
   "studioCreative.direction.generatedFromDirection": "Gerado a partir da direção selecionada",
+  "studioCreative.direction.moderationNotice": "Os prompts são analisados antes da geração. Conteúdo sexual, NSFW, de exploração, prejudicial, ilegal, deepfake e de manipulação facial é proibido.",
+  "studioCreative.direction.moderationNoticeLink": "Ver política",
 
   // ── studioModals (added) ──
   "studioModals.apply": "Aplicar",

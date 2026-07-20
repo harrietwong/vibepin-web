@@ -109,7 +109,60 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">5. No Guarantee of Results</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">5. AI-Generated Content and Prohibited Use</h2>
+            <p className="mb-3">
+              VibePin may provide features that process user instructions, prompts, reference materials, or other
+              inputs through third-party artificial intelligence services.
+            </p>
+            <p className="mb-3">
+              You are responsible for all prompts, uploads, reference materials, generated outputs, and uses of
+              generated content associated with your account. You must have all rights, permissions, and lawful
+              authority required for the content you submit and the purposes for which you use the service.
+            </p>
+            <p className="mb-3">
+              You may not use VibePin to request, generate, upload, distribute, promote, or facilitate:
+            </p>
+            <ul className="space-y-2 pl-4">
+              {[
+                "Pornographic, sexually explicit, erotic, NSFW, or sexually suggestive content.",
+                "Nudity presented for sexual purposes.",
+                "Any sexualized content involving or appearing to involve minors.",
+                "Child sexual exploitation, abuse, grooming, or endangerment.",
+                "Face swaps, deepfakes, deceptive impersonation, or non-consensual intimate imagery.",
+                "Harmful manipulation of a real person's face, identity, likeness, actions, or statements.",
+                "Unlawful, violent, hateful, harassing, exploitative, fraudulent, or rights-infringing content.",
+                "Content that violates another person's privacy, intellectual property, publicity, or other legal rights.",
+                "Attempts to bypass, disable, evade, probe, or interfere with content moderation or other safety controls.",
+              ].map(item => (
+                <li key={item} className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 rounded-full shrink-0" style={{ background: "#0891B2" }} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 mb-3">
+              User-submitted prompts may be screened before image generation. A request may be rejected when it
+              violates our policies, is identified as potentially unsafe, cannot be evaluated safely, or when the
+              moderation service is unavailable.
+            </p>
+            <p className="mb-3">
+              VibePin may remove content, block requests, restrict functionality, suspend or terminate accounts,
+              preserve relevant records, and take other reasonable enforcement action when activity violates these
+              Terms, the Acceptable Use Policy, applicable law, or the rights and safety of others.
+            </p>
+            <p>
+              Repeated or serious violations may result in immediate termination without prior notice. Where legally
+              required, VibePin may report suspected unlawful conduct to appropriate authorities. See our full{" "}
+              <Link href="/acceptable-use-policy" className="font-semibold hover:text-white transition-colors"
+                style={{ color: "#0891B2" }}>
+                Acceptable Use Policy
+              </Link>
+              .
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">6. No Guarantee of Results</h2>
             <p className="mb-3">
               VibePin provides data, trend signals, and content planning tools. We do not guarantee any specific
               outcome, including but not limited to:
@@ -137,7 +190,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">6. Account Suspension and Termination</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">7. Account Suspension and Termination</h2>
             <p className="mb-3">
               We reserve the right to suspend or terminate your account, with or without notice, if we determine
               that you have:
@@ -159,7 +212,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">7. Pinterest Integration</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">8. Pinterest Integration</h2>
             <p className="mb-3">
               VibePin&apos;s Pinterest publishing features are built on Pinterest&apos;s official API and are subject to
               Pinterest&apos;s Developer Terms. When publishing features are available, all publishing actions
@@ -174,7 +227,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">8. Limitation of Liability</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">9. Limitation of Liability</h2>
             <p>
               To the maximum extent permitted by applicable law, VibePin and its operators shall not be liable
               for any indirect, incidental, special, consequential, or punitive damages arising from your use
@@ -183,7 +236,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">9. Changes to Terms</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">10. Changes to Terms</h2>
             <p>
               We may update these Terms of Service from time to time. We will notify registered users of
               material changes via email. Continued use of the Service after changes are posted constitutes
@@ -192,7 +245,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">10. Contact</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">11. Contact</h2>
             <p>
               For questions about these Terms, contact us at:{" "}
               <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors"

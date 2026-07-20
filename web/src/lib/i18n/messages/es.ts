@@ -2296,6 +2296,8 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Mantener mis ediciones",
   "studioCreative.direction.manualBrief": "Brief manual",
   "studioCreative.direction.generatedFromDirection": "Generado a partir de la dirección seleccionada",
+  "studioCreative.direction.moderationNotice": "Las indicaciones se revisan antes de generar. Se prohíbe el contenido sexual, NSFW, explotador, dañino, ilegal, deepfake y de manipulación facial.",
+  "studioCreative.direction.moderationNoticeLink": "Ver política",
 
   // ── studioModals: generic / shared ──
   "studioModals.apply": "Aplicar",

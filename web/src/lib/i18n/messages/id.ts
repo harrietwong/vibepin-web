@@ -2625,6 +2625,8 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Pertahankan edit saya",
   "studioCreative.direction.manualBrief": "Brief manual",
   "studioCreative.direction.generatedFromDirection": "Dibuat dari arahan yang dipilih",
+  "studioCreative.direction.moderationNotice": "Prompt disaring sebelum pembuatan. Konten seksual, NSFW, eksploitatif, berbahaya, ilegal, deepfake, dan manipulasi wajah dilarang.",
+  "studioCreative.direction.moderationNoticeLink": "Lihat kebijakan",
 };
 
 export default id;

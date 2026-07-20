@@ -2472,6 +2472,8 @@ const tr: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Düzenlemelerimi koru",
   "studioCreative.direction.manualBrief": "Manuel brif",
   "studioCreative.direction.generatedFromDirection": "Seçilen yönden oluşturuldu",
+  "studioCreative.direction.moderationNotice": "İstemler oluşturmadan önce taranır. Cinsel, NSFW, sömürücü, zararlı, yasa dışı, deepfake ve yüz manipülasyonu içerikleri yasaktır.",
+  "studioCreative.direction.moderationNoticeLink": "Politikayı görüntüle",
 
   // studioBoard (board-view Create Pins v2)
   "studioBoard.title": "Pin Oluştur",
