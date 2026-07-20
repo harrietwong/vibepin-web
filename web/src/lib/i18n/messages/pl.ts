@@ -2089,6 +2089,8 @@ const pl: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Zachowaj moje zmiany",
   "studioCreative.direction.manualBrief": "Brief ręczny",
   "studioCreative.direction.generatedFromDirection": "Wygenerowano z wybranego kierunku",
+  "studioCreative.direction.moderationNotice": "Prompty są sprawdzane przed generowaniem. Treści seksualne, NSFW, wykorzystujące, szkodliwe, nielegalne, deepfake i manipulujące twarzą są zabronione.",
+  "studioCreative.direction.moderationNoticeLink": "Zobacz zasady",
   "studioModals.apply": "Zastosuj",
   "studioModals.undo": "Cofnij",
   "studioModals.noPinsChanged": "Żaden Pin nie został zmieniony",

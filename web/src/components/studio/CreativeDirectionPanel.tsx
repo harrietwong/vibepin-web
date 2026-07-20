@@ -312,6 +312,18 @@ export function CreativeDirectionPanel({
         )}
         <span style={{ fontSize: 10, color: UI.subtle }}>{manualBrief.length} / 1200</span>
       </div>
+
+      <p style={{ marginTop: 8, fontSize: 9, color: UI.subtle, lineHeight: 1.5 }}>
+        {tr("studioCreative.direction.moderationNotice")}{" "}
+        <a
+          href="/acceptable-use-policy"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "#C4B5FD", fontWeight: 700, textDecoration: "underline" }}
+        >
+          {tr("studioCreative.direction.moderationNoticeLink")}
+        </a>
+      </p>
     </section>
   );
 }

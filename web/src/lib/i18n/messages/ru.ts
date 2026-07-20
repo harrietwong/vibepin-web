@@ -1430,6 +1430,8 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Сохранить мои правки",
   "studioCreative.direction.manualBrief": "Ручной бриф",
   "studioCreative.direction.generatedFromDirection": "Сгенерировано на основе выбранного направления",
+  "studioCreative.direction.moderationNotice": "Запросы проверяются перед генерацией. Сексуальный, NSFW, эксплуататорский, вредный, незаконный, дипфейк и контент с манипуляцией лицами запрещён.",
+  "studioCreative.direction.moderationNoticeLink": "Смотреть политику",
 
   // ── studio ──
   "studio.header.title": "Создать пины",

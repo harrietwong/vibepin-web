@@ -18,8 +18,10 @@ import { toast } from "sonner";
 // A product chosen in the picker, with the metadata Create Pins needs to preserve.
 export type PickerSelection = {
   id?:          string;
+  // Optional: NULL/absent when the merchant page could not be read. Render nothing
+  // for the title rather than a fabricated placeholder (PRD v3.1 §4③ / §7.3).
   imageUrl:     string;
-  title:        string;
+  title?:       string;
   source:       "product_signals" | "product_ideas" | "uploaded" | "url" | "recent";
   category?:    string;
   productUrl?:  string;
@@ -107,11 +109,13 @@ function PickCard({ sel, selected, meta, metaTooltip, onToggle }: {
       </div>
       <div className="relative bg-gray-100" style={{ aspectRatio: "1/1" }}>
         {sel.imageUrl
-          ? <Image src={sel.imageUrl} alt={sel.title} fill className="object-cover" sizes="180px" unoptimized />
+          ? <Image src={sel.imageUrl} alt={sel.title ?? ""} fill className="object-cover" sizes="180px" unoptimized />
           : <div className="absolute inset-0 flex items-center justify-center"><Package className="h-7 w-7 text-gray-300" /></div>}
       </div>
       <div className="p-2.5">
-        <p className="text-[11px] font-semibold text-gray-900 leading-snug line-clamp-2">{sel.title}</p>
+        {/* No title row when the merchant name is unknown — the domain / category
+            sub-line below still says what we honestly know. Never a fabrication. */}
+        {sel.title && <p className="text-[11px] font-semibold text-gray-900 leading-snug line-clamp-2">{sel.title}</p>}
         <p className="text-[9px] text-gray-400 mt-1 truncate">
           {[sel.sourceDomain, sel.price].filter(Boolean).join(" · ") || sel.category || tr("products.picker.defaultProductLabel")}
         </p>
@@ -180,7 +184,7 @@ export function ProductOpportunityPicker({
     const q = search.trim().toLowerCase();
     let list = products.filter(p => !!p.image_url);
     if (q) list = list.filter(p =>
-      cleanProductTitle(p.product_name).toLowerCase().includes(q) ||
+      (cleanProductTitle(p.product_name) ?? "").toLowerCase().includes(q) ||
       (p.seed_keyword ?? "").toLowerCase().includes(q) ||
       (p.domain ?? "").toLowerCase().includes(q));
     if (catId) list = list.filter(p => p.seed_keyword != null && kwCatMap?.[p.seed_keyword] === catId);
@@ -195,7 +199,7 @@ export function ProductOpportunityPicker({
       const ev = productEvidence(p, tr);
       return {
         sel: {
-          id: p.id, imageUrl: p.image_url, title: cleanProductTitle(p.product_name),
+          id: p.id, imageUrl: p.image_url, title: cleanProductTitle(p.product_name) ?? undefined,
           source: "product_ideas" as const, category: p.seed_keyword ?? undefined,
           productUrl: p.source_url ?? undefined, sourceDomain: p.domain ?? undefined,
           price: fmtPrice(p.price, p.currency) || undefined,
@@ -211,7 +215,7 @@ export function ProductOpportunityPicker({
     return myProducts
       .filter(p => !q || (p.title ?? "").toLowerCase().includes(q) || (p.sourceDomain ?? "").toLowerCase().includes(q))
       .map(p => ({
-        id: p.id, imageUrl: p.imageUrl, title: cleanProductTitle(p.title),
+        id: p.id, imageUrl: p.imageUrl, title: cleanProductTitle(p.title) ?? undefined,
         source: "recent" as const, productUrl: p.productUrl ?? p.sourceUrl,
         sourceDomain: p.store ?? p.sourceDomain, price: p.price,
       }));
@@ -221,7 +225,7 @@ export function ProductOpportunityPicker({
     if (!files?.length) return;
     const added: PickerSelection[] = [];
     for (const file of Array.from(files)) {
-      const title = cleanProductTitle(file.name.replace(/\.[a-z0-9]+$/i, ""));
+      const title = cleanProductTitle(file.name.replace(/\.[a-z0-9]+$/i, "")) ?? undefined;
       // Externalize to a stable hosted URL. Fall back to a data: URL on failure (NOT
       // a blob: URL, which dies on refresh and can never sync) — the media-offload
       // sweep externalizes it later, matching InlineCreateAssetPicker.
@@ -254,7 +258,7 @@ export function ProductOpportunityPicker({
       } else {
         const top = [...(r.candidates ?? [])].sort((a, b) => b.score - a.score)[0];
         const imageUrl = top?.imageUrl ?? url;
-        const title = cleanProductTitle(r.title || r.sourceDomain || url);
+        const title = cleanProductTitle(r.title || r.sourceDomain || url) ?? undefined;
         const productUrl = r.normalizedUrl ?? r.originalUrl ?? url;
         const saved = assetStore.saveAsset({
           role: "product", source: "url", imageUrl, title, productUrl,
@@ -434,7 +438,13 @@ export function ProductOpportunityPicker({
                 {selectedList.slice(0, 6).map(s => (
                   <span key={keyOf(s)} className="inline-flex items-center gap-1 rounded-full pl-2.5 pr-1.5 py-1 text-[11px] font-semibold"
                     style={{ background: "rgba(192,38,211,0.08)", color: "#C026D3", border: "1px solid rgba(192,38,211,0.2)" }}>
-                    {s.title.length > 22 ? s.title.slice(0, 22) + "…" : s.title}
+                    {(() => {
+                      // Selection chip needs a handle. Prefer the real title; when
+                      // it's absent (unreadable merchant) fall back to the source
+                      // domain, then a neutral label — never a fabricated product name.
+                      const label = s.title || s.sourceDomain || tr("products.picker.defaultProductLabel");
+                      return label.length > 22 ? label.slice(0, 22) + "…" : label;
+                    })()}
                     <button type="button" onClick={() => toggle(s)} className="hover:opacity-70"><X className="h-3 w-3" /></button>
                   </span>
                 ))}

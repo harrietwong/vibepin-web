@@ -2077,6 +2077,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "保留我的编辑",
   "studioCreative.direction.manualBrief": "手动简报",
   "studioCreative.direction.generatedFromDirection": "根据所选方向生成",
+  "studioCreative.direction.moderationNotice": "提示词会在生成前经过审查。禁止性、NSFW、剥削性、有害、非法、深度伪造以及人脸操纵内容。",
+  "studioCreative.direction.moderationNoticeLink": "查看政策",
   // ── studioModals ──
   "studioModals.apply": "应用",
   "studioModals.undo": "撤销",

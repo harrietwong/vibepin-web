@@ -2109,6 +2109,8 @@ const ar: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "الاحتفاظ بتعديلاتي",
   "studioCreative.direction.manualBrief": "موجز يدوي",
   "studioCreative.direction.generatedFromDirection": "تم الإنشاء من الاتجاه المحدد",
+  "studioCreative.direction.moderationNotice": "يتم فحص المطالبات قبل الإنشاء. يُحظر المحتوى الجنسي وغير الآمن للعمل والاستغلالي والضار وغير القانوني والمزيّف العميق والمتلاعب بالوجوه.",
+  "studioCreative.direction.moderationNoticeLink": "عرض السياسة",
 
   // ── studioModals ──
   "studioModals.apply": "تطبيق",

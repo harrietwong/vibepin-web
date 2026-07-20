@@ -71,6 +71,7 @@ export const CORE: string[] = [
   "test-product-link-display",
   "test-product-opportunity-counts",
   "test-product-opportunity-admin",
+  "test-product-name-honesty",
   "test-product-top-tiers",
   "test-amazon-affiliate",
   "test-amazon-affiliate-wiring",
@@ -80,6 +81,9 @@ export const CORE: string[] = [
   "test-creem-webhook-ordering",
   "test-creem-billing-status",
   "test-predeploy-guard",
+  "test-moderate-prompt",
+  "test-generation-moderation-gate",
+  "test-aup-compliance",
   // Settings / support
   "test-settings-p0",
   "test-support-ai-responder",

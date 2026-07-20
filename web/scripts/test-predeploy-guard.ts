@@ -53,22 +53,34 @@ async function main() {
     assertEq(check({ CREEM_MODE: "TEST" }).length, 1, "case-insensitive test mode");
   });
 
-  await test("CREEM_API_KEY=creem_test_… → refused", () => {
-    const problems = check({ CREEM_API_KEY: "creem_test_abc123" });
+  await test("CREEM_MODE=live + creem_test_ billing key → refused", () => {
+    const problems = check({ CREEM_MODE: "live", CREEM_API_KEY: "creem_test_abc123" });
     assertEq(problems.length, 1, "one problem");
     assert(/test key/.test(problems[0]), "message mentions a test key");
   });
 
-  await test("both a test mode AND a test key → two problems", () => {
-    assertEq(check({ CREEM_MODE: "test", CREEM_API_KEY: "creem_test_x" }).length, 2, "both flagged");
+  await test("test billing key WITHOUT live mode → NOT policed (Demo posture)", () => {
+    // Only CREEM_MODE=live requires a live billing key. Under disabled/unset the
+    // billing key is not checked — a separate test MODERATION key powers the Demo.
+    assertEq(check({ CREEM_API_KEY: "creem_test_abc123" }).length, 0, "test billing key alone is not a deploy blocker");
+    assertEq(check({ CREEM_MODE: "disabled", CREEM_API_KEY: "creem_test_abc123" }).length, 0, "disabled + test billing key is fine");
   });
 
   await test("live mode + live key → no problem", () => {
     assertEq(check({ CREEM_MODE: "live", CREEM_API_KEY: "creem_live_x" }).length, 0, "clean");
   });
 
+  await test("test mode is still refused regardless of key", () => {
+    assertEq(check({ CREEM_MODE: "test", CREEM_API_KEY: "creem_test_x" }).length, 1, "only the mode problem");
+  });
+
   await test("disabled mode + no key → no problem", () => {
     assertEq(check({ CREEM_MODE: "disabled" }).length, 0, "clean");
+  });
+
+  await test("moderation key is never policed by the deploy guard", () => {
+    // The guard only knows about billing. A test moderation key must not block deploy.
+    assertEq(check({ CREEM_MODE: "disabled", CREEM_MODERATION_API_KEY: "creem_test_mod" }).length, 0, "moderation key ignored");
   });
 
   await test("empty env → no problem (nothing to flag)", () => {

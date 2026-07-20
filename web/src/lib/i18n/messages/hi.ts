@@ -1420,6 +1420,8 @@ const hi: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "मेरे बदलाव बनाए रखें",
   "studioCreative.direction.manualBrief": "मैन्युअल ब्रीफ",
   "studioCreative.direction.generatedFromDirection": "चयनित दिशा से जनरेट किया गया",
+  "studioCreative.direction.moderationNotice": "जनरेशन से पहले प्रॉम्प्ट की जांच की जाती है। यौन, NSFW, शोषणकारी, हानिकारक, अवैध, डीपफेक और चेहरा-हेरफेर वाली सामग्री प्रतिबंधित है।",
+  "studioCreative.direction.moderationNoticeLink": "नीति देखें",
 
   // studio
   "studio.header.title": "Pin बनाएँ",

@@ -34,6 +34,7 @@ const FOOTER_COLUMNS = [
     links: [
       { label: "Privacy Policy", href: "/privacy" },
       { label: "Terms of Service", href: "/terms" },
+      { label: "Acceptable Use Policy", href: "/acceptable-use-policy" },
       { label: "Refund Policy", href: "/refund-policy" },
       { label: "Pinterest App", href: "/pinterest-app" },
     ],

@@ -166,4 +166,8 @@ export const studioCreativeMessages = {
   "studioCreative.direction.keepMyEdits": "Keep my edits",
   "studioCreative.direction.manualBrief": "Manual brief",
   "studioCreative.direction.generatedFromDirection": "Generated from selected direction",
+
+  // ── Prompt moderation notice (AI-compliance) ──
+  "studioCreative.direction.moderationNotice": "Prompts are screened before generation. Sexual, NSFW, exploitative, harmful, illegal, deepfake, and face-manipulation content is prohibited.",
+  "studioCreative.direction.moderationNoticeLink": "View policy",
 } as const;

@@ -14,10 +14,14 @@
  *   3. web/.vercel/project.json points at the expected Vercel project.
  *   4. E2E_TEST_MODE is not truthy.
  *   5. PINTEREST_API_ENV is not "sandbox".
- *   6. Billing is not in test mode for production: CREEM_MODE is not "test" and
- *      CREEM_API_KEY is not a test key (creem_test_…). A test key can never open
- *      real checkout on production — this is the deploy-time half of the
- *      billingMode guard.
+ *   6. Billing is not in test mode for production. CREEM_MODE is never "test".
+ *      The billing CREEM_API_KEY is policed ONLY when CREEM_MODE is "live" (then
+ *      it must be a real live key, not a test key) — because only "live" opens
+ *      real checkout. Under CREEM_MODE=disabled (the review/Demo posture) the
+ *      billing key is expected to be EMPTY and is not checked, so a test-mode
+ *      MODERATION key (a separate CREEM_MODERATION_API_KEY) can power Create Pins
+ *      generation without tripping the deploy guard. This is the deploy-time half
+ *      of the billingMode guard.
  *
  * --override requires OVERRIDE_REASON to be set to a non-empty string. When
  * present, an override bypasses failed checks, appends an audit line to
@@ -55,8 +59,13 @@ export function checkBillingModeForProd(env) {
   if (mode === "test") {
     problems.push('CREEM_MODE is "test" — refusing a production deploy (a test-mode billing key must never open real checkout). Set CREEM_MODE=live or =disabled.');
   }
-  if (apiKey.startsWith("creem_test_")) {
-    problems.push("CREEM_API_KEY is a test key (creem_test_…) — refusing a production deploy with a sandbox billing key.");
+  // The billing key is only relevant when checkout is actually live. Under
+  // CREEM_MODE=disabled (review/Demo) the billing key is expected empty and is
+  // NOT policed — this lets a test MODERATION key (CREEM_MODERATION_API_KEY, a
+  // separate var) power generation without blocking the deploy. Only "live"
+  // requires a real billing key.
+  if (mode === "live" && apiKey.startsWith("creem_test_")) {
+    problems.push("CREEM_MODE=live but CREEM_API_KEY is a test key (creem_test_…) — refusing a production deploy with a sandbox billing key.");
   }
   return problems;
 }

@@ -1805,6 +1805,8 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Mantieni le mie modifiche",
   "studioCreative.direction.manualBrief": "Brief manuale",
   "studioCreative.direction.generatedFromDirection": "Generato dalla direzione selezionata",
+  "studioCreative.direction.moderationNotice": "I prompt vengono controllati prima della generazione. Sono vietati contenuti sessuali, NSFW, di sfruttamento, dannosi, illegali, deepfake e di manipolazione dei volti.",
+  "studioCreative.direction.moderationNoticeLink": "Vedi la policy",
 
   // ── plan: Day-of-week short labels ──
   "plan.day.mon": "LUN",
