@@ -8,18 +8,29 @@
  *
  * Creem Moderation API (confirmed from docs.creem.io):
  *   POST {base}/v1/moderation/prompt
- *   header  x-api-key: <CREEM_API_KEY>
+ *   header  x-api-key: <moderation key>
  *   body    { prompt: string, external_id?: string }
  *   200     { id, object:"moderation_result", prompt, external_id,
  *             decision: "allow"|"deny"|"flag", usage:{units} }
  *
- * Base URL is chosen by the CREEM_API_KEY prefix exactly like
+ * KEY SEPARATION (deliberate): moderation reads a DEDICATED
+ * `CREEM_MODERATION_API_KEY`, NOT the billing `CREEM_API_KEY`. This breaks a
+ * startup deadlock — the review/Demo phase runs CREEM_MODE=disabled with the
+ * billing key EMPTY (checkout stays "Coming soon"), while moderation still needs
+ * a working (test) key so Create Pins can generate. Sharing one key made
+ * "production deploy succeeds" and "Demo can generate" mutually exclusive (the
+ * predeploy guard rejects a test billing key). A test MODERATION key never opens
+ * checkout, so the guard does not police it. For backward-compat and the later
+ * all-live phase, if `CREEM_MODERATION_API_KEY` is unset we fall back to
+ * `CREEM_API_KEY` (so a single live key can serve both once billing goes live).
+ *
+ * Base URL is chosen by the moderation key's prefix exactly like
  * web/src/lib/server/creem/creemClient.ts (creem_test_ → test endpoint, else
  * prod). We do NOT import creemClient (it is under a hard freeze) — the 2-line
  * rule is replicated here with this pointer.
  *
- * Server-only: reads process.env.CREEM_API_KEY. NEVER import into client code and
- * NEVER prefix the key with NEXT_PUBLIC_.
+ * Server-only: reads process.env. NEVER import into client code and NEVER prefix
+ * the key with NEXT_PUBLIC_.
  */
 
 const PROD_BASE_URL = "https://api.creem.io";
@@ -100,14 +111,19 @@ export async function moderatePrompt(
     }
   }
 
-  const apiKey = (process.env.CREEM_API_KEY ?? "").trim();
+  // Dedicated moderation key; fall back to the billing key only when the dedicated
+  // one is unset (single-live-key phase). See the module header for why these are
+  // separate during the disabled/Demo phase.
+  const apiKey =
+    (process.env.CREEM_MODERATION_API_KEY ?? "").trim() ||
+    (process.env.CREEM_API_KEY ?? "").trim();
   if (!apiKey) {
     // Fail closed. Log a config error but do NOT throw — the route maps this to 503.
     console.error(
       JSON.stringify({
         event: "prompt_moderation",
         error: "config_error",
-        message: "CREEM_API_KEY is not set — cannot moderate prompts. Blocking generation (fail-closed).",
+        message: "No moderation key set (CREEM_MODERATION_API_KEY / CREEM_API_KEY) — cannot moderate prompts. Blocking generation (fail-closed).",
         externalId,
         ts: new Date().toISOString(),
       }),
