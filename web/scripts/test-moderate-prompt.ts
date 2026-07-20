@@ -153,15 +153,51 @@ async function main() {
     if (!r.ok) assertEq(r.reason, "unavailable", "reason");
   });
 
-  await test("missing CREEM_API_KEY → unavailable (does not throw)", async () => {
-    const saved = process.env.CREEM_API_KEY;
+  await test("missing BOTH moderation + billing keys → unavailable (does not throw)", async () => {
+    const savedBilling = process.env.CREEM_API_KEY;
+    const savedMod = process.env.CREEM_MODERATION_API_KEY;
     delete process.env.CREEM_API_KEY;
+    delete process.env.CREEM_MODERATION_API_KEY;
     try {
       const r = await moderatePrompt({ prompt: "x" }, { fetchImpl: fetchReturning(200, { id: "z", decision: "allow" }) });
       assert(!r.ok, "not ok");
       if (!r.ok) assertEq(r.reason, "unavailable", "reason");
     } finally {
-      process.env.CREEM_API_KEY = saved;
+      if (savedBilling !== undefined) process.env.CREEM_API_KEY = savedBilling;
+      if (savedMod !== undefined) process.env.CREEM_MODERATION_API_KEY = savedMod;
+    }
+  });
+
+  await test("CREEM_MODERATION_API_KEY is used (and takes priority over billing key)", async () => {
+    const savedBilling = process.env.CREEM_API_KEY;
+    const savedMod = process.env.CREEM_MODERATION_API_KEY;
+    process.env.CREEM_API_KEY = "creem_live_billing"; // billing present…
+    process.env.CREEM_MODERATION_API_KEY = "creem_test_moderation"; // …but moderation is separate + test
+    const cap: { headers?: Record<string, string>; url?: string } = {};
+    try {
+      const r = await moderatePrompt({ prompt: "x" }, { fetchImpl: fetchReturning(200, { id: "m", decision: "allow" }, cap) });
+      assert(r.ok, "allow proceeds with the dedicated moderation key");
+      assertEq(cap.headers?.["x-api-key"], "creem_test_moderation", "dedicated moderation key sent, NOT the billing key");
+      assert(cap.url?.startsWith("https://test-api.creem.io"), "test moderation key → test endpoint even though billing is live");
+    } finally {
+      if (savedBilling !== undefined) process.env.CREEM_API_KEY = savedBilling; else delete process.env.CREEM_API_KEY;
+      if (savedMod !== undefined) process.env.CREEM_MODERATION_API_KEY = savedMod; else delete process.env.CREEM_MODERATION_API_KEY;
+    }
+  });
+
+  await test("falls back to CREEM_API_KEY when CREEM_MODERATION_API_KEY unset (single-live-key phase)", async () => {
+    const savedBilling = process.env.CREEM_API_KEY;
+    const savedMod = process.env.CREEM_MODERATION_API_KEY;
+    delete process.env.CREEM_MODERATION_API_KEY;
+    process.env.CREEM_API_KEY = "creem_live_shared";
+    const cap: { headers?: Record<string, string>; url?: string } = {};
+    try {
+      const r = await moderatePrompt({ prompt: "x" }, { fetchImpl: fetchReturning(200, { id: "m", decision: "allow" }, cap) });
+      assert(r.ok, "allow proceeds via fallback key");
+      assertEq(cap.headers?.["x-api-key"], "creem_live_shared", "billing key used as fallback");
+    } finally {
+      if (savedBilling !== undefined) process.env.CREEM_API_KEY = savedBilling; else delete process.env.CREEM_API_KEY;
+      if (savedMod !== undefined) process.env.CREEM_MODERATION_API_KEY = savedMod;
     }
   });
 
