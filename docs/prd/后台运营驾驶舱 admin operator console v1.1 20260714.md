@@ -1,6 +1,6 @@
 # 后台运营驾驶舱 PRD v1.5
 
-**状态：** P0 已实施并全部验收通过（含浏览器复验 + 二次安全评审）。核心 5 提交已随生产化统一并入 `master`；`feat/admin-cockpit` 为 `master` 超集（持续追合最新 master），**9 个非 merge 净增量待回流**（见 §8 提交表）。**v33/v34/v51/v52 四迁移均已应用生产并逐列复核**。付费置顶只信 `app_metadata.plan`（`isPaid`/`planOf` 均已收窄，各带回归测试）。剩余仅：净增量回流 `master`。详见 §8。
+**状态：** P0 已实施并全部验收通过（含浏览器复验 + 二次安全评审）。核心 5 提交已随生产化统一并入 `master`；`feat/admin-cockpit` 为 `master` 超集（持续追合最新 master），**非 merge 净增量待回流**（准确清单以 `git log --no-merges master..feat/admin-cockpit` 为准，§8 提交表列主要项）。**v33/v34/v51/v52 四迁移均已应用生产并逐列复核**。付费置顶只信 `app_metadata.plan`（`isPaid`/`planOf` 均已收窄，各带回归测试）。剩余仅：净增量回流 `master`。详见 §8。
 **日期：** 2026-07-16（初稿 2026-07-14；§8 topology 于 2026-07-17 复核订正）
 **作者：** Fable 5（基于创始人确认的产品方向）
 **取代：** `【后台系统未实施 优先级不高】.txt`（定位文档，其"不做清单"与最终定位在本文档中继承并展开）
@@ -177,7 +177,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 - `feat/admin-cockpit` 是 `master` 的**超集**：多次把前进的 master 合了进来（最近一次追合含 master 的 10 个 Creem/billing 提交，其中 `e2543f6` 移除 `user_metadata.plan` 授权），核心 5 提交已随生产化统一合并入 master。
 - 因此本分支相对 master 的**净增量**（`git log master..feat/admin-cockpit` 的非 merge 提交）= 早期两修复 `3d4180b`/`1514eae` + 二次评审四修复 `48622b3`/`6123cae`/`22b24fa`/`1c8d118` + 文档订正 `0ab2f2b` + 付费置顶安全修复 `99702ff`（及本次 `planOf` 收窄）。其余提交为共享历史。
 
-**本分支相关的全部提交：5 个已随生产化统一并入 master（共享历史），9 个非 merge 净增量（`git log --no-merges master..feat/admin-cockpit`）待回流。真实 commit message 摘要，非杜撰：**
+**本分支相关的全部提交：5 个已随生产化统一并入 master（共享历史），其余为非 merge 净增量待回流（准确清单以 `git log --no-merges master..feat/admin-cockpit` 为准；下表列主要项，含文档订正与 planOf 测试 `68d95c5` 等收尾提交）。真实 commit message 摘要，非杜撰：**
 
 | 提交 | 是否已在 master | 内容 |
 |---|---|---|
