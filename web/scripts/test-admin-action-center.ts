@@ -239,6 +239,40 @@ test("getActionCenter: paid users sort before free; both have signup_not_connect
   assert.ok(res.items.every(i => i.blockerType === "signup_not_connected"));
 });
 
+// ── SECURITY REGRESSION: user_metadata.plan is NEVER trusted for "paid" ────────
+// user_metadata is USER-EDITABLE. isPaid must read ONLY app_metadata.plan (the
+// service-role cache), mirroring entitlements.ts resolvePlan. A user who set
+// user_metadata.plan="pro" themselves must NOT be treated as paid — otherwise
+// they could self-sort to the top of the founder's action list (the same
+// forbidden trust boundary security(billing) closed).
+//
+// Setup: both users are stuck (signup_not_connected) with the SAME createdAt →
+// identical firstSeenAt, so paid-status is the ONLY tiebreaker in the sort. The
+// app_metadata=pro user must lead; the user_metadata=pro user must be ranked as
+// free. (Against the OLD isPaid, which fell back to user_metadata.plan, BOTH
+// would be "paid" and the order would collapse to the id tiebreak — this test
+// would fail: usermeta1 would not be guaranteed last.)
+test("getActionCenter SECURITY: user_metadata.plan does NOT count as paid; app_metadata.plan does", async () => {
+  const createdAt = hoursAgo(100);
+  const authUsers = [
+    // Self-set user_metadata plan — must be treated as FREE (not paid).
+    { id: "usermeta1", email: "um@x.com", created_at: createdAt, last_sign_in_at: null, app_metadata: {}, user_metadata: { plan: "pro" } },
+    // Trusted service-role app_metadata plan — genuinely paid.
+    { id: "appmeta1", email: "am@x.com", created_at: createdAt, last_sign_in_at: null, app_metadata: { plan: "pro" }, user_metadata: {} },
+  ];
+  const { db } = makeMockDb(
+    { analytics_events: { rows: [] }, pin_drafts: { rows: [] }, pinterest_connections: { rows: [] }, pin_generations: { rows: [] } },
+    authUsers,
+  );
+  const res = await getActionCenter(db);
+  assert.ok(res.available);
+  assert.equal(res.items.length, 2);
+  // The app_metadata=pro user is the only paid one → must lead unconditionally,
+  // regardless of the id-order tiebreak (proves user_metadata=pro is NOT paid).
+  assert.equal(res.items[0].userId, "appmeta1", "app_metadata.plan=pro must sort paid-first");
+  assert.equal(res.items[1].userId, "usermeta1", "user_metadata.plan=pro must NOT be treated as paid");
+});
+
 test("getActionCenter: EXACT publish_failure end-to-end (event beats postedAt)", async () => {
   const authUsers = [{ id: "u1", email: "e@x.com", created_at: hoursAgo(300), last_sign_in_at: hoursAgo(1), app_metadata: {}, user_metadata: {} }];
   const { db } = makeMockDb(

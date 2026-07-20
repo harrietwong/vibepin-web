@@ -34,6 +34,7 @@ import {
   paginateRows,
   type AuthUserLite,
 } from "./adminQueryUtils";
+import type { PlanKey } from "./entitlements";
 
 // ── enums / contract types ───────────────────────────────────────────────────
 
@@ -720,12 +721,38 @@ function assembleFacts(
   };
 }
 
-/** paid = plan metadata present and not "free" (Creem tables absent — degrade silently). */
+/**
+ * Recognized plan vocabulary — mirrors entitlements.ts `normalizePlanKey`. Kept
+ * inline (not imported) so this file stays free of entitlements.ts's supabase
+ * import-time side effect; the `PlanKey` type import keeps the two in lockstep.
+ */
+function normalizePlanKey(value: unknown): PlanKey | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (v === "free" || v === "starter" || v === "pro" || v === "business") return v;
+  return null;
+}
+
+/**
+ * paid = the trusted `app_metadata.plan` cache names a real (non-free) plan.
+ *
+ * SECURITY (mirrors entitlements.ts `resolvePlan`): `user_metadata` is USER-
+ * EDITABLE and is NEVER read here — trusting it would let a user self-grant a
+ * paid plan (the hole closed by `security(billing): remove user_metadata plan
+ * authorization`). We read ONLY `app_metadata.plan`, the service-role-writable
+ * cache the Creem webhook refreshes — the exact same cache `resolvePlan` falls
+ * back to — and validate it against the canonical plan vocabulary.
+ *
+ * TRADEOFF: this is a SORT-ORDER hint ("paid users first" in the blocker list),
+ * not an access-control gate, so it deliberately reads the cached plan rather
+ * than doing a live `creem_subscriptions` lookup per user (that would be an N+1
+ * this file's efficiency budget forbids). Slightly less live-authoritative than
+ * `resolvePlan`, but on the correct side of the trust boundary. Creem tables /
+ * cache absent → normalizePlanKey returns null → not paid (degrade silently).
+ */
 function isPaid(user: AuthUserLite): boolean {
-  const fromApp = user.app_metadata?.["plan"];
-  const fromUser = user.user_metadata?.["plan"];
-  const plan = typeof fromApp === "string" ? fromApp : typeof fromUser === "string" ? fromUser : null;
-  return !!plan && plan.trim().toLowerCase() !== "free";
+  const plan = normalizePlanKey(user.app_metadata?.["plan"]);
+  return plan !== null && plan !== "free";
 }
 
 // ── public entry points ────────────────────────────────────────────────────────
