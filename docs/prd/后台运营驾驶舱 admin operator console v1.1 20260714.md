@@ -1,4 +1,4 @@
-# 后台运营驾驶舱 PRD v1.2
+# 后台运营驾驶舱 PRD v1.4
 
 **状态：** P0 已实施。核心 5 提交已随生产化统一合并进 `master`（`b6f935f`）；`feat/admin-cockpit` 是 `master` 的超集（已追合至 `2d35edf`），净增量 = `3d4180b`/`1514eae` + 二次评审 4 修复（`48622b3`/`6123cae`/`22b24fa`/`1c8d118`）。**v33/v34/v51/v52 四个迁移均已于 2026-07-16 应用生产并逐列复核**。剩余：净增量回流 master + §7.4 浏览器实测。详见 §8。
 **日期：** 2026-07-16（初稿 2026-07-14；§8 topology 于 2026-07-17 复核订正）
@@ -174,8 +174,8 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 
 **Git 拓扑（2026-07-17 现场 `git log` 复核，不沿用早前描述）：**
 - `master` HEAD = `b6f935f`（`merge: unify feat/pinterest-production-transition into master`）。本节前 5 个提交已经随这次生产化统一并入 `master`，即 master 现已包含驾驶舱的 P0 核心。
-- `feat/admin-cockpit` 是 `master` 的**超集**：它在 `49f6525` 把 master 合了进来，再叠加两个尚未回流 master 的修复（`3d4180b`、`1514eae`）。`git log master..feat/admin-cockpit` 当前恰好只列这两个。
-- 因此本分支相对 master 的**净增量 = `3d4180b` + `1514eae`**；其余 5 个提交是共享历史，不是"待合并"。
+- `feat/admin-cockpit` 是 `master` 的**超集**：多次把前进的 master 合了进来（最近一次追合含 master 的 10 个 Creem/billing 提交，其中 `e2543f6` 移除 `user_metadata.plan` 授权），核心 5 提交已随生产化统一合并入 master。
+- 因此本分支相对 master 的**净增量**（`git log master..feat/admin-cockpit` 的非 merge 提交）= 早期两修复 `3d4180b`/`1514eae` + 二次评审四修复 `48622b3`/`6123cae`/`22b24fa`/`1c8d118` + 文档订正 `0ab2f2b` + 付费置顶安全修复 `99702ff`（及本次 `planOf` 收窄）。其余提交为共享历史。
 
 **本分支相关的全部 7 个提交（真实 commit message 摘要，非杜撰）：**
 
@@ -194,8 +194,11 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 - AI 采用率关联从"图片 URL 字符串匹配"升级为 `sourceGenerationId` ↔ `generation_request_id` 精确关联（新草稿，`1514eae` 修正关联键），URL 匹配仅作历史数据回退
 - 事件口径：409 去重与请求体校验失败**不算** attempt（attempt 从提交给 Pinterest 起算）；每个 attempted 必有恰一个终结事件
 
+**付费置顶安全语义（`99702ff`，随 master 的 `e2543f6` 追合后修复）：**
+- master `e2543f6` 判定 `user_metadata.plan` 不可信（用户可自改 → 自授付费）。阻塞名单 `isPaid` 原先 app_metadata 缺失时回退读 `user_metadata.plan`，等于在 admin 侧重开该漏洞。已改为**只信 `app_metadata.plan`**（Creem webhook 写入的服务端缓存，与 `resolvePlan` 的 fallback 同源）+ 过 `normalizePlanKey`；付费置顶是排序提示非授权门禁，此口径正确且零新增查询。同类漏洞 `customer360.ts` 的 `planOf`（Customer 360 页面展示 plan）本次一并收窄。
+
 **待办（合并/上线前）：**
-- [ ] 把净增量回流合并进 `master`：`3d4180b`（v52 列持久化）、`1514eae`（采用率关联键）+ 二次评审 4 修复 `48622b3`（连接未创作全历史判定）/`6123cae`（相对时间 i18n）/`22b24fa`（0/0 口径不隐藏）/`1c8d118`（本文档订正）
+- [ ] 把净增量回流合并进 `master`：`3d4180b`/`1514eae` + 二次评审 4 修复 `48622b3`/`6123cae`/`22b24fa`/`1c8d118` + `0ab2f2b` + 安全修复 `99702ff` + `planOf` 收窄
 - [x] ~~v52 迁移应用~~ **已应用**（2026-07-16，`run_migration.py --apply` HTTP 201 + PostgREST 逐列复核 status/generation_request_id/setup_snapshot 存在）。schema drift 造成的 ~2026-06-14 起整月生成行静默丢失自此止血；历史丢失行不可从 DB 恢复（各浏览器 localStorage 50 条/设备 + storage bucket 可部分重建）
 - [x] ~~v51 迁移应用~~ **已应用**（2026-07-16，同通道，HTTP 201）
 - [x] ~~v33/v34 状态确认~~ **已确认并应用**（2026-07-16：探测确认原先未应用 → 应用 → PostgREST 复核 `admin_support_notes`/`admin_audit_events` 存在）
@@ -210,3 +213,4 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 | v1.1 | 2026-07-14 | 数据源核实结果写入 §7.2/§7.5 |
 | v1.2 | 2026-07-16 | 方案 B 实施记录（§8）：事件落库 + 派生层 + UI 四提交；Paddle→Creem 订正 |
 | v1.3 | 2026-07-17 | §8 topology 复核订正：列全 7 个相关提交（含 `2a4f9ec`/`3d4180b`/`1514eae`），厘清 5 已入 master + 2 仅在分支的真实关系；补 v52 未应用 + 整月 `pin_generations` 静默丢行；清剩余 Paddle 引用 → Creem |
+| v1.4 | 2026-07-18 | 迁移 v33/34/51/52 全部已应用+复核（订正 v1.3 的"未应用"）；追合 master 10 个 Creem 提交（含 `e2543f6` 移除 user_metadata plan 授权）；付费置顶安全修复 `99702ff`（isPaid 只信 app_metadata）+ `planOf` 同类收窄；净增量列表更新 |

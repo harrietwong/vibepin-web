@@ -90,10 +90,11 @@ function accountStatusOf(u: AuthUserLite): AccountStatus {
 }
 
 function planOf(u: AuthUserLite): string | null {
+  // Trust ONLY app_metadata.plan — the service-role-writable cache the Creem webhook
+  // refreshes. user_metadata is user-editable, so reading its plan would let a user
+  // self-display as paid (the trust boundary security(billing) e2543f6 closed elsewhere).
   const fromApp = u.app_metadata?.["plan"];
-  const fromUser = u.user_metadata?.["plan"];
-  const plan = typeof fromApp === "string" ? fromApp : typeof fromUser === "string" ? fromUser : null;
-  return plan;
+  return typeof fromApp === "string" ? fromApp : null;
 }
 
 // pinterest connection → safe summary (never selects token ciphertext).
