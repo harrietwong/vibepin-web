@@ -161,6 +161,29 @@ class TestPdpGateGuard(unittest.TestCase):
             self.assertFalse(accept_link(u)[0])
             self.assertFalse(ph.is_product_detail_url(u)[0])
 
+    def test_accept_link_is_the_pdp_authority_for_retailer_paths(self):
+        # accept_link is the single source of truth: retailer domains whose OWN
+        # path-precise rule IS the PDP gate (RETAIL_PRODUCT_PATHS, exempt from the
+        # generic re-gate) must be ACCEPTED even though the raw generic
+        # is_product_detail_url() does not recognize their bespoke path shapes
+        # (e.g. anthropologie /shop/<slug>, flightclub bare-slug, quince /women/<slug>).
+        # Downstream red-line checks MUST reuse accept_link, not the raw gate, or they
+        # false-reject a row that already passed discovery.
+        retailer_pdps = (
+            "https://www.anthropologie.com/shop/the-love-knot-slouchy-bag",
+            "https://www.flightclub.com/air-jordan-1-retro-high-og-dz5485-612",
+            "https://www.quince.com/women/organic-cotton-micro-rib-button-tee",
+            "https://us.puma.com/us/en/pd/fade-overload-mens-sneakers/408353",
+        )
+        for u in retailer_pdps:
+            ok, reason = accept_link(u)
+            self.assertTrue(ok, f"accept_link must accept retailer PDP {u} ({reason})")
+            self.assertEqual(reason, "retailer_product_path")
+        # And their navigation/category pages are still rejected by accept_link.
+        for u in ("https://www.anthropologie.com/shop/dresses",
+                  "https://www.quince.com/women"):
+            self.assertFalse(accept_link(u)[0], f"{u} should be rejected")
+
 
 class TestNormalizeDedup(unittest.TestCase):
     def test_tracking_params_stripped_same_hash(self):

@@ -559,7 +559,16 @@ def discover(c: httpx.Client, cands: list[dict], want: int = MAX_BATCH,
     min_attempts_per_bucket = 3
     attempts: dict[str, int] = defaultdict(int)
 
+    # Hard ceiling so the batch can NEVER exceed the write cap: the min-attempts-per-
+    # bucket floor below can otherwise push discovery past `want` (a bucket with <3
+    # attempts keeps going), producing 21 rows for want=20 and tripping the pre-write
+    # MAX_BATCH assert. Enforcing MAX_BATCH here keeps every batch <= 20 without raising
+    # the cap.
+    hard_cap = min(want, MAX_BATCH)
+
     for x in cands[:max_attempts]:
+        if len(rows) >= hard_cap:
+            break
         pin, url, dom = x["pin"], x["url"], x["domain"]
         b = bucket_of(dom)
         if len(rows) >= want and attempts[b] >= min_attempts_per_bucket:
@@ -687,7 +696,16 @@ def check_red_lines(rows: list[dict]) -> tuple[bool, list[str]]:
             v.append(f"[{u}] RED LINE 1: source_pin_url is not a real Pin URL")
         if "pinterest.com" in (r.get("source_url") or ""):
             v.append(f"[{u}] RED LINE 1: source_url must be the EXTERNAL product URL")
-        pdp_ok, pdp_why = is_product_detail_url(r.get("source_url") or "")
+        # PDP check must use the SAME authority as the harvester's acceptance:
+        # accept_link() runs the domain rules AND the PDP gate, and treats a domain's
+        # own path-precise rule (retailer paths, Teepublic) as the PDP gate itself
+        # (see product_harvest._PDP_GATE_EXEMPT_REASONS). Calling the raw
+        # is_product_detail_url() here instead re-judged those exempt domains and
+        # rejected legitimately-accepted PDPs (anthropologie /shop/<slug>, flightclub,
+        # quince /women/<slug>, teepublic /<cat>/<id>-<slug>) — a false red-line that
+        # a row which passed discovery could never be. accept_link is the single source
+        # of truth: if it accepted the URL as a product link, it IS a product page here.
+        pdp_ok, pdp_why = accept_link(r.get("source_url") or "")
         if not pdp_ok:
             v.append(f"[{u}] RED LINE 1: source_url is not a product-detail page ({pdp_why})")
 
