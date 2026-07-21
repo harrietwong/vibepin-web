@@ -3,6 +3,9 @@ import { catLabel } from "@/lib/categories";
 import {
   rankReferences,
   toRecommendation,
+  hasProductAnalysisSignal,
+  hasProductTextSignal,
+  deriveRecommendationBasis,
   type ReferenceCandidateRow,
   type ReferenceScoringInput,
 } from "@/lib/studio/referenceScoring";
@@ -206,6 +209,14 @@ export async function POST(request: Request) {
   }
 
   const analysis = body.imageAnalysis ?? {};
+
+  // Honest-basis inputs are read from the RAW body, BEFORE any category inference.
+  // Inference synthesizes a category out of product words; if it ran first we could not
+  // tell a genuine product signal from a category we invented. Note `analysis.category`
+  // is deliberately NOT a product-analysis signal — a category alone is not product detail.
+  const hasAnalysis = hasProductAnalysisSignal(analysis);
+  const hasText = hasProductTextSignal(body.product);
+
   const explicitCategory = (body.category ?? analysis.category ?? "").toLowerCase().replace(/[\s_]+/g, "-").trim();
   // When analysis hasn't classified the draft yet, infer the category from the product
   // title + image summary so the pool is scoped and recommendations stay on-topic.
@@ -268,11 +279,19 @@ export async function POST(request: Request) {
     hasClearSubject: r.has_clear_subject,
   }));
 
-  const items = rankReferences(rows, scoringInput, results).map(toRecommendation);
+  const ranked = rankReferences(rows, scoringInput, results);
+  const items = ranked.map(toRecommendation);
+
+  // Honest provenance: what the list was ACTUALLY based on. Downgrades to
+  // "category_fallback" when nothing returned carries product-level evidence — including
+  // the empty-items case. Always present on a successful response so the client never has
+  // to guess whether "Recommended for this product" is a truthful label.
+  const recommendationBasis = deriveRecommendationBasis({ hasAnalysis, hasText, results: ranked });
 
   return Response.json({
     items,
     itemCount: items.length,
     source: "reference_candidates_product_aware",
+    recommendationBasis,
   });
 }

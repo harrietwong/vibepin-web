@@ -86,6 +86,22 @@ export type ScoredReference = ReferenceRecommendation & {
 };
 
 /**
+ * What a recommendation set was ACTUALLY based on — honest provenance for the UI label.
+ *
+ * - `product_analysis`  the draft's image analysis carried real visual signal AND at least one
+ *                       returned pin genuinely matched it.
+ * - `product_text`      only product text (title / type / tags) carried real signal AND at least
+ *                       one returned pin genuinely matched it.
+ * - `category_fallback` the results are category-popularity only. The UI must NOT claim these
+ *                       were picked "for this product" — two products in the same category will
+ *                       legitimately get near-identical lists.
+ */
+export type RecommendationBasis =
+  | "product_analysis"
+  | "product_text"
+  | "category_fallback";
+
+/**
  * Minimum relevance evidence to surface a reference. Below this a pin has essentially no
  * category/scene/style overlap with the product — showing it would violate PRD "relevance
  * first" (e.g. a high-save fashion pin for a home-decor print). Mirrors keywordContext's
@@ -94,6 +110,151 @@ export type ScoredReference = ReferenceRecommendation & {
  * "nail art" vs "graphic art print", relevance ~0.2) — is dropped.
  */
 export const RELEVANCE_FLOOR = 0.3;
+
+// ── Recommendation basis (honest provenance) ─────────────────────────────────────
+//
+// Why this exists: `categoryMatch === 1` alone yields relevance 0.6, which clears
+// RELEVANCE_FLOOR. So a request carrying nothing but a category still returns pins —
+// correctly ranked by category popularity, but NOT "recommended for this product".
+// The basis lets the client label the set truthfully instead of overclaiming.
+
+/** Image-analysis subset that can carry genuine visual signal. */
+export type ProductAnalysisSignalInput = {
+  imageSummary?: string | null;
+  visibleObjects?: string[] | null;
+  colors?: string[] | null;
+  style?: string | null;
+} | null | undefined;
+
+/** Product-text subset that can carry genuine descriptive signal. */
+export type ProductTextSignalInput = {
+  title?: string | null;
+  productType?: string | null;
+  productTags?: string[] | null;
+} | null | undefined;
+
+/**
+ * Placeholder / filler strings that a product record commonly carries when the user has
+ * NOT actually named the product. These must never count as product signal — treating
+ * "Untitled Product" as text signal is exactly the overclaim this module is fixing.
+ * Compared case-insensitively after trimming. Exported so tests can assert coverage.
+ */
+export const PLACEHOLDER_PRODUCT_VALUES: ReadonlySet<string> = new Set([
+  "",
+  "-",
+  "--",
+  "n/a",
+  "na",
+  "none",
+  "null",
+  "undefined",
+  "unknown",
+  "untitled",
+  "untitled product",
+  "no title",
+  "product",
+  "products",
+  "new product",
+  "item",
+  "items",
+  "test",
+  "sample",
+  "default",
+  "tbd",
+]);
+
+/**
+ * Is a single string a MEANINGFUL product descriptor?
+ * Rejects: empty/whitespace, known placeholders, length < 2, and strings that are purely
+ * punctuation and/or digits (e.g. "123", "---", "#1") — none of these describe a product.
+ */
+export function isMeaningfulProductValue(value?: string | null): boolean {
+  const raw = (value ?? "").trim();
+  if (raw.length < 2) return false;
+  const lower = raw.toLowerCase();
+  if (PLACEHOLDER_PRODUCT_VALUES.has(lower)) return false;
+  // purely punctuation/digits → carries no descriptive vocabulary
+  if (!/[a-zÀ-ɏ一-鿿]/i.test(raw)) return false;
+  return true;
+}
+
+/**
+ * B1. Does the draft's image analysis carry GENUINE visual signal?
+ * True when any of imageSummary / visibleObjects / colors / style is actually populated
+ * (non-empty after trim for strings; at least one non-empty entry for arrays).
+ */
+export function hasProductAnalysisSignal(analysis: ProductAnalysisSignalInput): boolean {
+  if (!analysis) return false;
+  const str = (v?: string | null) => (v ?? "").trim().length > 0;
+  const arr = (v?: string[] | null) => Array.isArray(v) && v.some(x => (x ?? "").trim().length > 0);
+  return str(analysis.imageSummary) || arr(analysis.visibleObjects) || arr(analysis.colors) || str(analysis.style);
+}
+
+/**
+ * B2. Does the product carry GENUINE text signal?
+ * True when any of title / productType / productTags is meaningful per
+ * `isMeaningfulProductValue`. Placeholder titles ("Product", "Untitled", …) do NOT count.
+ * `productTags` counts only if at least one tag is itself meaningful.
+ */
+export function hasProductTextSignal(product: ProductTextSignalInput): boolean {
+  if (!product) return false;
+  if (isMeaningfulProductValue(product.title)) return true;
+  if (isMeaningfulProductValue(product.productType)) return true;
+  if (Array.isArray(product.productTags) && product.productTags.some(isMeaningfulProductValue)) return true;
+  return false;
+}
+
+/**
+ * Signals that constitute PRODUCT-LEVEL evidence on a returned pin.
+ *
+ * ── The crux of this change: "scene" vs "scene_match" ──────────────────────────────
+ * The legacy `"scene"` signal is pushed whenever `sceneLabel(row)` is non-empty. But
+ * `sceneLabel` is derived ENTIRELY from the reference pin's OWN visualFormat /
+ * humanPresence / compositionType — it never looks at the product or the analysis. A
+ * flat-lay pin yields "flat-lay layout" even when it shares zero words with the product.
+ * So `"scene"` is a DESCRIPTION of the pin, not EVIDENCE that it matched the product,
+ * and it must never be used to justify a product-level basis claim.
+ *
+ * `"scene_match"` is the honest counterpart: pushed only when CATEGORY-FREE containment is
+ * > 0 — i.e. the pin's own vocabulary overlapped the product/analysis context on words other
+ * than the category name. (The raw `scene` containment is not usable here: the category name
+ * sits on both sides inside a category-scoped pool, so `scene > 0` is near-universal and
+ * proves nothing.) Together with `"style"` (a genuine style-word hit, category word excluded)
+ * these are the ONLY signals the downgrade rule accepts as product-level evidence.
+ */
+export const PRODUCT_EVIDENCE_SIGNALS: readonly string[] = ["scene_match", "style"];
+
+/** Does this ranked result carry genuine product-level (not merely category) evidence? */
+export function hasProductEvidence(result: Pick<ScoredReference, "signals">): boolean {
+  return (result.signals ?? []).some(s => PRODUCT_EVIDENCE_SIGNALS.includes(s));
+}
+
+/**
+ * B3. Derive the honest basis for a recommendation set.
+ *
+ * initial = hasAnalysis ? product_analysis : hasText ? product_text : category_fallback
+ *
+ * DOWNGRADE RULE: if the initial basis is a product_* one, at least ONE ranked result must
+ * carry genuine product-level evidence (`scene_match` or `style`). If none does, the input
+ * had product info but the OUTPUT is pure category-popularity — claiming product-level would
+ * be a lie — so it downgrades to `category_fallback`.
+ *
+ * Zero results is the degenerate case of that rule: with nothing returned there is no
+ * product-level evidence at all, so an initial product_* ALWAYS downgrades.
+ */
+export function deriveRecommendationBasis(args: {
+  hasAnalysis: boolean;
+  hasText: boolean;
+  results: ScoredReference[];
+}): RecommendationBasis {
+  const { hasAnalysis, hasText, results } = args;
+  const initial: RecommendationBasis =
+    hasAnalysis ? "product_analysis" : hasText ? "product_text" : "category_fallback";
+  if (initial === "category_fallback") return "category_fallback";
+  // Empty results → `.some` is false → downgrade. Explicit and intentional.
+  const anyProductEvidence = (results ?? []).some(hasProductEvidence);
+  return anyProductEvidence ? initial : "category_fallback";
+}
 
 // ── Tokenization ─────────────────────────────────────────────────────────────────
 
@@ -276,6 +437,17 @@ export function scoreReference(
   const styleWords = distinctiveWords(input.style).filter(w => !catWords.has(w));
   const styleHit = styleWords.length > 0 && styleWords.some(w => candidateWords.includes(w));
 
+  // Category-free containment — the ONLY honest basis for a "this pin matched the product"
+  // claim. The plain `scene` value above is inflated by the category name appearing on both
+  // sides (row.category is in candidateWords, input.category is in contextSet), so within a
+  // category-scoped pool `scene > 0` is nearly universal and proves nothing. Dropping the
+  // category words on both sides leaves only real product/analysis vocabulary overlap.
+  // NOTE: this is a SIGNAL-only refinement — `scene` itself still feeds the score unchanged,
+  // so ranking behavior is untouched.
+  const matchCandidateWords = candidateWords.filter(w => !catWords.has(w));
+  const matchContextSet = new Set(Array.from(contextSet).filter(w => !catWords.has(w)));
+  const sceneMatchScore = containment(matchContextSet, matchCandidateWords);
+
   // 3. human presence fit
   const humanFit = humanPresenceFit(cat, row.humanPresence);
 
@@ -300,17 +472,47 @@ export function scoreReference(
   // floor so a category-less request can't surface high-save cross-category noise.
   const relevance = clamp01(categoryMatch * 0.6 + Math.min(scene, 0.5) + (styleHit ? 0.1 : 0));
 
-  // ── Reason (whitelisted phrases, priority order) ──
+  // ── Signals + reason (whitelisted phrases, honesty-ordered) ──
+  //
+  // Signal vocabulary:
+  //   "scene_match"  the pin's OWN words genuinely overlapped the product/analysis context
+  //                  (containment > 0). REAL product-level evidence.
+  //   "style"        a genuine style-word hit (category word excluded). REAL evidence.
+  //   "scene"        purely descriptive of the pin's own visualFormat/composition — it says
+  //                  NOTHING about matching this product. Kept for phrasing only; it must
+  //                  never justify a product-level basis claim (see PRODUCT_EVIDENCE_SIGNALS).
+  //   "category"     same category only.
+  //   "saves"        popularity. Supplement only, never leads.
   const signals: string[] = [];
-  const phrases: string[] = [];
-  if (categoryMatch >= 1) { signals.push("category"); phrases.push(`${humanize(rowCat) || "Same"} category`.trim()); }
+  const sceneMatched = sceneMatchScore > 0;
+  if (sceneMatched) signals.push("scene_match");
+  if (styleHit) signals.push("style");
+  if (categoryMatch >= 1) signals.push("category");
   const scLabel = sceneLabel(row);
-  if (scLabel) { signals.push("scene"); phrases.push(scLabel); }
-  if (styleHit) { signals.push("style"); phrases.push("matches your style"); }
-  if (saves >= 0.66) { signals.push("saves"); phrases.push("strong saves"); }
-  if (!phrases.length) {
-    phrases.push(`${humanize(rowCat) || "Style"} reference`);
+  if (scLabel) signals.push("scene");
+  if (saves >= 0.66) signals.push("saves");
+
+  // Reason honesty rules:
+  //  1. Real matching evidence (scene_match / style) LEADS when it exists.
+  //  2. The scene-descriptor phrase (derived from the pin's own format) may only appear
+  //     ALONGSIDE real evidence — on its own it reads as if the pin matched the product.
+  //  3. With category as the only relevance evidence, phrase it as "<Category> inspiration",
+  //     never "<Category> reference" and never a scene phrase.
+  //  4. Popularity is a supplement: never first, and never the sole relevance-implying phrase.
+  const hasRealEvidence = sceneMatched || styleHit;
+  const phrases: string[] = [];
+  if (hasRealEvidence) {
+    // Real matching evidence leads; the pin's own scene descriptor may ride along.
+    if (sceneMatched) phrases.push("matches your product details");
+    if (styleHit) phrases.push("matches your style");
+    if (scLabel) phrases.push(scLabel);
+    if (categoryMatch >= 1) phrases.push(`${humanize(rowCat) || "Same"} category`.trim());
+  } else {
+    // Category (or nothing) is the only relevance evidence → inspiration phrasing, and NO
+    // scene descriptor: the pin's own flat-lay/lifestyle format is not a product match.
+    phrases.push(`${humanize(rowCat) || "Style"} inspiration`);
   }
+  if (saves >= 0.66) phrases.push("strong saves");   // supplement only, always last
   const reason = capitalize(phrases.slice(0, 3).join(" · "));
 
   return {
