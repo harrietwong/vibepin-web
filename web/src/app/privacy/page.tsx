@@ -159,8 +159,8 @@ export default function PrivacyPage() {
               about how long a third-party moderation or AI provider retains request data.
             </p>
             <p className="mb-3">
-              VibePin&apos;s own API credentials and provider keys are held server-side. They are never written to
-              logs, never returned in API responses, and never exposed in client-side code.
+              VibePin API credentials and provider keys are stored server-side and are not intentionally exposed in
+              client-side code or API responses.
             </p>
             <p>
               VibePin is an independent product that integrates third-party artificial-intelligence services. It is

@@ -203,10 +203,17 @@ function main() {
     assert(!/never retain/i.test(privacyFlat), "privacy must not claim providers never retain data");
   });
 
-  test("Privacy states API keys are never logged or exposed", () => {
+  test("Privacy describes credential handling without an absolute guarantee", () => {
     assert(
-      privacyFlat.includes("never written to logs") && privacyFlat.includes("never exposed in client-side code"),
-      "privacy must state credentials are never logged and never exposed client-side",
+      privacyFlat.includes("stored server-side") &&
+        privacyFlat.includes("not intentionally exposed in client-side code or API responses"),
+      "privacy must describe server-side credential storage and non-exposure",
+    );
+    // "never …" would be a promise about all future logging behaviour that no
+    // codebase can permanently guarantee; keep the claim accurate instead.
+    assert(
+      !/keys are never written to logs/i.test(privacyFlat),
+      "privacy must not make an absolute 'never logged' promise",
     );
   });
 
