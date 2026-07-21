@@ -84,8 +84,13 @@ export const studioBoardMessages = {
   "studioBoard.card.removeKeywordAria": "Remove keyword {keyword}",
   "studioBoard.card.moreActionsAria": "More actions",
   "studioBoard.card.pinImageAlt": "Pin image",
+  // Alt text for the neutral placeholder shown when no image candidate resolves.
+  "studioBoard.card.pinImageUnavailable": "Pin image unavailable",
   "studioBoard.card.noImage": "No image",
   "studioBoard.card.generationFailedPlaceholder": "Generation failed",
+  // Badge on a failed card that is showing an INPUT image (product / reference /
+  // parent) instead of a generated result — it must not read as a success.
+  "studioBoard.card.originalImageFallback": "Original image",
 
   // ── PinBoardCard: recommended fix copy ──
   "studioBoard.card.fix.auth": "Your Pinterest connection needs to be reconnected before this Pin can publish.",
@@ -115,7 +120,11 @@ export const studioBoardMessages = {
 
   // ── PinBoardCard: expanded card ──
   "studioBoard.expanded.collapseAria": "Collapse",
+  // Retained for the aiDrawer title (a NEW generation from an existing pin).
   "studioBoard.expanded.generateAiImage": "Generate AI Image",
+  // Existing-draft action: replaces THIS draft's image. "Generate AI Image" read as
+  // if it created another Pin (PRD Section I naming).
+  "studioBoard.expanded.regenerateImage": "Regenerate image",
   "studioBoard.expanded.moreDetails": "More details",
   "studioBoard.expanded.productOptional": "Product · Optional",
   "studioBoard.expanded.noLinkedProduct": "No linked product",

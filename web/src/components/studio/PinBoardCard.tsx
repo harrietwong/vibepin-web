@@ -626,11 +626,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             disabled={publishing}
             onBeforeGenerate={flush}
             onApplyCopy={applyCopy}
+            // Shares the Generate copy row so both actions stay compact and on one
+            // line (PRD Section I), wrapping naturally on narrow cards.
+            actionsSlot={(
+              <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
+                style={{ flex: "0 1 auto", minHeight: 38, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: `1px solid ${BUI.purple}`, background: "rgba(124,58,237,0.06)", color: BUI.purple, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                <Layers style={{ width: 13, height: 13 }} /> {tr("studioBoard.expanded.regenerateImage")}
+              </button>
+            )}
           />
-          <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", borderRadius: 9, border: `1px solid ${BUI.purple}`, background: "rgba(124,58,237,0.06)", color: BUI.purple, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
-            <Layers style={{ width: 13, height: 13 }} /> {tr("studioBoard.expanded.generateAiImage")}
-          </button>
         </div>
       </div>
 
