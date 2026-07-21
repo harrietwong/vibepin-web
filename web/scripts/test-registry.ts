@@ -58,6 +58,7 @@ export const CORE: string[] = [
   "test-judge-verdict",
   "test-reference-scoring",
   "test-reference-basis",
+  "test-product-evidence",
   "test-top-pick",
   // Products / opportunity
   "test-product-ideas-picker",

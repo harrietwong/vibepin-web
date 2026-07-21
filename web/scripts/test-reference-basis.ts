@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   rankReferences,
+  rankReferencesTiered,
   scoreReference,
   deriveRecommendationBasis,
   hasProductAnalysisSignal,
@@ -309,6 +310,105 @@ test("signals: 'scene' (pin's own format) is never treated as product-level evid
     "category_fallback",
     "'scene' alone must never sustain a product_* basis",
   );
+});
+
+// ── 11. deriveRecommendationBasis under the TIERED path ────────────────────────
+//
+// The contract now has two branches. When any result carries `recommendationTier` the tier
+// is AUTHORITATIVE and signals are ignored; otherwise (untiered `rankReferences` output, as
+// every test above uses) the legacy signal check still applies. Both are exercised here.
+
+/** Mirror of the route's derivation, but over the TIERED ranker the POST path now uses. */
+function tieredBasisFor(
+  input: ReferenceScoringInput,
+  rows: ReferenceCandidateRow[],
+  raw: {
+    analysis?: { imageSummary?: string; visibleObjects?: string[]; colors?: string[]; style?: string };
+    product?: { title?: string; productType?: string; productTags?: string[] };
+  },
+) {
+  const ranked = rankReferencesTiered(rows, input, 12);
+  return {
+    ranked,
+    basis: deriveRecommendationBasis({
+      hasAnalysis: hasProductAnalysisSignal(raw.analysis),
+      hasText: hasProductTextSignal(raw.product),
+      results: ranked,
+    }),
+  };
+}
+
+test("tiered: a genuinely matching pin reaches Tier 1 and sustains product_analysis", () => {
+  const analysis = {
+    style: "cottagecore",
+    colors: ["cream"],
+    visibleObjects: ["floral bedding", "curtains"],
+    imageSummary: "A cottagecore bedroom with floral bedding and soft curtains.",
+  };
+  const input: ReferenceScoringInput = { category: "home-decor", ...analysis };
+  const { ranked, basis } = tieredBasisFor(input, [
+    row("match", { sourceKeyword: "cottagecore bedroom decor", title: "" }),
+  ], { analysis });
+  assert.equal(basis, "product_analysis");
+  assert.equal(ranked[0].recommendationTier, "product_evidence");
+});
+
+test("tiered: a product with NO lexical bridge still gets the full baseline, labeled honestly", () => {
+  // Round-2 named zero-bridge product. Under the naive de-saturation this returned NOTHING;
+  // the tiered merge must return the whole displayable pool as category inspiration.
+  const product = { title: "larssonjennings" };
+  const input: ReferenceScoringInput = { category: "fashion", productTitle: product.title };
+  const rows = [
+    row("a", { category: "fashion", sourceKeyword: "outfit ideas for school" }),
+    row("b", { category: "fashion", imageUrl: "https://img/b2.jpg", sourceKeyword: "aesthetic wallpaper" }),
+    row("c", { category: "fashion", imageUrl: "https://img/c2.jpg", sourceKeyword: "mens fashion casual outfits" }),
+  ];
+  const { ranked, basis } = tieredBasisFor(input, rows, { product });
+  assert.equal(ranked.length, 3, "the empty-result rate is 0% by construction");
+  assert.ok(ranked.every(r => r.recommendationTier === "category_fallback"));
+  assert.equal(basis, "category_fallback");
+  assert.ok(ranked.every(r => /inspiration/i.test(r.reason)), "every Tier-2 reason is inspiration phrasing");
+  assert.ok(ranked.every(r => !/matches your/i.test(r.reason)), "no Tier-2 item may claim a product match");
+});
+
+test("tiered: tier overrides signals — a Tier-2 item's scene_match cannot resurrect product_*", () => {
+  // The §5 bug, asserted at the basis layer: `results.some(hasProductEvidence)` returns TRUE
+  // for this set, yet the honest answer is category_fallback because nothing was admitted on
+  // product evidence. (Full construction + reason assertions live in test-product-evidence.)
+  const product = { title: "Beauty Vanity Mirror Tray" };
+  const input: ReferenceScoringInput = { category: "home-decor", productTitle: product.title };
+  const { ranked, basis } = tieredBasisFor(input, [
+    row("trap", { category: "beauty", sourceKeyword: "beauty", title: "", saveCount: 400_000 }),
+  ], { product });
+  assert.ok(ranked[0].signals.includes("scene_match"), "precondition: the misleading signal is present");
+  assert.equal(ranked[0].recommendationTier, "category_fallback");
+  assert.equal(basis, "category_fallback", "tier is authoritative over signals");
+});
+
+test("tiered: two DIFFERENT products in one category get genuinely different orderings", () => {
+  // The user-visible complaint. Both pins are equally popular and equally high quality, so
+  // ONLY product evidence can separate them — which is exactly what Tier 1 now does.
+  const rows = [
+    row("cottage", { sourceKeyword: "cottagecore bedroom floral bedding", title: "", saveCount: 400 }),
+    row("gallery", { imageUrl: "https://img/gallery.jpg", sourceKeyword: "modern gallery wall art print", title: "", saveCount: 400 }),
+  ];
+  const bedding: ReferenceScoringInput = { category: "home-decor", productTitle: "Floral Cottagecore Bedding Set" };
+  const artPrint: ReferenceScoringInput = { category: "home-decor", productTitle: "Modern Gallery Wall Art Prints" };
+  const a = rankReferencesTiered(rows, bedding, 12);
+  const b = rankReferencesTiered(rows, artPrint, 12);
+  assert.equal(a[0].id, "cottage");
+  assert.equal(b[0].id, "gallery");
+  assert.notDeepEqual(a.map(r => r.id), b.map(r => r.id));
+  // …and note "Prints" (plural) still matched "print" — plural normalization at work.
+  assert.equal(b[0].recommendationTier, "product_evidence");
+});
+
+test("tiered: untiered results still take the legacy signal path (contract is additive)", () => {
+  const rows = [row("m", { sourceKeyword: "cottagecore bedroom decor", title: "" })];
+  const input: ReferenceScoringInput = { category: "home-decor", productTitle: "Cottagecore Bedding" };
+  const legacy = rankReferences(rows, input, 12);
+  assert.ok(legacy.every(r => r.recommendationTier === undefined), "rankReferences stays untiered");
+  assert.equal(deriveRecommendationBasis({ hasAnalysis: false, hasText: true, results: legacy }), "product_text");
 });
 
 console.log(`\n${passed} reference-basis tests passed.`);

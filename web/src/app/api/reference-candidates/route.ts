@@ -1,7 +1,7 @@
 import { createServerClient } from "@/lib/supabase";
 import { catLabel } from "@/lib/categories";
 import {
-  rankReferences,
+  rankReferencesTiered,
   toRecommendation,
   hasProductAnalysisSignal,
   hasProductTextSignal,
@@ -279,13 +279,17 @@ export async function POST(request: Request) {
     hasClearSubject: r.has_clear_subject,
   }));
 
-  const ranked = rankReferences(rows, scoringInput, results);
+  // Tier-aware ranking: candidates with genuine category-free product evidence first
+  // (ordered by that evidence), then unconditional in-category backfill so the list is
+  // never empty. `recommendationTier` is internal and is stripped by toRecommendation().
+  const ranked = rankReferencesTiered(rows, scoringInput, results);
   const items = ranked.map(toRecommendation);
 
-  // Honest provenance: what the list was ACTUALLY based on. Downgrades to
-  // "category_fallback" when nothing returned carries product-level evidence — including
-  // the empty-items case. Always present on a successful response so the client never has
-  // to guess whether "Recommended for this product" is a truthful label.
+  // Honest provenance: what the list was ACTUALLY based on. Decided ONLY by whether the
+  // FINAL merged output contains a Tier-1 (product_evidence) item — a Tier-2 backfill can
+  // still carry scene_match/style signals from scoring, and must not resurrect product_*.
+  // Always present on a successful response so the client never has to guess whether
+  // "Recommended for this product" is a truthful label.
   const recommendationBasis = deriveRecommendationBasis({ hasAnalysis, hasText, results: ranked });
 
   return Response.json({
