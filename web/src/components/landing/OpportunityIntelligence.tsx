@@ -34,7 +34,7 @@ const WEEK_ANGLES = ["Lifestyle", "Detail", "Product", "Lifestyle", "Detail", "P
 const TRUST: [React.ReactNode, string, string][] = [
   [<Lock className="w-4 h-4" key="l" />, "Your data is private", "We never share your data"],
   [<Workflow className="w-4 h-4" key="w" />, "Built for Pinterest workflows", "Discovery to scheduling"],
-  [<Users className="w-4 h-4" key="u" />, "Used by creators, sellers and managers", "Real Pinterest teams"],
+  [<Users className="w-4 h-4" key="u" />, "Built for creators, sellers and managers", "Pinterest team workflows"],
 ];
 
 // ── Primitives ────────────────────────────────────────────────────────────────

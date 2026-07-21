@@ -19,6 +19,10 @@
  *     circuits before lock acquisition).
  *   - retry (mode:"retry_single_output") and the FastAPI (requiresFullPayload=
  *     false) branch both hit the gate first.
+ *   - CONTEXT DILUTION: each free-text field is moderated on its own RAW value,
+ *     so a field that denies alone stays blocked even when the joined text is
+ *     allowed (the production-proven bypass), and a composite-only deny also
+ *     blocks. Driven by MODERATION_MOCK_MAP, which addresses one check at a time.
  */
 
 // Env must be set BEFORE the route module loads.
@@ -198,6 +202,30 @@ async function runWorkerWith(decision: string, body: Record<string, unknown>): P
   return { status: res.status, json };
 }
 
+// ── Per-check runners (context-dilution regression) ───────────────────────────
+// MODERATION_MOCK_MAP addresses individual checks: "@<suffix>" targets a check by
+// its content-free externalId suffix (keyword/prompt/direction/category/tagN/
+// productN/composite), so a test can make ONE raw field deny while the composite
+// allows — exactly the shape the flat MODERATION_MOCK_DECISION seam cannot express.
+async function runWithMap(
+  map: Record<string, string>,
+  fallback: string,
+  body: Record<string, unknown>,
+  mode: "inline" | "worker" = "inline",
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  process.env.MODERATION_MOCK_MAP = JSON.stringify(map);
+  process.env.MODERATION_MOCK_DECISION = fallback;
+  process.env.GENERATION_MODE = mode;
+  spawnCount = 0;
+  enqueueInsertCount = 0;
+  const route = await import(`../src/app/api/generate/route?map=${mode}_${Math.random()}`);
+  const res = await route.POST(makeReq(body) as never);
+  const json = (await res.json()) as Record<string, unknown>;
+  process.env.GENERATION_MODE = "inline";
+  delete process.env.MODERATION_MOCK_MAP;
+  return { status: res.status, json };
+}
+
 async function main() {
   console.log("\nGeneration route moderation-gate tests\n");
 
@@ -289,6 +317,162 @@ async function main() {
       assertEq(json.error_type, "moderation_unavailable", "error_type");
     });
   }
+
+  // ── Context dilution (the production-proven bypass) ─────────────────────────
+  // Measured against the live Creem endpoint: a violent prompt that is DENIED on
+  // its own is ALLOWED once benign context (keyword + category + tag labels) is
+  // newline-joined onto it. Moderating only the joined text therefore lets that
+  // prompt through. Each case below pins one half of the two-layer contract.
+
+  await test("DILUTION: violence in ONE field blocked though composite allows (benign category+tags)", async () => {
+    const { status, json } = await runWithMap(
+      { "@prompt": "deny", "@composite": "allow" },
+      "allow",
+      fullBody({ prompt: "a violent scene", category: "home decor", selectedTags: [{ id: "t1", label: "cozy", group: "mood" }] }),
+    );
+    assertEq(spawnCount, 0, "no dispatch when a raw field is denied");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("DILUTION: composite allow + raw keyword deny → still blocked", async () => {
+    const { status, json } = await runWithMap({ "@keyword": "deny", "@composite": "allow" }, "allow", fullBody());
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("DILUTION: composite allow + raw directionBrief deny → still blocked", async () => {
+    const { status, json } = await runWithMap({ "@direction": "deny", "@composite": "allow" }, "allow", fullBody());
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  // category/selectedTags come from a fixed UI catalogue but are NOT whitelisted
+  // server-side (route.ts takes body.category verbatim and blind-casts
+  // selectedTags), so a direct API caller can inject text there — they get their
+  // own individual checks, not just composite membership.
+  await test("DILUTION: raw category deny (unvalidated server-side) → blocked", async () => {
+    const { status, json } = await runWithMap({ "@category": "deny", "@composite": "allow" }, "allow", fullBody());
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("DILUTION: raw selectedTags label deny → blocked", async () => {
+    const { status, json } = await runWithMap({ "@tag1": "deny", "@composite": "allow" }, "allow", fullBody());
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("DILUTION: raw product_metadata title deny → blocked", async () => {
+    const { status, json } = await runWithMap(
+      { "@product1": "deny", "@composite": "allow" },
+      "allow",
+      fullBody({ product_metadata: [{ title: "a product title", productUrl: "https://example.com/p" }] }),
+    );
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("SPLIT INTENT: every raw field allows but composite denies → still blocked", async () => {
+    const { status, json } = await runWithMap({ "@composite": "deny" }, "allow", fullBody());
+    assertEq(spawnCount, 0, "no dispatch when only the composite denies");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("FAIL-CLOSED: a single check unavailable (rest allow) → 503, ZERO dispatch", async () => {
+    const { status, json } = await runWithMap({ "@direction": "timeout" }, "allow", fullBody());
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 503, "status");
+    assertEq(json.error_type, "moderation_unavailable", "error_type");
+  });
+
+  await test("PRECEDENCE: one field denied + another unavailable → 400 prompt_rejected", async () => {
+    const { status, json } = await runWithMap({ "@prompt": "deny", "@keyword": "timeout" }, "allow", fullBody());
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "rejected wins over unavailable");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("ALL ALLOW: safe prompt still generates (dispatch exactly once)", async () => {
+    const { status, json } = await runWithMap({ "@composite": "allow" }, "allow", fullBody());
+    assertEq(spawnCount, 1, "safe request dispatched once");
+    assertEq(status, 200, "status");
+    assertEq(json.ok, true, "ok");
+  });
+
+  // Coverage across the remaining dispatch paths for the per-field layer.
+  await test("WORKER: raw field deny with composite allow → 400, ZERO enqueue", async () => {
+    const { status, json } = await runWithMap({ "@prompt": "deny", "@composite": "allow" }, "allow", fullBody(), "worker");
+    assertEq(enqueueInsertCount, 0, "no generation_jobs enqueue");
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("WORKER: single check unavailable → 503, ZERO enqueue", async () => {
+    const { status, json } = await runWithMap({ "@keyword": "non2xx" }, "allow", fullBody(), "worker");
+    assertEq(enqueueInsertCount, 0, "no enqueue");
+    assertEq(status, 503, "status");
+    assertEq(json.error_type, "moderation_unavailable", "error_type");
+  });
+
+  await test("RETRY: raw field deny with composite allow → 400, ZERO dispatch", async () => {
+    const { status, json } = await runWithMap(
+      { "@prompt": "deny", "@composite": "allow" },
+      "allow",
+      fullBody({ mode: "retry_single_output" }),
+    );
+    assertEq(spawnCount, 0, "no dispatch on rejected retry");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  await test("FASTAPI branch: raw keyword deny with composite allow → 400 before the probe", async () => {
+    // requiresFullPayload=false → the FastAPI probe would run next; the gate must
+    // still short-circuit on a per-field deny.
+    const body = { keyword: "plain keyword", prompt: "", directionBrief: "", category: "", selectedTags: [] };
+    const { status, json } = await runWithMap({ "@keyword": "deny", "@composite": "allow" }, "allow", body);
+    assertEq(spawnCount, 0, "no dispatch");
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "prompt_rejected", "error_type");
+  });
+
+  // ── Check construction: raw values only, content-free externalId suffixes ─────
+  await test("checks carry RAW field values — no labels, prefixes or sibling text", async () => {
+    const route = await import("../src/app/api/generate/route");
+    const checks = route.buildModerationChecks({
+      keyword: "cozy mug",
+      prompt: "a cozy ceramic mug",
+      directionBrief: "warm minimal styling",
+      category: "home decor",
+      selectedTags: [{ label: "cozy" }],
+      productMetadata: [{ title: "Ceramic Mug" }],
+    }) as Array<{ suffix: string; text: string }>;
+    const bySuffix = Object.fromEntries(checks.map(c => [c.suffix, c.text]));
+    assertEq(bySuffix.keyword, "cozy mug", "keyword check is the raw value");
+    assertEq(bySuffix.prompt, "a cozy ceramic mug", "prompt check is the raw value");
+    assertEq(bySuffix.direction, "warm minimal styling", "direction check is the raw value");
+    assertEq(bySuffix.category, "home decor", "category check is the raw value");
+    assertEq(bySuffix.tag1, "cozy", "tag check is the raw label");
+    assertEq(bySuffix.product1, "Ceramic Mug", "product title check is the raw value");
+    assert(bySuffix.composite.includes("cozy mug") && bySuffix.composite.includes("Ceramic Mug"), "composite joins the fields");
+    assertEq(checks[checks.length - 1].suffix, "composite", "composite is last");
+    assert(checks.every(c => /^(keyword|prompt|direction|category|tag\d+|product\d+|composite)$/.test(c.suffix)), "suffixes are content-free");
+  });
+
+  await test("empty fields produce no check (no wasted moderation call)", async () => {
+    const route = await import("../src/app/api/generate/route");
+    const checks = route.buildModerationChecks({
+      keyword: "cozy mug", prompt: "", directionBrief: "   ", category: "", selectedTags: [{ label: "" }], productMetadata: null,
+    }) as Array<{ suffix: string; text: string }>;
+    assertEq(checks.map(c => c.suffix).join(","), "keyword,composite", "only non-empty fields + composite");
+  });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

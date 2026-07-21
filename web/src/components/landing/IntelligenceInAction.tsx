@@ -120,7 +120,7 @@ function PinIdeasFeature({ pins }: { pins: LandingAsset[] }) {
               <div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold" style={{ background: "rgba(56,189,248,0.10)", color: "#38BDF8" }}><Check className="w-3.5 h-3.5" /> Low Competition</div>
               <div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold" style={{ background: "rgba(217,70,239,0.10)", color: "#E879F9" }}><TrendingUp className="w-3.5 h-3.5" /> Rising</div>
             </div>
-            <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#8B93A1" }}>💡 Users are saving this heavily while commercial competition remains low.</p>
+            <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#8B93A1" }}>💡 Similar Pins show strong save signals while commercial competition remains low.</p>
             <Link href="/app/studio" className={`${VibeBtn} w-full py-2.5 text-[12px] flex items-center justify-center gap-1.5 mb-2`}><Sparkles className="w-3.5 h-3.5" /> Create Pin from this idea</Link>
             <Link href="/app/discover" className="w-full rounded-full py-2.5 text-[12px] font-semibold border flex items-center justify-center gap-1.5 transition-colors hover:text-white hover:border-white/30" style={{ borderColor: "rgba(255,255,255,0.14)", color: "#C8CDD6" }}><Bookmark className="w-3.5 h-3.5" /> Use as Pin Reference</Link>
           </div>
