@@ -64,10 +64,16 @@ type PickerRole = "product" | "style_reference";
 export type VariationMode = "distinct" | "similar";
 
 /**
- * How the recommendation list was actually derived (contract owned by the data
- * session's /api/reference-candidates). Only product-level bases may be labelled
- * "Recommended for this product"; category-only results must say "Category
- * inspiration" — see Section F of the create-pin PRD (data-honesty).
+ * How the recommendation list was actually derived. Returned at the TOP LEVEL of
+ * the POST /api/reference-candidates response (not per item). Only product-level
+ * bases may be labelled "Recommended for this product"; category-only results must
+ * say "Category inspiration" — Section F of the create-pin PRD (data honesty).
+ *
+ * The canonical type belongs to the data session's referenceScoring module:
+ *     import type { RecommendationBasis } from "@/lib/studio/referenceScoring";
+ * It is declared locally until that lands, so this file compiles against the
+ * agreed contract without forking the algorithm. Swap the local alias for the
+ * import when the data session merges — the string union is identical.
  */
 type RecommendationBasis = "product_analysis" | "product_text" | "category_fallback";
 
@@ -116,8 +122,6 @@ export type AiVersionDrawerProps = {
   generating: boolean;
   title?: string;
   initialSetup?: AiVersionDrawerSetup;
-  /** Serial reference-group progress, e.g. {current:2,total:3}. Owned by the parent. */
-  groupProgress?: { current: number; total: number } | null;
   onSetupChange?: (setup: AiVersionDrawerSetup) => void;
   onClose: () => void;
   onGenerate: (opts: AiVersionOptions) => void;
@@ -306,7 +310,7 @@ function AssetStrip({
   );
 }
 
-export function AiVersionDrawer({ draft, open, generating, title, initialSetup, groupProgress, onSetupChange, onClose, onGenerate }: AiVersionDrawerProps) {
+export function AiVersionDrawer({ draft, open, generating, title, initialSetup, onSetupChange, onClose, onGenerate }: AiVersionDrawerProps) {
   const { t: tr } = useLocale();
   const resolvedTitle = title ?? tr("pinDrawer.dialogTitle");
   const storedAssets = useSyncExternalStore(assetStore.subscribe, assetStore.getAssets, assetStore.getServerAssets);
@@ -614,13 +618,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
 
   // Section G: the CTA shows the BATCH total; each group still requests `count`.
   const batchTotal = computeTotalPins(selectedReferences.length, count);
-  // Serial group queue progress (Section G, "Generating reference 2 of 3"). The
-  // parent owns execution, so it reports which group is in flight.
-  const generatingLabel = generating && groupProgress && groupProgress.total > 1
-    ? tr("pinDrawer.footer.generatingReferenceProgress")
-        .replace("{current}", String(groupProgress.current))
-        .replace("{total}", String(groupProgress.total))
-    : tr("pinDrawer.footer.generatingEllipsis");
+  // The drawer closes as soon as placeholders exist, so serial group progress is
+  // reported by StudioBoard's batch toast rather than here.
+  const generatingLabel = tr("pinDrawer.footer.generatingEllipsis");
 
   if (!open) return null;
 

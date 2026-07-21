@@ -239,8 +239,6 @@ export const pinDrawerMessages = {
 
   // ── AiVersionDrawer: footer ──
   "pinDrawer.footer.generatingEllipsis": "Generating...",
-  // Serial reference-group queue progress.
-  "pinDrawer.footer.generatingReferenceProgress": "Generating reference {current} of {total}...",
   // Makes the references × pins-each multiplication explicit next to the CTA.
   "pinDrawer.footer.batchMath": "{refs} references × {each} Pins each",
   "pinDrawer.footer.generateCountSingular": "Generate {n} Pin",

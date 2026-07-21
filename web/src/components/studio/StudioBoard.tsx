@@ -31,6 +31,7 @@ import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { generateAiVersions } from "@/lib/studio/generateAiVersions";
+import { planReferenceGroups } from "@/lib/studio/selectedReferences";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
@@ -337,7 +338,11 @@ export function StudioBoard() {
     //    task started (PRD 8.9). Stable keys gen:{requestId}:{i}; lineage preserved;
     //    the original upload is never touched.
     const requestId = `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const requested = Math.max(1, opts.count || 1);
+    const perGroup = Math.max(1, opts.count || 1);
+    // One group per style reference; no references still yields exactly one group.
+    // Each group requests `perGroup` images, so the batch total is groups × perGroup.
+    const groups = planReferenceGroups(opts.selectedReferences ?? [], perGroup);
+    const requested = groups.length * perGroup;
     const setupSnapshot = {
       mode: parent ? ("board_ai_version" as const) : ("board_ai_scratch" as const),
       keyword: parent?.keyword,
@@ -358,62 +363,105 @@ export function StudioBoard() {
       model: resolveModelLabel(undefined, opts.modelKey),
       modelKey: opts.modelKey,
     };
-    const placeholders = Array.from({ length: requested }, (_, i) =>
-      pinDraftStore.createBoardDraft({
-        // Placeholder shows the parent image while generating; scratch mode has none.
-        imageUrl: parent?.imageUrl ?? "",
-        source: "ai_generated_from_upload",
-        idempotencyKey: `gen:${requestId}:${i}`,
-        generationStatus: "generating",
-        parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
-        title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
-        model: resolveModelLabel(undefined, opts.modelKey),
-        format: opts.format,
-        generationSessionId: requestId,
-        promptSnapshot: opts.directionBrief,
-        setupSnapshot,
-      }),
+    // ALL totalPins placeholders exist before the first group runs, so the user sees
+    // the true batch size immediately rather than it growing group by group. Each
+    // placeholder already carries its group's reference association (PRD G2), which
+    // is what makes per-group failure fallback and Retry resolvable later.
+    const groupPlaceholders = groups.map(group =>
+      Array.from({ length: group.requestCount }, (_, i) =>
+        pinDraftStore.createBoardDraft({
+          // Placeholder shows the parent image while generating; scratch mode has none.
+          imageUrl: parent?.imageUrl ?? "",
+          source: "ai_generated_from_upload",
+          idempotencyKey: `gen:${requestId}:${group.index}:${i}`,
+          generationStatus: "generating",
+          parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
+          referenceId: group.reference?.id,
+          referenceImageUrl: group.reference?.imageUrl,
+          referenceSource: group.reference?.source,
+          title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
+          model: resolveModelLabel(undefined, opts.modelKey),
+          format: opts.format,
+          generationSessionId: requestId,
+          promptSnapshot: opts.directionBrief,
+          setupSnapshot,
+        }),
+      ),
     );
     // Close the drawer right away — generation continues and the cards update.
     setAiDrawer(null);
     setAiGenerating(false);
     toast.success(requested === 1 ? tr("studioBoard.toast.generatingOne") : tr("studioBoard.toast.generatingMany").replace("{n}", String(requested)));
 
-    // 2) Run generation; resolve/fail each placeholder. A closed drawer or a
-    //    partial failure never rolls back successful results.
-    try {
-      const result = await generateAiVersions({ source: parent, setup: opts });
-      result.urls.slice(0, placeholders.length).forEach((url, i) => {
-        pinDraftStore.completeGeneratedDraft(placeholders[i].id, url);
-        void startImageAnalysis(placeholders[i].id);
-        // Phase C: grade AI results in parallel (independent of copy analysis).
-        void startQualityJudge(placeholders[i].id);
-      });
-      // Requested more than came back → the unfilled placeholders failed.
-      placeholders.slice(result.urls.length).forEach(p => pinDraftStore.failGeneratedDraft(p.id));
-      // Returned more than requested (count clamped up is rare but possible) → extra cards.
-      result.urls.slice(placeholders.length).forEach((url, i) => {
-        const extra = pinDraftStore.createBoardDraft({
-          imageUrl: url, source: "ai_generated_from_upload", idempotencyKey: `gen:${requestId}:extra:${i}`,
-          parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
-          title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
-          model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
-          generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
+    // 2) Run the groups SERIALLY. /api/generate holds a per-user active-generation
+    //    lock and answers a concurrent second call with 429 (user_generation_limit),
+    //    so parallel groups would fail the 2nd and 3rd outright. Each group resolves
+    //    its own placeholders as soon as it returns, and a failing group only fails
+    //    its own — the remaining groups still run.
+    let okCount = 0;
+    let failCount = 0;
+    const batchToastId = `gen-batch-${requestId}`;
+    for (const group of groups) {
+      const placeholders = groupPlaceholders[group.index];
+      // Batch progress lives in a persistent toast because the drawer closes as soon
+      // as the placeholders exist (multi-group runs are long — 3 serial requests).
+      if (groups.length > 1) {
+        toast.loading(
+          tr("studioBoard.toast.generatingReferenceProgress")
+            .replace("{current}", String(group.index + 1))
+            .replace("{total}", String(groups.length)),
+          { id: batchToastId },
+        );
+      }
+      try {
+        const result = await generateAiVersions({
+          source: parent,
+          setup: opts,
+          styleReference: group.reference?.imageUrl ?? null,
+          batchRequestId: requestId,
         });
-        void startImageAnalysis(extra.id);
-        void startQualityJudge(extra.id);
-      });
-      const okCount = Math.min(result.urls.length, placeholders.length) + Math.max(0, result.urls.length - placeholders.length);
-      const failCount = Math.max(0, placeholders.length - result.urls.length);
-      if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
-      else if (okCount) toast.success(parent
-        ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
-        : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
-      else { placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id)); toast.error(tr("studioBoard.toast.noAiPinsGenerated")); }
-    } catch {
-      placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
-      toast.error(tr("studioBoard.toast.couldNotGenerate"));
+        result.urls.slice(0, placeholders.length).forEach((url, i) => {
+          pinDraftStore.completeGeneratedDraft(placeholders[i].id, url);
+          void startImageAnalysis(placeholders[i].id);
+          // Phase C: grade AI results in parallel (independent of copy analysis).
+          void startQualityJudge(placeholders[i].id);
+        });
+        okCount += Math.min(result.urls.length, placeholders.length);
+        // Requested more than came back → the unfilled placeholders failed.
+        const unfilled = placeholders.slice(result.urls.length);
+        unfilled.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
+        failCount += unfilled.length;
+        // Returned more than requested (count clamped up is rare but possible) →
+        // extra cards, still attributed to THIS group's reference.
+        result.urls.slice(placeholders.length).forEach((url, i) => {
+          const extra = pinDraftStore.createBoardDraft({
+            imageUrl: url, source: "ai_generated_from_upload",
+            idempotencyKey: `gen:${requestId}:${group.index}:extra:${i}`,
+            parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
+            referenceId: group.reference?.id,
+            referenceImageUrl: group.reference?.imageUrl,
+            referenceSource: group.reference?.source,
+            title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
+            model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
+            generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
+          });
+          okCount += 1;
+          void startImageAnalysis(extra.id);
+          void startQualityJudge(extra.id);
+        });
+      } catch {
+        // This reference failed; keep going so the others still produce results.
+        placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
+        failCount += placeholders.length;
+      }
     }
+    if (groups.length > 1) toast.dismiss(batchToastId);
+
+    if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
+    else if (okCount) toast.success(parent
+      ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
+      : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
+    else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
   }, [aiDrawer, tr]);
 
   const handleDelete = useCallback((d: PinDraft) => {

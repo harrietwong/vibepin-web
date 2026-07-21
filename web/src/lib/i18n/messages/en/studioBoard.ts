@@ -50,6 +50,8 @@ export const studioBoardMessages = {
   "studioBoard.toast.createdPinFromProduct": "Created a Pin from your product.",
   "studioBoard.toast.generatingOne": "Generating 1 Pin…",
   "studioBoard.toast.generatingMany": "Generating {n} Pins…",
+  // Serial reference-group queue: one /api/generate call per reference.
+  "studioBoard.toast.generatingReferenceProgress": "Generating reference {current} of {total}…",
   "studioBoard.toast.generatedSomeFailedSome": "{okCount} Pin{okPlural} generated, {failCount} failed.",
   "studioBoard.toast.createdAiPinsKeptOriginal": "Created {n} AI Pin{plural}. Original upload kept as a separate Pin.",
   "studioBoard.toast.createdAiPins": "Created {n} AI Pin{plural}.",
