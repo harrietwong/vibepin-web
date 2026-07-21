@@ -715,6 +715,8 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioModals.picker.noProductIdeasFound": "Nessuna idea di prodotto trovata\nProva un'altra categoria o aggiorna la fonte delle idee di prodotto.",
   "studioModals.picker.noProductIdeasFoundCategory": "Nessuna idea di prodotto trovata per questa categoria.\nProva un'altra categoria o aggiorna la fonte delle idee di prodotto.",
   "studioModals.picker.chooseProductImages": "Scegli immagini prodotto",
+  "studioModals.picker.chooseAProduct": "Scegli un prodotto",
+  "studioModals.picker.chooseProducts": "Scegli prodotti",
   "studioModals.picker.choosePinReferences": "Scegli Pin di riferimento",
   "studioModals.picker.productsSelectedOne": "1 prodotto selezionato",
   "studioModals.picker.productsSelectedMany": "{n} prodotti selezionati",
@@ -754,6 +756,10 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioModals.picker.tryAnotherCategoryPinIdeas": "Prova un'altra categoria o aggiorna la fonte delle idee per Pin.",
   "studioModals.picker.selectedReferencesAlsoSaved": "I riferimenti selezionati vengono salvati anche in I miei riferimenti.",
   "studioModals.picker.addSelected": "Aggiungi selezionati",
+  "studioModals.picker.addOneProduct": "Aggiungi 1 prodotto",
+  "studioModals.picker.addNProducts": "Aggiungi {n} prodotti",
+  "studioModals.picker.addOneReference": "Aggiungi 1 riferimento",
+  "studioModals.picker.addNReferences": "Aggiungi {n} riferimenti",
 
   // ── studioModals: Shopify picker panel ──
   "studioModals.shopify.all": "Tutti",
@@ -1436,6 +1442,8 @@ const it: Partial<Record<MessageKey, string>> = {
 
   // ── pinDrawer: AiVersionDrawer recommended references ──
   "pinDrawer.recommended.heading": "Consigliati per questo prodotto",
+  "pinDrawer.recommended.headingCategory": "Ispirazione per categoria",
+  "pinDrawer.recommended.refreshedForNewProduct": "Consigli aggiornati per il nuovo prodotto",
   "pinDrawer.recommended.inspirationDisclaimer": "Sono solo ispirazione di stile — la generazione prende spunti visivi come composizione e atmosfera, senza mai copiare queste immagini.",
   "pinDrawer.recommended.styleCuesUsed": "Spunti di stile usati:",
   "pinDrawer.recommended.viewOnPinterest": "Vedi su Pinterest",
@@ -1456,6 +1464,7 @@ const it: Partial<Record<MessageKey, string>> = {
   // ── pinDrawer: AiVersionDrawer Pin settings ──
   "pinDrawer.settings.heading": "Impostazioni Pin",
   "pinDrawer.settings.numberOfPins": "Numero di Pin",
+  "pinDrawer.settings.pinsPerReference": "Pin per riferimento",
   "pinDrawer.settings.aspectRatio": "Proporzioni",
   "pinDrawer.settings.resultVariety": "Varietà dei risultati",
   "pinDrawer.settings.distinct": "Distinti",
@@ -1466,6 +1475,7 @@ const it: Partial<Record<MessageKey, string>> = {
 
   // ── pinDrawer: AiVersionDrawer footer ──
   "pinDrawer.footer.generatingEllipsis": "Generazione...",
+  "pinDrawer.footer.batchMath": "{refs} riferimenti × {each} Pin ciascuno",
   "pinDrawer.footer.generateCountSingular": "Genera {n} Pin",
   "pinDrawer.footer.generateCountPlural": "Genera {n} Pin",
 
@@ -2227,6 +2237,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.createdPinFromProduct": "Pin creato dal tuo prodotto.",
   "studioBoard.toast.generatingOne": "Generazione di 1 Pin…",
   "studioBoard.toast.generatingMany": "Generazione di {n} Pin…",
+  "studioBoard.toast.generatingReferenceProgress": "Generazione riferimento {current} di {total}…",
   "studioBoard.toast.generatedSomeFailedSome": "{okCount} Pin{okPlural} generati, {failCount} non riusciti.",
   "studioBoard.toast.createdAiPinsKeptOriginal": "Creat{plural} {n} Pin AI. Il caricamento originale è stato mantenuto come Pin separato.",
   "studioBoard.toast.createdAiPins": "Creat{plural} {n} Pin AI.",
@@ -2259,8 +2270,10 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.removeKeywordAria": "Rimuovi parola chiave {keyword}",
   "studioBoard.card.moreActionsAria": "Altre azioni",
   "studioBoard.card.pinImageAlt": "Immagine Pin",
+  "studioBoard.card.pinImageUnavailable": "Immagine Pin non disponibile",
   "studioBoard.card.noImage": "Nessuna immagine",
   "studioBoard.card.generationFailedPlaceholder": "Generazione non riuscita",
+  "studioBoard.card.originalImageFallback": "Immagine originale",
 
   // ── studioBoard: PinBoardCard recommended fix copy ──
   "studioBoard.card.fix.auth": "La tua connessione a Pinterest deve essere riconnessa prima che questo Pin possa essere pubblicato.",
@@ -2291,6 +2304,7 @@ const it: Partial<Record<MessageKey, string>> = {
   // ── studioBoard: PinBoardCard expanded card ──
   "studioBoard.expanded.collapseAria": "Comprimi",
   "studioBoard.expanded.generateAiImage": "Genera immagine AI",
+  "studioBoard.expanded.regenerateImage": "Rigenera immagine",
   "studioBoard.expanded.moreDetails": "Altri dettagli",
   "studioBoard.expanded.productOptional": "Prodotto · Facoltativo",
   "studioBoard.expanded.noLinkedProduct": "Nessun prodotto collegato",

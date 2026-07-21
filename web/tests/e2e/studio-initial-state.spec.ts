@@ -97,7 +97,8 @@ test.describe("Create Pins initial state", () => {
     await page.getByTestId("add-product-images").click();
     await expect(page.getByTestId("asset-picker-modal")).toHaveCount(0);
     await expect(page.getByTestId("product-picker")).toBeVisible({ timeout: 8000 });
-    await expect(page.getByText("Choose Product Images")).toBeVisible();
+    // Header is selection-mode aware (PRD Section C); nothing is selected yet.
+    await expect(page.getByText("Choose products")).toBeVisible();
     await expect(page.getByTestId("composer-panel")).toBeVisible();
     await expect(page.getByTestId("picker-tab-my_products")).toHaveText("My Products");
     await expect(page.getByTestId("picker-tab-product_ideas")).toHaveText("Product Ideas");
