@@ -355,6 +355,25 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
 
   // Reset per-draft state during render when the drawer switches to another draft
   // (react.dev "adjusting state when props change" — avoids setState inside effects).
+  // Shown after a product SWAP (not on first load) so the user understands why the
+  // recommendation grid changed under them. Their already-selected references are
+  // deliberately kept — only the suggestions refresh. Declared before both reset
+  // blocks below, which set it during render.
+  const [productChanged, setProductChanged] = useState(false);
+  /**
+   * Image analysis for a product that is NOT the draft's own image.
+   *
+   * The draft's stored analysis describes the draft's image, so once the user swaps
+   * the Product strip to a different product it no longer applies (and must not be
+   * reused — it would recommend for the wrong product). startImageAnalysis() cannot
+   * be used here because it is draft-scoped and would overwrite the draft's analysis
+   * with a different product's. POST /api/ai-copy/analyze is stateless, so we call it
+   * directly and keep the result in memory, keyed by image URL.
+   */
+  const [swappedProductAnalysis, setSwappedProductAnalysis] = useState<{
+    url: string;
+    analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string };
+  } | null>(null);
   const [recDraftId, setRecDraftId] = useState<string | undefined>(draft?.id);
   if (draft?.id !== recDraftId) {
     setRecDraftId(draft?.id);
@@ -362,6 +381,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // refs, which are not draft-specific.
     setSelectedReferences(prev => prev.filter(r => r.source !== "recommended_pin"));
     setRecommendedRefs([]);
+    setProductChanged(false);
   }
 
   // Fetch recommendations for ANY draft that has an image — richer context (analysis,
@@ -388,7 +408,43 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   if (productKey !== prevProductKey) {
     setPrevProductKey(productKey);
     setRecommendedRefs([]);
+    setProductChanged(true);
   }
+  // Analyse a swapped-in product so its recommendations are product-level rather than
+  // title/category-only. Best-effort: on failure the request below simply omits
+  // imageAnalysis and the API falls back to category_fallback, which the heading
+  // then reports honestly as "Category inspiration".
+  useEffect(() => {
+    if (!open || draftImageSelected || !primaryProductUrl) return;
+    if (swappedProductAnalysis?.url === primaryProductUrl) return;
+    let cancelled = false;
+    // draftId is intentionally omitted: this is a stateless analysis of the swapped-in
+    // product, and must not be written onto the draft.
+    const asset = assetStore.getAssets().find(a => a.imageUrl === primaryProductUrl);
+    fetch("/api/ai-copy/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imageUrl: primaryProductUrl,
+        category: asset?.category || undefined,
+        productTitle: asset?.title || undefined,
+        productType: asset?.productType || undefined,
+        productTags: [asset?.category, asset?.keyword, asset?.visualFormat]
+          .map(v => (typeof v === "string" ? v.trim() : ""))
+          .filter(Boolean),
+      }),
+    })
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data: { analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string } }) => {
+        if (!cancelled) setSwappedProductAnalysis({ url: primaryProductUrl, analysis: data.analysis });
+      })
+      .catch(() => {
+        // Record the attempt so we don't retry in a loop; analysis stays undefined.
+        if (!cancelled) setSwappedProductAnalysis({ url: primaryProductUrl });
+      });
+    return () => { cancelled = true; };
+  }, [open, draftImageSelected, primaryProductUrl, swappedProductAnalysis?.url]);
+
   useEffect(() => {
     const d = liveDraft;
     if (!open || !d || !recsEligible) return;
@@ -396,11 +452,30 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     const primaryProduct = d.linkedProducts?.find(p => p.title?.trim());
     // Draft image still among the selected products → its analysis/title apply.
     // Otherwise use the swapped-in asset's title as the only trusted signal.
+    // The swapped-in product's own stored record — the only trusted source of
+    // title/type/tags once the pin's own image is no longer the selected product.
+    const selectedAsset = draftImageSelected
+      ? undefined
+      : storedAssets.find(a => a.imageUrl === primaryProductUrl);
+    // Only trust the cached analysis when it belongs to the CURRENTLY selected product.
+    const swappedProduct = !draftImageSelected && swappedProductAnalysis?.url === primaryProductUrl
+      ? swappedProductAnalysis.analysis
+      : undefined;
     const productTitle = draftImageSelected
       ? primaryProduct?.title?.trim() || d.title?.trim() || ""
-      : imageTitle(primaryProductUrl, storedAssets, "").trim() || primaryProduct?.title?.trim() || "";
+      : selectedAsset?.title?.trim() || primaryProduct?.title?.trim() || "";
+    // Tags carry whatever categorical signal the asset actually has. Never synthesise
+    // one — an absent tag is better input than a guessed one.
+    const productTags = [selectedAsset?.category, selectedAsset?.keyword, selectedAsset?.visualFormat]
+      .map(v => (typeof v === "string" ? v.trim() : ""))
+      .filter(Boolean);
     const body = {
-      category: draftImageSelected ? (d.imageCategory || d.category || undefined) : undefined,
+      category: draftImageSelected
+        ? (d.imageCategory || d.category || undefined)
+        : (swappedProduct?.category || selectedAsset?.category || undefined),
+      // The draft's analysis applies ONLY while the draft's own image is the selected
+      // product. After a swap we use the new product's own analysis (fetched above),
+      // never the previous product's.
       imageAnalysis: draftImageSelected
         ? {
             category: d.imageCategory || d.category || undefined,
@@ -409,8 +484,23 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
             visibleObjects: d.visibleObjects,
             imageSummary: d.imageSummary,
           }
+        : swappedProduct
+          ? {
+              category: swappedProduct.category || selectedAsset?.category || undefined,
+              style: swappedProduct.style,
+              colors: swappedProduct.colors,
+              visibleObjects: swappedProduct.visibleObjects,
+              imageSummary: swappedProduct.imageSummary,
+            }
+          : undefined,
+      product: (productTitle || selectedAsset)
+        ? {
+            title: productTitle,
+            imageUrl: primaryProductUrl || undefined,
+            type: selectedAsset?.productType || undefined,
+            tags: productTags.length ? productTags : undefined,
+          }
         : undefined,
-      product: productTitle ? { title: productTitle } : undefined,
       limit: 9,
     };
     // Transient failures (dev recompile 500s, flaky network) must not permanently blank
@@ -443,7 +533,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     };
     attempt(2);
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-  }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+    // swappedProductAnalysis is a dep so recommendations upgrade in place once the
+    // new product's analysis lands (product_analysis instead of category_fallback).
+  }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl, swappedProductAnalysis]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const REC_LIMIT = MAX_SELECTED_REFERENCES;
   /**
@@ -811,6 +903,13 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
                 <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.45, color: BUI.textSec }}>
                   {tr("pinDrawer.recommended.inspirationDisclaimer")}
                 </p>
+                {productChanged && (
+                  <p data-testid="recommendations-refreshed-notice"
+                    style={{ margin: 0, padding: "6px 9px", borderRadius: 8, background: "rgba(124,58,237,0.10)",
+                      border: `1px solid ${BUI.border}`, fontSize: 11, fontWeight: 700, color: BUI.purple }}>
+                    {tr("pinDrawer.recommended.refreshedForNewProduct")}
+                  </p>
+                )}
                 {recExpanded && (
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
                     {recommendedRefs.map(ref => {

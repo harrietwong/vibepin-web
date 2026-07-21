@@ -206,6 +206,9 @@ export const pinDrawerMessages = {
   // Shown when the API reports recommendationBasis=category_fallback — category-only
   // results must not claim product-level personalisation.
   "pinDrawer.recommended.headingCategory": "Category inspiration",
+  // Shown after a product swap: the grid refreshed, but the user's already-selected
+  // references were intentionally kept.
+  "pinDrawer.recommended.refreshedForNewProduct": "Recommendations refreshed for the new product",
   "pinDrawer.recommended.inspirationDisclaimer": "These are style inspiration only — generation borrows visual cues like composition and mood, and never copies these images.",
   "pinDrawer.recommended.styleCuesUsed": "Style cues used:",
   "pinDrawer.recommended.viewOnPinterest": "View on Pinterest",
