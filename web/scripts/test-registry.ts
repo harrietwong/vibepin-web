@@ -83,6 +83,7 @@ export const CORE: string[] = [
   "test-moderate-prompt",
   "test-generation-moderation-gate",
   "test-aup-compliance",
+  "test-public-compliance-copy",
   // Settings / support
   "test-settings-p0",
   "test-support-ai-responder",

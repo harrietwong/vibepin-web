@@ -3,7 +3,7 @@ import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
 
 const CONTACT = "support@vibepin.co";
-const UPDATED = "July 14, 2026";
+const UPDATED = "July 20, 2026";
 
 export const metadata = {
   title: "Privacy Policy — VibePin",
@@ -27,6 +27,7 @@ export default function PrivacyPage() {
           </div>
           <div className="flex items-center gap-4 text-[12px]" style={{ color: "#6B7280" }}>
             <Link href="/terms" className="hover:text-white transition-colors">Terms</Link>
+            <Link href="/acceptable-use-policy" className="hover:text-white transition-colors">Acceptable Use</Link>
             <Link href="/pinterest-app" className="hover:text-white transition-colors">Pinterest App</Link>
           </div>
         </div>
@@ -134,7 +135,43 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">6. Disconnecting Pinterest and Deletion of Pinterest-Related Data</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">6. AI Prompts, Content Moderation, and Third-Party AI Services</h2>
+            <p className="mb-3">
+              When a user requests AI image generation, VibePin processes the user-controlled inputs associated with
+              that request. These may include keywords, prompts, creative direction, category selections, tags, and
+              related descriptive text the user enters or selects.
+            </p>
+            <p className="mb-3">
+              Image-generation prompts and related user-controlled inputs may be transmitted to third-party
+              content-moderation and artificial-intelligence service providers solely to screen requests and provide
+              the requested generation features.
+            </p>
+            <p className="mb-3">
+              Before generation begins, these inputs are transmitted to a content-moderation service, which is used
+              to determine whether the request is permitted under our Acceptable Use Policy. If the request is
+              permitted, the related inputs are then sent to a third-party AI image-generation service in order to
+              produce the requested images. If the request is not permitted, or cannot be evaluated, generation does
+              not proceed.
+            </p>
+            <p className="mb-3">
+              These third-party providers process the inputs under their own terms and privacy policies, and we do
+              not control their independent data practices or retention periods. We do not make any representation
+              about how long a third-party moderation or AI provider retains request data.
+            </p>
+            <p className="mb-3">
+              VibePin&apos;s own API credentials and provider keys are held server-side. They are never written to
+              logs, never returned in API responses, and never exposed in client-side code.
+            </p>
+            <p>
+              VibePin is an independent product that integrates third-party artificial-intelligence services. It is
+              not affiliated with or endorsed by the providers of those AI models. See our{" "}
+              <Link href="/acceptable-use-policy" className="font-semibold hover:text-white transition-colors" style={{ color: "#0891B2" }}>Acceptable Use Policy</Link>
+              {" "}for the rules that govern generation requests.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">7. Disconnecting Pinterest and Deletion of Pinterest-Related Data</h2>
             <p className="mb-3">
               A user may disconnect their Pinterest account from VibePin at any time through VibePin Settings or by revoking access through Pinterest.
             </p>
@@ -163,7 +200,7 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">7. Data Sharing and Service Providers</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">8. Data Sharing and Service Providers</h2>
             <p className="mb-3">We do not sell, rent, or trade personal information.</p>
             <p className="mb-3">
               We may disclose limited information to trusted service providers that help us operate VibePin, including providers of cloud hosting, databases, authentication, security, analytics, communications, and customer support. They may process information only to provide services to VibePin and subject to applicable confidentiality and data-protection obligations.
@@ -184,7 +221,7 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">8. Data Retention</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">9. Data Retention</h2>
             <p className="mb-3">
               We retain personal information only for as long as reasonably necessary to provide VibePin, fulfill the purposes described in this Privacy Policy, comply with legal obligations, resolve disputes, and enforce agreements.
             </p>
@@ -192,12 +229,12 @@ export default function PrivacyPage() {
               Account and merchant content may generally be retained while the account remains active. Users may request deletion of their account and associated eligible information at any time.
             </p>
             <p>
-              Pinterest-related information is handled according to the disconnection and deletion practices described in Section 6.
+              Pinterest-related information is handled according to the disconnection and deletion practices described in Section 7.
             </p>
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">9. Data Security</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">10. Data Security</h2>
             <p className="mb-3">
               We use reasonable administrative, technical, and organizational safeguards designed to protect information against unauthorized access, loss, misuse, alteration, or disclosure.
             </p>
@@ -207,14 +244,14 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">10. International Processing</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">11. International Processing</h2>
             <p>
               VibePin and its service providers may process information in countries other than the user&apos;s country of residence. Where required, we use appropriate safeguards for international data transfers.
             </p>
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">11. Your Choices and Rights</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">12. Your Choices and Rights</h2>
             <p className="mb-4">Depending on applicable law, users may have the right to:</p>
             <ul className="space-y-2 pl-4 mb-4">
               {[
@@ -241,21 +278,21 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">12. Children&apos;s Privacy</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">13. Children&apos;s Privacy</h2>
             <p>
               VibePin is not directed to children under 13, or a higher minimum age where required by applicable law. We do not knowingly collect personal information from children in violation of applicable law.
             </p>
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">13. Changes to This Privacy Policy</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">14. Changes to This Privacy Policy</h2>
             <p>
               We may update this Privacy Policy from time to time. When we make material changes, we will update the &quot;Last updated&quot; date and provide additional notice where required.
             </p>
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">14. Contact</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">15. Contact</h2>
             <p className="mb-2">For privacy questions, requests, or concerns, contact:</p>
             <p className="mb-1 text-white font-semibold">VibePin</p>
             <p className="mb-1">
@@ -275,6 +312,7 @@ export default function PrivacyPage() {
           style={{ borderColor: "rgba(255,255,255,0.07)", color: "#374151" }}>
           <Link href="/" className="hover:text-white transition-colors">← Home</Link>
           <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
+          <Link href="/acceptable-use-policy" className="hover:text-white transition-colors">Acceptable Use Policy</Link>
           <Link href="/refund-policy" className="hover:text-white transition-colors">Refund Policy</Link>
           <Link href="/pinterest-app" className="hover:text-white transition-colors">Pinterest App</Link>
         </div>

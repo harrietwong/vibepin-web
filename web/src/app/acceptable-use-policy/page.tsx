@@ -5,7 +5,7 @@ import { BackButton } from "@/components/BackButton";
 const CONTACT = "support@vibepin.co";
 // Plain string constant (NOT a runtime Date()) so the page stays statically
 // prerendered and the date never drifts. Update on material policy changes.
-const UPDATED = "July 19, 2026";
+const UPDATED = "July 20, 2026";
 
 export const metadata = {
   title: "Acceptable Use Policy — VibePin",
@@ -181,7 +181,14 @@ export default function AcceptableUsePolicyPage() {
           <section>
             <h2 className="text-[16px] font-bold text-white mb-3">8. Prompt Screening and Enforcement</h2>
             <p className="mb-3">
-              User-submitted prompts may be screened before they are sent to an AI image-generation provider.
+              Every user-submitted image-generation prompt is submitted to a content-moderation service before it is
+              sent to an AI image-generation provider.
+            </p>
+            <p className="mb-3">
+              A request may be rejected when it is identified as violating this policy, when it is identified as
+              potentially unsafe, when it cannot be evaluated, or when the moderation service is unavailable. No
+              screening system identifies every possible violation, and screening does not relieve you of
+              responsibility for complying with this policy.
             </p>
             <p className="mb-3">
               VibePin may block a request, restrict features, suspend an account, terminate access, preserve
@@ -211,7 +218,19 @@ export default function AcceptableUsePolicyPage() {
           </section>
 
           <section>
-            <h2 className="text-[16px] font-bold text-white mb-3">10. Changes to This Policy</h2>
+            <h2 className="text-[16px] font-bold text-white mb-3">10. Third-Party AI Services</h2>
+            <p className="mb-3">
+              VibePin is an independent product that integrates third-party artificial-intelligence services. It is
+              not affiliated with or endorsed by the providers of those AI models.
+            </p>
+            <p>
+              Third-party providers apply their own terms and safety policies to requests made through their
+              services, in addition to this policy.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-[16px] font-bold text-white mb-3">11. Changes to This Policy</h2>
             <p>
               We may update this Acceptable Use Policy as VibePin, applicable laws, safety practices, or platform
               requirements evolve. Material changes will be reflected by updating the &quot;Last updated&quot; date
