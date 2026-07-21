@@ -28,6 +28,7 @@ import {
   type MetadataReadinessLabel,
   type PinMetadataDraft,
 } from "@/lib/pinMetadata";
+import { toLinkedProduct } from "@/lib/studio/productSelection";
 import type { SetupSnapshot, ProductSnapshot, ReferenceSnapshot, CategoryAudit } from "@/lib/studioPersistence";
 import type { PinDetailView, GenerationSetupSnapshot, RecoveryQuality } from "./pinDetails";
 import { getGenerationSetupSnapshot } from "./pinDetails";
@@ -690,20 +691,28 @@ export function PinDetailsDrawer({
     if (detail.format) failedSetupParts.push(detail.format);
   }
 
+  /**
+   * Map the picker's selection onto the canonical LinkedProduct.
+   *
+   * Routed through toLinkedProduct() so the destination URL obeys the same
+   * source rules everywhere (Section J) — notably: Shopify resolves to the
+   * storefront/canonical URL and an Admin URL is dropped rather than persisted.
+   * This mapper previously passed `p.url` through unchecked.
+   */
   function toLinkedProductFromSelection(p: ProductSelection): LinkedProduct {
-    return {
-      productId:    p.id,
+    const linked = toLinkedProduct({
+      id:           p.id,
       title:        p.title?.trim() || tr("pinDrawer.product.fallbackTitle"),
       imageUrl:     p.imageUrl,
-      thumbnailUrl: p.imageUrl,
-      productUrl:   p.url,
+      publicUrl:    p.url,
       canonicalUrl: p.canonicalUrl,
+      source:       normalizeProductSource(p.source),
       store:        p.store,
       price:        p.price,
       currency:     p.currency,
-      source:       normalizeProductSource(p.source),
-      linkType:     "manual",
-    };
+      asPrimary:    p.asPrimary,
+    });
+    return { ...linked, thumbnailUrl: p.imageUrl };
   }
 
   function handleProductSelect(p: ProductSelection) {

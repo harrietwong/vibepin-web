@@ -45,6 +45,8 @@ import type { CreativeDirectionSnapshotV2 } from "@/lib/studioPersistence";
 import { CreativeChips } from "@/components/studio/CreativeChips";
 import { InlineCreateAssetPicker, type InlineAssetItem } from "@/components/studio/InlineCreateAssetPicker";
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
+import { addProductToDraft } from "@/lib/pinMetadata";
+import { selectionFromAsset, toLinkedProduct } from "@/lib/studio/productSelection";
 import {
   MAX_SELECTED_REFERENCES,
   PINS_PER_REFERENCE_OPTIONS,
@@ -763,6 +765,29 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const confirmPicker = (items: InlineAssetItem[]) => {
     if (pickerRole === "product") {
       setProductUrls(unique(items.map(item => item.imageUrl).filter(Boolean)));
+      // Persist the full product record onto the draft so the Website URL can be
+      // derived from it (Section J). Previously only imageUrl survived this
+      // boundary, which is why AI-drawer product selection never filled the URL.
+      // Uses the SAME addProductToDraft path as Link/Change product — no parallel
+      // product state.
+      if (draft?.id && items.length) {
+        const current = pinDraftStore.getDraft(draft.id);
+        // Only extend an EXISTING metadataDraft — the same guard PinDetailsDrawer
+        // uses. There is no empty-draft factory, and synthesising one here would
+        // create a half-populated metadata record for a Pin that has not been
+        // through copy generation yet.
+        const existingMeta = current?.metadataDraft;
+        if (existingMeta) {
+          let meta = existingMeta;
+          items.forEach((item, i) => {
+            const selection = selectionFromAsset(item);
+            // First pick becomes primary only when the draft has none yet
+            // (addProductToDraft's `undefined` behaviour); later picks are tagged.
+            meta = addProductToDraft(meta, toLinkedProduct(selection), i === 0 ? undefined : false);
+          });
+          pinDraftStore.updateDraft(draft.id, { metadataDraft: meta });
+        }
+      }
     }
     if (pickerRole === "style_reference") {
       // The picker only knows about stored assets — merge so recommended Pins the

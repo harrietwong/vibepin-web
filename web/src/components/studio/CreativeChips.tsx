@@ -10,8 +10,11 @@
  *
  * The Style / Scene / Composition / Mood tag chips still exist and still drive the
  * prompt manifest, but they are tucked inside a collapsed "Advanced controls"
- * section labelled "Automatically detected" so users don't feel they must
- * hand-pick every chip. No internal reasoning, confidence, or hidden prompts here.
+ * section so users don't feel they must hand-pick every chip. The chips are
+ * EDITABLE (onToggleTag), so the group is labelled "Creative controls" rather than
+ * "Automatically detected" — the old label described them as a read-only readout
+ * and discouraged users from adjusting them. No internal reasoning, confidence, or
+ * hidden prompts here.
  */
 
 import { useState } from "react";
@@ -182,8 +185,8 @@ export function CreativeChips({
 
         {advancedOpen && (
           <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: UI.muted, letterSpacing: "0.03em", textTransform: "uppercase" }}>
-              Automatically detected
+            <div data-testid="creative-controls-label" style={{ fontSize: 10, fontWeight: 700, color: UI.muted, letterSpacing: "0.03em", textTransform: "uppercase" }}>
+              Creative controls
             </div>
             {byGroup.map(({ group, tags: groupTags }) => (
               <div key={group} data-testid={`creative-chip-group-${group}`}>

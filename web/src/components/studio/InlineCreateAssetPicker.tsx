@@ -18,11 +18,13 @@ import { usePinIdeas } from "@/lib/usePinIdeas";
 import {
   countBrokenImports,
   filterMyProducts,
-  MY_PRODUCTS_FILTERS,
+  MY_PRODUCTS_SORTS,
   productDisplayTitle,
   productSourceLabel,
   isAmazonProductAsset,
+  visibleProductSourceFilters,
   type MyProductsFilter,
+  type MyProductsSort,
   isBrokenProductImport,
 } from "@/lib/myProductsPicker";
 import { formatUpdatedAgo, isDataStale } from "@/lib/freshness";
@@ -49,6 +51,14 @@ export type InlineAssetItem = {
   source: string;
   productUrl?: string;
   sourceUrl?: string;
+  // Commerce fields — carried so a product picked here can populate the Website URL
+  // and keep its store/price context. They used to stop at this boundary, which is
+  // why AI-drawer product selection never filled the destination URL.
+  canonicalUrl?: string;
+  store?: string;
+  price?: string;
+  currency?: string;
+  status?: "ready" | "import_issue";
 };
 
 export type InlineCreateAssetPickerProps = {
@@ -60,10 +70,13 @@ export type InlineCreateAssetPickerProps = {
 
 // labelKey is an i18n key, resolved via useLocale() at render time — id stays the
 // canonical (untranslated) tab value used in state/comparisons.
+// Primary tabs are My Products and Product Ideas only (create-pin PRD Section C).
+// "From Shopify" was removed as a tab: Shopify is a SOURCE of My Products, not a
+// separate selection task. It is now a source chip under My Products, and the
+// Shopify connect/import panel is reachable from that chip's empty state.
 export const PRODUCT_PICKER_TABS = [
   { id: "my_products", labelKey: "studioModals.tabs.myProducts" },
   { id: "product_ideas", labelKey: "studioModals.tabs.productIdeas" },
-  { id: "shopify", labelKey: "studioModals.tabs.fromShopify" },
 ] as const;
 
 export const REFERENCE_PICKER_TABS = [
@@ -129,17 +142,20 @@ function normalizeCardTitle(title: string | null | undefined, fallback: string):
 
 function MyProductsFilterChips({
   active,
+  chips: sourceChips,
   brokenCount,
   onChange,
 }: {
   active: MyProductsFilter;
+  /** Only the sources present in this workspace (Section C). */
+  chips: { id: MyProductsFilter; label: string }[];
   brokenCount: number;
   onChange: (f: MyProductsFilter) => void;
 }) {
   const { t: tr } = useLocale();
   const chips = brokenCount > 0
-    ? [...MY_PRODUCTS_FILTERS, { id: "import_issues" as const, label: tr("studioModals.picker.importIssuesCount").replace("{n}", String(brokenCount)) }]
-    : MY_PRODUCTS_FILTERS;
+    ? [...sourceChips, { id: "import_issues" as const, label: tr("studioModals.picker.importIssuesCount").replace("{n}", String(brokenCount)) }]
+    : sourceChips;
 
   return (
     <div data-testid="my-products-filter-chips" style={{ display: "flex", gap: 5, flexWrap: "nowrap", overflowX: "auto", marginBottom: 8 }}>
@@ -265,6 +281,25 @@ function ProductLibraryCard({
       </div>
     </button>
   );
+}
+
+/** Single mapper so every exit path from this picker carries the same fields. */
+function toInlineAssetItem(item: assets.AssetItem): InlineAssetItem {
+  return {
+    id: item.id,
+    imageUrl: item.imageUrl,
+    title: item.title,
+    category: item.category,
+    keyword: item.keyword,
+    source: item.source,
+    productUrl: item.productUrl,
+    sourceUrl: item.sourceUrl,
+    canonicalUrl: item.canonicalUrl,
+    store: item.store ?? item.sourceDomain,
+    price: item.price,
+    currency: item.currency,
+    status: item.status,
+  };
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -678,6 +713,7 @@ export function InlineCreateAssetPicker({
   const [referenceFormat, setReferenceFormat] = useState("All formats");
   const [showProductUrlImport, setShowProductUrlImport] = useState(false);
   const [productFilter, setProductFilter] = useState<MyProductsFilter>("all");
+  const [productSort, setProductSort] = useState<MyProductsSort>("recently_used");
   const [refFilter,    setRefFilter]    = useState<MyRefsFilter>("all");
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlText, setUrlText] = useState("");
@@ -725,6 +761,7 @@ export function InlineCreateAssetPicker({
     userPickedRefTab.current = false;
     setShowProductUrlImport(false);
     setProductFilter("all");
+    setProductSort("recently_used");
     setProductSource("All Sources");
     setProductCategory("All Categories");
     setRefFilter("all");
@@ -908,7 +945,7 @@ export function InlineCreateAssetPicker({
         selected.has(item.id) &&
         normalizeLegacyAssetRole(item.role, item.assetRole) === (role === "product" ? "product_image" : "pin_reference"),
       )
-      .map(item => ({ id: item.id, imageUrl: item.imageUrl, title: item.title, category: item.category, keyword: item.keyword, source: item.source, productUrl: item.productUrl, sourceUrl: item.sourceUrl }));
+      .map(toInlineAssetItem);
     items.forEach(item => assets.markUsed(item.id));
     onConfirm(items);
     setSelected(new Set());
@@ -919,7 +956,7 @@ export function InlineCreateAssetPicker({
   // preview actions.
   function chooseProductForPins(item: assets.AssetItem) {
     assets.markUsed(item.id);
-    onConfirm([{ id: item.id, imageUrl: item.imageUrl, title: item.title, category: item.category, keyword: item.keyword, source: item.source, productUrl: item.productUrl, sourceUrl: item.sourceUrl }]);
+    onConfirm([toInlineAssetItem(item)]);
     setSelected(new Set());
   }
 
@@ -941,19 +978,35 @@ export function InlineCreateAssetPicker({
   });
 
   const brokenImportCount = countBrokenImports(myAssets);
-  const filteredMyProducts = filterMyProducts(myAssets, productFilter, search);
+  const filteredMyProducts = filterMyProducts(myAssets, productFilter, search, productSort);
   const filteredMyRefs     = filterMyReferences(myAssets, refFilter, search);
 
   const shopifyEnabled = isShopifyIntegrationEnabled();
-  const title = isProduct ? tr("studioModals.picker.chooseProductImages") : tr("studioModals.picker.choosePinReferences");
-  const tabs = (isProduct ? PRODUCT_PICKER_TABS : REFERENCE_PICKER_TABS)
-    .filter(t => t.id !== "shopify" || shopifyEnabled);
+  // "Choose a product" / "Choose products" by selection mode (Section C). This
+  // picker is always multi-select, so the plural form is the general case; the
+  // singular reads better while exactly one is chosen.
+  const title = isProduct
+    ? (selected.size === 1 ? tr("studioModals.picker.chooseAProduct") : tr("studioModals.picker.chooseProducts"))
+    : tr("studioModals.picker.choosePinReferences");
+  const tabs = isProduct ? PRODUCT_PICKER_TABS : REFERENCE_PICKER_TABS;
   const activeTab = isProduct ? productTab : referenceTab;
   const setActiveTab = (tab: string) => {
     setSearch("");
     if (isProduct) setProductTab(tab as typeof PRODUCT_PICKER_TABS[number]["id"]);
     else { userPickedRefTab.current = true; setReferenceTab(tab as typeof REFERENCE_PICKER_TABS[number]["id"]); }
   };
+
+  const confirmLabel = (() => {
+    const n = selected.size;
+    if (isProduct) {
+      return n === 1
+        ? tr("studioModals.picker.addOneProduct")
+        : tr("studioModals.picker.addNProducts").replace("{n}", String(n));
+    }
+    return n === 1
+      ? tr("studioModals.picker.addOneReference")
+      : tr("studioModals.picker.addNReferences").replace("{n}", String(n));
+  })();
 
   const selectedCountLabel = isProduct
     ? (selected.size === 1 ? tr("studioModals.picker.productsSelectedOne") : tr("studioModals.picker.productsSelectedMany").replace("{n}", String(selected.size)))
@@ -1029,12 +1082,33 @@ export function InlineCreateAssetPicker({
           )}
           <MyProductsFilterChips
             active={productFilter}
+            chips={visibleProductSourceFilters(myAssets)}
             brokenCount={brokenImportCount}
             onChange={setProductFilter}
           />
-          <p data-testid="my-products-count" style={{ margin: "0 0 10px", fontSize: 11, color: UI.muted }}>
-            {filteredMyProducts.length === 1 ? tr("studioModals.picker.showingProductOne") : tr("studioModals.picker.showingProductsMany").replace("{n}", String(filteredMyProducts.length))}
-          </p>
+          {/* Shopify is a source of My Products; when the user filters to it and has
+              nothing yet, the connect/import panel appears here instead of the old
+              "From Shopify" tab. */}
+          {productFilter === "shopify" && shopifyEnabled && filteredMyProducts.length === 0 && (
+            <div data-testid="my-products-shopify-connect" style={{ marginBottom: 10 }}>
+              <ShopifyProductPickerPanel mode="select-images" onSelectImages={saveShopifyImages} />
+              <p style={{ margin: "10px 0 0", color: UI.textSec, fontSize: 11 }}>{tr("studioModals.picker.selectedImagesAlsoSavedProducts")}</p>
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+            <p data-testid="my-products-count" style={{ margin: 0, fontSize: 11, color: UI.muted }}>
+              {filteredMyProducts.length === 1 ? tr("studioModals.picker.showingProductOne") : tr("studioModals.picker.showingProductsMany").replace("{n}", String(filteredMyProducts.length))}
+            </p>
+            {/* Recency is an ORDERING, not a source (Section C). */}
+            <select
+              data-testid="my-products-sort"
+              value={productSort}
+              onChange={e => setProductSort(e.target.value as MyProductsSort)}
+              style={{ borderRadius: 8, border: `1px solid ${UI.borderStrong}`, background: "var(--app-surface-2, #0D1423)", color: UI.textSec, padding: "5px 8px", fontSize: 11, fontWeight: 700, outline: "none", cursor: "pointer" }}
+            >
+              {MY_PRODUCTS_SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+          </div>
           <div
             data-testid="my-products-grid"
             style={{
@@ -1152,12 +1226,6 @@ export function InlineCreateAssetPicker({
         </>
       )}
 
-      {isProduct && productTab === "shopify" && shopifyEnabled && (
-        <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
-          <ShopifyProductPickerPanel mode="select-images" onSelectImages={saveShopifyImages} />
-          <p style={{ margin: "10px 0 0", color: UI.textSec, fontSize: 11 }}>{tr("studioModals.picker.selectedImagesAlsoSavedProducts")}</p>
-        </div>
-      )}
 
       {!isProduct && referenceTab === "my_references" && (
         <div className="studio-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12 }}>
@@ -1384,8 +1452,9 @@ export function InlineCreateAssetPicker({
         <button type="button" data-testid="asset-picker-cancel" onClick={() => { setSelected(new Set()); onClose(); }} style={{ padding: "9px 18px", borderRadius: 9, border: `1px solid ${UI.borderStrong}`, background: "transparent", color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
           {tr("common.cancel")}
         </button>
+        {/* Explicit count + noun instead of a vague "Add Selected" (Section C). */}
         <button type="button" data-testid="asset-picker-confirm" disabled={selected.size === 0} onClick={confirm} style={{ padding: "9px 20px", borderRadius: 9, border: "none", background: selected.size ? UI.gradient : "rgba(148,163,184,0.12)", color: selected.size ? "#fff" : UI.muted, fontSize: 12, fontWeight: 800, cursor: selected.size ? "pointer" : "not-allowed" }}>
-          {tr("studioModals.picker.addSelected")}
+          {confirmLabel}
         </button>
       </footer>
       <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => handleFiles(e.currentTarget.files)} />
