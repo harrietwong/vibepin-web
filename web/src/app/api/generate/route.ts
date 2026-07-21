@@ -226,22 +226,66 @@ function buildImageInputs(productImages: string[], styleRef: string | null): Gen
 // generation path flows through (single, batch, retry, AiVersions, and the
 // Python chat fallback all sit behind this route), so a single gate here covers
 // all of them.
-export function buildModeratedText(fields: {
+export type ModeratedFields = {
   keyword: string;
   prompt: string;
   directionBrief: string;
   category: string;
   selectedTags: Array<{ label?: string }>;
-}): string {
+  productMetadata?: Array<{ title?: string }> | null;
+};
+
+export function buildModeratedText(fields: ModeratedFields): string {
   return [
     fields.keyword,
     fields.prompt,
     fields.directionBrief,
     fields.category,
     ...fields.selectedTags.map(t => t?.label ?? ""),
+    ...(fields.productMetadata ?? []).map(p => p?.title ?? ""),
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// ── Per-field checks (context-dilution fix) ───────────────────────────────────
+// Moderating ONLY the joined text is exploitable: measured against the live
+// Creem endpoint, a violent prompt that is denied on its own is ALLOWED once
+// benign context (a keyword, a category, tag labels) is prepended — the added
+// context dilutes the signal. Creem's guidance is to moderate raw user input,
+// so every free-text field is now screened INDIVIDUALLY with its raw value —
+// no prefixes, no labels, no sibling field's text — and the composite check is
+// kept ON TOP to still catch intent split across fields. Both layers must pass.
+//
+// `category` and `selectedTags[].label` are chosen from a hard-coded UI
+// catalogue (creativeDirections.ts CategoryPlaybookId / creativeControls.ts
+// CATEGORY_TAGS), but this route does NOT whitelist them server-side — both are
+// taken straight off the body (`String(body.category)`, a blind cast for
+// selectedTags), so a caller hitting the HTTP API directly can put arbitrary
+// text in either. They are therefore screened individually too: the
+// fixed-option exemption only holds where the server actually enforces it.
+// `product_metadata[].title` is likewise DB-derived in the UI but unchecked on
+// the wire, so it is screened as well.
+//
+// The `externalId` suffix is content-free (`:keyword`, `:prompt`, `:direction`,
+// `:category`, `:tag1`, `:product1`, `:composite`) so logs stay text-free while
+// remaining attributable to a check.
+export function buildModerationChecks(fields: ModeratedFields): Array<{ suffix: string; text: string }> {
+  const checks: Array<{ suffix: string; text: string }> = [];
+  const push = (suffix: string, raw: string) => {
+    if (raw.trim()) checks.push({ suffix, text: raw });
+  };
+
+  push("keyword", fields.keyword);
+  push("prompt", fields.prompt);
+  push("direction", fields.directionBrief);
+  push("category", fields.category);
+  fields.selectedTags.forEach((t, i) => push(`tag${i + 1}`, t?.label ?? ""));
+  (fields.productMetadata ?? []).forEach((p, i) => push(`product${i + 1}`, p?.title ?? ""));
+
+  // Composite last: catches intent that is only harmful once the fields combine.
+  push("composite", buildModeratedText(fields));
+  return checks;
 }
 
 export type ModerationGateOutcome =
@@ -293,6 +337,26 @@ export function evaluateModerationForRequest(
     return { proceed: false, response: rejectedResponse(generationRequestId) };
   }
   return { proceed: false, response: unavailableResponse(generationRequestId) };
+}
+
+/**
+ * Combine the per-field + composite results under the SAME fail-closed contract
+ * as the single-check gate: the request proceeds only when EVERY check allows.
+ * `rejected` wins over `unavailable` so a genuinely policy-violating field still
+ * reports 400 prompt_rejected even if a sibling check happened to be unreachable.
+ * Exported for unit tests.
+ */
+export function evaluateModerationResults(
+  results: ModerationResult[],
+  generationRequestId: string,
+): ModerationGateOutcome {
+  if (results.some(r => !r.ok && r.reason === "rejected")) {
+    return { proceed: false, response: rejectedResponse(generationRequestId) };
+  }
+  if (results.some(r => !r.ok)) {
+    return { proceed: false, response: unavailableResponse(generationRequestId) };
+  }
+  return { proceed: true };
 }
 
 function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}): Promise<NextResponse> {
@@ -531,9 +595,18 @@ export async function POST(req: NextRequest) {
   // real AND mock-provider requests (mock is about the image provider, not
   // compliance). The moderated text is the user's actual intent; the Python
   // enhancer only rewrites it.
-  const moderatedText = buildModeratedText({ keyword, prompt, directionBrief, category, selectedTags });
-  const moderation = await moderatePrompt({ prompt: moderatedText, externalId: generationRequestId });
-  const gate = evaluateModerationForRequest(moderation, generationRequestId);
+  // Every free-text field is screened on its OWN raw value, plus one composite
+  // check over the joined text — see buildModerationChecks. Run in parallel so
+  // the added layers cost ~one moderation round-trip, not N.
+  const moderationChecks = buildModerationChecks({
+    keyword, prompt, directionBrief, category, selectedTags, productMetadata,
+  });
+  const moderationResults = await Promise.all(
+    moderationChecks.map(check =>
+      moderatePrompt({ prompt: check.text, externalId: `${generationRequestId}:${check.suffix}` }),
+    ),
+  );
+  const gate = evaluateModerationResults(moderationResults, generationRequestId);
   if (!gate.proceed) {
     return gate.response;
   }
