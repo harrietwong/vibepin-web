@@ -190,14 +190,34 @@ function requestFallbackIdentity(req: NextRequest, body: Record<string, unknown>
   return `anon:${safeLockName(`${forwarded}|${ua}`).slice(0, 24)}`;
 }
 
-async function resolveGenerationOwner(req: NextRequest, body: Record<string, unknown>): Promise<string> {
+/**
+ * Resolve the authenticated user ONCE per request. Called at the very top of the
+ * handler so authentication precedes any outbound moderation call; the result is
+ * threaded through both the worker enqueue path and the inline lock owner, so
+ * auth is never parsed twice (and a request never pays for two token
+ * verifications).
+ *
+ * Honours the same `ALLOW_GENERATION_AUTH_TEST_HEADER` seam the lock owner used,
+ * so tests can present a deterministic user without a live Supabase session. The
+ * seam is gated on an env flag that production never sets.
+ */
+async function resolveAuthenticatedUserId(req: NextRequest): Promise<string | null> {
   if (process.env.ALLOW_GENERATION_AUTH_TEST_HEADER === "true") {
     const testUserId = req.headers.get("x-vibepin-test-user-id")?.trim();
-    if (testUserId) return `user:${testUserId}`;
+    if (testUserId) return testUserId;
   }
   const bearerUser = await getUserIdFromBearer(req).catch(() => null);
-  const cookieUser = bearerUser ? null : await getUserIdFromCookies().catch(() => null);
-  const userId = bearerUser ?? cookieUser;
+  if (bearerUser) return bearerUser;
+  return getUserIdFromCookies().catch(() => null);
+}
+
+/**
+ * Lock owner for the inline path. Takes the ALREADY-RESOLVED user id (see
+ * resolveAuthenticatedUserId) rather than re-parsing auth. Anonymous callers keep
+ * their historical `session:`/`anon:` fallback identity — the inline path has
+ * always allowed them, and the lock is what bounds their concurrency.
+ */
+function resolveGenerationOwner(req: NextRequest, body: Record<string, unknown>, userId: string | null): string {
   return userId ? `user:${userId}` : requestFallbackIdentity(req, body);
 }
 
@@ -270,6 +290,187 @@ export function buildModeratedText(fields: ModeratedFields): string {
 // The `externalId` suffix is content-free (`:keyword`, `:prompt`, `:direction`,
 // `:category`, `:tag1`, `:product1`, `:composite`) so logs stay text-free while
 // remaining attributable to a check.
+// ── Input bounds (request amplification fix) ──────────────────────────────────
+// Every free-text field becomes its own OUTBOUND Creem moderation call, so an
+// unbounded array on the wire is an amplification primitive: 10,000 tags = 10,000
+// paid third-party calls from one request. The route previously blind-cast
+// `selectedTags` and `product_metadata` with no length or structure validation.
+//
+// Each cap below is DERIVED from an existing UI/product constraint, with modest
+// headroom so a legitimate maximum request never trips it:
+//
+//   KEYWORD 200          — `keyword` is a Pinterest search phrase sourced from
+//                          trend_keywords.keyword (schema.sql:12, unbounded
+//                          `text`); real values are a few words. 200 is far above
+//                          any observed value and far below an abuse payload.
+//   PROMPT 4000          — `prompt` is the machine-assembled hidden prompt
+//                          (studio/hiddenPromptBuilder.ts): ~10 fixed sections
+//                          plus directionBrief (≤1200) + customInstructions
+//                          (≤600) + product titles. 4000 covers the largest
+//                          assembly with room to spare.
+//   CATEGORY 64          — CategoryPlaybookId is an 8-value closed catalogue
+//                          (studio/creativeDirections.ts:87-95); the longest is
+//                          "digital-products" (16 chars). 64 = 4x headroom for
+//                          the raw DB category that can also arrive here.
+//   DIRECTION_BRIEF 1200 — the UI's own hard cap
+//                          (CreativeDirectionPanel.tsx:281 slice(0,1200), counter
+//                          at :313). Sibling brief inputs cap lower (600, 800).
+//   TAG_LABEL 64         — CATEGORY_TAGS (studio/creativeControls.ts:101-183)
+//                          longest label is "Street-style outfit" (19 chars).
+//                          64 = 3x headroom.
+//   TAGS 24              — the largest category set is `fashion` with 16 tags
+//                          (creativeControls.ts:102-119) and the format group is
+//                          single-select (toggleTagSelection, :229-239), so at
+//                          most 13 can be selected at once. 24 is ~2x that.
+//   PRODUCT_TITLE 300    — product title columns are unbounded `text`
+//                          (migrate_v22.sql:152, schema.sql:100); the nearest UI
+//                          title cap in the repo is 100 (StudioBoard.tsx:196,
+//                          maxLength={100} pin-title inputs). 300 = 3x that.
+//   PRODUCTS 24          — no selection cap exists; the evidenced ceilings are 4
+//                          (basket prefill, studio/page.tsx:2267) and 20 per bulk
+//                          URL paste (InlineCreateAssetPicker.tsx:790). 24 lets a
+//                          full 20-URL paste through with headroom.
+//
+// Over a limit → 400 invalid_request. We deliberately do NOT truncate and
+// proceed: silently dropping fields would moderate less text than the user
+// actually submitted, which is exactly the dilution failure the per-field gate
+// exists to prevent.
+export const INPUT_LIMITS = {
+  KEYWORD: 200,
+  PROMPT: 4000,
+  CATEGORY: 64,
+  DIRECTION_BRIEF: 1200,
+  TAG_LABEL: 64,
+  TAG_ID: 128,
+  TAG_GROUP: 64,
+  TAGS: 24,
+  PRODUCT_TITLE: 300,
+  PRODUCT_URL: 2048,
+  PRODUCTS: 24,
+} as const;
+
+// Absolute ceiling on outbound moderation calls for ONE request. Derived from
+// the caps above — the maximum legitimate check list is:
+//   keyword + prompt + direction + category   =  4
+//   selectedTags                              = 24  (INPUT_LIMITS.TAGS)
+//   product_metadata                          = 24  (INPUT_LIMITS.PRODUCTS)
+//   composite                                 =  1
+//                                             = 53
+// 56 leaves a small margin without meaningfully widening the blast radius. This
+// is a HARD backstop, checked after the list is built and before ANY call is
+// issued: over the ceiling → 400 with ZERO outbound requests. It is never used to
+// truncate the list, and a partial batch is never fired — a bounded-but-wrong
+// request must fail loudly rather than be silently screened in part.
+export const MAX_MODERATION_CHECKS = 56;
+
+function invalidRequestResponse(generationRequestId: string, detail: string): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error_type: "invalid_request",
+      code: "invalid_request",
+      error: `This request could not be processed: ${detail}. Please reduce the size of your request and try again.`,
+      urls: [],
+      generation_request_id: generationRequestId,
+    },
+    { status: 400 },
+  );
+}
+
+/** A plain object — not null, not an array, not a boxed primitive. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export type InputValidation =
+  | { ok: true; selectedTags: Array<{ id: string; label: string; group: string }>; productMetadata: Array<{ title?: string; productUrl?: string }> | null }
+  | { ok: false; detail: string };
+
+/**
+ * Validate and bound every user-controlled field that feeds the moderation gate,
+ * BEFORE the check list is built. Replaces the previous blind `as` casts on
+ * `selectedTags` / `product_metadata` with real structural validation: each entry
+ * must be a plain object (arrays / null / primitives rejected) whose text fields
+ * are strings within their caps.
+ *
+ * Exported so the bound can be unit-tested without driving the whole handler.
+ */
+export function validateGenerationInput(raw: {
+  keyword: string;
+  prompt: string;
+  directionBrief: string;
+  category: string;
+  selectedTags: unknown;
+  productMetadata: unknown;
+}): InputValidation {
+  const tooLong = (name: string, value: string, max: number) =>
+    value.length > max ? `${name} exceeds the maximum length of ${max} characters` : null;
+
+  const scalarError =
+    tooLong("keyword", raw.keyword, INPUT_LIMITS.KEYWORD) ??
+    tooLong("prompt", raw.prompt, INPUT_LIMITS.PROMPT) ??
+    tooLong("directionBrief", raw.directionBrief, INPUT_LIMITS.DIRECTION_BRIEF) ??
+    tooLong("category", raw.category, INPUT_LIMITS.CATEGORY);
+  if (scalarError) return { ok: false, detail: scalarError };
+
+  // selectedTags: absent → []. Present but not an array → reject (a blind cast
+  // previously turned `{}` or a string into an empty list silently).
+  let selectedTags: Array<{ id: string; label: string; group: string }> = [];
+  if (raw.selectedTags !== undefined && raw.selectedTags !== null) {
+    if (!Array.isArray(raw.selectedTags)) return { ok: false, detail: "selectedTags must be an array" };
+    if (raw.selectedTags.length > INPUT_LIMITS.TAGS) {
+      return { ok: false, detail: `selectedTags exceeds the maximum of ${INPUT_LIMITS.TAGS} tags` };
+    }
+    const validated: Array<{ id: string; label: string; group: string }> = [];
+    for (let i = 0; i < raw.selectedTags.length; i++) {
+      const entry = raw.selectedTags[i] as unknown;
+      if (!isPlainObject(entry)) return { ok: false, detail: `selectedTags[${i}] must be an object` };
+      const { id, label, group } = entry;
+      if (id !== undefined && typeof id !== "string") return { ok: false, detail: `selectedTags[${i}].id must be a string` };
+      if (label !== undefined && typeof label !== "string") return { ok: false, detail: `selectedTags[${i}].label must be a string` };
+      if (group !== undefined && typeof group !== "string") return { ok: false, detail: `selectedTags[${i}].group must be a string` };
+      const idStr = (id as string | undefined) ?? "";
+      const labelStr = (label as string | undefined) ?? "";
+      const groupStr = (group as string | undefined) ?? "";
+      if (idStr.length > INPUT_LIMITS.TAG_ID) return { ok: false, detail: `selectedTags[${i}].id exceeds the maximum length of ${INPUT_LIMITS.TAG_ID} characters` };
+      if (labelStr.length > INPUT_LIMITS.TAG_LABEL) return { ok: false, detail: `selectedTags[${i}].label exceeds the maximum length of ${INPUT_LIMITS.TAG_LABEL} characters` };
+      if (groupStr.length > INPUT_LIMITS.TAG_GROUP) return { ok: false, detail: `selectedTags[${i}].group exceeds the maximum length of ${INPUT_LIMITS.TAG_GROUP} characters` };
+      validated.push({ id: idStr, label: labelStr, group: groupStr });
+    }
+    selectedTags = validated;
+  }
+
+  // product_metadata: absent / non-array → null (matches the previous shape so
+  // the generator payload is unchanged), but a PRESENT array is fully validated.
+  let productMetadata: Array<{ title?: string; productUrl?: string }> | null = null;
+  if (Array.isArray(raw.productMetadata)) {
+    if (raw.productMetadata.length > INPUT_LIMITS.PRODUCTS) {
+      return { ok: false, detail: `product_metadata exceeds the maximum of ${INPUT_LIMITS.PRODUCTS} products` };
+    }
+    const validated: Array<{ title?: string; productUrl?: string }> = [];
+    for (let i = 0; i < raw.productMetadata.length; i++) {
+      const entry = raw.productMetadata[i] as unknown;
+      if (!isPlainObject(entry)) return { ok: false, detail: `product_metadata[${i}] must be an object` };
+      const { title, productUrl } = entry;
+      if (title !== undefined && typeof title !== "string") return { ok: false, detail: `product_metadata[${i}].title must be a string` };
+      if (productUrl !== undefined && typeof productUrl !== "string") return { ok: false, detail: `product_metadata[${i}].productUrl must be a string` };
+      if (typeof title === "string" && title.length > INPUT_LIMITS.PRODUCT_TITLE) {
+        return { ok: false, detail: `product_metadata[${i}].title exceeds the maximum length of ${INPUT_LIMITS.PRODUCT_TITLE} characters` };
+      }
+      if (typeof productUrl === "string" && productUrl.length > INPUT_LIMITS.PRODUCT_URL) {
+        return { ok: false, detail: `product_metadata[${i}].productUrl exceeds the maximum length of ${INPUT_LIMITS.PRODUCT_URL} characters` };
+      }
+      validated.push({
+        ...(title !== undefined ? { title: title as string } : {}),
+        ...(productUrl !== undefined ? { productUrl: productUrl as string } : {}),
+      });
+    }
+    productMetadata = validated;
+  }
+
+  return { ok: true, selectedTags, productMetadata };
+}
+
 export function buildModerationChecks(fields: ModeratedFields): Array<{ suffix: string; text: string }> {
   const checks: Array<{ suffix: string; text: string }> = [];
   const push = (suffix: string, raw: string) => {
@@ -550,9 +751,6 @@ export async function POST(req: NextRequest) {
   const referenceStrength  = String(body.reference_strength ?? "moderate");
   const outputType         = String(body.output_type ?? "");
   const pinFormat          = String(body.format ?? "vertical 2:3");
-  const productMetadata    = Array.isArray(body.product_metadata)
-    ? (body.product_metadata as Array<{ title?: string; productUrl?: string }>)
-    : null;
   const modelKey           = String(body.model_key ?? "gemini_image");
   const contentLanguage    = String(body.content_language ?? "en").trim() || "en";
   const promptMode         = body.prompt_mode === "creative_direction_v2" ? "creative_direction_v2" : "legacy";
@@ -560,9 +758,6 @@ export async function POST(req: NextRequest) {
   const creativeDirectionMeta = body.creative_direction_meta && typeof body.creative_direction_meta === "object"
     ? body.creative_direction_meta as Record<string, unknown>
     : null;
-  const selectedTags = Array.isArray(body.selectedTags)
-    ? body.selectedTags as Array<{ id: string; label: string; group: string }>
-    : [];
   const primaryFormatTag = String(body.primaryFormatTag ?? "");
   const directionBrief = String(body.directionBrief ?? "");
   const briefManuallyEdited = Boolean(body.briefManuallyEdited ?? false);
@@ -589,18 +784,77 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "keyword is required" }, { status: 400 });
   }
 
-  // ── Moderation gate (Creem AI-compliance) — BEFORE both dispatch branches and
-  // BEFORE lock acquisition, so a rejected/unscreenable prompt never spawns the
-  // generator, never hits FastAPI, and never acquires the per-user lock. Runs for
-  // real AND mock-provider requests (mock is about the image provider, not
-  // compliance). The moderated text is the user's actual intent; the Python
-  // enhancer only rewrites it.
+  // ── Step 1: AUTHENTICATE — before any outbound moderation call ────────────────
+  // Moderation is a PAID third-party API. Resolving the user AFTER the moderation
+  // batch (as this route previously did, 60 lines later in the worker branch) let
+  // an unauthenticated request burn up to N outbound Creem calls before being
+  // rejected 401 — request amplification and unauthorized consumption of a paid
+  // API in one. The user is resolved ONCE here and the same `userId` is reused by
+  // the worker enqueue path below; auth is never re-parsed.
+  //
+  // NON-WORKER PATHS (inline generator.py / FastAPI): these have always tolerated
+  // an anonymous caller — resolveGenerationOwner() falls back to a
+  // `session:<studioClientId>` or `anon:<ip+ua hash>` lock owner (see
+  // requestFallbackIdentity), which only exists because anonymous requests can
+  // reach the inline generator. That is the local-dev / self-hosted shape, so we
+  // do NOT break it: an anonymous request still proceeds on those paths, and the
+  // `anon:` lock still bounds it to one concurrent generation per browser/IP.
+  // GENERATION_MODE=worker is the PRODUCTION setting, and it is now strictly
+  // authenticated: 401 before a single moderation call. The bound/validation work
+  // below applies to every path, so the anonymous inline path is amplification-
+  // capped even though it is not authenticated.
+  const authUserId = await resolveAuthenticatedUserId(req);
+  if (GENERATION_MODE === "worker" && !authUserId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  // ── Step 2: VALIDATE AND BOUND the moderated inputs — still before any call ───
+  // Structural + length validation replacing the old blind `as` casts. An
+  // over-limit or malformed request is rejected with 400 invalid_request having
+  // issued ZERO outbound moderation requests. Never truncates.
+  const validated = validateGenerationInput({
+    keyword,
+    prompt,
+    directionBrief,
+    category,
+    selectedTags: body.selectedTags,
+    productMetadata: body.product_metadata,
+  });
+  if (!validated.ok) {
+    return invalidRequestResponse(generationRequestId, validated.detail);
+  }
+  const selectedTags = validated.selectedTags;
+  const productMetadata = validated.productMetadata;
+
+  // ── Step 3: Moderation gate (Creem AI-compliance) — BEFORE both dispatch
+  // branches and BEFORE lock acquisition, so a rejected/unscreenable prompt never
+  // spawns the generator, never hits FastAPI, and never acquires the per-user
+  // lock. Runs for real AND mock-provider requests (mock is about the image
+  // provider, not compliance). The moderated text is the user's actual intent;
+  // the Python enhancer only rewrites it.
   // Every free-text field is screened on its OWN raw value, plus one composite
   // check over the joined text — see buildModerationChecks. Run in parallel so
   // the added layers cost ~one moderation round-trip, not N.
   const moderationChecks = buildModerationChecks({
     keyword, prompt, directionBrief, category, selectedTags, productMetadata,
   });
+  // Hard, unbypassable backstop. Step 2's per-field caps should already make this
+  // unreachable; it stands as a second, independent line of defence so that ANY
+  // future field added to buildModerationChecks without a matching cap fails
+  // closed instead of silently multiplying outbound calls. Zero requests are
+  // issued when it trips — the list is never truncated and no partial batch fires.
+  if (moderationChecks.length > MAX_MODERATION_CHECKS) {
+    console.warn(JSON.stringify({
+      event: "moderation_check_limit_exceeded",
+      generationRequestId,
+      checkCount: moderationChecks.length,
+      maxChecks: MAX_MODERATION_CHECKS,
+    }));
+    return invalidRequestResponse(
+      generationRequestId,
+      `it requires ${moderationChecks.length} content checks, above the maximum of ${MAX_MODERATION_CHECKS}`,
+    );
+  }
   const moderationResults = await Promise.all(
     moderationChecks.map(check =>
       moderatePrompt({ prompt: check.text, externalId: `${generationRequestId}:${check.suffix}` }),
@@ -659,9 +913,10 @@ export async function POST(req: NextRequest) {
   // Path 0: WP3-P1 worker enqueue (GENERATION_MODE=worker). Short-circuits everything
   // below — the VPS worker fulfills the job, this process never spawns generator.py.
   if (GENERATION_MODE === "worker") {
-    const bearerUser = await getUserIdFromBearer(req).catch(() => null);
-    const cookieUser = bearerUser ? null : await getUserIdFromCookies().catch(() => null);
-    const userId = bearerUser ?? cookieUser;
+    // Auth already resolved (and enforced) in Step 1 above — reused, never
+    // re-parsed. The `!authUserId` case returned 401 before any moderation call,
+    // so this narrowing can only fail if that guard is ever removed.
+    const userId = authUserId;
     if (!userId) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
@@ -726,7 +981,7 @@ export async function POST(req: NextRequest) {
   const promptWithLang = contentLanguage !== "en"
     ? `${prompt}\n\n[Important: Generate any on-image text and descriptive copy in ${contentLanguage}. Keep Pinterest-native tone.]`
     : prompt;
-  const generationOwnerId = await resolveGenerationOwner(req, body);
+  const generationOwnerId = resolveGenerationOwner(req, body, authUserId);
   const userLock = await acquireTtlLock("active-generation", generationOwnerId, USER_GENERATION_LOCK_TTL_MS);
   if (!userLock.acquired) {
     console.warn(JSON.stringify({

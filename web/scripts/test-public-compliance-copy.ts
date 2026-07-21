@@ -188,7 +188,11 @@ function main() {
       privacyFlat.includes("third-party AI image-generation service"),
       "privacy names the third-party AI image-generation step",
     );
-    for (const input of ["keywords", "prompts", "creative direction", "category", "tags"]) {
+    // "product titles" is enumerated explicitly: product titles attached to a
+    // generation are transmitted to the third-party moderation provider (they get
+    // their own per-field check in /api/generate), so the disclosure must name
+    // them rather than leave them to "related descriptive text".
+    for (const input of ["keywords", "prompts", "creative direction", "category", "tags", "product titles"]) {
       assert(privacyFlat.includes(input), `privacy enumerates processed input: ${input}`);
     }
   });
