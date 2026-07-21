@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, ImagePlus, Layers, Loader2, Plus, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Loader2, Plus, Sparkles, X } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import * as assetStore from "@/lib/assetStore";
@@ -45,15 +45,44 @@ import type { CreativeDirectionSnapshotV2 } from "@/lib/studioPersistence";
 import { CreativeChips } from "@/components/studio/CreativeChips";
 import { InlineCreateAssetPicker, type InlineAssetItem } from "@/components/studio/InlineCreateAssetPicker";
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
+import {
+  MAX_SELECTED_REFERENCES,
+  PINS_PER_REFERENCE_OPTIONS,
+  isAtCapacity,
+  isSelected as isReferenceSelected,
+  mergePickerSelection,
+  referenceImageUrls,
+  referenceKey,
+  removeReference,
+  selectedPatternTags,
+  toggleReference,
+  totalPins as computeTotalPins,
+  type SelectedReference,
+} from "@/lib/studio/selectedReferences";
 
 type PickerRole = "product" | "style_reference";
 export type VariationMode = "distinct" | "similar";
+
+/**
+ * How the recommendation list was actually derived (contract owned by the data
+ * session's /api/reference-candidates). Only product-level bases may be labelled
+ * "Recommended for this product"; category-only results must say "Category
+ * inspiration" — see Section F of the create-pin PRD (data-honesty).
+ */
+type RecommendationBasis = "product_analysis" | "product_text" | "category_fallback";
 
 export type AiVersionOptions = {
   prompt: string;
   hiddenPrompt: string;
   productImages: string[];
+  /** Flat URLs, kept for compatibility with existing callers. */
   referenceImages: string[];
+  /**
+   * The same references with provenance intact. Commit 2 plans one generation
+   * group per entry and persists the association onto every resulting Pin.
+   */
+  selectedReferences: SelectedReference[];
+  /** Per-group /api/generate count — the batch total is groups × count. */
   count: number;
   format: string;
   modelKey: string;
@@ -87,13 +116,16 @@ export type AiVersionDrawerProps = {
   generating: boolean;
   title?: string;
   initialSetup?: AiVersionDrawerSetup;
+  /** Serial reference-group progress, e.g. {current:2,total:3}. Owned by the parent. */
+  groupProgress?: { current: number; total: number } | null;
   onSetupChange?: (setup: AiVersionDrawerSetup) => void;
   onClose: () => void;
   onGenerate: (opts: AiVersionOptions) => void;
 };
 
 const FORMATS = ["Pinterest 2:3", "Pinterest 4:5", "Square 1:1", "Story 9:16"];
-const COUNTS = [1, 2, 3, 4];
+// Output count now comes from PINS_PER_REFERENCE_OPTIONS (1..3): the value is
+// per-reference and the batch is capped at 3 references × 3 Pins = 9.
 const MODEL_OPTIONS = [
   { value: "gemini_image", label: MODEL_KEY_TO_LABEL.gemini_image ?? "Gemini Image" },
   { value: "gpt_image", label: MODEL_KEY_TO_LABEL.gpt_image ?? "GPT Image" },
@@ -274,12 +306,21 @@ function AssetStrip({
   );
 }
 
-export function AiVersionDrawer({ draft, open, generating, title, initialSetup, onSetupChange, onClose, onGenerate }: AiVersionDrawerProps) {
+export function AiVersionDrawer({ draft, open, generating, title, initialSetup, groupProgress, onSetupChange, onClose, onGenerate }: AiVersionDrawerProps) {
   const { t: tr } = useLocale();
   const resolvedTitle = title ?? tr("pinDrawer.dialogTitle");
   const storedAssets = useSyncExternalStore(assetStore.subscribe, assetStore.getAssets, assetStore.getServerAssets);
   const [productUrls, setProductUrls] = useState<string[]>(() => initialSetup ? initialSetup.productImages : draft?.imageUrl ? [draft.imageUrl] : []);
-  const [referenceUrls, setReferenceUrls] = useState<string[]>(() => initialSetup?.referenceImages ?? []);
+  // ONE selection state for every reference entry point — recommended Pins, picker
+  // uploads and saved refs all live here (see lib/studio/selectedReferences.ts).
+  // Rehydrated from the flat URL list when restoring a prior setup; provenance for
+  // recommended Pins is re-attached once recommendations load (effect below).
+  const [selectedReferences, setSelectedReferences] = useState<SelectedReference[]>(
+    () => (initialSetup?.referenceImages ?? []).map(url => ({
+      id: url, imageUrl: url, source: "saved" as const, role: "style_reference" as const,
+    })),
+  );
+  const referenceUrls = referenceImageUrls(selectedReferences);
   const [pickerRole, setPickerRole] = useState<PickerRole | null>(null);
   const [count, setCount] = useState(() => initialSetup?.count ?? 2);
   const [format, setFormat] = useState(() => initialSetup?.format ?? FORMATS[0]);
@@ -291,8 +332,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const [briefManuallyEdited, setBriefManuallyEdited] = useState(() => initialSetup?.briefManuallyEdited ?? false);
   // ── Phase B: product-aware recommended references (inspiration only) ──────────
   const [recommendedRefs, setRecommendedRefs] = useState<ReferenceRecommendation[]>([]);
+  const [recommendationBasis, setRecommendationBasis] = useState<RecommendationBasis>("category_fallback");
   const [recExpanded, setRecExpanded] = useState(true);
-  const [selectedRefIds, setSelectedRefIds] = useState<string[]>(() => draft?.creativeSelections?.selectedReferenceIds ?? []);
+  // Derived, never stored separately — this is what keeps the recommendation grid
+  // and the top tray from disagreeing about what is selected.
+  const selectedRefIds = selectedReferences.filter(r => r.source === "recommended_pin").map(r => r.id);
 
   // Live view of the source draft: the `draft` prop is a click-time snapshot, but
   // analysis fields fill in asynchronously (and may land after the drawer opened) —
@@ -310,7 +354,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const [recDraftId, setRecDraftId] = useState<string | undefined>(draft?.id);
   if (draft?.id !== recDraftId) {
     setRecDraftId(draft?.id);
-    setSelectedRefIds(draft?.creativeSelections?.selectedReferenceIds ?? []);
+    // Drop recommended Pins from the previous draft; keep the user's own uploads/saved
+    // refs, which are not draft-specific.
+    setSelectedReferences(prev => prev.filter(r => r.source !== "recommended_pin"));
     setRecommendedRefs([]);
   }
 
@@ -373,8 +419,17 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         body: JSON.stringify(body),
       })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((data: { items?: ReferenceRecommendation[] }) => {
-          if (!cancelled) setRecommendedRefs(Array.isArray(data.items) ? data.items : []);
+        .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: string }) => {
+          if (cancelled) return;
+          setRecommendedRefs(Array.isArray(data.items) ? data.items : []);
+          // Contract owned by the data session. Until it ships the field is absent —
+          // default to category_fallback so we never over-claim product-level
+          // personalisation we did not actually perform.
+          setRecommendationBasis(
+            data.recommendationBasis === "product_analysis" || data.recommendationBasis === "product_text"
+              ? data.recommendationBasis
+              : "category_fallback",
+          );
         })
         .catch(() => {
           if (cancelled) return;
@@ -386,34 +441,57 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const REC_LIMIT = 3;
-  // Toggle a recommended reference as INSPIRATION (compliance §4): records the choice
-  // + emits analytics; only the derived pattern tags ever reach the prompt (below).
+  const REC_LIMIT = MAX_SELECTED_REFERENCES;
+  /**
+   * Toggle a recommended Pin as a real Style Reference.
+   *
+   * Until 2026-07-21 this only recorded an id and fed derived patternTags to the
+   * prompt — Pinterest创意智能层 PRD §4 forbade pin_samples images as generation
+   * conditioning. The product owner lifted that rule (§4.1); the Pin's imageUrl now
+   * enters the batch as role=style_reference alongside role=product images, while
+   * patternTags remain an auxiliary signal (§4.1.8) and the Pinterest linkback stays
+   * on the card (§4.1.11).
+   */
   const handleToggleRecommended = (ref: ReferenceRecommendation) => {
-    const isSelected = selectedRefIds.includes(ref.id);
-    if (!isSelected && selectedRefIds.length >= REC_LIMIT) return;
-    const nextSelected = isSelected
-      ? selectedRefIds.filter(id => id !== ref.id)
-      : [...selectedRefIds, ref.id];
-    setSelectedRefIds(nextSelected);
-    track(isSelected ? "reference_rejected" : "reference_selected", {
+    const entry: SelectedReference = {
+      id: ref.id,
+      imageUrl: ref.imageUrl,
+      source: "recommended_pin",
+      sourceUrl: ref.sourceUrl ?? ref.pinterestUrl ?? undefined,
+      title: ref.title,
+      reason: ref.reason,
+      patternTags: ref.patternTags,
+      role: "style_reference",
+    };
+    const wasSelected = isReferenceSelected(selectedReferences, entry);
+    // Capacity is shared across ALL reference sources, so a user with 3 uploads
+    // cannot add a 4th via the recommendation grid.
+    if (!wasSelected && isAtCapacity(selectedReferences)) return;
+    const next = toggleReference(selectedReferences, entry);
+    setSelectedReferences(next);
+    track(wasSelected ? "reference_rejected" : "reference_selected", {
       draftId: draft?.id ?? null,
       referenceId: ref.id,
     });
     if (draft?.id) {
       const prev = pinDraftStore.getDraft(draft.id)?.creativeSelections ?? {};
       const rejected = new Set(prev.rejectedReferenceIds ?? []);
-      if (isSelected) rejected.add(ref.id); else rejected.delete(ref.id);
+      if (wasSelected) rejected.add(ref.id); else rejected.delete(ref.id);
       pinDraftStore.updateDraft(draft.id, {
-        creativeSelections: { ...prev, selectedReferenceIds: nextSelected, rejectedReferenceIds: [...rejected] },
+        creativeSelections: {
+          ...prev,
+          selectedReferenceIds: next.filter(r => r.source === "recommended_pin").map(r => r.id),
+          rejectedReferenceIds: [...rejected],
+        },
       });
     }
   };
 
-  // Derived pattern tags of the SELECTED recommendations — text signals for the prompt.
+  // Derived pattern tags of the SELECTED references — auxiliary prompt signal that
+  // now accompanies, rather than replaces, the reference images themselves.
   const inspirationPatterns = useMemo(
-    () => recommendedRefs.filter(r => selectedRefIds.includes(r.id)).map(r => r.patternTags),
-    [recommendedRefs, selectedRefIds],
+    () => selectedPatternTags<InspirationPatternTags>(selectedReferences),
+    [selectedReferences],
   );
 
   useEffect(() => {
@@ -534,6 +612,16 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
 
   const outputVariants = useMemo(() => buildOutputVariants(count, variationMode, category), [count, variationMode, category]);
 
+  // Section G: the CTA shows the BATCH total; each group still requests `count`.
+  const batchTotal = computeTotalPins(selectedReferences.length, count);
+  // Serial group queue progress (Section G, "Generating reference 2 of 3"). The
+  // parent owns execution, so it reports which group is in flight.
+  const generatingLabel = generating && groupProgress && groupProgress.total > 1
+    ? tr("pinDrawer.footer.generatingReferenceProgress")
+        .replace("{current}", String(groupProgress.current))
+        .replace("{total}", String(groupProgress.total))
+    : tr("pinDrawer.footer.generatingEllipsis");
+
   if (!open) return null;
 
   const currentSetup: AiVersionDrawerSetup = {
@@ -581,9 +669,22 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   };
 
   const confirmPicker = (items: InlineAssetItem[]) => {
-    const urls = unique(items.map(item => item.imageUrl).filter(Boolean));
-    if (pickerRole === "product") setProductUrls(urls);
-    if (pickerRole === "style_reference") setReferenceUrls(urls);
+    if (pickerRole === "product") {
+      setProductUrls(unique(items.map(item => item.imageUrl).filter(Boolean)));
+    }
+    if (pickerRole === "style_reference") {
+      // The picker only knows about stored assets — merge so recommended Pins the
+      // user selected in the drawer are not silently dropped by a picker confirm.
+      const picked: SelectedReference[] = items.filter(i => i.imageUrl).map(item => ({
+        id: item.id || item.imageUrl,
+        imageUrl: item.imageUrl,
+        source: item.source === "upload" ? "upload" : item.source === "url" ? "url" : "saved",
+        sourceUrl: item.sourceUrl,
+        title: item.title,
+        role: "style_reference",
+      }));
+      setSelectedReferences(prev => mergePickerSelection(prev, picked, ["upload", "saved", "url"]));
+    }
     setPickerRole(null);
   };
 
@@ -610,6 +711,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       hiddenPrompt,
       productImages: productUrls,
       referenceImages: referenceUrls,
+      selectedReferences,
       count,
       format,
       modelKey,
@@ -684,7 +786,12 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
               emptyText={tr("pinDrawer.asset.noReferenceSelected")}
               addTestId="ai-version-add-reference"
               onAdd={openReferencePicker}
-              onRemove={url => setReferenceUrls(prev => prev.filter(x => x !== url))}
+              // Removing a thumbnail here also clears the matching recommendation
+              // card, because both read the same collection.
+              onRemove={url => setSelectedReferences(prev => {
+                const match = prev.find(r => r.imageUrl === url);
+                return match ? removeReference(prev, referenceKey(match)) : prev;
+              })}
             />
 
             {recsEligible && recommendedRefs.length > 0 && (
@@ -692,7 +799,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
                 <button type="button" onClick={() => setRecExpanded(v => !v)}
                   style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
                   {recExpanded ? <ChevronDown style={{ width: 14, height: 14, color: BUI.textSec }} /> : <ChevronRight style={{ width: 14, height: 14, color: BUI.textSec }} />}
-                  <h3 style={{ margin: 0, fontSize: 13, fontWeight: 850, color: BUI.text }}>{tr("pinDrawer.recommended.heading")}</h3>
+                  <h3 data-testid="recommended-heading" data-basis={recommendationBasis} style={{ margin: 0, fontSize: 13, fontWeight: 850, color: BUI.text }}>
+                    {recommendationBasis === "category_fallback"
+                      ? tr("pinDrawer.recommended.headingCategory")
+                      : tr("pinDrawer.recommended.heading")}
+                  </h3>
                   {selectedRefIds.length > 0 && (
                     <span style={{ fontSize: 10.5, fontWeight: 800, color: BUI.purple }}>{selectedRefIds.length}/{REC_LIMIT}</span>
                   )}
@@ -786,9 +897,15 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
                   </select>
                 </div>
                 <div>
-                  <span style={labelStyle}>{tr("pinDrawer.settings.numberOfPins")}</span>
+                  {/* Label reflects the actual semantics: with references selected the
+                      value is per-reference, so the batch total is refs × value. */}
+                  <span style={labelStyle}>
+                    {selectedReferences.length > 0
+                      ? tr("pinDrawer.settings.pinsPerReference")
+                      : tr("pinDrawer.settings.numberOfPins")}
+                  </span>
                   <select data-testid="ai-version-count" value={count} onChange={e => setCount(Number(e.target.value))} style={{ ...fieldStyle, cursor: "pointer" }}>
-                    {COUNTS.map(n => <option key={n} value={n}>{n}</option>)}
+                    {PINS_PER_REFERENCE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
                 <div>
@@ -807,16 +924,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
               </div>
             </section>
 
-            <div data-testid="ai-version-debug-weights" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <div style={{ border: `1px solid ${BUI.border}`, background: BUI.surface2, borderRadius: 10, padding: 9 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 850, color: BUI.text }}><ImagePlus style={{ width: 13, height: 13 }} /> {tr("pinDrawer.settings.productsCountPrefix")}{productUrls.length}</div>
-                <p style={{ margin: "4px 0 0", fontSize: 10.5, color: BUI.textSec }}>{tr("pinDrawer.settings.promptWeightPrefix")}60%</p>
-              </div>
-              <div style={{ border: `1px solid ${BUI.border}`, background: BUI.surface2, borderRadius: 10, padding: 9 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 850, color: BUI.text }}><Layers style={{ width: 13, height: 13 }} /> {tr("pinDrawer.settings.referencesCountPrefix")}{referenceUrls.length}</div>
-                <p style={{ margin: "4px 0 0", fontSize: 10.5, color: BUI.textSec }}>{tr("pinDrawer.settings.promptWeightPrefix")}{referenceUrls.length ? "40%" : "0%"}</p>
-              </div>
-            </div>
+            {/* The Products/References "Prompt weight: 60%/40%" cards were removed
+                (create-pin PRD Section H): the percentages were fixed constants, not a
+                readout of real weighting. Internal prompt weighting is unchanged. */}
           </div>
         </div>
 
@@ -824,8 +934,18 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
           <button type="button" data-testid="ai-version-generate" disabled={generating || productUrls.length === 0}
             onClick={doGenerate}
             style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px 16px", borderRadius: 11, border: "none", background: BUI.gradient, color: "#fff", fontSize: 13, fontWeight: 850, cursor: generating || productUrls.length === 0 ? "default" : "pointer", opacity: generating || productUrls.length === 0 ? 0.65 : 1, fontFamily: "inherit" }}>
-            {generating ? <><Loader2 style={{ width: 15, height: 15 }} className="animate-spin" /> {tr("pinDrawer.footer.generatingEllipsis")}</> : <><Sparkles style={{ width: 15, height: 15 }} /> {(count === 1 ? tr("pinDrawer.footer.generateCountSingular") : tr("pinDrawer.footer.generateCountPlural")).replace("{n}", String(count))}</>}
+            {generating
+              ? <><Loader2 style={{ width: 15, height: 15 }} className="animate-spin" /> {generatingLabel}</>
+              : <><Sparkles style={{ width: 15, height: 15 }} /> {(batchTotal === 1 ? tr("pinDrawer.footer.generateCountSingular") : tr("pinDrawer.footer.generateCountPlural")).replace("{n}", String(batchTotal))}</>}
           </button>
+          {/* Make the multiplication explicit so "Generate 9 Pins" is never a surprise. */}
+          {selectedReferences.length > 0 && (
+            <p data-testid="ai-version-batch-math" style={{ margin: "7px 0 0", fontSize: 10.5, textAlign: "center", color: BUI.textSec }}>
+              {tr("pinDrawer.footer.batchMath")
+                .replace("{refs}", String(selectedReferences.length))
+                .replace("{each}", String(count))}
+            </p>
+          )}
         </footer>
       </div>
 
