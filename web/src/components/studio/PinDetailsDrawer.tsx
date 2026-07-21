@@ -28,7 +28,8 @@ import {
   type MetadataReadinessLabel,
   type PinMetadataDraft,
 } from "@/lib/pinMetadata";
-import { toLinkedProduct } from "@/lib/studio/productSelection";
+import { selectionFromLinkedProduct, toLinkedProduct } from "@/lib/studio/productSelection";
+import { clearDestinationUrlForUnlink, deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDerivation";
 import type { SetupSnapshot, ProductSnapshot, ReferenceSnapshot, CategoryAudit } from "@/lib/studioPersistence";
 import type { PinDetailView, GenerationSetupSnapshot, RecoveryQuality } from "./pinDetails";
 import { getGenerationSetupSnapshot } from "./pinDetails";
@@ -727,15 +728,47 @@ export function PinDetailsDrawer({
     const lp = toLinkedProductFromSelection(p);
     // After a primary replace, no primary exists, so honor asPrimary as-is.
     next = addProductToDraft(next, lp, p.asPrimary);
-    onMetadataChange({ metadataDraft: next });
+
+    // Derive the Website URL from the newly linked product (Section J). Skipped
+    // entirely when the field was manually edited — deriveDestinationUrlForProduct
+    // returns null and we leave the value byte-identical.
+    const selection = selectionFromLinkedProduct(lp);
+    const urlChange = deriveDestinationUrlForProduct(
+      { destinationUrl: form?.destinationUrl ?? next.destinationUrl, destinationUrlSource: next.destinationUrlSource },
+      selection,
+    );
+    if (urlChange) {
+      next = { ...next, destinationUrl: urlChange.destinationUrl, destinationUrlSource: urlChange.destinationUrlSource };
+      onMetadataChange({ metadataDraft: next, destinationUrl: urlChange.destinationUrl ?? "" });
+    } else {
+      onMetadataChange({ metadataDraft: next });
+    }
     setPickerReplaceKey(null);
   }
 
   function handleRemoveProduct(key: string) {
     const draft = form?.metadataDraft;
     if (!draft) return;
-    const { draft: next } = removeProductFromDraft(draft, key);
-    onMetadataChange({ metadataDraft: next });
+    const { primary } = resolvePinProducts(draft);
+    const removed = primary && productKey(primary) === key ? primary : null;
+    const { draft: after } = removeProductFromDraft(draft, key);
+
+    // Unlinking clears the URL ONLY when it is still that product's derived value
+    // (Section J) — a manual URL, or one from another product, survives.
+    const urlChange = removed
+      ? clearDestinationUrlForUnlink(
+          { destinationUrl: form?.destinationUrl ?? after.destinationUrl, destinationUrlSource: after.destinationUrlSource },
+          selectionFromLinkedProduct(removed),
+        )
+      : null;
+    if (urlChange) {
+      onMetadataChange({
+        metadataDraft: { ...after, destinationUrl: "", destinationUrlSource: undefined },
+        destinationUrl: "",
+      });
+    } else {
+      onMetadataChange({ metadataDraft: after });
+    }
   }
 
   function handlePromoteToPrimary(key: string) {

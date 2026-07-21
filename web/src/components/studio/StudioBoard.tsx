@@ -40,7 +40,7 @@ import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } fro
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI } from "@/components/studio/boardUI";
 import { ProductPickerModal, type ProductSelection } from "@/components/studio/ProductPickerModal";
-import { normalizeProductSource, type LinkedProduct } from "@/lib/pinMetadata";
+import { EMPTY_TOUCHED, normalizeProductSource, type LinkedProduct } from "@/lib/pinMetadata";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
@@ -224,7 +224,23 @@ export function StudioBoard() {
   const [scheduleErrors, setScheduleErrors] = useState<Record<string, string>>({});
 
   const handlePersist = useCallback((id: string, patch: Partial<PinDraft>) => {
-    pinDraftStore.updateDraft(id, patch); flashSaved();
+    let next = patch;
+    // A URL typed into the card's own field is a manual edit, exactly like the two
+    // other hand-entry points (studio page + batch row). Without this flag, product
+    // selection would later treat the value as auto-derived and overwrite it
+    // (create-pin PRD Section J).
+    if ("destinationUrl" in patch) {
+      const existing = pinDraftStore.getDraft(id);
+      const typed = (patch.destinationUrl ?? "").trim();
+      if (typed !== (existing?.destinationUrl ?? "").trim()) {
+        next = {
+          ...patch,
+          destinationUrlSource: "manual",
+          metadataTouched: { ...EMPTY_TOUCHED, ...existing?.metadataTouched, destinationUrlTouched: true },
+        };
+      }
+    }
+    pinDraftStore.updateDraft(id, next); flashSaved();
     if (patch.boardId) setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
   }, [flashSaved]);
 

@@ -47,6 +47,7 @@ import { InlineCreateAssetPicker, type InlineAssetItem } from "@/components/stud
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { addProductToDraft } from "@/lib/pinMetadata";
 import { selectionFromAsset, toLinkedProduct } from "@/lib/studio/productSelection";
+import { deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDerivation";
 import {
   MAX_SELECTED_REFERENCES,
   PINS_PER_REFERENCE_OPTIONS,
@@ -779,12 +780,25 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         const existingMeta = current?.metadataDraft;
         if (existingMeta) {
           let meta = existingMeta;
-          items.forEach((item, i) => {
-            const selection = selectionFromAsset(item);
+          const selections = items.map(item => selectionFromAsset(item));
+          selections.forEach((selection, i) => {
             // First pick becomes primary only when the draft has none yet
             // (addProductToDraft's `undefined` behaviour); later picks are tagged.
             meta = addProductToDraft(meta, toLinkedProduct(selection), i === 0 ? undefined : false);
           });
+          // Derive the Website URL from the PRIMARY selection. Returns null (and we
+          // write nothing) when the field is manually edited or already correct.
+          const urlChange = deriveDestinationUrlForProduct(
+            {
+              destinationUrl: meta.destinationUrl,
+              destinationUrlSource: meta.destinationUrlSource,
+              destinationUrlTouched: current?.metadataTouched?.destinationUrlTouched,
+            },
+            selections[0],
+          );
+          if (urlChange) {
+            meta = { ...meta, destinationUrl: urlChange.destinationUrl, destinationUrlSource: urlChange.destinationUrlSource };
+          }
           pinDraftStore.updateDraft(draft.id, { metadataDraft: meta });
         }
       }
