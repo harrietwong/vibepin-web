@@ -135,6 +135,7 @@ export const STUDIO: string[] = [
   "test-recommendation-request",
   "test-drawer-product-state",
   "test-generation-product-link",
+  "test-ai-generation-run",
   "test-pin-details-phase3",
   "test-pin-details-modal-compact",
   "test-optional-website-url",

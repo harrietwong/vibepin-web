@@ -3165,7 +3165,10 @@ function CreatePinsContent() {
     const formState = buildPinDetailsForm(pinDetailPin);
     setMetadataForm(formState);
     setFormBaseline(formState);
-    setMetadataFormTouched({});
+    // Seed from the PERSISTED flags rather than clearing. Resetting to {} meant a
+    // manual URL edit was forgotten on close/reopen, after which the next product
+    // change treated the hand-typed value as auto-managed and overwrote it.
+    setMetadataFormTouched(pinDetailPin.metadataTouched ?? {});
     setShowSaved(false);
 
     const isCompleted = pinDetailView?.statusLabel === "Completed" || pinDetailView?.statusLabel === "Added to Plan";

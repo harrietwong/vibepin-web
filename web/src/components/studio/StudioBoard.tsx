@@ -31,7 +31,8 @@ import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { generateAiVersions } from "@/lib/studio/generateAiVersions";
-import { planReferenceGroups, type SelectedReference } from "@/lib/studio/selectedReferences";
+import { type SelectedReference } from "@/lib/studio/selectedReferences";
+import { runAiGeneration } from "@/lib/studio/runAiGeneration";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
@@ -333,178 +334,49 @@ export function StudioBoard() {
     // Regenerating from an existing pin (version mode) is a "regenerate" action.
     if (parent) track("regenerate_clicked", { draftId: parent.id });
 
-    // 1) Create N Generating placeholder cards IMMEDIATELY so the user sees the
-    //    task started (PRD 8.9). Stable keys gen:{requestId}:{i}; lineage preserved;
-    //    the original upload is never touched.
-    const requestId = `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const perGroup = Math.max(1, opts.count || 1);
-    // One group per style reference; no references still yields exactly one group.
-    // Each group requests `perGroup` images, so the batch total is groups × perGroup.
-    const groups = planReferenceGroups(opts.selectedReferences ?? [], perGroup);
-    const requested = groups.length * perGroup;
-    // Website URL + product link for Pins generated from top-level "Select product".
-    // Derived once from the prefilled product, applied to every resulting draft.
-    // The drawer sends a product only when it is EXPLICIT or a restored link — a bare
-    // draft image never fabricates one. When the drawer sends nothing but the parent
-    // already had a product (version mode, product untouched), inherit the parent's
-    // link and its destination URL verbatim rather than re-deriving it, so a manually
-    // edited URL on the parent survives onto the generated Pins.
-    // The drawer sends a product ONLY when the user actively chose one this session.
-    // Otherwise (version drawer, product untouched) we inherit the parent's COMPLETE
-    // product state — every link, its own primaryProductId, and its destinationUrl
-    // verbatim (which may have been hand-edited and must not be re-derived).
-    const chosenProduct = opts.primaryProductSelection ?? null;
-    const chosenLinked = chosenProduct ? toLinkedProduct({ ...chosenProduct, asPrimary: true }) : null;
-    const parentLinked = !chosenProduct && parent?.linkedProducts?.length ? parent.linkedProducts : null;
-
-    const productLinkPatch: Partial<PinDraft> | null = chosenLinked
-      ? {
-          linkedProducts: [chosenLinked],
-          primaryProductId: chosenLinked.productId,
-          // Provenance is required: without it, later derivation sees an unknown
-          // source, treats the URL as manual, and refuses to update or clear it.
-          ...(resolveProductPublicUrl(chosenProduct!)
-            ? { destinationUrl: resolveProductPublicUrl(chosenProduct!), destinationUrlSource: PRODUCT_DERIVED_URL_SOURCE }
-            : {}),
+    // The run itself lives in lib/studio/runAiGeneration so it can be driven by
+    // tests with a real store and a fake generate() — see test-ai-generation-run.
+    const batchToastId = `gen-batch-${Date.now()}`;
+    let groupTotal = 1;
+    await runAiGeneration({ parent, opts }, {
+      store: pinDraftStore,
+      generate: ({ styleReference, batchRequestId, setup }) =>
+        generateAiVersions({ source: parent, setup, styleReference, batchRequestId }),
+      resolveModelLabel: (_a, modelKey) => resolveModelLabel(undefined, modelKey),
+      onAnalyze: id => { void startImageAnalysis(id); },
+      onJudge: id => { void startQualityJudge(id); },
+      onPlaceholdersReady: totalPins => {
+        // Close the drawer right away — generation continues and the cards update.
+        setAiDrawer(null);
+        setAiGenerating(false);
+        toast.success(totalPins === 1
+          ? tr("studioBoard.toast.generatingOne")
+          : tr("studioBoard.toast.generatingMany").replace("{n}", String(totalPins)));
+      },
+      onGroupProgress: (current, total) => {
+        groupTotal = total;
+        // Batch progress lives in a toast because the drawer closes as soon as the
+        // placeholders exist (multi-group runs are long — N serial requests).
+        if (total > 1) {
+          toast.loading(
+            tr("studioBoard.toast.generatingReferenceProgress")
+              .replace("{current}", String(current))
+              .replace("{total}", String(total)),
+            { id: batchToastId },
+          );
         }
-      : parentLinked
-        ? {
-            linkedProducts: parentLinked,
-            primaryProductId: parent?.primaryProductId ?? parentLinked[0]?.productId,
-            // Carry the parent's URL AND its provenance unchanged, so a manually
-            // edited parent URL stays manual on the generated Pins.
-            ...(parent?.destinationUrl
-              ? { destinationUrl: parent.destinationUrl, destinationUrlSource: parent.destinationUrlSource }
-              : {}),
-          }
-        : null;
-    const setupSnapshot = {
-      mode: parent ? ("board_ai_version" as const) : ("board_ai_scratch" as const),
-      keyword: parent?.keyword,
-      category: opts.category || parent?.category,
-      opportunityTitle: parent?.opportunity,
-      noTextOverlay: true,
-      imagesPerReference: opts.count,
-      selectedProducts: opts.productImages.map((imageUrl, index) => ({
-        imageUrl,
-        title: opts.productMetadata[index]?.title || parent?.title || `Product ${index + 1}`,
-        productUrl: opts.productMetadata[index]?.productUrl,
-      })),
-      selectedReferences: opts.referenceImages.map(imageUrl => ({ imageUrl })),
-      promptSnapshot: opts.directionBrief,
-      creativeDirectionSnapshot: opts.creativeDirectionMeta,
-      createdFrom: "studio_board",
-      format: opts.format,
-      model: resolveModelLabel(undefined, opts.modelKey),
-      modelKey: opts.modelKey,
-    };
-    // ALL totalPins placeholders exist before the first group runs, so the user sees
-    // the true batch size immediately rather than it growing group by group. Each
-    // placeholder already carries its group's reference association (PRD G2), which
-    // is what makes per-group failure fallback and Retry resolvable later.
-    const groupPlaceholders = groups.map(group =>
-      Array.from({ length: group.requestCount }, (_, i) => {
-        const placeholder = pinDraftStore.createBoardDraft({
-          // Placeholder shows the parent image while generating; scratch mode has none.
-          imageUrl: parent?.imageUrl ?? "",
-          source: "ai_generated_from_upload",
-          idempotencyKey: `gen:${requestId}:${group.index}:${i}`,
-          generationStatus: "generating",
-          parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
-          referenceId: group.reference?.id,
-          referenceImageUrl: group.reference?.imageUrl,
-          referenceSource: group.reference?.source,
-          title: parent?.title ?? chosenProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
-          model: resolveModelLabel(undefined, opts.modelKey),
-          format: opts.format,
-          generationSessionId: requestId,
-          promptSnapshot: opts.directionBrief,
-          setupSnapshot,
-        });
-        // Carry the product state (chosen product, or the parent's inherited state)
-        // onto the generated Pin, including the URL's provenance (Section J).
-        if (productLinkPatch) pinDraftStore.updateDraft(placeholder.id, productLinkPatch);
-        return placeholder;
-      }),
-    );
-    // Close the drawer right away — generation continues and the cards update.
-    setAiDrawer(null);
-    setAiGenerating(false);
-    toast.success(requested === 1 ? tr("studioBoard.toast.generatingOne") : tr("studioBoard.toast.generatingMany").replace("{n}", String(requested)));
-
-    // 2) Run the groups SERIALLY. /api/generate holds a per-user active-generation
-    //    lock and answers a concurrent second call with 429 (user_generation_limit),
-    //    so parallel groups would fail the 2nd and 3rd outright. Each group resolves
-    //    its own placeholders as soon as it returns, and a failing group only fails
-    //    its own — the remaining groups still run.
-    let okCount = 0;
-    let failCount = 0;
-    const batchToastId = `gen-batch-${requestId}`;
-    for (const group of groups) {
-      const placeholders = groupPlaceholders[group.index];
-      // Batch progress lives in a persistent toast because the drawer closes as soon
-      // as the placeholders exist (multi-group runs are long — 3 serial requests).
-      if (groups.length > 1) {
-        toast.loading(
-          tr("studioBoard.toast.generatingReferenceProgress")
-            .replace("{current}", String(group.index + 1))
-            .replace("{total}", String(groups.length)),
-          { id: batchToastId },
-        );
-      }
-      try {
-        const result = await generateAiVersions({
-          source: parent,
-          setup: opts,
-          styleReference: group.reference?.imageUrl ?? null,
-          batchRequestId: requestId,
-        });
-        result.urls.slice(0, placeholders.length).forEach((url, i) => {
-          pinDraftStore.completeGeneratedDraft(placeholders[i].id, url);
-          void startImageAnalysis(placeholders[i].id);
-          // Phase C: grade AI results in parallel (independent of copy analysis).
-          void startQualityJudge(placeholders[i].id);
-        });
-        okCount += Math.min(result.urls.length, placeholders.length);
-        // Requested more than came back → the unfilled placeholders failed.
-        const unfilled = placeholders.slice(result.urls.length);
-        unfilled.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
-        failCount += unfilled.length;
-        // Returned more than requested (count clamped up is rare but possible) →
-        // extra cards, still attributed to THIS group's reference.
-        result.urls.slice(placeholders.length).forEach((url, i) => {
-          const extra = pinDraftStore.createBoardDraft({
-            imageUrl: url, source: "ai_generated_from_upload",
-            idempotencyKey: `gen:${requestId}:${group.index}:extra:${i}`,
-            parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
-            referenceId: group.reference?.id,
-            referenceImageUrl: group.reference?.imageUrl,
-            referenceSource: group.reference?.source,
-            title: parent?.title ?? chosenProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
-            model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
-            generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
-          });
-          // Extra results must carry the SAME product state as the placeholders —
-          // otherwise a provider-returned extra loses the product.
-          if (productLinkPatch) pinDraftStore.updateDraft(extra.id, productLinkPatch);
-          okCount += 1;
-          void startImageAnalysis(extra.id);
-          void startQualityJudge(extra.id);
-        });
-      } catch {
-        // This reference failed; keep going so the others still produce results.
-        placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
-        failCount += placeholders.length;
-      }
-    }
-    if (groups.length > 1) toast.dismiss(batchToastId);
-
-    if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
-    else if (okCount) toast.success(parent
-      ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
-      : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
-    else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+      },
+      onSettled: ({ okCount, failCount }) => {
+        if (groupTotal > 1) toast.dismiss(batchToastId);
+        if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
+        else if (okCount) toast.success(parent
+          ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
+          : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
+        else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+      },
+    });
   }, [aiDrawer, tr]);
+
 
   const handleDelete = useCallback((d: PinDraft) => {
     if (typeof window !== "undefined" && !window.confirm(tr("studioBoard.confirm.deleteDraft"))) return;
@@ -583,9 +455,20 @@ export function StudioBoard() {
           role: "style_reference",
         }]
       : [];
-    const retrySetup = groupReference.length
+    // Restore the product images the failed run used. An EMPTY list here would be
+    // treated as authoritative by buildInitialProductSelections (initialSetup wins
+    // over the parent fallback), leaving the drawer with no product and Generate
+    // permanently disabled — so only build a setup when we can supply them.
+    const snapshotProducts = (d.setupSnapshot?.selectedProducts ?? [])
+      .map(p => p.imageUrl)
+      .filter((u): u is string => !!u);
+    const productImages = snapshotProducts.length
+      ? snapshotProducts
+      : parent?.imageUrl ? [parent.imageUrl] : d.sourceImageUrl ? [d.sourceImageUrl] : [];
+
+    const retrySetup = groupReference.length && productImages.length
       ? {
-          productImages: [],
+          productImages,
           referenceImages: groupReference.map(r => r.imageUrl),
           referenceSelections: groupReference,
           count: 1,
@@ -598,8 +481,17 @@ export function StudioBoard() {
           briefManuallyEdited: false,
         }
       : undefined;
-    if (retrySetup) setAiSetupCache(prev => ({ ...prev, [parent?.id ?? d.id ?? "scratch"]: retrySetup }));
-    setAiDrawer(parent ? { mode: "version", draft: parent } : d.imageUrl ? { mode: "version", draft: d } : { mode: "scratch" });
+
+    // The drawer opens in version mode when there is a parent or an own image, and
+    // reads aiSetupCache under the DRAFT ID in that case; a true scratch drawer reads
+    // the literal key "scratch". Cache under whichever key will actually be read —
+    // keying a scratch retry by draft id silently discarded the restored reference.
+    const nextDrawer: AiDrawerState = parent
+      ? { mode: "version", draft: parent }
+      : d.imageUrl ? { mode: "version", draft: d } : { mode: "scratch" };
+    const cacheKey = nextDrawer.mode === "version" ? nextDrawer.draft.id : "scratch";
+    if (retrySetup) setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
+    setAiDrawer(nextDrawer);
   }, [handlePublish]);
 
   // Persist failure is re-read on every render; the store emits (via

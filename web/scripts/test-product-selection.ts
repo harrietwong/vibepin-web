@@ -145,6 +145,38 @@ test("genuine public URLs still pass", () => {
   }
 });
 
+test("public IPv6 destinations are NOT rejected (regression guard)", () => {
+  // Requiring a dot in the hostname rejected every IPv6 literal, since they use colons.
+  const u = "https://[2606:4700:4700::1111]/product";
+  const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+  assert.equal(resolveProductPublicUrl(s), u);
+});
+
+test("ports, uppercase hosts and punycode survive", () => {
+  for (const u of ["https://Shop.Example.COM:8443/p/1", "https://xn--80ak6aa92e.com/p"]) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), u, `${u} must be accepted`);
+  }
+});
+
+test("the SERVER commerce id becomes LinkedProduct.productId, not the local asset id", () => {
+  const s = selectionFromAsset({
+    id: "local_asset_123", title: "Widget", source: "shopify",
+    imageUrl: "https://cdn/w.png", productUrl: "https://acme.example/products/w",
+    shopifyProductId: "sp_999",
+  });
+  assert.equal(s.id, "local_asset_123", "the local id is still carried");
+  assert.deepEqual(s.commerceIds, { shopify: "sp_999" }, "server id kept SEPARATE");
+  const lp = toLinkedProduct(s);
+  assert.equal(lp.productId, "sp_999", "the link references the merchant's catalogue id");
+});
+
+test("a product with no server id still links by its local id", () => {
+  const s = selectionFromAsset({ id: "local_1", title: "Upload", source: "upload", imageUrl: "https://cdn/u.png" });
+  assert.equal(s.commerceIds, undefined);
+  assert.equal(toLinkedProduct(s).productId, "local_1");
+});
+
 test("whitespace around a URL is trimmed", () => {
   const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: "  https://x.example/p  " };
   assert.equal(resolveProductPublicUrl(s), "https://x.example/p");

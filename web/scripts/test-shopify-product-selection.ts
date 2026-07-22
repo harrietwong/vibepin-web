@@ -234,7 +234,11 @@ async function main() {
     const src = readFileSync("src/components/studio/InlineCreateAssetPicker.tsx", "utf8");
     // The Shopify chip's empty state hosts the connect/select-images panel; saved
     // products come only from an explicit selection, never an implicit sync.
-    assert.match(src, /mode="select-images"\s*onSelectImages=\{saveShopifyImages\}/);
+    // Prop-order-independent: the earlier adjacency regex broke the moment a prop
+    // was inserted between them, which is a test asserting formatting, not behaviour.
+    assert.match(src, /mode="select-images"/);
+    assert.match(src, /onSelectImages=\{saveShopifyImages\}/);
+    assert.match(src, /storeLabel=\{shopifyStoreLabel\}/, "real store identity must be threaded, not left to the generic fallback");
   });
 
   // ── Product → Pin draft creation: destinationUrl empty, title prefilled ────────────────
@@ -270,7 +274,11 @@ async function main() {
     const src = readFileSync("src/components/studio/InlineCreateAssetPicker.tsx", "utf8");
     // Shopify is now a My Products source chip whose empty state hosts the panel.
     assert.match(src, /productFilter === "shopify"/);
-    assert.match(src, /mode="select-images"\s*onSelectImages=\{saveShopifyImages\}/);
+    // Prop-order-independent: the earlier adjacency regex broke the moment a prop
+    // was inserted between them, which is a test asserting formatting, not behaviour.
+    assert.match(src, /mode="select-images"/);
+    assert.match(src, /onSelectImages=\{saveShopifyImages\}/);
+    assert.match(src, /storeLabel=\{shopifyStoreLabel\}/, "real store identity must be threaded, not left to the generic fallback");
   });
 
   await test("StudioBoard: Select product opens the one CanonicalProductPicker", () => {

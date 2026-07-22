@@ -37,6 +37,7 @@ import {
 import { ProductHoverPreview } from "@/components/studio/ProductPreview";
 import { toPreviewProduct, asinForAsset } from "@/lib/studio/productPreview";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
+import { getShopifyStatus } from "@/lib/shopifyClient";
 import { ShopifyProductPickerPanel } from "@/components/studio/ShopifyProductPickerPanel";
 import type { ShopifyPanelImage, ShopifyProductSelectionCompat } from "@/components/studio/ShopifyProductPickerPanel";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
@@ -63,6 +64,8 @@ export type InlineAssetItem = {
   // recommendations for a picked product. Undefined when the asset lacks the field.
   productType?: string;
   visualFormat?: string;
+  /** Server-side commerce id (Shopify). NEVER the local asset id. */
+  shopifyProductId?: string;
 };
 
 export type InlineCreateAssetPickerProps = {
@@ -311,6 +314,9 @@ function toInlineAssetItem(item: assets.AssetItem): InlineAssetItem {
     status: item.status,
     productType: item.productType,
     visualFormat: item.visualFormat,
+    // The SERVER product id, distinct from the local asset id above — it is what a
+    // LinkedProduct should reference for a Shopify product.
+    shopifyProductId: item.shopifyProductId,
   };
 }
 
@@ -726,6 +732,9 @@ export function InlineCreateAssetPicker({
   const [showProductUrlImport, setShowProductUrlImport] = useState(false);
   const [productFilter, setProductFilter] = useState<MyProductsFilter>("all");
   const [productSort, setProductSort] = useState<MyProductsSort>("recently_used");
+  // Real shop name/domain for the saved product's `store` field. Best-effort: the
+  // picker still works if it never resolves (store falls back to "Shopify").
+  const [shopifyStoreLabel, setShopifyStoreLabel] = useState<string | undefined>(undefined);
   const [refFilter,    setRefFilter]    = useState<MyRefsFilter>("all");
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlText, setUrlText] = useState("");
@@ -811,6 +820,19 @@ export function InlineCreateAssetPicker({
     });
   }
 
+  /**
+   * The ONE path by which upload / URL import / product-URL import / Shopify add to
+   * the selection. They previously each spread into the existing set directly, which
+   * bypassed selectionMode entirely — a single-product caller could end up showing
+   * "Add 3 products" and then silently consume only the first.
+   */
+  function addToSelection(ids: string[]) {
+    if (!ids.length) return;
+    setSelected(prev => (selectionMode === "single"
+      ? new Set([ids[ids.length - 1]])   // keep the most recent pick only
+      : new Set([...prev, ...ids])));
+  }
+
   async function handleFiles(files: FileList | null) {
     if (!files?.length) return;
     const savedIds: string[] = [];
@@ -833,7 +855,7 @@ export function InlineCreateAssetPicker({
       });
       savedIds.push(saved.id);
     }
-    setSelected(prev => new Set([...prev, ...savedIds]));
+    addToSelection(savedIds);
   }
 
   function importUrls() {
@@ -849,7 +871,7 @@ export function InlineCreateAssetPicker({
       productUrl: url,
       sourceContext: role === "product" ? "url_imported" : "url_imported",
     }).id);
-    setSelected(prev => new Set([...prev, ...savedIds]));
+    addToSelection(savedIds);
     setUrlText("");
     setShowUrlInput(false);
   }
@@ -881,7 +903,7 @@ export function InlineCreateAssetPicker({
       });
       savedIds.push(saved.id);
     }
-    setSelected(prev => new Set([...prev, ...savedIds]));
+    addToSelection(savedIds);
     setShowProductUrlImport(false);
   }
 
@@ -936,7 +958,7 @@ export function InlineCreateAssetPicker({
       });
       savedIds.push(saved.id);
     }
-    setSelected(prev => new Set([...prev, ...savedIds]));
+    addToSelection(savedIds);
   }
 
   function selectPinIdea(pin: PinIdea) {
@@ -1004,11 +1026,28 @@ export function InlineCreateAssetPicker({
   const filteredMyRefs     = filterMyReferences(myAssets, refFilter, search);
 
   const shopifyEnabled = isShopifyIntegrationEnabled();
+  useEffect(() => {
+    if (!shopifyEnabled) return;
+    let cancelled = false;
+    getShopifyStatus()
+      .then(status => {
+        if (cancelled) return;
+        const conn = status.connections[0];
+        setShopifyStoreLabel(conn?.shopName || conn?.shopDomain || undefined);
+      })
+      .catch(() => { /* store label is best-effort */ });
+    return () => { cancelled = true; };
+  }, [shopifyEnabled]);
   // "Choose a product" / "Choose products" by selection mode (Section C). This
   // picker is always multi-select, so the plural form is the general case; the
   // singular reads better while exactly one is chosen.
   const title = isProduct
-    ? (selected.size === 1 ? tr("studioModals.picker.chooseAProduct") : tr("studioModals.picker.chooseProducts"))
+    // A single-product picker always reads "Choose a product" — using selected.size
+    // alone made an empty single picker say "Choose products", promising multi-select
+    // it does not offer.
+    ? (selectionMode === "single" || selected.size === 1
+        ? tr("studioModals.picker.chooseAProduct")
+        : tr("studioModals.picker.chooseProducts"))
     : tr("studioModals.picker.choosePinReferences");
   const tabs = isProduct ? PRODUCT_PICKER_TABS : REFERENCE_PICKER_TABS;
   const activeTab = isProduct ? productTab : referenceTab;
@@ -1113,7 +1152,10 @@ export function InlineCreateAssetPicker({
               "From Shopify" tab. */}
           {productFilter === "shopify" && shopifyEnabled && filteredMyProducts.length === 0 && (
             <div data-testid="my-products-shopify-connect" style={{ marginBottom: 10 }}>
-              <ShopifyProductPickerPanel mode="select-images" onSelectImages={saveShopifyImages} />
+              {/* storeLabel is required for the real store identity to reach the
+                  asset — without it shopifyProductToSelection returns store:undefined
+                  and everything falls back to the generic "Shopify" literal. */}
+              <ShopifyProductPickerPanel mode="select-images" storeLabel={shopifyStoreLabel} onSelectImages={saveShopifyImages} />
               <p style={{ margin: "10px 0 0", color: UI.textSec, fontSize: 11 }}>{tr("studioModals.picker.selectedImagesAlsoSavedProducts")}</p>
             </div>
           )}
@@ -1479,7 +1521,7 @@ export function InlineCreateAssetPicker({
           {confirmLabel}
         </button>
       </footer>
-      <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => handleFiles(e.currentTarget.files)} />
+      <input ref={fileRef} type="file" accept="image/*" {...(selectionMode === "single" ? {} : { multiple: true })} style={{ display: "none" }} onChange={e => handleFiles(e.currentTarget.files)} />
       <style>{`@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }`}</style>
     </section>
   );

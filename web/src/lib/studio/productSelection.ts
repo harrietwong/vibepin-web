@@ -86,8 +86,11 @@ function safePublicUrl(url: string | undefined | null): string | undefined {
   let parsed: URL;
   try { parsed = new URL(v); } catch { return undefined; } // malformed
   if (!parsed.hostname) return undefined;
-  // A hostname with no dot and no port is not a routable public host (e.g. "https://x").
-  if (!parsed.hostname.includes(".") && parsed.hostname !== "localhost") return undefined;
+  // IPv6 literals are bracketed and contain colons, not dots — requiring a dot
+  // rejected every public IPv6 destination. Validate them by shape instead.
+  const isIpv6Literal = parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]");
+  // A dotless, non-IPv6 hostname is not a routable public host (e.g. "https://x").
+  if (!isIpv6Literal && !parsed.hostname.includes(".") && parsed.hostname !== "localhost") return undefined;
   if (isNonPublicHost(parsed.hostname)) return undefined;
   // Shopify Admin URLs are internal — they 404 for visitors and leak the store's
   // back office. The storefront URL is the only valid destination.
@@ -132,9 +135,12 @@ export function selectionFromAsset(asset: {
   keyword?: string;
   visualFormat?: string;
   tags?: string[];
+  shopifyProductId?: string;
 }): CanonicalProductSelection {
   return {
     id: asset.id,
+    // The SERVER commerce id, kept separate from the local asset id above.
+    commerceIds: asset.shopifyProductId ? { shopify: asset.shopifyProductId } : undefined,
     title: (asset.title ?? "").trim(),
     imageUrl: asset.imageUrl,
     publicUrl: asset.productUrl ?? asset.sourceUrl,
@@ -164,7 +170,10 @@ export function selectionFromAsset(asset: {
  */
 export function toLinkedProduct(selection: CanonicalProductSelection): LinkedProduct {
   return {
-    productId: selection.id,
+    // Prefer the SERVER commerce id: a LinkedProduct that stores the local asset id
+    // cannot be matched back to the merchant's catalogue. Falls back to the local id
+    // for sources that genuinely have no server-side record (uploads, manual).
+    productId: selection.commerceIds?.shopify ?? selection.id,
     title: selection.title,
     imageUrl: selection.imageUrl,
     productUrl: resolveProductPublicUrl(selection),
