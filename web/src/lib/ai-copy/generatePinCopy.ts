@@ -12,6 +12,32 @@ import type {
   ProductContext,
 } from "./types";
 
+/**
+ * Error thrown by generatePinterestPinCopy, carrying a machine-readable `code` so the
+ * calling UI can pick the right severity instead of pattern-matching a message.
+ *
+ * `code === "rate_limited"` means the server's per-user AI cost ceiling was hit
+ * (HTTP 429). It is NOT a quality failure and NOT a provider failure: the user simply
+ * asked for too much too quickly and the same request will work after a short wait.
+ * Callers should surface it with the NEUTRAL toast severity — the same treatment
+ * /api/generate's `user_generation_limit` gets in app/app/studio/page.tsx.
+ */
+export class PinCopyError extends Error {
+  readonly code: string;
+  readonly retryAfterSeconds: number | null;
+  constructor(code: string, message: string, retryAfterSeconds: number | null = null) {
+    super(message);
+    this.name = "PinCopyError";
+    this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/** True when `err` is the rate-limit stop (429), so the UI can soften the toast. */
+export function isRateLimitError(err: unknown): err is PinCopyError {
+  return err instanceof PinCopyError && err.code === "rate_limited";
+}
+
 const UI_STAGE_YIELD_MS = 40;
 // How long "Generate copy" waits for an in-flight upload-time analysis to finish
 // before falling back to the vision one-call path.
@@ -269,13 +295,35 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     // as a provider or quality failure, and tell the user to sign in rather than
     // implying the model could not write copy for their image.
     if (res.status === 401) {
-      throw new Error(body.userMessage || "Please sign in to generate copy.");
+      throw new PinCopyError("unauthenticated", body.userMessage || "Please sign in to generate copy.");
+    }
+    // 429 = the server's per-user AI cost ceiling (Phase 1B PR2). This is NOT a
+    // quality failure and NOT a provider failure. Before this branch existed it fell
+    // through to the generic bucket below, which both told the user "we couldn't
+    // generate good copy for this image" (misleading — the image is fine) and
+    // counted the request as `ai_copy_quality_failed` in telemetry, corrupting the
+    // quality-failure rate. It gets its OWN event and its own error code so the UI
+    // can use the neutral toast severity.
+    if (res.status === 429) {
+      const retryAfter = Number(res.headers.get("retry-after"));
+      track("ai_copy_rate_limited", {
+        draftId: input.draftId,
+        retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : null,
+      });
+      throw new PinCopyError(
+        "rate_limited",
+        body.userMessage || "You're doing that a bit too fast. Please wait a moment and try again.",
+        Number.isFinite(retryAfter) ? retryAfter : null,
+      );
     }
     // 422 = quality gate (don't write fields); 502 = provider failure. Never leak
     // internal codes (e.g. ai_copy_quality_gate_failed) into the UI.
     if (res.status === 502) track("ai_copy_provider_failed", { draftId: input.draftId, error: body.error ?? null });
     else track("ai_copy_quality_failed", { draftId: input.draftId, error: body.error ?? null, versions: { promptVersion: COPY_PROMPT_VERSION } });
-    throw new Error(body.userMessage || "We couldn't generate good copy for this image. Please try again.");
+    throw new PinCopyError(
+      "ai_copy_failed",
+      body.userMessage || "We couldn't generate good copy for this image. Please try again.",
+    );
   }
 
   track("ai_copy_success", {

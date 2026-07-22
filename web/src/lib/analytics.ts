@@ -17,6 +17,12 @@ export type AnalyticsEvent =
   | "ai_copy_success"
   | "ai_copy_quality_failed"
   | "ai_copy_provider_failed"
+  // Server returned 429 (per-user AI cost ceiling, Phase 1B PR2). Deliberately its
+  // OWN event: before it existed these landed in `ai_copy_quality_failed`, inflating
+  // the quality-failure rate with requests the model never even saw.
+  | "ai_copy_rate_limited"
+  | "image_analysis_rate_limited"
+  | "quality_judge_rate_limited"
   | "ai_copy_latency_ms"
   // ── PRD v0.2 Creative-Intelligence events (channel + types ready; wired incrementally) ──
   | "direction_selected"

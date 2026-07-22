@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
+import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
 import { retrievePinterestKeywords, type KeywordContextResult } from "@/lib/ai-copy/keywordContext";
 import { appendShopifyProductDetails } from "@/lib/ai-copy/shopifyGrounding";
 import {
@@ -225,6 +226,19 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { ok: false, requestId, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE },
       { status: 401 },
+    );
+  }
+
+  // RATE LIMIT SECOND — still before body parsing, provider configuration, image
+  // fetching and every provider call below. Authentication alone only converted
+  // unlimited anonymous spend into unlimited per-account spend; this bounds what a
+  // single account can cost. Fails OPEN when the limiter's own infrastructure is
+  // down — deliberate, see lib/server/rateLimit.ts.
+  const limit = await consumeRateLimit(userId, "ai_copy");
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { ok: false, requestId, error: RATE_LIMITED_ERROR, userMessage: RATE_LIMITED_MESSAGE },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
     );
   }
 

@@ -17,7 +17,7 @@
 import { forwardRef, useCallback, useImperativeHandle, useMemo, useState } from "react";
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
-import { generatePinterestPinCopy } from "@/lib/ai-copy/generatePinCopy";
+import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
 import type { CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
 import type { PinterestBoard } from "@/lib/pinterestClient";
@@ -186,7 +186,16 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
       const msg = (err as Error)?.message || tr("pinForm.genericGenerateError");
       setErrorMsg(msg);
       setStage("error");
-      toast.error(msg);
+      // A 429 (per-user AI cost ceiling) is a "wait a moment", not a failure the user
+      // did anything wrong to cause. Softened to the NEUTRAL toast severity, matching
+      // how app/app/studio/page.tsx treats /api/generate's user_generation_limit.
+      // Reuses the existing rate-limit strings (translated in all 20 locales) rather
+      // than the raw server message.
+      if (isRateLimitError(err)) {
+        toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
+      } else {
+        toast.error(msg);
+      }
     }
   }, [isRegen, props, tr]);
 

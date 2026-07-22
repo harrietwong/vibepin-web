@@ -76,6 +76,19 @@ export async function startQualityJudge(draftId: string): Promise<void> {
       // background call the user never initiated would be worse UX than the
       // existing behaviour, and the foreground actions on the same page
       // (Generate copy) already prompt for sign-in.
+      //
+      // 429 = the server's per-user AI cost ceiling (Phase 1B PR2). Same silent path
+      // for the same reason, but tagged `rate_limited` with its OWN analytics event so
+      // it reads as "we deliberately declined to spend", not as a grader failure. A
+      // skipped judge is harmless by design: the card renders exactly as an unjudged one.
+      if (res.status === 429) {
+        const retryAfter = Number(res.headers.get("retry-after"));
+        track("quality_judge_rate_limited", {
+          draftId,
+          retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : null,
+        });
+        throw new Error("rate_limited");
+      }
       throw new Error(res.status === 401 ? "unauthenticated" : (bodyJson?.error || `judge_http_${res.status}`));
     }
 

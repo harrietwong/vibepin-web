@@ -92,6 +92,20 @@ export async function startImageAnalysis(draftId: string): Promise<void> {
       // the error is tagged `unauthenticated` so the failure telemetry does not
       // read as an AI failure. The user-visible sign-in prompt comes from the
       // Generate-copy call (generatePinCopy.ts), which is a foreground action.
+      //
+      // 429 = the server's per-user AI cost ceiling (Phase 1B PR2). Same reasoning,
+      // same silent path — a background call the user never initiated must not raise
+      // a toast — but it is tagged `rate_limited` and gets its OWN analytics event so
+      // it is not miscounted as an image/provider failure. Generate copy still works
+      // for these drafts: it falls back to the vision one-call path.
+      if (res.status === 429) {
+        const retryAfter = Number(res.headers.get("retry-after"));
+        track("image_analysis_rate_limited", {
+          draftId,
+          retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : null,
+        });
+        throw new Error("rate_limited");
+      }
       throw new Error(res.status === 401 ? "unauthenticated" : (body?.error || `analyze_http_${res.status}`));
     }
 
