@@ -48,7 +48,10 @@ import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 type AiDrawerState =
-  | { mode: "version"; draft: PinDraft }
+  // `product` on the version variant carries a RETRY's own product forward, so a
+  // failed run that chose a different product than its parent is not re-inherited
+  // from the parent on retry.
+  | { mode: "version"; draft: PinDraft; product?: CanonicalProductSelection }
   | { mode: "scratch"; product?: CanonicalProductSelection }
   | null;
 
@@ -474,16 +477,27 @@ export function StudioBoard() {
       ? snapshotProducts
       : parent?.imageUrl ? [parent.imageUrl] : d.sourceImageUrl ? [d.sourceImageUrl] : [];
 
-    const retrySetup = groupReference.length && productImages.length
+    // Preserve the ORIGINAL model. Only a known model key is accepted — a blank or
+    // unrecognised persisted value falls back rather than being passed through to a
+    // provider that does not exist.
+    const KNOWN_MODELS = ["gemini_image", "gpt_image"];
+    const snapshotModel = (d.setupSnapshot?.modelKey ?? "").trim();
+    const retryModelKey = KNOWN_MODELS.includes(snapshotModel) ? snapshotModel : "gemini_image";
+
+    // Build a setup whenever there is ANYTHING worth restoring. Gating on
+    // `groupReference.length && productImages.length` meant a zero-reference failure
+    // never restored its model — the drawer silently reopened on the default.
+    // productImages may be empty here only when there is genuinely nothing to restore,
+    // in which case no setup is cached at all (an empty list would otherwise be taken
+    // as authoritative and leave Generate disabled).
+    const retrySetup = productImages.length
       ? {
           productImages,
           referenceImages: groupReference.map(r => r.imageUrl),
           referenceSelections: groupReference,
           count: 1,
           format: d.format ?? "Pinterest 2:3",
-          // Preserve the ORIGINAL model — hard-coding gemini_image silently moved a
-          // gpt_image retry onto a different provider than the run it is retrying.
-          modelKey: d.setupSnapshot?.modelKey ?? "gemini_image",
+          modelKey: retryModelKey,
           variationMode: "distinct" as const,
           selectedDirectionId: null,
           selectedTagIds: [],
@@ -506,9 +520,13 @@ export function StudioBoard() {
       : null;
     const retryProduct = failedPrimary ? selectionFromLinkedProduct(failedPrimary) : undefined;
 
+    // The failed draft's OWN product must survive every retry branch. Previously
+    // retryProduct was computed but only reached the scratch branch, so a version
+    // retry re-inherited the PARENT's product: if the failed run explicitly chose
+    // product B from a parent linked to A, retrying silently produced A.
     const nextDrawer: AiDrawerState = parent
-      ? { mode: "version", draft: parent }
-      : d.imageUrl ? { mode: "version", draft: d } : { mode: "scratch", product: retryProduct };
+      ? { mode: "version", draft: parent, product: retryProduct }
+      : d.imageUrl ? { mode: "version", draft: d, product: retryProduct } : { mode: "scratch", product: retryProduct };
     const cacheKey = nextDrawer.mode === "version" ? nextDrawer.draft.id : "scratch";
     if (retrySetup) setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
     setAiDrawer(nextDrawer);
@@ -714,7 +732,9 @@ export function StudioBoard() {
           // has a product but no cached setup — starts clean, so a previous scratch
           // session's settings are not inherited by a different product.
           initialSetup={aiSetupKey ? aiSetupCache[aiSetupKey] : undefined}
-          initialProductSelection={aiDrawer.mode === "scratch" ? aiDrawer.product ?? null : null}
+          // Both modes may carry a product: scratch from Select product, version from
+          // a retry restoring the failed draft's own product.
+          initialProductSelection={aiDrawer.product ?? null}
           onSetupChange={setup => {
             if (!aiSetupKey) return;
             setAiSetupCache(prev => ({ ...prev, [aiSetupKey]: setup }));

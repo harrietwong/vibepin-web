@@ -45,8 +45,6 @@ export type RunAiGenerationDeps = {
   /** Called once all placeholders exist — the UI closes the drawer here. */
   onPlaceholdersReady?: (totalPins: number) => void;
   onGroupProgress?: (current: number, total: number) => void;
-  /** Provider returned more images than requested; they were dropped, not persisted. */
-  onExtrasDiscarded?: (count: number) => void;
   onSettled?: (summary: { okCount: number; failCount: number }) => void;
   now?: () => number;
   randomId?: () => string;
@@ -191,7 +189,12 @@ export async function runAiGeneration(
       // would make the batch deliver more Pins than the CTA promised and inflate
       // the success count.
       const discarded = Math.max(0, result.urls.length - placeholders.length);
-      if (discarded > 0) deps.onExtrasDiscarded?.(discarded);
+      if (discarded > 0 && process.env.NODE_ENV !== "production") {
+        // Dev-only: dropping provider output is intentional but should not be
+        // invisible while iterating. No user-facing surface — the CTA already
+        // promised exactly totalPins, so there is nothing to report to the user.
+        console.warn(`[runAiGeneration] provider returned ${discarded} image(s) beyond the requested count; discarded`);
+      }
     } catch {
       // This reference failed; keep going so the others still produce results.
       placeholders.forEach(p => store.failGeneratedDraft(p.id));

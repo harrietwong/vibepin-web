@@ -86,19 +86,24 @@ function isNonPublicHost(hostname: string): boolean {
   if (v6 === "::1" || v6 === "::") return true;            // loopback / unspecified
   if (/^fe[89ab][0-9a-f]:/.test(v6)) return true;          // fe80::/10 link-local
   if (/^f[cd][0-9a-f]{2}:/.test(v6)) return true;          // fc00::/7 unique-local
-  // IPv4-mapped (::ffff:127.0.0.1) smuggles a private IPv4 through the IPv6 path.
-  // NOTE: the URL parser NORMALISES the dotted quad to hex — "::ffff:127.0.0.1"
-  // arrives as "::ffff:7f00:1" — so a dotted-quad regex never matches here and the
-  // trailing groups must be decoded back to octets.
-  const mappedDotted = v6.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (mappedDotted && isNonPublicIpv4(mappedDotted[1])) return true;
-  const mappedHex = v6.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (mappedHex) {
-    const hi = parseInt(mappedHex[1], 16);
-    const lo = parseInt(mappedHex[2], 16);
-    const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
-    if (isNonPublicIpv4(dotted)) return true;
-  }
+  // An IPv6 address can WRAP a private IPv4 in several ways, and the URL parser
+  // normalises the dotted quad to hex ("::ffff:127.0.0.1" arrives as "::ffff:7f00:1"),
+  // so each embedded form must be decoded back to octets and re-checked:
+  //   ::ffff:a.b.c.d  IPv4-mapped
+  //   ::a.b.c.d       IPv4-compatible (deprecated but still routed by some stacks)
+  //   2002:xxxx:yyyy::/16  6to4 — the two groups after 2002: ARE the IPv4
+  const hexPairToDotted = (hi: number, lo: number) =>
+    `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+
+  const dottedTail = v6.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dottedTail && isNonPublicIpv4(dottedTail[1])) return true;
+
+  const mappedHex = v6.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex && isNonPublicIpv4(hexPairToDotted(parseInt(mappedHex[1], 16), parseInt(mappedHex[2], 16)))) return true;
+
+  const sixToFour = v6.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})(?::|$)/);
+  if (sixToFour && isNonPublicIpv4(hexPairToDotted(parseInt(sixToFour[1], 16), parseInt(sixToFour[2], 16)))) return true;
+
   return false;
 }
 

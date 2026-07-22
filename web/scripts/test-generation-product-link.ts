@@ -12,6 +12,8 @@ process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "placeholder-anon-key";
  */
 
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // localStorage + window shims (same as test-pin-board-store).
 const mem = new Map<string, string>();
@@ -177,6 +179,18 @@ async function main() {
     const relinked = toLinkedProduct({ ...selection, asPrimary: true });
     assert.equal(relinked.productId, "sp_777", "not downgraded to a local id");
     assert.equal(relinked.productUrl, "https://shop.example/p/7");
+  });
+
+  await test("the PICKER path (not just saveAsset) backfills a legacy Shopify asset", () => {
+    // The bug was NOT in saveAsset — it was that the picker short-circuited with
+    // `existing ?? saveAsset(...)`, so a legacy asset never reached the backfill.
+    // Assert the shipped call site has no such short-circuit.
+    const src = readFileSync(join(process.cwd(), "src/components/studio/InlineCreateAssetPicker.tsx"), "utf8");
+    assert.ok(
+      !/const saved = existing \?\? assets\.saveAsset/.test(src),
+      "no save path may bypass saveAsset — that is what skipped the backfill",
+    );
+    assert.ok(/const saved = assets\.saveAsset\(/.test(src), "saves go through saveAsset directly");
   });
 
   await test("saveAsset BACKFILLS missing fields on an existing asset (migration)", async () => {

@@ -167,6 +167,28 @@ test("IPv4-mapped private/loopback addresses are rejected", () => {
   }
 });
 
+test("IPv4-compatible and 6to4 wrappers of private IPv4 are rejected", () => {
+  // Two further ways to smuggle a private IPv4 through the IPv6 path:
+  //   ::a.b.c.d           IPv4-compatible (normalised to ::7f00:1)
+  //   2002:xxxx:yyyy::/16 6to4 — the two groups after 2002: ARE the IPv4
+  for (const u of [
+    "https://[::127.0.0.1]/",
+    "https://[::10.0.0.1]/",
+    "https://[2002:7f00:1::]/",     // 127.0.0.1
+    "https://[2002:a00:1::]/",      // 10.0.0.1
+    "https://[2002:c0a8:101::]/",   // 192.168.1.1
+  ]) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), undefined, `${u} wraps a private IPv4`);
+  }
+});
+
+test("6to4 wrapping a PUBLIC IPv4 is still accepted", () => {
+  const u = "https://[2002:0808:0808::]/";   // 8.8.8.8
+  const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+  assert.equal(resolveProductPublicUrl(s), u, "only PRIVATE wrapped addresses are rejected");
+});
+
 test("an IPv4-mapped PUBLIC address is still accepted", () => {
   const u = "https://[::ffff:8.8.8.8]/p";
   const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };

@@ -909,8 +909,9 @@ export function InlineCreateAssetPicker({
 
   function selectProductIdea(product: ProductIdea) {
     const mapped = mapProductIdeaToPickerAsset(product, kwCatMap);
-    const existing = allAssets.find(a => a.role === "product" && a.imageUrl === product.image_url);
-    const saved = existing ?? assets.saveAsset({
+    // saveAsset dedupes by imageUrl+role AND backfills fields a previously-saved
+    // record is missing; short-circuiting on `existing` skipped that backfill.
+    const saved = assets.saveAsset({
       role: "product",
       assetRole: mapped.assetRole,
       itemType: product.item_type ?? "product",
@@ -935,8 +936,13 @@ export function InlineCreateAssetPicker({
   function saveShopifyImages(images: ShopifyPanelImage[], product: ShopifyProductSelectionCompat) {
     const savedIds: string[] = [];
     for (const img of images) {
-      const existing = allAssets.find(a => a.role === "product" && a.imageUrl === img.url);
-      const saved = existing ?? assets.saveAsset({
+      // ALWAYS go through saveAsset: it already dedupes by imageUrl+role, and it is
+      // what backfills commerce fields onto a record saved before those fields
+      // existed. The previous `existing ?? saveAsset(...)` short-circuit meant a
+      // legacy Shopify asset never reached the backfill at all — the very case it
+      // was written for — so its shopifyProductId stayed missing and the same
+      // product kept producing two different productKeys.
+      const saved = assets.saveAsset({
         role:            "product",
         assetRole:       "product_image",
         itemType:        "product",
@@ -963,8 +969,9 @@ export function InlineCreateAssetPicker({
 
   function selectPinIdea(pin: PinIdea) {
     const mapped = mapPinIdeaToPickerAsset(pin);
-    const existing = allAssets.find(a => a.role === "style_reference" && a.imageUrl === pin.image_url);
-    const saved = existing ?? assets.saveAsset({
+    // Same reason as selectProductIdea: always go through saveAsset so a record
+    // saved before a field existed can acquire it.
+    const saved = assets.saveAsset({
       role: "style_reference",
       assetRole: mapped.assetRole,
       itemType: pin.item_type ?? "pin_idea",

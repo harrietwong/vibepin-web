@@ -76,6 +76,7 @@ import {
   writePinProducts,
   type PinMetadataDraft, type MetadataTouchedFlags,
 } from "@/lib/pinMetadata";
+import { isAutoManaged } from "@/lib/studio/destinationUrlDerivation";
 import { resolveCanonicalPinProducts } from "@/lib/studio/pinProducts";
 import { usePublishAssistantContext } from "@/lib/assistant/useAssistant";
 import { detectCreatePins } from "@/lib/assistant/detectors/createPins";
@@ -3294,7 +3295,15 @@ function CreatePinsContent() {
       // session Pin left the two stores disagreeing about the same Pin's URL.
       if (patch.automatedUrlFill && "destinationUrl" in patch) {
         const boardDraft = pinDraftStore.getDraftByImageUrl(pinDetailPin?.url ?? "");
-        if (boardDraft) {
+        // The board draft gets its OWN say: the automated decision was made from the
+        // session copy, which can be stale. If the board side is manually protected,
+        // mirroring would destroy a hand-edited URL that the drawer never saw.
+        const boardIsManual = isAutoManaged({
+          destinationUrl: boardDraft?.destinationUrl,
+          destinationUrlSource: boardDraft?.destinationUrlSource,
+          destinationUrlTouched: boardDraft?.metadataTouched?.destinationUrlTouched,
+        }) === false;
+        if (boardDraft && !boardIsManual) {
           pinDraftStore.updateDraft(boardDraft.id, {
             destinationUrl: patch.destinationUrl ?? "",
             destinationUrlSource: draft.destinationUrlSource,

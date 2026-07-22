@@ -150,6 +150,33 @@ test("the stale guard is actually WIRED into the drawer, not just exported", () 
   assert.ok(guardUses.length >= 3, `every then/catch must check it (found ${guardUses.length})`);
 });
 
+test("EVERY retry branch carries the failed draft's own product, not just scratch", () => {
+  // retryProduct used to be computed and then dropped by both version branches, so a
+  // failed run that chose product B was retried with the PARENT's product A.
+  const src = read("components/studio/StudioBoard.tsx");
+  const block = src.slice(src.indexOf("const nextDrawer: AiDrawerState"), src.indexOf("setAiDrawer(nextDrawer);"));
+  const branches = block.match(/product: retryProduct/g) ?? [];
+  assert.equal(branches.length, 3, `all three branches must carry it (found ${branches.length})`);
+  // …and the drawer must actually receive it in version mode too.
+  assert.ok(
+    /initialProductSelection=\{aiDrawer\.product \?\? null\}/.test(src),
+    "the drawer prop must not be gated on scratch mode",
+  );
+});
+
+test("retry restores the model even with ZERO references", () => {
+  const src = read("components/studio/StudioBoard.tsx");
+  // Gating the setup on a reference meant a no-reference failure never restored it.
+  assert.ok(/const retrySetup = productImages\.length/.test(src), "setup must not require a reference");
+  assert.ok(/KNOWN_MODELS\.includes\(snapshotModel\)/.test(src), "an unknown/blank persisted model must fall back");
+});
+
+test("the automated URL mirror checks the BOARD draft before overwriting it", () => {
+  const src = read("app/app/studio/page.tsx");
+  assert.ok(/boardIsManual/.test(src), "board-side manual protection must be consulted");
+  assert.ok(/if \(boardDraft && !boardIsManual\)/.test(src), "a manually protected board URL must not be mirrored over");
+});
+
 test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not only the draft", () => {
   // Pairs with test-url-persistence (which can only mirror these closures): the form
   // is rebuilt from pin.destinationUrl, so persisting metadataDraft alone made an
