@@ -1,6 +1,17 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
-export const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+/**
+ * The Supabase origin these tests intercept. It MUST match whatever the app under
+ * test is actually configured with, or every page.route() pattern below silently
+ * fails to match and the "mocked" tests hit a real database instead.
+ *
+ * Reads NEXT_PUBLIC_SUPABASE_URL so the suite follows the environment (the isolated
+ * TEST project during QA). The historical production URL remains only as a
+ * last-resort default for anyone running without env — it is an interception
+ * pattern, never a destination.
+ */
+export const SUPABASE_URL =
+  (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://jaxteelkecvlozdrdoog.supabase.co").replace(/\/$/, "");
 
 export const TINY_RED_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==",

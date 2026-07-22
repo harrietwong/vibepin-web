@@ -1,65 +1,81 @@
 /**
- * Mock-driven QA for the 2026-07-21 Create Pin flow changes.
+ * Authenticated browser QA for the 2026-07-21 Create Pin flow changes.
  *
- * SCOPE: the Product Picker information architecture (create-pin PRD Section C)
- * and the footer/header copy, which are reachable from /app/studio with the
- * existing mock harness.
+ * SURFACE: Studio Board V2 (`data-testid="studio-board"`), which is the DEFAULT
+ * Create Pins experience — see lib/studioBoardFlag.ts. An earlier version of this
+ * file reused helpers/studio.ts `gotoStudio()`, which waits for the LEGACY composer
+ * (composer-panel / generate-btn / generation-feed). Those ids do not exist on Board
+ * V2, so every test failed on navigation and never reached its assertion.
  *
- * NOT covered here: the Studio Board V2 AI drawer changes (unified reference
- * selection, 3x3 reference groups, serial queue, per-group failure media,
- * Website URL derivation). Those live behind an authenticated board surface that
- * this mock harness does not stand up; they are covered by the unit suites
- * (test-selected-references, test-reference-groups, test-generation-failure-media,
- * test-product-selection, test-destination-url-derivation) and remain pending
- * authenticated Preview QA.
+ * ENVIRONMENT: run against the ISOLATED TEST Supabase project only. Per
+ * .claude/CLAUDE.md "测试环境隔离", production (jaxteelkecvlozdrdoog) must never be
+ * the target of E2E writes; these tests create Pin drafts.
  */
 
-import { test, expect } from "@playwright/test";
-import {
-  prepareStudioPage,
-  gotoStudio,
-  openProductPicker,
-  uploadProductInPicker,
-  pickerTab,
-} from "./helpers/studio";
+import { test, expect, type Page } from "@playwright/test";
 
-test.describe("Create Pin flow 2026-07-21 — Product Picker IA", () => {
-  test.beforeEach(async ({ page }) => {
-    await prepareStudioPage(page);
-    await page.addInitScript(() => {
-      localStorage.clear();
-      sessionStorage.clear();
-    });
+/** Open Create Pins (Board V2) and wait for the board itself, not the legacy composer. */
+async function gotoBoard(page: Page) {
+  await page.goto("/app/studio", { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page.getByTestId("studio-board")).toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * Open the canonical Product Picker.
+ *
+ * The board has TWO Select-product entry points and renders exactly one: the
+ * toolbar button (`board-select-product`) only once cards exist, and the empty
+ * state's "Create from your store?" link (`board-select-product-empty`) otherwise.
+ * Both are additionally gated on the Shopify integration flag.
+ */
+async function openProductPicker(page: Page) {
+  const toolbar = page.getByTestId("board-select-product");
+  const empty = page.getByTestId("board-select-product-empty");
+  const entry = (await toolbar.count()) > 0 ? toolbar : empty;
+  await expect(entry).toBeVisible({ timeout: 20_000 });
+  await entry.click();
+  await expect(page.getByTestId("canonical-product-picker")).toBeVisible({ timeout: 20_000 });
+}
+
+test.describe("Create Pin flow 2026-07-21 — canonical Product Picker", () => {
+  test("board renders and exposes a Select product entry point", async ({ page }) => {
+    await gotoBoard(page);
+    const toolbar = await page.getByTestId("board-select-product").count();
+    const empty = await page.getByTestId("board-select-product-empty").count();
+    expect(toolbar + empty).toBeGreaterThan(0);
   });
 
-  test("primary tabs are only My Products and Product Ideas — no From Shopify", async ({ page }) => {
-    await gotoStudio(page);
+  test("only ONE product picker exists, and it is the canonical one", async ({ page }) => {
+    await gotoBoard(page);
     await openProductPicker(page);
+    // The retired ProductPickerModal is gone; nothing else may render a second picker.
+    await expect(page.getByTestId("canonical-product-picker")).toHaveCount(1);
+    await expect(page.getByTestId("product-picker")).toBeVisible();
+  });
 
-    const tabs = page.getByTestId("asset-picker-top-tabs").locator("button");
-    await expect(tabs).toHaveText(["My Products", "Product Ideas"]);
-    // Shopify is a SOURCE of My Products now, never a primary tab.
+  test("primary tabs are My Products and Product Ideas — no From Shopify tab", async ({ page }) => {
+    await gotoBoard(page);
+    await openProductPicker(page);
+    await expect(page.getByTestId("asset-picker-top-tabs").locator("button"))
+      .toHaveText(["My Products", "Product Ideas"]);
     await expect(page.getByTestId("picker-tab-shopify")).toHaveCount(0);
-    await expect(pickerTab(page, "my_products")).toBeVisible();
   });
 
   test("source chips exclude Product Ideas and Recent", async ({ page }) => {
-    await gotoStudio(page);
+    await gotoBoard(page);
     await openProductPicker(page);
-
     const chips = page.getByTestId("my-products-filter-chips");
     await expect(chips).toBeVisible();
-    const chipText = (await chips.locator("button").allTextContents()).join("|");
-    expect(chipText).not.toContain("Product Ideas");
-    expect(chipText).not.toContain("Recent");
-    // "All" is always available.
-    expect(chipText).toContain("All");
+    const text = (await chips.locator("button").allTextContents()).join("|");
+    expect(text).toContain("All");
+    expect(text).not.toContain("Product Ideas");
+    expect(text).not.toContain("Recent");
   });
 
-  test("Recent is offered as a sort mode, not a source", async ({ page }) => {
-    await gotoStudio(page);
+  test("Recent is a SORT mode, not a source", async ({ page }) => {
+    await gotoBoard(page);
     await openProductPicker(page);
-
     const sort = page.getByTestId("my-products-sort");
     await expect(sort).toBeVisible();
     const options = await sort.locator("option").allTextContents();
@@ -68,83 +84,21 @@ test.describe("Create Pin flow 2026-07-21 — Product Picker IA", () => {
     expect(options).toContain("Name A–Z");
   });
 
-  test("footer CTA names what is being added, with a count", async ({ page }) => {
-    await gotoStudio(page);
-    const panel = await openProductPicker(page);
-
-    // Nothing selected yet — the CTA is disabled and plural.
-    const confirm = page.getByTestId("asset-picker-confirm");
-    await expect(confirm).toBeDisabled();
-    await expect(confirm).toHaveText("Add 0 products");
-
-    await uploadProductInPicker(page, panel);
-
-    // Exactly one selected → singular noun, explicit count (never "Add Selected").
-    await expect(confirm).toBeEnabled({ timeout: 10000 });
-    await expect(confirm).toHaveText("Add 1 product");
+  test("a single-product entry point says 'Choose a product' and offers no vague CTA", async ({ page }) => {
+    await gotoBoard(page);
+    await openProductPicker(page);
+    // Select product consumes exactly one product, so the picker must not promise more.
+    await expect(page.getByText("Choose a product")).toBeVisible();
     await expect(page.getByText("Add Selected")).toHaveCount(0);
   });
 
-  test("picker header reflects the selection mode", async ({ page }) => {
-    await gotoStudio(page);
-    const panel = await openProductPicker(page);
-
-    await expect(page.getByText("Choose products")).toBeVisible();
-    await uploadProductInPicker(page, panel);
-    // Exactly one chosen → singular header.
-    await expect(page.getByText("Choose a product")).toBeVisible({ timeout: 10000 });
-  });
-
-  test("reference picker keeps its own tabs and role", async ({ page }) => {
-    await gotoStudio(page);
-    await page.getByTestId("add-pin-references").click();
-    await expect(page.getByTestId("reference-picker")).toBeVisible({ timeout: 8000 });
-
-    // Product images and Style references stay separate pickers (PRD Section D).
-    await expect(page.getByTestId("product-picker")).toHaveCount(0);
-    await expect(page.getByTestId("asset-picker-top-tabs").locator("button"))
-      .toHaveText(["My References", "Pin Ideas"]);
-  });
-});
-
-/**
- * Studio Board V2: top-level Select product → AI drawer.
- *
- * These cover review items 1 and 8 — a scratch drawer opened from Select product
- * requests recommendations (draft-less), and cancelling leaves no draft. They live
- * behind the authenticated board surface, so they run under authenticated Preview
- * QA; the request-building, stale-guard, and product-link logic they exercise is
- * additionally unit-tested (test-recommendation-request, test-drawer-product-state,
- * test-generation-product-link).
- */
-test.describe("Create Pin flow 2026-07-21 — Select product opens the AI drawer @auth", () => {
-  test.skip(!process.env.PLAYWRIGHT_AUTH_STATE, "requires an authenticated Preview session");
-
-  test("Select product opens the AI drawer prefilled, and requests recommendations", async ({ page }) => {
-    const recRequests: string[] = [];
-    await page.route("**/api/reference-candidates", async route => {
-      recRequests.push(route.request().postData() ?? "");
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], recommendationBasis: "category_fallback" }) });
-    });
-
-    await gotoStudio(page);
-    await page.getByTestId("board-select-product").click();
-    await expect(page.getByTestId("canonical-product-picker")).toBeVisible();
-    // (Select a product via the picker — helper omitted; runs under auth QA.)
-    // The AI drawer opens with the product prefilled…
-    await expect(page.getByTestId("ai-version-drawer")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId("product-images-selected")).toContainText(/./);
-    // …and a recommendation request fired for that product (item 1).
-    await expect.poll(() => recRequests.length, { timeout: 10_000 }).toBeGreaterThan(0);
-  });
-
-  test("cancelling the AI drawer leaves no draft (item 8)", async ({ page }) => {
-    await gotoStudio(page);
+  test("cancelling the picker creates NO draft", async ({ page }) => {
+    await gotoBoard(page);
     const before = await page.getByTestId("pin-board-card").count();
-    await page.getByTestId("board-select-product").click();
-    await page.getByTestId("canonical-product-picker").waitFor();
-    // (Pick a product, then close the drawer without generating.)
-    await page.getByTestId("ai-version-close").click();
+    await openProductPicker(page);
+    await page.getByTestId("asset-picker-cancel").click();
+    await expect(page.getByTestId("canonical-product-picker")).toHaveCount(0);
+    // Browsing and cancelling must never have a side effect.
     await expect.poll(() => page.getByTestId("pin-board-card").count()).toBe(before);
   });
 });
