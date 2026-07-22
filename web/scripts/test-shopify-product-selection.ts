@@ -262,9 +262,14 @@ async function main() {
 
   await test("StudioBoard.tsx: top-level Select product opens the AI drawer, not a bare draft", () => {
     const src = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
-    const handler = src.slice(src.indexOf("const handleProductSelect"), src.indexOf("const handleProductSelect") + 700);
+    // Slice to the handler's real end, not a fixed byte count — a magic window
+    // silently stops covering the code it is meant to assert as the function grows.
+    const start = src.indexOf("const handleProductSelect");
+    const handler = src.slice(start, src.indexOf("}, [tr]);", start) + "}, [tr]);".length);
     // The corrective commit replaced silent draft creation with the prefilled drawer.
-    assert.match(handler, /setAiDrawer\(\{ mode: "scratch", product \}\)/);
+    // Order-independent: the handler also clears the stale scratch setup cache before
+    // opening, so asserting adjacency here would break on unrelated edits.
+    assert.match(handler, /setAiDrawer\(\{\s*mode: "scratch",\s*product\s*\}\)/);
     assert.doesNotMatch(handler, /createBoardDraft/, "selection must not create a draft");
   });
 

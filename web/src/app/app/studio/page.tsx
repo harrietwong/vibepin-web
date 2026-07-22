@@ -3256,6 +3256,12 @@ function CreatePinsContent() {
         title: metadataForm.title, description: metadataForm.description,
         altText: metadataForm.altText, destinationUrl: metadataForm.destinationUrl,
         scheduledDate: metadataForm.plannedDate,
+        // The URL's protection must travel WITH it. Syncing the value but not its
+        // touched flag / provenance left the same Pin "manually protected" in the
+        // session store and "auto-managed" in the board draft, so the board's
+        // product flow could overwrite a hand-edited URL (Section J).
+        metadataTouched: { ...EMPTY_TOUCHED, ...existingDraft.metadataTouched, ...metadataFormTouched },
+        destinationUrlSource: updatedDraft?.destinationUrlSource ?? existingDraft.destinationUrlSource,
       });
     }
     setFormBaseline({ ...metadataForm });
@@ -3284,6 +3290,18 @@ function CreatePinsContent() {
       updatePinMetadata(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx, p => ({
         ...p, metadataDraft: draft, ...urlPatch,
       }));
+      // Mirror an automated URL change onto the board draft too. Updating only the
+      // session Pin left the two stores disagreeing about the same Pin's URL.
+      if (patch.automatedUrlFill && "destinationUrl" in patch) {
+        const boardDraft = pinDraftStore.getDraftByImageUrl(pinDetailPin?.url ?? "");
+        if (boardDraft) {
+          pinDraftStore.updateDraft(boardDraft.id, {
+            destinationUrl: patch.destinationUrl ?? "",
+            destinationUrlSource: draft.destinationUrlSource,
+            metadataTouched: { ...EMPTY_TOUCHED, ...boardDraft.metadataTouched, destinationUrlTouched: false },
+          });
+        }
+      }
     }
     const touched: Partial<MetadataTouchedFlags> = {};
     if ("title" in patch) touched.titleTouched = true;

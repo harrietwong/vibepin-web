@@ -63,15 +63,42 @@ export type CanonicalProductSelection = {
  * RFC1918 private ranges. A Pin published with one of these sends every visitor to
  * their own machine or nowhere at all.
  */
-function isNonPublicHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
-  if (h === "0.0.0.0" || h === "::1" || h === "[::1]") return true;
+/** Loopback / private / link-local IPv4, in dotted form. */
+function isNonPublicIpv4(h: string): boolean {
+  if (h === "0.0.0.0") return true;
   if (/^127\./.test(h)) return true;                       // loopback
   if (/^10\./.test(h)) return true;                        // private class A
   if (/^192\.168\./.test(h)) return true;                  // private class C
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;   // private class B
   if (/^169\.254\./.test(h)) return true;                  // link-local
+  return false;
+}
+
+function isNonPublicHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
+  if (isNonPublicIpv4(h)) return true;
+
+  // IPv6. URL.hostname keeps the brackets, so strip them before classifying —
+  // checking only the literal "::1" let fe80::/fc00::/fd00:: through as "public".
+  const v6 = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (!v6.includes(":")) return false;
+  if (v6 === "::1" || v6 === "::") return true;            // loopback / unspecified
+  if (/^fe[89ab][0-9a-f]:/.test(v6)) return true;          // fe80::/10 link-local
+  if (/^f[cd][0-9a-f]{2}:/.test(v6)) return true;          // fc00::/7 unique-local
+  // IPv4-mapped (::ffff:127.0.0.1) smuggles a private IPv4 through the IPv6 path.
+  // NOTE: the URL parser NORMALISES the dotted quad to hex — "::ffff:127.0.0.1"
+  // arrives as "::ffff:7f00:1" — so a dotted-quad regex never matches here and the
+  // trailing groups must be decoded back to octets.
+  const mappedDotted = v6.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (mappedDotted && isNonPublicIpv4(mappedDotted[1])) return true;
+  const mappedHex = v6.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    if (isNonPublicIpv4(dotted)) return true;
+  }
   return false;
 }
 

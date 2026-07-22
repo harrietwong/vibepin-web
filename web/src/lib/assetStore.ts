@@ -130,6 +130,17 @@ export function saveAsset(item: Omit<AssetItem, "id" | "createdAt" | "lastUsedAt
   const existing = items.find(x => x.imageUrl === item.imageUrl && x.role === item.role);
   if (existing) {
     existing.lastUsedAt = new Date().toISOString();
+    // Backfill fields the stored record is MISSING. Returning it untouched meant an
+    // asset saved before a field existed (e.g. shopifyProductId) could never acquire
+    // it, so the same product produced two different productKeys depending on when it
+    // was first saved — and add/dedupe/remove then treated it as two products.
+    // Only absent values are filled: a user's existing data is never overwritten.
+    for (const [key, value] of Object.entries(item) as [keyof AssetItem, unknown][]) {
+      if (value === undefined || value === null || value === "") continue;
+      if (existing[key] === undefined || existing[key] === null || existing[key] === "") {
+        (existing as Record<string, unknown>)[key] = value;
+      }
+    }
     write([...items]);
     return existing;
   }

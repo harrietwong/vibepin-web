@@ -33,7 +33,7 @@ async function test(name: string, fn: () => void | Promise<void>): Promise<void>
 
 async function main() {
   const store = await import("../src/lib/pinDraftStore");
-  const { toLinkedProduct, resolveProductPublicUrl } = await import("../src/lib/studio/productSelection");
+  const { toLinkedProduct, resolveProductPublicUrl, selectionFromLinkedProduct } = await import("../src/lib/studio/productSelection");
   // Production gates — not reimplemented here.
   const { isUserChosenProduct } = await import("../src/components/studio/AiVersionDrawer");
   const { PRODUCT_DERIVED_URL_SOURCE, isAutoManaged } = await import("../src/lib/studio/destinationUrlDerivation");
@@ -158,6 +158,56 @@ async function main() {
     const d = store.getDraft(ph.id)!;
     assert.equal(d.linkedProducts, undefined, "no fabricated product link");
     assert.equal(d.destinationUrl ?? "", "", "no fabricated destination URL");
+  });
+
+  // ── Retry preserves the failed run's product (Codex review #3, finding 2) ──
+
+  await test("a failed draft's product survives retry as an EXPLICIT selection", () => {
+    // A scratch retry has no parent, and a restored image URL alone is classified as
+    // implicit_draft_image → primaryProductSelection null → product silently dropped.
+    // Passing the failed draft's own linked product as a selection is what saves it.
+    const failedLinked = {
+      productId: "sp_777", title: "Shopify Product", source: "shopify" as const,
+      linkType: "manual" as const, productUrl: "https://shop.example/p/7",
+    };
+    const selection = selectionFromLinkedProduct(failedLinked);
+    assert.equal(selection.id, "sp_777", "server id preserved");
+    assert.equal(selection.publicUrl, "https://shop.example/p/7");
+    // …and once handed to the drawer as an explicit pick it is persistable again.
+    const relinked = toLinkedProduct({ ...selection, asPrimary: true });
+    assert.equal(relinked.productId, "sp_777", "not downgraded to a local id");
+    assert.equal(relinked.productUrl, "https://shop.example/p/7");
+  });
+
+  await test("saveAsset BACKFILLS missing fields on an existing asset (migration)", async () => {
+    reset();
+    const assets = await import("../src/lib/assetStore");
+    // An asset saved BEFORE shopifyProductId existed.
+    const first = assets.saveAsset({
+      role: "product", source: "shopify", imageUrl: "https://cdn/legacy.jpg", title: "Legacy",
+    } as never);
+    assert.equal(first.shopifyProductId, undefined);
+    // Selecting the same product again now carries the server id — it must attach,
+    // otherwise the same product yields two different productKeys.
+    const second = assets.saveAsset({
+      role: "product", source: "shopify", imageUrl: "https://cdn/legacy.jpg",
+      title: "Legacy", shopifyProductId: "sp_555", canonicalUrl: "https://shop/x", price: "9",
+    } as never);
+    assert.equal(second.id, first.id, "still the same asset, not a duplicate");
+    assert.equal(second.shopifyProductId, "sp_555", "missing field backfilled");
+    assert.equal(second.canonicalUrl, "https://shop/x");
+  });
+
+  await test("backfill never OVERWRITES a value the asset already has", async () => {
+    reset();
+    const assets = await import("../src/lib/assetStore");
+    assets.saveAsset({
+      role: "product", source: "shopify", imageUrl: "https://cdn/x.jpg", title: "Original Title",
+    } as never);
+    const again = assets.saveAsset({
+      role: "product", source: "shopify", imageUrl: "https://cdn/x.jpg", title: "Different Title",
+    } as never);
+    assert.equal(again.title, "Original Title", "existing user data is not clobbered");
   });
 
   console.log(`\nGeneration product link: ${passed} passed, ${failed} failed`);

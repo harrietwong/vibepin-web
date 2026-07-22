@@ -41,7 +41,7 @@ import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } fro
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI } from "@/components/studio/boardUI";
 import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
-import { resolveProductPublicUrl, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
+import { selectionFromLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
@@ -321,6 +321,14 @@ export function StudioBoard() {
     const product = selections[0];
     const chosenImageUrl = product?.imageUrl ?? "";
     if (!chosenImageUrl) { toast.error(tr("studioBoard.toast.productNoImage")); return; }
+    // Drop any cached scratch setup so a NEW product never inherits a previous scratch
+    // session's references/settings. (A retry seeds this key deliberately and opens the
+    // drawer itself, so it is unaffected.)
+    setAiSetupCache(prev => {
+      if (!prev.scratch) return prev;
+      const { scratch: _dropped, ...rest } = prev;
+      return rest;
+    });
     setAiDrawer({ mode: "scratch", product });
   }, [tr]);
 
@@ -473,7 +481,9 @@ export function StudioBoard() {
           referenceSelections: groupReference,
           count: 1,
           format: d.format ?? "Pinterest 2:3",
-          modelKey: "gemini_image",
+          // Preserve the ORIGINAL model — hard-coding gemini_image silently moved a
+          // gpt_image retry onto a different provider than the run it is retrying.
+          modelKey: d.setupSnapshot?.modelKey ?? "gemini_image",
           variationMode: "distinct" as const,
           selectedDirectionId: null,
           selectedTagIds: [],
@@ -486,9 +496,19 @@ export function StudioBoard() {
     // reads aiSetupCache under the DRAFT ID in that case; a true scratch drawer reads
     // the literal key "scratch". Cache under whichever key will actually be read —
     // keying a scratch retry by draft id silently discarded the restored reference.
+    // Carry the failed draft's OWN product forward. A scratch retry reopens without a
+    // parent, and a restored image URL alone is classified as an implicit draft image
+    // — which sends primaryProductSelection: null and silently drops the product link,
+    // its Shopify id, and the Website URL the failed run had. Passing the product as
+    // an explicit selection is what preserves them.
+    const failedPrimary = d.linkedProducts?.length
+      ? (d.linkedProducts.find(p => p.productId === d.primaryProductId) ?? d.linkedProducts[0])
+      : null;
+    const retryProduct = failedPrimary ? selectionFromLinkedProduct(failedPrimary) : undefined;
+
     const nextDrawer: AiDrawerState = parent
       ? { mode: "version", draft: parent }
-      : d.imageUrl ? { mode: "version", draft: d } : { mode: "scratch" };
+      : d.imageUrl ? { mode: "version", draft: d } : { mode: "scratch", product: retryProduct };
     const cacheKey = nextDrawer.mode === "version" ? nextDrawer.draft.id : "scratch";
     if (retrySetup) setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
     setAiDrawer(nextDrawer);
@@ -689,7 +709,11 @@ export function StudioBoard() {
           title={aiDrawer.mode === "version" ? tr("studioBoard.aiDrawer.generateAiImage") : tr("studioBoard.aiDrawer.createWithAi")}
           open generating={aiGenerating}
           // A product prefill takes precedence over a cached scratch setup.
-          initialSetup={aiDrawer.mode === "scratch" && aiDrawer.product ? undefined : aiSetupKey ? aiSetupCache[aiSetupKey] : undefined}
+          // A cached setup wins when one exists (a retry seeds it with the failed
+          // run's reference + products). Only a FRESH Select-product scratch — which
+          // has a product but no cached setup — starts clean, so a previous scratch
+          // session's settings are not inherited by a different product.
+          initialSetup={aiSetupKey ? aiSetupCache[aiSetupKey] : undefined}
           initialProductSelection={aiDrawer.mode === "scratch" ? aiDrawer.product ?? null : null}
           onSetupChange={setup => {
             if (!aiSetupKey) return;

@@ -45,6 +45,8 @@ export type RunAiGenerationDeps = {
   /** Called once all placeholders exist — the UI closes the drawer here. */
   onPlaceholdersReady?: (totalPins: number) => void;
   onGroupProgress?: (current: number, total: number) => void;
+  /** Provider returned more images than requested; they were dropped, not persisted. */
+  onExtrasDiscarded?: (count: number) => void;
   onSettled?: (summary: { okCount: number; failCount: number }) => void;
   now?: () => number;
   randomId?: () => string;
@@ -183,30 +185,13 @@ export async function runAiGeneration(
       const unfilled = placeholders.slice(result.urls.length);
       unfilled.forEach(p => store.failGeneratedDraft(p.id));
       failCount += unfilled.length;
-      // Returned more than requested → extra cards, still attributed to THIS group.
-      result.urls.slice(placeholders.length).forEach((url, i) => {
-        const extra = store.createBoardDraft({
-          imageUrl: url, source: "ai_generated_from_upload",
-          idempotencyKey: `gen:${requestId}:${group.index}:extra:${i}`,
-          parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
-          referenceId: group.reference?.id,
-          referenceImageUrl: group.reference?.imageUrl,
-          referenceSource: group.reference?.source,
-          title: parent?.title ?? chosenProduct?.title,
-          keyword: parent?.keyword,
-          category: opts.category || parent?.category,
-          model: resolveModelLabel(undefined, opts.modelKey),
-          format: opts.format,
-          generationSessionId: requestId,
-          promptSnapshot: opts.directionBrief,
-          setupSnapshot,
-        });
-        // Extra results carry the SAME product state as the placeholders.
-        if (productLinkPatch) store.updateDraft(extra.id, productLinkPatch);
-        okCount += 1;
-        deps.onAnalyze?.(extra.id);
-        deps.onJudge?.(extra.id);
-      });
+      // A provider may return MORE images than requested. Those are DISCARDED:
+      // totalPins is the only source of truth for the final record count (PRD
+      // Section G / acceptance 26 — "不得创建超过请求数量的草稿"). Persisting them
+      // would make the batch deliver more Pins than the CTA promised and inflate
+      // the success count.
+      const discarded = Math.max(0, result.urls.length - placeholders.length);
+      if (discarded > 0) deps.onExtrasDiscarded?.(discarded);
     } catch {
       // This reference failed; keep going so the others still produce results.
       placeholders.forEach(p => store.failGeneratedDraft(p.id));

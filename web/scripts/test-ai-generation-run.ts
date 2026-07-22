@@ -35,15 +35,19 @@ async function main() {
   const { runAiGeneration } = await import("../src/lib/studio/runAiGeneration");
   const reset = () => { mem.clear(); store.__resetMemoryCacheForTests(); };
 
-  const baseOpts = {
-    prompt: "p", hiddenPrompt: "hp", productImages: [] as string[],
-    referenceImages: [] as string[], selectedReferences: [],
+  // Typed as the real AiVersionOptions (not `as never`, which makes spreading it a
+  // type error and broke `next build`'s TypeScript pass even though the filtered
+  // tsc run skipped scripts/).
+  type Opts = Parameters<typeof runAiGeneration>[0]["opts"];
+  const baseOpts: Opts = {
+    prompt: "p", hiddenPrompt: "hp", productImages: [],
+    referenceImages: [], selectedReferences: [],
     count: 1, format: "Pinterest 2:3", modelKey: "gemini_image",
     variationMode: "distinct", outputVariants: [], category: "home",
     selectedTags: [], directionBrief: "brief", briefManuallyEdited: false,
-    creativeDirectionMeta: {}, productMetadata: [],
+    creativeDirectionMeta: {} as Opts["creativeDirectionMeta"], productMetadata: [],
     primaryProductSelection: null,
-  } as never;
+  };
 
   const deps = (generate: (a: { styleReference: string | null }) => Promise<{ urls: string[] }>) => ({
     store: store as never,
@@ -113,7 +117,7 @@ async function main() {
   await test("a chosen product links onto EVERY draft with product provenance", async () => {
     reset();
     const chosen = {
-      id: "B", title: "Product B", source: "shopify", imageUrl: "https://cdn/B.jpg",
+      id: "B", title: "Product B", source: "shopify" as const, imageUrl: "https://cdn/B.jpg",
       canonicalUrl: "https://shop.example/products/b",
     };
     await runAiGeneration(
@@ -161,19 +165,35 @@ async function main() {
     assert.equal(gen.destinationUrl ?? "", "");
   });
 
-  await test("provider EXTRA results carry the product AND the group reference", async () => {
+  // NOTE: an earlier version of this test asserted that a provider EXTRA became its
+  // own card. That codified a violation of the brief ("API 即使返回多余图片，也不得
+  // 创建超过请求数量的草稿") and of acceptance criterion 26 — totalPins is the only
+  // source of truth for the final record count. Extras are now discarded.
+
+  await test("provider extras are DISCARDED — never more records than requested", async () => {
     reset();
-    const chosen = { id: "B", title: "B", source: "shopify", imageUrl: "https://cdn/B.jpg", canonicalUrl: "https://shop.example/products/b" };
-    await runAiGeneration(
+    const chosen = { id: "B", title: "B", source: "shopify" as const, imageUrl: "https://cdn/B.jpg", canonicalUrl: "https://shop.example/products/b" };
+    const r = await runAiGeneration(
       { parent: null, opts: { ...baseOpts, count: 1, selectedReferences: [ref("a")], primaryProductSelection: chosen } },
-      deps(async () => ({ urls: ["u1", "extra1"] })), // 2 returned, 1 requested
+      deps(async () => ({ urls: ["u1", "extra1", "extra2"] })), // 3 returned, 1 requested
     );
     const all = store.getAllDrafts().filter(d => d.generationSessionId?.startsWith("board_"));
-    assert.equal(all.length, 2, "the extra became its own card");
-    for (const d of all) {
-      assert.equal(d.primaryProductId, "B", "an extra must not lose the product");
-      assert.equal(d.referenceId, "a", "…nor its group reference");
-    }
+    assert.equal(all.length, 1, "exactly totalPins records, extras dropped");
+    assert.equal(r.okCount, 1, "okCount must not count discarded extras");
+    assert.equal(all[0].primaryProductId, "B");
+    assert.equal(all[0].referenceId, "a");
+  });
+
+  await test("a multi-group batch still persists exactly totalPins when every group overruns", async () => {
+    reset();
+    const r = await runAiGeneration(
+      { parent: null, opts: { ...baseOpts, count: 2, selectedReferences: [ref("a"), ref("b")] } },
+      deps(async () => ({ urls: ["u1", "u2", "u3", "u4"] })), // 4 returned per group, 2 requested
+    );
+    const all = store.getAllDrafts().filter(d => d.generationSessionId?.startsWith("board_"));
+    assert.equal(r.totalPins, 4);
+    assert.equal(all.length, 4, "2 groups x 2 = 4, not 8");
+    assert.equal(r.okCount, 4);
   });
 
   // ── Placeholders exist up front ──────────────────────────────────────────

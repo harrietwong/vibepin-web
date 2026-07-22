@@ -152,6 +152,42 @@ test("public IPv6 destinations are NOT rejected (regression guard)", () => {
   assert.equal(resolveProductPublicUrl(s), u);
 });
 
+test("IPv4-mapped private/loopback addresses are rejected", () => {
+  // The URL parser NORMALISES the dotted quad to hex — "::ffff:127.0.0.1" arrives as
+  // "::ffff:7f00:1" — so a dotted-quad check alone silently lets these through.
+  for (const u of [
+    "https://[::ffff:127.0.0.1]/p",
+    "https://[::ffff:10.0.0.1]/p",
+    "https://[::ffff:192.168.1.1]/p",
+    "https://[::ffff:172.16.0.1]/p",
+    "https://[::ffff:169.254.1.1]/p",
+  ]) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), undefined, `${u} smuggles a private IPv4`);
+  }
+});
+
+test("an IPv4-mapped PUBLIC address is still accepted", () => {
+  const u = "https://[::ffff:8.8.8.8]/p";
+  const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+  assert.equal(resolveProductPublicUrl(s), u);
+});
+
+test("non-public IPv6 ranges are rejected (brackets must not hide them)", () => {
+  // URL.hostname keeps the brackets; matching only the bare literal "::1" let
+  // link-local and unique-local addresses through as if they were public.
+  for (const u of [
+    "https://[::1]/product",        // loopback
+    "https://[::]/product",         // unspecified
+    "https://[fe80::1]/product",    // fe80::/10 link-local
+    "https://[fc00::1]/product",    // fc00::/7 unique-local
+    "https://[fd12:3456::1]/product",
+  ]) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), undefined, `${u} is not a public destination`);
+  }
+});
+
 test("ports, uppercase hosts and punycode survive", () => {
   for (const u of ["https://Shop.Example.COM:8443/p/1", "https://xn--80ak6aa92e.com/p"]) {
     const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
