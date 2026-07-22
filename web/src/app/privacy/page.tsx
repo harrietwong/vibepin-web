@@ -138,8 +138,9 @@ export default function PrivacyPage() {
             <h2 className="text-[16px] font-bold text-white mb-3">6. AI Prompts, Content Moderation, and Third-Party AI Services</h2>
             <p className="mb-3">
               When a user requests AI image generation, VibePin processes the user-controlled inputs associated with
-              that request. These may include keywords, prompts, creative direction, category selections, tags, and
-              related descriptive text the user enters or selects.
+              that request. These may include keywords, prompts, creative direction, category selections, tags,
+              product titles for any products the user attaches to the request, and related descriptive text the
+              user enters or selects.
             </p>
             <p className="mb-3">
               Image-generation prompts and related user-controlled inputs may be transmitted to third-party
