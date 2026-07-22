@@ -6,6 +6,12 @@
  * numeric limit. No vague tiers ("Basic discovery", "Advanced", "intelligence").
  */
 
+import {
+  allowanceRowValues,
+  formatMonthlyAllowance,
+  formatPlainCount,
+} from "./server/planEntitlements";
+
 export type PlanKey = "free" | "starter" | "pro" | "business";
 
 export type PricingTier = {
@@ -192,15 +198,24 @@ export const COMPARISON_SECTIONS: ComparisonSection[] = [
       {
         label: "Accounts per platform",
         note: "How many accounts or Pages you can connect on each platform.",
-        values: ["1", "1", "2", "3"],
+        // Derived from PLAN_ENTITLEMENTS.connectedAccountsPerPlatform → "1"/"1"/"2"/"3".
+        values: allowanceRowValues("connectedAccountsPerPlatform", formatPlainCount),
       },
-      { label: "Scheduled posts", values: ["5 / month", "150 / month", "300 / month", "Unlimited"] },
+      {
+        label: "Scheduled posts",
+        // Derived → "5 / month"/"150 / month"/"300 / month"/"Unlimited".
+        values: allowanceRowValues("monthlyScheduledPosts", formatMonthlyAllowance),
+      },
     ],
   },
   {
     title: "AI Creation",
     rows: [
-      { label: "AI image credits", values: ["10 / month", "150 / month", "800 / month", "3,000 / month"] },
+      {
+        label: "AI image credits",
+        // Derived → "10 / month"/"150 / month"/"800 / month"/"3,000 / month".
+        values: allowanceRowValues("monthlyAiImages", formatMonthlyAllowance),
+      },
       { label: "AI Pin generation", values: ["Limited", "✓", "✓", "✓"] },
       { label: "AI titles, descriptions, and hashtags", values: ["Limited", "✓", "✓", "✓"] },
       { label: "Batch generation", values: ["—", "Limited", "✓", "✓"] },

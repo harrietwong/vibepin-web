@@ -21,6 +21,7 @@
  */
 
 import { createServerClient } from "../supabase";
+import { PLAN_ENTITLEMENTS, type PlanKey as CanonicalPlanKey } from "./planEntitlements";
 
 export type PlanKey = "free" | "starter" | "pro" | "business";
 
@@ -31,13 +32,24 @@ export type Entitlements = {
   maxSyncedProducts: number;
 };
 
-/** Default limits per plan (决策 3: Free 0/0, Starter 1/100, Pro 2/500, Business 3/1000). */
+/**
+ * Default Shopify limits per plan (决策 3: Free 0/0, Starter 1/100, Pro 2/500,
+ * Business 3/1000). These numbers are NOT written here — they are derived from
+ * the canonical `PLAN_ENTITLEMENTS` (task 1C-a: single source of truth). The
+ * `SHOPIFY_PRODUCT_LIMIT_*` env override and all enforcement below are unchanged;
+ * only the base numbers moved to planEntitlements.ts.
+ */
 export const DEFAULT_PLAN_ENTITLEMENTS: Record<PlanKey, Entitlements> = {
-  free: { maxStores: 0, maxSyncedProducts: 0 },
-  starter: { maxStores: 1, maxSyncedProducts: 100 },
-  pro: { maxStores: 2, maxSyncedProducts: 500 },
-  business: { maxStores: 3, maxSyncedProducts: 1000 },
+  free: canonicalShopifyLimits("free"),
+  starter: canonicalShopifyLimits("starter"),
+  pro: canonicalShopifyLimits("pro"),
+  business: canonicalShopifyLimits("business"),
 };
+
+function canonicalShopifyLimits(plan: CanonicalPlanKey): Entitlements {
+  const c = PLAN_ENTITLEMENTS[plan];
+  return { maxStores: c.maxStores, maxSyncedProducts: c.maxSyncedProducts };
+}
 
 /** Env override names for maxSyncedProducts (maxStores has no override). */
 const PRODUCT_LIMIT_ENV: Record<PlanKey, string> = {
