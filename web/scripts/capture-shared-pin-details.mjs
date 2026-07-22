@@ -4,8 +4,8 @@ import path from "node:path";
 
 const baseUrl = "http://127.0.0.1:3000";
 const outputDir = path.resolve("artifacts", "shared-pin-details");
-const imageUrl = `${baseUrl}/landing/boho-living-room/references/pin-ref-01.jpg`;
-const productUrl = `${baseUrl}/landing/boho-living-room/products/product-wicker-storage-basket.jpg`;
+const imageUrl = `${baseUrl}/landing/boho-living-room/references/pin-ref-01.webp`;
+const productUrl = `${baseUrl}/landing/boho-living-room/products/product-wicker-storage-basket.webp`;
 const now = new Date().toISOString();
 
 const setupSnapshot = {

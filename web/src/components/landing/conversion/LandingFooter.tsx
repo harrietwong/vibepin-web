@@ -78,7 +78,7 @@ export function LandingFooter() {
       <div className={`${CONTAINER} grid grid-cols-2 md:grid-cols-5 gap-8 mb-10`}>
         <div className="col-span-2 md:col-span-1">
           <div className="flex items-center gap-2 mb-3">
-            <BrandLogo size={28} />
+            <BrandLogo size={30} />
             <span className="font-black text-white text-sm tracking-tight">VibePin</span>
           </div>
           <p className="text-[11px] leading-relaxed mb-3" style={{ color: "#4B5563" }}>

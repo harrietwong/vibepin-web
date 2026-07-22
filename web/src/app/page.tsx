@@ -497,7 +497,7 @@ export default function HomePage() {
       {/* ══ NAV ══ */}
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md" style={{ background: "rgba(8,14,11,0.9)", borderColor: "rgba(255,255,255,0.07)" }}>
         <div className="max-w-[1240px] mx-auto px-5 h-[60px] flex items-center justify-between">
-          <div className="flex items-center gap-2"><BrandLogo size={28} /><span className="font-black text-white tracking-tight text-[17px]">VibePin</span></div>
+          <div className="flex items-center gap-2"><BrandLogo size={36} /><span className="font-black text-white tracking-tight text-[17px]">VibePin</span></div>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>
             <a href="#create" className="hover:text-white transition-colors">How it works</a>
             <Link href="/app/products" className="hover:text-white transition-colors">Product Opportunities</Link>
