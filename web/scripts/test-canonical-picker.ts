@@ -184,6 +184,27 @@ test("board protection is decided BEFORE either copy is written", () => {
   assert.ok(guardAt > 0 && sessionWriteAt > 0, "both the guard and the session write must exist");
   assert.ok(guardAt < sessionWriteAt, "the guard must be computed BEFORE the session write");
   assert.ok(/isAutomatedUrl && !boardIsManual/.test(block), "the session patch must respect board protection");
+
+  // The ordering above was ALREADY satisfied while the bug was live: the guard sat
+  // before the store writes but AFTER setMetadataForm, so the visible form took the
+  // automated URL and the next Save (which writes metadataForm.destinationUrl into
+  // both stores) destroyed the manual one. Assert the form update is guarded too.
+  const formWriteAt = block.indexOf("setMetadataForm(prev =>");
+  assert.ok(formWriteAt > 0, "the form write must exist");
+  assert.ok(
+    guardAt < formWriteAt,
+    "protection must be decided BEFORE the visible form is updated, or Save resurrects the automated URL",
+  );
+  assert.ok(
+    /setMetadataForm\(prev => prev \? \{ \.\.\.prev, \.\.\.effectivePatch \}/.test(block),
+    "the form must consume the protection-filtered patch, not the raw one",
+  );
+  // The URL also rides inside metadataDraft; dropping only the top-level field would
+  // leave the automated value to be persisted through the draft.
+  assert.ok(
+    /const effectivePatch/.test(block) && /destinationUrl: _dropped/.test(block),
+    "a protected patch must strip the automated destinationUrl entirely",
+  );
 });
 
 test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not only the draft", () => {
@@ -194,7 +215,9 @@ test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not on
   const mcStart = src.indexOf("function handleMetadataChange");
   const block = src.slice(mcStart, src.indexOf("\n  }", src.indexOf("setMetadataFormTouched(t =>", mcStart)));
   assert.ok(block.includes("automatedUrlFill"), "the automated-fill signal must be consulted");
-  assert.ok(/destinationUrl: patch\.destinationUrl/.test(block), "top-level destinationUrl must be written");
+  // effectivePatch, not patch: the raw patch still carries the automated URL that
+  // manual-URL protection strips out.
+  assert.ok(/destinationUrl: effectivePatch\.destinationUrl/.test(block), "top-level destinationUrl must be written");
   assert.ok(/destinationUrlTouched: false/.test(block), "a derived fill must stay auto-managed");
 });
 

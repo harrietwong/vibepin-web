@@ -3271,25 +3271,62 @@ function CreatePinsContent() {
 
   function handleMetadataChange(patch: PinMetadataFormPatch) {
     setShowSaved(false);
-    setMetadataForm(prev => prev ? { ...prev, ...patch } : prev);
+
+    // Protection has to be decided BEFORE the visible form is updated, not just before
+    // the store writes. setMetadataForm ran unconditionally here, so a protected Pin
+    // still showed the automated URL in the open drawer — and handleSave writes
+    // metadataForm.destinationUrl into BOTH stores, silently destroying the manual URL
+    // on the next Save. Guarding only the immediate writes produced a third divergent
+    // copy (form) rather than fixing the divergence.
+    const isAutomatedUrlPatch = !!patch.automatedUrlFill && "destinationUrl" in patch;
+    const protectedBoardDraft = isAutomatedUrlPatch
+      ? pinDraftStore.getDraftByImageUrl(pinDetailPin?.url ?? "")
+      : null;
+    // Either copy being manual protects both. Consulting only the BOARD draft meant a
+    // session Pin with no board draft (getDraftByImageUrl → null) had its hand-edited
+    // URL overwritten with no check at all, since nothing else inspects the session's
+    // own destinationUrlTouched here.
+    const boardIsManual = isAutomatedUrlPatch && (
+      (!!protectedBoardDraft && !isAutoManaged({
+        destinationUrl: protectedBoardDraft.destinationUrl,
+        destinationUrlSource: protectedBoardDraft.destinationUrlSource,
+        destinationUrlTouched: protectedBoardDraft.metadataTouched?.destinationUrlTouched,
+      })) ||
+      (!!pinDetailPin && !isAutoManaged({
+        destinationUrl: pinDetailPin.destinationUrl,
+        destinationUrlSource: pinDetailPin.metadataDraft?.destinationUrlSource,
+        destinationUrlTouched: pinDetailPin.metadataTouched?.destinationUrlTouched,
+      }))
+    );
+
+    // When protected, drop the automated URL from the patch entirely — including the
+    // copy riding inside metadataDraft — so form, session and board all keep the
+    // user's value and Save cannot resurrect the automated one.
+    const effectivePatch: PinMetadataFormPatch = boardIsManual
+      ? (() => {
+          const { destinationUrl: _dropped, ...rest } = patch;
+          // Whichever copy is protected supplies the surviving value; the board draft
+          // may legitimately not exist (session-only Pin), so fall back to the session.
+          const keptUrl = protectedBoardDraft?.destinationUrl ?? pinDetailPin?.destinationUrl;
+          const keptSource =
+            protectedBoardDraft?.destinationUrlSource ?? pinDetailPin?.metadataDraft?.destinationUrlSource;
+          return patch.metadataDraft
+            ? { ...rest, metadataDraft: {
+                ...patch.metadataDraft,
+                destinationUrl: keptUrl,
+                destinationUrlSource: keptSource,
+              } }
+            : rest;
+        })()
+      : patch;
+
+    setMetadataForm(prev => prev ? { ...prev, ...effectivePatch } : prev);
     // Product / board changes ride on metadataDraft — persist them immediately so they
     // survive closing & reopening the drawer without requiring an explicit Save (Test F).
-    if ("metadataDraft" in patch && patch.metadataDraft && pinDetailView && pinDetailView.pinIdx !== undefined) {
-      const draft = patch.metadataDraft;
-      const isAutomatedUrl = !!patch.automatedUrlFill && "destinationUrl" in patch;
-
-      // Decide the board draft's protection BEFORE writing EITHER copy. Checking it
-      // only before the board write meant the session copy still got the automated
-      // URL while the board kept its manual one — two divergent values instead of
-      // one wrong value, and publishing reads the session copy.
-      const boardDraft = isAutomatedUrl
-        ? pinDraftStore.getDraftByImageUrl(pinDetailPin?.url ?? "")
-        : null;
-      const boardIsManual = !!boardDraft && !isAutoManaged({
-        destinationUrl: boardDraft.destinationUrl,
-        destinationUrlSource: boardDraft.destinationUrlSource,
-        destinationUrlTouched: boardDraft.metadataTouched?.destinationUrlTouched,
-      });
+    if ("metadataDraft" in effectivePatch && effectivePatch.metadataDraft && pinDetailView && pinDetailView.pinIdx !== undefined) {
+      const draft = effectivePatch.metadataDraft;
+      const isAutomatedUrl = isAutomatedUrlPatch;
+      const boardDraft = protectedBoardDraft;
 
       // An automated URL fill/clear must ALSO reach the top-level field and the
       // touched flags. buildPinDetailsForm reads pin.destinationUrl (not the draft),
@@ -3299,7 +3336,7 @@ function CreatePinsContent() {
       // user's hand-edited URL wins and the two stores stay in agreement.
       const urlPatch = isAutomatedUrl && !boardIsManual
         ? {
-            destinationUrl: patch.destinationUrl ?? "",
+            destinationUrl: effectivePatch.destinationUrl ?? "",
             // It was derived, not typed: keep destinationUrlTouched false so a later
             // product change may still update it (Section J).
             metadataTouched: { ...EMPTY_TOUCHED, ...pinDetailPin?.metadataTouched, destinationUrlTouched: false },
@@ -3312,7 +3349,7 @@ function CreatePinsContent() {
       // computed above so both copies move together or neither does.
       if (isAutomatedUrl && boardDraft && !boardIsManual) {
         pinDraftStore.updateDraft(boardDraft.id, {
-          destinationUrl: patch.destinationUrl ?? "",
+          destinationUrl: effectivePatch.destinationUrl ?? "",
           destinationUrlSource: draft.destinationUrlSource,
           metadataTouched: { ...EMPTY_TOUCHED, ...boardDraft.metadataTouched, destinationUrlTouched: false },
         });

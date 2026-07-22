@@ -6,12 +6,35 @@ import { expect, type Locator, type Page } from "@playwright/test";
  * fails to match and the "mocked" tests hit a real database instead.
  *
  * Reads NEXT_PUBLIC_SUPABASE_URL so the suite follows the environment (the isolated
- * TEST project during QA). The historical production URL remains only as a
- * last-resort default for anyone running without env — it is an interception
- * pattern, never a destination.
+ * TEST project during QA).
+ *
+ * This deliberately FAILS rather than defaulting. It previously fell back to the
+ * production URL, which meant an unset env silently pointed a mutation-capable suite
+ * (the catch-all route below lets non-GET requests through) at the production
+ * project — the precise outcome the isolation rule exists to prevent. A missing env
+ * is a setup error, not something to paper over with a production default.
  */
-export const SUPABASE_URL =
-  (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://jaxteelkecvlozdrdoog.supabase.co").replace(/\/$/, "");
+const PRODUCTION_SUPABASE_REF = "jaxteelkecvlozdrdoog";
+
+function resolveSupabaseUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  if (!raw) {
+    throw new Error(
+      "E2E: NEXT_PUBLIC_SUPABASE_URL is not set. Point it at the TEST Supabase project " +
+        "(web/.env.test.local) before running the browser suite — there is no default.",
+    );
+  }
+  const url = raw.replace(/\/$/, "");
+  if (url.includes(PRODUCTION_SUPABASE_REF)) {
+    throw new Error(
+      `E2E: refusing to run against the PRODUCTION Supabase project (${PRODUCTION_SUPABASE_REF}). ` +
+        "This suite can issue writes; use the isolated TEST project instead.",
+    );
+  }
+  return url;
+}
+
+export const SUPABASE_URL = resolveSupabaseUrl();
 
 export const TINY_RED_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==",

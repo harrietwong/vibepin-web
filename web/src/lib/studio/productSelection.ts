@@ -101,11 +101,20 @@ function isNonPublicHost(hostname: string): boolean {
     // Every wrapper form leaves the first four groups zero; groups 4-5 vary by form
     // (0:0 compatible, 0:ffff mapped, ffff:0 translated), so only the leading zeros
     // are load-bearing. Checking five leading zeros missed ::ffff:0:a.b.c.d.
-    const isWrapper =
-      groups.slice(0, 4).every(g => g === 0) ||                        // ::x:x, ::ffff:x:x, ::ffff:0:x:x
-      (groups[0] === 0x64 && groups[1] === 0xff9b) ||                  // 64:ff9b::/96 NAT64
-      (groups[0] === 0x2001 && groups[1] === 0);                       // 2001:0::/32 Teredo
-    if (isWrapper && isNonPublicIpv4(tail)) return true;
+    const isWrapper = groups.slice(0, 4).every(g => g === 0);          // ::x:x, ::ffff:x:x, ::ffff:0:x:x
+    // 64:ff9b::/96 NAT64 — the prefix is 96 bits, so groups 0-5 are all fixed.
+    // Matching only the first 32 bits rejected unrelated public 64:ff9b:… addresses.
+    const isNat64 =
+      groups[0] === 0x64 && groups[1] === 0xff9b &&
+      groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0;
+    if ((isWrapper || isNat64) && isNonPublicIpv4(tail)) return true;
+    // 2001:0::/32 Teredo. RFC 4380 §4 stores the client IPv4 BITWISE INVERTED, so
+    // the tail must be un-obfuscated before classification — read verbatim, a
+    // wrapped 127.0.0.1 (encoded 80ff:fffe) looks like public 128.255.255.254.
+    if (groups[0] === 0x2001 && groups[1] === 0) {
+      const teredo = hexPairToDotted((~groups[6]) & 0xffff, (~groups[7]) & 0xffff);
+      if (isNonPublicIpv4(teredo)) return true;
+    }
     if (groups[0] === 0x2002 && isNonPublicIpv4(hexPairToDotted(groups[1], groups[2]))) return true; // 6to4
   }
 

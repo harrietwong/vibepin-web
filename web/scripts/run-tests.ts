@@ -38,7 +38,10 @@ const scripts = args.flatMap(a => {
   return [a];
 });
 
-type Result = { script: string; passed: boolean; durationMs: number };
+type Result = { script: string; passed: boolean; durationMs: number; tail?: string };
+
+/** Lines of a failing script's output to reprint beside the summary. */
+const FAILURE_TAIL_LINES = 25;
 
 const results: Result[] = [];
 
@@ -46,16 +49,27 @@ for (const script of scripts) {
   const start = Date.now();
   console.log(`\n>>> RUNNING ${script}`);
   const isWindows = process.platform === "win32";
+  // Capture (not "inherit") so a failure's output can be REPRINTED next to the
+  // summary. With 73 scripts streaming live, a failure's cause scrolls thousands of
+  // lines away from the summary line, which is how an ENOSPC ("no space left on
+  // device") failure went undiagnosed across two review rounds — the summary named
+  // the failing scripts but never showed why. Passing output is still streamed
+  // through so a live run looks unchanged.
   const proc = spawnSync("npx", ["tsx", script], {
-    stdio: "inherit",
+    encoding: "utf8",
     shell: isWindows,
   });
   const durationMs = Date.now() - start;
   const passed = proc.status === 0 && !proc.error;
+  const combined = `${proc.stdout ?? ""}${proc.stderr ?? ""}`;
+  process.stdout.write(combined);
   if (proc.error) {
     console.error(`run-tests: failed to start ${script}: ${proc.error.message}`);
   }
-  results.push({ script, passed, durationMs });
+  const tail = passed
+    ? undefined
+    : combined.split(/\r?\n/).filter(Boolean).slice(-FAILURE_TAIL_LINES).join("\n");
+  results.push({ script, passed, durationMs, tail });
 }
 
 const failed = results.filter((r) => !r.passed);
@@ -72,6 +86,14 @@ if (failed.length > 0) {
   console.log("\nFailed scripts:");
   for (const r of failed) {
     console.log(`  - ${r.script}`);
+  }
+  // Reprint WHY each one failed, right here at the end. Without this the reason is
+  // only discoverable by rerunning the script by hand — and a rerun can pass, which
+  // makes an environmental failure look like flaky logic.
+  console.log("\n=== Failure output (last " + FAILURE_TAIL_LINES + " lines each) ===");
+  for (const r of failed) {
+    console.log(`\n--- ${r.script} ---`);
+    console.log(r.tail?.trim() || "(no output captured)");
   }
   process.exit(1);
 }

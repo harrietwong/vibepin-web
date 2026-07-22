@@ -189,11 +189,28 @@ test("IPv4-translated, NAT64 and Teredo wrappers of private IPv4 are rejected", 
   for (const u of [
     "https://[::ffff:0:127.0.0.1]/",   // ::ffff:0:0/96 IPv4-translated
     "https://[64:ff9b::127.0.0.1]/",   // 64:ff9b::/96 NAT64
-    "https://[2001:0:0:0::7f00:1]/",   // 2001:0::/32 Teredo
+    // RFC 4380 §4: Teredo stores the client IPv4 BITWISE INVERTED. 127.0.0.1 is
+    // therefore encoded as 80ff:fffe, NOT 7f00:1. The earlier test used 7f00:1 and
+    // passed, because both it and the code read the tail verbatim — the test
+    // asserted my misreading of the protocol, so a REAL Teredo-wrapped 127.0.0.1
+    // (which decodes to the public-looking 128.255.255.254) was accepted.
+    "https://[2001:0:0:0::80ff:fffe]/", // 2001:0::/32 Teredo, obfuscated 127.0.0.1
+    "https://[2001:0:0:0::f5ff:fffe]/", // Teredo-obfuscated 10.0.0.1 (private)
+    "https://[2001:0:0:0::3f57:fefe]/", // Teredo-obfuscated 192.168.1.1 (private)
   ]) {
     const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
-    assert.equal(resolveProductPublicUrl(s), undefined, `${u} wraps 127.0.0.1`);
+    assert.equal(resolveProductPublicUrl(s), undefined, `${u} wraps a private IPv4`);
   }
+});
+
+test("a Teredo address wrapping a genuinely PUBLIC IPv4 is still accepted", () => {
+  // Guards the inversion from being applied backwards: 93.184.216.34 obfuscates to
+  // a2:2717:27dd, which read verbatim would look like the private-ish 162.39.…
+  const obf = [93, 184, 216, 34].map(o => (~o) & 0xff);
+  const hex = `${((obf[0] << 8) | obf[1]).toString(16)}:${((obf[2] << 8) | obf[3]).toString(16)}`;
+  const u = `https://[2001:0:0:0::${hex}]/`;
+  const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+  assert.equal(resolveProductPublicUrl(s), u, `${u} wraps public 93.184.216.34`);
 });
 
 test("a public address in a wrapper range is still accepted", () => {
