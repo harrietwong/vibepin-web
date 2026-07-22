@@ -3269,7 +3269,21 @@ function CreatePinsContent() {
     // survive closing & reopening the drawer without requiring an explicit Save (Test F).
     if ("metadataDraft" in patch && patch.metadataDraft && pinDetailView && pinDetailView.pinIdx !== undefined) {
       const draft = patch.metadataDraft;
-      updatePinMetadata(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx, p => ({ ...p, metadataDraft: draft }));
+      // An automated URL fill/clear must ALSO reach the top-level field and the
+      // touched flags. buildPinDetailsForm reads pin.destinationUrl (not the draft),
+      // so persisting only metadataDraft made a product-derived URL disappear on
+      // reopen — the very thing this immediate-persist block claims to prevent.
+      const urlPatch = patch.automatedUrlFill && "destinationUrl" in patch
+        ? {
+            destinationUrl: patch.destinationUrl ?? "",
+            // It was derived, not typed: keep destinationUrlTouched false so a later
+            // product change may still update it (Section J).
+            metadataTouched: { ...EMPTY_TOUCHED, ...pinDetailPin?.metadataTouched, destinationUrlTouched: false },
+          }
+        : {};
+      updatePinMetadata(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx, p => ({
+        ...p, metadataDraft: draft, ...urlPatch,
+      }));
     }
     const touched: Partial<MetadataTouchedFlags> = {};
     if ("title" in patch) touched.titleTouched = true;

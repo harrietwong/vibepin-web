@@ -150,6 +150,17 @@ test("the stale guard is actually WIRED into the drawer, not just exported", () 
   assert.ok(guardUses.length >= 3, `every then/catch must check it (found ${guardUses.length})`);
 });
 
+test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not only the draft", () => {
+  // Pairs with test-url-persistence (which can only mirror these closures): the form
+  // is rebuilt from pin.destinationUrl, so persisting metadataDraft alone made an
+  // automated URL vanish on reopen.
+  const src = readFileSync(join(SRC, "app/app/studio/page.tsx"), "utf8");
+  const block = src.slice(src.indexOf("function handleMetadataChange"), src.indexOf("function handleMetadataChange") + 1800);
+  assert.ok(block.includes("automatedUrlFill"), "the automated-fill signal must be consulted");
+  assert.ok(/destinationUrl: patch\.destinationUrl/.test(block), "top-level destinationUrl must be written");
+  assert.ok(/destinationUrlTouched: false/.test(block), "a derived fill must stay auto-managed");
+});
+
 test("changing product clears old basis before the new request", () => {
   const src = read("components/studio/AiVersionDrawer.tsx");
   const block = src.slice(src.indexOf("if (productKey !== prevProductKey)"), src.indexOf("if (productKey !== prevProductKey)") + 400);
