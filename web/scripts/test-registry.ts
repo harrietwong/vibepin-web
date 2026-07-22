@@ -62,6 +62,7 @@ export const CORE: string[] = [
   "test-creative-intelligence-metrics",
   "test-ai-provider-auth-boundary",
   "test-ai-provider-rate-limit",
+  "test-ai-copy-provider-boundary",
   "test-judge-verdict",
   "test-reference-scoring",
   "test-top-pick",
