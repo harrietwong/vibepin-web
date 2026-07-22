@@ -1,11 +1,26 @@
 import Link from "next/link";
 import { ArrowRight, Check } from "lucide-react";
-import { PRICING_TIERS } from "@/lib/pricingPlans";
+import { PRICING_TIERS, type PricingTier } from "@/lib/pricingPlans";
 import { CONTAINER, GradientText, SECTION, SectionLabel, VibeBtn } from "./shared";
 
 const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
 };
+
+/**
+ * Landing paid CTAs must carry the buyer's purchase intent through signup, the
+ * same way /pricing does for signed-out clicks: `/signup?plan=<id>&next=<encoded
+ * /pricing?checkout=<id>&period=month>`. Without the `next`, signup falls back to
+ * /app/studio and the buyer never reaches checkout.
+ *
+ * This section has no month/year toggle (it only renders `priceMonthly`), so the
+ * period is always `month`. Free keeps its plain `/signup?plan=free`.
+ */
+function planCtaHref(plan: PricingTier): string {
+  if (plan.id === "free") return plan.ctaHref;
+  const resumeNext = `/pricing?checkout=${encodeURIComponent(plan.id)}&period=month`;
+  return `/signup?plan=${encodeURIComponent(plan.id)}&next=${encodeURIComponent(resumeNext)}`;
+}
 
 /** Light pricing preview for the landing page. The real pricing page lives at
  *  /pricing — this section only shows the tiers and links there. */
@@ -84,7 +99,7 @@ export function PricingSection() {
                 ))}
               </ul>
               <Link
-                href={plan.ctaHref}
+                href={planCtaHref(plan)}
                 className={`w-full rounded-full py-3 text-[13px] font-bold text-center transition-all ${
                   plan.highlighted ? VibeBtn : "border hover:text-white hover:border-white/30"
                 }`}
