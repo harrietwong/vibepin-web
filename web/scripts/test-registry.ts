@@ -183,6 +183,15 @@ export const EXCLUDED: Record<string, string> = {
     "explanation, because a green run that connected to nothing is the exact failure " +
     "mode this channel exists to prevent. See scripts/lib/test-db-config.ts for how the " +
     "target is pinned to the test project and can never resolve to production.",
+  "test-usage-ledger-db":
+    "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
+    "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate, for the same reasons as the rate-limit " +
+    "test above (and it likewise fails loudly rather than skipping when credentials are " +
+    "absent). It is the ONLY caller of those RPCs: the v55 primitives are deliberately " +
+    "DORMANT — no route, worker, webhook, publish path, Billing UI or cron touches them " +
+    "until Phase 3 wires them up — so this suite is the sole evidence that reservation, " +
+    "settlement, release and expiry behave correctly under real concurrency.",
 };
 
 /**
