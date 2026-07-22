@@ -17,8 +17,8 @@ const FOOTER_COLUMNS = [
   {
     title: "Resources",
     links: [
-      { label: "Help Center", href: "mailto:support@vibepin.co" },
-      { label: "Pinterest Guide", href: "/app/discover" },
+      { label: "Help Center", href: "/app/help" },
+      { label: "How we use Pinterest", href: "/pinterest-app" },
     ],
   },
   {
