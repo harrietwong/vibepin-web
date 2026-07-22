@@ -87,24 +87,52 @@ function isNonPublicHost(hostname: string): boolean {
   if (/^fe[89ab][0-9a-f]:/.test(v6)) return true;          // fe80::/10 link-local
   if (/^f[cd][0-9a-f]{2}:/.test(v6)) return true;          // fc00::/7 unique-local
   // An IPv6 address can WRAP a private IPv4 in several ways, and the URL parser
-  // normalises the dotted quad to hex ("::ffff:127.0.0.1" arrives as "::ffff:7f00:1"),
-  // so each embedded form must be decoded back to octets and re-checked:
-  //   ::ffff:a.b.c.d  IPv4-mapped
-  //   ::a.b.c.d       IPv4-compatible (deprecated but still routed by some stacks)
-  //   2002:xxxx:yyyy::/16  6to4 — the two groups after 2002: ARE the IPv4
-  const hexPairToDotted = (hi: number, lo: number) =>
-    `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
-
-  const dottedTail = v6.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (dottedTail && isNonPublicIpv4(dottedTail[1])) return true;
-
-  const mappedHex = v6.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (mappedHex && isNonPublicIpv4(hexPairToDotted(parseInt(mappedHex[1], 16), parseInt(mappedHex[2], 16)))) return true;
-
-  const sixToFour = v6.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})(?::|$)/);
-  if (sixToFour && isNonPublicIpv4(hexPairToDotted(parseInt(sixToFour[1], 16), parseInt(sixToFour[2], 16)))) return true;
+  // normalises any dotted quad to hex ("::ffff:127.0.0.1" arrives as "::ffff:7f00:1").
+  // Matching each textual variant with its own regex kept missing new ones
+  // (::ffff:0:a.b.c.d translated, 64:ff9b:: NAT64, 2001:0::/32 Teredo), so decode the
+  // address into its eight 16-bit groups once and inspect the embedded IPv4 directly.
+  const groups = expandIpv6(v6);
+  if (groups) {
+    const hexPairToDotted = (hi: number, lo: number) =>
+      `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    // The LAST two groups carry the embedded IPv4 for every mapped/compatible/
+    // translated/NAT64 form; 6to4 carries it in groups 1-2 instead.
+    const tail = hexPairToDotted(groups[6], groups[7]);
+    // Every wrapper form leaves the first four groups zero; groups 4-5 vary by form
+    // (0:0 compatible, 0:ffff mapped, ffff:0 translated), so only the leading zeros
+    // are load-bearing. Checking five leading zeros missed ::ffff:0:a.b.c.d.
+    const isWrapper =
+      groups.slice(0, 4).every(g => g === 0) ||                        // ::x:x, ::ffff:x:x, ::ffff:0:x:x
+      (groups[0] === 0x64 && groups[1] === 0xff9b) ||                  // 64:ff9b::/96 NAT64
+      (groups[0] === 0x2001 && groups[1] === 0);                       // 2001:0::/32 Teredo
+    if (isWrapper && isNonPublicIpv4(tail)) return true;
+    if (groups[0] === 0x2002 && isNonPublicIpv4(hexPairToDotted(groups[1], groups[2]))) return true; // 6to4
+  }
 
   return false;
+}
+
+/** Expand a (possibly `::`-compressed) IPv6 literal into eight 16-bit groups. */
+function expandIpv6(addr: string): number[] | null {
+  if (!addr.includes(":")) return null;
+  // A trailing dotted quad ("::ffff:127.0.0.1") becomes two hex groups.
+  const dotted = addr.match(/^(.*:)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  let text = addr;
+  if (dotted) {
+    const o = dotted[2].split(".").map(Number);
+    if (o.some(n => Number.isNaN(n) || n > 255)) return null;
+    text = `${dotted[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const [head, tail, ...extra] = text.split("::");
+  if (extra.length) return null; // more than one "::" is invalid
+  const parse = (s: string) => (s ? s.split(":").filter(Boolean).map(g => parseInt(g, 16)) : []);
+  const left = parse(head);
+  const right = tail === undefined ? [] : parse(tail);
+  if (left.some(Number.isNaN) || right.some(Number.isNaN)) return null;
+  const fill = 8 - left.length - right.length;
+  if (tail === undefined) return left.length === 8 ? left : null;
+  if (fill < 0) return null;
+  return [...left, ...Array(fill).fill(0), ...right];
 }
 
 function safePublicUrl(url: string | undefined | null): string | undefined {

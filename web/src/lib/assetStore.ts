@@ -139,16 +139,25 @@ export function saveAsset(item: Omit<AssetItem, "id" | "createdAt" | "lastUsedAt
     // Build a NEW object rather than mutating in place: read() hands back the shared
     // _cache array, so mutating a member would retroactively change an object a
     // previous caller is still holding — an order-dependent surprise.
-    const merged: AssetItem = { ...existing, lastUsedAt: new Date().toISOString() };
+    const nowIso = new Date().toISOString();
+    const merged: AssetItem = { ...existing, lastUsedAt: nowIso };
+    let backfilled = false;
     for (const [key, value] of Object.entries(item)) {
       // Identity/audit fields are owned by the store and are never taken from input.
-      if (key === "id" || key === "createdAt") continue;
+      if (key === "id" || key === "createdAt" || key === "updatedAt") continue;
       if (value === undefined || value === null || value === "") continue;
       const current = (merged as Record<string, unknown>)[key];
       if (current === undefined || current === null || current === "") {
         (merged as Record<string, unknown>)[key] = value;
+        backfilled = true;
       }
     }
+    // A backfill is a real content change, so it must advance the LWW timestamp the
+    // sync adapter reads — assetTs() prefers `updatedAt`, so leaving it stale would
+    // let the server's older copy win and silently undo the migration on other
+    // devices. `lastUsedAt` alone is not enough. Only bump when something actually
+    // changed, so a plain re-selection stays a no-op for sync purposes.
+    if (backfilled) merged.updatedAt = nowIso;
     const next = [...items];
     next[existingIdx] = merged;
     write(next);

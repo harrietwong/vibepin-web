@@ -183,6 +183,26 @@ test("IPv4-compatible and 6to4 wrappers of private IPv4 are rejected", () => {
   }
 });
 
+test("IPv4-translated, NAT64 and Teredo wrappers of private IPv4 are rejected", () => {
+  // Matching each textual variant with its own regex kept missing new ones, so the
+  // address is now expanded into eight groups and the embedded IPv4 read directly.
+  for (const u of [
+    "https://[::ffff:0:127.0.0.1]/",   // ::ffff:0:0/96 IPv4-translated
+    "https://[64:ff9b::127.0.0.1]/",   // 64:ff9b::/96 NAT64
+    "https://[2001:0:0:0::7f00:1]/",   // 2001:0::/32 Teredo
+  ]) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), undefined, `${u} wraps 127.0.0.1`);
+  }
+});
+
+test("a public address in a wrapper range is still accepted", () => {
+  // Teredo/NAT64 prefixes are only rejected when what they WRAP is private.
+  const u = "https://[2001:4860:4860::8888]/";
+  const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+  assert.equal(resolveProductPublicUrl(s), u);
+});
+
 test("6to4 wrapping a PUBLIC IPv4 is still accepted", () => {
   const u = "https://[2002:0808:0808::]/";   // 8.8.8.8
   const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };

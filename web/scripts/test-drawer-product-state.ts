@@ -67,6 +67,40 @@ async function main() {
     assert.equal(out[0].category, "home");
   });
 
+  await test("a retry prefill KEEPS the rest of the restored product images", () => {
+    // Returning only the primary silently changed a multi-product retry into a
+    // single-product one, so the regenerated request no longer matched the failure.
+    const out = buildInitialProductSelections({
+      initialProductSelection: { title: "B", source: "shopify", imageUrl: "https://cdn/B.jpg" },
+      initialSetup: { productImages: ["https://cdn/B.jpg", "https://cdn/C.jpg", "https://cdn/D.jpg"] } as never,
+      draft: {
+        id: "d1",
+        linkedProducts: [{ productId: "C", title: "Rich C", imageUrl: "https://cdn/C.jpg", productUrl: "https://shop/c", source: "shopify", linkType: "manual" }],
+      } as never,
+    });
+    assert.equal(out.length, 3, "all three product images survive");
+    assert.equal(out[0].imageUrl, "https://cdn/B.jpg");
+    assert.equal(out[0].asPrimary, true, "the explicit pick leads");
+    assert.equal(out[0].selectionOrigin, "explicit_picker");
+    // A companion that matches a linked product keeps its rich fields…
+    const c = out.find(s => s.imageUrl === "https://cdn/C.jpg")!;
+    assert.equal(c.title, "Rich C");
+    assert.equal(c.selectionOrigin, "linked_product");
+    // …and one that does not stays a bare generation input.
+    const d = out.find(s => s.imageUrl === "https://cdn/D.jpg")!;
+    assert.equal(d.selectionOrigin, "implicit_draft_image");
+    assert.ok(out.slice(1).every(s => s.asPrimary === false), "only one primary");
+  });
+
+  await test("the prefill is not duplicated when it also appears in the setup", () => {
+    const out = buildInitialProductSelections({
+      initialProductSelection: { title: "B", source: "shopify", imageUrl: "https://cdn/B.jpg" },
+      initialSetup: { productImages: ["https://cdn/B.jpg"] } as never,
+      draft: null,
+    });
+    assert.equal(out.length, 1, "no duplicate entry for the same image");
+  });
+
   await test("prefill takes precedence over the draft (never diluted)", () => {
     const out = buildInitialProductSelections({
       initialProductSelection: { title: "Prefill", source: "shopify", imageUrl: "https://cdn/prefill.jpg" },
@@ -101,15 +135,19 @@ async function main() {
 
   // ── initialSetup + prefill both present → prefill wins (§2.1, test 4.5) ────
 
-  await test("initialSetup AND initialProductSelection both present → prefill wins", () => {
+  await test("initialSetup AND initialProductSelection both present → prefill LEADS", () => {
+    // Updated contract: the prefill leads but no longer DISCARDS the restored setup's
+    // other product images — dropping them turned a multi-product retry into a
+    // single-product one (Codex review #5, finding 4).
     const out = buildInitialProductSelections({
       initialSetup: { productImages: ["https://cdn/old.jpg"] } as never,
       initialProductSelection: { title: "Prefill B", source: "shopify", imageUrl: "https://cdn/B.jpg" },
       draft: null,
     });
-    assert.equal(out.length, 1);
-    assert.equal(out[0].imageUrl, "https://cdn/B.jpg", "explicit prefill beats a restored setup");
+    assert.equal(out[0].imageUrl, "https://cdn/B.jpg", "explicit prefill leads");
     assert.equal(out[0].selectionOrigin, "explicit_picker");
+    assert.equal(out[0].asPrimary, true);
+    assert.ok(out.some(s => s.imageUrl === "https://cdn/old.jpg"), "companions are retained, not dropped");
   });
 
   // ── initialSetup URLs rehydrate against draft linked products (test 4.6) ──

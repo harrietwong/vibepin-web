@@ -234,9 +234,23 @@ export function buildInitialProductSelections(input: {
   const { initialSetup, initialProductSelection, draft } = input;
   const linked = draft?.linkedProducts ?? [];
 
-  // 1. An explicit Select-product choice always wins — it is the freshest signal.
+  // 1. An explicit choice (top-level Select product, or a retry restoring the failed
+  //    run's product) leads. It does NOT discard the rest of a restored setup: a
+  //    retry of a multi-product generation must reproduce ALL its product images, and
+  //    returning only the primary silently changed what the regenerated request was.
   if (initialProductSelection?.imageUrl) {
-    return [{ ...initialProductSelection, asPrimary: true, selectionOrigin: "explicit_picker" }];
+    const primary: DrawerProductSelection = {
+      ...initialProductSelection, asPrimary: true, selectionOrigin: "explicit_picker",
+    };
+    const others = (initialSetup?.productImages ?? [])
+      .filter(url => url && url !== initialProductSelection.imageUrl)
+      .map(imageUrl => {
+        const match = linked.find(p => p.imageUrl === imageUrl);
+        return match
+          ? { ...selectionFromLinkedProduct(match), asPrimary: false, selectionOrigin: "linked_product" as const }
+          : { title: "", imageUrl, source: "my_products" as const, asPrimary: false, selectionOrigin: "implicit_draft_image" as const };
+      });
+    return [primary, ...others];
   }
 
   // 2. A restored setup kept only flat URLs. Rehydrate each against the draft's

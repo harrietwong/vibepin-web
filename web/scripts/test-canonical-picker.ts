@@ -171,10 +171,19 @@ test("retry restores the model even with ZERO references", () => {
   assert.ok(/KNOWN_MODELS\.includes\(snapshotModel\)/.test(src), "an unknown/blank persisted model must fall back");
 });
 
-test("the automated URL mirror checks the BOARD draft before overwriting it", () => {
+test("board protection is decided BEFORE either copy is written", () => {
+  // Checking it only before the BOARD write left the session copy overwritten — two
+  // divergent URLs instead of one wrong one, and publishing reads the session copy.
   const src = read("app/app/studio/page.tsx");
-  assert.ok(/boardIsManual/.test(src), "board-side manual protection must be consulted");
-  assert.ok(/if \(boardDraft && !boardIsManual\)/.test(src), "a manually protected board URL must not be mirrored over");
+  // Slice to the function's real end, never a fixed byte count — a magic window
+  // silently stops covering the code it asserts as the function grows.
+  const start = src.indexOf("function handleMetadataChange");
+  const block = src.slice(start, src.indexOf("\n  }", src.indexOf("setMetadataFormTouched(t =>", start)));
+  const guardAt = block.indexOf("const boardIsManual");
+  const sessionWriteAt = block.indexOf("updatePinMetadata(pinDetailView.sessionId");
+  assert.ok(guardAt > 0 && sessionWriteAt > 0, "both the guard and the session write must exist");
+  assert.ok(guardAt < sessionWriteAt, "the guard must be computed BEFORE the session write");
+  assert.ok(/isAutomatedUrl && !boardIsManual/.test(block), "the session patch must respect board protection");
 });
 
 test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not only the draft", () => {
@@ -182,7 +191,8 @@ test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not on
   // is rebuilt from pin.destinationUrl, so persisting metadataDraft alone made an
   // automated URL vanish on reopen.
   const src = readFileSync(join(SRC, "app/app/studio/page.tsx"), "utf8");
-  const block = src.slice(src.indexOf("function handleMetadataChange"), src.indexOf("function handleMetadataChange") + 1800);
+  const mcStart = src.indexOf("function handleMetadataChange");
+  const block = src.slice(mcStart, src.indexOf("\n  }", src.indexOf("setMetadataFormTouched(t =>", mcStart)));
   assert.ok(block.includes("automatedUrlFill"), "the automated-fill signal must be consulted");
   assert.ok(/destinationUrl: patch\.destinationUrl/.test(block), "top-level destinationUrl must be written");
   assert.ok(/destinationUrlTouched: false/.test(block), "a derived fill must stay auto-managed");
