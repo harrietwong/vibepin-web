@@ -63,6 +63,7 @@
     "scan:secrets": "node ../scripts/scan-secrets.mjs",
     "check:test-registry": "npx tsx scripts/check-test-registry.ts",
     "test:browser": "npx tsx scripts/run-browser-qa.ts",
+    "test:db": "npx tsx scripts/test-db-integration-rate-limit.ts",
     "predeploy:guard": "node scripts/predeploy-guard.mjs"
   },
   "dependencies": {

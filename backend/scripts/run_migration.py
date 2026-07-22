@@ -19,12 +19,27 @@ Usage:
   # Apply a migration (requires explicit --apply flag)
   python scripts/run_migration.py --apply --sql db/migrate_v28_product_supply_expansion.sql
 
+  # Apply to a NON-DEFAULT project (e.g. the isolated integration-test project).
+  # Requires --project-ref; there is no way to reach a second project implicitly.
+  python scripts/run_migration.py --apply --sql db/migrate_v53_ai_rate_limit_windows.sql \
+      --project-ref snulmwprsahzqvdbyenc
+
 Guardrails:
   - Token values are NEVER printed, logged, or included in error output.
   - --apply is refused when SUPABASE_MIGRATION_TOKEN is missing.
   - SQL file must exist and must not be empty.
   - Only the SQL in the named file is executed; nothing else.
   - No product rows are touched; no opportunity/backfill/crawl jobs run.
+
+TARGET SELECTION (added for the integration-test channel):
+  By DEFAULT the target project ref is derived from SUPABASE_URL in backend/.env,
+  exactly as before — every existing production invocation is byte-for-byte unchanged.
+
+  `--project-ref <ref>` (or SUPABASE_MIGRATION_PROJECT_REF in the environment)
+  overrides that target. The override is ALWAYS printed, and when it points somewhere
+  other than the .env-derived project, the PostgREST probes that use the .env
+  SUPABASE_SERVICE_ROLE_KEY are SKIPPED — that key belongs to the default project and
+  must never be aimed at another one.
 """
 
 from __future__ import annotations
@@ -77,6 +92,27 @@ def _project_ref(supabase_url: str) -> str:
         return host.split(".")[0]
     except (IndexError, AttributeError):
         return ""
+
+
+def _resolve_target(creds: dict, override: str | None) -> tuple[str, bool]:
+    """
+    Decide which Supabase project this invocation targets.
+
+    Returns (project_ref, is_default). `is_default` is True only when the ref came
+    from SUPABASE_URL in backend/.env — i.e. the historical behaviour. When it is
+    False the caller must not reuse the .env SUPABASE_SERVICE_ROLE_KEY, because that
+    key authenticates against the DEFAULT project, not the overridden one.
+
+    Precedence: --project-ref  >  SUPABASE_MIGRATION_PROJECT_REF  >  SUPABASE_URL.
+    An override must be requested explicitly; nothing silently redirects a run.
+    """
+    default_ref = _project_ref(creds.get("SUPABASE_URL", ""))
+    chosen = (override or os.environ.get("SUPABASE_MIGRATION_PROJECT_REF") or "").strip()
+    if not chosen:
+        return default_ref, True
+    if not chosen.isalnum():
+        _die(f"--project-ref must be a bare Supabase project ref (alphanumeric), got: {chosen!r}")
+    return chosen, chosen == default_ref
 
 
 def _mask(s: str) -> str:
@@ -137,12 +173,15 @@ def _columns_from_sql(sql_text: str) -> list[str]:
 
 # ── Subcommands ────────────────────────────────────────────────────────────────
 
-def cmd_check(creds: dict, sql_path: Path | None) -> int:
+def cmd_check(creds: dict, sql_path: Path | None, ref: str, is_default: bool) -> int:
     """Read-only connectivity test + optional post-migration column probe."""
     url  = creds.get("SUPABASE_URL", "")
     skey = creds.get("SUPABASE_SERVICE_ROLE_KEY", "")
     tok  = creds.get("SUPABASE_MIGRATION_TOKEN", "")
-    ref  = _project_ref(url)
+    # The .env service key authenticates against the DEFAULT project only. On an
+    # overridden target it is the wrong credential for the wrong database, so every
+    # probe that uses it is disabled rather than pointed somewhere it does not belong.
+    probe_ok = is_default and bool(url) and bool(skey)
 
     print(f"\n{'='*60}")
     print("CONNECTIVITY CHECK (read-only — no schema changes)")
@@ -150,7 +189,10 @@ def cmd_check(creds: dict, sql_path: Path | None) -> int:
     print(f"  SUPABASE_URL:            {'present (' + _mask(url) + ')' if url else 'MISSING'}")
     print(f"  SERVICE_ROLE_KEY:        {'present' if skey else 'MISSING'}")
     print(f"  MIGRATION_TOKEN:         {'present' if tok else 'MISSING (apply will fail)'}")
-    print(f"  project_ref (derived):   {ref or 'UNKNOWN'}")
+    print(f"  project_ref:             {ref or 'UNKNOWN'}"
+          f"{'  (derived from SUPABASE_URL)' if is_default else '  ← OVERRIDDEN via --project-ref'}")
+    if not is_default:
+        print("  NOTE: non-default target — .env service-key probes are SKIPPED.")
 
     ok = True
 
@@ -192,7 +234,9 @@ def cmd_check(creds: dict, sql_path: Path | None) -> int:
     # Test B: PostgREST connectivity (uses service key — always available)
     print(f"\n{'─'*60}")
     print("Test B — PostgREST read-only probe (HTTPS)")
-    if url and skey:
+    if not is_default:
+        print("  ⚠️   SKIPPED — non-default --project-ref; .env service key targets another project")
+    elif url and skey:
         import httpx
         try:
             r = httpx.get(
@@ -214,8 +258,8 @@ def cmd_check(creds: dict, sql_path: Path | None) -> int:
         print("  ⚠️   SKIPPED — SUPABASE_URL or SERVICE_ROLE_KEY missing")
         ok = False
 
-    # Optional: v28 column-presence probe
-    if sql_path and sql_path.exists() and url and skey:
+    # Optional: v28 column-presence probe (service-key based → default target only)
+    if sql_path and sql_path.exists() and probe_ok:
         print(f"\n{'─'*60}")
         print(f"Column probe — columns declared in {sql_path.name}")
         cols = _columns_from_sql(sql_path.read_text(encoding="utf-8"))
@@ -230,17 +274,16 @@ def cmd_check(creds: dict, sql_path: Path | None) -> int:
     return 0 if ok else 1
 
 
-def cmd_apply(creds: dict, sql_path: Path) -> int:
+def cmd_apply(creds: dict, sql_path: Path, ref: str, is_default: bool) -> int:
     """Apply a migration SQL file via the Management API. Requires --apply flag."""
     tok = creds.get("SUPABASE_MIGRATION_TOKEN", "")
     url = creds.get("SUPABASE_URL", "")
     skey = creds.get("SUPABASE_SERVICE_ROLE_KEY", "")
-    ref = _project_ref(url)
 
     if not tok:
         _die("SUPABASE_MIGRATION_TOKEN missing in backend/.env.migration — cannot apply.")
     if not ref:
-        _die("Cannot derive project_ref from SUPABASE_URL.")
+        _die("Cannot derive project_ref from SUPABASE_URL (and no --project-ref given).")
     if not sql_path.exists():
         _die(f"SQL file not found: {sql_path}")
     sql = sql_path.read_text(encoding="utf-8").strip()
@@ -249,6 +292,8 @@ def cmd_apply(creds: dict, sql_path: Path) -> int:
 
     print(f"\n{'='*60}")
     print(f"APPLYING MIGRATION: {sql_path.name}")
+    print(f"Target project_ref: {ref}"
+          f"{'  (default — derived from SUPABASE_URL)' if is_default else '  ← OVERRIDDEN via --project-ref'}")
     print(f"Endpoint: https://api.supabase.com/v1/projects/{ref}/database/query")
     print(f"{'='*60}")
     print(f"SQL preview (first 400 chars):\n{sql[:400]}{'...' if len(sql)>400 else ''}\n")
@@ -262,8 +307,12 @@ def cmd_apply(creds: dict, sql_path: Path) -> int:
         print(f"   Error: {body[:500]}")
         return 1
 
-    # Re-probe columns
-    if url and skey:
+    # Re-probe columns. Service-key based, so default target only — on an overridden
+    # target this key would authenticate against the wrong project entirely.
+    if not is_default:
+        print("\nPost-migration column probe SKIPPED — non-default --project-ref "
+              "(.env service key belongs to the default project).")
+    elif url and skey:
         print("\nPost-migration column probe:")
         cols = _columns_from_sql(sql)
         all_ok = True
@@ -298,6 +347,11 @@ def main() -> int:
                     help="Read-only connectivity test + optional column probe (no changes)")
     ap.add_argument("--apply", action="store_true",
                     help="Apply the SQL migration (requires SUPABASE_MIGRATION_TOKEN)")
+    ap.add_argument("--project-ref", default=None,
+                    help="Target a NON-DEFAULT Supabase project (e.g. the integration-test "
+                         "project). Omit for the historical behaviour: the ref derived from "
+                         "SUPABASE_URL in backend/.env. Also settable via "
+                         "SUPABASE_MIGRATION_PROJECT_REF.")
 
     args = ap.parse_args()
 
@@ -306,6 +360,7 @@ def main() -> int:
         return 2
 
     creds = load_credentials()
+    ref, is_default = _resolve_target(creds, args.project_ref)
     sql_path: Path | None = None
     if args.sql:
         p = Path(args.sql)
@@ -314,12 +369,12 @@ def main() -> int:
             _die(f"SQL file not found: {sql_path}")
 
     if args.check:
-        return cmd_check(creds, sql_path)
+        return cmd_check(creds, sql_path, ref, is_default)
 
     if args.apply:
         if not sql_path:
             _die("--apply requires --sql <path>")
-        return cmd_apply(creds, sql_path)
+        return cmd_apply(creds, sql_path, ref, is_default)
 
     return 0
 
