@@ -113,6 +113,38 @@ test("unsafe and non-http schemes are rejected", () => {
   }
 });
 
+test("localhost / private / link-local hosts are rejected (PRD Section J)", () => {
+  const bad = [
+    "http://localhost:3000/p/1",
+    "https://localhost/p",
+    "http://127.0.0.1:8080/x",
+    "http://0.0.0.0/x",
+    "http://10.0.0.5/x",
+    "http://192.168.1.10/x",
+    "http://172.16.4.2/x",
+    "http://169.254.1.1/x",
+    "http://dev.local/p",
+  ];
+  for (const u of bad) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), undefined, `${u} is not a public destination`);
+  }
+});
+
+test("malformed URLs are rejected", () => {
+  for (const u of ["https://", "https:// example.com/p", "https://exa mple.com/p", "http://nohost"]) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), undefined, `${u} must be rejected`);
+  }
+});
+
+test("genuine public URLs still pass", () => {
+  for (const u of ["https://shop.example.com/products/a", "http://brand.co.uk/p/1?ref=x"]) {
+    const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: u };
+    assert.equal(resolveProductPublicUrl(s), u, `${u} must be accepted`);
+  }
+});
+
 test("whitespace around a URL is trimmed", () => {
   const s: CanonicalProductSelection = { title: "T", source: "manual", publicUrl: "  https://x.example/p  " };
   assert.equal(resolveProductPublicUrl(s), "https://x.example/p");

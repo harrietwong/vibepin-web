@@ -50,6 +50,8 @@ export type AssetItem = {
   price?:        string;
   currency?:     string;
   canonicalUrl?: string;
+  /** Server-side commerce id (e.g. Shopify store_products.id). NEVER the local asset id. */
+  shopifyProductId?: string;
   store?:        string;
   allImages?:    string[];
   status?:       "ready" | "import_issue";

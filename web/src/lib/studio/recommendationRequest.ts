@@ -100,7 +100,13 @@ export function buildReferenceRequestBody(input: {
  * the UI renders as "Category inspiration". This is what prevents a fabricated
  * "Recommended for this product" claim.
  */
-export function resolveBasis(raw: string | undefined | null): "product_analysis" | "product_text" | "category_fallback" {
+export function resolveBasis(
+  raw: string | undefined | null,
+  itemCount?: number,
+): "product_analysis" | "product_text" | "category_fallback" {
+  // With no items there is no product-level result to justify the stronger claim,
+  // so an empty list collapses to category_fallback regardless of what the field says.
+  if (itemCount === 0) return "category_fallback";
   return raw === "product_analysis" || raw === "product_text" ? raw : "category_fallback";
 }
 

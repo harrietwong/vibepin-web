@@ -91,7 +91,15 @@ test("source chips are hidden when the workspace has no such products", () => {
   const ids = visibleProductSourceFilters(onlyUploads).map(f => f.id);
   assert(ids.includes("all"), "All is always shown");
   assert(ids.includes("uploaded"), "uploaded present → chip shown");
-  assert(!ids.includes("shopify"), "no Shopify products → no Shopify chip");
+  assert(!ids.includes("shopify"), "integration off + no products → no Shopify chip");
+});
+
+test("Shopify chip IS shown when the integration is enabled but no products exist yet", () => {
+  // Its empty state hosts the connect/import panel — hiding the chip made connecting
+  // impossible for exactly the workspace that needs to connect (Codex finding #6).
+  const onlyUploads = sample.filter(i => i.source === "upload");
+  const ids = visibleProductSourceFilters(onlyUploads, { shopifyEnabled: true }).map(f => f.id);
+  assert(ids.includes("shopify"), "an unconnected workspace must be able to reach Connect");
 });
 
 test("broken/missing image imports are not in All grid", () => {

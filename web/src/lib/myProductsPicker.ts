@@ -55,11 +55,18 @@ export function hasAmazonProducts(items: AssetItem[]): boolean {
  * shown; a source chip appears only when the user actually has such products, so
  * nobody clicks a chip that can only ever return an empty grid.
  */
-export function visibleProductSourceFilters(items: AssetItem[]): { id: MyProductsFilter; label: string }[] {
+export function visibleProductSourceFilters(
+  items: AssetItem[],
+  opts: { shopifyEnabled?: boolean } = {},
+): { id: MyProductsFilter; label: string }[] {
   return MY_PRODUCTS_FILTERS.filter(chip => {
     switch (chip.id) {
       case "all":          return true;
-      case "shopify":      return hasShopifyProducts(items);
+      // Shopify is shown whenever the integration is enabled, NOT only when Shopify
+      // products already exist: its empty state hosts the connect/import panel, so
+      // hiding the chip for an unconnected workspace made connecting impossible —
+      // the exact opposite of what the PRD asks for an unconnected commerce source.
+      case "shopify":      return !!opts.shopifyEnabled || hasShopifyProducts(items);
       case "amazon":       return hasAmazonProducts(items);
       case "uploaded":     return items.some(i => i.source === "upload");
       case "url_imported": return items.some(i => i.source === "url");

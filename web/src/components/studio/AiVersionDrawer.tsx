@@ -107,6 +107,14 @@ export type AiVersionOptions = {
 export type AiVersionDrawerSetup = {
   productImages: string[];
   referenceImages: string[];
+  /**
+   * The selected references WITH provenance (Pinterest id, source, linkback, reason,
+   * patternTags). referenceImages above is a flat mirror kept for existing callers.
+   * Without this, reopening a cached setup degraded every reference to
+   * `source: "saved"` with the URL as its id, losing the Pinterest linkback and
+   * breaking recommendation-card selected-state matching by id.
+   */
+  referenceSelections?: SelectedReference[];
   count: number;
   format: string;
   modelKey: string;
@@ -167,6 +175,21 @@ export type DrawerProductSelection = CanonicalProductSelection & {
 /** True when this selection may be persisted as a Pin's LinkedProduct. */
 export function isPersistableProduct(sel: DrawerProductSelection | null | undefined): boolean {
   return !!sel && sel.selectionOrigin !== "implicit_draft_image";
+}
+
+/**
+ * True when the user actively chose this product in THIS drawer session — either
+ * from top-level Select product (the prefill) or the in-drawer picker.
+ *
+ * A product merely RESTORED from the draft (`linked_product`) is not a choice: the
+ * generated Pins should inherit the parent's full product state (all links, its
+ * primaryProductId, and its possibly hand-edited destinationUrl) rather than be
+ * rebuilt from a single restored selection. Sending a restored product as the
+ * generation product is what made StudioBoard's parent-inheritance branch dead
+ * code — it dropped tagged products and re-derived a manual URL.
+ */
+export function isUserChosenProduct(sel: DrawerProductSelection | null | undefined): boolean {
+  return !!sel && sel.selectionOrigin === "explicit_picker";
 }
 
 /**
@@ -453,12 +476,16 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   };
   // ONE selection state for every reference entry point — recommended Pins, picker
   // uploads and saved refs all live here (see lib/studio/selectedReferences.ts).
-  // Rehydrated from the flat URL list when restoring a prior setup; provenance for
-  // recommended Pins is re-attached once recommendations load (effect below).
+  // A restored setup carries the full selections (with Pinterest provenance) when it
+  // has them; the flat URL list is only a last-resort fallback for setups saved
+  // before referenceSelections existed, and those genuinely cannot recover
+  // provenance — they degrade to "saved" rather than claiming a source they lack.
   const [selectedReferences, setSelectedReferences] = useState<SelectedReference[]>(
-    () => (initialSetup?.referenceImages ?? []).map(url => ({
-      id: url, imageUrl: url, source: "saved" as const, role: "style_reference" as const,
-    })),
+    () => initialSetup?.referenceSelections?.length
+      ? initialSetup.referenceSelections
+      : (initialSetup?.referenceImages ?? []).map(url => ({
+          id: url, imageUrl: url, source: "saved" as const, role: "style_reference" as const,
+        })),
   );
   const referenceUrls = referenceImageUrls(selectedReferences);
   const [pickerRole, setPickerRole] = useState<PickerRole | null>(null);
@@ -565,7 +592,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // Clear immediately during render (same pattern as the draft-switch reset above) so
   // stale recs never linger while the refetch is in flight. An analysis-ready upgrade
   // keeps the same key and swaps in place without flashing.
-  const productKey = `${draftImageSelected}|${primaryProductUrl}`;
+  // Includes the full request identity (id/title/type/tags), not just the image URL:
+  // a product whose identity changed while keeping the same image must still clear
+  // the old results AND trigger a refetch, or the guard rejects the in-flight
+  // response and nothing ever replaces it (permanent loading).
+  const productKey = `${draftImageSelected}|${currentProductKey}`;
   const [prevProductKey, setPrevProductKey] = useState(productKey);
   if (productKey !== prevProductKey) {
     setPrevProductKey(productKey);
@@ -585,6 +616,10 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // top-level Select-product product (draft === null). draftId is omitted: this is
     // a stateless analysis and must not be written onto any draft.
     if (!open || draftImageSelected || !primaryProductUrl) return;
+    // Cached by IMAGE url on purpose: image analysis depends only on the pixels, so a
+    // product whose title/type/tags changed but whose image did not needs no re-analysis.
+    // The recommendation effect below still refetches on identity change (its deps
+    // include currentProductKey), which is what actually has to refresh.
     if (swappedProductAnalysis?.url === primaryProductUrl) return;
     // Bind this request to the product it was issued for; a late response for a
     // previous product must not overwrite the current one (§4).
@@ -628,7 +663,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // Abort a still-inflight analysis when the product changes — its result is stale.
     return () => { controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, draftImageSelected, primaryProductUrl, swappedProductAnalysis?.url]);
+  }, [open, draftImageSelected, primaryProductUrl, currentProductKey, swappedProductAnalysis?.url]);
 
   useEffect(() => {
     // No draft requirement: recommendations follow the PRIMARY PRODUCT, which exists
@@ -687,12 +722,12 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: RecommendationBasis }) => {
           // Guard: the product changed while this was in flight → discard (§4).
           if (isStale()) return;
-          setRecommendedRefs(Array.isArray(data.items) ? data.items : []);
-          // Field is always present per the final contract; the fallbacks below keep
-          // the UI honest against an empty items list, a request failure, or an older
-          // API response that predates the field — all three read as Category
-          // inspiration, never as a fabricated product-level claim.
-          setRecommendationBasis(resolveBasis(data.recommendationBasis));
+          const items = Array.isArray(data.items) ? data.items : [];
+          setRecommendedRefs(items);
+          // Field is always present per the final contract; passing the item count
+          // additionally collapses an EMPTY list to Category inspiration, so the UI
+          // can never carry a product-level claim with nothing to back it.
+          setRecommendationBasis(resolveBasis(data.recommendationBasis, items.length));
           setRecStatus("idle");
         })
         .catch((e: unknown) => {
@@ -712,7 +747,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // swappedProductAnalysis is a dep so recommendations upgrade in place once the
     // new product's analysis lands (product_analysis instead of category_fallback).
     // recReloadKey lets the Retry button re-run this effect on demand.
-  }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl, swappedProductAnalysis, recReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl, currentProductKey, swappedProductAnalysis, recReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const REC_LIMIT = MAX_SELECTED_REFERENCES;
   /**
@@ -896,6 +931,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const currentSetup: AiVersionDrawerSetup = {
     productImages: productUrls,
     referenceImages: referenceUrls,
+    referenceSelections: selectedReferences,
     count,
     format,
     modelKey,
@@ -1040,11 +1076,12 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       productMetadata: selectedAssets
         .filter(a => a.role === "product")
         .map(a => ({ title: a.title, productUrl: a.productUrl })),
-      // The CURRENT primary selection — reflects any in-drawer product change,
-      // never the immutable prefill. Only an EXPLICIT choice or a restored linked
-      // product may become a Pin's LinkedProduct; a bare draft image is a generation
-      // input and must not fabricate a product link (§3.4).
-      primaryProductSelection: isPersistableProduct(primarySelection) ? primarySelection : null,
+      // Sent ONLY when the user actively chose a product in this session. A product
+      // restored from the draft is deliberately omitted so the caller inherits the
+      // parent's complete product state (all links + primaryProductId + a possibly
+      // hand-edited destinationUrl) instead of rebuilding it from one selection.
+      // A bare draft image never fabricates a product link either.
+      primaryProductSelection: isUserChosenProduct(primarySelection) ? primarySelection : null,
     });
   };
 

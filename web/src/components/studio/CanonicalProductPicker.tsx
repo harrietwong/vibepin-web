@@ -28,6 +28,13 @@ export type CanonicalProductPickerProps = {
   /** Whether the Pin already has a primary product — the first pick becomes primary
    *  only when it does not. Carried onto each returned selection's asPrimary. */
   hasPrimary?: boolean;
+  /**
+   * Single-product entry points (top-level Select product, Link/Change product) set
+   * this so the picker's CTA promises exactly what the caller will use. Without it
+   * the footer could read "Add 3 products" while the caller silently kept only the
+   * first — the UI lying about the outcome.
+   */
+  selectionMode?: "single" | "multiple";
   onSelect: (selections: CanonicalProductSelection[]) => void;
   onClose: () => void;
 };
@@ -44,7 +51,7 @@ export function selectionsFromInlineItems(
   }));
 }
 
-export function CanonicalProductPicker({ hasPrimary = false, onSelect, onClose }: CanonicalProductPickerProps) {
+export function CanonicalProductPicker({ hasPrimary = false, selectionMode = "multiple", onSelect, onClose }: CanonicalProductPickerProps) {
   const { t: tr } = useLocale();
   return (
     <>
@@ -61,6 +68,7 @@ export function CanonicalProductPicker({ hasPrimary = false, onSelect, onClose }
       >
         <InlineCreateAssetPicker
           role="product"
+          selectionMode={selectionMode}
           onClose={onClose}
           onConfirm={items => {
             onSelect(selectionsFromInlineItems(items, hasPrimary));

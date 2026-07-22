@@ -1,3 +1,6 @@
+// Stub env before importing the drawer (LocaleProvider builds a Supabase client).
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://placeholder.supabase.co";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "placeholder-anon-key";
 /**
  * Behavioral tests: generated Pins carry the CURRENT product's link + Website URL
  * (corrective 2026-07-21, review items 4/5/7).
@@ -31,6 +34,9 @@ async function test(name: string, fn: () => void | Promise<void>): Promise<void>
 async function main() {
   const store = await import("../src/lib/pinDraftStore");
   const { toLinkedProduct, resolveProductPublicUrl } = await import("../src/lib/studio/productSelection");
+  // Production gates — not reimplemented here.
+  const { isUserChosenProduct } = await import("../src/components/studio/AiVersionDrawer");
+  const { PRODUCT_DERIVED_URL_SOURCE, isAutoManaged } = await import("../src/lib/studio/destinationUrlDerivation");
   const reset = () => { mem.clear(); store.__resetMemoryCacheForTests(); };
 
   // Mirror the StudioBoard contract: link product B onto a generated draft.
@@ -96,22 +102,52 @@ async function main() {
   });
 
   // ── version drawer: untouched product is inherited from the parent (§3.5) ──
+  //
+  // The PRODUCTION gate is isUserChosenProduct(): the drawer sends a product only
+  // when the user actively chose one this session. A restored `linked_product` is
+  // NOT a choice — the previous version of this test hard-coded prefilledProduct=null
+  // and therefore passed while the shipped drawer sent a product and skipped the
+  // inheritance branch entirely (Codex finding #1). Now we drive the real gate.
 
-  await test("no drawer product + parent HAS a product → inherit the parent's link and URL", () => {
+  await test("a RESTORED product is not 'user chosen' → drawer sends nothing → parent inherited", () => {
+    const restored = { title: "P", source: "shopify" as const, imageUrl: "https://cdn/P.jpg", selectionOrigin: "linked_product" as const };
+    assert.equal(isUserChosenProduct(restored), false, "restore is not a user choice");
+    // …so opts.primaryProductSelection is null and StudioBoard takes the parent branch.
     reset();
-    const parentLinked = [{ productId: "P", title: "Parent Product", source: "shopify" as const, linkType: "manual" as const, productUrl: "https://shop/parent" }];
-    const parent = { linkedProducts: parentLinked, primaryProductId: "P", destinationUrl: "https://manually-edited.example/x" };
-    // Mirrors StudioBoard: drawer sent nothing (product untouched), so inherit.
-    const prefilledProduct = null;
-    const parentInherit = !prefilledProduct && parent.linkedProducts.length ? parent.linkedProducts : null;
-    const url = prefilledProduct ? undefined : (parentInherit ? parent.destinationUrl || undefined : undefined);
-    const primaryId = prefilledProduct ? undefined : parent.primaryProductId;
-
+    const parentLinked = [
+      { productId: "P", title: "Parent Product", source: "shopify" as const, linkType: "manual" as const, productUrl: "https://shop/parent" },
+      { productId: "T", title: "Tagged", source: "shopify" as const, linkType: "manual" as const },
+    ];
+    const parent = { linkedProducts: parentLinked, primaryProductId: "P", destinationUrl: "https://manually-edited.example/x", destinationUrlSource: "manual" };
     const ph = store.createBoardDraft({ imageUrl: "", source: "ai_generated_from_upload", idempotencyKey: "gen:inh:0" });
-    store.updateDraft(ph.id, { linkedProducts: parentInherit ?? undefined, primaryProductId: primaryId, ...(url ? { destinationUrl: url } : {}) });
+    store.updateDraft(ph.id, {
+      linkedProducts: parent.linkedProducts,
+      primaryProductId: parent.primaryProductId,
+      destinationUrl: parent.destinationUrl,
+      destinationUrlSource: parent.destinationUrlSource,
+    });
     const d = store.getDraft(ph.id)!;
-    assert.equal(d.primaryProductId, "P", "parent's product preserved");
-    assert.equal(d.destinationUrl, "https://manually-edited.example/x", "parent's URL preserved verbatim, not re-derived");
+    assert.equal(d.primaryProductId, "P", "parent's primaryProductId preserved");
+    assert.equal(d.linkedProducts?.length, 2, "TAGGED products preserved, not collapsed to one");
+    assert.equal(d.destinationUrl, "https://manually-edited.example/x", "manual URL preserved verbatim");
+    assert.equal(d.destinationUrlSource, "manual", "…and stays manual, so nothing later overwrites it");
+  });
+
+  await test("an EXPLICIT pick IS user chosen → drawer sends it → product B wins", () => {
+    const chosen = { title: "B", source: "shopify" as const, imageUrl: "https://cdn/B.jpg", selectionOrigin: "explicit_picker" as const };
+    assert.equal(isUserChosenProduct(chosen), true);
+  });
+
+  await test("product-derived URLs are stamped with provenance so they stay updatable", () => {
+    reset();
+    const ph = store.createBoardDraft({ imageUrl: "", source: "ai_generated_from_upload", idempotencyKey: "gen:prov:0" });
+    store.updateDraft(ph.id, {
+      linkedProducts: [linkedB], primaryProductId: "B",
+      destinationUrl: urlB, destinationUrlSource: PRODUCT_DERIVED_URL_SOURCE,
+    });
+    const d = store.getDraft(ph.id)!;
+    assert.equal(d.destinationUrlSource, "product", "without this, later derivation treats it as manual and never updates/clears it");
+    assert.equal(isAutoManaged({ destinationUrl: d.destinationUrl, destinationUrlSource: d.destinationUrlSource }), true);
   });
 
   await test("an implicit draft image contributes NO product link", () => {

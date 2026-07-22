@@ -38,7 +38,7 @@ import { ProductHoverPreview } from "@/components/studio/ProductPreview";
 import { toPreviewProduct, asinForAsset } from "@/lib/studio/productPreview";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { ShopifyProductPickerPanel } from "@/components/studio/ShopifyProductPickerPanel";
-import type { ShopifyPanelImage } from "@/components/studio/ShopifyProductPickerPanel";
+import type { ShopifyPanelImage, ShopifyProductSelectionCompat } from "@/components/studio/ShopifyProductPickerPanel";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
@@ -67,6 +67,12 @@ export type InlineAssetItem = {
 
 export type InlineCreateAssetPickerProps = {
   role: "product" | "style_reference";
+  /**
+   * "single" — picking replaces the current selection and the CTA reads
+   * "Add 1 product". Used by entry points that can only consume one product, so the
+   * footer never promises more than the caller will actually use.
+   */
+  selectionMode?: "single" | "multiple";
   onClose: () => void;
   onConfirm: (items: InlineAssetItem[]) => void;
   currentSelectedUrls?: string[];
@@ -701,7 +707,7 @@ function MyReferencesFilterChips({ active, onChange }: {
 // 闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴?Main picker 闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛瀣崌閺屽秹宕楁径濠佸闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛瀣崌閺屽秹宕楁径濠佸闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛瀣崌閺屽秹宕楁径濠佸闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛瀣崌閺屽秹宕楁径濠佸闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛瀣崌閺屽秹宕楁径濠佸闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛瀣崌閺屽秹宕楁径濠佸闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛瀣崌閺屽秹宕楁径濠佸闂備礁鍟块崢婊堝磻閹剧粯鐓冮柛蹇擃槸娴滈箖姊洪崘鎻掑辅闁稿鎹囬弻宥夊礂婢跺﹣澹曢梻浣稿暱閸樻粓宕戦幘缁樼厓闁稿繐顦禍楣冩⒑閸愭彃甯ㄩ柛?
 
 export function InlineCreateAssetPicker({
-  role, onClose, onConfirm, currentSelectedUrls = [],
+  role, selectionMode = "multiple", onClose, onConfirm, currentSelectedUrls = [],
 }: InlineCreateAssetPickerProps) {
   const { t: tr } = useLocale();
   const allAssets = useSyncExternalStore(assets.subscribe, assets.getAssets, assets.getServerAssets);
@@ -795,6 +801,9 @@ export function InlineCreateAssetPicker({
 
   function toggle(id: string) {
     setSelected(prev => {
+      // Single mode REPLACES rather than accumulates, so the CTA count always
+      // matches what the caller will consume.
+      if (selectionMode === "single") return prev.has(id) ? new Set<string>() : new Set([id]);
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -901,7 +910,7 @@ export function InlineCreateAssetPicker({
     toggle(saved.id);
   }
 
-  function saveShopifyImages(images: ShopifyPanelImage[], product: { title: string; productUrl?: string }) {
+  function saveShopifyImages(images: ShopifyPanelImage[], product: ShopifyProductSelectionCompat) {
     const savedIds: string[] = [];
     for (const img of images) {
       const existing = allAssets.find(a => a.role === "product" && a.imageUrl === img.url);
@@ -915,8 +924,15 @@ export function InlineCreateAssetPicker({
         source:          "shopify",
         imageUrl:        img.url,
         title:           product.title,
-        productUrl:      product.productUrl,
-        store:           "Shopify",
+        productUrl:      product.url,
+        // The full commerce record — previously dropped, which left Website-URL
+        // derivation and the LinkedProduct without the fields they depend on.
+        // `shopifyProductId` stays SEPARATE from the local asset id.
+        canonicalUrl:    product.canonicalUrl,
+        shopifyProductId: product.id,
+        store:           product.store ?? "Shopify",
+        price:           product.price,
+        currency:        product.currency,
       });
       savedIds.push(saved.id);
     }
@@ -1088,7 +1104,7 @@ export function InlineCreateAssetPicker({
           )}
           <MyProductsFilterChips
             active={productFilter}
-            chips={visibleProductSourceFilters(myAssets)}
+            chips={visibleProductSourceFilters(myAssets, { shopifyEnabled })}
             brokenCount={brokenImportCount}
             onChange={setProductFilter}
           />

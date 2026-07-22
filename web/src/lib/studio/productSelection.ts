@@ -58,14 +58,41 @@ export type CanonicalProductSelection = {
 };
 
 /** A `javascript:`/`data:` URL must never reach a Pin's destination field. */
+/**
+ * Hosts that can never be a public Pin destination: loopback, link-local, and the
+ * RFC1918 private ranges. A Pin published with one of these sends every visitor to
+ * their own machine or nowhere at all.
+ */
+function isNonPublicHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
+  if (h === "0.0.0.0" || h === "::1" || h === "[::1]") return true;
+  if (/^127\./.test(h)) return true;                       // loopback
+  if (/^10\./.test(h)) return true;                        // private class A
+  if (/^192\.168\./.test(h)) return true;                  // private class C
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;   // private class B
+  if (/^169\.254\./.test(h)) return true;                  // link-local
+  return false;
+}
+
 function safePublicUrl(url: string | undefined | null): string | undefined {
   const v = (url ?? "").trim();
   if (!v) return undefined;
   if (/^(javascript|data|blob|file):/i.test(v)) return undefined;
+  if (!/^https?:\/\//i.test(v)) return undefined;
+  // Whitespace inside a URL means it was never a single valid URL.
+  if (/\s/.test(v)) return undefined;
+
+  let parsed: URL;
+  try { parsed = new URL(v); } catch { return undefined; } // malformed
+  if (!parsed.hostname) return undefined;
+  // A hostname with no dot and no port is not a routable public host (e.g. "https://x").
+  if (!parsed.hostname.includes(".") && parsed.hostname !== "localhost") return undefined;
+  if (isNonPublicHost(parsed.hostname)) return undefined;
   // Shopify Admin URLs are internal — they 404 for visitors and leak the store's
   // back office. The storefront URL is the only valid destination.
-  if (/^https?:\/\/admin\.shopify\.com\//i.test(v)) return undefined;
-  if (!/^https?:\/\//i.test(v)) return undefined;
+  if (parsed.hostname.toLowerCase() === "admin.shopify.com") return undefined;
+
   return v;
 }
 

@@ -31,7 +31,7 @@ import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { generateAiVersions } from "@/lib/studio/generateAiVersions";
-import { planReferenceGroups } from "@/lib/studio/selectedReferences";
+import { planReferenceGroups, type SelectedReference } from "@/lib/studio/selectedReferences";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
@@ -42,6 +42,7 @@ import { BUI } from "@/components/studio/boardUI";
 import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
 import { resolveProductPublicUrl, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
+import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
@@ -348,17 +349,35 @@ export function StudioBoard() {
     // already had a product (version mode, product untouched), inherit the parent's
     // link and its destination URL verbatim rather than re-deriving it, so a manually
     // edited URL on the parent survives onto the generated Pins.
-    const prefilledProduct = opts.primaryProductSelection ?? null;
-    const parentLinked = !prefilledProduct && parent?.linkedProducts?.length ? parent.linkedProducts : null;
-    const prefilledUrl = prefilledProduct
-      ? resolveProductPublicUrl(prefilledProduct)
-      : (parentLinked ? (parent?.destinationUrl || undefined) : undefined);
-    const prefilledLinkedProducts = prefilledProduct
-      ? [toLinkedProduct({ ...prefilledProduct, asPrimary: true })]
-      : parentLinked ?? undefined;
-    const prefilledPrimaryId = prefilledProduct
-      ? toLinkedProduct({ ...prefilledProduct, asPrimary: true }).productId
-      : parent?.primaryProductId ?? parentLinked?.[0]?.productId;
+    // The drawer sends a product ONLY when the user actively chose one this session.
+    // Otherwise (version drawer, product untouched) we inherit the parent's COMPLETE
+    // product state — every link, its own primaryProductId, and its destinationUrl
+    // verbatim (which may have been hand-edited and must not be re-derived).
+    const chosenProduct = opts.primaryProductSelection ?? null;
+    const chosenLinked = chosenProduct ? toLinkedProduct({ ...chosenProduct, asPrimary: true }) : null;
+    const parentLinked = !chosenProduct && parent?.linkedProducts?.length ? parent.linkedProducts : null;
+
+    const productLinkPatch: Partial<PinDraft> | null = chosenLinked
+      ? {
+          linkedProducts: [chosenLinked],
+          primaryProductId: chosenLinked.productId,
+          // Provenance is required: without it, later derivation sees an unknown
+          // source, treats the URL as manual, and refuses to update or clear it.
+          ...(resolveProductPublicUrl(chosenProduct!)
+            ? { destinationUrl: resolveProductPublicUrl(chosenProduct!), destinationUrlSource: PRODUCT_DERIVED_URL_SOURCE }
+            : {}),
+        }
+      : parentLinked
+        ? {
+            linkedProducts: parentLinked,
+            primaryProductId: parent?.primaryProductId ?? parentLinked[0]?.productId,
+            // Carry the parent's URL AND its provenance unchanged, so a manually
+            // edited parent URL stays manual on the generated Pins.
+            ...(parent?.destinationUrl
+              ? { destinationUrl: parent.destinationUrl, destinationUrlSource: parent.destinationUrlSource }
+              : {}),
+          }
+        : null;
     const setupSnapshot = {
       mode: parent ? ("board_ai_version" as const) : ("board_ai_scratch" as const),
       keyword: parent?.keyword,
@@ -395,22 +414,16 @@ export function StudioBoard() {
           referenceId: group.reference?.id,
           referenceImageUrl: group.reference?.imageUrl,
           referenceSource: group.reference?.source,
-          title: parent?.title ?? prefilledProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
+          title: parent?.title ?? chosenProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
           model: resolveModelLabel(undefined, opts.modelKey),
           format: opts.format,
           generationSessionId: requestId,
           promptSnapshot: opts.directionBrief,
           setupSnapshot,
         });
-        // Carry the top-level-selected product onto the generated Pin: its link and
-        // its derived Website URL (Section J). Only when this batch was prefilled.
-        if (prefilledLinkedProducts) {
-          pinDraftStore.updateDraft(placeholder.id, {
-            linkedProducts: prefilledLinkedProducts,
-            primaryProductId: prefilledPrimaryId,
-            ...(prefilledUrl ? { destinationUrl: prefilledUrl } : {}),
-          });
-        }
+        // Carry the product state (chosen product, or the parent's inherited state)
+        // onto the generated Pin, including the URL's provenance (Section J).
+        if (productLinkPatch) pinDraftStore.updateDraft(placeholder.id, productLinkPatch);
         return placeholder;
       }),
     );
@@ -467,19 +480,13 @@ export function StudioBoard() {
             referenceId: group.reference?.id,
             referenceImageUrl: group.reference?.imageUrl,
             referenceSource: group.reference?.source,
-            title: parent?.title ?? prefilledProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
+            title: parent?.title ?? chosenProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
             model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
             generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
           });
-          // Extra results must carry the SAME product link + URL as the placeholders
-          // (review item 5) — otherwise a provider-returned extra loses the product.
-          if (prefilledLinkedProducts) {
-            pinDraftStore.updateDraft(extra.id, {
-              linkedProducts: prefilledLinkedProducts,
-              primaryProductId: prefilledPrimaryId,
-              ...(prefilledUrl ? { destinationUrl: prefilledUrl } : {}),
-            });
-          }
+          // Extra results must carry the SAME product state as the placeholders —
+          // otherwise a provider-returned extra loses the product.
+          if (productLinkPatch) pinDraftStore.updateDraft(extra.id, productLinkPatch);
           okCount += 1;
           void startImageAnalysis(extra.id);
           void startQualityJudge(extra.id);
@@ -563,6 +570,35 @@ export function StudioBoard() {
   const handleTryAgain = useCallback((d: PinDraft) => {
     if (d.publishError?.trim()) { void handlePublish(d.id); return; }
     const parent = d.parentDraftId ? pinDraftStore.getDraft(d.parentDraftId) : null;
+    // Restore the failed card's OWN generation group reference, so retrying a failed
+    // reference group regenerates against the same reference instead of reopening a
+    // blank drawer (acceptance criterion 24). The association is persisted on the
+    // draft, so this survives refresh and cross-device — unlike the in-memory setup
+    // cache the drawer otherwise falls back to.
+    const groupReference: SelectedReference[] = d.referenceImageUrl
+      ? [{
+          id: d.referenceId || d.referenceImageUrl,
+          imageUrl: d.referenceImageUrl,
+          source: (d.referenceSource as SelectedReference["source"]) || "saved",
+          role: "style_reference",
+        }]
+      : [];
+    const retrySetup = groupReference.length
+      ? {
+          productImages: [],
+          referenceImages: groupReference.map(r => r.imageUrl),
+          referenceSelections: groupReference,
+          count: 1,
+          format: d.format ?? "Pinterest 2:3",
+          modelKey: "gemini_image",
+          variationMode: "distinct" as const,
+          selectedDirectionId: null,
+          selectedTagIds: [],
+          directionBrief: d.promptSnapshot ?? "",
+          briefManuallyEdited: false,
+        }
+      : undefined;
+    if (retrySetup) setAiSetupCache(prev => ({ ...prev, [parent?.id ?? d.id ?? "scratch"]: retrySetup }));
     setAiDrawer(parent ? { mode: "version", draft: parent } : d.imageUrl ? { mode: "version", draft: d } : { mode: "scratch" });
   }, [handlePublish]);
 
@@ -775,6 +811,7 @@ export function StudioBoard() {
       {showProductPicker && (
         <CanonicalProductPicker
           hasPrimary={false}
+          selectionMode="single"
           onSelect={handleProductSelect}
           onClose={() => setShowProductPicker(false)}
         />

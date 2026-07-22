@@ -63,7 +63,13 @@ type SelectProductModeProps = {
 
 type SelectImagesModeProps = {
   mode: "select-images";
-  onSelectImages: (images: ShopifyPanelImage[], product: { title: string; productUrl?: string }) => void;
+  /**
+   * `product` carries the FULL Shopify record (server product id, canonicalUrl,
+   * price, currency, real store), not just title+url — callers persist those as
+   * commerce identifiers. It was previously title+productUrl only, which silently
+   * dropped every field the Website-URL derivation and LinkedProduct record need.
+   */
+  onSelectImages: (images: ShopifyPanelImage[], product: ShopifyProductSelectionCompat) => void;
 };
 
 export type ShopifyProductPickerPanelProps = (SelectProductModeProps | SelectImagesModeProps) & {
@@ -347,7 +353,9 @@ export function ShopifyProductPickerPanel(props: ShopifyProductPickerPanelProps)
     if (props.mode === "select-product") {
       props.onSelectProduct(shopifyProductToSelection(product, props.storeLabel), images);
     } else {
-      props.onSelectImages(images, { title: product.title || tr("studioModals.product.productFallback"), productUrl: product.productUrl ?? undefined });
+      // Same rich mapping select-product uses — the two modes differ only in how
+      // many images they hand back, never in product fidelity.
+      props.onSelectImages(images, shopifyProductToSelection(product, props.storeLabel));
     }
   }
 

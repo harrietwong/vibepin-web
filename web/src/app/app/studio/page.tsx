@@ -35,7 +35,7 @@ import {
   loadAllSetupSnapshots as loadAllRemixSetups,
   pruneSetupSnapshots as pruneRemixSetups,
 } from "@/lib/remixRecoveryStore";
-import type { PinMetadataFormState, PinDetailsGenStatus, DrawerTab, RemixDraftSetup } from "@/components/studio/PinDetailsDrawer";
+import type { PinMetadataFormState, PinMetadataFormPatch, PinDetailsGenStatus, DrawerTab, RemixDraftSetup } from "@/components/studio/PinDetailsDrawer";
 import type { BatchPinRow, BatchApplyOpts } from "@/components/studio/BatchEditDrawer";
 import { StudioBoard } from "@/components/studio/StudioBoard";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
@@ -1284,7 +1284,7 @@ function MasonryPinFeed({
   onOpenPinDetail:     (sessionId: string, entryKey: string, tab?: DrawerTab) => void;
   onClosePinDetail:    () => void;
   onRetryGenerateDetails: () => void;
-  onMetadataChange:    (patch: Partial<PinMetadataFormState>) => void;
+  onMetadataChange:    (patch: PinMetadataFormPatch) => void;
   onSelectTitleCandidate: (title: string) => void;
   onRegenerateTitles: () => void;
   onRegenerateDescription: () => void;
@@ -3259,7 +3259,7 @@ function CreatePinsContent() {
     setShowSaved(true);
   }
 
-  function handleMetadataChange(patch: Partial<PinMetadataFormState>) {
+  function handleMetadataChange(patch: PinMetadataFormPatch) {
     setShowSaved(false);
     setMetadataForm(prev => prev ? { ...prev, ...patch } : prev);
     // Product / board changes ride on metadataDraft — persist them immediately so they
@@ -3272,7 +3272,10 @@ function CreatePinsContent() {
     if ("title" in patch) touched.titleTouched = true;
     if ("description" in patch) touched.descriptionTouched = true;
     if ("altText" in patch) touched.altTextTouched = true;
-    if ("destinationUrl" in patch) touched.destinationUrlTouched = true;
+    // An AUTOMATIC product-derived fill must NOT be recorded as a manual edit —
+    // otherwise the very next product change refuses to update its own auto value.
+    // The drawer sets `automatedUrlFill` when it derived/cleared the URL itself.
+    if ("destinationUrl" in patch && !patch.automatedUrlFill) touched.destinationUrlTouched = true;
     if ("plannedDate" in patch) touched.plannedDateTouched = true;
     if (Object.keys(touched).length) setMetadataFormTouched(t => ({ ...t, ...touched }));
   }
@@ -4695,7 +4698,7 @@ function CreatePinsContent() {
             pinDetailOpen={pinDetailSelection !== null && pinDetailView !== null}
             pinDetailInitialTab={pinDetailSelection?.initialTab ?? "remix"}
             pinDetail={pinDetailView}
-            metadataForm={metadataForm}
+            metadataForm={metadataForm && { ...metadataForm, destinationUrlTouched: metadataFormTouched.destinationUrlTouched }}
             pinDetailsGenStatus={pinDetailsGenStatus}
             readinessLabel={pinReadinessLabel}
             isDirty={isFormDirty}

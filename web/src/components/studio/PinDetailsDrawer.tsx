@@ -496,6 +496,17 @@ export type PinMetadataFormState = {
   destinationUrl: string;
   plannedDate: string;
   metadataDraft: PinMetadataDraft | null;
+  /** Whether the user has hand-edited the Website URL (Section J protection). */
+  destinationUrlTouched?: boolean;
+};
+
+/** Patch shape accepted by onMetadataChange. */
+export type PinMetadataFormPatch = Partial<PinMetadataFormState> & {
+  /**
+   * Set when the drawer itself derived or cleared destinationUrl from a product.
+   * The caller uses it to avoid recording an automatic fill as a manual edit.
+   */
+  automatedUrlFill?: boolean;
 };
 
 export type PinDetailsDrawerProps = {
@@ -508,7 +519,7 @@ export type PinDetailsDrawerProps = {
   isDirty: boolean;
   showSaved: boolean;
   onClose: () => void;
-  onMetadataChange: (patch: Partial<PinMetadataFormState>) => void;
+  onMetadataChange: (patch: PinMetadataFormPatch) => void;
   onSelectTitleCandidate: (title: string) => void;
   onRegenerateTitles: () => void;
   onRegenerateDescription: () => void;
@@ -709,12 +720,19 @@ export function PinDetailsDrawer({
     // entirely when the field was manually edited — deriveDestinationUrlForProduct
     // returns null and we leave the value byte-identical.
     const urlChange = deriveDestinationUrlForProduct(
-      { destinationUrl: form?.destinationUrl ?? next.destinationUrl, destinationUrlSource: next.destinationUrlSource },
+      {
+        destinationUrl: form?.destinationUrl ?? next.destinationUrl,
+        destinationUrlSource: next.destinationUrlSource,
+        // Without this the helper cannot see a hand-edit whose provenance was lost,
+        // and would overwrite it on the next product change.
+        destinationUrlTouched: form?.destinationUrlTouched,
+      },
       product,
     );
     if (urlChange) {
       next = { ...next, destinationUrl: urlChange.destinationUrl, destinationUrlSource: urlChange.destinationUrlSource };
-      onMetadataChange({ metadataDraft: next, destinationUrl: urlChange.destinationUrl ?? "" });
+      // automatedUrlFill: this is OUR derivation, not a user keystroke.
+      onMetadataChange({ metadataDraft: next, destinationUrl: urlChange.destinationUrl ?? "", automatedUrlFill: true });
     } else {
       onMetadataChange({ metadataDraft: next });
     }
@@ -732,7 +750,11 @@ export function PinDetailsDrawer({
     // (Section J) — a manual URL, or one from another product, survives.
     const urlChange = removed
       ? clearDestinationUrlForUnlink(
-          { destinationUrl: form?.destinationUrl ?? after.destinationUrl, destinationUrlSource: after.destinationUrlSource },
+          {
+            destinationUrl: form?.destinationUrl ?? after.destinationUrl,
+            destinationUrlSource: after.destinationUrlSource,
+            destinationUrlTouched: form?.destinationUrlTouched,
+          },
           selectionFromLinkedProduct(removed),
         )
       : null;
@@ -740,6 +762,7 @@ export function PinDetailsDrawer({
       onMetadataChange({
         metadataDraft: { ...after, destinationUrl: "", destinationUrlSource: undefined },
         destinationUrl: "",
+        automatedUrlFill: true,
       });
     } else {
       onMetadataChange({ metadataDraft: after });
@@ -1408,6 +1431,7 @@ export function PinDetailsDrawer({
       {showProductPicker && (
         <CanonicalProductPicker
           hasPrimary={pickerHasPrimary}
+          selectionMode="single"
           onSelect={handleProductSelect}
           onClose={() => { setShowProductPicker(false); setPickerReplaceKey(null); }}
         />

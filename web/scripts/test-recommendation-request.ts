@@ -100,6 +100,17 @@ test("basis: category_fallback / missing / unknown all become category_fallback"
   assert.equal(resolveBasis("something_else"), "category_fallback");
 });
 
+test("basis: an EMPTY item list collapses to category_fallback even if the field claims otherwise", () => {
+  // Nothing to back a product-level claim → never assert one (Codex finding #11).
+  assert.equal(resolveBasis("product_analysis", 0), "category_fallback");
+  assert.equal(resolveBasis("product_text", 0), "category_fallback");
+  // With items, the field is honoured.
+  assert.equal(resolveBasis("product_analysis", 6), "product_analysis");
+  assert.equal(resolveBasis("product_text", 1), "product_text");
+  // Unknown count keeps the previous behaviour.
+  assert.equal(resolveBasis("product_analysis"), "product_analysis");
+});
+
 // ── Stale-response guard: A→B, A's late response is discarded ────────────────
 
 test("a late response for the PREVIOUS product is discarded", () => {
