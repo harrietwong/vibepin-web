@@ -24,7 +24,6 @@ import {
   productSourceLabel,
   productKey,
   normalizeProductSource,
-  type LinkedProduct,
   type MetadataReadinessLabel,
   type PinMetadataDraft,
 } from "@/lib/pinMetadata";
@@ -33,8 +32,8 @@ import { clearDestinationUrlForUnlink, deriveDestinationUrlForProduct } from "@/
 import type { SetupSnapshot, ProductSnapshot, ReferenceSnapshot, CategoryAudit } from "@/lib/studioPersistence";
 import type { PinDetailView, GenerationSetupSnapshot, RecoveryQuality } from "./pinDetails";
 import { getGenerationSetupSnapshot } from "./pinDetails";
-import { ProductPickerModal } from "./ProductPickerModal";
-import type { ProductSelection } from "./ProductPickerModal";
+import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
+import type { CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { getShopifyProductFreshness, type ShopifyFreshnessState } from "@/lib/shopifyClient";
 
 const UI = {
@@ -692,50 +691,26 @@ export function PinDetailsDrawer({
     if (detail.format) failedSetupParts.push(detail.format);
   }
 
-  /**
-   * Map the picker's selection onto the canonical LinkedProduct.
-   *
-   * Routed through toLinkedProduct() so the destination URL obeys the same
-   * source rules everywhere (Section J) — notably: Shopify resolves to the
-   * storefront/canonical URL and an Admin URL is dropped rather than persisted.
-   * This mapper previously passed `p.url` through unchecked.
-   */
-  function toLinkedProductFromSelection(p: ProductSelection): LinkedProduct {
-    const linked = toLinkedProduct({
-      id:           p.id,
-      title:        p.title?.trim() || tr("pinDrawer.product.fallbackTitle"),
-      imageUrl:     p.imageUrl,
-      publicUrl:    p.url,
-      canonicalUrl: p.canonicalUrl,
-      source:       normalizeProductSource(p.source),
-      store:        p.store,
-      price:        p.price,
-      currency:     p.currency,
-      asPrimary:    p.asPrimary,
-    });
-    return { ...linked, thumbnailUrl: p.imageUrl };
-  }
-
-  function handleProductSelect(p: ProductSelection) {
+  function handleProductSelect(selections: CanonicalProductSelection[]) {
     setShowProductPicker(false);
+    const product = selections[0];
     const draft = form?.metadataDraft;
-    if (!draft) { setPickerReplaceKey(null); return; }
+    if (!draft || !product) { setPickerReplaceKey(null); return; }
     let next = draft;
     // "Change" replaces the targeted product before adding the new one.
     if (pickerReplaceKey) {
       next = removeProductFromDraft(next, pickerReplaceKey).draft;
     }
-    const lp = toLinkedProductFromSelection(p);
+    const lp = toLinkedProduct(product);
     // After a primary replace, no primary exists, so honor asPrimary as-is.
-    next = addProductToDraft(next, lp, p.asPrimary);
+    next = addProductToDraft(next, lp, product.asPrimary);
 
     // Derive the Website URL from the newly linked product (Section J). Skipped
     // entirely when the field was manually edited — deriveDestinationUrlForProduct
     // returns null and we leave the value byte-identical.
-    const selection = selectionFromLinkedProduct(lp);
     const urlChange = deriveDestinationUrlForProduct(
       { destinationUrl: form?.destinationUrl ?? next.destinationUrl, destinationUrlSource: next.destinationUrlSource },
-      selection,
+      product,
     );
     if (urlChange) {
       next = { ...next, destinationUrl: urlChange.destinationUrl, destinationUrlSource: urlChange.destinationUrlSource };
@@ -1431,20 +1406,8 @@ export function PinDetailsDrawer({
         </div>
       </aside>
       {showProductPicker && (
-        <ProductPickerModal
-          title={pickerReplaceKey ? tr("pinDrawer.products.changeProduct") : tr("pinDrawer.products.addProduct")}
-          subtitle={replacingPrimary ? tr("pinDrawer.products.replacePrimaryHelper") : tr("pinDrawer.products.linkProductHelper")}
+        <CanonicalProductPicker
           hasPrimary={pickerHasPrimary}
-          recommendedProducts={
-            (detail?.setupSnapshot?.selectedProducts ?? []).length > 0
-              ? detail!.setupSnapshot!.selectedProducts.map(ps => ({
-                  title:    ps.title,
-                  imageUrl: ps.imageUrl ?? undefined,
-                  url:      ps.productUrl ?? undefined,
-                  source:   ps.source ?? "product_signal",
-                }))
-              : undefined
-          }
           onSelect={handleProductSelect}
           onClose={() => { setShowProductPicker(false); setPickerReplaceKey(null); }}
         />

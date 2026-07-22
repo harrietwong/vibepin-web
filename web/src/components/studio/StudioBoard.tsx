@@ -39,12 +39,16 @@ import { PinBoardCard } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI } from "@/components/studio/boardUI";
-import { ProductPickerModal, type ProductSelection } from "@/components/studio/ProductPickerModal";
-import { EMPTY_TOUCHED, normalizeProductSource, type LinkedProduct } from "@/lib/pinMetadata";
+import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
+import { resolveProductPublicUrl, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
+import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
-type AiDrawerState = { mode: "version"; draft: PinDraft } | { mode: "scratch" } | null;
+type AiDrawerState =
+  | { mode: "version"; draft: PinDraft }
+  | { mode: "scratch"; product?: CanonicalProductSelection }
+  | null;
 
 // Deep link into /app/plan that reopens the Edit-details drawer for a specific Pin.
 // Reuses the SAME "?modal=publish&pinId=…" contract Plan already parses (see the
@@ -305,40 +309,18 @@ export function StudioBoard() {
     } finally { endPublish(id); }
   }, [noBoardAccess, tr]);
 
-  // ── Product → Pin (Shopify "Select product", §3.6) ─────────────────────────
-  // Opening/browsing the picker never creates anything — only a confirmed selection
-  // does. destinationUrl is intentionally left empty (never auto-filled, §2).
-  const handleProductSelect = useCallback((p: ProductSelection) => {
+  // ── Top-level "Select product" → AI drawer ─────────────────────────────────
+  // Selecting a product now opens the SAME AiVersionDrawer as "Create with AI",
+  // prefilled with the product, instead of silently creating a bare draft. No draft
+  // exists until the user Generates — cancelling leaves nothing behind. The drawer
+  // derives the Website URL and requests this product's own recommendations.
+  const handleProductSelect = useCallback((selections: CanonicalProductSelection[]) => {
     setShowProductPicker(false);
-    // Multi-image selection → the first chosen image becomes the card's cover.
-    const chosenImageUrl = p.images?.[0]?.url ?? p.imageUrl ?? "";
+    const product = selections[0];
+    const chosenImageUrl = product?.imageUrl ?? "";
     if (!chosenImageUrl) { toast.error(tr("studioBoard.toast.productNoImage")); return; }
-    const linkedProduct: LinkedProduct = {
-      productId:    p.id,
-      title:        p.title?.trim() || "Product",
-      imageUrl:     chosenImageUrl,
-      thumbnailUrl: chosenImageUrl,
-      productUrl:   p.url,
-      canonicalUrl: p.canonicalUrl,
-      store:        p.store,
-      price:        p.price,
-      currency:     p.currency,
-      source:       normalizeProductSource(p.source),
-      linkType:     "auto",
-    };
-    const created = pinDraftStore.createBoardDraft({
-      imageUrl: chosenImageUrl,
-      source:   "uploaded_image",
-      title:    p.title?.trim() || undefined,
-    });
-    pinDraftStore.updateDraft(created.id, {
-      linkedProducts: [linkedProduct],
-      primaryProductId: linkedProduct.productId,
-    });
-    void startImageAnalysis(created.id);
-    flashSaved();
-    toast.success(tr("studioBoard.toast.createdPinFromProduct"));
-  }, [flashSaved, tr]);
+    setAiDrawer({ mode: "scratch", product });
+  }, [tr]);
 
   // ── AI drawers ─────────────────────────────────────────────────────────────
   const handleGenerateAiImage = useCallback((d: PinDraft) => setAiDrawer({ mode: "version", draft: d }), []);
@@ -359,6 +341,13 @@ export function StudioBoard() {
     // Each group requests `perGroup` images, so the batch total is groups × perGroup.
     const groups = planReferenceGroups(opts.selectedReferences ?? [], perGroup);
     const requested = groups.length * perGroup;
+    // Website URL + product link for Pins generated from top-level "Select product".
+    // Derived once from the prefilled product, applied to every resulting draft.
+    const prefilledProduct = opts.primaryProductSelection ?? null;
+    const prefilledUrl = prefilledProduct ? resolveProductPublicUrl(prefilledProduct) : undefined;
+    const prefilledLinkedProducts = prefilledProduct
+      ? [toLinkedProduct({ ...prefilledProduct, asPrimary: true })]
+      : undefined;
     const setupSnapshot = {
       mode: parent ? ("board_ai_version" as const) : ("board_ai_scratch" as const),
       keyword: parent?.keyword,
@@ -384,8 +373,8 @@ export function StudioBoard() {
     // placeholder already carries its group's reference association (PRD G2), which
     // is what makes per-group failure fallback and Retry resolvable later.
     const groupPlaceholders = groups.map(group =>
-      Array.from({ length: group.requestCount }, (_, i) =>
-        pinDraftStore.createBoardDraft({
+      Array.from({ length: group.requestCount }, (_, i) => {
+        const placeholder = pinDraftStore.createBoardDraft({
           // Placeholder shows the parent image while generating; scratch mode has none.
           imageUrl: parent?.imageUrl ?? "",
           source: "ai_generated_from_upload",
@@ -395,14 +384,24 @@ export function StudioBoard() {
           referenceId: group.reference?.id,
           referenceImageUrl: group.reference?.imageUrl,
           referenceSource: group.reference?.source,
-          title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
+          title: parent?.title ?? prefilledProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
           model: resolveModelLabel(undefined, opts.modelKey),
           format: opts.format,
           generationSessionId: requestId,
           promptSnapshot: opts.directionBrief,
           setupSnapshot,
-        }),
-      ),
+        });
+        // Carry the top-level-selected product onto the generated Pin: its link and
+        // its derived Website URL (Section J). Only when this batch was prefilled.
+        if (prefilledLinkedProducts) {
+          pinDraftStore.updateDraft(placeholder.id, {
+            linkedProducts: prefilledLinkedProducts,
+            primaryProductId: prefilledLinkedProducts[0].productId,
+            ...(prefilledUrl ? { destinationUrl: prefilledUrl } : {}),
+          });
+        }
+        return placeholder;
+      }),
     );
     // Close the drawer right away — generation continues and the cards update.
     setAiDrawer(null);
@@ -733,11 +732,17 @@ export function StudioBoard() {
 
       {aiDrawer && (
         <AiVersionDrawer
-          key={aiDrawer.mode === "version" ? aiDrawer.draft.id : "scratch"}
+          // A scratch drawer opened WITH a product gets a per-product key so a fresh
+          // "Select product" never inherits a previous scratch session's cached setup.
+          key={aiDrawer.mode === "version" ? aiDrawer.draft.id
+            : aiDrawer.product ? `scratch:${aiDrawer.product.id ?? aiDrawer.product.imageUrl}`
+            : "scratch"}
           draft={aiDrawer.mode === "version" ? aiDrawer.draft : null}
           title={aiDrawer.mode === "version" ? tr("studioBoard.aiDrawer.generateAiImage") : tr("studioBoard.aiDrawer.createWithAi")}
           open generating={aiGenerating}
-          initialSetup={aiSetupKey ? aiSetupCache[aiSetupKey] : undefined}
+          // A product prefill takes precedence over a cached scratch setup.
+          initialSetup={aiDrawer.mode === "scratch" && aiDrawer.product ? undefined : aiSetupKey ? aiSetupCache[aiSetupKey] : undefined}
+          initialProductSelection={aiDrawer.mode === "scratch" ? aiDrawer.product ?? null : null}
           onSetupChange={setup => {
             if (!aiSetupKey) return;
             setAiSetupCache(prev => ({ ...prev, [aiSetupKey]: setup }));
@@ -748,10 +753,8 @@ export function StudioBoard() {
       )}
 
       {showProductPicker && (
-        <ProductPickerModal
-          title={tr("studioBoard.productPicker.title")}
-          subtitle={tr("studioBoard.productPicker.subtitle")}
-          initialTab="shopify"
+        <CanonicalProductPicker
+          hasPrimary={false}
           onSelect={handleProductSelect}
           onClose={() => setShowProductPicker(false)}
         />

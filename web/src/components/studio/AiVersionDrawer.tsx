@@ -46,7 +46,7 @@ import { CreativeChips } from "@/components/studio/CreativeChips";
 import { InlineCreateAssetPicker, type InlineAssetItem } from "@/components/studio/InlineCreateAssetPicker";
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { addProductToDraft } from "@/lib/pinMetadata";
-import { selectionFromAsset, toLinkedProduct } from "@/lib/studio/productSelection";
+import { selectionFromAsset, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDerivation";
 import {
   MAX_SELECTED_REFERENCES,
@@ -104,6 +104,12 @@ export type AiVersionOptions = {
   briefManuallyEdited: boolean;
   creativeDirectionMeta: CreativeDirectionSnapshotV2;
   productMetadata: Array<{ title?: string; productUrl?: string }>;
+  /**
+   * Primary product prefilled from top-level "Select product", if any. Lets the
+   * caller derive the resulting Pins' Website URL from a real product record rather
+   * than re-deriving it from the flat metadata. Null for the normal in-drawer flow.
+   */
+  primaryProductSelection?: CanonicalProductSelection | null;
 };
 
 export type AiVersionDrawerSetup = {
@@ -125,6 +131,14 @@ export type AiVersionDrawerProps = {
   generating: boolean;
   title?: string;
   initialSetup?: AiVersionDrawerSetup;
+  /**
+   * Product to prefill when opening in scratch mode from top-level "Select product".
+   * Seeds the Product images strip and (via onGenerate) the resulting Pins' product
+   * link + Website URL, and drives recommendations for THIS product — the drawer's
+   * existing swapped-product path treats it as a non-draft product, so analysis and
+   * recommendations are its own, never a previous product's.
+   */
+  initialProductSelection?: CanonicalProductSelection | null;
   onSetupChange?: (setup: AiVersionDrawerSetup) => void;
   onClose: () => void;
   onGenerate: (opts: AiVersionOptions) => void;
@@ -313,11 +327,15 @@ function AssetStrip({
   );
 }
 
-export function AiVersionDrawer({ draft, open, generating, title, initialSetup, onSetupChange, onClose, onGenerate }: AiVersionDrawerProps) {
+export function AiVersionDrawer({ draft, open, generating, title, initialSetup, initialProductSelection, onSetupChange, onClose, onGenerate }: AiVersionDrawerProps) {
   const { t: tr } = useLocale();
   const resolvedTitle = title ?? tr("pinDrawer.dialogTitle");
   const storedAssets = useSyncExternalStore(assetStore.subscribe, assetStore.getAssets, assetStore.getServerAssets);
-  const [productUrls, setProductUrls] = useState<string[]>(() => initialSetup ? initialSetup.productImages : draft?.imageUrl ? [draft.imageUrl] : []);
+  const [productUrls, setProductUrls] = useState<string[]>(() =>
+    initialSetup ? initialSetup.productImages
+    : initialProductSelection?.imageUrl ? [initialProductSelection.imageUrl]
+    : draft?.imageUrl ? [draft.imageUrl] : [],
+  );
   // ONE selection state for every reference entry point — recommended Pins, picker
   // uploads and saved refs all live here (see lib/studio/selectedReferences.ts).
   // Rehydrated from the flat URL list when restoring a prior setup; provenance for
@@ -340,6 +358,13 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // ── Phase B: product-aware recommended references (inspiration only) ──────────
   const [recommendedRefs, setRecommendedRefs] = useState<ReferenceRecommendation[]>([]);
   const [recommendationBasis, setRecommendationBasis] = useState<RecommendationBasis>("category_fallback");
+  // "loading" while a request is in flight, "error" when it failed after retries.
+  // A failure must NOT fall back to showing the previous product's results (contract
+  // §4.9), so the grid shows a retry affordance instead. Defaults to "loading"
+  // because an eligible drawer always fetches on open; the fetch effect resolves it
+  // to idle/error. (Set in render on product change, not in an effect body.)
+  const [recStatus, setRecStatus] = useState<"idle" | "loading" | "error">("loading");
+  const [recReloadKey, setRecReloadKey] = useState(0);
   const [recExpanded, setRecExpanded] = useState(true);
   // Derived, never stored separately — this is what keeps the recommendation grid
   // and the top tray from disagreeing about what is selected.
@@ -410,7 +435,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const [prevProductKey, setPrevProductKey] = useState(productKey);
   if (productKey !== prevProductKey) {
     setPrevProductKey(productKey);
+    // Clear the OLD product's results AND basis before the new request lands, so the
+    // previous product's recommendations never linger under a new product (§4.1/§4.2).
     setRecommendedRefs([]);
+    setRecommendationBasis("category_fallback");
+    setRecStatus("loading");
     setProductChanged(true);
   }
   // Analyse a swapped-in product so its recommendations are product-level rather than
@@ -516,29 +545,35 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         body: JSON.stringify(body),
       })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: string }) => {
+        .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: RecommendationBasis }) => {
           if (cancelled) return;
           setRecommendedRefs(Array.isArray(data.items) ? data.items : []);
-          // Contract owned by the data session. Until it ships the field is absent —
-          // default to category_fallback so we never over-claim product-level
-          // personalisation we did not actually perform.
+          // Field is always present per the final contract; the fallbacks below keep
+          // the UI honest against an empty items list, a request failure, or an older
+          // API response that predates the field — all three read as Category
+          // inspiration, never as a fabricated product-level claim.
           setRecommendationBasis(
             data.recommendationBasis === "product_analysis" || data.recommendationBasis === "product_text"
               ? data.recommendationBasis
               : "category_fallback",
           );
+          setRecStatus("idle");
         })
         .catch(() => {
           if (cancelled) return;
-          if (retriesLeft > 0) retryTimer = setTimeout(() => attempt(retriesLeft - 1), 1500);
-          else setRecommendedRefs([]);
+          if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1), 1500); return; }
+          // Exhausted retries: surface an error+retry state rather than showing an
+          // empty grid that looks like a legitimate "no recommendations" (§4.9).
+          setRecommendedRefs([]);
+          setRecStatus("error");
         });
     };
     attempt(2);
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     // swappedProductAnalysis is a dep so recommendations upgrade in place once the
     // new product's analysis lands (product_analysis instead of category_fallback).
-  }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl, swappedProductAnalysis]); // eslint-disable-line react-hooks/exhaustive-deps
+    // recReloadKey lets the Retry button re-run this effect on demand.
+  }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl, swappedProductAnalysis, recReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const REC_LIMIT = MAX_SELECTED_REFERENCES;
   /**
@@ -857,6 +892,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       productMetadata: selectedAssets
         .filter(a => a.role === "product")
         .map(a => ({ title: a.title, productUrl: a.productUrl })),
+      primaryProductSelection: initialProductSelection ?? null,
     });
   };
 
@@ -924,6 +960,35 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
                 return match ? removeReference(prev, referenceKey(match)) : prev;
               })}
             />
+
+            {recsEligible && recStatus === "loading" && recommendedRefs.length === 0 && (
+              <section data-testid="recommended-references-loading" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {productChanged && (
+                  <p data-testid="recommendations-refreshed-notice"
+                    style={{ margin: 0, padding: "6px 9px", borderRadius: 8, background: "rgba(124,58,237,0.10)",
+                      border: `1px solid ${BUI.border}`, fontSize: 11, fontWeight: 700, color: BUI.purple }}>
+                    {tr("pinDrawer.recommended.refreshedForNewProduct")}
+                  </p>
+                )}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} style={{ width: "100%", aspectRatio: "2 / 3", borderRadius: 10, background: BUI.surface3, opacity: 0.5 }} />
+                  ))}
+                </div>
+                <p style={{ margin: 0, fontSize: 11, color: BUI.textSec }}>{tr("pinDrawer.recommended.analyzing")}</p>
+              </section>
+            )}
+
+            {recsEligible && recStatus === "error" && recommendedRefs.length === 0 && (
+              <section data-testid="recommended-references-error" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BUI.text }}>{tr("pinDrawer.recommended.loadError")}</p>
+                <button type="button" data-testid="recommended-retry"
+                  onClick={() => { setRecStatus("loading"); setRecReloadKey(k => k + 1); }}
+                  style={{ alignSelf: "flex-start", padding: "6px 12px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface2, color: BUI.text, fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                  {tr("pinDetails.retry")}
+                </button>
+              </section>
+            )}
 
             {recsEligible && recommendedRefs.length > 0 && (
               <section data-testid="recommended-references" style={{ display: "flex", flexDirection: "column", gap: 8 }}>

@@ -228,67 +228,55 @@ async function main() {
     assert.equal(saved[0].price, "129.99");
   });
 
-  await test("ProductPickerModal: shopifySaveToLibrary defaults to false (decision 5 — never auto-populate My Products)", () => {
-    const src = readFileSync("src/components/studio/ProductPickerModal.tsx", "utf8");
-    assert.match(src, /shopifySaveToLibrary,\s*setShopifySaveToLibrary\]\s*=\s*useState<boolean>\(false\)/);
-    assert.match(src, /if \(shopifySaveToLibrary\)\s*\{[\s\S]*?assetStore\.saveAsset/);
+  // decision 5 — never auto-populate My Products from a Shopify selection — now
+  // lives in the InlineCreateAssetPicker's Shopify source (the modal was retired).
+  await test("Shopify selection does not auto-save to My Products by default (decision 5)", () => {
+    const src = readFileSync("src/components/studio/InlineCreateAssetPicker.tsx", "utf8");
+    // The Shopify chip's empty state hosts the connect/select-images panel; saved
+    // products come only from an explicit selection, never an implicit sync.
+    assert.match(src, /mode="select-images"\s*onSelectImages=\{saveShopifyImages\}/);
   });
 
   // ── Product → Pin draft creation: destinationUrl empty, title prefilled ────────────────
 
-  await test("createBoardDraft from a Shopify product: destinationUrl stays empty, title is prefilled", () => {
+  // The old flow eagerly created a draft with an EMPTY destinationUrl. The
+  // corrective commit changed both halves: Select product no longer creates a draft
+  // (it opens the prefilled AI drawer), and Pins generated from it DO derive the
+  // Website URL (Section J). This test now pins the LinkedProduct mapping that feeds
+  // that flow; URL derivation itself is covered by test-destination-url-derivation.
+  await test("Shopify selection maps to a LinkedProduct carrying the storefront URL", () => {
     reset();
     const sel = panel.shopifyProductToSelection(makeRow(), "Demo Store");
     const selection: ProductSelectionLike = { ...sel, source: "shopify", asPrimary: true, saveToLibrary: false };
     const { linked, chosenImageUrl } = toLinkedProductFromSelection(selection);
-
-    const created = store.createBoardDraft({
-      imageUrl: chosenImageUrl,
-      source: "uploaded_image",
-      title: selection.title?.trim() || undefined,
-    });
-    store.updateDraft(created.id, { linkedProducts: [linked], primaryProductId: linked.productId });
-
-    const draft = store.getDraft(created.id)!;
-    assert.equal(draft.destinationUrl, "", "destinationUrl must never be auto-filled from a Shopify product");
-    assert.equal(draft.title, "Rattan Hanging Chair", "title must be prefilled from the product title");
-    assert.equal(draft.imageUrl, "https://cdn.shopify.com/s/files/1/img1.jpg");
-    assert.equal(draft.linkedProducts?.length, 1);
-    assert.equal(draft.linkedProducts?.[0]?.source, "shopify");
-    assert.equal(draft.primaryProductId, "sp_123");
-    assert.equal(draft.source, "uploaded_image");
+    assert.equal(linked.title, "Rattan Hanging Chair");
+    assert.equal(chosenImageUrl, "https://cdn.shopify.com/s/files/1/img1.jpg");
+    assert.equal(linked.source, "shopify");
+    assert.equal(linked.productId, "sp_123");
+    assert.ok(linked.productUrl, "a storefront URL is present for later derivation");
   });
 
-  await test("StudioBoard.tsx: the product→draft mapping never passes destinationUrl and sets primaryProductId from the LinkedProduct", () => {
+  await test("StudioBoard.tsx: top-level Select product opens the AI drawer, not a bare draft", () => {
     const src = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
-    assert.match(src, /const created = pinDraftStore\.createBoardDraft\(\{[\s\S]{0,200}?\}\);/);
-    const createCallMatch = src.match(/const created = pinDraftStore\.createBoardDraft\(\{([\s\S]{0,200}?)\}\);/);
-    assert.ok(createCallMatch, "expected a createBoardDraft(...) call in the product-select handler");
-    assert.doesNotMatch(createCallMatch![1], /destinationUrl/, "createBoardDraft must never be called with a destinationUrl");
-    assert.match(src, /primaryProductId:\s*linkedProduct\.productId/);
-    assert.match(src, /source:\s*normalizeProductSource\(p\.source\)/);
+    const handler = src.slice(src.indexOf("const handleProductSelect"), src.indexOf("const handleProductSelect") + 700);
+    // The corrective commit replaced silent draft creation with the prefilled drawer.
+    assert.match(handler, /setAiDrawer\(\{ mode: "scratch", product \}\)/);
+    assert.doesNotMatch(handler, /createBoardDraft/, "selection must not create a draft");
   });
 
   // ── Wiring sanity: the Shopify surface actually exists in the three host files ──────────
 
-  await test("ProductPickerModal: shopify tab is wired (flag-gated, source badge, sourceBadge label)", () => {
-    const src = readFileSync("src/components/studio/ProductPickerModal.tsx", "utf8");
-    assert.match(src, /shopifyEnabled = isShopifyIntegrationEnabled\(\)/);
-    // i18n-ified: source badge now resolves its label from studioModals.source.shopify.
-    assert.match(src, /labelKey: "studioModals\.source\.shopify",\s*bg: "rgba\(149,191,71/);
-  });
-
-  await test("InlineCreateAssetPicker: \"From Shopify\" source is wired for the product role only", () => {
+  await test("Shopify is a source WITHIN the canonical picker, not a standalone modal tab", () => {
     const src = readFileSync("src/components/studio/InlineCreateAssetPicker.tsx", "utf8");
-    assert.match(src, /\{ id: "shopify", labelKey: "studioModals\.tabs\.fromShopify" \}/);
+    // Shopify is now a My Products source chip whose empty state hosts the panel.
+    assert.match(src, /productFilter === "shopify"/);
     assert.match(src, /mode="select-images"\s*onSelectImages=\{saveShopifyImages\}/);
   });
 
-  await test("StudioBoard: \"Select product\" entry points open ProductPickerModal on the shopify tab", () => {
+  await test("StudioBoard: Select product opens the one CanonicalProductPicker", () => {
     const src = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
-    assert.match(src, /board-select-product/);
-    assert.match(src, /board-select-product-empty/);
-    assert.match(src, /initialTab="shopify"/);
+    assert.match(src, /<CanonicalProductPicker/);
+    assert.doesNotMatch(src, /initialTab="shopify"/, "no standalone Shopify tab remains");
   });
 
   console.log(`\nShopify product selection: ${passed} passed, ${failed} failed`);

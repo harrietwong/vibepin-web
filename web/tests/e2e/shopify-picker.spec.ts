@@ -169,8 +169,11 @@ async function gotoBoard(page: Page) {
 }
 
 async function openShopifyPicker(page: Page) {
+  // Select product now opens the ONE canonical picker (2026-07-21). Shopify is a
+  // My Products source chip; its empty state hosts the Shopify select-images panel.
   await page.getByTestId("board-select-product").click();
-  // ProductPickerModal opens straight on the Shopify tab (initialTab="shopify").
+  await expect(page.getByTestId("canonical-product-picker")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("my-products-filter-shopify").click();
   await expect(page.getByTestId("shopify-picker-panel")).toBeVisible({ timeout: 15_000 });
 }
 
