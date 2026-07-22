@@ -8,11 +8,12 @@
  * The client caches the result on the Pin draft (localStorage) so that a later
  * "Generate copy" can skip vision entirely and use the fast text path.
  *
- * Status contract: 422 = bad/unreadable image; 502 = upstream provider failure;
- * 500 = provider not configured. Never returns fabricated data.
+ * Status contract: 401 = not signed in; 422 = bad/unreadable image; 502 = upstream
+ * provider failure; 500 = provider not configured. Never returns fabricated data.
  */
 
 import { NextResponse } from "next/server";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import {
   CopyError,
   PROVIDER_MESSAGE,
@@ -41,8 +42,22 @@ type Body = {
   productTags?: string[];
 };
 
+/** Same envelope as every other failure on this route; code distinguishes sign-in from provider errors. */
+const UNAUTHENTICATED_MESSAGE = "Please sign in to analyze images.";
+
 export async function POST(req: Request) {
   const started = performance.now();
+
+  // AUTHENTICATION FIRST — before body parsing, provider configuration, the image
+  // fetch and the vision call. An anonymous caller reaches no outbound request.
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) {
+    return NextResponse.json(
+      { ok: false, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE },
+      { status: 401 },
+    );
+  }
+
   const body = await req.json() as Body;
   const cfg = providerConfig();
 

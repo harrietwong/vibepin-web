@@ -56,6 +56,9 @@ export async function startQualityJudge(draftId: string): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
+      // Explicit (the fetch default): the route authenticates this same-origin
+      // caller from the Supabase SSR session cookies.
+      credentials: "same-origin",
       body: JSON.stringify({
         draftId,
         imageUrl: draft.imageUrl,
@@ -66,7 +69,14 @@ export async function startQualityJudge(draftId: string): Promise<void> {
     });
     const bodyJson = await res.json() as JudgeResponse;
     if (!res.ok || !bodyJson.ok || !bodyJson.verdict) {
-      throw new Error(bodyJson?.error || `judge_http_${res.status}`);
+      // 401 (signed out / expired session) takes the same silent path as every
+      // other failure here, and deliberately so: this judge is a background
+      // best-effort grader with NO user-facing surface — the PRD requires a failed
+      // judge to leave the card exactly as it is. Surfacing a sign-in prompt from a
+      // background call the user never initiated would be worse UX than the
+      // existing behaviour, and the foreground actions on the same page
+      // (Generate copy) already prompt for sign-in.
+      throw new Error(res.status === 401 ? "unauthenticated" : (bodyJson?.error || `judge_http_${res.status}`));
     }
 
     pinDraftStore.updateDraft(draftId, {

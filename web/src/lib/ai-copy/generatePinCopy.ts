@@ -198,6 +198,9 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
+    // Explicit (this is the fetch default): the route authenticates the caller
+    // from the Supabase SSR session cookies on this same origin.
+    credentials: "same-origin",
     body: JSON.stringify({
       draftId: input.draftId,
       imageUrl: input.imageUrl,
@@ -262,6 +265,12 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
   trackLatency("generate_click_to_copy", clickToCopyMs, { draftId: input.draftId, mode, cacheHit, pathUsed: body.pathUsed ?? null });
 
   if (!res.ok || !body.ok || !body.output?.title || !body.output.description || !body.output.altText) {
+    // 401 = the session is gone/expired. This is NOT an AI failure: don't count it
+    // as a provider or quality failure, and tell the user to sign in rather than
+    // implying the model could not write copy for their image.
+    if (res.status === 401) {
+      throw new Error(body.userMessage || "Please sign in to generate copy.");
+    }
     // 422 = quality gate (don't write fields); 502 = provider failure. Never leak
     // internal codes (e.g. ai_copy_quality_gate_failed) into the UI.
     if (res.status === 502) track("ai_copy_provider_failed", { draftId: input.draftId, error: body.error ?? null });

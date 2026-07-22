@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { retrievePinterestKeywords, type KeywordContextResult } from "@/lib/ai-copy/keywordContext";
 import { appendShopifyProductDetails } from "@/lib/ai-copy/shopifyGrounding";
 import {
@@ -202,10 +203,31 @@ async function refineCopyWithKeywords(args: {
 
 // ── Handler ──────────────────────────────────────────────────────────────────
 
+/**
+ * User-safe 401 message. Mirrors the shape of every other failure on this route
+ * ({ ok:false, error, userMessage }) so the client's existing error path renders
+ * it without special-casing, while `error: "unauthenticated"` lets callers tell a
+ * sign-in problem apart from an AI/provider problem.
+ */
+const UNAUTHENTICATED_MESSAGE = "Please sign in to generate copy.";
+
 export async function POST(req: Request) {
   const requestId = nowId();
   const started = performance.now();
   const timings: Record<string, number> = {};
+
+  // AUTHENTICATION FIRST — before body parsing, provider configuration, image
+  // fetching and every provider call below. This route spends real provider money
+  // per request; an anonymous caller must not be able to reach a single outbound
+  // call, nor to make us parse an attacker-sized body.
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) {
+    return NextResponse.json(
+      { ok: false, requestId, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE },
+      { status: 401 },
+    );
+  }
+
   const body = await req.json() as RequestBody;
   const cfg = providerConfig();
   const mode = body.mode ?? "initial";
