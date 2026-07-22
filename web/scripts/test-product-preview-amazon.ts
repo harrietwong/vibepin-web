@@ -107,7 +107,10 @@ async function main() {
   });
   test("Part3: saved-product preview can still choose one product directly", () => {
     assert.match(pickerSource, /function chooseProductForPins\(item: assets\.AssetItem\)/);
-    assert.match(pickerSource, /onConfirm\(\[\{ id: item\.id/);
+    // The single-product confirm now maps through the shared toInlineAssetItem so
+    // every exit path carries the same commerce fields (canonicalUrl/store/price…);
+    // it still confirms exactly the one chosen item.
+    assert.match(pickerSource, /onConfirm\(\[toInlineAssetItem\(item\)\]\)/);
   });
   test("Part3: Product Ideas keeps multi-select Add Selected flow", () => {
     assert.match(pickerSource, /onToggleProduct\(product\)/);

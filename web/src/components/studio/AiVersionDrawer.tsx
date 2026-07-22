@@ -19,7 +19,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinDraft, SelectedCreativeDirection } from "@/lib/pinDraftStore";
 import { track } from "@/lib/analytics";
 import { buildHiddenPrompt } from "@/lib/studio/hiddenPromptBuilder";
-import type { ReferenceRecommendation, InspirationPatternTags } from "@/lib/studio/referenceScoring";
+import type { ReferenceRecommendation, InspirationPatternTags, RecommendationBasis } from "@/lib/studio/referenceScoring";
 import { analyzeProductSet } from "@/lib/studio/productAnalysis";
 import { analyzeReferences } from "@/lib/studio/referenceAnalysis";
 import { inferCreativeIntent } from "@/lib/studio/creativeIntent";
@@ -66,19 +66,10 @@ import {
 type PickerRole = "product" | "style_reference";
 export type VariationMode = "distinct" | "similar";
 
-/**
- * How the recommendation list was actually derived. Returned at the TOP LEVEL of
- * the POST /api/reference-candidates response (not per item). Only product-level
- * bases may be labelled "Recommended for this product"; category-only results must
- * say "Category inspiration" — Section F of the create-pin PRD (data honesty).
- *
- * The canonical type belongs to the data session's referenceScoring module:
- *     import type { RecommendationBasis } from "@/lib/studio/referenceScoring";
- * It is declared locally until that lands, so this file compiles against the
- * agreed contract without forking the algorithm. Swap the local alias for the
- * import when the data session merges — the string union is identical.
- */
-type RecommendationBasis = "product_analysis" | "product_text" | "category_fallback";
+// RecommendationBasis (top-level field of the /api/reference-candidates response)
+// is now imported from the data session's canonical module — see the import above.
+// product_analysis / product_text → "Recommended for this product";
+// category_fallback or a missing field → "Category inspiration".
 
 export type AiVersionOptions = {
   prompt: string;
