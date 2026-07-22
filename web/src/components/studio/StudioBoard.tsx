@@ -456,10 +456,19 @@ export function StudioBoard() {
             referenceId: group.reference?.id,
             referenceImageUrl: group.reference?.imageUrl,
             referenceSource: group.reference?.source,
-            title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
+            title: parent?.title ?? prefilledProduct?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
             model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
             generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
           });
+          // Extra results must carry the SAME product link + URL as the placeholders
+          // (review item 5) — otherwise a provider-returned extra loses the product.
+          if (prefilledLinkedProducts) {
+            pinDraftStore.updateDraft(extra.id, {
+              linkedProducts: prefilledLinkedProducts,
+              primaryProductId: prefilledLinkedProducts[0].productId,
+              ...(prefilledUrl ? { destinationUrl: prefilledUrl } : {}),
+            });
+          }
           okCount += 1;
           void startImageAnalysis(extra.id);
           void startQualityJudge(extra.id);

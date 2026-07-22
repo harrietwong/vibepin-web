@@ -59,6 +59,10 @@ export type InlineAssetItem = {
   price?: string;
   currency?: string;
   status?: "ready" | "import_issue";
+  // Recommendation context — passed through so the drawer can request product-level
+  // recommendations for a picked product. Undefined when the asset lacks the field.
+  productType?: string;
+  visualFormat?: string;
 };
 
 export type InlineCreateAssetPickerProps = {
@@ -299,6 +303,8 @@ function toInlineAssetItem(item: assets.AssetItem): InlineAssetItem {
     price: item.price,
     currency: item.currency,
     status: item.status,
+    productType: item.productType,
+    visualFormat: item.visualFormat,
   };
 }
 

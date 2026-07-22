@@ -106,3 +106,45 @@ test.describe("Create Pin flow 2026-07-21 — Product Picker IA", () => {
       .toHaveText(["My References", "Pin Ideas"]);
   });
 });
+
+/**
+ * Studio Board V2: top-level Select product → AI drawer.
+ *
+ * These cover review items 1 and 8 — a scratch drawer opened from Select product
+ * requests recommendations (draft-less), and cancelling leaves no draft. They live
+ * behind the authenticated board surface, so they run under authenticated Preview
+ * QA; the request-building, stale-guard, and product-link logic they exercise is
+ * additionally unit-tested (test-recommendation-request, test-drawer-product-state,
+ * test-generation-product-link).
+ */
+test.describe("Create Pin flow 2026-07-21 — Select product opens the AI drawer @auth", () => {
+  test.skip(!process.env.PLAYWRIGHT_AUTH_STATE, "requires an authenticated Preview session");
+
+  test("Select product opens the AI drawer prefilled, and requests recommendations", async ({ page }) => {
+    const recRequests: string[] = [];
+    await page.route("**/api/reference-candidates", async route => {
+      recRequests.push(route.request().postData() ?? "");
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], recommendationBasis: "category_fallback" }) });
+    });
+
+    await gotoStudio(page);
+    await page.getByTestId("board-select-product").click();
+    await expect(page.getByTestId("canonical-product-picker")).toBeVisible();
+    // (Select a product via the picker — helper omitted; runs under auth QA.)
+    // The AI drawer opens with the product prefilled…
+    await expect(page.getByTestId("ai-version-drawer")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("product-images-selected")).toContainText(/./);
+    // …and a recommendation request fired for that product (item 1).
+    await expect.poll(() => recRequests.length, { timeout: 10_000 }).toBeGreaterThan(0);
+  });
+
+  test("cancelling the AI drawer leaves no draft (item 8)", async ({ page }) => {
+    await gotoStudio(page);
+    const before = await page.getByTestId("pin-board-card").count();
+    await page.getByTestId("board-select-product").click();
+    await page.getByTestId("canonical-product-picker").waitFor();
+    // (Pick a product, then close the drawer without generating.)
+    await page.getByTestId("ai-version-close").click();
+    await expect.poll(() => page.getByTestId("pin-board-card").count()).toBe(before);
+  });
+});

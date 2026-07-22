@@ -46,8 +46,9 @@ import { CreativeChips } from "@/components/studio/CreativeChips";
 import { InlineCreateAssetPicker, type InlineAssetItem } from "@/components/studio/InlineCreateAssetPicker";
 import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { addProductToDraft } from "@/lib/pinMetadata";
-import { selectionFromAsset, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
+import { selectionFromAsset, selectionFromLinkedProduct, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDerivation";
+import { buildReferenceRequestBody, resolveBasis } from "@/lib/studio/recommendationRequest";
 import {
   MAX_SELECTED_REFERENCES,
   PINS_PER_REFERENCE_OPTIONS,
@@ -143,8 +144,47 @@ const MODEL_OPTIONS = [
   { value: "gpt_image", label: MODEL_KEY_TO_LABEL.gpt_image ?? "GPT Image" },
 ];
 
-function unique(urls: string[]): string[] {
-  return Array.from(new Set(urls.filter(Boolean)));
+/**
+ * Seed the canonical current-product state when the drawer opens.
+ *
+ * Priority: a restored setup's product images (rehydrated as bare selections),
+ * then a Select-product prefill, then the draft's own linked products, then the
+ * draft's image as an implicit product. Later sources are only consulted when the
+ * earlier one is empty, so a prefill is never diluted by the draft.
+ */
+export function buildInitialProductSelections(input: {
+  initialSetup?: AiVersionDrawerSetup;
+  initialProductSelection?: CanonicalProductSelection | null;
+  draft: PinDraft | null;
+}): CanonicalProductSelection[] {
+  const { initialSetup, initialProductSelection, draft } = input;
+  if (initialSetup) {
+    // A restored setup only kept flat URLs; rehydrate minimal selections. Any linked
+    // product on the draft re-attaches its richer fields below on first render.
+    return initialSetup.productImages.map((imageUrl, i) => ({
+      title: "",
+      imageUrl,
+      source: "my_products" as const,
+      asPrimary: i === 0,
+    }));
+  }
+  if (initialProductSelection?.imageUrl) {
+    return [{ ...initialProductSelection, asPrimary: true }];
+  }
+  const linked = draft?.linkedProducts ?? [];
+  if (linked.length) {
+    return linked.map((p, i) => ({ ...selectionFromLinkedProduct(p), asPrimary: i === 0 }));
+  }
+  if (draft?.imageUrl) {
+    return [{
+      title: draft.title ?? "",
+      imageUrl: draft.imageUrl,
+      source: "upload" as const,
+      category: draft.category ?? undefined,
+      asPrimary: true,
+    }];
+  }
+  return [];
 }
 
 const COMPOSITION_LABEL_KEYS: Record<string, MessageKey> = {
@@ -322,11 +362,27 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const { t: tr } = useLocale();
   const resolvedTitle = title ?? tr("pinDrawer.dialogTitle");
   const storedAssets = useSyncExternalStore(assetStore.subscribe, assetStore.getAssets, assetStore.getServerAssets);
-  const [productUrls, setProductUrls] = useState<string[]>(() =>
-    initialSetup ? initialSetup.productImages
-    : initialProductSelection?.imageUrl ? [initialProductSelection.imageUrl]
-    : draft?.imageUrl ? [draft.imageUrl] : [],
+  // Canonical current-product state — the source of truth for BOTH the Product
+  // images strip and the recommendation/analysis/generation product context. It is
+  // initialised from (in priority) a prefilled Select-product selection, then the
+  // draft's linked products, then the draft's own image; and it is what the user
+  // mutates when they pick, change or clear a product inside the drawer. productUrls
+  // is derived from it so the two can never drift (the bug the review caught).
+  const [selectedProductSelections, setSelectedProductSelections] = useState<CanonicalProductSelection[]>(() =>
+    buildInitialProductSelections({ initialSetup, initialProductSelection, draft }),
   );
+  // Derived, not stored — keeps the strip and the canonical state atomically in sync.
+  const productUrls = selectedProductSelections.map(s => s.imageUrl).filter((u): u is string => !!u);
+  const setProductUrls = (next: string[] | ((prev: string[]) => string[])) => {
+    // A URL-level edit (removing a thumbnail) maps back onto the canonical state by
+    // dropping the matching selection — no separate product-url store survives.
+    setSelectedProductSelections(prev => {
+      const prevUrls = prev.map(s => s.imageUrl).filter((u): u is string => !!u);
+      const resolved = typeof next === "function" ? next(prevUrls) : next;
+      const keep = new Set(resolved);
+      return prev.filter(s => s.imageUrl && keep.has(s.imageUrl));
+    });
+  };
   // ONE selection state for every reference entry point — recommended Pins, picker
   // uploads and saved refs all live here (see lib/studio/selectedReferences.ts).
   // Rehydrated from the flat URL list when restoring a prior setup; provenance for
@@ -413,10 +469,17 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // longer describes the selected product — in that case we drop the stale analysis
   // (honesty) and match on the selected asset's title instead, refetching on change.
   // If nothing can be inferred from it, showing no recommendations beats wrong ones.
-  const primaryProductUrl = productUrls[0] ?? "";
+  // The primary product drives analysis + recommendations. It comes from the
+  // canonical selection state, NOT from a draft — so a scratch drawer opened via
+  // Select product (draft === null) still has a primary and still requests
+  // recommendations. The draft is optional context only.
+  const primarySelection = selectedProductSelections[0] ?? null;
+  const primaryProductUrl = primarySelection?.imageUrl ?? productUrls[0] ?? "";
+  // Whether the primary product IS the draft's own image (its stored analysis then
+  // applies). False for a swapped-in or top-level-selected product.
   const draftImageSelected =
-    productUrls.length === 0 || (!!liveDraft?.imageUrl && productUrls.includes(liveDraft.imageUrl));
-  const recsEligible = Boolean(liveDraft?.imageUrl || productUrls.length > 0);
+    !!liveDraft?.imageUrl && !!primaryProductUrl && primaryProductUrl === liveDraft.imageUrl;
+  const recsEligible = Boolean(primaryProductUrl || liveDraft?.imageUrl);
 
   // Product selection changed → the old recommendations describe a different product.
   // Clear immediately during render (same pattern as the draft-switch reset above) so
@@ -438,94 +501,86 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // imageAnalysis and the API falls back to category_fallback, which the heading
   // then reports honestly as "Category inspiration".
   useEffect(() => {
+    // Analyse ANY product that is not the draft's own image — including a scratch /
+    // top-level Select-product product (draft === null). draftId is omitted: this is
+    // a stateless analysis and must not be written onto any draft.
     if (!open || draftImageSelected || !primaryProductUrl) return;
     if (swappedProductAnalysis?.url === primaryProductUrl) return;
-    let cancelled = false;
-    // draftId is intentionally omitted: this is a stateless analysis of the swapped-in
-    // product, and must not be written onto the draft.
-    const asset = assetStore.getAssets().find(a => a.imageUrl === primaryProductUrl);
+    // Bind this request to the product it was issued for; a late response for a
+    // previous product must not overwrite the current one (§4).
+    const requestUrl = primaryProductUrl;
+    const controller = new AbortController();
+    const sel = primarySelection;
+    // Prefer the selection's own honest fields; the asset store is a fallback only.
+    const asset = assetStore.getAssets().find(a => a.imageUrl === requestUrl);
+    const tags = (sel?.tags && sel.tags.length ? sel.tags
+      : [sel?.category ?? asset?.category, sel?.keyword ?? asset?.keyword, sel?.visualFormat ?? asset?.visualFormat]
+          .map(v => (typeof v === "string" ? v.trim() : "")).filter(Boolean));
     fetch("/api/ai-copy/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
-        imageUrl: primaryProductUrl,
-        category: asset?.category || undefined,
-        productTitle: asset?.title || undefined,
-        productType: asset?.productType || undefined,
-        productTags: [asset?.category, asset?.keyword, asset?.visualFormat]
-          .map(v => (typeof v === "string" ? v.trim() : ""))
-          .filter(Boolean),
+        imageUrl: requestUrl,
+        category: sel?.category || asset?.category || undefined,
+        productTitle: sel?.title || asset?.title || undefined,
+        productType: sel?.productType || asset?.productType || undefined,
+        productTags: tags.length ? tags : undefined,
       }),
     })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((data: { analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string } }) => {
-        if (!cancelled) setSwappedProductAnalysis({ url: primaryProductUrl, analysis: data.analysis });
+        setSwappedProductAnalysis({ url: requestUrl, analysis: data.analysis });
       })
-      .catch(() => {
-        // Record the attempt so we don't retry in a loop; analysis stays undefined.
-        if (!cancelled) setSwappedProductAnalysis({ url: primaryProductUrl });
+      .catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        // Record the attempt (keyed by url) so we don't retry in a loop.
+        setSwappedProductAnalysis({ url: requestUrl });
       });
-    return () => { cancelled = true; };
+    // Abort a still-inflight analysis when the product changes — its result is stale.
+    return () => { controller.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, draftImageSelected, primaryProductUrl, swappedProductAnalysis?.url]);
 
   useEffect(() => {
+    // No draft requirement: recommendations follow the PRIMARY PRODUCT, which exists
+    // for a scratch/Select-product drawer too. The draft is optional context.
+    if (!open || !recsEligible || !primaryProductUrl) return;
+    // Bind this request to the current product. A late response for a previous
+    // product is discarded rather than overwriting the current product's results
+    // (§4: no stale writes to recommendedRefs / basis / status).
+    const requestUrl = primaryProductUrl;
+    const controller = new AbortController();
     const d = liveDraft;
-    if (!open || !d || !recsEligible) return;
-    let cancelled = false;
-    const primaryProduct = d.linkedProducts?.find(p => p.title?.trim());
-    // Draft image still among the selected products → its analysis/title apply.
-    // Otherwise use the swapped-in asset's title as the only trusted signal.
-    // The swapped-in product's own stored record — the only trusted source of
-    // title/type/tags once the pin's own image is no longer the selected product.
-    const selectedAsset = draftImageSelected
-      ? undefined
-      : storedAssets.find(a => a.imageUrl === primaryProductUrl);
-    // Only trust the cached analysis when it belongs to the CURRENTLY selected product.
-    const swappedProduct = !draftImageSelected && swappedProductAnalysis?.url === primaryProductUrl
+    const sel = primarySelection;
+    // The draft's own analysis applies ONLY when the primary product IS the draft's
+    // image. Otherwise use the swapped-in product's own analysis, keyed by url.
+    const swappedProduct = !draftImageSelected && swappedProductAnalysis?.url === requestUrl
       ? swappedProductAnalysis.analysis
       : undefined;
-    const productTitle = draftImageSelected
-      ? primaryProduct?.title?.trim() || d.title?.trim() || ""
-      : selectedAsset?.title?.trim() || primaryProduct?.title?.trim() || "";
-    // Tags carry whatever categorical signal the asset actually has. Never synthesise
-    // one — an absent tag is better input than a guessed one.
-    const productTags = [selectedAsset?.category, selectedAsset?.keyword, selectedAsset?.visualFormat]
-      .map(v => (typeof v === "string" ? v.trim() : ""))
-      .filter(Boolean);
-    const body = {
-      category: draftImageSelected
-        ? (d.imageCategory || d.category || undefined)
-        : (swappedProduct?.category || selectedAsset?.category || undefined),
-      // The draft's analysis applies ONLY while the draft's own image is the selected
-      // product. After a swap we use the new product's own analysis (fetched above),
-      // never the previous product's.
-      imageAnalysis: draftImageSelected
-        ? {
-            category: d.imageCategory || d.category || undefined,
-            style: d.style,
-            colors: d.colors,
-            visibleObjects: d.visibleObjects,
-            imageSummary: d.imageSummary,
-          }
-        : swappedProduct
-          ? {
-              category: swappedProduct.category || selectedAsset?.category || undefined,
-              style: swappedProduct.style,
-              colors: swappedProduct.colors,
-              visibleObjects: swappedProduct.visibleObjects,
-              imageSummary: swappedProduct.imageSummary,
-            }
-          : undefined,
-      product: (productTitle || selectedAsset)
-        ? {
-            title: productTitle,
-            imageUrl: primaryProductUrl || undefined,
-            type: selectedAsset?.productType || undefined,
-            tags: productTags.length ? productTags : undefined,
-          }
-        : undefined,
-      limit: 9,
-    };
+    // Enrich the primary selection with any asset-store fields it lacks (a saved
+    // product whose selection was built minimally), without ever fabricating.
+    const selectedAsset = draftImageSelected ? undefined : storedAssets.find(a => a.imageUrl === requestUrl);
+    const enrichedPrimary: CanonicalProductSelection | null = sel
+      ? {
+          ...sel,
+          title: sel.title?.trim() || selectedAsset?.title?.trim() || "",
+          category: sel.category ?? selectedAsset?.category,
+          productType: sel.productType ?? selectedAsset?.productType,
+          keyword: sel.keyword ?? selectedAsset?.keyword,
+          visualFormat: sel.visualFormat ?? selectedAsset?.visualFormat,
+        }
+      : null;
+    const body = buildReferenceRequestBody({
+      primary: enrichedPrimary,
+      draftImageSelected,
+      draftAnalysis: d ? {
+        title: d.title,
+        category: d.imageCategory || d.category || undefined,
+        style: d.style, colors: d.colors, visibleObjects: d.visibleObjects, imageSummary: d.imageSummary,
+      } : undefined,
+      productAnalysis: swappedProduct,
+    });
     // Transient failures (dev recompile 500s, flaky network) must not permanently blank
     // the section for this drawer session — retry a couple of times before giving up.
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -533,25 +588,23 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       fetch("/api/reference-candidates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify(body),
       })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: RecommendationBasis }) => {
-          if (cancelled) return;
+          // Guard: the product changed while this was in flight → discard (§4).
+          if (controller.signal.aborted) return;
           setRecommendedRefs(Array.isArray(data.items) ? data.items : []);
           // Field is always present per the final contract; the fallbacks below keep
           // the UI honest against an empty items list, a request failure, or an older
           // API response that predates the field — all three read as Category
           // inspiration, never as a fabricated product-level claim.
-          setRecommendationBasis(
-            data.recommendationBasis === "product_analysis" || data.recommendationBasis === "product_text"
-              ? data.recommendationBasis
-              : "category_fallback",
-          );
+          setRecommendationBasis(resolveBasis(data.recommendationBasis));
           setRecStatus("idle");
         })
-        .catch(() => {
-          if (cancelled) return;
+        .catch((e: unknown) => {
+          if (controller.signal.aborted || (e instanceof DOMException && e.name === "AbortError")) return;
           if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1), 1500); return; }
           // Exhausted retries: surface an error+retry state rather than showing an
           // empty grid that looks like a legitimate "no recommendations" (§4.9).
@@ -560,7 +613,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         });
     };
     attempt(2);
-    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
+    // Aborting on product change guarantees the previous product's late response
+    // cannot write recommendedRefs / basis / status for the new product.
+    return () => { controller.abort(); if (retryTimer) clearTimeout(retryTimer); };
     // swappedProductAnalysis is a dep so recommendations upgrade in place once the
     // new product's analysis lands (product_analysis instead of category_fallback).
     // recReloadKey lets the Retry button re-run this effect on demand.
@@ -791,12 +846,16 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
 
   const confirmPicker = (items: InlineAssetItem[]) => {
     if (pickerRole === "product") {
-      setProductUrls(unique(items.map(item => item.imageUrl).filter(Boolean)));
+      // Replace the canonical selection with the picked products (full fields kept),
+      // so analysis / recommendations / generation all follow the NEW product. The
+      // strip derives from this — no separate product-url store to fall out of sync.
+      const picked = items
+        .filter(item => item.imageUrl)
+        .map((item, i) => ({ ...selectionFromAsset(item), asPrimary: i === 0 }));
+      setSelectedProductSelections(picked);
       // Persist the full product record onto the draft so the Website URL can be
-      // derived from it (Section J). Previously only imageUrl survived this
-      // boundary, which is why AI-drawer product selection never filled the URL.
-      // Uses the SAME addProductToDraft path as Link/Change product — no parallel
-      // product state.
+      // derived from it (Section J). Uses the SAME addProductToDraft path as
+      // Link/Change product — no parallel product state.
       if (draft?.id && items.length) {
         const current = pinDraftStore.getDraft(draft.id);
         // Only extend an EXISTING metadataDraft — the same guard PinDetailsDrawer
@@ -883,7 +942,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       productMetadata: selectedAssets
         .filter(a => a.role === "product")
         .map(a => ({ title: a.title, productUrl: a.productUrl })),
-      primaryProductSelection: initialProductSelection ?? null,
+      // The CURRENT primary selection — reflects any in-drawer product change,
+      // never the immutable prefill.
+      primaryProductSelection: primarySelection,
     });
   };
 

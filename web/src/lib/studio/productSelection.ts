@@ -46,6 +46,15 @@ export type CanonicalProductSelection = {
   /** Whether this becomes the Pin's primary product. */
   asPrimary?: boolean;
   status?: "ready" | "import_issue" | "incomplete";
+  // ── Recommendation context (honest passthrough) ────────────────────────────
+  // Carried so the drawer can request product-level recommendations WITHOUT
+  // re-reading the asset store. Each is undefined when the source genuinely lacks
+  // it — never inferred or fabricated.
+  category?: string;
+  productType?: string;
+  tags?: string[];
+  keyword?: string;
+  visualFormat?: string;
 };
 
 /** A `javascript:`/`data:` URL must never reach a Pin's destination field. */
@@ -91,6 +100,11 @@ export function selectionFromAsset(asset: {
   price?: string;
   currency?: string;
   status?: "ready" | "import_issue";
+  category?: string;
+  productType?: string;
+  keyword?: string;
+  visualFormat?: string;
+  tags?: string[];
 }): CanonicalProductSelection {
   return {
     id: asset.id,
@@ -103,6 +117,12 @@ export function selectionFromAsset(asset: {
     price: asset.price,
     currency: asset.currency,
     status: asset.status,
+    // Recommendation context — passed through only when present.
+    category: asset.category || undefined,
+    productType: asset.productType || undefined,
+    keyword: asset.keyword || undefined,
+    visualFormat: asset.visualFormat || undefined,
+    tags: asset.tags && asset.tags.length ? asset.tags : undefined,
   };
 }
 
