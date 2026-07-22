@@ -70,6 +70,59 @@ export function checkBillingModeForProd(env) {
   return problems;
 }
 
+/**
+ * Unmerged-work check (2026-07-22, after four sessions serially clobbered each
+ * other's production deploys in one morning).
+ *
+ * `vercel --prod` replaces the whole tree — it does not merge. So whichever
+ * session deploys last makes production 100% its branch, and every other
+ * session's shipped work silently disappears from production even though its
+ * commits are safe in git. The old guard passed all four of those deploys:
+ * each had a clean tree, a named branch and the right project. Cleanliness was
+ * never the problem; *completeness* was.
+ *
+ * So: a production deploy must carry every other active branch's work. Given
+ * the branches that exist and, for each, how many of its commits are missing
+ * from the commit being deployed, report every branch that would be dropped.
+ *
+ * Pure (inputs in → problems out) so a unit test can drive it without git.
+ *
+ * Two filters keep this honest rather than noisy — a guard that cries wolf
+ * teaches people to reach for --override, which is worse than no guard:
+ *  - `unmergedFromMain`: work already merged into the integration branch is NOT
+ *    pending. A finished feature branch left lying around must not block anyone.
+ *  - `ageDays`: long-abandoned branches (and per-agent worktree scratch refs)
+ *    are not another session's live work.
+ *
+ * @param branches {Array<{name: string, missing: number, unmergedFromMain: number, ageDays: number}>}
+ *   `missing` = commits on that branch not contained in the deploy target;
+ *   `unmergedFromMain` = commits on it not contained in the integration branch.
+ * @param opts {{currentBranch: string, staleAfterDays?: number, ignorePatterns?: RegExp[]}}
+ */
+export function checkUnmergedBranches(branches, opts) {
+  const problems = [];
+  const staleAfterDays = opts.staleAfterDays ?? 7;
+  const ignorePatterns = opts.ignorePatterns ?? [/^worktree-agent-/];
+  const dropped = branches.filter(b =>
+    b.name !== opts.currentBranch &&
+    b.missing > 0 &&
+    b.unmergedFromMain > 0 &&
+    b.ageDays <= staleAfterDays &&
+    !ignorePatterns.some(re => re.test(b.name)),
+  );
+  if (dropped.length === 0) return problems;
+  const list = dropped
+    .sort((a, b) => b.missing - a.missing)
+    .map(b => `      ${b.name} (${b.missing} commit${b.missing === 1 ? "" : "s"} not in this deploy, ${b.unmergedFromMain} not yet in the integration branch, last active ${b.ageDays}d ago)`)
+    .join("\n");
+  problems.push(
+    `deploying ${opts.currentBranch} would drop work from ${dropped.length} other active branch(es) —\n` +
+    `    production is a whole-tree replace, so their features would vanish from the live site:\n${list}\n` +
+    "    Merge them first (or confirm each is intentionally not shipping) before deploying.",
+  );
+  return problems;
+}
+
 // Only run the full guard (git + filesystem + process.exit) when invoked directly
 // as the entrypoint — importing this module for its pure export must be side-effect
 // free.
@@ -202,6 +255,48 @@ if (process.env.PINTEREST_API_ENV === "sandbox") {
 // open real checkout on production.
 for (const problem of checkBillingModeForProd(process.env)) {
   failures.push(problem);
+}
+
+// --- Check 7: no other active branch's work would be dropped ---
+// See checkUnmergedBranches (top of file). Gathers, for every local branch, how
+// many of its commits are NOT contained in HEAD, plus how recently it was
+// touched; the pure checker decides what counts as a blocking drop.
+try {
+  const raw = runGit([
+    "-C", repoRoot, "for-each-ref",
+    "--format=%(refname:short)%09%(committerdate:unix)",
+    "refs/heads",
+  ]);
+  const nowSec = Math.floor(Date.now() / 1000);
+  // Work already merged here counts as accounted-for, so a finished branch left
+  // lying around never blocks a deploy. `master` is this repo's integration
+  // branch; override with DEPLOY_INTEGRATION_BRANCH if that ever changes.
+  const mainBranch = String(process.env.DEPLOY_INTEGRATION_BRANCH ?? "master").trim() || "master";
+  const branches = [];
+  for (const line of raw.split("\n").map(l => l.replace(/\r$/, "")).filter(Boolean)) {
+    const [name, ts] = line.split("\t");
+    if (!name) continue;
+    // `rev-list --count A..<branch>` = commits on the branch that A lacks.
+    let missing = 0;
+    let unmergedFromMain = 0;
+    try {
+      missing = parseInt(runGit(["-C", repoRoot, "rev-list", "--count", `HEAD..${name}`]).trim(), 10) || 0;
+      unmergedFromMain = name === mainBranch
+        ? missing
+        : parseInt(runGit(["-C", repoRoot, "rev-list", "--count", `${mainBranch}..${name}`]).trim(), 10) || 0;
+    } catch { continue; }
+    branches.push({
+      name,
+      missing,
+      unmergedFromMain,
+      ageDays: Math.max(0, Math.floor((nowSec - (parseInt(ts, 10) || nowSec)) / 86400)),
+    });
+  }
+  for (const problem of checkUnmergedBranches(branches, { currentBranch: branch ?? "HEAD" })) {
+    failures.push(problem);
+  }
+} catch (err) {
+  failures.push(`could not enumerate branches for the unmerged-work check: ${err.message}`);
 }
 
 // --- Resolve outcome ---
