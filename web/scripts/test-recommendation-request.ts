@@ -121,6 +121,36 @@ test("a late response for the PREVIOUS product is discarded", () => {
   assert.deepEqual(applied.refs, ["B1", "B2"], "B's result is applied");
 });
 
+test("A resolving BEFORE abort cleanup is still discarded by the key guard (4.9)", () => {
+  // The scenario AbortController alone does not cover: A's fetch resolves while the
+  // product is already B, but React has not yet run the effect cleanup that aborts
+  // it. signal.aborted is still false — only the key check saves us.
+  const state = { refs: [] as string[], basis: "category_fallback", status: "loading" };
+  const keyRef = { current: "A|imgA" };
+  const signal = { aborted: false }; // cleanup has NOT run yet
+
+  const requestKeyA = "A|imgA";
+  // User switches to B; the ref updates during render, before cleanup fires.
+  keyRef.current = "B|imgB";
+
+  const isStale = (requestKey: string) => signal.aborted || !isCurrentResult(requestKey, keyRef.current);
+  // A's response lands now:
+  if (!isStale(requestKeyA)) {
+    state.refs = ["A1"]; state.basis = "product_analysis"; state.status = "idle";
+  }
+  assert.deepEqual(state.refs, [], "A's refs must not land");
+  assert.equal(state.basis, "category_fallback", "A's basis must not land");
+  assert.equal(state.status, "loading", "A's status must not land");
+  assert.equal(signal.aborted, false, "…and abort alone would NOT have caught this");
+
+  // B's response, with the matching key, does land.
+  if (!isStale("B|imgB")) {
+    state.refs = ["B1"]; state.basis = "product_text"; state.status = "idle";
+  }
+  assert.deepEqual(state.refs, ["B1"]);
+  assert.equal(state.basis, "product_text");
+});
+
 test("the guard also protects basis and status by the same key check", () => {
   const state = { basis: "category_fallback", status: "loading" };
   const applyBasis = (resultKey: string, currentKey: string, basis: string, status: string) => {

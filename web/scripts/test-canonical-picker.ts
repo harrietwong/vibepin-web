@@ -139,6 +139,17 @@ test("a failed recommendation request shows error+retry, not stale results", () 
   assert.ok(src.includes("recommended-retry"), "retry affordance exists");
 });
 
+test("the stale guard is actually WIRED into the drawer, not just exported", () => {
+  const src = read("components/studio/AiVersionDrawer.tsx");
+  assert.ok(src.includes("isCurrentResult"), "drawer must import and call isCurrentResult");
+  assert.ok(src.includes("currentProductKeyRef"), "a current-product key ref must exist");
+  // Both async paths (analysis + recommendations) must consult the guard.
+  const guardDefs = src.match(/const isStale = \(\) =>/g) ?? [];
+  assert.equal(guardDefs.length, 2, "both the analysis and recommendation effects need the guard");
+  const guardUses = src.match(/if \(isStale\(\)\) return;/g) ?? [];
+  assert.ok(guardUses.length >= 3, `every then/catch must check it (found ${guardUses.length})`);
+});
+
 test("changing product clears old basis before the new request", () => {
   const src = read("components/studio/AiVersionDrawer.tsx");
   const block = src.slice(src.indexOf("if (productKey !== prevProductKey)"), src.indexOf("if (productKey !== prevProductKey)") + 400);

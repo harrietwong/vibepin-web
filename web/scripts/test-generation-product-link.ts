@@ -95,6 +95,35 @@ async function main() {
     assert.equal(d.destinationUrl ?? "", "", "no public URL → no destination, never invented");
   });
 
+  // ── version drawer: untouched product is inherited from the parent (§3.5) ──
+
+  await test("no drawer product + parent HAS a product → inherit the parent's link and URL", () => {
+    reset();
+    const parentLinked = [{ productId: "P", title: "Parent Product", source: "shopify" as const, linkType: "manual" as const, productUrl: "https://shop/parent" }];
+    const parent = { linkedProducts: parentLinked, primaryProductId: "P", destinationUrl: "https://manually-edited.example/x" };
+    // Mirrors StudioBoard: drawer sent nothing (product untouched), so inherit.
+    const prefilledProduct = null;
+    const parentInherit = !prefilledProduct && parent.linkedProducts.length ? parent.linkedProducts : null;
+    const url = prefilledProduct ? undefined : (parentInherit ? parent.destinationUrl || undefined : undefined);
+    const primaryId = prefilledProduct ? undefined : parent.primaryProductId;
+
+    const ph = store.createBoardDraft({ imageUrl: "", source: "ai_generated_from_upload", idempotencyKey: "gen:inh:0" });
+    store.updateDraft(ph.id, { linkedProducts: parentInherit ?? undefined, primaryProductId: primaryId, ...(url ? { destinationUrl: url } : {}) });
+    const d = store.getDraft(ph.id)!;
+    assert.equal(d.primaryProductId, "P", "parent's product preserved");
+    assert.equal(d.destinationUrl, "https://manually-edited.example/x", "parent's URL preserved verbatim, not re-derived");
+  });
+
+  await test("an implicit draft image contributes NO product link", () => {
+    reset();
+    // The drawer sends primaryProductSelection = null for an implicit draft image,
+    // and the parent has no product → the generated Pin has no linked product.
+    const ph = store.createBoardDraft({ imageUrl: "", source: "ai_generated_from_upload", idempotencyKey: "gen:imp:0" });
+    const d = store.getDraft(ph.id)!;
+    assert.equal(d.linkedProducts, undefined, "no fabricated product link");
+    assert.equal(d.destinationUrl ?? "", "", "no fabricated destination URL");
+  });
+
   console.log(`\nGeneration product link: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

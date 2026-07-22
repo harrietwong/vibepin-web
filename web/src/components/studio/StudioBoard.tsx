@@ -343,11 +343,22 @@ export function StudioBoard() {
     const requested = groups.length * perGroup;
     // Website URL + product link for Pins generated from top-level "Select product".
     // Derived once from the prefilled product, applied to every resulting draft.
+    // The drawer sends a product only when it is EXPLICIT or a restored link — a bare
+    // draft image never fabricates one. When the drawer sends nothing but the parent
+    // already had a product (version mode, product untouched), inherit the parent's
+    // link and its destination URL verbatim rather than re-deriving it, so a manually
+    // edited URL on the parent survives onto the generated Pins.
     const prefilledProduct = opts.primaryProductSelection ?? null;
-    const prefilledUrl = prefilledProduct ? resolveProductPublicUrl(prefilledProduct) : undefined;
+    const parentLinked = !prefilledProduct && parent?.linkedProducts?.length ? parent.linkedProducts : null;
+    const prefilledUrl = prefilledProduct
+      ? resolveProductPublicUrl(prefilledProduct)
+      : (parentLinked ? (parent?.destinationUrl || undefined) : undefined);
     const prefilledLinkedProducts = prefilledProduct
       ? [toLinkedProduct({ ...prefilledProduct, asPrimary: true })]
-      : undefined;
+      : parentLinked ?? undefined;
+    const prefilledPrimaryId = prefilledProduct
+      ? toLinkedProduct({ ...prefilledProduct, asPrimary: true }).productId
+      : parent?.primaryProductId ?? parentLinked?.[0]?.productId;
     const setupSnapshot = {
       mode: parent ? ("board_ai_version" as const) : ("board_ai_scratch" as const),
       keyword: parent?.keyword,
@@ -396,7 +407,7 @@ export function StudioBoard() {
         if (prefilledLinkedProducts) {
           pinDraftStore.updateDraft(placeholder.id, {
             linkedProducts: prefilledLinkedProducts,
-            primaryProductId: prefilledLinkedProducts[0].productId,
+            primaryProductId: prefilledPrimaryId,
             ...(prefilledUrl ? { destinationUrl: prefilledUrl } : {}),
           });
         }
@@ -465,7 +476,7 @@ export function StudioBoard() {
           if (prefilledLinkedProducts) {
             pinDraftStore.updateDraft(extra.id, {
               linkedProducts: prefilledLinkedProducts,
-              primaryProductId: prefilledLinkedProducts[0].productId,
+              primaryProductId: prefilledPrimaryId,
               ...(prefilledUrl ? { destinationUrl: prefilledUrl } : {}),
             });
           }

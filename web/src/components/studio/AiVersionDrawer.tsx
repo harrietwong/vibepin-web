@@ -9,7 +9,7 @@
  * Generated outputs are handled by StudioBoard as separate child Pin drafts.
  */
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Loader2, Plus, Sparkles, X } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -48,7 +48,7 @@ import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { addProductToDraft } from "@/lib/pinMetadata";
 import { selectionFromAsset, selectionFromLinkedProduct, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDerivation";
-import { buildReferenceRequestBody, resolveBasis } from "@/lib/studio/recommendationRequest";
+import { buildReferenceRequestBody, isCurrentResult, resolveBasis } from "@/lib/studio/recommendationRequest";
 import {
   MAX_SELECTED_REFERENCES,
   PINS_PER_REFERENCE_OPTIONS,
@@ -145,6 +145,57 @@ const MODEL_OPTIONS = [
 ];
 
 /**
+ * Where a drawer-held product came from. This decides whether it may become a
+ * persistable LinkedProduct on the generated Pins:
+ *
+ *   explicit_picker      — the user chose it (top-level Select product, or the
+ *                          drawer's Add/Change product). Persistable.
+ *   linked_product       — restored from a draft's existing linkedProducts.
+ *                          Persistable (it already was a link).
+ *   implicit_draft_image — just the pin's own photo, or a bare restored URL with no
+ *                          matching link. A GENERATION INPUT ONLY: persisting it
+ *                          would invent a product link the user never made.
+ *
+ * Internal only — never sent to any API.
+ */
+export type ProductSelectionOrigin = "explicit_picker" | "linked_product" | "implicit_draft_image";
+
+export type DrawerProductSelection = CanonicalProductSelection & {
+  selectionOrigin: ProductSelectionOrigin;
+};
+
+/** True when this selection may be persisted as a Pin's LinkedProduct. */
+export function isPersistableProduct(sel: DrawerProductSelection | null | undefined): boolean {
+  return !!sel && sel.selectionOrigin !== "implicit_draft_image";
+}
+
+/**
+ * Reduce a URL-level edit (removing a thumbnail from the strip) back onto the
+ * canonical selection list. Exported so the drawer and its tests call the SAME
+ * implementation rather than a mirrored copy.
+ */
+export function applyProductUrlEdit(
+  prev: DrawerProductSelection[],
+  nextUrls: string[],
+): DrawerProductSelection[] {
+  const keep = new Set(nextUrls);
+  const filtered = prev.filter(s => s.imageUrl && keep.has(s.imageUrl));
+  // Re-assert primary on the surviving head so removing the primary promotes the next.
+  return filtered.map((s, i) => ({ ...s, asPrimary: i === 0 }));
+}
+
+/**
+ * Stable identity for the CURRENT product, used to discard stale async results.
+ * Includes the fields that actually change the request, so a same-image product
+ * whose title/type/tags differ is still treated as a different request context.
+ */
+export function productRequestKey(sel: DrawerProductSelection | CanonicalProductSelection | null): string {
+  if (!sel) return "";
+  const tags = (sel.tags ?? []).join(",");
+  return [sel.id ?? "", sel.imageUrl ?? "", sel.title ?? "", sel.productType ?? "", tags].join("|");
+}
+
+/**
  * Seed the canonical current-product state when the drawer opens.
  *
  * Priority: a restored setup's product images (rehydrated as bare selections),
@@ -156,25 +207,43 @@ export function buildInitialProductSelections(input: {
   initialSetup?: AiVersionDrawerSetup;
   initialProductSelection?: CanonicalProductSelection | null;
   draft: PinDraft | null;
-}): CanonicalProductSelection[] {
+}): DrawerProductSelection[] {
   const { initialSetup, initialProductSelection, draft } = input;
-  if (initialSetup) {
-    // A restored setup only kept flat URLs; rehydrate minimal selections. Any linked
-    // product on the draft re-attaches its richer fields below on first render.
-    return initialSetup.productImages.map((imageUrl, i) => ({
-      title: "",
-      imageUrl,
-      source: "my_products" as const,
-      asPrimary: i === 0,
-    }));
-  }
-  if (initialProductSelection?.imageUrl) {
-    return [{ ...initialProductSelection, asPrimary: true }];
-  }
   const linked = draft?.linkedProducts ?? [];
-  if (linked.length) {
-    return linked.map((p, i) => ({ ...selectionFromLinkedProduct(p), asPrimary: i === 0 }));
+
+  // 1. An explicit Select-product choice always wins — it is the freshest signal.
+  if (initialProductSelection?.imageUrl) {
+    return [{ ...initialProductSelection, asPrimary: true, selectionOrigin: "explicit_picker" }];
   }
+
+  // 2. A restored setup kept only flat URLs. Rehydrate each against the draft's
+  //    linked products BY imageUrl so title/productUrl/store/price survive a
+  //    reopen; a URL with no matching linked product stays a bare image (it is a
+  //    generation input, not a persistable product link).
+  if (initialSetup) {
+    return initialSetup.productImages.map((imageUrl, i) => {
+      const match = linked.find(p => p.imageUrl === imageUrl);
+      if (match) {
+        return { ...selectionFromLinkedProduct(match), asPrimary: i === 0, selectionOrigin: "linked_product" as const };
+      }
+      return {
+        title: "",
+        imageUrl,
+        source: "my_products" as const,
+        asPrimary: i === 0,
+        selectionOrigin: "implicit_draft_image" as const,
+      };
+    });
+  }
+
+  // 3. The draft's own linked products.
+  if (linked.length) {
+    return linked.map((p, i) => ({ ...selectionFromLinkedProduct(p), asPrimary: i === 0, selectionOrigin: "linked_product" as const }));
+  }
+
+  // 4. The draft's image is a GENERATION INPUT only. It is deliberately NOT a
+  //    persistable product link — creating a LinkedProduct from "the pin's own
+  //    photo" would invent a product the user never linked.
   if (draft?.imageUrl) {
     return [{
       title: draft.title ?? "",
@@ -182,6 +251,7 @@ export function buildInitialProductSelections(input: {
       source: "upload" as const,
       category: draft.category ?? undefined,
       asPrimary: true,
+      selectionOrigin: "implicit_draft_image",
     }];
   }
   return [];
@@ -368,19 +438,17 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // draft's linked products, then the draft's own image; and it is what the user
   // mutates when they pick, change or clear a product inside the drawer. productUrls
   // is derived from it so the two can never drift (the bug the review caught).
-  const [selectedProductSelections, setSelectedProductSelections] = useState<CanonicalProductSelection[]>(() =>
+  const [selectedProductSelections, setSelectedProductSelections] = useState<DrawerProductSelection[]>(() =>
     buildInitialProductSelections({ initialSetup, initialProductSelection, draft }),
   );
   // Derived, not stored — keeps the strip and the canonical state atomically in sync.
   const productUrls = selectedProductSelections.map(s => s.imageUrl).filter((u): u is string => !!u);
   const setProductUrls = (next: string[] | ((prev: string[]) => string[])) => {
-    // A URL-level edit (removing a thumbnail) maps back onto the canonical state by
-    // dropping the matching selection — no separate product-url store survives.
+    // Delegates to the exported reducer so the drawer and its tests share one path.
     setSelectedProductSelections(prev => {
       const prevUrls = prev.map(s => s.imageUrl).filter((u): u is string => !!u);
       const resolved = typeof next === "function" ? next(prevUrls) : next;
-      const keep = new Set(resolved);
-      return prev.filter(s => s.imageUrl && keep.has(s.imageUrl));
+      return applyProductUrlEdit(prev, resolved);
     });
   };
   // ONE selection state for every reference entry point — recommended Pins, picker
@@ -475,6 +543,18 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // recommendations. The draft is optional context only.
   const primarySelection = selectedProductSelections[0] ?? null;
   const primaryProductUrl = primarySelection?.imageUrl ?? productUrls[0] ?? "";
+  // Identity of the product each async request was issued for. A ref (not state) so
+  // an in-flight callback reads the CURRENT value at resolution time — this is what
+  // discards A's response after the user switched to B, even when A resolved before
+  // React ran the effect cleanup that aborts it.
+  //
+  // The ref is synced in a layout effect (never during render — that would be a
+  // render-phase ref write). It still updates BEFORE any fetch callback can run,
+  // because a resolved promise is a macrotask/microtask after commit, and both
+  // request effects re-run on the same commit that changes the key.
+  const currentProductKey = productRequestKey(primarySelection);
+  const currentProductKeyRef = useRef(currentProductKey);
+  useLayoutEffect(() => { currentProductKeyRef.current = currentProductKey; }, [currentProductKey]);
   // Whether the primary product IS the draft's own image (its stored analysis then
   // applies). False for a swapped-in or top-level-selected product.
   const draftImageSelected =
@@ -509,7 +589,13 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // Bind this request to the product it was issued for; a late response for a
     // previous product must not overwrite the current one (§4).
     const requestUrl = primaryProductUrl;
+    // Safe to read here: the layout effect above syncs the ref before any passive
+    // effect runs, so this is THIS render's key, not the previous one's.
+    const requestKey = currentProductKeyRef.current;
     const controller = new AbortController();
+    // Belt and braces: abort covers the common case, the key check covers a response
+    // that lands BEFORE cleanup runs (abort alone would miss it).
+    const isStale = () => controller.signal.aborted || !isCurrentResult(requestKey, currentProductKeyRef.current);
     const sel = primarySelection;
     // Prefer the selection's own honest fields; the asset store is a fallback only.
     const asset = assetStore.getAssets().find(a => a.imageUrl === requestUrl);
@@ -530,10 +616,12 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((data: { analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string } }) => {
+        if (isStale()) return; // product changed while this was in flight
         setSwappedProductAnalysis({ url: requestUrl, analysis: data.analysis });
       })
       .catch((e: unknown) => {
         if (e instanceof DOMException && e.name === "AbortError") return;
+        if (isStale()) return;
         // Record the attempt (keyed by url) so we don't retry in a loop.
         setSwappedProductAnalysis({ url: requestUrl });
       });
@@ -550,7 +638,11 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     // product is discarded rather than overwriting the current product's results
     // (§4: no stale writes to recommendedRefs / basis / status).
     const requestUrl = primaryProductUrl;
+    const requestKey = currentProductKeyRef.current;
     const controller = new AbortController();
+    // Abort handles cleanup-ordered cases; the key check additionally rejects a
+    // response that resolved BEFORE the effect cleanup aborted it (§1.5/§1.6).
+    const isStale = () => controller.signal.aborted || !isCurrentResult(requestKey, currentProductKeyRef.current);
     const d = liveDraft;
     const sel = primarySelection;
     // The draft's own analysis applies ONLY when the primary product IS the draft's
@@ -594,7 +686,7 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: RecommendationBasis }) => {
           // Guard: the product changed while this was in flight → discard (§4).
-          if (controller.signal.aborted) return;
+          if (isStale()) return;
           setRecommendedRefs(Array.isArray(data.items) ? data.items : []);
           // Field is always present per the final contract; the fallbacks below keep
           // the UI honest against an empty items list, a request failure, or an older
@@ -604,7 +696,8 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
           setRecStatus("idle");
         })
         .catch((e: unknown) => {
-          if (controller.signal.aborted || (e instanceof DOMException && e.name === "AbortError")) return;
+          if (e instanceof DOMException && e.name === "AbortError") return;
+          if (isStale()) return;
           if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1), 1500); return; }
           // Exhausted retries: surface an error+retry state rather than showing an
           // empty grid that looks like a legitimate "no recommendations" (§4.9).
@@ -849,9 +942,14 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
       // Replace the canonical selection with the picked products (full fields kept),
       // so analysis / recommendations / generation all follow the NEW product. The
       // strip derives from this — no separate product-url store to fall out of sync.
-      const picked = items
+      const picked: DrawerProductSelection[] = items
         .filter(item => item.imageUrl)
-        .map((item, i) => ({ ...selectionFromAsset(item), asPrimary: i === 0 }));
+        .map((item, i) => ({
+          ...selectionFromAsset(item),
+          asPrimary: i === 0,
+          // A picker choice is explicit → persistable as a LinkedProduct.
+          selectionOrigin: "explicit_picker" as const,
+        }));
       setSelectedProductSelections(picked);
       // Persist the full product record onto the draft so the Website URL can be
       // derived from it (Section J). Uses the SAME addProductToDraft path as
@@ -943,8 +1041,10 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         .filter(a => a.role === "product")
         .map(a => ({ title: a.title, productUrl: a.productUrl })),
       // The CURRENT primary selection — reflects any in-drawer product change,
-      // never the immutable prefill.
-      primaryProductSelection: primarySelection,
+      // never the immutable prefill. Only an EXPLICIT choice or a restored linked
+      // product may become a Pin's LinkedProduct; a bare draft image is a generation
+      // input and must not fabricate a product link (§3.4).
+      primaryProductSelection: isPersistableProduct(primarySelection) ? primarySelection : null,
     });
   };
 
