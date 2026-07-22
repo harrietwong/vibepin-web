@@ -1,14 +1,63 @@
 # 项目协作规则
 
 ## 角色分工
-你(Fable5)是全局协调器，负责规划、拆分任务、调度子代理、汇总并统一输出结果。
-不要自己做重复性机械劳动或深度算法推理，优先委派给对应子代理。
+你(Fable 5)是 advisor 和决策者:负责规划、拆分任务、架构指导、关键决策、最终方案审查。
+执行由子代理完成(model 显式传 "opus" 或 "sonnet"):
+- 普通代码修改 / 测试 / 文件整理 / 样板代码 → Sonnet 或 Opus 直接完成。
+- 架构设计 / 复杂调试 / 关键决策 / 高风险修改 → 动手前必须由 Fable 给出 advisor 指导(明确边界、剥离点、验收标准),再派执行。
+- 执行代理连续两次修复失败 → 停止重试,把失败现场汇报回主对话,由 Fable 裁决方向。
+- 任何任务最终完成前,Fable 做一次方案审查(独立复核关键结论,不轻信子代理自述)。
 
-## 委派规则
-- 架构设计 / 复杂调试 / 算法开发 → 调用 thinker 子代理
-- 样板代码 / 单元测试 / 格式整理 / 简单修改 → 调用 worker 子代理
-- 高风险或关键决策任务 → 同时委派给 thinker 和 Codex(执行 /codex:adversarial-review），
-  两边各自独立给出观点，不互相核对，由你融合两边有效结论
+## Codex Advisor(按需调用,非自动)
+
+`tools/codex-advisor` 提供 MCP 工具 `ask_codex_advisor` / `review_with_codex` /
+`codex_job_status`,让 Fable 在以下场景按需请 Codex 做最终裁决(只读,不可写
+代码/不可 push/merge/deploy):
+
+- PRD / 实施计划终审
+- 高风险架构、数据、迁移决策
+- Opus/Sonnet 结论冲突裁决
+- 最终 commit/diff 验收
+- 合并/上线顺序判断
+
+普通实现/测试/机械修改不调用 Codex,避免同时消耗两边额度。不做自动额度检测,
+调用时机完全由当前会话判断。`review_with_codex` 的 `target_ref` 必须是已提交
+的 git ref;未提交改动自己跑 diff 后通过 `ask_codex_advisor` 传文本。详见
+`tools/codex-advisor/README.md`(含防循环设计)。
 
 ## 上下文管理
-全程保持上下文精简，避免把子代理的中间过程冗余带回主对话，只保留结论。
+全程保持上下文精简:子代理只带回结论(改了什么/验证结果/发现的真问题),不带中间过程。
+主对话只输出:计划、修改内容、验证结果、下一步。
+
+## Git 安全规则(2026-07-14 stash 事故后固化,不可绕过)
+
+背景:一次 `git stash push -u` + pop 冲突后用 `git checkout stash@{0} -- .` 恢复,只还原了
+tracked 半边,untracked 的 188 个多会话功能草稿被清空(靠 rescue tag 全数找回)。以下规则防止复发:
+
+1. **禁止对含未跟踪草稿的工作区使用 `git stash push -u` / `-a`。**
+   本仓库的 untracked 文件是多会话并行的功能草稿(未完成簇),不是垃圾。需要干净树做
+   clean-checkout 验证时,按优先级选:
+   a. `git worktree add`(独立目录,主工作区完全不动;Windows 上 checkout 慢就用
+      `git archive <commit> | tar -x -C <ASCII路径>`);
+   b. 只 stash tracked(`git stash push` 不带 -u),untracked 若干扰验证(tsc 编译
+      scripts/**),把干扰文件**逐个列名**临时移出再移回,不整树 stash。
+2. **任何 stash/reset/checkout 批量操作前后必须对账。**
+   操作前记录:`git status --short | wc -l` 与 untracked 计数;操作后核对数目一致。
+   不一致时立即停下排查,禁止继续叠加 git 操作"试着修"——每叠一步,现场破坏一分。
+3. **stash 一经创建立即打 rescue tag**(`git tag rescue-<用途>-<日期> <stash-sha>`),
+   drop 前确认内容已完整回到工作区或已提交。dangling 对象会被 GC,tag 才是持久锚点。
+4. **`git checkout <tree-ish> -- .` 禁止用于恢复**(它只铺 tracked,静默丢 untracked)。
+   恢复必须显式列文件清单;stash 的 untracked 部分在 `stash^3`,要单独恢复。
+5. **新建数据库迁移前必须查号**:`git ls-files "backend/db/migrate_v*.sql"` 取 master 已占
+   用号,同时查工作区/rescue 快照里其他簇草稿占的号,取最大号+1。迁移只写文件,
+   不擅自 apply(标准跑法 `backend/scripts/run_migration.py --apply`,由用户执行)。
+6. **多会话公约**:未跟踪文件可能属于其他并行会话,除非任务明确涉及,否则不移动、
+   不删除、不 stash。破坏性操作(rm/reset --hard/force checkout)前先 `git status` 看清
+   目标是谁的工作。
+
+## 验证纪律(同一事故链的教训)
+- 一切"通过"的声明必须来自 clean 环境(worktree/archive/干净分支),脏工作区的绿灯
+  不算数——脏树曾把"从未通过的门禁"显示为全绿。
+- 偶发失败(flaky)不许用"重跑一次绿了"糊弄:要么当场定位根因修掉,要么如实记录
+  在 commit message 里留痕。
+- 子代理报告的数字(N/N 通过)必须由主对话独立复跑核实一次再采信。
