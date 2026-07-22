@@ -417,12 +417,15 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
 
   // Launch a signed-in buyer's checkout. On any failure, surface the retryable
   // banner (never leave a dead button).
+  // `intervalOverride` exists because the auto-resume effect calls this in the
+  // same tick as `setYearly(...)`: the state update has not landed yet, so a
+  // yearly intent read off `yearly` here would silently bill monthly.
   const launchCheckout = useCallback(
-    async (planId: PaidPlan) => {
+    async (planId: PaidPlan, intervalOverride?: "month" | "year") => {
       setPendingPlanId(planId);
       setCheckoutUnavailable(false);
       setCheckoutComingSoon(false);
-      const interval = yearly ? "year" : "month";
+      const interval = intervalOverride ?? (yearly ? "year" : "month");
       try {
         const url = await startCreemCheckout(planId, interval);
         window.location.assign(url);
@@ -545,7 +548,8 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
       return;
     }
 
-    void launchCheckout(plan.id);
+    // Pass `period` explicitly — `setYearly` above has not applied yet.
+    void launchCheckout(plan.id, period);
     router.replace("/pricing", { scroll: false });
   }, [searchParams, billingEnabled, authReady, userId, launchCheckout, router]);
 
@@ -729,7 +733,7 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
             Instagram, TikTok, and Facebook.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <Link href="/app/studio" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
+            <Link href="/signup?plan=free" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
               Get started free <ArrowRight className="w-4 h-4" />
             </Link>
             {!billingEnabled ? (

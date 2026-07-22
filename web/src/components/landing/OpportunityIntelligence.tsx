@@ -84,8 +84,8 @@ function MetricRow({ label, value, valueColor = "#FFFFFF" }: { label: string; va
   );
 }
 
-function EvidenceShell({ n, accent, title, question, desc, children, footer }: {
-  n: number; accent: string; title: string; question: string; desc: string; children: React.ReactNode; footer: string;
+function EvidenceShell({ n, accent, title, question, desc, children, footer, footerHref }: {
+  n: number; accent: string; title: string; question: string; desc: string; children: React.ReactNode; footer: string; footerHref: string;
 }) {
   return (
     <div className="flex flex-col rounded-2xl border p-5 transition-transform hover:-translate-y-1" style={{ background: "linear-gradient(180deg,#0C1018,#0A0C14)", borderColor: "rgba(255,255,255,0.08)" }}>
@@ -96,7 +96,7 @@ function EvidenceShell({ n, accent, title, question, desc, children, footer }: {
       <p className="text-[11px] font-semibold mb-2" style={{ color: accent }}>{question}</p>
       <p className="text-[12.5px] leading-relaxed mb-4" style={{ color: "#8B93A1" }}>{desc}</p>
       <div className="flex-1">{children}</div>
-      <Link href="/app/discover" className="inline-flex items-center gap-1.5 text-[12px] font-bold mt-4" style={{ color: accent }}>{footer} <ArrowRight className="w-3.5 h-3.5" /></Link>
+      <Link href={footerHref} className="inline-flex items-center gap-1.5 text-[12px] font-bold mt-4" style={{ color: accent }}>{footer} <ArrowRight className="w-3.5 h-3.5" /></Link>
     </div>
   );
 }
@@ -156,7 +156,7 @@ export default function OpportunityIntelligence({ pinSamples, products }: { pinS
         {/* Three evidence cards */}
         <div className="grid md:grid-cols-3 gap-5 mb-6">
           {/* Demand Signal */}
-          <EvidenceShell n={1} accent="#10B981" title="Demand Signal" question="Is interest growing?" desc="Increasing search demand and save activity show whether this topic is gaining momentum." footer="View full demand insights">
+          <EvidenceShell n={1} accent="#10B981" title="Demand Signal" question="Is interest growing?" desc="Increasing search demand and save activity show whether this topic is gaining momentum." footer="View full demand insights" footerHref="/app/discover">
             <div className="rounded-xl p-3 mb-3" style={{ background: "#080C12", border: "1px solid rgba(255,255,255,0.07)" }}>
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: "#4B5563" }}>Interest over time</span>
@@ -173,7 +173,7 @@ export default function OpportunityIntelligence({ pinSamples, products }: { pinS
           </EvidenceShell>
 
           {/* Pin Evidence */}
-          <EvidenceShell n={2} accent="#A855F7" title="Pin Evidence" question="What creative is already working?" desc="High-save Pins reveal the formats, visual styles, and content angles that already attract engagement." footer="Explore all Pin evidence">
+          <EvidenceShell n={2} accent="#A855F7" title="Pin Evidence" question="What creative is already working?" desc="High-save Pins reveal the formats, visual styles, and content angles that already attract engagement." footer="Explore all Pin evidence" footerHref="/app/discover">
             <div className="grid grid-cols-4 gap-1.5 mb-3">
               {pinEvid.map((a, i) => (
                 <div key={i} className="relative rounded-lg overflow-hidden" style={{ aspectRatio: "3/4" }}>
@@ -188,7 +188,7 @@ export default function OpportunityIntelligence({ pinSamples, products }: { pinS
           </EvidenceShell>
 
           {/* Product Signals */}
-          <EvidenceShell n={3} accent="#38BDF8" title="Product Signals" question="What is worth promoting?" desc="Related products show where Pinterest demand can turn into traffic, product discovery, and monetization." footer="See all product signals">
+          <EvidenceShell n={3} accent="#38BDF8" title="Product Signals" question="What is worth promoting?" desc="Related products show where Pinterest demand can turn into traffic, product discovery, and monetization." footer="See all product signals" footerHref="/app/products">
             <div className="grid grid-cols-4 gap-1.5 mb-3">
               {prodEvid.map((a, i) => <div key={i} className="relative rounded-lg overflow-hidden" style={{ aspectRatio: "1/1", border: "1px solid rgba(255,255,255,0.07)" }}><AssetImg asset={a} label="Product" /></div>)}
             </div>
