@@ -22,6 +22,8 @@ import { promises as fs }            from "fs";
 import { getUserIdFromBearer, getUserIdFromCookies } from "@/lib/server/authUser";
 import { createServerClient }        from "@/lib/supabase";
 import { moderatePrompt, type ModerationResult } from "@/lib/server/creem/moderatePrompt";
+import { validateImageModelKey, DEFAULT_IMAGE_MODEL_KEY } from "@/lib/server/imageModelKey";
+import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -751,7 +753,10 @@ export async function POST(req: NextRequest) {
   const referenceStrength  = String(body.reference_strength ?? "moderate");
   const outputType         = String(body.output_type ?? "");
   const pinFormat          = String(body.format ?? "vertical 2:3");
-  const modelKey           = String(body.model_key ?? "gemini_image");
+  // `model_key` is NOT read here. It is client-controlled and selects which PAID
+  // provider the account is billed for, so it is validated against the closed
+  // contract in Step 2a below and only then bound to `modelKey`. Reading it into a
+  // plain `String(...)` at this point is exactly the defect being removed.
   const contentLanguage    = String(body.content_language ?? "en").trim() || "en";
   const promptMode         = body.prompt_mode === "creative_direction_v2" ? "creative_direction_v2" : "legacy";
   const promptVersion      = Number(body.prompt_version ?? (promptMode === "creative_direction_v2" ? 2 : 1));
@@ -825,6 +830,98 @@ export async function POST(req: NextRequest) {
   }
   const selectedTags = validated.selectedTags;
   const productMetadata = validated.productMetadata;
+
+  // ── Step 2a: VALIDATE model_key — the paid-provider selector ──────────────────
+  // `model_key` is client-controlled and decides which PAID image model the account
+  // is billed for. It used to be taken verbatim (`String(body.model_key ?? …)`) and
+  // forwarded to both dispatch branches; generator.py::_resolve_model_id then mapped
+  // ANY unknown key onto GPT Image, so arbitrary body text silently chose a specific
+  // paid model AND changed capability (_model_supports_image_input branches on the
+  // resolved model, not the key). This is the trust boundary that closes that.
+  //
+  // WHY HERE — after input bounds, BEFORE the moderation batch:
+  //   * It is a pure, local, zero-cost string check. A request that is going to 400
+  //     on an invalid model must not first buy up to MAX_MODERATION_CHECKS outbound
+  //     Creem calls; placing a free check after a paid one is the amplification
+  //     mistake this route already fixed once for auth and input bounds.
+  //   * It CANNOT move ahead of moderation's own position in any way that weakens
+  //     the gate: this step only ever returns 400 or falls through. Moderation still
+  //     runs unconditionally for every request that proceeds, still fails closed,
+  //     and still sits before enqueue / FastAPI / inline dispatch. Rejecting earlier
+  //     strictly shrinks what an invalid request can reach — it never lets an
+  //     unmoderated request through.
+  //   * It sits with the other Step 2 structural validation because it IS structural
+  //     validation: same 400 invalid_request envelope, same "never truncate, never
+  //     coerce" rule.
+  // Absent → DEFAULT_IMAGE_MODEL_KEY; legacy `nano_banana` → `gemini_image`; anything
+  // else → 400. Never silently coerced onto a valid (paid) model.
+  const modelKeyValidation = validateImageModelKey(body.model_key);
+  if (!modelKeyValidation.ok) {
+    return invalidRequestResponse(generationRequestId, modelKeyValidation.detail);
+  }
+  const modelKey: string = modelKeyValidation.modelKey;
+
+  // ── Step 2b: DURABLE per-user rate limit — before any PAID work ───────────────
+  // An ABUSE CEILING on request velocity, not allowance metering (that is a later
+  // phase). This route is the most expensive in the product: one admitted request
+  // buys up to MAX_IMAGES_PER_REQUEST paid image generations plus a moderation batch
+  // of up to MAX_MODERATION_CHECKS outbound Creem calls.
+  //
+  // WHY DURABLE: the existing os.tmpdir() TTL lock further down is PER-LAMBDA-
+  // INSTANCE, so N concurrent instances admit N concurrent generations. Only the
+  // shared Postgres window (ai_rate_limit_windows, v53) can bound total spend.
+  //
+  // WHY HERE — after auth (Step 1) and the free structural checks, but strictly
+  // BEFORE the moderation batch and every dispatch path: a throttled request must
+  // cost ZERO outbound Creem calls and ZERO provider work. Moderation's own position
+  // relative to dispatch is untouched — it still runs, unconditionally and
+  // fail-closed, for every request that gets past this point.
+  //
+  // ANONYMOUS INLINE CALLERS: /api/generate only requires auth in
+  // GENERATION_MODE=worker (production). The inline/FastAPI paths deliberately serve
+  // anonymous callers (local dev / self-hosted), and Step 1's comment records that as
+  // a supported shape. Breaking it would be a scope violation — but leaving it
+  // unlimited would make the limiter trivially bypassable by simply dropping the
+  // Authorization header. So an anonymous caller is limited under its EXISTING
+  // stable identity: `resolveGenerationOwner`'s `session:<studioClientId>` /
+  // `anon:<hash(ip|ua)>` fallback, the same string the per-user TTL lock already
+  // keys on. It is a weaker identity than an account id (a client can rotate
+  // studioClientId), but it is the identity this route has always had for those
+  // callers, it is not unlimited, and in production the worker path's 401 means an
+  // anonymous request never reaches this line at all.
+  const rateLimitIdentity = resolveGenerationOwner(req, body, authUserId);
+  const rateLimit = await consumeRateLimit(rateLimitIdentity, "image_generation");
+  if (!rateLimit.allowed) {
+    // Two distinct refusals, deliberately given different status codes:
+    //   limit_exceeded      → 429, the user really did go too fast.
+    //   limiter_unavailable → 503, the limiter FAILED CLOSED. That is the opposite
+    //     of the ai-copy routes' fail-open choice and is intentional for this route
+    //     only — see the `image_generation` note in lib/server/rateLimit.ts. Do not
+    //     "unify" it. 503 (not 429) because an outage is not the caller's fault and
+    //     is honestly a server-side unavailability.
+    const unavailable = rateLimit.reason === "limiter_unavailable";
+    console.warn(JSON.stringify({
+      event: unavailable ? "generation_rate_limiter_unavailable" : "generation_rate_limited",
+      generationRequestId,
+      identityKind: rateLimitIdentity.startsWith("user:") ? "user" : "anonymous",
+    }));
+    return NextResponse.json(
+      {
+        ok: false,
+        error_type: unavailable ? "rate_limiter_unavailable" : RATE_LIMITED_ERROR,
+        code: unavailable ? "rate_limiter_unavailable" : RATE_LIMITED_ERROR,
+        error: unavailable
+          ? "Image generation is temporarily unavailable. Please try again in a moment."
+          : RATE_LIMITED_MESSAGE,
+        urls: [],
+        generation_request_id: generationRequestId,
+      },
+      {
+        status: unavailable ? 503 : 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+      },
+    );
+  }
 
   // ── Step 3: Moderation gate (Creem AI-compliance) — BEFORE both dispatch
   // branches and BEFORE lock acquisition, so a rejected/unscreenable prompt never
@@ -981,7 +1078,10 @@ export async function POST(req: NextRequest) {
   const promptWithLang = contentLanguage !== "en"
     ? `${prompt}\n\n[Important: Generate any on-image text and descriptive copy in ${contentLanguage}. Keep Pinterest-native tone.]`
     : prompt;
-  const generationOwnerId = resolveGenerationOwner(req, body, authUserId);
+  // Same identity the rate limiter keyed on in Step 2b — resolved once, reused, so
+  // the durable window and the per-instance lock can never disagree about who the
+  // caller is.
+  const generationOwnerId = rateLimitIdentity;
   const userLock = await acquireTtlLock("active-generation", generationOwnerId, USER_GENERATION_LOCK_TTL_MS);
   if (!userLock.acquired) {
     console.warn(JSON.stringify({

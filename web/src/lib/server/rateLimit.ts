@@ -33,7 +33,7 @@
  * for a cost ceiling set well above legitimate burst sizes.
  *
  * ═══════════════════════════════════════════════════════════════════════════════
- * FAIL-OPEN — DELIBERATE. DO NOT "FIX" THIS TO FAIL-CLOSED.
+ * FAIL-OPEN IS THE DEFAULT — DELIBERATE. DO NOT "FIX" IT TO FAIL-CLOSED.
  * ═══════════════════════════════════════════════════════════════════════════════
  * If the limiter's own infrastructure is unavailable (Supabase unreachable, table
  * missing because v53 has not been applied yet, network timeout), the request is
@@ -50,6 +50,28 @@
  *
  * If you are here to make this fail-closed, that is a product decision that needs an
  * explicit owner sign-off, not a drive-by hardening.
+ *
+ * ── THE ONE DOCUMENTED EXCEPTION: `image_generation` ──────────────────────────
+ * The `image_generation` bucket (/api/generate) is configured `failClosed: true`
+ * and is the ONLY one. That divergence is deliberate and signed off, NOT an
+ * oversight to be unified away:
+ *
+ *   - /api/generate is by a wide margin the most expensive route in the product.
+ *     One admitted request buys up to MAX_IMAGES_PER_REQUEST paid image
+ *     generations plus a moderation batch of up to MAX_MODERATION_CHECKS outbound
+ *     Creem calls. The three text/vision routes above cost one model call each.
+ *   - The blast radius of failing open is therefore asymmetric: an unmetered
+ *     Supabase outage on /api/ai-copy costs cents per request; on /api/generate an
+ *     automated caller can spend without any bound at all for the whole outage.
+ *   - The availability argument that justifies fail-open elsewhere is much weaker
+ *     here: /api/generate ALREADY hard-depends on Supabase in production
+ *     (GENERATION_MODE=worker enqueues a generation_jobs row through the very same
+ *     client). If the limiter's store is unreachable, the enqueue was going to fail
+ *     anyway — refusing early costs the user a 503 they were going to get, and
+ *     saves the paid moderation batch that sits in between.
+ *
+ * So: do NOT delete `failClosed`, and do NOT set the other three buckets to true.
+ * Both halves of that split are the decision.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -58,13 +80,20 @@ import { createServerClient } from "@/lib/supabase";
 const TABLE = "ai_rate_limit_windows";
 
 /** Logical route keys. Limits are per-route: exhausting one must not disable another. */
-export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge";
+export type RateLimitedRoute = "ai_copy" | "ai_copy_analyze" | "quality_judge" | "image_generation";
 
 export type RateLimitRule = {
   /** Maximum admitted requests per window. */
   limit: number;
   /** Fixed-window length in seconds. */
   windowSeconds: number;
+  /**
+   * When true, an infrastructure failure REFUSES the request instead of admitting
+   * it. Only `image_generation` sets this — see the fail-open block at the top of
+   * this file for why that one route diverges and why the others must not.
+   * Absent/false keeps the module-wide fail-open default.
+   */
+  failClosed?: boolean;
 };
 
 /**
@@ -116,6 +145,43 @@ export const RATE_LIMITS: Record<RateLimitedRoute, RateLimitRule> = {
    * window — far more than the image pipeline can physically produce in five minutes.
    */
   quality_judge: { limit: 120, windowSeconds: 300 },
+
+  /**
+   * POST /api/generate — the image generation route. THE most expensive request in
+   * the product: one admitted call buys up to MAX_IMAGES_PER_REQUEST paid image
+   * generations (route.ts:44-47 — default 2, hard cap 4) PLUS a moderation batch of
+   * up to MAX_MODERATION_CHECKS = 56 outbound Creem calls.
+   *
+   * This is a REQUEST-VELOCITY / ABUSE CEILING, not allowance metering. Metering
+   * ("1 successful image = 1 allowance, flat") is a separate, later phase and must
+   * not be inferred from this number: this bucket counts ADMITTED REQUESTS, charges
+   * the same for a failed one, and is per fixed window rather than per billing
+   * period.
+   *
+   * ── 40 / 5min = 8/min sustained. Why that is far above every legitimate flow ──
+   * Every client call site issues ONE request per user action, never a fan-out loop:
+   *   - the main Create Pins generate (studio/page.tsx:588),
+   *   - Remix / regenerate-with-remix (studio/page.tsx:3662),
+   *   - single-output retry (`mode: "retry_single_output"`, one request per retried
+   *     card),
+   *   - the Board V2 AiVersions helper (lib/studio/generateAiVersions.ts:112/160).
+   * There is no batch surface that loops this route the way BatchEditDrawer loops
+   * /api/ai-copy — which is why this ceiling is an order of magnitude below ai_copy's.
+   *
+   * And each of those requests is SLOW: production runs GENERATION_MODE=worker, a
+   * VPS worker fulfils the job in tens of seconds, and the route additionally holds a
+   * per-user TTL lock on the inline path. A human clicking Generate, watching, and
+   * retrying individual outputs produces single-digit requests per minute. 40 in five
+   * minutes allows a user to retry every output of ten consecutive 4-image runs
+   * inside one window and still not trip.
+   *
+   * Deliberately conservative in absolute terms: at the hard cap of 4 images this
+   * bucket still bounds one account to 160 paid images / 5 min, which is the point.
+   *
+   * failClosed: TRUE — the one bucket that diverges from this module's fail-open
+   * default. See the block comment at the top of the file; do not unify it.
+   */
+  image_generation: { limit: 40, windowSeconds: 300, failClosed: true },
 };
 
 /**
@@ -155,7 +221,15 @@ function sleep(ms: number): Promise<void> {
 
 export type RateLimitDecision =
   | { allowed: true; reason: "under_limit" | "limiter_unavailable"; remaining: number | null }
-  | { allowed: false; reason: "limit_exceeded"; retryAfterSeconds: number; limit: number; windowSeconds: number };
+  | { allowed: false; reason: "limit_exceeded"; retryAfterSeconds: number; limit: number; windowSeconds: number }
+  /**
+   * Only produced for a `failClosed` rule (today: `image_generation`). The limiter
+   * could not reach its durable state, so the request is REFUSED rather than
+   * admitted. Kept as its own reason so a caller can answer 503 "temporarily
+   * unavailable" instead of 429 "you went too fast" — an outage is not the user's
+   * fault and Retry-After is a guess, not a window boundary.
+   */
+  | { allowed: false; reason: "limiter_unavailable"; retryAfterSeconds: number };
 
 type WindowRow = { hits: number };
 
@@ -334,20 +408,44 @@ export async function consumeRateLimit(
       "[rate-limit] contention",
       JSON.stringify({ event: "ai_rate_limit_contention", route, attempts: MAX_CAS_ATTEMPTS }),
     );
-    return { allowed: true, reason: "limiter_unavailable", remaining: null };
+    return unavailableDecision(rule, nowMs);
   } catch (err) {
-    // FAIL OPEN — deliberate. See the block comment at the top of this file before
-    // changing this. A limiter outage must not take the product down.
+    // FAIL OPEN by default — deliberate. See the block comment at the top of this
+    // file before changing this: a limiter outage must not take the product down.
+    // The single exception is a `failClosed` rule (image_generation), handled in
+    // unavailableDecision below.
     console.warn(
       "[rate-limit] unavailable",
       JSON.stringify({
         event: "ai_rate_limit_unavailable",
         route,
+        failClosed: rule.failClosed === true,
         error: (err as Error)?.message?.slice(0, 200) ?? "unknown",
       }),
     );
-    return { allowed: true, reason: "limiter_unavailable", remaining: null };
+    return unavailableDecision(rule, nowMs);
   }
+}
+
+/**
+ * The "limiter could not decide" outcome. Fail-open (admit) for every ordinary
+ * bucket; fail-CLOSED (refuse) for a rule that opts in.
+ *
+ * Both branches live in ONE function on purpose: the divergence is a single
+ * documented flag rather than duplicated control flow, so it cannot drift and
+ * cannot be half-applied to one exit path but not the other.
+ */
+function unavailableDecision(rule: RateLimitRule, nowMs: number): RateLimitDecision {
+  if (rule.failClosed) {
+    return {
+      allowed: false,
+      reason: "limiter_unavailable",
+      // Not a window boundary — the window is exactly what we could not read. A short
+      // fixed backoff invites a retry once the outage clears without hammering.
+      retryAfterSeconds: Math.min(60, rule.windowSeconds),
+    };
+  }
+  return { allowed: true, reason: "limiter_unavailable", remaining: null };
 }
 
 /**

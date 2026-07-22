@@ -1010,7 +1010,14 @@ export function PinDetailsDrawer({
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                     <span style={{ fontSize: 11, color: UI.textMuted, flexShrink: 0 }}>{tr("pinDrawer.setup.model")}</span>
                     <div style={{ display: "flex", gap: 4 }}>
-                      {([{ value: "gpt_image", label: tr("pinDrawer.model.gptImage") }, { value: "nano_banana", label: tr("pinDrawer.model.nanoBanana") }] as const).map(opt => (
+                      {/* Both selectors (here and AiVersionDrawer) now speak the one
+                          canonical contract in lib/server/imageModelKey.ts. This
+                          option used to SEND the legacy `nano_banana` key; it sends
+                          `gemini_image` — the same Gemini model, same label — so
+                          nothing new is minted with the alias. The alias is still
+                          ACCEPTED server-side for historical persisted drafts.
+                          The user-visible label is deliberately unchanged. */}
+                      {([{ value: "gpt_image", label: tr("pinDrawer.model.gptImage") }, { value: "gemini_image", label: tr("pinDrawer.model.nanoBanana") }] as const).map(opt => (
                         <button key={opt.value} type="button"
                           onClick={() => setRemixDraft(prev => ({ ...(prev ?? remix), modelKey: opt.value }))}
                           style={{
