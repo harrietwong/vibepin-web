@@ -37,6 +37,15 @@ export {};
 
 import { Module } from "node:module";
 
+// process.env.NODE_ENV is typed read-only; these helpers let the security tests
+// simulate a production build without weakening the type elsewhere.
+const envBag = process.env as Record<string, string | undefined>;
+function setEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete envBag[key];
+  else envBag[key] = value;
+}
+
+
 // `next/headers` throws outside a Next request scope. Stub it with an EMPTY
 // cookie/header store so the request-level gates below can be driven directly:
 // with no credentials the only way a caller becomes an admin is a bypass, which
@@ -277,9 +286,9 @@ async function main() {
     });
     const previous = { NODE_ENV: process.env.NODE_ENV, E2E: process.env.E2E_TEST_MODE };
     try {
-      process.env.NODE_ENV = "production";
-      process.env.E2E_TEST_MODE = "true";
-      process.env.ENABLE_LOCAL_ADMIN_BYPASS = "true"; // the other bypass must also stay inert
+      setEnv("NODE_ENV", "production");
+      setEnv("E2E_TEST_MODE", "true");
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", "true"); // the other bypass must also stay inert
       assertEq(
         await sa.requireSuperAdminFromRequest(request),
         null,
@@ -291,11 +300,11 @@ async function main() {
         "no admin role from a forged header in production",
       );
     } finally {
-      if (previous.NODE_ENV === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previous.NODE_ENV;
-      if (previous.E2E === undefined) delete process.env.E2E_TEST_MODE;
-      else process.env.E2E_TEST_MODE = previous.E2E;
-      delete process.env.ENABLE_LOCAL_ADMIN_BYPASS;
+      if (previous.NODE_ENV === undefined) setEnv("NODE_ENV", undefined);
+      else setEnv("NODE_ENV", previous.NODE_ENV);
+      if (previous.E2E === undefined) setEnv("E2E_TEST_MODE", undefined);
+      else setEnv("E2E_TEST_MODE", previous.E2E);
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", undefined);
     }
   });
 
@@ -303,8 +312,8 @@ async function main() {
     const request = new Request("https://vibepin.co/api/admin/me");
     const previousNodeEnv = process.env.NODE_ENV;
     try {
-      process.env.NODE_ENV = "production";
-      process.env.ENABLE_LOCAL_ADMIN_BYPASS = "true";
+      setEnv("NODE_ENV", "production");
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", "true");
       assertEq(
         await sa.requireSuperAdminFromRequest(request),
         null,
@@ -316,25 +325,25 @@ async function main() {
         "local admin bypass grants no admin role in production",
       );
     } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previousNodeEnv;
-      delete process.env.ENABLE_LOCAL_ADMIN_BYPASS;
+      if (previousNodeEnv === undefined) setEnv("NODE_ENV", undefined);
+      else setEnv("NODE_ENV", previousNodeEnv);
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", undefined);
     }
   });
 
   await test("the server-component gates are also inert in production", async () => {
     const previousNodeEnv = process.env.NODE_ENV;
     try {
-      process.env.NODE_ENV = "production";
-      process.env.E2E_TEST_MODE = "true";
-      process.env.ENABLE_LOCAL_ADMIN_BYPASS = "true";
+      setEnv("NODE_ENV", "production");
+      setEnv("E2E_TEST_MODE", "true");
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", "true");
       assertEq(await sa.getCurrentSuperAdmin(), null, "getCurrentSuperAdmin denies in production");
       assertEq(await sa.getCurrentAdminRole(), null, "getCurrentAdminRole denies in production");
     } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previousNodeEnv;
-      delete process.env.E2E_TEST_MODE;
-      delete process.env.ENABLE_LOCAL_ADMIN_BYPASS;
+      if (previousNodeEnv === undefined) setEnv("NODE_ENV", undefined);
+      else setEnv("NODE_ENV", previousNodeEnv);
+      setEnv("E2E_TEST_MODE", undefined);
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", undefined);
     }
   });
 
@@ -343,23 +352,23 @@ async function main() {
     // bypasses were simply broken everywhere.
     const previousNodeEnv = process.env.NODE_ENV;
     try {
-      process.env.NODE_ENV = "development";
-      process.env.ENABLE_LOCAL_ADMIN_BYPASS = "true";
+      setEnv("NODE_ENV", "development");
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", "true");
       const local = await sa.requireSuperAdminFromRequest(new Request("https://localhost/api/admin/me"));
       assert(local, "local admin bypass still works in development");
       assertEq(local?.email, "local-dev-admin@localhost", "it is the local dev admin");
 
-      delete process.env.ENABLE_LOCAL_ADMIN_BYPASS;
-      process.env.E2E_TEST_MODE = "true";
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", undefined);
+      setEnv("E2E_TEST_MODE", "true");
       const e2e = await sa.requireAdminRoleFromRequest(
         new Request("https://localhost/api/admin/me", { headers: { "x-e2e-support-admin": "true" } }),
       );
       assertEq(e2e?.role, "support", "E2E support header still works in development");
     } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previousNodeEnv;
-      delete process.env.E2E_TEST_MODE;
-      delete process.env.ENABLE_LOCAL_ADMIN_BYPASS;
+      if (previousNodeEnv === undefined) setEnv("NODE_ENV", undefined);
+      else setEnv("NODE_ENV", previousNodeEnv);
+      setEnv("E2E_TEST_MODE", undefined);
+      setEnv("ENABLE_LOCAL_ADMIN_BYPASS", undefined);
     }
   });
 
