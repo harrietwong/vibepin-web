@@ -175,6 +175,14 @@ export const EXCLUDED: Record<string, string> = {
   "test-ai-copy-context":
     "Real-browser Playwright test — drives a live dev server (E2E_TEST_MODE=true npm run dev). " +
     "`npm test` is the node-only gate; this runs via `npm run test:browser`.",
+  "test-db-integration-rate-limit":
+    "REAL-POSTGRES integration test — writes and deletes rows in the isolated Supabase " +
+    "test project. `npm test` must stay a hermetic node-only gate that anyone can run " +
+    "with no credentials and no network, so this runs via `npm run test:db` instead. " +
+    "It does NOT skip when credentials are absent: test:db exits NON-ZERO with an " +
+    "explanation, because a green run that connected to nothing is the exact failure " +
+    "mode this channel exists to prevent. See scripts/lib/test-db-config.ts for how the " +
+    "target is pinned to the test project and can never resolve to production.",
 };
 
 /**
