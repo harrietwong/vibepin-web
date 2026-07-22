@@ -32,6 +32,17 @@
  *       * an over-long single field → 0 calls, 400
  *       * no request can ever exceed MAX_MODERATION_CHECKS outbound calls
  *       * a legitimate maximum-size request → exactly the expected fixed count
+ *   - MODEL KEY (image-generation hardening): `model_key` is client-controlled and
+ *     picks which PAID provider the account is billed for. Both canonical keys are
+ *     accepted and FORWARDED VERBATIM to the dispatch payload, the legacy
+ *     `nano_banana` alias normalises to `gemini_image`, an omitted key takes the
+ *     documented default, and anything else is 400 with ZERO enqueue / ZERO FastAPI
+ *     / ZERO spawn. The payload is captured off the intercepted seams so "forwarded
+ *     correctly" is asserted on the real value, not inferred from a status code.
+ *   - RATE LIMIT (image-generation hardening): the durable per-user
+ *     `image_generation` bucket runs BEFORE the moderation batch, so a throttled
+ *     request costs zero outbound Creem calls and zero provider work. Includes the
+ *     FAIL-CLOSED divergence: unlike the ai-copy routes, a limiter outage REFUSES.
  */
 
 // Env must be set BEFORE the route module loads.
@@ -78,12 +89,19 @@ function assert(cond: unknown, msg: string) {
 // a rejected/unavailable prompt can be proven to NEVER enqueue a job (the queue
 // is the easiest background bypass — the gate must sit before it).
 let enqueueInsertCount = 0;
+/** The `params` of the last enqueued generation_jobs row — lets a test assert what
+ *  was actually FORWARDED (e.g. model_key), not merely that a 200 came back. */
+let lastEnqueuedParams: Record<string, unknown> | null = null;
 function fakeServerClient() {
   return {
     from(table: string) {
       return {
         insert(_row: unknown) {
-          if (table === "generation_jobs") enqueueInsertCount++;
+          if (table === "generation_jobs") {
+            enqueueInsertCount++;
+            const row = _row as { params?: Record<string, unknown> };
+            lastEnqueuedParams = row?.params ?? null;
+          }
           return {
             select() {
               return {
@@ -113,15 +131,23 @@ function fakeServerClient() {
 
 // ── Intercept child_process.spawn to count generator dispatches ────────────────
 let spawnCount = 0;
+/** The JSON payload piped to generator.py on the inline path — same purpose as
+ *  lastEnqueuedParams, for the branch that spawns instead of enqueuing. */
+let lastSpawnPayload: Record<string, unknown> | null = null;
 function fakeSpawn() {
   spawnCount++;
   const child = new EventEmitter() as EventEmitter & {
-    stdin: { write: () => void; end: () => void };
+    stdin: { write: (chunk?: unknown) => void; end: () => void };
     stdout: EventEmitter;
     stderr: EventEmitter;
     kill: () => void;
   };
-  child.stdin = { write: () => {}, end: () => {} };
+  child.stdin = {
+    write: (chunk?: unknown) => {
+      try { lastSpawnPayload = JSON.parse(String(chunk)) as Record<string, unknown>; } catch { /* not the payload write */ }
+    },
+    end: () => {},
+  };
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = () => {};
@@ -184,6 +210,56 @@ const originalResolve = (Module as any)._resolveFilename;
 };
 void originalResolve;
 
+// ── Durable rate-limit store fake ─────────────────────────────────────────────
+// /api/generate consumes the `image_generation` bucket of lib/server/rateLimit.ts
+// BEFORE the moderation batch. The real store would reach Supabase, so a fake that
+// models the two Postgres constraints the limiter depends on is installed here —
+// same fidelity contract as test-ai-provider-rate-limit.ts:
+//   create() → PRIMARY KEY uniqueness (a duplicate returns false, i.e. 23505)
+//   bump()   → compare-and-swap, applying only while `hits` is still what was read
+// `failing = true` simulates the store being unreachable, which is how the
+// FAIL-CLOSED divergence for this route is exercised.
+type LimiterKey = { userId: string; route: string; windowStart: string };
+const limiterKeyOf = (k: LimiterKey) => `${k.userId}|${k.route}|${k.windowStart}`;
+
+class FakeLimiterStore {
+  rows = new Map<string, { hits: number }>();
+  failing = false;
+  private guard() { if (this.failing) throw new Error("simulated supabase outage"); }
+  async read(k: LimiterKey) { this.guard(); const r = this.rows.get(limiterKeyOf(k)); return r ? { hits: r.hits } : null; }
+  async create(k: LimiterKey) {
+    this.guard();
+    const id = limiterKeyOf(k);
+    if (this.rows.has(id)) return false; // PRIMARY KEY violation (23505)
+    this.rows.set(id, { hits: 1 });
+    return true;
+  }
+  async bump(k: LimiterKey, seen: number) {
+    this.guard();
+    const row = this.rows.get(limiterKeyOf(k));
+    if (!row || row.hits !== seen) return false; // lost CAS
+    row.hits = seen + 1;
+    return true;
+  }
+  async prune() { this.guard(); }
+  /** Pre-fill a window to `hits` so the very next request is over the ceiling. */
+  fill(userId: string, route: string, windowStart: string, hits: number) {
+    this.rows.set(limiterKeyOf({ userId, route, windowStart }), { hits });
+  }
+}
+
+// The limiter module is loaded ONCE and shared by module identity, so installing the
+// fake here is what the route handler sees — even across the route-module evictions
+// these runners do (evicting the ROUTE does not evict the limiter).
+const rateLimitModule = require("../src/lib/server/rateLimit") as typeof import("../src/lib/server/rateLimit");
+let limiterStore = new FakeLimiterStore();
+function resetLimiter() {
+  limiterStore = new FakeLimiterStore();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rateLimitModule.__setRateLimitStoreForTests(limiterStore as any);
+}
+resetLimiter();
+
 function makeReq(body: Record<string, unknown>): Request {
   return new Request("https://vibepin.co/api/generate", {
     method: "POST",
@@ -222,6 +298,8 @@ async function runWith(decision: string, body: Record<string, unknown>): Promise
   enqueueInsertCount = 0;
   moderateCallCount = 0;
   moderateExternalIds = [];
+  lastEnqueuedParams = null;
+  lastSpawnPayload = null;
   // Evict so this inline-mode run re-evaluates the module rather than inheriting
   // a copy left in worker mode by a preceding test (see runWorkerWith).
   delete require.cache[require.resolve("../src/app/api/generate/route")];
@@ -241,6 +319,8 @@ async function runWorkerWith(decision: string, body: Record<string, unknown>): P
   enqueueInsertCount = 0;
   moderateCallCount = 0;
   moderateExternalIds = [];
+  lastEnqueuedParams = null;
+  lastSpawnPayload = null;
   // GENERATION_MODE is captured at module top-level, so re-import a fresh copy.
   // Under tsx these imports resolve through the CJS cache, which is keyed on the
   // resolved file path and ignores the query string — evict the entry so the
@@ -271,6 +351,8 @@ async function runWithMap(
   enqueueInsertCount = 0;
   moderateCallCount = 0;
   moderateExternalIds = [];
+  lastEnqueuedParams = null;
+  lastSpawnPayload = null;
   delete require.cache[require.resolve("../src/app/api/generate/route")];
   const route = await import(`../src/app/api/generate/route?map=${mode}_${Math.random()}`);
   const res = await route.POST(makeReq(body) as never);
@@ -297,6 +379,8 @@ async function runAnon(
   enqueueInsertCount = 0;
   moderateCallCount = 0;
   moderateExternalIds = [];
+  lastEnqueuedParams = null;
+  lastSpawnPayload = null;
   try {
     // GENERATION_MODE is captured at module top-level, so the module must be
     // re-evaluated after the env flip above. tsx runs these imports through the
@@ -314,6 +398,47 @@ async function runAnon(
     process.env.ALLOW_GENERATION_AUTH_TEST_HEADER = "true";
   }
 }
+
+// ── Image-generation hardening runners ────────────────────────────────────────
+// Like runWith/runWorkerWith, but (a) pin the user id so a test can pre-fill that
+// user's rate-limit window, and (b) return the raw Response so header assertions
+// (Retry-After) are possible.
+function makeReqAs(userId: string, body: Record<string, unknown>): Request {
+  return new Request("https://vibepin.co/api/generate", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-vibepin-test-user-id": userId },
+    body: JSON.stringify(body),
+  });
+}
+
+async function runAs(
+  userId: string,
+  body: Record<string, unknown>,
+  mode: "inline" | "worker" = "inline",
+  decision = "allow",
+): Promise<{ status: number; json: Record<string, unknown>; res: Response }> {
+  process.env.MODERATION_MOCK_DECISION = decision;
+  process.env.GENERATION_MODE = mode;
+  spawnCount = 0;
+  enqueueInsertCount = 0;
+  moderateCallCount = 0;
+  moderateExternalIds = [];
+  lastEnqueuedParams = null;
+  lastSpawnPayload = null;
+  try {
+    delete require.cache[require.resolve("../src/app/api/generate/route")];
+    const route = await import(`../src/app/api/generate/route?as=${mode}_${Math.random()}`);
+    const res = (await route.POST(makeReqAs(userId, body) as never)) as Response;
+    const json = (await res.clone().json()) as Record<string, unknown>;
+    return { status: res.status, json, res };
+  } finally {
+    process.env.GENERATION_MODE = "inline";
+  }
+}
+
+let uniqueUserSeq = 0;
+/** A fresh user id, so each test starts on an empty rate-limit window. */
+const freshUser = () => `u_hard_${++uniqueUserSeq}_${Math.random().toString(36).slice(2)}`;
 
 async function main() {
   console.log("\nGeneration route moderation-gate tests\n");
@@ -805,9 +930,315 @@ async function main() {
     assertEq(result.productMetadata?.[0].title, "Ceramic Mug", "title preserved verbatim");
   });
 
+  // ══════════════════════════════════════════════════════════════════════════════
+  // MODEL KEY VALIDATION (image-generation hardening)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // `model_key` was taken verbatim off the body and forwarded to both dispatch
+  // branches; generator.py::_resolve_model_id mapped ANY unknown key onto GPT
+  // Image, so arbitrary client text silently chose a specific PAID model and (via
+  // _model_supports_image_input, which branches on the RESOLVED model) changed
+  // capability too. Every assertion below checks the FORWARDED VALUE off the
+  // intercepted dispatch seam, because a route that 200s while quietly sending the
+  // wrong model would pass a status-code-only test and still bill the wrong provider.
+
+  const { CANONICAL_IMAGE_MODEL_KEYS, DEFAULT_IMAGE_MODEL_KEY, validateImageModelKey } =
+    await import("../src/lib/server/imageModelKey");
+
+  for (const key of CANONICAL_IMAGE_MODEL_KEYS) {
+    await test(`MODEL KEY: "${key}" is accepted and forwarded verbatim (inline dispatch)`, async () => {
+      resetLimiter();
+      const { status } = await runAs(freshUser(), fullBody({ model_key: key }));
+      assertEq(status, 200, "status");
+      assertEq(spawnCount, 1, "dispatched once");
+      assertEq(lastSpawnPayload?.model_key, key, "the generator payload carries the requested key");
+    });
+
+    await test(`MODEL KEY: "${key}" is forwarded verbatim on the WORKER enqueue path`, async () => {
+      resetLimiter();
+      const { status } = await runAs(freshUser(), fullBody({ model_key: key }), "worker");
+      assertEq(status, 200, "status");
+      assertEq(enqueueInsertCount, 1, "enqueued once");
+      assertEq(lastEnqueuedParams?.model_key, key, "the queued job params carry the requested key");
+    });
+  }
+
+  await test("MODEL KEY: legacy `nano_banana` normalises to gemini_image before dispatch", async () => {
+    // The alias must never reach the provider layer: it is accepted for historical
+    // persisted drafts (SetupSnapshot.modelKey) and rewritten at the boundary.
+    resetLimiter();
+    const { status } = await runAs(freshUser(), fullBody({ model_key: "nano_banana" }));
+    assertEq(status, 200, "an old draft's key still works");
+    assertEq(spawnCount, 1, "dispatched once");
+    assertEq(lastSpawnPayload?.model_key, "gemini_image", "normalised, NOT forwarded as the alias");
+  });
+
+  await test("MODEL KEY: `nano_banana` also normalises on the worker path", async () => {
+    resetLimiter();
+    const { status } = await runAs(freshUser(), fullBody({ model_key: "nano_banana" }), "worker");
+    assertEq(status, 200, "status");
+    assertEq(lastEnqueuedParams?.model_key, "gemini_image", "queued job carries the canonical key");
+  });
+
+  await test("MODEL KEY: omitted → the documented default (gemini_image)", async () => {
+    resetLimiter();
+    const { status } = await runAs(freshUser(), fullBody());
+    assertEq(status, 200, "status");
+    assertEq(lastSpawnPayload?.model_key, DEFAULT_IMAGE_MODEL_KEY, "default applied");
+    assertEq(DEFAULT_IMAGE_MODEL_KEY, "gemini_image", "the documented default is gemini_image");
+  });
+
+  // The heart of the fix: an unknown key must be REFUSED, never coerced.
+  const badKeys: Array<[string, unknown]> = [
+    ["an arbitrary string", "totally_made_up_model"],
+    ["a plausible-looking provider id", "gpt-image-2"],
+    ["a near-miss of a real key", "gemini-image"],
+    ["empty-ish garbage with whitespace", "  not_a_model  "],
+    ["a number", 42],
+    ["an object (the String() coercion payload)", { evil: 1 }],
+    ["an array", ["gpt_image"]],
+    ["a boolean", true],
+  ];
+  for (const [label, value] of badKeys) {
+    await test(`MODEL KEY: ${label} → 400, ZERO spawn / enqueue / moderation`, async () => {
+      resetLimiter();
+      const { status, json } = await runAs(freshUser(), fullBody({ model_key: value }));
+      assertEq(status, 400, "status");
+      assertEq(json.error_type, "invalid_request", "reuses the route's existing error envelope");
+      assertEq(json.code, "invalid_request", "code");
+      assertEq(spawnCount, 0, "ZERO generator dispatch");
+      assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+      // The whole point of validating before the moderation batch: an invalid model
+      // must not buy a single PAID Creem call.
+      assertEq(moderateCallCount, 0, "ZERO outbound moderation calls");
+    });
+
+    await test(`MODEL KEY (worker): ${label} → 400, ZERO enqueue`, async () => {
+      resetLimiter();
+      const { status, json } = await runAs(freshUser(), fullBody({ model_key: value }), "worker");
+      assertEq(status, 400, "status");
+      assertEq(json.error_type, "invalid_request", "error_type");
+      assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+      assertEq(moderateCallCount, 0, "ZERO outbound moderation calls");
+    });
+  }
+
+  await test("MODEL KEY: an invalid key is NEVER coerced onto a valid/paid model", async () => {
+    // Explicitly pins the anti-regression: the old behaviour returned 200 having
+    // silently substituted GPT Image. A 200 here at all would be the bug back.
+    resetLimiter();
+    const { status } = await runAs(freshUser(), fullBody({ model_key: "anything_at_all" }));
+    assert(status !== 200, "an unknown key must not succeed");
+    assertEq(lastSpawnPayload, null, "nothing was ever handed to the provider layer");
+    assertEq(lastEnqueuedParams, null, "and nothing was queued");
+  });
+
+  await test("MODEL KEY: the FastAPI branch is also gated (no probe on an invalid key)", async () => {
+    // requiresFullPayload=false → this body would take the FastAPI path. Validation
+    // sits ahead of it, so an invalid key 400s before any outbound work.
+    resetLimiter();
+    const { status, json } = await runAs(freshUser(), {
+      keyword: "plain keyword", prompt: "", directionBrief: "", category: "", selectedTags: [],
+      model_key: "made_up",
+    });
+    assertEq(status, 400, "status");
+    assertEq(json.error_type, "invalid_request", "error_type");
+    assertEq(moderateCallCount, 0, "ZERO moderation calls");
+    assertEq(spawnCount, 0, "ZERO dispatch");
+  });
+
+  // Unit-level contract (no handler needed).
+  await test("MODEL KEY: validateImageModelKey contract", () => {
+    assertEq(validateImageModelKey(undefined).ok, true, "absent is valid");
+    assertEq((validateImageModelKey(undefined) as { modelKey: string }).modelKey, "gemini_image", "absent → default");
+    assertEq((validateImageModelKey(null) as { modelKey: string }).modelKey, "gemini_image", "null → default");
+    assertEq((validateImageModelKey("") as { modelKey: string }).modelKey, "gemini_image", "empty → default");
+    assertEq((validateImageModelKey("  ") as { modelKey: string }).modelKey, "gemini_image", "whitespace → default");
+    assertEq((validateImageModelKey("gpt_image") as { modelKey: string }).modelKey, "gpt_image", "canonical passthrough");
+    assertEq((validateImageModelKey("nano_banana") as { modelKey: string }).modelKey, "gemini_image", "alias normalised");
+    assertEq(validateImageModelKey("nope").ok, false, "unknown rejected");
+    assertEq(validateImageModelKey(7).ok, false, "non-string rejected");
+    // The rejected value is attacker-controlled and gets rendered into a user-facing
+    // string, so it must not be echoed back.
+    const detail = (validateImageModelKey("<script>x</script>") as { detail: string }).detail;
+    assert(!detail.includes("<script>"), "the rejected value is not echoed into the error detail");
+    assertEq(CANONICAL_IMAGE_MODEL_KEYS.length, 2, "the closed set stays closed (gemini_image, gpt_image)");
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // DURABLE RATE LIMIT on /api/generate (image-generation hardening)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // An ABUSE CEILING on request velocity. The existing os.tmpdir() TTL lock is
+  // per-Lambda-instance and cannot bound total spend; this bucket is the shared
+  // Postgres window. Every denial assertion also requires ZERO outbound moderation
+  // calls and ZERO dispatch — a 429 that still burned the paid moderation batch
+  // would pass a status-only test and still cost money.
+
+  const { RATE_LIMITS, windowStartMs } = rateLimitModule;
+  const GEN_RULE = RATE_LIMITS.image_generation;
+
+  await test("RATE LIMIT: the image_generation bucket exists and is conservative", () => {
+    assert(GEN_RULE, "bucket configured");
+    assertEq(GEN_RULE.windowSeconds, 300, "5-minute fixed window, like the other buckets");
+    assert(GEN_RULE.limit <= 60, `an abuse ceiling, not a quota (${GEN_RULE.limit} <= 60)`);
+    assert(GEN_RULE.limit >= 20, `but above every legitimate flow (${GEN_RULE.limit} >= 20)`);
+    // The divergence that must not be "unified" away.
+    assertEq(GEN_RULE.failClosed, true, "image_generation is the fail-CLOSED bucket");
+    assert(!RATE_LIMITS.ai_copy.failClosed, "ai_copy stays fail-open");
+    assert(!RATE_LIMITS.ai_copy_analyze.failClosed, "ai_copy_analyze stays fail-open");
+    assert(!RATE_LIMITS.quality_judge.failClosed, "quality_judge stays fail-open");
+  });
+
+  await test("RATE LIMIT: exceeded → 429 with Retry-After, ZERO provider/enqueue/moderation", async () => {
+    resetLimiter();
+    const userId = freshUser();
+    // Pre-fill this user's current window to the ceiling so the next request denies.
+    const windowStart = new Date(windowStartMs(Date.now(), GEN_RULE.windowSeconds)).toISOString();
+    limiterStore.fill(`user:${userId}`, "image_generation", windowStart, GEN_RULE.limit);
+
+    const { status, json, res } = await runAs(userId, fullBody());
+    assertEq(status, 429, "status");
+    assertEq(json.code, "rate_limited", "stable machine-readable code");
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    assert(Number.isFinite(retryAfter) && retryAfter >= 1, `Retry-After present and positive (got ${res.headers.get("Retry-After")})`);
+    assert(retryAfter <= GEN_RULE.windowSeconds, "Retry-After never exceeds the window length");
+    assertEq(moderateCallCount, 0, "ZERO outbound moderation calls — the limiter precedes the paid batch");
+    assertEq(spawnCount, 0, "ZERO provider dispatch");
+    assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+  });
+
+  await test("RATE LIMIT: exceeded on the WORKER path too → 429, ZERO enqueue", async () => {
+    resetLimiter();
+    const userId = freshUser();
+    const windowStart = new Date(windowStartMs(Date.now(), GEN_RULE.windowSeconds)).toISOString();
+    limiterStore.fill(`user:${userId}`, "image_generation", windowStart, GEN_RULE.limit);
+
+    const { status } = await runAs(userId, fullBody(), "worker");
+    assertEq(status, 429, "status");
+    assertEq(enqueueInsertCount, 0, "ZERO generation_jobs enqueue");
+    assertEq(moderateCallCount, 0, "ZERO outbound moderation calls");
+  });
+
+  await test("RATE LIMIT: FAIL CLOSED when the store is unavailable (opposite of ai-copy)", async () => {
+    // This is the deliberate divergence. On /api/ai-copy a store outage ADMITS the
+    // request; here the most expensive route in the product REFUSES it.
+    resetLimiter();
+    limiterStore.failing = true;
+    const { status, json, res } = await runAs(freshUser(), fullBody());
+    assertEq(status, 503, "refused — 503, because an outage is not the caller's fault");
+    assertEq(json.code, "rate_limiter_unavailable", "distinct code from a genuine 429");
+    assert(res.headers.get("Retry-After"), "Retry-After still offered");
+    assertEq(moderateCallCount, 0, "ZERO outbound moderation calls");
+    assertEq(spawnCount, 0, "ZERO provider dispatch");
+    assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+  });
+
+  await test("RATE LIMIT: fail-closed also holds on the worker path", async () => {
+    resetLimiter();
+    limiterStore.failing = true;
+    const { status } = await runAs(freshUser(), fullBody(), "worker");
+    assertEq(status, 503, "refused");
+    assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+  });
+
+  await test("RATE LIMIT: the OTHER buckets still FAIL OPEN (divergence is scoped)", async () => {
+    // Guards against a future "unify the limiters" change quietly making the
+    // text/vision routes fail closed too — that would be an availability regression.
+    resetLimiter();
+    limiterStore.failing = true;
+    for (const route of ["ai_copy", "ai_copy_analyze", "quality_judge"] as const) {
+      const d = await rateLimitModule.consumeRateLimit("u_scoped", route);
+      assertEq(d.allowed, true, `${route} still admits during an outage`);
+      assertEq(d.reason, "limiter_unavailable", `${route} reports the outage honestly`);
+    }
+    const gen = await rateLimitModule.consumeRateLimit("u_scoped", "image_generation");
+    assertEq(gen.allowed, false, "image_generation refuses");
+    assertEq(gen.reason, "limiter_unavailable", "and says why");
+  });
+
+  await test("RATE LIMIT: a legitimate usage rate is NOT throttled", async () => {
+    // The real worst case for this route: a user generates, then retries every
+    // output of a maximum 4-image run, repeatedly. Each retry is ONE request
+    // (`mode: retry_single_output`); there is no client fan-out loop on this route.
+    // 5 runs x (1 generate + 4 retries) = 25 requests inside one window.
+    resetLimiter();
+    const userId = freshUser();
+    for (let run = 0; run < 5; run++) {
+      const gen = await runAs(userId, fullBody({ count: 4 }));
+      assertEq(gen.status, 200, `run ${run}: the generate request is served`);
+      for (let i = 0; i < 4; i++) {
+        const retry = await runAs(userId, fullBody({ mode: "retry_single_output", retryOutputIndex: i }));
+        assertEq(retry.status, 200, `run ${run} retry ${i}: served`);
+      }
+    }
+    // 25 admitted requests, still inside the ceiling.
+    assert(GEN_RULE.limit > 25, `the chosen limit (${GEN_RULE.limit}) leaves headroom above a 25-request session`);
+  });
+
+  await test("RATE LIMIT: the ceiling actually binds after `limit` admitted requests", async () => {
+    // Proves the counter is real (not merely that a pre-filled row denies): drive
+    // the handler until it flips, and check it flipped at exactly the configured
+    // limit, having admitted every request before that.
+    resetLimiter();
+    const userId = freshUser();
+    let admitted = 0;
+    let denialStatus = 0;
+    for (let i = 0; i < GEN_RULE.limit + 1; i++) {
+      const { status } = await runAs(userId, fullBody());
+      if (status === 200) { admitted++; continue; }
+      denialStatus = status;
+      break;
+    }
+    assertEq(admitted, GEN_RULE.limit, "exactly `limit` requests were admitted");
+    assertEq(denialStatus, 429, "request limit+1 is throttled");
+  });
+
+  await test("RATE LIMIT: one user's exhausted window does not throttle another user", async () => {
+    resetLimiter();
+    const victim = freshUser();
+    const windowStart = new Date(windowStartMs(Date.now(), GEN_RULE.windowSeconds)).toISOString();
+    limiterStore.fill(`user:${freshUser()}`, "image_generation", windowStart, GEN_RULE.limit);
+    const { status } = await runAs(victim, fullBody());
+    assertEq(status, 200, "an unrelated account is unaffected");
+  });
+
+  await test("RATE LIMIT: an anonymous inline caller is limited, not exempt", async () => {
+    // The inline path deliberately serves anonymous callers. They must not become an
+    // unlimited hole simply by omitting the Authorization header — they are keyed on
+    // the SAME `session:`/`anon:` identity the per-user TTL lock already uses.
+    resetLimiter();
+    const clientId = `anon_client_${Math.random().toString(36).slice(2)}`;
+    const windowStart = new Date(windowStartMs(Date.now(), GEN_RULE.windowSeconds)).toISOString();
+    limiterStore.fill(`session:${clientId}`, "image_generation", windowStart, GEN_RULE.limit);
+
+    delete process.env.ALLOW_GENERATION_AUTH_TEST_HEADER;
+    try {
+      process.env.MODERATION_MOCK_DECISION = "allow";
+      process.env.GENERATION_MODE = "inline";
+      spawnCount = 0; enqueueInsertCount = 0; moderateCallCount = 0;
+      delete require.cache[require.resolve("../src/app/api/generate/route")];
+      const route = await import(`../src/app/api/generate/route?anonlimit=${Math.random()}`);
+      const res = await route.POST(makeAnonReq(fullBody({ studioClientId: clientId })) as never);
+      assertEq(res.status, 429, "an anonymous caller is throttled on its stable session identity");
+      assertEq(moderateCallCount, 0, "ZERO outbound moderation calls");
+      assertEq(spawnCount, 0, "ZERO dispatch");
+    } finally {
+      process.env.ALLOW_GENERATION_AUTH_TEST_HEADER = "true";
+    }
+  });
+
+  await test("RATE LIMIT: the anonymous inline path still WORKS when under the ceiling", async () => {
+    // The documented anonymous path must not be broken by the limiter — only bounded.
+    resetLimiter();
+    const { status, json } = await runAnon("allow", fullBody(), "inline");
+    assertEq(status, 200, "anonymous inline generation still succeeds");
+    assertEq(json.ok, true, "ok");
+    assertEq(spawnCount, 1, "dispatched once");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (Module as any)._load = originalLoad;
+  rateLimitModule.__setRateLimitStoreForTests(null);
   if (failed > 0) process.exit(1);
 }
 

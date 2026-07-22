@@ -21,7 +21,7 @@ import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinterestClientError } from "@/lib/pinterestClient";
-import { generatePinterestPinCopy } from "@/lib/ai-copy/generatePinCopy";
+import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
 import { isPinReady, pinMissingFieldLabels, pinFieldErrors, type ReadinessInput } from "@/lib/pinReadiness";
 import { combineLocalPlannedAt } from "@/lib/weeklyPlanHandoff";
@@ -949,6 +949,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     setGenProgress({ current: 0, total: targets.length, failed: 0 });
     const next: Record<string, RowEdit> = { ...rowEdits };
     let updated = 0, failed = 0;
+    let rateLimited = false;
     for (let i = 0; i < targets.length; i++) {
       const pin = targets[i];
       setGenProgress({ current: i + 1, total: targets.length, failed });
@@ -972,13 +973,24 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           altText: res.fields.altText,
         };
         updated++;
-      } catch {
+      } catch (err) {
+        // 429 = the per-user AI cost ceiling. Stop the loop immediately: every
+        // remaining Pin in this batch would get the same 429, so continuing would
+        // just report N spurious "failed" rows. Pins already updated keep their copy.
+        if (isRateLimitError(err)) { rateLimited = true; break; }
         failed++;
       }
     }
     commit(next);
     setGenProgress(null);
-    if (updated && failed) toast.error(tr("studioModals.genCopy.updatedAndFailed").replace("{updated}", String(updated)).replace("{failed}", String(failed)));
+    // Rate limit is a "wait a moment", not a failure — neutral toast severity,
+    // matching how /api/generate's user_generation_limit is surfaced in Studio.
+    // Reuses the existing all-locale rate-limit strings.
+    if (rateLimited) {
+      toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
+      if (updated) toast.success(tr("studioModals.genCopy.updated").replace("{n}", String(updated)));
+    }
+    else if (updated && failed) toast.error(tr("studioModals.genCopy.updatedAndFailed").replace("{updated}", String(updated)).replace("{failed}", String(failed)));
     else if (updated) toast.success(tr("studioModals.genCopy.updated").replace("{n}", String(updated)));
     else toast.error(tr("studioModals.genCopy.failedCount").replace("{n}", String(failed)));
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -79,16 +79,39 @@ _MODEL_KEY_TO_MODEL_ID: dict[str, str] = {
     "nano_banana":  GEMINI_IMAGE_MODEL or "gemini-2.5-flash-image",  # legacy alias
 }
 
+class UnknownModelKeyError(ValueError):
+    """Raised when a payload carries a model key outside the supported set."""
+
+
 def _resolve_model_id(model_key: str) -> str:
     """Return the LinAPI model ID for a frontend model key.
 
     Returns "" for gemini_image when no Gemini image model is configured — the
     caller MUST treat an empty id as a configuration error (no silent fallback).
+
+    Raises UnknownModelKeyError for a key outside _MODEL_KEY_TO_MODEL_ID.
+
+    ── WHY THIS RAISES INSTEAD OF FALLING BACK ────────────────────────────────
+    This function used to end with `return GPT_IMAGE_MODEL or "gpt-image-2"`, so
+    ANY unrecognised key silently became a specific PAID model. Combined with the
+    (now fixed) lack of validation on /api/generate's `model_key`, arbitrary
+    client-supplied text chose which provider the account was billed for — and,
+    because _model_supports_image_input() branches on the RESOLVED model id, it
+    also changed what the request could do with image inputs.
+
+    The web route (web/src/app/api/generate/route.ts, Step 2a) is the real trust
+    boundary and now rejects anything outside the closed set. This raise is
+    DEFENSE IN DEPTH: the worker also consumes queued generation_jobs.params rows
+    written by other/older code paths, so it must fail closed on its own rather
+    than trust that every producer validated. An empty/missing key is NOT an error
+    here — callers default it to "gemini_image" before this point.
     """
     key = (model_key or "").strip()
     if key in _MODEL_KEY_TO_MODEL_ID:
         return _MODEL_KEY_TO_MODEL_ID[key]
-    return GPT_IMAGE_MODEL or "gpt-image-2"
+    raise UnknownModelKeyError(
+        f"Unsupported image model key. Supported keys: {', '.join(sorted(_MODEL_KEY_TO_MODEL_ID))}"
+    )
 
 
 def _model_supports_image_input(model_id: str) -> bool:
@@ -1697,7 +1720,17 @@ async def prepare_generation(data: dict) -> dict:
     direction_brief    = str(data.get("directionBrief") or "").strip()
     image_inputs = _normalize_image_inputs(data, product_images, style_ref)
     image_manifest = _build_image_manifest(image_inputs)
-    model_id           = _resolve_model_id(model_key)
+    # Defense in depth. The web route validates model_key at the trust boundary, but
+    # this worker also runs against queued generation_jobs.params written elsewhere
+    # (or by stale code), so an unknown key fails CLOSED here with a structured error
+    # instead of silently resolving to a paid model. Note this is a DIFFERENT failure
+    # from the gemini_image configuration guard below: that one is a valid key with a
+    # missing env var; this one is a key the product does not support at all.
+    try:
+        model_id       = _resolve_model_id(model_key)
+    except UnknownModelKeyError as exc:
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": str(exc),
+               "error_type": "invalid_model_key", "urls": [], "keyword": keyword}}
     category_passed    = category
     inferred_category  = _infer_category(category, output_type, custom_prompt, product_metadata)
     category           = inferred_category
