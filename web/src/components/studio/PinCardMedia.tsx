@@ -122,8 +122,13 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
       <div data-testid="card-generation-failed-placeholder"
         role="img"
         aria-label={tr("studioBoard.card.pinImageUnavailable")}
+        // Soft neutral GRADIENT (theme-aware via CSS vars: light ≈ #F1F5F9→#E2E8F0,
+        // the same gentle gray the earlier Studio used), overlaid with the status
+        // label so the card still reads as "failed / no image" and stays actionable.
         style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center",
-          justifyContent: "center", gap: 6, background: BUI.surface3, color: BUI.textMuted, ...style }}
+          justifyContent: "center", gap: 6,
+          background: `linear-gradient(135deg, ${BUI.surface3}, ${BUI.border})`,
+          color: BUI.textMuted, ...style }}
         className={className}>
         <ImageOff style={{ width: 22, height: 22 }} />
         <span style={{ fontSize: 11, fontWeight: 700 }}>{placeholderCopy}</span>
