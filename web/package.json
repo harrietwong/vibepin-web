@@ -63,7 +63,8 @@
     "scan:secrets": "node ../scripts/scan-secrets.mjs",
     "check:test-registry": "npx tsx scripts/check-test-registry.ts",
     "test:browser": "npx tsx scripts/run-browser-qa.ts",
-    "predeploy:guard": "node scripts/predeploy-guard.mjs"
+    "predeploy:guard": "node scripts/predeploy-guard.mjs",
+    "dev:testdb": "node scripts/dev-testdb.mjs"
   },
   "dependencies": {
     "@paddle/paddle-js": "^1.6.4",
