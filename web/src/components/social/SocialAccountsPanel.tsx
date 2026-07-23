@@ -15,11 +15,13 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
 import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
+import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
 /** All-not-connected fallback so a failed fetch still shows the platform grid. */
 function notConnectedSummaries(): PlatformConnectionSummary[] {
@@ -42,6 +44,27 @@ import { startPinterestConnect, disconnectPinterest } from "@/lib/pinterestClien
 import { isMultiSocialAccountsEnabled } from "@/lib/socialFeatureFlags";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
+
+/**
+ * `?facebook=<status>` OAuth-return consumption (照 PinterestSettingsPanel /
+ * ShopifyTab's `?pinterest=` / `?shopify=` pattern): read via useSearchParams,
+ * toast once, then router.replace to a clean URL so a refresh never re-fires
+ * the toast. Statuses mirror the redirects in
+ * api/auth/facebook/{connect,callback}/route.ts.
+ */
+type OAuthNoticeType = "success" | "error" | "info";
+const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: string }> = {
+  connected: { type: "success", msg: "Facebook connected" },
+  cancelled: { type: "info", msg: "Facebook connection was cancelled. You can try again when ready." },
+  session_expired: { type: "error", msg: "Your session expired — please sign in and retry" },
+  state_expired: { type: "error", msg: "Connection request expired — please try again" },
+  state_mismatch: { type: "error", msg: "Security check failed — please try connecting again" },
+  exchange_failed: { type: "error", msg: "Could not complete Facebook authorization — please try again" },
+  profile_failed: { type: "error", msg: "Facebook authorized but reading your profile failed — try again" },
+  persist_failed: { type: "error", msg: "Facebook authorized but saving the connection failed — try again" },
+  config_error: { type: "error", msg: "Facebook is not configured on the server" },
+  error: { type: "error", msg: "Facebook authorization failed" },
+};
 
 const UI = {
   surface: "var(--app-surface, #161D2E)",
@@ -307,6 +330,8 @@ function DisconnectButton({ provider, busy, onClick }: { provider: SocialProvide
 
 export function SocialAccountsPanel() {
   const { t: tr } = useLocale();
+  const params = useSearchParams();
+  const router = useRouter();
   const [summaries, setSummaries] = useState<PlatformConnectionSummary[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [busyProvider, setBusyProvider] = useState<SocialProvider | null>(null);
@@ -329,6 +354,23 @@ export function SocialAccountsPanel() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // `?facebook=<status>` OAuth-return consumption (see FACEBOOK_CALLBACK_MESSAGES
+  // above) — mirrors PinterestSettingsPanel / ShopifyTab: toast once, clear the
+  // query param via router.replace so a refresh never re-fires it, then refresh
+  // the connection list on success so the card flips to "connected" immediately.
+  useEffect(() => {
+    const flag = params.get("facebook");
+    if (!flag) return;
+    const m = FACEBOOK_CALLBACK_MESSAGES[flag];
+    if (m) {
+      const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
+      notify(m.msg);
+    }
+    router.replace(SETTINGS_SOCIAL_PATH);
+    if (flag === "connected") void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
   async function handleConnect(provider: SocialProvider) {
     setBusyProvider(provider);
