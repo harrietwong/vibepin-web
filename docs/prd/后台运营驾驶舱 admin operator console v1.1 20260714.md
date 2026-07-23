@@ -1,4 +1,4 @@
-# 后台运营驾驶舱 PRD v1.5
+# 后台运营驾驶舱 PRD v1.6
 
 **状态：** P0 已实施并全部验收通过（含浏览器复验 + 二次安全评审）。核心 5 提交已随生产化统一并入 `master`；`feat/admin-cockpit` 为 `master` 超集（持续追合最新 master），**非 merge 净增量待回流**（准确清单以 `git log --no-merges master..feat/admin-cockpit` 为准，§8 提交表列主要项）。**v33/v34/v51/v52 四迁移均已应用生产并逐列复核**。付费置顶只信 `app_metadata.plan`（`isPaid`/`planOf` 均已收窄，各带回归测试）。剩余仅：净增量回流 `master`。详见 §8。
 **日期：** 2026-07-16（初稿 2026-07-14；§8 topology 于 2026-07-17 复核订正）
@@ -211,6 +211,46 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 - [ ] §7.4 验收清单的浏览器实测项（真实数据下的名单/漏斗/Alert Strip 一致性）——首轮目视验收发现的 3 个 P1 已由上述 4 修复解决，待复验
 - [ ] 已知局限：BatchEditDrawer 在 Studio 上下文的 `pinId` 非草稿 ID（join 不上，无害）；事件仅从部署起累积
 
+## 9. §7.4 验收 + 安全评审（2026-07-21~22）
+
+### 9.1 隔离测试环境（不碰生产）
+
+生产库禁止造测试数据，本轮建立独立测试库并把规则固化进 `.claude/CLAUDE.md`「测试环境隔离」章节：
+
+| 环境 | project ref | 凭据文件 |
+|---|---|---|
+| 生产 | `jaxteelkecvlozdrdoog` | `.env.local`（只读探测） |
+| 测试 | `snulmwprsahzqvdbyenc` | `web/.env.test.local` |
+
+任何写操作前必须打印 project ref 并断言 ≠ 生产。已建 `backend/scripts/setup_test_db.py`（按 console 实读表转录 DDL，52 个迁移非线性自洽不整链重放）+ `seed_test_cockpit.py`（17 个 `e2e-cockpit-*@example.test` 合成用户覆盖五类阻塞 + 负向对照 + 付费/伪造付费 + 漏斗五段）。全程复核生产 `pin_generations` 仍 4 行、0 个 e2e 用户。
+
+### 9.2 §7.4 逐项验收结果（浏览器实测 + 独立复核）
+
+用 API 换 session 注入 cookie（绕开登录表单 hydration 竞态）+ 无 bypass 实例（:3100）+ 有 bypass 对照（:3000）验证门禁真实生效：
+
+| 项 | 结果 | 关键证据 |
+|---|---|---|
+| 阻塞消失 | ✅ | 翻转数据后 11→7 行，三类阻塞离开名单 |
+| 空态 | ✅ | 「今日无阻塞 / No blockers today」中英双语 |
+| 0/0 口径 | ✅ | 零发布 cohort 下两发布段均显示「尚无发布数据可归因」 |
+| 独立 SQL 对账 | ✅ | 按 PRD 定义独立写 SQL（非照抄实现），五段 18/12/5/3/1 全对 |
+| 健康 drivers | ✅ | 三档 Healthy/Needs attention/At risk + 具体 why |
+| 已登录普通用户被拒 | ✅ | 重定向离开后台 |
+| 真超管无 bypass 通过 | ✅ | 页面渲染，替代 bypass 假对照 |
+| `/api/admin/*` 负向 | ✅ | 未认证/普通用户 403 无泄露，超管 200 正对照 |
+| AI 采用率 UI 断言 | ✅ | DOM 实测 60%、3/5、2 exact·1 inferred |
+| hydration | 未复现 | dev 下无警告；待 prod build 定向复验后结案（不记「已修复」） |
+
+### 9.3 越权漏洞（浏览器实证 + 已修，见独立分支）
+
+**§7.4「非 super admin 访问被重定向」实测判负**：`superAdmin.ts` 的 `isSuperAdminUser`/`adminRoleOf` 回退信任**用户可自改的** `user_metadata.role`。实证：app_metadata 空、仅自设 `user_metadata.role='super_admin'` 的用户完整进入 `/admin/today`（徽章 "Super Admin only · Internal"，见客户邮箱），`/api/admin/me` 返回 `{"isSuperAdmin":true}`；伪造 `support` 进入 `/admin/generation-logs` 读 9 条日志。同类回退还有 `generationDebugAccess.ts`（完整 prompt 访问权）。**既有测试 `test-shared-pin-details` 曾把该漏洞断言为正确规格**。
+
+Codex 裁决：必须移除，无合理例外（Supabase 官方明确 user_metadata 不可用于授权）；单开 `security/admin-auth-trust-boundary` 分支修，不塞驾驶舱分支。修复内容：两处授权只信 `app_metadata.role` + 邮箱允许名单；`E2E_TEST_MODE` 补上此前缺失的 `NODE_ENV !== production` 硬门；predeploy-guard 补拦 `ENABLE_LOCAL_ADMIN_BYPASS`；25 项安全回归测试（回退证明有效：漏洞放回→25→22 失败→恢复→25/25）。**迁移零风险**：生产 5 用户 0 人靠 metadata.role 授权（全走 `SUPER_ADMIN_EMAILS`），0 测试依赖该路径。详见记忆 `admin-auth-user-metadata-vuln`。
+
+### 9.4 回流顺序（Codex 裁决）
+
+Codex 否决"先回流驾驶舱"：不得把已知可利用漏洞作为已签收版本传播。正确顺序 = **安全修复先入最新 master → 驾驶舱追合含修复的 master → 重跑全部门禁与授权负向测试 → Codex 最终签收 → 再回流驾驶舱**。安全分支合并由持有 master worktree 的会话执行（多会话公约）。
+
 ## 文档历史
 
 | 版本 | 日期 | 变更 |
@@ -221,3 +261,4 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 | v1.3 | 2026-07-17 | §8 topology 复核订正：列全 7 个相关提交（含 `2a4f9ec`/`3d4180b`/`1514eae`），厘清 5 已入 master + 2 仅在分支的真实关系；补 v52 未应用 + 整月 `pin_generations` 静默丢行；清剩余 Paddle 引用 → Creem |
 | v1.4 | 2026-07-18 | 迁移 v33/34/51/52 全部已应用+复核（订正 v1.3 的"未应用"）；追合 master 10 个 Creem 提交（含 `e2543f6` 移除 user_metadata plan 授权）；付费置顶安全修复 `99702ff`（isPaid 只信 app_metadata）+ `planOf` 同类收窄；净增量列表更新 |
 | v1.5 | 2026-07-18 | 三次评审闭环：追合 `dc74a0f`（pricing）；清 §6.1/§7.5/§8 三处残留"读 user_metadata.plan"旧口径；§8 提交表补齐至 9 个真实净增量（原写"7 个"）；补 `planOf` 回归测试 `test-customer360-plan.ts` |
+| v1.6 | 2026-07-22 | 新增 §9：隔离测试库 + §7.4 逐项浏览器验收（独立复核，含按 PRD 定义独立写的漏斗 SQL 对账）+ **越权漏洞实证**（user_metadata.role 自授超管）+ 已修（独立 security 分支）+ Codex 裁决的回流顺序。状态：驾驶舱功能验收通过，签收阻塞于安全修复回流 master + hydration prod-build 复验 |
