@@ -55,16 +55,59 @@ import type { MessageKey } from "@/lib/i18n/messages/en";
 type OAuthNoticeType = "success" | "error" | "info";
 const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: string }> = {
   connected: { type: "success", msg: "Facebook connected" },
+  select_account: { type: "info", msg: "Facebook connected — choose which Instagram account to publish to." },
+  reconnect_required: {
+    type: "error",
+    msg: "Facebook connected, but some required permissions were not granted. Please reconnect and allow all of them.",
+  },
+  no_instagram_account: {
+    type: "error",
+    msg: "Facebook connected, but no Page is linked to an Instagram Business account. Link one in Facebook, then reconnect.",
+  },
   cancelled: { type: "info", msg: "Facebook connection was cancelled. You can try again when ready." },
   session_expired: { type: "error", msg: "Your session expired — please sign in and retry" },
   state_expired: { type: "error", msg: "Connection request expired — please try again" },
   state_mismatch: { type: "error", msg: "Security check failed — please try connecting again" },
   exchange_failed: { type: "error", msg: "Could not complete Facebook authorization — please try again" },
+  permissions_failed: { type: "error", msg: "Facebook authorized but reading your permissions failed — try again" },
   profile_failed: { type: "error", msg: "Facebook authorized but reading your profile failed — try again" },
+  discovery_failed: { type: "error", msg: "Facebook authorized but reading your accounts failed — try again" },
   persist_failed: { type: "error", msg: "Facebook authorized but saving the connection failed — try again" },
   config_error: { type: "error", msg: "Facebook is not configured on the server" },
   error: { type: "error", msg: "Facebook authorization failed" },
 };
+
+/** Human-readable labels for the required Facebook permissions (for the missing-scope hint). */
+const FACEBOOK_SCOPE_LABELS: Record<string, string> = {
+  pages_show_list: "See your Pages",
+  pages_read_engagement: "Read Page details",
+  instagram_basic: "Read your Instagram account",
+  instagram_content_publish: "Publish to Instagram",
+};
+const REQUIRED_FACEBOOK_SCOPES_UI = [
+  "pages_show_list",
+  "pages_read_engagement",
+  "instagram_basic",
+  "instagram_content_publish",
+] as const;
+
+/** Client-safe shape of metadata.facebook produced by socialConnectionStore.sanitizeMetadata. */
+type FacebookMeta = {
+  connectionState?: string | null;
+  facebookUserName?: string | null;
+  selectedPageName?: string | null;
+  selectedInstagramUsername?: string | null;
+  candidatePages?: Array<{
+    pageName?: string | null;
+    instagramUsername?: string | null;
+  }> | null;
+};
+
+function readFacebookMeta(summary: PlatformConnectionSummary): FacebookMeta | null {
+  const account = summary.accounts[0];
+  const meta = account?.metadata as { facebook?: FacebookMeta } | null | undefined;
+  return meta?.facebook ?? null;
+}
 
 const UI = {
   surface: "var(--app-surface, #161D2E)",
@@ -199,6 +242,13 @@ function PlatformCard({
         </div>
       </div>
 
+      {/* Facebook/Instagram discovery detail (display only — Phase 1). Shown whenever
+          there is a stored Facebook row, including degraded/error states so the user
+          sees exactly what is connected and what is missing. */}
+      {summary.provider === "facebook" && summary.accounts.length > 0 && (
+        <FacebookDetails summary={summary} />
+      )}
+
       {/* Capabilities (only when not connected, mirrors the Pinterest empty state) */}
       {!connected && (
         <ul
@@ -302,6 +352,87 @@ function PlatformCard({
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Facebook/Instagram connection detail (display only — Phase 1).
+ *
+ * Renders the discovered Facebook user, Page, Instagram username, granted-vs-
+ * missing permissions, token expiry, and a state hint. It NEVER shows any token —
+ * all data comes from the sanitized metadata.facebook projection (page tokens are
+ * stripped server-side). Publishing is Phase 2 and is intentionally absent here.
+ */
+function FacebookDetails({ summary }: { summary: PlatformConnectionSummary }) {
+  const fb = readFacebookMeta(summary);
+  const account = summary.accounts[0];
+  if (!fb && !account) return null;
+
+  const grantedScopes = new Set(account?.scopes ?? []);
+  const missing = REQUIRED_FACEBOOK_SCOPES_UI.filter(s => !grantedScopes.has(s));
+  const state = fb?.connectionState ?? null;
+  const tokenExpiresAt = account?.tokenExpiresAt ?? null;
+  const expiryLabel = tokenExpiresAt
+    ? new Date(tokenExpiresAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+    : null;
+
+  const rows: Array<{ label: string; value: string }> = [];
+  if (fb?.facebookUserName) rows.push({ label: "Facebook", value: fb.facebookUserName });
+  if (fb?.selectedPageName) rows.push({ label: "Page", value: fb.selectedPageName });
+  if (fb?.selectedInstagramUsername) rows.push({ label: "Instagram", value: `@${fb.selectedInstagramUsername}` });
+  if (expiryLabel) rows.push({ label: "Access expires", value: expiryLabel });
+
+  return (
+    <div
+      data-testid="facebook-connection-detail"
+      style={{
+        marginTop: 14,
+        padding: "12px 14px",
+        borderRadius: 10,
+        background: UI.surface2,
+        border: `1px solid ${UI.border}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      {rows.map(r => (
+        <div key={r.label} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+          <span style={{ color: UI.textSec }}>{r.label}</span>
+          <span style={{ color: UI.text, fontWeight: 600, textAlign: "right", minWidth: 0, wordBreak: "break-word" }}>
+            {r.value}
+          </span>
+        </div>
+      ))}
+
+      {state === "no_instagram_account" && (
+        <p style={{ margin: 0, fontSize: 11.5, color: UI.warning, lineHeight: 1.5 }}>
+          Connected to Facebook, but no Page is linked to an Instagram Business account. Link an Instagram
+          Business account to a Page in Facebook, then reconnect.
+        </p>
+      )}
+
+      {(state === "reconnect_required" || missing.length > 0) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <p style={{ margin: 0, fontSize: 11.5, color: UI.warning, lineHeight: 1.5 }}>
+            Missing required permissions — reconnect and allow all of them:
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            {missing.map(s => (
+              <li key={s} style={{ fontSize: 11.5, color: UI.textSec }}>
+                {FACEBOOK_SCOPE_LABELS[s] ?? s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {fb?.candidatePages && fb.candidatePages.length > 1 && (
+        <p style={{ margin: 0, fontSize: 11.5, color: UI.blue, lineHeight: 1.5 }}>
+          {fb.candidatePages.length} Instagram accounts available — pick one to publish to.
+        </p>
+      )}
+    </div>
   );
 }
 

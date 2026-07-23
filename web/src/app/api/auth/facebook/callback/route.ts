@@ -7,11 +7,23 @@
  *   2. Verify `state` against the sealed cookie AND the current session user.
  *   3. Clear the OAuth cookies (single use) regardless of outcome.
  *   4. Exchange the code for tokens (short-lived → long-lived) server-side.
- *   5. Fetch the Facebook profile (id + name) for display.
- *   6. Encrypt + persist into social_connections (provider='facebook').
- *   7. Redirect back to returnTo (or the social settings page) with a status flag.
+ *   5. Verify the ACTUALLY-granted permissions (/me/permissions). Missing any of
+ *      the four required business scopes → store 'reconnect_required' (never mark
+ *      active) and redirect ?facebook=reconnect_required.
+ *   6. Fetch the Facebook user (id + name) and discover IG-linked Pages
+ *      (/me/accounts). Zero eligible Pages → 'no_instagram_account'
+ *      (?facebook=no_instagram_account). We NEVER bypass with a hard-coded id.
+ *   7. Encrypt + persist into social_connections (provider='facebook') incl. the
+ *      per-Page page-scoped tokens (encrypted) for Phase 2 IG publishing.
+ *   8. Redirect back to returnTo (or the social settings page) with a status flag.
  *
- * On success the redirect carries `?facebook=connected`.
+ * On success the redirect carries `?facebook=connected` (single eligible Page,
+ * auto-selected) or `?facebook=select_account` (multiple — user must choose).
+ *
+ * SELECTION POLICY: with exactly ONE eligible Page we select it (there is nothing
+ * to choose). With several we store them all as candidates and DO NOT auto-pick
+ * index 0 — the user selects later. Phase 1 persists the candidate list; the
+ * selection-landing UI is a follow-up.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -23,9 +35,14 @@ import {
   readSealedReturnTo,
   safeReturnTo,
 } from "@/lib/server/facebook/oauthState";
-import { exchangeCodeForTokens, fetchFacebookProfile } from "@/lib/server/facebook/service";
+import {
+  exchangeCodeForTokens,
+  fetchFacebookUser,
+  fetchGrantedPermissions,
+  discoverInstagramAccounts,
+} from "@/lib/server/facebook/service";
 import { upsertFacebookConnection } from "@/lib/server/facebook/connectionStore";
-import { FACEBOOK_SCOPES } from "@/lib/server/facebook/config";
+import { missingRequiredScopes } from "@/lib/server/facebook/config";
 
 export const dynamic = "force-dynamic";
 
@@ -93,31 +110,112 @@ export async function GET(req: NextRequest) {
     return redirectAfterOAuth(req, "exchange_failed", verdict.returnTo);
   }
 
-  let profile;
+  // ── Verify granted permissions ──────────────────────────────────────────────
+  // Facebook can return a code even if the user unchecked some permissions. Read
+  // what was ACTUALLY granted and gate on the four required business scopes.
+  let grantedScopes: string[];
   try {
-    profile = await fetchFacebookProfile(tokens.accessToken);
+    grantedScopes = await fetchGrantedPermissions(tokens.accessToken);
   } catch (err) {
-    console.error("[Facebook OAuth Callback] profile fetch failed:", (err as Error).message);
+    console.error("[Facebook OAuth Callback] permissions fetch failed:", (err as Error).message);
+    return redirectAfterOAuth(req, "permissions_failed", verdict.returnTo);
+  }
+
+  // Fetch the connecting Facebook user (id + name) for display + row identity.
+  let fbUser;
+  try {
+    fbUser = await fetchFacebookUser(tokens.accessToken);
+  } catch (err) {
+    console.error("[Facebook OAuth Callback] user fetch failed:", (err as Error).message);
     return redirectAfterOAuth(req, "profile_failed", verdict.returnTo);
   }
+
+  const missing = missingRequiredScopes(grantedScopes);
+  if (missing.length > 0) {
+    // Not usable — persist granted scopes + reconnect_required, never mark active.
+    // The frontend reads metadata to show exactly which permissions are missing.
+    try {
+      await upsertFacebookConnection(uid, {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresAt: tokens.accessTokenExpiresAt,
+        scopes: grantedScopes,
+        accountId: fbUser.id,
+        accountName: fbUser.name,
+        state: "reconnect_required",
+        pages: [],
+        selected: null,
+      });
+    } catch (persistErr) {
+      console.error("[Facebook OAuth Callback] persist (reconnect) failed:", (persistErr as Error).message);
+      return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
+    }
+    return redirectAfterOAuth(req, "reconnect_required", verdict.returnTo);
+  }
+
+  // ── Discover Instagram-linked Pages ─────────────────────────────────────────
+  let pages;
+  try {
+    pages = await discoverInstagramAccounts(tokens.accessToken);
+  } catch (err) {
+    console.error("[Facebook OAuth Callback] account discovery failed:", (err as Error).message);
+    return redirectAfterOAuth(req, "discovery_failed", verdict.returnTo);
+  }
+
+  if (pages.length === 0) {
+    // Scopes are fine, but no Page has a linked IG Business account. We NEVER
+    // bypass this with a known id — the user must link an IG account to a Page.
+    try {
+      await upsertFacebookConnection(uid, {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresAt: tokens.accessTokenExpiresAt,
+        scopes: grantedScopes,
+        accountId: fbUser.id,
+        accountName: fbUser.name,
+        state: "no_instagram_account",
+        pages: [],
+        selected: null,
+      });
+    } catch (persistErr) {
+      console.error("[Facebook OAuth Callback] persist (no-ig) failed:", (persistErr as Error).message);
+      return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
+    }
+    return redirectAfterOAuth(req, "no_instagram_account", verdict.returnTo);
+  }
+
+  // One eligible Page → select it (nothing to choose). Several → store all as
+  // candidates and DO NOT auto-pick index 0; the user selects later.
+  const single = pages.length === 1 ? pages[0] : null;
+  const selected = single
+    ? {
+        pageId: single.pageId,
+        pageName: single.pageName,
+        instagramUserId: single.instagram.id,
+        instagramUsername: single.instagram.username,
+      }
+    : null;
 
   try {
     await upsertFacebookConnection(uid, {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresAt: tokens.accessTokenExpiresAt,
-      // Record the scopes we requested (Facebook returns the granted set only via a
-      // separate /me/permissions call, wired later if Page publishing needs it).
-      scopes: [...FACEBOOK_SCOPES],
-      accountId: profile.id,
-      accountName: profile.name,
+      scopes: grantedScopes,
+      accountId: fbUser.id,
+      accountName: fbUser.name,
+      // A single selected Page = a usable connection. Multiple = still connected
+      // (scopes + IG present) but pending the user's account choice.
+      state: "connected",
+      pages,
+      selected,
     });
   } catch (persistErr) {
     console.error("[Facebook OAuth Callback] persist failed:", (persistErr as Error).message);
     return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
   }
 
-  return redirectAfterOAuth(req, "connected", verdict.returnTo);
+  return redirectAfterOAuth(req, selected ? "connected" : "select_account", verdict.returnTo);
 }
 
 export async function OPTIONS() {
