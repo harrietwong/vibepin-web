@@ -20,7 +20,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { getSourceBadge, getStatusBadge, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
+import { getSourceBadge, getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
@@ -302,7 +302,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // GENERATION failure (AI Pin never finished) — same lifecycle value, different
   // recovery paths (mirrors handleTryAgain's own branch upstream). Computed before
   // `status` so the badge override below can use it.
-  const isPublishFailure = !!draft.publishError?.trim();
+  const isPublishFailure = isActionablePublishFailure(draft);
   const failureCategory = draft.errorCategory ?? (isPublishFailure ? mapPublishErrorToCategory(draft.publishErrorCode, draft.publishError) : undefined);
 
   const status = getStatusBadge(draft);

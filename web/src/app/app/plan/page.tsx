@@ -82,7 +82,7 @@ import {
 } from "@/lib/weeklyPlanStats";
 import { markDataReady } from "@/lib/navTiming";
 import { logPlanHydrated, logPlanTiming } from "@/lib/planLoadTiming";
-import { countPublishFailures, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+import { countPublishFailures } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 
 // ── Lazily loaded components ─────────────────────────────────────────────────
@@ -100,6 +100,8 @@ const SmartScheduleDrawer = dynamic(() =>
   import("@/components/plan/SmartScheduleDrawer").then(m => m.SmartScheduleDrawer), { ssr: false });
 const PlanListView = dynamic(() =>
   import("@/components/plan/PlanListView").then(m => m.PlanListView), { ssr: false });
+// Type-only import (erased at build) — lets Plan seed the List view's status filter.
+import type { ListStatus } from "@/components/plan/PlanListView";
 const BatchEditDrawer = dynamic(() =>
   import("@/components/studio/BatchEditDrawer").then(m => m.BatchEditDrawer), { ssr: false });
 
@@ -1516,7 +1518,17 @@ function PlanPageInner() {
   const catDef   = CATEGORIES.find(c => c.id === category);
   const catLabel = isAllCategories ? tr("plan.header.allCategories") : (catDef?.label ?? category);
 
-  const [viewMode, setViewMode] = useState<ViewMode>("calendar");
+  const deepLinkView = searchParams.get("view");
+  const deepLinkStatus = searchParams.get("status");
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    deepLinkView === "list" || deepLinkView === "calendar" ? deepLinkView : "calendar",
+  );
+  // Mount-seed for PlanListView's status filter. `token` forces a remount so re-clicking
+  // "N failed" (openFailedList) re-applies the Failed filter even if the user had since
+  // changed the dropdown. A ?status=failed deep link seeds it on first render.
+  const [listStatusSeed, setListStatusSeed] = useState<{ status: ListStatus | undefined; token: number }>(
+    () => ({ status: deepLinkStatus === "failed" ? "Failed" : undefined, token: 0 }),
+  );
   const [calendarScope, setCalendarScope] = useState<CalendarScope>("week");
   const [calendarEditDraft, setCalendarEditDraft] = useState<PinDraft | null>(null);
   const [weekOffset, setWeekOffset]   = useState(0);
@@ -2097,15 +2109,23 @@ function PlanPageInner() {
     return () => window.removeEventListener(pinDraftStore.DRAFT_STORE_EVENT, refreshFailureCount);
   }, []);
   const { visibleCount: failureBannerCount, dismiss: dismissFailureBanner } = useFailureBannerDismiss(publishFailureCount);
-  const openFailedInStudio = useCallback(() => {
+  // Review-failures entry (Banner CTA + stats-bar "N failed"). Previously this hard-
+  // navigated to /app/studio, but non-board-source failures (Plan drawer / cron fails)
+  // never render on the Create Pins board, so the user landed on an empty view. Instead
+  // we stay in Plan and switch to the List view filtered to Failed — where EVERY source's
+  // failed drafts appear and each row opens the Retry-capable details drawer. The
+  // ?view=list&status=failed query param makes the view survive a reload.
+  const openFailedList = useCallback(() => {
+    setViewMode("list");
+    // Bump the token so PlanListView remounts (its status filter is mount-seeded), even
+    // when we're already in list view — so the filter reliably lands on Failed.
+    setListStatusSeed(s => ({ status: "Failed", token: s.token + 1 }));
     try {
-      window.sessionStorage.setItem("vp:studio:filter", "failed");
-      // Failed-view sub-filter default (PRD §4): both the Banner CTA and the stats-bar
-      // "N failed" click land on "Publish failures" (matches this count's own source —
-      // countPublishFailures — so the number the user just saw equals the list they land on).
-      window.sessionStorage.setItem(FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH);
-    } catch { /* storage unavailable — studio still defaults sanely */ }
-    window.location.href = "/app/studio";
+      const url = new URL(window.location.href);
+      url.searchParams.set("view", "list");
+      url.searchParams.set("status", "failed");
+      window.history.replaceState({}, "", url.toString());
+    } catch { /* URL update is best-effort — the in-memory view switch already happened */ }
   }, []);
 
   // ── Dev-only Plan identity diagnostics (Issue B) ──────────────────────────────
@@ -2164,7 +2184,7 @@ function PlanPageInner() {
   return (
     <div data-testid="weekly-plan-page" style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--app-bg)" }}>
 
-      <FailureBanner count={failureBannerCount} onReview={openFailedInStudio} onDismiss={dismissFailureBanner} />
+      <FailureBanner count={failureBannerCount} onReview={openFailedList} onDismiss={dismissFailureBanner} />
 
       {/* ── Header ── */}
       <div style={{ background: "var(--app-surface)", flexShrink: 0 }}>
@@ -2240,7 +2260,7 @@ function PlanPageInner() {
         </div>
 
         {/* Compact summary bar */}
-        <CompactSummaryBar stats={planStats} onFailedClick={openFailedInStudio} />
+        <CompactSummaryBar stats={planStats} onFailedClick={openFailedList} />
 
         {/* View mode + calendar controls */}
         <div style={{ padding: "4px 20px 8px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -2357,7 +2377,11 @@ function PlanPageInner() {
         ) : viewMode === "list" ? (
           // List view — compact publishing management table (Calendar | List IA).
           <PlanListView
+            // Remount when a failures entry re-seeds the status filter (token bump) so the
+            // Failed filter reliably re-applies even if the user had changed the dropdown.
+            key={`plan-list-${listStatusSeed.token}`}
             category={category}
+            initialStatus={listStatusSeed.status}
             handlers={{
               onOpenDetails: setCalendarEditDraft,
               onReschedule:  setCalendarEditDraft,
