@@ -1,16 +1,17 @@
 import { test, expect, type Page } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
 /**
  * Create Pins initial-state UI — compact composer + generation feed fallback.
  * Run: pnpm test:e2e studio-initial-state.spec.ts
  */
 
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true }); // guarded: never production
 
 async function setupMocks(page: Page) {
   // Return empty arrays for all Supabase table reads so the picker can render cleanly.
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async (route) => {
-    if (route.request().method() !== "GET") { await route.continue(); return; }
+    if (route.request().method() !== "GET") { await route.abort(); return; }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   await page.route(`${SUPABASE_URL}/auth/**`, async (route) => { await route.continue(); });

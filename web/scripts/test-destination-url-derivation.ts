@@ -13,6 +13,7 @@ import {
   deriveDestinationUrlForProduct,
   isAutoManaged,
   markDestinationUrlManual,
+  reconcileProtectedUrl,
   type DestinationUrlState,
 } from "../src/lib/studio/destinationUrlDerivation";
 import type { CanonicalProductSelection } from "../src/lib/studio/productSelection";
@@ -179,6 +180,56 @@ test("attribution query parameters are preserved verbatim", () => {
   };
   const change = deriveDestinationUrlForProduct({}, affiliate);
   assert.equal(change?.destinationUrl, "https://shop.example/p/7?tag=aff-20&ref=vibepin");
+});
+
+// ── reconcileProtectedUrl: the two-copy conflict that recurred three times ──────
+// Round 4 protected the board copy but overwrote the session; round 5 protected both
+// stores but let the form resurrect the value on Save; round 6 dropped the field but
+// still left a stale form value. These assert the ACTUAL conflicting states, which
+// the source-structure tests never executed.
+
+const MANUAL: DestinationUrlState = { destinationUrl: "https://mine.example/lp", destinationUrlSource: "manual", destinationUrlTouched: true };
+const AUTO: DestinationUrlState = { destinationUrl: "https://acme.example/products/a", destinationUrlSource: PRODUCT_DERIVED_URL_SOURCE };
+const EMPTY: DestinationUrlState = {};
+
+test("reconcile: both auto-managed → null (fill proceeds)", () => {
+  assert.equal(reconcileProtectedUrl(AUTO, AUTO), null);
+  assert.equal(reconcileProtectedUrl(EMPTY, EMPTY), null);
+  assert.equal(reconcileProtectedUrl(null, EMPTY), null, "brand-new session Pin, no board draft");
+});
+
+test("reconcile: board manual, session stale-auto → board value wins on BOTH", () => {
+  const r = reconcileProtectedUrl(MANUAL, AUTO);
+  assert.ok(r, "must protect");
+  assert.equal(r!.url, "https://mine.example/lp", "the manual board URL is authoritative");
+  assert.equal(r!.source, "manual");
+  assert.equal(r!.boardManual, true);
+  assert.equal(r!.sessionManual, false);
+});
+
+test("reconcile: session manual, board auto → SESSION value wins (not the auto board)", () => {
+  // This is the reverse conflict round 6 got wrong: it always preferred the board.
+  const r = reconcileProtectedUrl(AUTO, MANUAL);
+  assert.ok(r, "must protect");
+  assert.equal(r!.url, "https://mine.example/lp", "the manual SESSION URL is authoritative, not the auto board");
+  assert.equal(r!.boardManual, false);
+  assert.equal(r!.sessionManual, true);
+});
+
+test("reconcile: session manual, NO board draft → session value protected", () => {
+  const r = reconcileProtectedUrl(null, MANUAL);
+  assert.ok(r, "a session-only Pin's manual URL must still be protected");
+  assert.equal(r!.url, "https://mine.example/lp");
+  assert.equal(r!.sessionManual, true);
+});
+
+test("reconcile: both manually edited but DIFFERENT → board is source of truth", () => {
+  const sessionManual: DestinationUrlState = { destinationUrl: "https://mine.example/session", destinationUrlSource: "manual", destinationUrlTouched: true };
+  const boardManual: DestinationUrlState = { destinationUrl: "https://mine.example/board", destinationUrlSource: "manual", destinationUrlTouched: true };
+  const r = reconcileProtectedUrl(boardManual, sessionManual);
+  assert.equal(r!.url, "https://mine.example/board", "publish reads the board, so it wins a two-manual conflict");
+  assert.equal(r!.boardManual, true);
+  assert.equal(r!.sessionManual, true);
 });
 
 console.log(`\nDestination URL derivation: ${passed} passed, ${failed} failed`);

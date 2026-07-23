@@ -106,6 +106,39 @@ export function clearDestinationUrlForUnlink(
 }
 
 /**
+ * When an automated URL fill lands, the Pin has TWO existing copies of the URL —
+ * the session Pin and its board draft — and either (or both) may be a hand-edited
+ * value the fill must not clobber. They can also disagree. This computes the single
+ * authoritative value every surface must be reconciled to.
+ *
+ * Extracted from the studio page handler precisely because the bug recurred three
+ * times there: each attempt protected one surface and let another keep the stale
+ * automated value, which Save then wrote back. As a pure function the conflicting
+ * states are directly testable.
+ *
+ * Returns:
+ *   - `null` when neither copy is manual → the automated fill proceeds unchanged;
+ *   - otherwise the authoritative manual `{ url, source }`, plus which side owned it,
+ *     so the caller sets the touched flag on the right surface.
+ */
+export function reconcileProtectedUrl(
+  board: DestinationUrlState | null,
+  session: DestinationUrlState | null,
+): { url: string | undefined; source: string | undefined; boardManual: boolean; sessionManual: boolean } | null {
+  const boardManual = !!board && !isAutoManaged(board);
+  const sessionManual = !!session && !isAutoManaged(session);
+  if (!boardManual && !sessionManual) return null;
+  // Both independently manual → the board draft is the publish-time source of truth.
+  const owner = boardManual ? board! : session!;
+  return {
+    url: owner.destinationUrl,
+    source: owner.destinationUrlSource,
+    boardManual,
+    sessionManual,
+  };
+}
+
+/**
  * Record a manual edit. Called from every hand-entry point so the touched flag is
  * set consistently — the field's provenance becomes "manual" and automation stops
  * touching it from here on.

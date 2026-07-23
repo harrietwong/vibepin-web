@@ -1,40 +1,14 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
+import { resolveSupabaseTarget } from "./supabaseTarget";
+
 /**
- * The Supabase origin these tests intercept. It MUST match whatever the app under
- * test is actually configured with, or every page.route() pattern below silently
- * fails to match and the "mocked" tests hit a real database instead.
- *
- * Reads NEXT_PUBLIC_SUPABASE_URL so the suite follows the environment (the isolated
- * TEST project during QA).
- *
- * This deliberately FAILS rather than defaulting. It previously fell back to the
- * production URL, which meant an unset env silently pointed a mutation-capable suite
- * (the catch-all route below lets non-GET requests through) at the production
- * project — the precise outcome the isolation rule exists to prevent. A missing env
- * is a setup error, not something to paper over with a production default.
+ * The Supabase origin these tests intercept. Resolved through the shared guard so
+ * production can never be the target and an unset env fails loudly rather than
+ * defaulting. allowMock: specs using this helper are pure route-interception mocks,
+ * so with no env they intercept the mock placeholder origin.
  */
-const PRODUCTION_SUPABASE_REF = "jaxteelkecvlozdrdoog";
-
-function resolveSupabaseUrl(): string {
-  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  if (!raw) {
-    throw new Error(
-      "E2E: NEXT_PUBLIC_SUPABASE_URL is not set. Point it at the TEST Supabase project " +
-        "(web/.env.test.local) before running the browser suite — there is no default.",
-    );
-  }
-  const url = raw.replace(/\/$/, "");
-  if (url.includes(PRODUCTION_SUPABASE_REF)) {
-    throw new Error(
-      `E2E: refusing to run against the PRODUCTION Supabase project (${PRODUCTION_SUPABASE_REF}). ` +
-        "This suite can issue writes; use the isolated TEST project instead.",
-    );
-  }
-  return url;
-}
-
-export const SUPABASE_URL = resolveSupabaseUrl();
+export const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true });
 
 export const TINY_RED_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==",
@@ -216,8 +190,10 @@ export async function setupStudioMocks(page: Page, opts: StudioMockOptions = {})
   });
 
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async route => {
+    // ABORT writes rather than continue(): an unmocked mutation must never escape to
+    // a real origin. GETs return an empty result set.
     if (route.request().method() !== "GET") {
-      await route.continue();
+      await route.abort();
       return;
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });

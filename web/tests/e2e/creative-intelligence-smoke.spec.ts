@@ -1,4 +1,5 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
 /**
  * Creative Intelligence — real-browser E2E smoke (Phase A/B/C + WP1/WP2).
@@ -27,7 +28,12 @@ import { test, expect, type Page, type BrowserContext } from "@playwright/test";
  */
 
 // ── Fake session (see header) ────────────────────────────────────────────────
-const SUPABASE_REF = "jaxteelkecvlozdrdoog";
+// The auth cookie is `sb-<ref>-auth-token` where <ref> MUST be the ref the app was
+// built with (it reads exactly that cookie). Deriving it from the resolved target —
+// rather than hardcoding production — keeps the fake session valid against the test
+// project and is guarded from ever being production.
+const SUPABASE_REF =
+  resolveSupabaseTarget({ allowMock: true }).match(/https:\/\/([a-z0-9]+)\.supabase\.co/)?.[1] ?? "e2e-mock";
 const AUTH_COOKIE_NAME = `sb-${SUPABASE_REF}-auth-token`;
 const FAKE_USER_ID = "e2e00000-0000-4000-8000-0000000000c1";
 const FAKE_EMAIL = "creative-intel-smoke@example.com";

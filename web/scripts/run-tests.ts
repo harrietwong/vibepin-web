@@ -16,7 +16,7 @@
  * new test cannot quietly end up running nowhere.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { CORE, STUDIO, PLAN } from "./test-registry";
 
 const GROUPS: Record<string, string[]> = { core: CORE, studio: STUDIO, plan: PLAN };
@@ -43,59 +43,94 @@ type Result = { script: string; passed: boolean; durationMs: number; tail?: stri
 /** Lines of a failing script's output to reprint beside the summary. */
 const FAILURE_TAIL_LINES = 25;
 
-const results: Result[] = [];
-
-for (const script of scripts) {
+/**
+ * Run one script with async spawn, teeing its output live AND retaining only the
+ * last N non-empty lines in a bounded ring buffer.
+ *
+ * Why not spawnSync with capture: spawnSync buffers each pipe into memory with a
+ * 1 MiB default maxBuffer. A chatty but PASSING script that exceeds it is killed
+ * with SIGTERM (status null, error.code ENOBUFS) and would be reported as FAILED —
+ * turning "verbose test" into "spurious failure". Raising maxBuffer only moves the
+ * cliff. Streaming with a ring buffer has no ceiling: we tee every chunk to our own
+ * stdout as it arrives (so a live run still scrolls in real time) and keep just the
+ * tail we need for the end-of-run diagnostic.
+ */
+function runOne(script: string): Promise<Result> {
   const start = Date.now();
-  console.log(`\n>>> RUNNING ${script}`);
   const isWindows = process.platform === "win32";
-  // Capture (not "inherit") so a failure's output can be REPRINTED next to the
-  // summary. With 73 scripts streaming live, a failure's cause scrolls thousands of
-  // lines away from the summary line, which is how an ENOSPC ("no space left on
-  // device") failure went undiagnosed across two review rounds — the summary named
-  // the failing scripts but never showed why. Passing output is still streamed
-  // through so a live run looks unchanged.
-  const proc = spawnSync("npx", ["tsx", script], {
-    encoding: "utf8",
-    shell: isWindows,
+  const child = spawn("npx", ["tsx", script], { shell: isWindows });
+
+  const ring: string[] = []; // last FAILURE_TAIL_LINES non-empty lines
+  let carry = ""; // partial line spanning chunk boundaries
+  const absorb = (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    process.stdout.write(text); // live tee — unchanged real-time experience
+    const lines = (carry + text).split(/\r?\n/);
+    carry = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line) continue;
+      ring.push(line);
+      if (ring.length > FAILURE_TAIL_LINES) ring.shift();
+    }
+  };
+  child.stdout.on("data", absorb);
+  child.stderr.on("data", absorb);
+
+  return new Promise<Result>(resolve => {
+    const finish = (passed: boolean) => {
+      if (carry) { ring.push(carry); if (ring.length > FAILURE_TAIL_LINES) ring.shift(); }
+      resolve({
+        script,
+        passed,
+        durationMs: Date.now() - start,
+        tail: passed ? undefined : ring.join("\n"),
+      });
+    };
+    child.on("error", err => {
+      process.stderr.write(`run-tests: failed to start ${script}: ${err.message}\n`);
+      finish(false);
+    });
+    child.on("close", code => finish(code === 0));
   });
-  const durationMs = Date.now() - start;
-  const passed = proc.status === 0 && !proc.error;
-  const combined = `${proc.stdout ?? ""}${proc.stderr ?? ""}`;
-  process.stdout.write(combined);
-  if (proc.error) {
-    console.error(`run-tests: failed to start ${script}: ${proc.error.message}`);
-  }
-  const tail = passed
-    ? undefined
-    : combined.split(/\r?\n/).filter(Boolean).slice(-FAILURE_TAIL_LINES).join("\n");
-  results.push({ script, passed, durationMs, tail });
 }
 
-const failed = results.filter((r) => !r.passed);
-const passedCount = results.length - failed.length;
+async function main(): Promise<void> {
+  const results: Result[] = [];
 
-console.log("\n=== Test Summary ===");
-for (const r of results) {
-  const tag = r.passed ? "PASS" : "FAIL";
-  console.log(`${tag}  ${r.script}  (${r.durationMs}ms)`);
-}
-console.log(`\n${passedCount}/${results.length} passed, ${failed.length} failed.`);
-
-if (failed.length > 0) {
-  console.log("\nFailed scripts:");
-  for (const r of failed) {
-    console.log(`  - ${r.script}`);
+  // Sequential (await in a loop), preserving the previous one-at-a-time ordering so
+  // interleaving of live output stays readable and resource use is bounded.
+  for (const script of scripts) {
+    console.log(`\n>>> RUNNING ${script}`);
+    results.push(await runOne(script));
   }
-  // Reprint WHY each one failed, right here at the end. Without this the reason is
-  // only discoverable by rerunning the script by hand — and a rerun can pass, which
-  // makes an environmental failure look like flaky logic.
-  console.log("\n=== Failure output (last " + FAILURE_TAIL_LINES + " lines each) ===");
-  for (const r of failed) {
-    console.log(`\n--- ${r.script} ---`);
-    console.log(r.tail?.trim() || "(no output captured)");
+
+  const failed = results.filter((r) => !r.passed);
+  const passedCount = results.length - failed.length;
+
+  console.log("\n=== Test Summary ===");
+  for (const r of results) {
+    const tag = r.passed ? "PASS" : "FAIL";
+    console.log(`${tag}  ${r.script}  (${r.durationMs}ms)`);
   }
-  process.exit(1);
+  console.log(`\n${passedCount}/${results.length} passed, ${failed.length} failed.`);
+
+  if (failed.length > 0) {
+    console.log("\nFailed scripts:");
+    for (const r of failed) {
+      console.log(`  - ${r.script}`);
+    }
+    // Reprint WHY each one failed, right here at the end. Without this the reason is
+    // only discoverable by rerunning the script by hand — and a rerun can pass, which
+    // makes an environmental failure look like flaky logic.
+    console.log("\n=== Failure output (last " + FAILURE_TAIL_LINES + " lines each) ===");
+    for (const r of failed) {
+      console.log(`\n--- ${r.script} ---`);
+      console.log(r.tail?.trim() || "(no output captured)");
+    }
+    process.exit(1);
+  }
+
+  process.exit(0);
 }
 
-process.exit(0);
+void main();

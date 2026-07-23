@@ -6,6 +6,9 @@ export const STORAGE_STATE = path.join(process.cwd(), "tests", ".auth", "user.js
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // Import-independent isolation guard: refuses to start if the app is pointed at the
+  // production Supabase project, no matter which spec runs or what it imports.
+  globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -24,17 +27,27 @@ export default defineConfig({
     video: "on-first-retry",
   },
   projects: [
-    // auth.setup.ts signs in once and writes tests/.auth/user.json. It was previously
-    // in testIgnore and no project referenced storageState, so the file was produced
-    // and then never consumed: `npm run test:e2e` opened an anonymous context and the
-    // authenticated specs only passed under a hand-configured local invocation. Wiring
-    // it as a dependency makes an authenticated run reproducible from this ref alone.
+    // The DEFAULT project is ANONYMOUS — it must stay that way. Almost every spec
+    // either performs its own login, mocks the session via E2E_TEST_MODE, or is
+    // deliberately anonymous (e.g. pricing-purchase-intent's "routes to signup"
+    // cases). A previous round applied storageState to every Chromium spec, which
+    // silently pre-authenticated the anonymous ones and inverted their meaning.
+    {
+      name: "chromium",
+      testIgnore: [/auth\.setup\.ts/, /\.auth\.spec\.ts$/],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    // Opt-in authenticated lane. auth.setup.ts signs in once and writes
+    // tests/.auth/user.json; only specs named *.auth.spec.ts consume it. This keeps
+    // a real authenticated run reproducible from this ref (via the setup dependency)
+    // without touching the anonymous coverage above.
     {
       name: "setup",
       testMatch: /auth\.setup\.ts/,
     },
     {
-      name: "chromium",
+      name: "authenticated",
+      testMatch: /\.auth\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], storageState: STORAGE_STATE },
       dependencies: ["setup"],
     },

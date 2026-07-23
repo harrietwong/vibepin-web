@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
 /**
  * Shopify product picker E2E (WP8, §9 of the Phase 1 implementation plan).
@@ -21,7 +22,7 @@ import { test, expect, type Page } from "@playwright/test";
  * Run:  npx playwright test tests/e2e/shopify-picker.spec.ts
  */
 
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true }); // guarded: never production
 const SHOPIFY_FLAG_KEY = "vp:shopify_integration";
 const DRAFTS_KEY = "vp:pin_drafts:v1";
 
@@ -146,7 +147,7 @@ async function setupBaseMocks(page: Page, opts: { connected?: boolean } = {}) {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async route => {
-    if (route.request().method() !== "GET") { await route.continue(); return; }
+    if (route.request().method() !== "GET") { await route.abort(); return; }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   await page.route("https://placehold.co/**", async route => {

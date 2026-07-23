@@ -171,39 +171,35 @@ test("retry restores the model even with ZERO references", () => {
   assert.ok(/KNOWN_MODELS\.includes\(snapshotModel\)/.test(src), "an unknown/blank persisted model must fall back");
 });
 
-test("board protection is decided BEFORE either copy is written", () => {
-  // Checking it only before the BOARD write left the session copy overwritten — two
-  // divergent URLs instead of one wrong one, and publishing reads the session copy.
+test("URL protection delegates to reconcileProtectedUrl and reconciles ALL surfaces", () => {
+  // The conflicting-copy LOGIC is unit-tested in test-destination-url-derivation
+  // (reconcileProtectedUrl); this only asserts the handler wires it correctly, since
+  // the previous three regressions were all in the WIRING (protecting some surfaces
+  // and not others), never in a formula. Three surfaces must move together: the
+  // visible form, the session (top level + draft), and the board draft.
   const src = read("app/app/studio/page.tsx");
-  // Slice to the function's real end, never a fixed byte count — a magic window
-  // silently stops covering the code it asserts as the function grows.
   const start = src.indexOf("function handleMetadataChange");
   const block = src.slice(start, src.indexOf("\n  }", src.indexOf("setMetadataFormTouched(t =>", start)));
-  const guardAt = block.indexOf("const boardIsManual");
-  const sessionWriteAt = block.indexOf("updatePinMetadata(pinDetailView.sessionId");
-  assert.ok(guardAt > 0 && sessionWriteAt > 0, "both the guard and the session write must exist");
-  assert.ok(guardAt < sessionWriteAt, "the guard must be computed BEFORE the session write");
-  assert.ok(/isAutomatedUrl && !boardIsManual/.test(block), "the session patch must respect board protection");
 
-  // The ordering above was ALREADY satisfied while the bug was live: the guard sat
-  // before the store writes but AFTER setMetadataForm, so the visible form took the
-  // automated URL and the next Save (which writes metadataForm.destinationUrl into
-  // both stores) destroyed the manual one. Assert the form update is guarded too.
+  const reconcileAt = block.indexOf("reconcileProtectedUrl(");
   const formWriteAt = block.indexOf("setMetadataForm(prev =>");
-  assert.ok(formWriteAt > 0, "the form write must exist");
-  assert.ok(
-    guardAt < formWriteAt,
-    "protection must be decided BEFORE the visible form is updated, or Save resurrects the automated URL",
-  );
+  const sessionWriteAt = block.indexOf("updatePinMetadata(pinDetailView.sessionId");
+  const boardWriteAt = block.indexOf("pinDraftStore.updateDraft(boardDraft.id");
+
+  assert.ok(reconcileAt > 0, "must delegate to reconcileProtectedUrl");
+  assert.ok(formWriteAt > 0 && sessionWriteAt > 0 && boardWriteAt > 0, "all three surfaces must be written");
+  // The decision must precede EVERY surface write, including the visible form — the
+  // form was the surface round 6 left stale, which Save then resurrected.
+  assert.ok(reconcileAt < formWriteAt, "protection decided before the form update");
+  assert.ok(reconcileAt < sessionWriteAt, "protection decided before the session write");
+  assert.ok(reconcileAt < boardWriteAt, "protection decided before the board write");
+  // The persisted value is a single reconciled variable, not a per-surface re-read
+  // that could diverge.
+  assert.ok(/const persistUrl = authoritativeManual/.test(block), "one authoritative persist value");
+  assert.ok(/destinationUrl: persistUrl/.test(block), "session and board both write persistUrl");
   assert.ok(
     /setMetadataForm\(prev => prev \? \{ \.\.\.prev, \.\.\.effectivePatch \}/.test(block),
-    "the form must consume the protection-filtered patch, not the raw one",
-  );
-  // The URL also rides inside metadataDraft; dropping only the top-level field would
-  // leave the automated value to be persisted through the draft.
-  assert.ok(
-    /const effectivePatch/.test(block) && /destinationUrl: _dropped/.test(block),
-    "a protected patch must strip the automated destinationUrl entirely",
+    "the form must consume the reconciled patch, not the raw one",
   );
 });
 
@@ -215,10 +211,16 @@ test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not on
   const mcStart = src.indexOf("function handleMetadataChange");
   const block = src.slice(mcStart, src.indexOf("\n  }", src.indexOf("setMetadataFormTouched(t =>", mcStart)));
   assert.ok(block.includes("automatedUrlFill"), "the automated-fill signal must be consulted");
-  // effectivePatch, not patch: the raw patch still carries the automated URL that
-  // manual-URL protection strips out.
-  assert.ok(/destinationUrl: effectivePatch\.destinationUrl/.test(block), "top-level destinationUrl must be written");
-  assert.ok(/destinationUrlTouched: false/.test(block), "a derived fill must stay auto-managed");
+  // persistUrl is the single reconciled value (authoritative manual when protected,
+  // else the automated fill) — written to the session top level so it survives reopen.
+  assert.ok(/destinationUrl: persistUrl/.test(block), "top-level destinationUrl must be written");
+  // A fresh automated fill stays auto-managed (touched false); a protection-reconciled
+  // write keeps the manual side's touched flag. Both are expressed via the computed
+  // `!!authoritativeManual && …` — assert automation does not blanket-set touched true.
+  assert.ok(
+    /destinationUrlTouched: !!authoritativeManual && sessionManual/.test(block),
+    "a derived fill must stay auto-managed unless the session copy was the manual one",
+  );
 });
 
 test("changing product clears old basis before the new request", () => {

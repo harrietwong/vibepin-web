@@ -1,4 +1,5 @@
 import { test, expect, type Page, type BrowserContext, type Route } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
 /**
  * WP-F: cross-device account-level sync E2E.
@@ -42,8 +43,11 @@ import { test, expect, type Page, type BrowserContext, type Route } from "@playw
  * Run:  npx playwright test tests/e2e/account-sync.spec.ts --project=chromium
  */
 
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
-const SUPABASE_REF = "jaxteelkecvlozdrdoog";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true }); // guarded: never production
+// Derived from the guarded target (never production); the app reads exactly this
+// `sb-<ref>-auth-token` cookie, so <ref> must match the project it was built against.
+const SUPABASE_REF =
+  SUPABASE_URL.match(/https:\/\/([a-z0-9]+)\.supabase\.co/)?.[1] ?? "e2e-mock";
 const AUTH_COOKIE_NAME = `sb-${SUPABASE_REF}-auth-token`;
 const APP_ORIGIN = "http://localhost:3000";
 
@@ -175,7 +179,7 @@ async function setupDevice(page: Page, server: SharedServer): Promise<void> {
     }
   });
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async route => {
-    if (route.request().method() !== "GET") { await route.continue(); return; }
+    if (route.request().method() !== "GET") { await route.abort(); return; }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   // Account tab calls getUser() (profile load) and Save calls updateUser() — both
