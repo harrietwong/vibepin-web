@@ -786,7 +786,15 @@ export function InlineCreateAssetPicker({
     setProductSource("All Sources");
     setProductCategory("All Categories");
     setRefFilter("all");
-  }, [role, selectedUrlsKey, currentSelectedUrls]);
+    // Depend on selectedUrlsKey (the stable string projection of currentSelectedUrls),
+    // NOT on currentSelectedUrls itself. Callers pass a freshly-built array every render
+    // (e.g. AiVersionDrawer's `productUrls = selections.map(...).filter(...)`, and
+    // CanonicalProductPicker omits the prop entirely so it defaults to a new `[]`). A
+    // reference dependency therefore re-ran this effect on every render, and the effect
+    // calls setSelected(new Set(...)) each time → "Maximum update depth exceeded".
+    // selectedUrlsKey only changes when the URLs actually change, which is the intent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, selectedUrlsKey]);
 
   useEffect(() => {
     // Default the reference picker to "Pin Ideas" when "My References" is empty
