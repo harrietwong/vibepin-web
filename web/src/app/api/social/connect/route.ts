@@ -57,6 +57,17 @@ export async function POST(req: Request) {
     });
   }
 
+  // Facebook has its own dedicated OAuth route (parallel to Pinterest), backed by
+  // FACEBOOK_* env + the shared social_connections table. Point the client at it.
+  if (provider === "facebook") {
+    return Response.json({
+      provider,
+      status: "oauth_url",
+      url: `/api/auth/facebook/connect?next=${encodeURIComponent(next)}`,
+      message: null,
+    });
+  }
+
   try {
     const result = await getSocialProvider().getConnectUrl({ provider, userId: uid, returnTo: next });
     return Response.json({ provider, ...result });
