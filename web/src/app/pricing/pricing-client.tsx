@@ -562,7 +562,7 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
       >
         <div className="max-w-[1240px] mx-auto px-5 h-[60px] flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <BrandLogo size={28} />
+            <BrandLogo size={36} />
             <span className="font-black text-white tracking-tight text-[17px]">VibePin</span>
           </Link>
           <div className="hidden md:flex items-center gap-6 text-[13px] font-medium" style={{ color: "#9097A0" }}>

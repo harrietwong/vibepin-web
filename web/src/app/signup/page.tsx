@@ -88,7 +88,7 @@ function SignupContent() {
 
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-8">
-          <BrandLogo size={32} style={{ filter: "invert(1)" }} />
+          <BrandLogo size={32} />
           <span className="font-black text-gray-900 text-lg tracking-tight">VibePin</span>
         </div>
 
