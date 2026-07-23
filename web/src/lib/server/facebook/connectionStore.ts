@@ -18,16 +18,59 @@
  *   - "disconnect" clears the token columns and sets connection_status='not_connected'
  *     (row kept), mirroring the Pinterest disconnect semantics as closely as this
  *     schema allows.
+ *
+ * FACEBOOK LOGIN FOR BUSINESS / INSTAGRAM (Phase 1)
+ * The v32 CHECK constraint only permits connection_status in
+ *   connected | not_connected | expired | revoked | error.
+ * "reconnect_required" (missing business scopes) is therefore mapped to the DB
+ * status 'expired' — the UI already renders 'expired' as "Reconnect needed" — and
+ * the precise state ('reconnect_required' | 'no_instagram_account' | 'connected')
+ * plus all the Facebook/IG discovery data is stored in the `metadata` jsonb column
+ * (which v32 already has, so NO migration is needed). page_access_token values are
+ * encrypted (same FACEBOOK_TOKEN_ENC_KEY cipher) before going into metadata, and
+ * the client-facing projection (socialConnectionStore) never returns them.
  */
 
 import { createServerClient } from "@/lib/supabase";
 import { createTokenCipher } from "@/lib/server/crypto";
+import type { DiscoveredInstagramAccount } from "./service";
 
 const TABLE = "social_connections";
 const PROVIDER = "facebook";
 
 // Facebook tokens are encrypted with their own key, never Pinterest's.
 const cipher = createTokenCipher("FACEBOOK_TOKEN_ENC_KEY");
+
+/** Precise Facebook connection lifecycle (finer than the DB CHECK constraint). */
+export type FacebookConnectionState =
+  | "connected"
+  | "reconnect_required" // missing required business scopes → user must re-auth
+  | "no_instagram_account"; // scopes ok but no Page has a linked IG account
+
+/**
+ * Map our precise Facebook state to a DB-legal connection_status value.
+ *   connected             → 'connected'
+ *   reconnect_required    → 'expired'  (UI shows "Reconnect needed")
+ *   no_instagram_account  → 'error'    (connected, but nothing publishable yet)
+ */
+function dbStatusFor(state: FacebookConnectionState): string {
+  if (state === "connected") return "connected";
+  if (state === "reconnect_required") return "expired";
+  return "error"; // no_instagram_account
+}
+
+/**
+ * Client-safe metadata for a Facebook connection. Encrypted page tokens live in a
+ * SEPARATE server-only field (see FacebookConnectionMetadata below) that the
+ * client projection strips. This shape holds only display-safe identifiers.
+ */
+export type FacebookCandidatePage = {
+  pageId: string;
+  pageName: string | null;
+  instagramUserId: string;
+  instagramUsername: string | null;
+  instagramName: string | null;
+};
 
 function db() {
   return createServerClient();
@@ -38,13 +81,56 @@ function isMissingTable(code: string | undefined): boolean {
 }
 
 export type UpsertFacebookInput = {
+  /** Long-lived USER access token (encrypted into access_token_encrypted). */
   accessToken: string;
   refreshToken?: string | null;
   /** ISO timestamp for token expiry, or null. */
   expiresAt: string | null;
+  /** The permissions Facebook actually granted (stored in scopes[]). */
   scopes: string[];
+  /** Facebook user id → provider_account_id. */
   accountId: string | null;
+  /** Facebook user name → provider_account_name. */
   accountName: string | null;
+  /** Precise Facebook lifecycle state (maps to a DB-legal connection_status). */
+  state: FacebookConnectionState;
+  /**
+   * The Instagram-linked Pages discovered for this user. Each page_access_token
+   * is encrypted here before storage. May be empty (reconnect_required /
+   * no_instagram_account). The SELECTED page (see selected*) is chosen by the
+   * callback — never auto-picked from index 0 when there are multiple.
+   */
+  pages?: DiscoveredInstagramAccount[];
+  /** The page/IG chosen as active, when exactly one candidate exists (or user-selected later). */
+  selected?: {
+    pageId: string;
+    pageName: string | null;
+    instagramUserId: string;
+    instagramUsername: string | null;
+  } | null;
+};
+
+/**
+ * The Facebook block persisted under social_connections.metadata.facebook.
+ * `candidatePages[].pageAccessTokenEncrypted` is ciphertext (never plaintext).
+ * The public projection (socialConnectionStore.rowToSafe) must strip the
+ * encrypted token before returning to the client.
+ */
+export type FacebookConnectionMetadata = {
+  authMethod: "facebook_login";
+  connectionState: FacebookConnectionState;
+  facebookUserId: string | null;
+  facebookUserName: string | null;
+  /** Chosen active page + IG, or null when none is selected yet. */
+  selectedPageId: string | null;
+  selectedPageName: string | null;
+  selectedInstagramUserId: string | null;
+  selectedInstagramUsername: string | null;
+  /** All discovered IG-linked pages (display-safe fields + encrypted page token). */
+  candidatePages: Array<
+    FacebookCandidatePage & { pageAccessTokenEncrypted: string }
+  >;
+  updatedAt: string;
 };
 
 /**
@@ -61,9 +147,33 @@ export async function upsertFacebookConnection(
   const accessTokenEncrypted = cipher.encrypt(input.accessToken);
   const refreshTokenEncrypted = input.refreshToken ? cipher.encrypt(input.refreshToken) : null;
 
+  // Encrypt every discovered page-scoped token BEFORE it goes near the DB. These
+  // are what Phase 2 uses to publish to Instagram (page token, not user token).
+  const candidatePages = (input.pages ?? []).map(p => ({
+    pageId: p.pageId,
+    pageName: p.pageName,
+    instagramUserId: p.instagram.id,
+    instagramUsername: p.instagram.username,
+    instagramName: p.instagram.name,
+    pageAccessTokenEncrypted: cipher.encrypt(p.pageAccessToken),
+  }));
+
+  const metadataFacebook: FacebookConnectionMetadata = {
+    authMethod: "facebook_login",
+    connectionState: input.state,
+    facebookUserId: input.accountId,
+    facebookUserName: input.accountName,
+    selectedPageId: input.selected?.pageId ?? null,
+    selectedPageName: input.selected?.pageName ?? null,
+    selectedInstagramUserId: input.selected?.instagramUserId ?? null,
+    selectedInstagramUsername: input.selected?.instagramUsername ?? null,
+    candidatePages,
+    updatedAt: now,
+  };
+
   const { data: existing, error: readError } = await db()
     .from(TABLE)
-    .select("id")
+    .select("id, metadata")
     .eq("user_id", uid)
     .eq("provider", PROVIDER)
     .maybeSingle();
@@ -76,17 +186,24 @@ export async function upsertFacebookConnection(
     throw new Error("Facebook connection storage is not set up");
   }
 
+  // Preserve any unrelated keys already in metadata (defensive — Facebook owns
+  // metadata.facebook, but never clobber a sibling key another feature may add).
+  const existingMetadata =
+    ((existing as { metadata?: Record<string, unknown> | null } | null)?.metadata ?? {}) as Record<string, unknown>;
+
   const payload = {
     provider: PROVIDER,
     auth_provider: "official",
-    connection_status: "connected",
+    connection_status: dbStatusFor(input.state),
     provider_account_id: input.accountId,
     provider_account_name: input.accountName,
-    provider_account_username: null as string | null,
+    // Surface the selected IG handle as the account username when we have one.
+    provider_account_username: input.selected?.instagramUsername ?? null,
     access_token_encrypted: accessTokenEncrypted,
     refresh_token_encrypted: refreshTokenEncrypted,
     token_expires_at: input.expiresAt,
     scopes: input.scopes,
+    metadata: { ...existingMetadata, facebook: metadataFacebook },
     updated_at: now,
   };
 
@@ -127,6 +244,8 @@ export async function disconnectFacebookConnection(uid: string): Promise<void> {
       refresh_token_encrypted: null,
       token_expires_at: null,
       connection_status: "not_connected",
+      // Drop the Facebook/IG block incl. every encrypted page token on disconnect.
+      metadata: null,
       updated_at: new Date().toISOString(),
     })
     .eq("user_id", uid)

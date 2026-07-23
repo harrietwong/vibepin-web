@@ -62,6 +62,50 @@ function isMissingSocialConnectionsTable(error: { code?: string; message?: strin
   );
 }
 
+/**
+ * Strip every token-shaped value out of a connection's metadata before it can
+ * reach the client. For Facebook, metadata.facebook.candidatePages[] each carry a
+ * `pageAccessTokenEncrypted` (page-scoped token ciphertext) — even encrypted, it
+ * must NEVER leave the server. We rebuild a display-safe metadata.facebook that
+ * keeps only identifiers/usernames/state, and drop the encrypted token field.
+ */
+function sanitizeMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== "object") return metadata ?? null;
+  const fb = (metadata as { facebook?: Record<string, unknown> }).facebook;
+  if (!fb || typeof fb !== "object") return metadata;
+
+  const rawPages = Array.isArray((fb as { candidatePages?: unknown }).candidatePages)
+    ? ((fb as { candidatePages: unknown[] }).candidatePages)
+    : [];
+  const safePages = rawPages.map(p => {
+    const page = (p ?? {}) as Record<string, unknown>;
+    // Deliberately OMIT pageAccessTokenEncrypted — never send a token, encrypted or not.
+    return {
+      pageId: page.pageId ?? null,
+      pageName: page.pageName ?? null,
+      instagramUserId: page.instagramUserId ?? null,
+      instagramUsername: page.instagramUsername ?? null,
+      instagramName: page.instagramName ?? null,
+    };
+  });
+
+  const safeFacebook: Record<string, unknown> = {
+    authMethod: (fb as { authMethod?: unknown }).authMethod ?? null,
+    connectionState: (fb as { connectionState?: unknown }).connectionState ?? null,
+    facebookUserId: (fb as { facebookUserId?: unknown }).facebookUserId ?? null,
+    facebookUserName: (fb as { facebookUserName?: unknown }).facebookUserName ?? null,
+    selectedPageId: (fb as { selectedPageId?: unknown }).selectedPageId ?? null,
+    selectedPageName: (fb as { selectedPageName?: unknown }).selectedPageName ?? null,
+    selectedInstagramUserId: (fb as { selectedInstagramUserId?: unknown }).selectedInstagramUserId ?? null,
+    selectedInstagramUsername: (fb as { selectedInstagramUsername?: unknown }).selectedInstagramUsername ?? null,
+    candidatePages: safePages,
+  };
+
+  return { ...metadata, facebook: safeFacebook };
+}
+
 function rowToSafe(row: SocialConnectionRow): SocialConnection {
   return {
     id: row.id,
@@ -76,7 +120,7 @@ function rowToSafe(row: SocialConnectionRow): SocialConnection {
     externalConnectionId: row.external_connection_id,
     scopes: row.scopes ?? [],
     tokenExpiresAt: row.token_expires_at,
-    metadata: row.metadata,
+    metadata: sanitizeMetadata(row.metadata),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
