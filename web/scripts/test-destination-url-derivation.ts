@@ -189,6 +189,11 @@ test("attribution query parameters are preserved verbatim", () => {
 // the source-structure tests never executed.
 
 const MANUAL: DestinationUrlState = { destinationUrl: "https://mine.example/lp", destinationUrlSource: "manual", destinationUrlTouched: true };
+// A product-derived URL the user then EDITED: source stays "product", touched true.
+// isAutoManaged calls this MANUAL only because of the flag — so a reconciliation that
+// drops the flag would silently auto-manage it. The earlier tests used only
+// source:"manual", dodging exactly this representation (review #8 finding #2).
+const EDITED_PRODUCT: DestinationUrlState = { destinationUrl: "https://user-edited.example", destinationUrlSource: PRODUCT_DERIVED_URL_SOURCE, destinationUrlTouched: true };
 const AUTO: DestinationUrlState = { destinationUrl: "https://acme.example/products/a", destinationUrlSource: PRODUCT_DERIVED_URL_SOURCE };
 const EMPTY: DestinationUrlState = {};
 
@@ -221,6 +226,49 @@ test("reconcile: session manual, NO board draft → session value protected", ()
   assert.ok(r, "a session-only Pin's manual URL must still be protected");
   assert.equal(r!.url, "https://mine.example/lp");
   assert.equal(r!.sessionManual, true);
+});
+
+test("reconcile ALWAYS returns touched:true, so an EDITED-PRODUCT url survives being copied", () => {
+  // The bug (review #8 #2): board is manual because it's an edited product URL
+  // (source:"product", touched:true). Reconciliation copies url+source to the session
+  // but must ALSO carry the touched flag — with source:"product" the value is manual
+  // ONLY when touched. If touched were dropped the copy becomes auto-managed and the
+  // next fill overwrites the user's edit.
+  const r = reconcileProtectedUrl(EDITED_PRODUCT, AUTO);
+  assert.ok(r, "an edited product URL is manual and must be protected");
+  assert.equal(r!.url, "https://user-edited.example");
+  assert.equal(r!.source, PRODUCT_DERIVED_URL_SOURCE, "source stays product");
+  assert.equal(r!.touched, true, "touched MUST travel with the value");
+  // Prove the reconciled representation is still manual (would be auto-managed w/o flag).
+  assert.equal(
+    isAutoManaged({ destinationUrl: r!.url, destinationUrlSource: r!.source, destinationUrlTouched: r!.touched }),
+    false,
+    "reconciled copy must remain manual on the receiving surface",
+  );
+  // And the SAME source without the flag would (wrongly) be auto-managed — the trap.
+  assert.equal(
+    isAutoManaged({ destinationUrl: r!.url, destinationUrlSource: r!.source, destinationUrlTouched: false }),
+    true,
+    "sanity: dropping the flag auto-manages it — which is exactly the bug",
+  );
+});
+
+test("reconcile: a legacy manual url (source:manual, touched FALSE) still yields touched:true", () => {
+  // Distinguishes "always true" from "echo the owner's flag": this owner is manual by
+  // SOURCE with touched:false. Reconciliation must still hand every surface touched:true
+  // so that, once copied, protection does not depend on a source the copy may not keep.
+  const legacyManual: DestinationUrlState = { destinationUrl: "https://legacy.example", destinationUrlSource: "manual", destinationUrlTouched: false };
+  const r = reconcileProtectedUrl(legacyManual, AUTO);
+  assert.ok(r, "legacy manual (by source) is protected");
+  assert.equal(r!.touched, true, "reconciled touched must be true even though the owner's flag was false");
+});
+
+test("reconcile: edited-product session, auto board → session value protected with touched", () => {
+  const r = reconcileProtectedUrl(AUTO, EDITED_PRODUCT);
+  assert.equal(r!.url, "https://user-edited.example");
+  assert.equal(r!.touched, true);
+  assert.equal(r!.sessionManual, true);
+  assert.equal(r!.boardManual, false);
 });
 
 test("reconcile: both manually edited but DIFFERENT → board is source of truth", () => {

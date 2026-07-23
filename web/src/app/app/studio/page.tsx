@@ -3312,9 +3312,9 @@ function CreatePinsContent() {
             : null,
         )
       : null;
-    const authoritativeManual = reconciled ? { url: reconciled.url, source: reconciled.source } : null;
-    const sessionManual = !!reconciled?.sessionManual;
-    const boardManual = !!reconciled?.boardManual;
+    const authoritativeManual = reconciled
+      ? { url: reconciled.url, source: reconciled.source, touched: reconciled.touched }
+      : null;
 
     // When protected, force the automated URL in the patch (top level AND the copy
     // riding inside metadataDraft) to the authoritative manual value, so the form the
@@ -3324,6 +3324,11 @@ function CreatePinsContent() {
       ? {
           ...patch,
           ...("destinationUrl" in patch ? { destinationUrl: authoritativeManual.url ?? "" } : {}),
+          // Reconcile the FORM's touched flag too. Save copies metadataForm's touched
+          // state into both stores; leaving it false would let Save re-mark a manual
+          // URL as auto-managed (a hand-edited product URL is manual only WITH the
+          // flag). The reconciled value is manual, so the form must carry touched:true.
+          destinationUrlTouched: authoritativeManual.touched,
           ...(patch.metadataDraft
             ? { metadataDraft: {
                 ...patch.metadataDraft,
@@ -3334,6 +3339,11 @@ function CreatePinsContent() {
         }
       : patch;
 
+    // Keep the form's touched map in sync with the reconciled flag (metadataForm holds
+    // the value; metadataFormTouched holds its touched bits, read by Save).
+    if (authoritativeManual) {
+      setMetadataFormTouched(t => ({ ...t, destinationUrlTouched: authoritativeManual.touched }));
+    }
     setMetadataForm(prev => prev ? { ...prev, ...effectivePatch } : prev);
     // Product / board changes ride on metadataDraft — persist them immediately so they
     // survive closing & reopening the drawer without requiring an explicit Save (Test F).
@@ -3348,26 +3358,30 @@ function CreatePinsContent() {
       const urlPatch = isAutomatedUrl
         ? {
             destinationUrl: persistUrl,
-            // Derived (or protection-reconciled), not typed: keep destinationUrlTouched
-            // as it was for the manual copy so protection persists, and false for a
-            // fresh automated fill so a later product change may still update it.
+            // When protected, EVERY surface adopts the reconciled touched flag (true —
+            // the value is manual). A hand-edited product URL is manual only WITH the
+            // flag, so writing false here (as an earlier version keyed on sessionManual
+            // did) would auto-manage the very copy we just protected. For a fresh
+            // automated fill (not protected) the flag stays false so a later product
+            // change may still update it.
             metadataTouched: {
               ...EMPTY_TOUCHED, ...pinDetailPin?.metadataTouched,
-              destinationUrlTouched: !!authoritativeManual && sessionManual,
+              destinationUrlTouched: authoritativeManual ? authoritativeManual.touched : false,
             },
           }
         : {};
       updatePinMetadata(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx, p => ({
         ...p, metadataDraft: draft, ...urlPatch,
       }));
-      // Reconcile the board draft to the SAME value so no surface is left divergent.
+      // Reconcile the board draft to the SAME value AND touched flag so no surface is
+      // left divergent or wrongly auto-managed.
       if (isAutomatedUrl && boardDraft) {
         pinDraftStore.updateDraft(boardDraft.id, {
           destinationUrl: persistUrl,
           destinationUrlSource: draft.destinationUrlSource,
           metadataTouched: {
             ...EMPTY_TOUCHED, ...boardDraft.metadataTouched,
-            destinationUrlTouched: !!authoritativeManual && boardManual,
+            destinationUrlTouched: authoritativeManual ? authoritativeManual.touched : false,
           },
         });
       }

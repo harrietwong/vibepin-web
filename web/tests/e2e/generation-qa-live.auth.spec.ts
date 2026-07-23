@@ -25,15 +25,26 @@ test.setTimeout(10 * 60_000);
 
 const PRODUCT_IMAGE = path.join(process.cwd(), "tests", "e2e", "fixtures", "qa-product.png");
 
-test("select product → generate 2 → exactly 2 results with product URL derived", async ({ page }) => {
+test("select product → generate 2 → exactly 2 drafts (no provider extras), pin editable", async ({ page }) => {
   await page.goto("/app/studio");
   await expect(page.getByTestId("studio-board")).toBeVisible({ timeout: 30_000 });
 
   // Baseline on the ALL filter (the same filter counted after the run), so prior
-  // pins — including failed ones from an earlier run — don't skew the delta.
+  // pins — including failed ones from an earlier run — don't skew the delta. Wait for
+  // the board to be hydrated (its own settle) before sampling, so a slow first render
+  // doesn't undercount the baseline and inflate the delta.
   await page.getByRole("tab", { name: /^All/ }).or(page.getByText(/^All\s*\d/)).first().click().catch(() => {});
-  await page.waitForTimeout(500);
-  const baselineCards = await page.getByTestId("pin-board-card").count();
+  const baselineLoc = page.getByTestId("pin-board-card");
+  // Let the count stabilise across two consecutive samples rather than a fixed sleep.
+  let baselineCards = await baselineLoc.count();
+  await expect
+    .poll(async () => {
+      const n = await baselineLoc.count();
+      const stable = n === baselineCards;
+      baselineCards = n;
+      return stable;
+    }, { timeout: 15_000, intervals: [500] })
+    .toBe(true);
 
   // Open the canonical picker from whichever Select-product entry is rendered.
   const entry = page.getByTestId("board-select-product").or(page.getByTestId("board-select-product-empty"));
@@ -90,30 +101,29 @@ test("select product → generate 2 → exactly 2 results with product URL deriv
     .poll(async () => (await resultCardsLoc.count()) - baselineCards, { timeout: 8 * 60_000, intervals: [2000] })
     .toBeGreaterThanOrEqual(2);
 
-  // Still on the ALL filter (set at baseline) so both successful and failed drafts
-  // are visible.
   // "请求几张就返回几张": exactly the requested count of NEW drafts, no provider extras.
-  // This holds whether the model SUCCEEDS or FAILS — the flow must never fan a
-  // 2-pin request out to 3 cards. (In an under-provisioned test env the model call
-  // itself may fail; the count semantics under test are independent of that.)
+  // Holds whether the model SUCCEEDS or FAILS — the flow must never fan a 2-pin request
+  // out to 3 cards.
   const resultCards = page.getByTestId("pin-board-card");
   const settled = await resultCards.count();
   expect(settled - baselineCards, "exactly the requested number of NEW drafts, no provider extras").toBe(2);
 
-  // Product URL derivation: open a settled card's details (card-edit only renders on a
-  // non-generating card). Best-effort — a card still mid-generation has no edit
-  // affordance yet, and that's an environment timing property, not the flow contract
-  // under test (which is the exact-count assertion above). When a settled card is
-  // reachable, assert the URL derived from the selected product.
+  // Each new draft settles into an editable card (card-edit renders on every settled
+  // card, success or failure). Wait for one and open it — this asserts the drafts are
+  // real, editable pins, not stuck placeholders. The generation call can take ~60s.
+  //
+  // NOTE on URL derivation: it is deliberately NOT asserted here. This fixture is an
+  // UPLOADED IMAGE, which has no storefront/public URL, so deriveDestinationUrlForProduct
+  // correctly derives nothing — asserting a non-empty URL would be asserting the wrong
+  // thing for this product type. URL derivation is covered deterministically by the unit
+  // suite (test-destination-url-derivation: deriveDestinationUrlForProduct +
+  // reconcileProtectedUrl, 25 cases). A live URL-derivation check would need an
+  // "Import from URL" product, which is a separate scenario.
   const editable = page.getByTestId("card-edit").first();
-  if (await editable.isVisible().catch(() => false)) {
-    await editable.click();
-    const urlField = page.getByTestId("pin-details-destination-url");
-    await expect(urlField).toBeVisible({ timeout: 15_000 });
-    const urlValue = await urlField.inputValue();
-    expect(urlValue.length, "destination URL derived from the selected product").toBeGreaterThan(0);
-    console.log(`LIVE QA: ${settled - baselineCards} new drafts, ref=${referenceSelected}, url=${urlValue}`);
-  } else {
-    console.log(`LIVE QA: ${settled - baselineCards} new drafts, ref=${referenceSelected}, url check skipped (no settled card)`);
-  }
+  await expect(editable).toBeVisible({ timeout: 8 * 60_000 });
+  await editable.click();
+  // The edit surface is open and shows the pin's fields (title reflects the product).
+  await expect(page.getByTestId("pin-details-destination-url").or(page.getByText(/Website URL/i)).first())
+    .toBeVisible({ timeout: 15_000 });
+  console.log(`LIVE QA: ${settled - baselineCards} new drafts, ref=${referenceSelected}, generation reached settled editable cards`);
 });

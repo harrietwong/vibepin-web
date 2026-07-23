@@ -179,7 +179,10 @@ test("URL protection delegates to reconcileProtectedUrl and reconciles ALL surfa
   // visible form, the session (top level + draft), and the board draft.
   const src = read("app/app/studio/page.tsx");
   const start = src.indexOf("function handleMetadataChange");
-  const block = src.slice(start, src.indexOf("\n  }", src.indexOf("setMetadataFormTouched(t =>", start)));
+  // Slice to the next top-level function (robust against the handler calling
+  // setMetadataFormTouched more than once, which a marker anchor would truncate on).
+  const end = src.indexOf("\n  function ", start + 1);
+  const block = src.slice(start, end > 0 ? end : undefined);
 
   const reconcileAt = block.indexOf("reconcileProtectedUrl(");
   const formWriteAt = block.indexOf("setMetadataForm(prev =>");
@@ -209,17 +212,21 @@ test("the immediate-persist block writes destinationUrl to the TOP LEVEL, not on
   // automated URL vanish on reopen.
   const src = readFileSync(join(SRC, "app/app/studio/page.tsx"), "utf8");
   const mcStart = src.indexOf("function handleMetadataChange");
-  const block = src.slice(mcStart, src.indexOf("\n  }", src.indexOf("setMetadataFormTouched(t =>", mcStart)));
+  // Slice to the next top-level function so the whole body is covered. The handler now
+  // calls setMetadataFormTouched twice, so anchoring on that marker would truncate early.
+  const mcEnd = src.indexOf("\n  function ", mcStart + 1);
+  const block = src.slice(mcStart, mcEnd > 0 ? mcEnd : undefined);
   assert.ok(block.includes("automatedUrlFill"), "the automated-fill signal must be consulted");
   // persistUrl is the single reconciled value (authoritative manual when protected,
   // else the automated fill) — written to the session top level so it survives reopen.
   assert.ok(/destinationUrl: persistUrl/.test(block), "top-level destinationUrl must be written");
-  // A fresh automated fill stays auto-managed (touched false); a protection-reconciled
-  // write keeps the manual side's touched flag. Both are expressed via the computed
-  // `!!authoritativeManual && …` — assert automation does not blanket-set touched true.
+  // The touched flag on every store write is the RECONCILED flag when protected
+  // (authoritativeManual.touched, always true — a hand-edited product URL is manual only
+  // WITH the flag), and false for a fresh automated fill. Assert automation neither
+  // blanket-sets true nor drops protection.
   assert.ok(
-    /destinationUrlTouched: !!authoritativeManual && sessionManual/.test(block),
-    "a derived fill must stay auto-managed unless the session copy was the manual one",
+    /destinationUrlTouched: authoritativeManual \? authoritativeManual\.touched : false/.test(block),
+    "protected write must adopt the reconciled touched flag; a fresh fill stays false",
   );
 });
 

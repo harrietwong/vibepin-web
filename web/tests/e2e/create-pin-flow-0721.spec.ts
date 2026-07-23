@@ -1,5 +1,11 @@
 /**
- * Authenticated browser QA for the 2026-07-21 Create Pin flow changes.
+ * Browser QA for the 2026-07-21 Create Pin flow changes.
+ *
+ * AUTH MODEL: this runs on the ANONYMOUS default project and reaches /app/** via
+ * E2E_TEST_MODE=true (the proxy no-op), NOT via a real signed-in storageState. It is
+ * therefore deliberately NOT named *.auth.spec.ts — that suffix is reserved for specs
+ * that consume a genuine authenticated session (see playwright.config.ts). The line-20
+ * `not.toHaveURL(/login/)` assertion just confirms the test-mode gate let us in.
  *
  * SURFACE: Studio Board V2 (`data-testid="studio-board"`), which is the DEFAULT
  * Create Pins experience — see lib/studioBoardFlag.ts. An earlier version of this

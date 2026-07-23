@@ -124,7 +124,21 @@ export function clearDestinationUrlForUnlink(
 export function reconcileProtectedUrl(
   board: DestinationUrlState | null,
   session: DestinationUrlState | null,
-): { url: string | undefined; source: string | undefined; boardManual: boolean; sessionManual: boolean } | null {
+): {
+  url: string | undefined;
+  source: string | undefined;
+  /**
+   * The touched flag EVERY receiving surface must adopt. When the authoritative value
+   * is a hand-edited product-derived URL (`source:"product"`, `touched:true`), its
+   * manual-ness lives ONLY in the touched flag — copying it to another surface with
+   * touched:false would make that surface auto-managed (isAutoManaged returns true for
+   * source:"product" when untouched) and the next fill would overwrite it. So the flag
+   * travels with the value; it is always true here (the owner is, by definition, manual).
+   */
+  touched: boolean;
+  boardManual: boolean;
+  sessionManual: boolean;
+} | null {
   const boardManual = !!board && !isAutoManaged(board);
   const sessionManual = !!session && !isAutoManaged(session);
   if (!boardManual && !sessionManual) return null;
@@ -133,6 +147,10 @@ export function reconcileProtectedUrl(
   return {
     url: owner.destinationUrl,
     source: owner.destinationUrlSource,
+    // The reconciled value is manual on every surface it lands on. Preserve manual
+    // semantics explicitly rather than relying on source alone (source may be
+    // "product" for an edited product URL, which is only manual WITH the flag).
+    touched: true,
     boardManual,
     sessionManual,
   };
