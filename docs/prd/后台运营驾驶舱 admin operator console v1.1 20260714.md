@@ -1,6 +1,6 @@
 # 后台运营驾驶舱 PRD v1.6
 
-**状态：** P0 已实施并全部验收通过（含浏览器复验 + 二次安全评审）。核心 5 提交已随生产化统一并入 `master`；`feat/admin-cockpit` 为 `master` 超集（持续追合最新 master），**非 merge 净增量待回流**（准确清单以 `git log --no-merges master..feat/admin-cockpit` 为准，§8 提交表列主要项）。**v33/v34/v51/v52 四迁移均已应用生产并逐列复核**。付费置顶只信 `app_metadata.plan`（`isPaid`/`planOf` 均已收窄，各带回归测试）。剩余仅：净增量回流 `master`。详见 §8。
+**状态：** P0 功能已实施，§7.4 逐项浏览器验收通过（见 §9.2）；**但整体尚未签收**——阻塞于两件事：(1) 越权漏洞（`user_metadata.role` 自授超管，§9.3）的修复须先入 master，(2) hydration 项须在 production build 下定向复验后结案。核心 5 提交已随生产化统一并入 `master`；`feat/admin-cockpit` 为 `master` 超集，**非 merge 净增量待回流**（准确清单以 `git log --no-merges master..feat/admin-cockpit` 为准，§8 提交表列主要项）。**v33/v34/v51/v52 四迁移均已应用生产并逐列复核**。付费置顶只信 `app_metadata.plan`（`isPaid`/`planOf` 均已收窄，各带回归测试）。回流顺序见 §9.4。
 **日期：** 2026-07-16（初稿 2026-07-14；§8 topology 于 2026-07-17 复核订正）
 **作者：** Fable 5（基于创始人确认的产品方向）
 **取代：** `【后台系统未实施 优先级不高】.txt`（定位文档，其"不做清单"与最终定位在本文档中继承并展开）
