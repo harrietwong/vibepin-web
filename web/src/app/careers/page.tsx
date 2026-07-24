@@ -16,7 +16,7 @@ export default function CareersPage() {
         <div className="max-w-[860px] mx-auto px-5 h-[56px] flex items-center justify-between">
           <div className="flex items-center gap-4">
             <BackButton />
-            <Link href="/" className="flex items-center gap-2 no-underline"><BrandLogo size={24} /><span className="font-black text-white text-[15px] tracking-tight">VibePin</span></Link>
+            <Link href="/" className="flex items-center gap-2 no-underline"><BrandLogo size={32} /><span className="font-black text-white text-[15px] tracking-tight">VibePin</span></Link>
           </div>
           <div className="flex items-center gap-4 text-[12px]" style={{ color: "#9097A0" }}>
             <Link href="/about" className="hover:text-white transition-colors">About</Link>

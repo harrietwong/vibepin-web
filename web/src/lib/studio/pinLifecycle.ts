@@ -13,6 +13,7 @@
  */
 
 import type { PinDraft } from "@/lib/pinDraftStore";
+import { isBoardSource } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 
 export type PinLifecycle = "generating" | "failed" | "unscheduled" | "scheduled" | "posted";
@@ -93,13 +94,41 @@ export function mapPublishErrorToCategory(code?: string, message?: string): Erro
   return "transient";
 }
 
-/** Count drafts whose most recent PUBLISH attempt failed (drives a "N failed" banner). */
-export function countPublishFailures(drafts: Pick<PinDraft, "failureType" | "publishError">[]): number {
-  let n = 0;
-  for (const d of drafts) {
-    if (d.failureType === "publish" && sanitizeHandoffField(d.publishError)) n++;
-  }
-  return n;
+/** THE single, source-agnostic predicate for an *actionable* publish failure.
+ *  A draft counts iff its last failure was a PUBLISH failure, it still carries a
+ *  publish error, and it is NOT archived. Source is deliberately NOT part of this:
+ *  the Plan drawer / cron can fail non-board-source drafts too, and those are real
+ *  failures the user can Retry from Plan — so we must not filter them out by source.
+ *  Callers that need a board-scoped count layer isBoardSource on top of this. */
+export function isActionablePublishFailure(
+  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+): boolean {
+  return d.failureType === "publish"
+    && !!sanitizeHandoffField(d.publishError)
+    && !d.archivedAt;
+}
+
+/** Full-population actionable publish failures (Plan: the whole-population entry). */
+export function listActionablePublishFailures<
+  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+>(drafts: T[]): T[] {
+  return drafts.filter(isActionablePublishFailure);
+}
+
+/** Board-scoped actionable publish failures (Create Pins: layer isBoardSource). */
+export function listBoardActionablePublishFailures<
+  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt" | "source">,
+>(drafts: T[]): T[] {
+  return drafts.filter(d => isActionablePublishFailure(d) && isBoardSource(d));
+}
+
+/** Count drafts whose most recent PUBLISH attempt failed (drives a "N failed" banner).
+ *  Now equivalent to listActionablePublishFailures().length — it additionally excludes
+ *  archived drafts, which is the intended fix (archived failures are off the board). */
+export function countPublishFailures(
+  drafts: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">[],
+): number {
+  return listActionablePublishFailures(drafts).length;
 }
 
 // ── Failed-view sub-filter entry signal (PRD "失败情况优化" §4) ─────────────────

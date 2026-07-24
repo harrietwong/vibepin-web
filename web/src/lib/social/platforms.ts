@@ -70,7 +70,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     name: "Facebook Page",
     brandColor: "#1877F2",
     capabilities: ["Publish to your Page", "Repurpose product posts", "Track publishing status"],
-    liveConnect: false,
+    liveConnect: true,
   },
   tiktok: {
     provider: "tiktok",

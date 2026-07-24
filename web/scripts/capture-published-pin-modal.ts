@@ -24,7 +24,7 @@ const STORE_KEY = "vp:pin_drafts:v1";
 const THEME_KEY = "vp:appearance_theme:v1";
 
 const common = {
-  imageUrl: "/landing/boho-living-room/references/pin-ref-01.jpg",
+  imageUrl: "/landing/boho-living-room/references/pin-ref-01.webp",
   keyword: "boho living room",
   category: "home-decor",
   title: "Ideas for your home",

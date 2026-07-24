@@ -71,7 +71,7 @@ export function FaqSection() {
               turns them into scheduled publishing plans.
             </p>
             <Link
-              href="mailto:support@vibepin.co"
+              href="/app/help"
               className="inline-flex items-center gap-1.5 text-[13px] font-bold transition-opacity hover:opacity-80"
               style={{ color: "#E879F9" }}
             >

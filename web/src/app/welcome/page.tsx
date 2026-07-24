@@ -11,7 +11,7 @@ export default function WelcomePage() {
     <div className="min-h-screen antialiased" style={{ background: "#080C12", color: "#D1D5DB" }}>
       <nav className="sticky top-0 z-50 border-b backdrop-blur-md" style={{ background: "rgba(8,12,18,0.92)", borderColor: "rgba(255,255,255,0.07)" }}>
         <div className="max-w-[860px] mx-auto px-5 h-[56px] flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 no-underline"><BrandLogo size={24} /><span className="font-black text-white text-[15px] tracking-tight">VibePin</span></Link>
+          <Link href="/" className="flex items-center gap-2 no-underline"><BrandLogo size={32} /><span className="font-black text-white text-[15px] tracking-tight">VibePin</span></Link>
         </div>
       </nav>
 

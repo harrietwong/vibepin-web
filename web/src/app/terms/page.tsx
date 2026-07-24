@@ -22,7 +22,7 @@ export default function TermsPage() {
           <div className="flex items-center gap-4">
             <BackButton />
             <Link href="/" className="flex items-center gap-2 no-underline">
-              <BrandLogo size={24} />
+              <BrandLogo size={32} />
               <span className="font-black text-white text-[15px] tracking-tight">VibePin</span>
             </Link>
           </div>

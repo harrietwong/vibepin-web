@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codex_advisor": {
+      "command": "node",
+      "args": ["tools/codex-advisor/server.mjs"]
+    }
+  }
+}

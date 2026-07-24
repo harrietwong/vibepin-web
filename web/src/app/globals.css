@@ -192,9 +192,10 @@ body::-webkit-scrollbar { width: 12px; }
   color-scheme: light;
 }
 
-[data-theme="light"] [data-brand-logo] {
-  filter: invert(1);
-}
+/* The brand mark is a full-colour gradient with a transparent background, so it
+   reads correctly on both light and dark surfaces as-is. It used to be a flat
+   white silhouette, which needed inverting in light theme — that inversion is
+   now wrong (it would turn the magenta/violet gradient green/yellow). */
 
 [data-theme="dark"] {
   --app-bg:          #080A12;

@@ -6,7 +6,8 @@ import type { LandingAsset } from "@/lib/landingAssets";
  * One coherent opportunity, multiple creative directions. Files live in
  *   public/landing/boho-living-room/products
  *   public/landing/boho-living-room/references
- * Paths below match the exact filenames + extensions on disk (mixed jpg/png/webp).
+ * All assets are WebP: these are opaque photos, and the originals (PNG at up to
+ * 3.2MB each) totalled 23MB, which stalled the landing page on first paint.
  * Titles / directions / objectPosition are editable here — the single source of truth.
  */
 
@@ -18,35 +19,35 @@ export type LandingReferenceAsset = { id: string; title: string; direction: stri
 
 // ── Products (exact filenames) ────────────────────────────────────────────────
 const PRODUCTS: LandingProductAsset[] = [
-  { id: "rattan-pendant-light",  title: "Rattan Pendant Light",  imageUrl: P + "product-rattan-pendant-light.png" },
-  { id: "rattan-accent-chair",   title: "Rattan Accent Chair",   imageUrl: P + "product-rattan-accent-chair.png" },
-  { id: "natural-woven-rug",     title: "Natural Woven Rug",     imageUrl: P + "product-natural-woven-rug.png" },
+  { id: "rattan-pendant-light",  title: "Rattan Pendant Light",  imageUrl: P + "product-rattan-pendant-light.webp" },
+  { id: "rattan-accent-chair",   title: "Rattan Accent Chair",   imageUrl: P + "product-rattan-accent-chair.webp" },
+  { id: "natural-woven-rug",     title: "Natural Woven Rug",     imageUrl: P + "product-natural-woven-rug.webp" },
   { id: "trailing-vine-plant",   title: "Trailing Vine Plant",   imageUrl: P + "product-trailing-vine-plant.webp" },
-  { id: "striped-throw-pillow",  title: "Striped Throw Pillow",  imageUrl: P + "product-striped-throw-pillow.jpg" },
-  { id: "wicker-storage-basket", title: "Wicker Storage Basket", imageUrl: P + "product-wicker-storage-basket.jpg" },
-  { id: "cream-sofa",            title: "Cream Sofa",            imageUrl: P + "product-cream-sofa.jpg" },
-  { id: "potted-greenery",       title: "Potted Greenery",       imageUrl: P + "product-potted-greenery.png" },
-  { id: "square-wicker-basket",  title: "Square Wicker Basket",  imageUrl: P + "product-square-wicker-basket.jpg" },
+  { id: "striped-throw-pillow",  title: "Striped Throw Pillow",  imageUrl: P + "product-striped-throw-pillow.webp" },
+  { id: "wicker-storage-basket", title: "Wicker Storage Basket", imageUrl: P + "product-wicker-storage-basket.webp" },
+  { id: "cream-sofa",            title: "Cream Sofa",            imageUrl: P + "product-cream-sofa.webp" },
+  { id: "potted-greenery",       title: "Potted Greenery",       imageUrl: P + "product-potted-greenery.webp" },
+  { id: "square-wicker-basket",  title: "Square Wicker Basket",  imageUrl: P + "product-square-wicker-basket.webp" },
 ];
 
-// ── References (exact filenames + extensions for pin-ref-01..10) ───────────────
+// ── References (pin-ref-01..10) ───────────────────────────────────────────────
 // Editable creative-direction labels; the photos are intentionally diverse.
-const REF_FILES: { ext: string; direction: string }[] = [
-  { ext: "jpg",  direction: "Neutral boho" },          // pin-ref-01
-  { ext: "png",  direction: "Colorful eclectic" },     // pin-ref-02
-  { ext: "webp", direction: "Cozy reading corner" },   // pin-ref-03
-  { ext: "jpg",  direction: "Small-space decor" },     // pin-ref-04
-  { ext: "png",  direction: "Warm maximalist" },       // pin-ref-05
-  { ext: "jpg",  direction: "Modern organic" },        // pin-ref-06
-  { ext: "png",  direction: "Natural rattan styling" },// pin-ref-07
-  { ext: "jpg",  direction: "Layered textiles" },      // pin-ref-08
-  { ext: "png",  direction: "Bright & airy" },         // pin-ref-09
-  { ext: "png",  direction: "Warm editorial" },        // pin-ref-10
+const REF_DIRECTIONS = [
+  "Neutral boho",           // pin-ref-01
+  "Colorful eclectic",      // pin-ref-02
+  "Cozy reading corner",    // pin-ref-03
+  "Small-space decor",      // pin-ref-04
+  "Warm maximalist",        // pin-ref-05
+  "Modern organic",         // pin-ref-06
+  "Natural rattan styling", // pin-ref-07
+  "Layered textiles",       // pin-ref-08
+  "Bright & airy",          // pin-ref-09
+  "Warm editorial",         // pin-ref-10
 ];
 
-const REFERENCES: LandingReferenceAsset[] = REF_FILES.map((f, i) => {
+const REFERENCES: LandingReferenceAsset[] = REF_DIRECTIONS.map((direction, i) => {
   const n = String(i + 1).padStart(2, "0");
-  return { id: `pin-ref-${n}`, title: `Boho Living Room Reference ${n}`, direction: f.direction, imageUrl: `${R}pin-ref-${n}.${f.ext}` };
+  return { id: `pin-ref-${n}`, title: `Boho Living Room Reference ${n}`, direction, imageUrl: `${R}pin-ref-${n}.webp` };
 });
 
 export const bohoLivingRoomDemo = {

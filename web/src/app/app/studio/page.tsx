@@ -5009,7 +5009,11 @@ export default function CreatePinsPage() {
   if (experience === "board-v2") {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "var(--app-bg, #F8FAFC)", overflow: "hidden", minHeight: 0 }}>
-        <StudioBoard />
+        {/* StudioBoard reads useSearchParams (deep-link ?filter=&sub=), which requires a
+            Suspense boundary or the production build fails (missing-suspense-with-csr). */}
+        <Suspense fallback={<StudioBoardSkeleton />}>
+          <StudioBoard />
+        </Suspense>
       </div>
     );
   }

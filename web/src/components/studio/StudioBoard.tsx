@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -24,7 +25,7 @@ import { publishPin, startPinterestConnect } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
-import { beginPublish, endPublish, countPublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+import { beginPublish, endPublish, isActionablePublishFailure, listActionablePublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { isPinReady, isPublishableImage } from "@/lib/pinReadiness";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
@@ -79,12 +80,13 @@ function readStoredFilter(): BoardFilter {
 // ── Failed-view sub-filter (PRD §4) ─────────────────────────────────────────────
 // Second-level chips shown only while the main filter is "failed": Publish failures /
 // Generation failures / All. Entry-point default differs by how the user got here:
-//   - Banner CTA / stats-bar "N failed" click (openFailedInStudio-style entry) → "publish"
+//   - A `?sub=publish` deep link (or the Banner CTA within Create Pins) → "publish"
 //     (matches the Banner's count, which is publish-failures only).
 //   - Manually clicking the "Failed" filter chip → "all" (no assumption about intent).
-// The signal is passed via a ONE-SHOT sessionStorage flag written by the caller right
-// before navigating (Plan's openFailedInStudio) — read once on mount here, then cleared,
-// so it never sticks around and overrides a later manual chip click.
+// Two seed channels, URL-first: a reload-durable `?sub=` query param (see the mount
+// effect) takes priority; the legacy ONE-SHOT sessionStorage flag (FAILED_SUB_ENTRY_KEY)
+// is retained as a fallback for any in-session caller that still writes it — read once
+// on mount here, then cleared, so it never overrides a later manual chip click.
 export type FailedSubFilter = "publish" | "generation" | "all";
 function consumeFailedSubEntryDefault(): FailedSubFilter {
   if (typeof window === "undefined") return "all";
@@ -95,8 +97,25 @@ function consumeFailedSubEntryDefault(): FailedSubFilter {
   } catch { return "all"; }
 }
 
+// ── URL query-param entry (deep link / reload-durable) ──────────────────────────
+// A `?filter=<board-filter>&sub=<publish|generation|all>` query param takes priority
+// over the sessionStorage session memory, so a shared/reloaded link like
+// `/app/studio?filter=failed&sub=publish` reliably lands on Failed → Publish failures
+// even after a refresh (sessionStorage alone doesn't survive a fresh deep link). When
+// present, the filter is still written back to sessionStorage so the rest of the
+// session remembers it — the existing behavior is preserved, URL just seeds it.
+function parseFilterParam(raw: string | null | undefined): BoardFilter | null {
+  return raw && (VALID_FILTERS as string[]).includes(raw) ? (raw as BoardFilter) : null;
+}
+function parseSubParam(raw: string | null | undefined): FailedSubFilter | null {
+  return raw === "publish" || raw === "generation" || raw === "all" ? raw : null;
+}
+
 export function StudioBoard() {
   const { t: tr } = useLocale();
+  // Deep-link filter/sub source of truth (reload-durable). Read here (component is inside
+  // the page's Suspense boundary — see app/studio/page.tsx) and consumed once on mount.
+  const searchParams = useSearchParams();
   // SSR/first-render always starts at the default; the real (possibly session-
   // remembered) filter is applied post-mount alongside the hydration gate below,
   // so this never causes a hydration mismatch.
@@ -116,7 +135,11 @@ export function StudioBoard() {
   const { items: rawItems, allItems, counts, isPublishing } = usePinBoardDrafts(filter);
   // Sub-filter is applied on TOP of the main "failed" filter — never touches
   // usePinBoardDrafts/BoardFilter itself (PRD: no change to the primary filter enum).
-  const isPublishFailureItem = useCallback((d: PinDraft) => !!d.publishError?.trim(), []);
+  // Shared, source-agnostic actionable-publish-failure predicate (pinLifecycle) —
+  // one predicate for Plan + Create Pins so the two never disagree. Stricter than the
+  // old `!!publishError`: it also requires failureType==="publish" and !archivedAt,
+  // eliminating the third divergent predicate that made counts drift.
+  const isPublishFailureItem = useCallback((d: PinDraft) => isActionablePublishFailure(d), []);
   const failedSubCounts = useMemo(() => {
     if (filter !== "failed") return { publish: 0, generation: 0, all: 0 };
     const publish = rawItems.filter(x => isPublishFailureItem(x.draft)).length;
@@ -129,7 +152,10 @@ export function StudioBoard() {
   // Publish-failure banner (PRD §12, WP-F) — computed from the FULL board so it's
   // independent of the current filter view; count is a derived value from `allItems`,
   // so Retry/Move to Unscheduled/Delete are reflected immediately via re-render.
-  const publishFailureCount = useMemo(() => countPublishFailures(allItems.map(x => x.draft)), [allItems]);
+  // `allItems` is already board-scoped (!archivedAt && isBoardSource, see usePinBoardDrafts),
+  // so layering the core actionable predicate here is equivalent to the board selector
+  // (listBoardActionablePublishFailures over the full population) — same board, same predicate.
+  const publishFailureCount = useMemo(() => listActionablePublishFailures(allItems.map(x => x.draft)).length, [allItems]);
   const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount);
   // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
   // depends on the current filter view; the badge transfers automatically as cards change.
@@ -149,20 +175,28 @@ export function StudioBoard() {
   // once mounted. This is separate from the experience decision (which is already
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
+  const didInitFilterRef = useRef(false);
   useEffect(() => {
+    if (didInitFilterRef.current) return;
+    didInitFilterRef.current = true;
     setHydrated(true);
-    // Apply any session-remembered filter now that we're on the client (sessionStorage
-    // is unavailable during SSR). Runs once, before the board is shown.
-    const restored = readStoredFilter();
+    // URL query param wins over session memory (reload-durable deep link). Falls back to
+    // the sessionStorage-remembered filter when no valid ?filter= is present.
+    const urlFilter = parseFilterParam(searchParams.get("filter"));
+    const restored = urlFilter ?? readStoredFilter();
     setFilterState(restored);
-    // Failed-view sub-filter default (PRD §4): consume the one-shot entry signal ONLY
-    // when we actually landed on the failed filter — a stray/stale flag must never
-    // silently seed "publish" the next time the user happens to land elsewhere.
-    setFailedSubFilter(restored === "failed" ? consumeFailedSubEntryDefault() : "all");
+    // Keep sessionStorage in sync so the rest of the session remembers a URL-seeded filter
+    // (preserves the existing session-memory behavior — the URL just seeds it).
+    if (urlFilter) { try { window.sessionStorage.setItem(FILTER_STORAGE_KEY, urlFilter); } catch { /* storage unavailable */ } }
+    // Failed-view sub-filter default (PRD §4): only meaningful when we land on "failed".
+    // A ?sub= param wins; otherwise consume the one-shot sessionStorage entry signal.
+    // A stray/stale flag must never silently seed "publish" when not on the failed filter.
+    const urlSub = parseSubParam(searchParams.get("sub"));
+    setFailedSubFilter(restored === "failed" ? (urlSub ?? consumeFailedSubEntryDefault()) : "all");
     // Client-driven generation can't survive a reload — any draft still marked
     // "generating" now is unrecoverable. Fail it so cards never stick in Generating.
     pinDraftStore.failStaleGeneratingDrafts();
-  }, []);
+  }, [searchParams]);
 
   const [uploading, setUploading] = useState(false);
   // Per-file upload status: "Uploading 2/5…" while a multi-file batch runs.
@@ -569,8 +603,8 @@ export function StudioBoard() {
           count={bannerCount}
           onReview={() => {
             // Banner CTA → Failed view defaults to "Publish failures" (matches the
-            // Banner's own count, which is publish-failures only). Same rule Plan's
-            // openFailedInStudio applies via the sessionStorage entry signal.
+            // Banner's own count, which is publish-failures only). Plan applies the same
+            // rule on its own surface now (stays in Plan's Failed list, no cross-nav).
             setFilter("failed", "publish");
           }}
           onDismiss={dismissBanner}

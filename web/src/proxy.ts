@@ -43,7 +43,18 @@ export async function proxy(request: NextRequest) {
     // each data request, so this is safe for a nav guard.
     const { data: { session } } = await supabase.auth.getSession();
 
-    if (!session && request.nextUrl.pathname.startsWith("/app")) {
+    // Help Center is public: prospects need to read "how to connect Pinterest",
+    // the refund policy, etc. before signing up, and the landing footer links
+    // straight here. The articles are static content with no user data, and
+    // /app/help renders fine with a null session (the shell degrades to an
+    // empty user). Everything else under /app still requires a session.
+    // Exact path or a child of it — a bare startsWith("/app/help") would also
+    // exempt a future /app/helpdesk and silently make it public.
+    const isPublicAppPath =
+      request.nextUrl.pathname === "/app/help" ||
+      request.nextUrl.pathname.startsWith("/app/help/");
+
+    if (!session && !isPublicAppPath && request.nextUrl.pathname.startsWith("/app")) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
       url.searchParams.set("next", request.nextUrl.pathname + request.nextUrl.search);

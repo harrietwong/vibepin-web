@@ -1,21 +1,60 @@
 import { test, expect, type Page } from "@playwright/test";
-import { PRICING_TIERS } from "../../src/lib/pricingPlans";
+import {
+  BILLING_DISABLED_SKIP_REASON,
+  isBillingEnabled,
+  proCtaLocator,
+} from "./helpers/billingMode";
+import { interceptCreemCheckout, UUID_RE } from "./helpers/creemCheckout";
 
 /**
  * Purchase-intent preservation across auth.
  *
- * The bug this guards against: an anonymous visitor could open Paddle Checkout
- * directly, so the webhook received no custom_data.userId and the resulting
+ * ── BILLING SWITCH (CREEM_MODE) ──────────────────────────────────────────────
+ * Every assertion below about a paid CTA presupposes that checkout is TURNED ON.
+ * The server reads `CREEM_MODE` (web/src/lib/server/creem/billingMode.ts); the
+ * legal values are `disabled` | `test` | `live`, and anything unset/unrecognized
+ * resolves to `disabled` — the safe default.
+ *
+ * With `disabled`, /pricing server-renders every paid tier as a *disabled*
+ * "Coming soon" button and `handlePlanCta` returns immediately (no signup route,
+ * no checkout call). That is correct product behaviour, not a bug — so the
+ * checkout-dependent cases here SKIP rather than pretend to pass. They are
+ * gated on a runtime probe (`helpers/billingMode.ts`) instead of on env vars,
+ * because the dev server's env is not visible to the test process.
+ *
+ * To run the full paid coverage locally, set `CREEM_MODE=test` in web/.env.local
+ * (sandbox billing; `live` is rejected outside production by
+ * assertBillingModeUsable) and restart the dev server.
+ *
+ * The intent/redirect-safety cases ("plain Log in", "malicious next") do NOT
+ * touch checkout and always run.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ── HOW CHECKOUT IS OBSERVED (Creem, full-page redirect) ─────────────────────
+ * The bug this guards against: an anonymous visitor could start checkout
+ * directly, so the billing webhook received no userId and the resulting
  * subscription could not be linked back to a Supabase user.
  *
- * Rules enforced here:
- *   1. Anonymous plan CTA never opens checkout — it routes to signup carrying
- *      the plan + period as a `next` that returns to /pricing.
- *   2. Period (month|year) survives the whole pricing → signup → login round trip.
- *   3. A signed-in return to /pricing?checkout=<plan>&period=<p> auto-opens
- *      checkout with a real userId in customData, exactly once, and scrubs the URL.
- *   4. A plain "Log in" (no intent) returns to /pricing WITHOUT opening checkout.
- *   5. `next` cannot be used for an open redirect.
+ * Under Paddle that was an overlay (`Paddle.Checkout.open({ customData })`) and
+ * these tests stubbed the SDK to capture its argument. Creem is a HOSTED page:
+ * `pricing-client.tsx` POSTs `{ plan, interval }` to
+ * `/api/billing/creem/checkout` and then does `window.location.assign(url)` —
+ * a real navigation, with no client-side call object to inspect.
+ *
+ * So "checkout opened" is now observed at OUR OWN API seam: helpers/creemCheckout
+ * intercepts that POST, records `{ plan, interval }` plus the
+ * `Authorization: Bearer <supabase JWT>` it carries, and answers with a
+ * same-origin fake checkout URL so the redirect stays inside the test.
+ * "Checkout never opened" is therefore `requests.length === 0`, and this holds
+ * even for the anonymous cases: if the client ever tried to start a checkout,
+ * the interceptor would see it whether or not the user was logged in.
+ *
+ * LESSON LEARNED: assertions about *how a third-party SDK is invoked* die with
+ * the SDK. All three signed-in cases here had to be rewritten from scratch when
+ * billing moved Paddle → Creem, and they failed loudly ("Execution context was
+ * destroyed") rather than usefully. Assert instead that OUR SERVER RECEIVES THE
+ * RIGHT PARAMETERS — that boundary is ours, so the test survives the next
+ * provider swap.
  *
  * Requires a dev server started WITHOUT E2E_TEST_MODE=true, otherwise the proxy
  * auth guard is bypassed and the redirect assertions are meaningless.
@@ -40,66 +79,18 @@ import { PRICING_TIERS } from "../../src/lib/pricingPlans";
  * loginViaForm() + E2E_USER_EMAIL/PASSWORD.
  */
 
-type CheckoutCall = {
-  items: { priceId: string; quantity: number }[];
-  customData?: { userId?: string };
-  customer?: { email?: string };
-};
-
-declare global {
-  interface Window {
-    __checkoutCalls: CheckoutCall[];
-  }
-}
-
-/**
- * Stub Paddle before any app code runs. Checkout.open() is recorded instead of
- * opening the real third-party overlay, so we can assert on exactly what the
- * app would have sent to Paddle — above all, customData.userId.
- *
- * `getPaddle()` calls `initializePaddle` from @paddle/paddle-js, which injects
- * Paddle.js from the CDN and then wraps `window.Paddle`. So stubbing the global
- * up-front is not enough (the real script would overwrite it) — we serve our own
- * script from the CDN URL instead, and install the global from there.
- */
-async function stubPaddle(page: Page) {
-  // Let the real Paddle.js load and initialize (a hand-rolled fake global gets
-  // rejected by the SDK's own version check), then hot-swap only Checkout.open
-  // so the overlay never actually opens and we capture the exact payload.
-  await page.addInitScript(() => {
-    window.__checkoutCalls = [];
-
-    let real: unknown;
-    Object.defineProperty(window, "Paddle", {
-      configurable: true,
-      get: () => real,
-      set: (incoming: { Checkout?: { open?: unknown } }) => {
-        if (incoming?.Checkout) {
-          const checkout = incoming.Checkout as { open: (o: CheckoutCall) => void };
-          checkout.open = (opts: CheckoutCall) => {
-            window.__checkoutCalls.push(opts);
-          };
-        }
-        real = incoming;
-      },
-    });
-  });
-}
-
-async function checkoutCalls(page: Page): Promise<CheckoutCall[]> {
-  return page.evaluate(() => window.__checkoutCalls ?? []);
-}
+const BASE_URL = process.env.PLAYWRIGHT_TEST_BASE_URL ?? "http://localhost:3000";
 
 /**
  * Click the Pro plan's CTA.
  *
  * The button's label flips to "Loading…" while a click is parked waiting for
- * auth/Paddle, so matching on the literal "Start Pro" text is racy. Wait for the
- * page to settle into its resolved state (button enabled, showing its real
- * label) before clicking.
+ * auth, so matching on the literal "Start Pro" text is racy. Wait for the page
+ * to settle into its resolved state (button enabled, showing its real label)
+ * before clicking.
  */
 async function clickStartPro(page: Page) {
-  const cta = page.getByRole("button", { name: /^(Start Pro|Loading…)$/ }).first();
+  const cta = proCtaLocator(page);
   await cta.waitFor({ state: "visible" });
   await expect(cta).toBeEnabled({ timeout: 15_000 });
   await expect(cta).toHaveText("Start Pro", { timeout: 15_000 });
@@ -121,98 +112,111 @@ async function loginViaForm(page: Page) {
   await page.locator('button[type="submit"]').click();
 }
 
-// ── Scenario A + B: anonymous CTA carries plan + period to signup ──────────────
+/**
+ * Every case inside this block clicks a PAID tier CTA. When CREEM_MODE resolves
+ * to "disabled" that button is server-rendered as a disabled "Coming soon" and
+ * there is no signup route / checkout call to assert — so the whole group skips
+ * with an explicit reason instead of failing or being weakened.
+ */
+test.describe("paid checkout intent (requires CREEM_MODE=test|live)", () => {
+  test.beforeEach(async ({ browser }) => {
+    test.skip(!(await isBillingEnabled(browser)), BILLING_DISABLED_SKIP_REASON);
+  });
 
-for (const [label, yearly, expectedPeriod] of [
-  ["monthly", false, "month"],
-  ["yearly", true, "year"],
-] as const) {
-  test(`anonymous "Start Pro" (${label}) routes to signup with intent, never opens checkout`, async ({ page }) => {
-    await stubPaddle(page);
+  // ── Scenario A + B: anonymous CTA carries plan + period to signup ──────────────
+
+  for (const [label, yearly, expectedPeriod] of [
+    ["monthly", false, "month"],
+    ["yearly", true, "year"],
+  ] as const) {
+    test(`anonymous "Start Pro" (${label}) routes to signup with intent, never opens checkout`, async ({ page }) => {
+      const checkout = await interceptCreemCheckout(page, BASE_URL);
+      await page.goto("/pricing", { waitUntil: "networkidle" });
+
+      if (yearly) {
+        // Billing toggle — switch to annual before clicking the plan CTA.
+        await page.getByRole("button", { name: /year/i }).first().click();
+      }
+
+      await clickStartPro(page);
+      // Client-side router.push fires no `load` event, so poll the URL instead of
+      // waitForURL (which waits for a navigation that never happens).
+      await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/signup");
+
+      const url = new URL(page.url());
+      expect(url.pathname).toBe("/signup");
+      expect(url.searchParams.get("plan")).toBe("pro");
+
+      // The intent must survive as a decodable relative path back to /pricing.
+      const next = url.searchParams.get("next");
+      expect(next).toBeTruthy();
+      const nextUrl = new URL(next!, "http://localhost");
+      expect(nextUrl.pathname).toBe("/pricing");
+      expect(nextUrl.searchParams.get("checkout")).toBe("pro");
+      expect(nextUrl.searchParams.get("period")).toBe(expectedPeriod);
+
+      // The whole point: an anonymous visitor must never reach the checkout API.
+      expect(checkout.requests).toHaveLength(0);
+    });
+  }
+
+  // ── Race: a click that lands before auth resolves must be parked, not dropped ─
+
+  test("clicking Start Pro before auth resolves still reaches signup", async ({ page }) => {
+    const checkout = await interceptCreemCheckout(page, BASE_URL);
+
+    // Stall the session lookup so the click is guaranteed to land while
+    // `authReady` is still false — the exact window where the CTA used to be
+    // swallowed (or wrongly reported checkout as unavailable).
+    await page.route("**/auth/v1/user**", async route => {
+      await new Promise(r => setTimeout(r, 3_000));
+      await route.continue();
+    });
+
     await page.goto("/pricing", { waitUntil: "networkidle" });
 
-    if (yearly) {
-      // Billing toggle — switch to annual before clicking the plan CTA.
-      await page.getByRole("button", { name: /year/i }).first().click();
-    }
+    const cta = proCtaLocator(page);
+    await cta.waitFor({ state: "visible" });
+    await cta.click(); // deliberately early — auth is still in flight
 
-    await clickStartPro(page);
-    // Client-side router.push fires no `load` event, so poll the URL instead of
-    // waitForURL (which waits for a navigation that never happens).
-    await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/signup");
+    // The intent must be parked and replayed once auth resolves, not discarded.
+    await expect.poll(() => new URL(page.url()).pathname, { timeout: 20_000 }).toBe("/signup");
 
     const url = new URL(page.url());
-    expect(url.pathname).toBe("/signup");
     expect(url.searchParams.get("plan")).toBe("pro");
+    expect(url.searchParams.get("next")).toContain("checkout");
 
-    // The intent must survive as a decodable relative path back to /pricing.
+    // A pending auth state must never be misreported as a broken checkout.
+    expect(await page.getByText(/temporarily unavailable/i).count()).toBe(0);
+    expect(checkout.requests).toHaveLength(0);
+  });
+
+  // ── Scenario C: an existing user going signup → login keeps the intent ────────
+
+  test('signup\'s "Sign in" link forwards the purchase intent to login', async ({ page }) => {
+    const checkout = await interceptCreemCheckout(page, BASE_URL);
+    await page.goto("/pricing", { waitUntil: "networkidle" });
+    await clickStartPro(page);
+    await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/signup");
+
+    await page.getByRole("link", { name: /sign in/i }).click();
+    await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/login");
+
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/login");
     const next = url.searchParams.get("next");
-    expect(next).toBeTruthy();
     const nextUrl = new URL(next!, "http://localhost");
     expect(nextUrl.pathname).toBe("/pricing");
     expect(nextUrl.searchParams.get("checkout")).toBe("pro");
-    expect(nextUrl.searchParams.get("period")).toBe(expectedPeriod);
-
-    // The whole point: an anonymous visitor must never reach Paddle.
-    expect(await checkoutCalls(page)).toHaveLength(0);
-  });
-}
-
-// ── Race: a click that lands before auth resolves must be parked, not dropped ─
-
-test("clicking Start Pro before auth resolves still reaches signup", async ({ page }) => {
-  await stubPaddle(page);
-
-  // Stall the session lookup so the click is guaranteed to land while
-  // `authReady` is still false — the exact window where the CTA used to be
-  // swallowed (or wrongly reported checkout as unavailable).
-  await page.route("**/auth/v1/user**", async route => {
-    await new Promise(r => setTimeout(r, 3_000));
-    await route.continue();
+    expect(checkout.requests).toHaveLength(0);
   });
 
-  await page.goto("/pricing", { waitUntil: "networkidle" });
-
-  const cta = page.getByRole("button", { name: /^(Start Pro|Loading…)$/ }).first();
-  await cta.waitFor({ state: "visible" });
-  await cta.click(); // deliberately early — auth is still in flight
-
-  // The intent must be parked and replayed once auth resolves, not discarded.
-  await expect.poll(() => new URL(page.url()).pathname, { timeout: 20_000 }).toBe("/signup");
-
-  const url = new URL(page.url());
-  expect(url.searchParams.get("plan")).toBe("pro");
-  expect(url.searchParams.get("next")).toContain("checkout");
-
-  // A pending auth state must never be misreported as a broken checkout.
-  expect(await page.getByText(/temporarily unavailable/i).count()).toBe(0);
-  expect(await checkoutCalls(page)).toHaveLength(0);
-});
-
-// ── Scenario C: an existing user going signup → login keeps the intent ────────
-
-test('signup\'s "Sign in" link forwards the purchase intent to login', async ({ page }) => {
-  await stubPaddle(page);
-  await page.goto("/pricing", { waitUntil: "networkidle" });
-  await clickStartPro(page);
-  await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/signup");
-
-  await page.getByRole("link", { name: /sign in/i }).click();
-  await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/login");
-
-  const url = new URL(page.url());
-  expect(url.pathname).toBe("/login");
-  const next = url.searchParams.get("next");
-  const nextUrl = new URL(next!, "http://localhost");
-  expect(nextUrl.pathname).toBe("/pricing");
-  expect(nextUrl.searchParams.get("checkout")).toBe("pro");
-  expect(await checkoutCalls(page)).toHaveLength(0);
-});
+}); // end: paid checkout intent
 
 // ── Scenario D: a plain Log in has no intent and must not open checkout ───────
+// Billing-agnostic: asserts only the `next` the nav's Log in link carries.
 
 test('plain "Log in" from pricing carries no checkout intent', async ({ page }) => {
-  await stubPaddle(page);
   await page.goto("/pricing", { waitUntil: "networkidle" });
   await page.getByRole("link", { name: /^log in$/i }).click();
   await page.waitForURL(/\/login/, { timeout: 15_000 });
@@ -236,7 +240,7 @@ test("malicious next values fall back to /app/studio, never off-site", async ({ 
   }
 });
 
-// ── Scenarios C + B end-to-end: signed-in resume opens checkout with a real id ─
+// ── Scenarios C + B end-to-end: signed-in resume starts checkout for real ─────
 
 test.describe("signed-in resume", () => {
   test.skip(
@@ -244,12 +248,19 @@ test.describe("signed-in resume", () => {
     "needs E2E_USER_EMAIL / E2E_USER_PASSWORD",
   );
 
-  for (const [label, period, priceKey] of [
-    ["monthly", "month", "month"],
-    ["yearly", "year", "year"],
+  // Resuming an intent means STARTING checkout — meaningless with billing off,
+  // where /pricing?checkout=pro deliberately shows "coming soon" and scrubs the
+  // URL without ever calling the checkout endpoint.
+  test.beforeEach(async ({ browser }) => {
+    test.skip(!(await isBillingEnabled(browser)), BILLING_DISABLED_SKIP_REASON);
+  });
+
+  for (const [label, period] of [
+    ["monthly", "month"],
+    ["yearly", "year"],
   ] as const) {
     test(`email login resumes Pro ${label} checkout with a real Supabase userId`, async ({ page }) => {
-      await stubPaddle(page);
+      const checkout = await interceptCreemCheckout(page, BASE_URL);
 
       const intent = `/pricing?checkout=pro&period=${period}`;
       await page.goto(`/login?next=${encodeURIComponent(intent)}`, { waitUntil: "domcontentloaded" });
@@ -258,40 +269,79 @@ test.describe("signed-in resume", () => {
       // Must land back on pricing, not /app/studio — the intent wins.
       await page.waitForURL(/\/pricing/, { timeout: 30_000 });
 
-      // Auto-checkout fires once Paddle + auth are both ready.
-      await expect
-        .poll(async () => (await checkoutCalls(page)).length, { timeout: 20_000 })
-        .toBe(1);
+      // Auto-checkout fires once auth resolves: exactly one POST to our endpoint.
+      await expect.poll(() => checkout.requests.length, { timeout: 30_000 }).toBe(1);
 
-      const [call] = await checkoutCalls(page);
+      const [call] = checkout.requests;
 
-      // THE assertion this whole change exists for: a real user id reaches Paddle.
-      expect(call.customData?.userId).toBeTruthy();
-      expect(call.customData!.userId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-      );
+      // Plan fidelity + period fidelity: a yearly intent must not silently
+      // become monthly. The server maps (plan, interval) to the Creem product id
+      // from its own env allowlist, so these two fields fully determine what the
+      // buyer is charged for.
+      //
+      // KNOWN FAILING (yearly case) — this is a REAL product bug, deliberately
+      // left red rather than weakened. In pricing-client.tsx the auto-resume
+      // effect does:
+      //     setYearly(period === "year");   // React state — applied next render
+      //     void launchCheckout(plan.id);   // same tick
+      // but `launchCheckout` is a useCallback over [yearly], so the instance
+      // invoked here still closes over the PREVIOUS `yearly` (false). It computes
+      // `interval = "month"` and a `?period=year` purchase intent is checked out
+      // monthly. Every other assertion on the yearly path passes; only the
+      // interval is wrong. Fix belongs in the product (e.g. pass the interval
+      // into launchCheckout explicitly instead of reading it from state), which
+      // is out of scope for this test-only change.
+      expect(call.body.plan).toBe("pro");
+      expect(call.body.interval).toBe(period);
 
-      // Period fidelity: the yearly intent must not silently become monthly.
-      const pro = PRICING_TIERS.find(t => t.id === "pro")!;
-      expect(call.items[0].priceId).toBe(pro.paddlePriceIds![priceKey]);
+      // THE assertion this whole flow exists for: a REAL Supabase user id is
+      // attached to the checkout.
+      //
+      // Under Creem the userId is NOT in the request body — the route handler
+      // (src/app/api/billing/creem/checkout/route.ts) derives it server-side via
+      // getUserIdFromBearerOrCookies() and puts it in Creem's metadata.userId.
+      // The closest thing a browser test can observe is the credential the client
+      // sends, which is precisely what the server resolves: the bearer is the
+      // Supabase access token, and the server's auth.getUser(token).user.id is
+      // that JWT's `sub`. So asserting the bearer's `sub` is a UUID asserts the
+      // exact value that will reach the billing webhook — not a proxy for it.
+      expect(call.authorization).toMatch(/^Bearer .+/);
+      expect(call.bearerUserId).toBeTruthy();
+      expect(call.bearerUserId!).toMatch(UUID_RE);
 
-      // URL is scrubbed so a refresh does not re-open the overlay.
-      await expect.poll(async () => new URL(page.url()).search, { timeout: 10_000 }).toBe("");
+      // Checkout is a full-page redirect to the hosted page (here: our
+      // same-origin stand-in). Landing there proves the flow actually launched
+      // rather than dying after the API call.
+      await page.waitForURL(u => u.toString().startsWith(checkout.fakeCheckoutUrl), {
+        timeout: 20_000,
+      });
 
-      // And a reload really does not fire it again.
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(3_000);
-      expect(await checkoutCalls(page)).toHaveLength(0); // fresh page → fresh recorder
+      // Coming BACK to /pricing (as a buyer who abandons checkout does) must not
+      // re-fire: the resume URL was scrubbed before the redirect, so the plain
+      // /pricing has no intent left to replay.
+      await page.goto("/pricing", { waitUntil: "networkidle" });
+      await page.waitForTimeout(4_000);
+      expect(checkout.requests).toHaveLength(1);
       expect(new URL(page.url()).search).toBe("");
     });
   }
 
+});
+
+// A purely negative assertion — "no intent ⇒ no checkout" must hold with billing
+// on OR off, so this one is deliberately NOT gated on the billing posture.
+test.describe("signed-in, no intent", () => {
+  test.skip(
+    !CREDS.email || !CREDS.password,
+    "needs E2E_USER_EMAIL / E2E_USER_PASSWORD",
+  );
+
   test("signed-in user with no intent lands on pricing without a checkout", async ({ page }) => {
-    await stubPaddle(page);
+    const checkout = await interceptCreemCheckout(page, BASE_URL);
     await page.goto(`/login?next=${encodeURIComponent("/pricing")}`, { waitUntil: "domcontentloaded" });
     await loginViaForm(page);
     await page.waitForURL(/\/pricing/, { timeout: 30_000 });
     await page.waitForTimeout(4_000); // give any stray auto-checkout a chance to fire
-    expect(await checkoutCalls(page)).toHaveLength(0);
+    expect(checkout.requests).toHaveLength(0);
   });
 });
