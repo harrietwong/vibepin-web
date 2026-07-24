@@ -51,7 +51,6 @@ import {
   type PublishingFormat,
 } from "@/lib/publishingPrefsStore";
 import { SmartScheduleConfigForm } from "@/components/plan/SmartScheduleConfigForm";
-import { EXISTING_APP_TOKEN_BALANCE } from "@/lib/accountSummary";
 import {
   getAmazonAffiliateSettings,
   saveAmazonAffiliateSettings,
@@ -383,7 +382,6 @@ function BillingTab() {
   const previousPlanName = billing?.previousPlan
     ? normalizePlanName(billing.previousPlan)
     : null;
-  const lastActivity = summary.lastCreditActivityAt ? formatEnglishDateTime(summary.lastCreditActivityAt) : null;
 
   // Status badge: green ONLY when access is granted and the raw status is
   // active/trialing; scheduled_cancel → amber "Cancels on <date>"; any lapsed
@@ -512,7 +510,13 @@ function BillingTab() {
             {t("billing.aboutTokens")} ↗
           </Link>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        {/*
+          Balance intentionally NOT shown: no real usage ledger populates a
+          token balance yet, so any number here would be fabricated. Show the
+          honest "no usage data yet" state instead of a placeholder figure.
+          (Slice 1: fake-34 removal — the de-Credit copy sweep is slice 2.)
+        */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{
             width: 36, height: 36, borderRadius: "50%",
             background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)",
@@ -520,20 +524,9 @@ function BillingTab() {
           }}>
             <Zap size={16} style={{ color: "#60A5FA" }} />
           </div>
-          <span style={{ fontSize: 28, fontWeight: 800, color: UI.text }}>{loaded ? summary.tokenBalance : "…"}</span>
-          <span style={{ fontSize: 13, color: UI.textSec }}>{t("billing.tokensAvailable")}</span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          {[
-            { label: t("billing.usedThisMonth"), value: loaded ? String(summary.usedThisMonth ?? "—") : "—" },
-            { label: t("billing.remaining"),     value: loaded ? String(summary.tokenBalance) : "—" },
-            { label: t("billing.lastActivity"),  value: lastActivity ?? "—" },
-          ].map(({ label, value }) => (
-            <div key={label} style={{ padding: "10px 12px", borderRadius: 10, background: UI.surface2, border: `1px solid ${UI.border}` }}>
-              <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 700, color: UI.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</p>
-              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: UI.textSec }}>{value}</p>
-            </div>
-          ))}
+          <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: UI.textSec }}>
+            {t("billing.noUsage")}
+          </p>
         </div>
       </SectionCard>
 

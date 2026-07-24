@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { deriveAccountBillingSummary, EXISTING_APP_TOKEN_BALANCE } from "../src/lib/accountSummary";
+import { deriveAccountBillingSummary } from "../src/lib/accountSummary";
+import * as accountSummaryModule from "../src/lib/accountSummary";
 import { formatEnglishDateTime } from "../src/lib/dateTimeFormat";
 import { derivePinterestSettingsState } from "../src/lib/pinterest/pinterestSettingsState";
 
@@ -50,10 +51,31 @@ test("Billing IGNORES a forged user_metadata plan (only app_metadata is trusted)
   assert.equal(value.planName, null);
 });
 
-test("Billing preserves the existing app token balance when metadata is unavailable", () => {
+test("Billing shows NO fabricated token balance when metadata is unavailable", () => {
+  // The old fake-34 constant is gone: with no real metered value, tokenBalance
+  // must be null (an honest "unavailable" state), never a placeholder number.
   const value = deriveAccountBillingSummary(null);
   assert.equal(value.planName, null);
-  assert.equal(value.tokenBalance, EXISTING_APP_TOKEN_BALANCE);
+  assert.equal(value.tokenBalance, null);
+});
+
+test("The fabricated EXISTING_APP_TOKEN_BALANCE export no longer exists", () => {
+  assert.equal(
+    "EXISTING_APP_TOKEN_BALANCE" in accountSummaryModule,
+    false,
+    "EXISTING_APP_TOKEN_BALANCE must be deleted so no fake balance can reach the UI",
+  );
+});
+
+test("Billing card shows the honest no-usage state instead of a balance number", () => {
+  // The Token balance card must render billing.noUsage, not a numeric balance
+  // derived from summary.tokenBalance.
+  assert.match(billing, /t\("billing\.noUsage"\)/);
+  assert.doesNotMatch(billing, /summary\.tokenBalance/);
+});
+
+test("The app chrome no longer renders a fabricated token balance", () => {
+  assert.doesNotMatch(layout, /EXISTING_APP_TOKEN_BALANCE/);
 });
 
 test("Pinterest derives all three safe states", () => {
@@ -93,7 +115,6 @@ test("Account dropdown routes work and logout calls Supabase", () => {
   assert.match(layout, /openSettings\("account"\)/);
   assert.match(layout, /openSettings\("billing"\)/);
   assert.match(layout, /supabase\.auth\.signOut\(\)/);
-  assert.match(layout, /aria-label="Open Billing & Credits"/);
 });
 
 console.log(`\nSettings P0: ${passed} passed, 0 failed`);

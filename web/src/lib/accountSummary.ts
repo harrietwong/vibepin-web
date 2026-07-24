@@ -1,5 +1,3 @@
-export const EXISTING_APP_TOKEN_BALANCE = 34;
-
 type UserLike = {
   user_metadata?: Record<string, unknown> | null;
   app_metadata?: Record<string, unknown> | null;
@@ -9,7 +7,10 @@ export type AccountBillingSummary = {
   planName: string | null;
   planStatus: string | null;
   renewalAt: string | null;
-  tokenBalance: number;
+  // Real balance only. Null when no metered value exists yet (nothing populates
+  // token_balance/credits today). Callers MUST render an honest unavailable
+  // state for null — never substitute 0 or any placeholder number.
+  tokenBalance: number | null;
   usedThisMonth: number | null;
   lastCreditActivityAt: string | null;
 };
@@ -69,7 +70,7 @@ export function deriveAccountBillingSummary(user: UserLike | null | undefined): 
     planName: firstString(appMeta, ["plan_name", "planName", "plan"]),
     planStatus: firstString(metadata, ["subscription_status", "subscriptionStatus", "plan_status"]),
     renewalAt: firstString(metadata, ["renewal_at", "renewalAt", "current_period_end"]),
-    tokenBalance: firstNumber(metadata, ["token_balance", "tokenBalance", "credits"]) ?? EXISTING_APP_TOKEN_BALANCE,
+    tokenBalance: firstNumber(metadata, ["token_balance", "tokenBalance", "credits"]),
     usedThisMonth: firstNumber(metadata, ["tokens_used_this_month", "usedThisMonth", "monthly_usage"]),
     lastCreditActivityAt: firstString(metadata, ["last_credit_activity_at", "lastCreditActivityAt"]),
   };
