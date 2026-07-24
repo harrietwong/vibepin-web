@@ -1337,6 +1337,10 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         </div>
 
         <footer style={{ padding: 16, borderTop: `1px solid ${BUI.border}`, flexShrink: 0 }}>
+          {/* Prompt-only generation (no product) is intentionally DISABLED: per create-pin
+              PRD §31, it may only be enabled after verification against the live image model.
+              Until then the button stays disabled with no product selected (Section B's
+              "product optional" clause is conditional on that verification). */}
           <button type="button" data-testid="ai-version-generate" disabled={generating || productUrls.length === 0}
             onClick={doGenerate}
             style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px 16px", borderRadius: 11, border: "none", background: BUI.gradient, color: "#fff", fontSize: 13, fontWeight: 850, cursor: generating || productUrls.length === 0 ? "default" : "pointer", opacity: generating || productUrls.length === 0 ? 0.65 : 1, fontFamily: "inherit" }}>
