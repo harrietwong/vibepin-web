@@ -17,49 +17,52 @@
 import { ConfigurationError } from "@/lib/server/pinterest/errors";
 
 // Graph API version. Kept as a single constant so every URL stays in lockstep.
-// Bumped to v25.0 for Facebook Login for Business + Instagram content publishing.
+// v25.0 — Facebook Login for Business, Page-only publishing target.
 export const FACEBOOK_API_VERSION = "v25.0";
 export const FACEBOOK_AUTHORIZE_URL = `https://www.facebook.com/${FACEBOOK_API_VERSION}/dialog/oauth`;
 export const FACEBOOK_TOKEN_URL = `https://graph.facebook.com/${FACEBOOK_API_VERSION}/oauth/access_token`;
 export const FACEBOOK_GRAPH_URL = `https://graph.facebook.com/${FACEBOOK_API_VERSION}`;
 
 /**
- * Requested scopes for the Instagram Business publishing flow.
+ * Requested scopes for the Facebook Page publishing flow (Page-only).
  *
  *   pages_show_list           — enumerate the user's Facebook Pages (/me/accounts)
- *   pages_read_engagement     — read Page details incl. the linked IG account
- *   instagram_basic           — read the IG Business account (id/username)
- *   instagram_content_publish — publish media to the IG Business account (Phase 2)
+ *   pages_manage_posts        — publish posts to a Page the user manages
+ *   pages_read_engagement     — read Page details (name, tasks/roles)
  *
  * `public_profile` is kept so we can still fetch the connecting user's id/name
  * for display; it needs no App Review and is granted by default.
  *
- * NOTE: the four business scopes go through Meta App Review. When VibePin uses
- * Facebook Login for Business, these are NOT sent as a `scope` param — the
- * granted permission set is decided by the Login Configuration (config_id) in the
- * Meta dashboard. See buildAuthorizeUrl below. The scope list here is the
- * fallback for the classic (config-less) Facebook Login flow.
+ * Instagram is fully decoupled — no instagram_basic / instagram_content_publish
+ * here (Instagram runs through its own independent Instagram Login flow). This
+ * flow's ONLY target is a Facebook Page. We deliberately do NOT request
+ * pages_manage_metadata (no webhook subscriptions), business_management, or any
+ * ads_* scopes — the minimal Page-publishing set keeps App Review lean.
+ *
+ * NOTE: these business scopes go through Meta App Review. When VibePin uses
+ * Facebook Login for Business, they are NOT sent as a `scope` param — the granted
+ * permission set is decided by the Login Configuration (config_id) in the Meta
+ * dashboard. See buildAuthorizeUrl below. The scope list here is the fallback for
+ * the classic (config-less) Facebook Login flow.
  */
 export const FACEBOOK_SCOPES = [
   "public_profile",
   "pages_show_list",
+  "pages_manage_posts",
   "pages_read_engagement",
-  "instagram_basic",
-  "instagram_content_publish",
 ] as const;
 
 /**
  * The permissions that MUST be granted for the connection to be usable. If the
- * user unchecks any of these on the Facebook consent screen we cannot discover /
- * publish to their Instagram Business account, so the connection is marked
- * "reconnect required" rather than active. `public_profile` is intentionally NOT
- * in this list — it is display-only and always granted.
+ * user unchecks any of these on the Facebook consent screen we cannot enumerate or
+ * publish to their Facebook Page, so the connection is marked "reconnect required"
+ * rather than active. `public_profile` is intentionally NOT in this list — it is
+ * display-only and always granted.
  */
 export const REQUIRED_FACEBOOK_SCOPES = [
   "pages_show_list",
+  "pages_manage_posts",
   "pages_read_engagement",
-  "instagram_basic",
-  "instagram_content_publish",
 ] as const;
 
 /** Comma-joined scope string for the (fallback) classic authorize request. */
@@ -134,14 +137,21 @@ export function isFacebookConfigured(): boolean {
  *      the URL carries `config_id` and does NOT carry a `scope` param. With Login
  *      for Business the permission set is defined by the Login Configuration in
  *      the Meta dashboard, so sending `scope` is wrong (Meta ignores/rejects it).
- *      The Configuration is what pins the business permissions
- *      (pages_show_list / pages_read_engagement / instagram_basic /
- *      instagram_content_publish) that IG publishing needs.
+ *      The Configuration is what pins the Page permissions
+ *      (pages_show_list / pages_manage_posts / pages_read_engagement) that Page
+ *      publishing needs.
+ *
+ *      IMPORTANT: the Meta-dashboard Configuration bound to this config_id MUST be
+ *      a minimal "Facebook Pages only" configuration — no Instagram assets, no ads
+ *      permissions, no Business Portfolio asset selection. If the Configuration is
+ *      set up as a broad business login, the user is shown a full asset "grab bag"
+ *      consent page (Pages + IG + ad accounts + catalogs) instead of a clean
+ *      Page picker. Getting this wrong is a Configuration mistake, not a code one.
  *
  *   2. Classic Facebook Login (FALLBACK — when no config_id is configured):
- *      the URL carries the comma-joined `scope` list (the four business scopes +
+ *      the URL carries the comma-joined `scope` list (the three Page scopes +
  *      public_profile). This keeps the connect flow working before a Login
- *      Configuration exists, but the business scopes still require App Review.
+ *      Configuration exists, but the Page scopes still require App Review.
  *
  * `state`, `redirect_uri`, and `response_type=code` are always present.
  */

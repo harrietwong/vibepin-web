@@ -55,14 +55,14 @@ import type { MessageKey } from "@/lib/i18n/messages/en";
 type OAuthNoticeType = "success" | "error" | "info";
 const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: string }> = {
   connected: { type: "success", msg: "Facebook connected" },
-  select_account: { type: "info", msg: "Facebook connected — choose which Instagram account to publish to." },
+  select_page: { type: "info", msg: "Facebook connected — choose which Page to publish to." },
   reconnect_required: {
     type: "error",
     msg: "Facebook connected, but some required permissions were not granted. Please reconnect and allow all of them.",
   },
-  no_instagram_account: {
+  no_pages: {
     type: "error",
-    msg: "Facebook connected, but no Page is linked to an Instagram Business account. Link one in Facebook, then reconnect.",
+    msg: "Your Facebook account has no Page to manage. Create a Facebook Page (or get admin access to one), then reconnect.",
   },
   cancelled: { type: "info", msg: "Facebook connection was cancelled. You can try again when ready." },
   session_expired: { type: "error", msg: "Your session expired — please sign in and retry" },
@@ -77,29 +77,51 @@ const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: s
   error: { type: "error", msg: "Facebook authorization failed" },
 };
 
+/**
+ * `?instagram=<status>` OAuth-return consumption. Fully independent from the
+ * `?facebook=` handling above — Instagram runs through its own dedicated
+ * "Instagram Login" flow (api/auth/instagram/{connect,callback}). Statuses mirror
+ * the redirects in those routes.
+ */
+const INSTAGRAM_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: string }> = {
+  connected: { type: "success", msg: "Instagram connected" },
+  cancelled: { type: "info", msg: "Instagram connection was cancelled. You can try again when ready." },
+  personal_account: {
+    type: "error",
+    msg: "VibePin currently supports Instagram Business and Creator accounts. Please switch to a professional account and try again.",
+  },
+  session_expired: { type: "error", msg: "Your session expired — please sign in and retry" },
+  state_expired: { type: "error", msg: "Connection request expired — please try again" },
+  state_mismatch: { type: "error", msg: "Security check failed — please try connecting again" },
+  exchange_failed: { type: "error", msg: "Could not complete Instagram authorization — please try again" },
+  profile_failed: { type: "error", msg: "Instagram authorized but reading your profile failed — try again" },
+  persist_failed: { type: "error", msg: "Instagram authorized but saving the connection failed — try again" },
+  config_error: { type: "error", msg: "Instagram is not configured on the server" },
+  error: { type: "error", msg: "Instagram authorization failed" },
+};
+
 /** Human-readable labels for the required Facebook permissions (for the missing-scope hint). */
 const FACEBOOK_SCOPE_LABELS: Record<string, string> = {
   pages_show_list: "See your Pages",
+  pages_manage_posts: "Publish to your Page",
   pages_read_engagement: "Read Page details",
-  instagram_basic: "Read your Instagram account",
-  instagram_content_publish: "Publish to Instagram",
 };
 const REQUIRED_FACEBOOK_SCOPES_UI = [
   "pages_show_list",
+  "pages_manage_posts",
   "pages_read_engagement",
-  "instagram_basic",
-  "instagram_content_publish",
 ] as const;
 
 /** Client-safe shape of metadata.facebook produced by socialConnectionStore.sanitizeMetadata. */
 type FacebookMeta = {
   connectionState?: string | null;
   facebookUserName?: string | null;
+  selectedPageId?: string | null;
   selectedPageName?: string | null;
-  selectedInstagramUsername?: string | null;
   candidatePages?: Array<{
+    pageId?: string | null;
     pageName?: string | null;
-    instagramUsername?: string | null;
+    canPublish?: boolean | null;
   }> | null;
 };
 
@@ -107,6 +129,25 @@ function readFacebookMeta(summary: PlatformConnectionSummary): FacebookMeta | nu
   const account = summary.accounts[0];
   const meta = account?.metadata as { facebook?: FacebookMeta } | null | undefined;
   return meta?.facebook ?? null;
+}
+
+/** Client-safe shape of metadata.instagram produced by socialConnectionStore.sanitizeMetadata. */
+type InstagramMeta = {
+  connectionState?: string | null;
+  accountType?: string | null;
+};
+
+function readInstagramMeta(summary: PlatformConnectionSummary): InstagramMeta | null {
+  const account = summary.accounts[0];
+  const meta = account?.metadata as { instagram?: InstagramMeta } | null | undefined;
+  return meta?.instagram ?? null;
+}
+
+/** Friendly label for an Instagram account_type (BUSINESS / MEDIA_CREATOR). */
+function instagramAccountTypeLabel(accountType: string | null | undefined): string | null {
+  if (accountType === "BUSINESS") return "Business account";
+  if (accountType === "MEDIA_CREATOR") return "Creator account";
+  return null;
 }
 
 const UI = {
@@ -195,6 +236,7 @@ function PlatformCard({
   multiAccount,
   onConnect,
   onDisconnect,
+  onRefresh,
 }: {
   summary: PlatformConnectionSummary;
   busy: boolean;
@@ -203,6 +245,8 @@ function PlatformCard({
   multiAccount: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
+  /** Re-fetch the connection list (used after a Facebook Page selection). */
+  onRefresh: () => void;
 }) {
   const { t: tr } = useLocale();
   const meta = PLATFORMS[summary.provider];
@@ -242,11 +286,18 @@ function PlatformCard({
         </div>
       </div>
 
-      {/* Facebook/Instagram discovery detail (display only — Phase 1). Shown whenever
-          there is a stored Facebook row, including degraded/error states so the user
-          sees exactly what is connected and what is missing. */}
+      {/* Facebook Page connection detail (display only). Shown whenever there is a
+          stored Facebook row, including degraded/error states, so the user sees
+          exactly what is connected and what is missing. Includes the Page picker
+          when several Pages await selection. */}
       {summary.provider === "facebook" && summary.accounts.length > 0 && (
-        <FacebookDetails summary={summary} />
+        <FacebookDetails summary={summary} onRefresh={onRefresh} />
+      )}
+
+      {/* Instagram connection detail (display only). Independent of Facebook — reads
+          only the Instagram row's sanitized metadata.instagram (no tokens). */}
+      {summary.provider === "instagram" && summary.accounts.length > 0 && (
+        <InstagramDetails summary={summary} />
       )}
 
       {/* Capabilities (only when not connected, mirrors the Pinterest empty state) */}
@@ -355,17 +406,25 @@ function PlatformCard({
   );
 }
 
+/** Mask a Page id for display — first 4 + last 4 chars (e.g. `9656...5245`). */
+function maskPageId(pageId: string): string {
+  if (pageId.length <= 8) return pageId;
+  return `${pageId.slice(0, 4)}...${pageId.slice(-4)}`;
+}
+
 /**
- * Facebook/Instagram connection detail (display only — Phase 1).
+ * Facebook Page connection detail (display only + Page picker).
  *
- * Renders the discovered Facebook user, Page, Instagram username, granted-vs-
- * missing permissions, token expiry, and a state hint. It NEVER shows any token —
- * all data comes from the sanitized metadata.facebook projection (page tokens are
- * stripped server-side). Publishing is Phase 2 and is intentionally absent here.
+ * Renders the connecting Facebook user, the selected Page, granted-vs-missing
+ * permissions, token expiry, and a state hint. When several Pages await selection
+ * it shows a picker. It NEVER shows any token — all data comes from the sanitized
+ * metadata.facebook projection (page tokens are stripped server-side). Instagram
+ * is fully decoupled and not rendered here.
  */
-function FacebookDetails({ summary }: { summary: PlatformConnectionSummary }) {
+function FacebookDetails({ summary, onRefresh }: { summary: PlatformConnectionSummary; onRefresh: () => void }) {
   const fb = readFacebookMeta(summary);
   const account = summary.accounts[0];
+  const [selecting, setSelecting] = useState<string | null>(null);
   if (!fb && !account) return null;
 
   const grantedScopes = new Set(account?.scopes ?? []);
@@ -376,11 +435,35 @@ function FacebookDetails({ summary }: { summary: PlatformConnectionSummary }) {
     ? new Date(tokenExpiresAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
     : null;
 
+  const candidatePages = fb?.candidatePages ?? [];
+  const needsSelection = state === "page_selection_required" && candidatePages.length > 1;
+
   const rows: Array<{ label: string; value: string }> = [];
   if (fb?.facebookUserName) rows.push({ label: "Facebook", value: fb.facebookUserName });
   if (fb?.selectedPageName) rows.push({ label: "Page", value: fb.selectedPageName });
-  if (fb?.selectedInstagramUsername) rows.push({ label: "Instagram", value: `@${fb.selectedInstagramUsername}` });
   if (expiryLabel) rows.push({ label: "Access expires", value: expiryLabel });
+
+  async function handleSelectPage(pageId: string) {
+    setSelecting(pageId);
+    try {
+      const res = await fetch("/api/integrations/facebook/select-page", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; pageName?: string | null; error?: string };
+      if (!res.ok || !body.ok) {
+        toast.error(body.error || "Could not select that Page — please try again");
+        return;
+      }
+      toast.success(body.pageName ? `Publishing to ${body.pageName}` : "Facebook Page selected");
+      onRefresh();
+    } catch {
+      toast.error("Could not select that Page — please try again");
+    } finally {
+      setSelecting(null);
+    }
+  }
 
   return (
     <div
@@ -405,10 +488,10 @@ function FacebookDetails({ summary }: { summary: PlatformConnectionSummary }) {
         </div>
       ))}
 
-      {state === "no_instagram_account" && (
+      {state === "no_pages" && (
         <p style={{ margin: 0, fontSize: 11.5, color: UI.warning, lineHeight: 1.5 }}>
-          Connected to Facebook, but no Page is linked to an Instagram Business account. Link an Instagram
-          Business account to a Page in Facebook, then reconnect.
+          Your Facebook account has no Page to manage. Create a Facebook Page (or get admin access to one),
+          then reconnect.
         </p>
       )}
 
@@ -427,11 +510,110 @@ function FacebookDetails({ summary }: { summary: PlatformConnectionSummary }) {
         </div>
       )}
 
-      {fb?.candidatePages && fb.candidatePages.length > 1 && (
-        <p style={{ margin: 0, fontSize: 11.5, color: UI.blue, lineHeight: 1.5 }}>
-          {fb.candidatePages.length} Instagram accounts available — pick one to publish to.
-        </p>
+      {needsSelection && (
+        <div data-testid="facebook-page-selector" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <p style={{ margin: 0, fontSize: 11.5, color: UI.blue, lineHeight: 1.5 }}>
+            Choose which Page to publish to:
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {candidatePages.map(p => {
+              const pageId = typeof p.pageId === "string" ? p.pageId : "";
+              const busySelecting = selecting === pageId;
+              const disabled = !pageId || selecting !== null;
+              return (
+                <button
+                  key={pageId || (p.pageName ?? "page")}
+                  type="button"
+                  data-testid={`facebook-select-page-${pageId}`}
+                  onClick={() => pageId && void handleSelectPage(pageId)}
+                  disabled={disabled}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    padding: "9px 12px",
+                    borderRadius: 9,
+                    border: `1px solid ${UI.border}`,
+                    background: "transparent",
+                    color: UI.text,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    textAlign: "left",
+                    cursor: disabled ? "not-allowed" : "pointer",
+                    opacity: disabled && !busySelecting ? 0.6 : 1,
+                  }}
+                >
+                  <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                    <span style={{ wordBreak: "break-word" }}>{p.pageName || "Untitled Page"}</span>
+                    <span style={{ fontSize: 10.5, color: UI.textSec, fontWeight: 500 }}>
+                      {pageId ? maskPageId(pageId) : ""}
+                      {p.canPublish === false ? " · can't publish" : ""}
+                    </span>
+                  </span>
+                  {busySelecting
+                    ? <Loader2 size={13} className="animate-spin" style={{ color: UI.textSec, flexShrink: 0 }} />
+                    : <Check size={13} style={{ color: UI.textMuted, flexShrink: 0 }} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Instagram connection detail (display only).
+ *
+ * Renders the connected @username, account type (Business / Creator), and token
+ * expiry. It reads ONLY the Instagram row's sanitized metadata.instagram + account
+ * fields — never any Facebook data — so the two platform cards are fully
+ * independent. There is no Page picker and no token is ever shown (Instagram stores
+ * no token in metadata).
+ */
+function InstagramDetails({ summary }: { summary: PlatformConnectionSummary }) {
+  const ig = readInstagramMeta(summary);
+  const account = summary.accounts[0];
+  if (!ig && !account) return null;
+
+  const username = account?.providerAccountUsername ?? null;
+  const typeLabel = instagramAccountTypeLabel(ig?.accountType);
+  const tokenExpiresAt = account?.tokenExpiresAt ?? null;
+  const expiryLabel = tokenExpiresAt
+    ? new Date(tokenExpiresAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+    : null;
+
+  const rows: Array<{ label: string; value: string }> = [];
+  if (username) rows.push({ label: "Instagram", value: `@${username}` });
+  if (typeLabel) rows.push({ label: "Account", value: typeLabel });
+  if (expiryLabel) rows.push({ label: "Access expires", value: expiryLabel });
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div
+      data-testid="instagram-connection-detail"
+      style={{
+        marginTop: 14,
+        padding: "12px 14px",
+        borderRadius: 10,
+        background: UI.surface2,
+        border: `1px solid ${UI.border}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      {rows.map(r => (
+        <div key={r.label} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+          <span style={{ color: UI.textSec }}>{r.label}</span>
+          <span style={{ color: UI.text, fontWeight: 600, textAlign: "right", minWidth: 0, wordBreak: "break-word" }}>
+            {r.value}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -494,6 +676,25 @@ export function SocialAccountsPanel() {
     const flag = params.get("facebook");
     if (!flag) return;
     const m = FACEBOOK_CALLBACK_MESSAGES[flag];
+    if (m) {
+      const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
+      notify(m.msg);
+    }
+    router.replace(SETTINGS_SOCIAL_PATH);
+    // Refresh on both a completed connection and a pending Page choice so the card
+    // flips to "connected" (or shows the Page picker) immediately.
+    if (flag === "connected" || flag === "select_page") void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  // `?instagram=<status>` OAuth-return consumption — fully independent of the
+  // `?facebook=` handler above (its own dedicated Instagram Login flow). Toast once,
+  // clear the query param, and refresh the list on success so the Instagram card
+  // flips to "connected" immediately without touching the Facebook card.
+  useEffect(() => {
+    const flag = params.get("instagram");
+    if (!flag) return;
+    const m = INSTAGRAM_CALLBACK_MESSAGES[flag];
     if (m) {
       const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
       notify(m.msg);
@@ -637,6 +838,7 @@ export function SocialAccountsPanel() {
               multiAccount={multiAccountEnabled}
               onConnect={() => void handleConnect(provider)}
               onDisconnect={() => void handleDisconnect(summary)}
+              onRefresh={() => void load()}
             />
           );
         })}

@@ -8,22 +8,22 @@
  *   3. Clear the OAuth cookies (single use) regardless of outcome.
  *   4. Exchange the code for tokens (short-lived → long-lived) server-side.
  *   5. Verify the ACTUALLY-granted permissions (/me/permissions). Missing any of
- *      the four required business scopes → store 'reconnect_required' (never mark
- *      active) and redirect ?facebook=reconnect_required.
- *   6. Fetch the Facebook user (id + name) and discover IG-linked Pages
- *      (/me/accounts). Zero eligible Pages → 'no_instagram_account'
- *      (?facebook=no_instagram_account). We NEVER bypass with a hard-coded id.
- *   7. Encrypt + persist into social_connections (provider='facebook') incl. the
- *      per-Page page-scoped tokens (encrypted) for Phase 2 IG publishing.
+ *      the required Page scopes → store 'reconnect_required' (never mark active)
+ *      and redirect ?facebook=reconnect_required.
+ *   6. Fetch the Facebook user (id + name) and discover the Pages the user manages
+ *      (/me/accounts). Zero managed Pages → 'no_pages' (?facebook=no_pages). We
+ *      NEVER bypass with a hard-coded id. Instagram is fully decoupled — this flow
+ *      never reads instagram_business_account.
+ *   7. Encrypt + persist into social_connections (provider='facebook') incl. each
+ *      Page's page-scoped token (encrypted) for publishing.
  *   8. Redirect back to returnTo (or the social settings page) with a status flag.
  *
- * On success the redirect carries `?facebook=connected` (single eligible Page,
- * auto-selected) or `?facebook=select_account` (multiple — user must choose).
+ * On success the redirect carries `?facebook=connected` (exactly one Page,
+ * auto-selected) or `?facebook=select_page` (several — user must choose a Page).
  *
- * SELECTION POLICY: with exactly ONE eligible Page we select it (there is nothing
+ * SELECTION POLICY: with exactly ONE managed Page we select it (there is nothing
  * to choose). With several we store them all as candidates and DO NOT auto-pick
- * index 0 — the user selects later. Phase 1 persists the candidate list; the
- * selection-landing UI is a follow-up.
+ * index 0 — the user selects one later via the Page picker.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -39,7 +39,7 @@ import {
   exchangeCodeForTokens,
   fetchFacebookUser,
   fetchGrantedPermissions,
-  discoverInstagramAccounts,
+  fetchManagedPages,
 } from "@/lib/server/facebook/service";
 import { upsertFacebookConnection } from "@/lib/server/facebook/connectionStore";
 import { missingRequiredScopes } from "@/lib/server/facebook/config";
@@ -153,18 +153,18 @@ export async function GET(req: NextRequest) {
     return redirectAfterOAuth(req, "reconnect_required", verdict.returnTo);
   }
 
-  // ── Discover Instagram-linked Pages ─────────────────────────────────────────
+  // ── Discover the Pages the user manages ─────────────────────────────────────
   let pages;
   try {
-    pages = await discoverInstagramAccounts(tokens.accessToken);
+    pages = await fetchManagedPages(tokens.accessToken);
   } catch (err) {
-    console.error("[Facebook OAuth Callback] account discovery failed:", (err as Error).message);
+    console.error("[Facebook OAuth Callback] page discovery failed:", (err as Error).message);
     return redirectAfterOAuth(req, "discovery_failed", verdict.returnTo);
   }
 
   if (pages.length === 0) {
-    // Scopes are fine, but no Page has a linked IG Business account. We NEVER
-    // bypass this with a known id — the user must link an IG account to a Page.
+    // Scopes are fine, but the user manages no Facebook Page. We NEVER bypass this
+    // with a known id — the user must create or gain admin of a Page first.
     try {
       await upsertFacebookConnection(uid, {
         accessToken: tokens.accessToken,
@@ -173,28 +173,21 @@ export async function GET(req: NextRequest) {
         scopes: grantedScopes,
         accountId: fbUser.id,
         accountName: fbUser.name,
-        state: "no_instagram_account",
+        state: "no_pages",
         pages: [],
         selected: null,
       });
     } catch (persistErr) {
-      console.error("[Facebook OAuth Callback] persist (no-ig) failed:", (persistErr as Error).message);
+      console.error("[Facebook OAuth Callback] persist (no-pages) failed:", (persistErr as Error).message);
       return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
     }
-    return redirectAfterOAuth(req, "no_instagram_account", verdict.returnTo);
+    return redirectAfterOAuth(req, "no_pages", verdict.returnTo);
   }
 
-  // One eligible Page → select it (nothing to choose). Several → store all as
-  // candidates and DO NOT auto-pick index 0; the user selects later.
+  // Exactly one Page → select it (nothing to choose). Several → store all as
+  // candidates and DO NOT auto-pick index 0; the user selects one later.
   const single = pages.length === 1 ? pages[0] : null;
-  const selected = single
-    ? {
-        pageId: single.pageId,
-        pageName: single.pageName,
-        instagramUserId: single.instagram.id,
-        instagramUsername: single.instagram.username,
-      }
-    : null;
+  const selected = single ? { pageId: single.pageId, pageName: single.pageName } : null;
 
   try {
     await upsertFacebookConnection(uid, {
@@ -204,9 +197,9 @@ export async function GET(req: NextRequest) {
       scopes: grantedScopes,
       accountId: fbUser.id,
       accountName: fbUser.name,
-      // A single selected Page = a usable connection. Multiple = still connected
-      // (scopes + IG present) but pending the user's account choice.
-      state: "connected",
+      // One selected Page = a usable connection. Multiple = authorized but pending
+      // the user's Page choice (page_selection_required).
+      state: single ? "connected" : "page_selection_required",
       pages,
       selected,
     });
@@ -215,7 +208,7 @@ export async function GET(req: NextRequest) {
     return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
   }
 
-  return redirectAfterOAuth(req, selected ? "connected" : "select_account", verdict.returnTo);
+  return redirectAfterOAuth(req, single ? "connected" : "select_page", verdict.returnTo);
 }
 
 export async function OPTIONS() {

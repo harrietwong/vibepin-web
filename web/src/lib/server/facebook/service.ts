@@ -7,9 +7,10 @@
  *   - OAuth code exchange (short-lived token) then short→long-lived exchange.
  *   - Fetching the connected user's profile (id + name) for display.
  *   - Reading the ACTUAL granted permissions (/me/permissions) to gate the
- *     connection on the four business scopes IG publishing needs.
- *   - Discovering the user's Facebook Pages and their linked Instagram Business
- *     accounts (/me/accounts), returning each Page's page-scoped access token.
+ *     connection on the Page-publishing business scopes.
+ *   - Discovering the Facebook Pages the user manages (/me/accounts), returning
+ *     each Page's page-scoped access token and management tasks. Instagram is
+ *     fully decoupled — this module never touches instagram_business_account.
  *
  * KEY DIFFERENCES vs Pinterest:
  *   - Facebook's token endpoint takes client_id/client_secret/redirect_uri/code as
@@ -148,10 +149,9 @@ export async function fetchFacebookProfile(accessToken: string): Promise<Faceboo
 }
 
 /**
- * Alias for fetchFacebookProfile — the Phase 1 account-discovery flow refers to
- * the connecting person as the "Facebook user" (distinct from the Facebook Page
- * and the Instagram account it will later publish through). Same call
- * (GET /me?fields=id,name), one canonical implementation.
+ * Alias for fetchFacebookProfile — the connect flow refers to the connecting
+ * person as the "Facebook user" (distinct from the Facebook Page it will publish
+ * through). Same call (GET /me?fields=id,name), one canonical implementation.
  */
 export async function fetchFacebookUser(userToken: string): Promise<FacebookProfile> {
   return fetchFacebookProfile(userToken);
@@ -189,88 +189,104 @@ export async function fetchGrantedPermissions(userToken: string): Promise<string
     .map(r => r.permission as string);
 }
 
-/** A Facebook Page that has a linked Instagram Business account. */
-export type DiscoveredInstagramAccount = {
+/** A Facebook Page the connecting user manages — a potential publishing target. */
+export type ManagedPage = {
   pageId: string;
   pageName: string | null;
   /**
-   * PAGE-scoped access token. Instagram content publishing (Phase 2) must use
-   * this, NOT the user token — see the module + callback notes. Plaintext; the
-   * caller encrypts it before it ever touches the DB and it is never logged.
+   * PAGE-scoped access token. Publishing a post to this Page must use this token,
+   * NOT the user token. Plaintext here; the caller encrypts it before it ever
+   * touches the DB and it is never logged.
    */
   pageAccessToken: string;
-  instagram: {
-    id: string;
-    username: string | null;
-    name: string | null;
-  };
+  /** The user's management roles on this Page (e.g. CREATE_CONTENT, MANAGE). */
+  tasks: string[];
 };
 
 /**
- * Discover the user's Facebook Pages and their linked Instagram Business
- * accounts via:
- *   GET /me/accounts?fields=id,name,tasks,access_token,
- *       instagram_business_account{id,username,name}
- *
- * Only Pages that HAVE an instagram_business_account are returned — a Page with
- * no linked IG account cannot be an IG publishing target, so it is filtered out
- * here rather than surfaced as a dead option. An empty `data` array (no Pages, or
- * none with IG) yields [] (never throws) so the callback can show an accurate
- * "no Instagram account" diagnostic instead of a hard error.
- *
- * Every returned id/username comes from Graph — never from the client. The token
- * is in the query string; errors never echo the URL.
+ * True when the user's Page tasks include a role that permits publishing content.
+ * "CREATE_CONTENT" is the direct content-publishing task; "MANAGE" (full admin)
+ * implies it. Any other combination is treated as read-only for our purposes.
  */
-export async function discoverInstagramAccounts(
-  userToken: string,
-): Promise<DiscoveredInstagramAccount[]> {
-  const params = new URLSearchParams({
-    fields: "id,name,tasks,access_token,instagram_business_account{id,username,name}",
+export function canPublishToPage(tasks: readonly string[]): boolean {
+  return tasks.includes("CREATE_CONTENT") || tasks.includes("MANAGE");
+}
+
+type RawPageRow = {
+  id?: string;
+  name?: string;
+  access_token?: string;
+  tasks?: string[];
+};
+
+type RawAccountsPage = {
+  data?: RawPageRow[];
+  paging?: { next?: string };
+} & Record<string, unknown>;
+
+/**
+ * Discover the Facebook Pages the connecting user manages via:
+ *   GET /me/accounts?fields=id,name,tasks,access_token
+ *
+ * Instagram is intentionally NOT requested — this flow targets Facebook Pages
+ * only. Every Page with a real id + page-scoped token is returned (its tasks tell
+ * the caller whether the user can publish). An empty `data` array (no managed
+ * Pages) yields [] (never throws) so the callback can show an accurate "no Pages"
+ * diagnostic instead of a hard error.
+ *
+ * Pagination: Graph returns Pages in batches with a `paging.next` cursor. We
+ * follow it up to a small defensive cap (3 pages of results) so an account with
+ * many Pages is enumerated without an unbounded fetch loop. The user token is in
+ * the query string; errors never echo the URL.
+ *
+ * Every returned id/name comes from Graph — never from the client.
+ */
+export async function fetchManagedPages(userToken: string): Promise<ManagedPage[]> {
+  const MAX_PAGES_OF_RESULTS = 3;
+  const discovered: ManagedPage[] = [];
+
+  // First request is built server-side; subsequent requests follow paging.next
+  // (a full Graph URL that already carries the token + cursor).
+  const initialParams = new URLSearchParams({
+    fields: "id,name,tasks,access_token",
     access_token: userToken,
   });
-  const res = await fetch(`${FACEBOOK_GRAPH_URL}/me/accounts?${params.toString()}`, { method: "GET" });
-  const json = (await res.json().catch(() => ({}))) as {
-    data?: Array<{
-      id?: string;
-      name?: string;
-      access_token?: string;
-      instagram_business_account?: { id?: string; username?: string; name?: string } | null;
-    }>;
-  } & Record<string, unknown>;
+  let nextUrl: string | null = `${FACEBOOK_GRAPH_URL}/me/accounts?${initialParams.toString()}`;
 
-  if (!res.ok) {
-    throw new FacebookApiError(
-      extractError(json) || `Facebook accounts request failed (${res.status})`,
-      res.status,
-      "accounts_fetch_failed",
-    );
-  }
+  for (let fetched = 0; nextUrl && fetched < MAX_PAGES_OF_RESULTS; fetched += 1) {
+    const res = await fetch(nextUrl, { method: "GET" });
+    const json = (await res.json().catch(() => ({}))) as RawAccountsPage;
 
-  const pages = Array.isArray(json.data) ? json.data : [];
-  const discovered: DiscoveredInstagramAccount[] = [];
-  for (const page of pages) {
-    const ig = page.instagram_business_account;
-    // Require a real Page id, a page-scoped token (needed for Phase 2 publishing),
-    // and a linked IG business account with an id. Anything missing → skip.
-    if (
-      !page ||
-      typeof page.id !== "string" || !page.id ||
-      typeof page.access_token !== "string" || !page.access_token ||
-      !ig ||
-      typeof ig.id !== "string" || !ig.id
-    ) {
-      continue;
+    if (!res.ok) {
+      throw new FacebookApiError(
+        extractError(json) || `Facebook accounts request failed (${res.status})`,
+        res.status,
+        "accounts_fetch_failed",
+      );
     }
-    discovered.push({
-      pageId: page.id,
-      pageName: typeof page.name === "string" ? page.name : null,
-      pageAccessToken: page.access_token,
-      instagram: {
-        id: ig.id,
-        username: typeof ig.username === "string" ? ig.username : null,
-        name: typeof ig.name === "string" ? ig.name : null,
-      },
-    });
+
+    const rows = Array.isArray(json.data) ? json.data : [];
+    for (const page of rows) {
+      // Require a real Page id and a page-scoped token (needed to publish). Skip
+      // anything missing rather than surfacing a dead option.
+      if (
+        !page ||
+        typeof page.id !== "string" || !page.id ||
+        typeof page.access_token !== "string" || !page.access_token
+      ) {
+        continue;
+      }
+      discovered.push({
+        pageId: page.id,
+        pageName: typeof page.name === "string" ? page.name : null,
+        pageAccessToken: page.access_token,
+        tasks: Array.isArray(page.tasks) ? page.tasks.filter((t): t is string => typeof t === "string") : [],
+      });
+    }
+
+    const next = json.paging?.next;
+    nextUrl = typeof next === "string" && next ? next : null;
   }
+
   return discovered;
 }
