@@ -92,6 +92,50 @@ test("publish_failure INFERRED: overdue scheduled draft with no postedAt", () =>
   assert.equal(items[0].dataQuality, "inferred");
 });
 
+// ── REGRESSION: inferred publish_failure must honor the SAME 24h-window +
+// later-success-clears-it predicate as the exact branch (PRD §3 支柱1:
+// "24h 内有失败的发布且此后无成功发布"). Before the fix, the two inferred
+// branches (publishError draft / overdue draft) had no window bound at all and
+// ignored later successes — a failure from weeks ago stayed in the blocker
+// list forever, and a later successful publish never cleared it.
+test("publish_failure INFERRED-REGRESSION: publishError draft OLDER than 24h → NOT a blocker", () => {
+  const t = typesOf(facts({
+    draft: { publishErrorDraftId: "dOld", publishErrorCode: "content_error", lastDraftUpdatedAt: hoursAgo(30) },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a publishError from 30h ago must fall outside the 24h window");
+});
+test("publish_failure INFERRED: publishError draft INSIDE 24h → IS a blocker", () => {
+  const t = typesOf(facts({
+    draft: { publishErrorDraftId: "dNew", publishErrorCode: "content_error", lastDraftUpdatedAt: hoursAgo(2) },
+  }));
+  assert.ok(has(t, "publish_failure"), "a publishError from 2h ago must be inside the 24h window");
+});
+test("publish_failure INFERRED-REGRESSION: publishError inside 24h but LATER success clears it", () => {
+  const t = typesOf(facts({
+    draft: {
+      publishErrorDraftId: "dCleared",
+      publishErrorCode: "content_error",
+      lastDraftUpdatedAt: hoursAgo(5),
+      lastPostedAt: hoursAgo(2), // a later successful publish (inferred) after the failure evidence
+    },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a later inferred success must clear the inferred publishError blocker");
+});
+test("publish_failure INFERRED-REGRESSION: overdue draft OLDER than 24h → NOT a blocker", () => {
+  const t = typesOf(facts({ draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(30) } }));
+  assert.ok(!has(t, "publish_failure"), "an overdue scheduled time from 30h ago must fall outside the 24h window");
+});
+test("publish_failure INFERRED: overdue draft INSIDE 24h → IS a blocker", () => {
+  const t = typesOf(facts({ draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(3) } }));
+  assert.ok(has(t, "publish_failure"), "an overdue scheduled time from 3h ago must be inside the 24h window");
+});
+test("publish_failure INFERRED-REGRESSION: overdue inside 24h but LATER success clears it", () => {
+  const t = typesOf(facts({
+    draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(5), lastPostedAt: hoursAgo(2) },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a later inferred success must clear the inferred overdue blocker");
+});
+
 // ── 2. pinterest_disconnected ─────────────────────────────────────────────────
 test("pinterest_disconnected POSITIVE: disconnected_at set → reason 'disconnected'", () => {
   const items = evaluateBlockers(facts({ conn: { hasRow: true, disconnectedAt: hoursAgo(1), createdAt: hoursAgo(200) } }), windowStart)

@@ -205,10 +205,27 @@ function hoursSince(iso: string | null): number | undefined {
 }
 
 /**
- * publish_failure. EXACT wins: a pinterest_publish_failed inside the window with
- * no LATER pinterest_publish_succeeded. INFERRED fallback (only when no exact
- * signal): a live draft with payload.publishError, or a scheduled time passed
- * with no postedAt.
+ * publish_failure. PRD §3 支柱1 predicate: "24h 内有失败的发布且此后无成功发布"
+ * — the failure evidence must fall inside the 24h window AND no success may have
+ * happened after it. EXACT wins: a pinterest_publish_failed inside the window
+ * with no LATER pinterest_publish_succeeded. INFERRED fallback (only when no
+ * exact signal) must honor the SAME window-and-later-success-clears-it shape:
+ *
+ *   - a live draft carrying payload.publishError. There is no dedicated
+ *     "when did the error happen" timestamp in payload — but payloadAfterFailure
+ *     (publishDueLogic.ts) always bumps payload.updatedAt = nowIso in the SAME
+ *     write that sets publishError, and that is mirrored onto the row's
+ *     updated_at column. So `lastDraftUpdatedAt` is an honest upper bound on the
+ *     failure's recency for that draft (it can only be later than the failure —
+ *     a subsequent unrelated edit to the same draft would also bump it — never
+ *     earlier). Approximation, documented per this codebase's inferred-data rule.
+ *   - a scheduled time (`overdueScheduledAt`) that passed with no postedAt on
+ *     that same draft — the scheduled instant IS the anchor, no approximation
+ *     needed there.
+ *
+ * Both inferred branches also clear if `lastPostedAt` (the user's most recent
+ * inferred publish success, across all their drafts) is later than the failure
+ * evidence — the same "later success clears it" rule the exact branch applies.
  */
 function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | null {
   const p = f.publish;
@@ -232,7 +249,12 @@ function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | nu
   }
 
   const d = f.draft;
-  if (d.publishErrorDraftId) {
+  if (
+    d.publishErrorDraftId &&
+    d.lastDraftUpdatedAt &&
+    d.lastDraftUpdatedAt >= windowStart &&
+    (!d.lastPostedAt || d.lastPostedAt < d.lastDraftUpdatedAt)
+  ) {
     return {
       userId: f.user.id,
       email: f.user.email,
@@ -242,7 +264,12 @@ function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | nu
       evidence: { failedPublishCount: 1, publishErrorCode: d.publishErrorCode, draftId: d.publishErrorDraftId },
     };
   }
-  if (d.overdueDraftId) {
+  if (
+    d.overdueDraftId &&
+    d.overdueScheduledAt &&
+    d.overdueScheduledAt >= windowStart &&
+    (!d.lastPostedAt || d.lastPostedAt < d.overdueScheduledAt)
+  ) {
     return {
       userId: f.user.id,
       email: f.user.email,
