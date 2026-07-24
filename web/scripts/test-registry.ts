@@ -79,6 +79,7 @@ export const CORE: string[] = [
   "test-amazon-affiliate-wiring",
   // Billing (Creem)
   "test-plan-entitlements",
+  "test-usage-period-math",
   "test-entitlements-security",
   "test-creem-checkout-api",
   "test-creem-webhook-ordering",
@@ -184,6 +185,15 @@ export const EXCLUDED: Record<string, string> = {
     "explanation, because a green run that connected to nothing is the exact failure " +
     "mode this channel exists to prevent. See scripts/lib/test-db-config.ts for how the " +
     "target is pinned to the test project and can never resolve to production.",
+  "test-db-usage-lifecycle":
+    "REAL-POSTGRES integration test for the v56 usage-account LIFECYCLE RPC " +
+    "(usage_ensure_account: init / period rollover / plan change). Writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` rather " +
+    "than the hermetic `npm test` gate, for the same reasons as the rate-limit and " +
+    "usage-ledger DB tests. It fails loudly rather than skipping when credentials are " +
+    "absent. It proves the exactly-once guarantees the lifecycle lives on — a concurrent " +
+    "double-ensure yields ONE account + ONE init event, and a replayed rollover does not " +
+    "double-reset — which only real Postgres row locks + unique constraints can testify to.",
   "test-usage-ledger-db":
     "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
