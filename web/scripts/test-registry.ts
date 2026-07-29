@@ -87,6 +87,7 @@ export const CORE: string[] = [
   "test-predeploy-guard",
   "test-moderate-prompt",
   "test-generation-moderation-gate",
+  "test-generation-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
   // Settings / support
@@ -194,6 +195,15 @@ export const EXCLUDED: Record<string, string> = {
     "absent. It proves the exactly-once guarantees the lifecycle lives on — a concurrent " +
     "double-ensure yields ONE account + ONE init event, and a replayed rollover does not " +
     "double-reset — which only real Postgres row locks + unique constraints can testify to.",
+  "test-db-usage-metering":
+    "REAL-POSTGRES integration test for Phase 4I image metering — writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. It drives the exact RPC cycle the route " +
+    "and worker now depend on (usage_reserve_generation_job → the generation_jobs row " +
+    "carries usage_reservation_id → per-slot settle with the ['s0','s1',...] keys the " +
+    "TS module and worker both produce → reservation ends PARTIAL with counters exact), " +
+    "which only real Postgres can testify to. Fails loudly rather than skipping when " +
+    "credentials are absent, like the other test-db-* channels.",
   "test-usage-ledger-db":
     "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
