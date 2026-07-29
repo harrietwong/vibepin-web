@@ -63,7 +63,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     name: "Instagram",
     brandColor: "#E1306C",
     capabilities: ["Publish photo posts", "Repurpose product posts", "Track publishing status"],
-    liveConnect: false,
+    liveConnect: true,
   },
   facebook: {
     provider: "facebook",

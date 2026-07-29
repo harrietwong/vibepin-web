@@ -1,7 +1,7 @@
 /**
  * "official" auth-provider entry — dispatches to each platform's own dedicated
- * OAuth integration (currently only Facebook) rather than a third-party
- * aggregator (Zernio/OneUp/...).
+ * OAuth integration (Facebook, Instagram) rather than a third-party aggregator
+ * (Zernio/OneUp/...).
  *
  * connectionStore.ts writes `auth_provider: "official"` for connections created
  * by our own OAuth routes (Pinterest's metadata rows, Facebook's connection
@@ -54,6 +54,11 @@ export const officialProvider: SocialPublishingProvider = {
     if (input.provider === "facebook") {
       const { disconnectFacebookConnection } = await import("@/lib/server/facebook/connectionStore");
       await disconnectFacebookConnection(input.userId);
+      return;
+    }
+    if (input.provider === "instagram") {
+      const { disconnectInstagramConnection } = await import("@/lib/server/instagram/connectionStore");
+      await disconnectInstagramConnection(input.userId);
       return;
     }
     // Pinterest never reaches here (see module comment). Any other future

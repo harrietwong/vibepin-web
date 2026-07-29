@@ -68,6 +68,18 @@ export async function POST(req: Request) {
     });
   }
 
+  // Instagram has its own dedicated "Instagram Login" OAuth route, fully decoupled
+  // from Facebook (its own INSTAGRAM_* env + provider='instagram' row). Point the
+  // client at it, just like Pinterest/Facebook.
+  if (provider === "instagram") {
+    return Response.json({
+      provider,
+      status: "oauth_url",
+      url: `/api/auth/instagram/connect?next=${encodeURIComponent(next)}`,
+      message: null,
+    });
+  }
+
   try {
     const result = await getSocialProvider().getConnectUrl({ provider, userId: uid, returnTo: next });
     return Response.json({ provider, ...result });
