@@ -22,6 +22,12 @@
  *      MODERATION key (a separate CREEM_MODERATION_API_KEY) can power Create Pins
  *      generation without tripping the deploy guard. This is the deploy-time half
  *      of the billingMode guard.
+ *   7. The deploy would not drop another active branch's work. `vercel --prod`
+ *      is a whole-tree replace, so a deploy that omits other sessions' merged-
+ *      nowhere commits silently removes their shipped features from production.
+ *   8. AI_COPY_TEXT_MODEL is set (non-blank) whenever an AI-copy provider
+ *      credential (LINAPI_KEY or OPENAI_API_KEY) is configured — production must
+ *      not run copy generation on an implicit, credential-dependent default.
  *
  * --override requires OVERRIDE_REASON to be set to a non-empty string. When
  * present, an override bypasses failed checks, appends an audit line to
@@ -120,6 +126,32 @@ export function checkUnmergedBranches(branches, opts) {
     `    production is a whole-tree replace, so their features would vanish from the live site:\n${list}\n` +
     "    Merge them first (or confirm each is intentionally not shipping) before deploying.",
   );
+  return problems;
+}
+
+/**
+ * The AI-copy fast text path falls back to a provider-dependent default model when
+ * AI_COPY_TEXT_MODEL is unset (see providerConfig in src/lib/ai-copy/visionServer.ts).
+ * That fallback is fine locally, but in production it means rotating or switching a
+ * provider credential SILENTLY changes which model writes user-facing copy. So once an
+ * AI-copy provider credential is configured at all, the model must be pinned explicitly.
+ *
+ * Deploy-time only — the runtime fallback in providerConfig() is deliberately kept for
+ * local/test. Pure (env in → problems out) and exported at the top BEFORE any side
+ * effects, so a unit test can drive it with fake env.
+ */
+export function checkAiCopyTextModelForProd(env) {
+  const problems = [];
+  const hasProviderCredential =
+    String(env.LINAPI_KEY ?? "").trim() !== "" || String(env.OPENAI_API_KEY ?? "").trim() !== "";
+  if (!hasProviderCredential) return problems;
+  if (String(env.AI_COPY_TEXT_MODEL ?? "").trim() === "") {
+    problems.push(
+      "an AI-copy provider credential is configured (LINAPI_KEY or OPENAI_API_KEY) but AI_COPY_TEXT_MODEL is unset/blank — " +
+        "refusing a production deploy on an implicit default model (a credential change would silently change which model writes user copy). " +
+        "Set AI_COPY_TEXT_MODEL explicitly.",
+    );
+  }
   return problems;
 }
 
@@ -297,6 +329,13 @@ try {
   }
 } catch (err) {
   failures.push(`could not enumerate branches for the unmerged-work check: ${err.message}`);
+}
+
+// --- Check 8: AI-copy text model must be pinned when a provider credential exists ---
+// See checkAiCopyTextModelForProd (top of file) — production must never run copy
+// generation on an implicit, credential-dependent default model.
+for (const problem of checkAiCopyTextModelForProd(process.env)) {
+  failures.push(problem);
 }
 
 // --- Resolve outcome ---

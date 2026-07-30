@@ -1292,8 +1292,6 @@ const tr: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Pinterest bağlantısı tamamlanmadı. Lütfen Pin'i tekrar seçin.",
   "plan.error.pinNotFound": "Bu Pin bulunamadı.",
   "plan.error.needsImage": "Bu Pin'in zamanlanabilmesi için bir görsele ihtiyacı var.",
-  "plan.error.needsTitle": "Bu Pin'in zamanlanabilmesi için bir başlığa ihtiyacı var.",
-  "plan.error.needsDescription": "Bu Pin'in zamanlanabilmesi için bir açıklamaya ihtiyacı var.",
   "plan.error.needsBoard": "Yayınlamadan önce bir pano ekleyin.",
   "plan.dropBlock.editSmartSchedule": "Akıllı Zamanlamayı Düzenle",
   "plan.dropBlock.allPastTitle": "{date} tarihinde boş zaman kalmadı.",
@@ -1304,7 +1302,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Bu günde zaten her Akıllı Zamanlama aralığını dolduran {n} zamanlanmış Pin{plural} var. Günlük pin sayısını artırın veya başka bir gün seçin.",
   "plan.toast.timeLocked": "Saat kilitlendi — yeniden dengeleme sırasında korunur.",
   "plan.toast.timeUnlocked": "Saat kilidi kaldırıldı.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural}'in zamanlanmadan önce bir görsele, başlığa veya açıklamaya ihtiyacı var.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural}'in zamanlanmadan önce bir görsele, bir panoya veya daha kısa bir başlığa/açıklamaya ihtiyacı var.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} zaten zamanlandı",
   "plan.toast.couldNotSchedule": "Seçilen Pinler zamanlanamadı.",
   "plan.toast.scheduledCount": "{n} Pin{plural} zamanlandı{alreadySuffix}",
@@ -1312,7 +1310,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Eksik ayrıntılar oluşturuldu",
   "plan.toast.movedPins": "{n} Pin{plural} {date} tarihine taşındı",
   "plan.toast.removedPins": "{n} Pin{plural} plandan kaldırıldı",
-  "plan.toast.selectedNeedDetails": "Seçilen Pinlerin zamanlanmadan önce bir görsele, başlığa veya açıklamaya ihtiyacı var.",
+  "plan.toast.selectedNeedDetails": "Seçilen Pinlerin zamanlanmadan önce bir görsele, bir panoya veya daha kısa bir başlığa/açıklamaya ihtiyacı var.",
   "plan.toast.noUnscheduledSelected": "Zamanlanmamış Pin seçilmedi — zaten zamanlanmış Pinler atlanıyor.",
 
   // ── planViews ──
@@ -2698,6 +2696,9 @@ const tr: Partial<Record<MessageKey, string>> = {
   "trendChart.falling": "↓ Düşüyor",
   "trendChart.tooltip.indexPrefix": "Endeks: ",
   "trendChart.footerNote": "Yıllık/aylık büyümeden tahmin edilmiştir · ham arama sayıları değildir",
+
+  "studioBoard.toast.fieldTooLong": "Planlamadan veya yayınlamadan önce başlığı veya açıklamayı kısaltın.",
+
 };
 
 export default tr;

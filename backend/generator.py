@@ -33,11 +33,16 @@ import time
 import uuid
 from pathlib import Path
 
-# Force UTF-8 on Windows where the default console encoding is cp936/GBK
-if sys.platform == "win32":
-    sys.stdin  = io.TextIOWrapper(sys.stdin.buffer,  encoding="utf-8", errors="replace")
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Force UTF-8 on Windows where the default console encoding is cp936/GBK.
+# NOTE: this rebinds sys.stdin/stdout/stderr, so it MUST NOT run at import time —
+# doing so corrupts pytest's output capture and breaks any process that imports
+# generator as a library (e.g. the WP3 generation worker). It is invoked only from
+# the CLI/stdin entry point (main()), preserving the original --from-stdin behavior.
+def _force_utf8_streams() -> None:
+    if sys.platform == "win32":
+        sys.stdin  = io.TextIOWrapper(sys.stdin.buffer,  encoding="utf-8", errors="replace")
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 try:
     from dotenv import load_dotenv
@@ -74,16 +79,39 @@ _MODEL_KEY_TO_MODEL_ID: dict[str, str] = {
     "nano_banana":  GEMINI_IMAGE_MODEL or "gemini-2.5-flash-image",  # legacy alias
 }
 
+class UnknownModelKeyError(ValueError):
+    """Raised when a payload carries a model key outside the supported set."""
+
+
 def _resolve_model_id(model_key: str) -> str:
     """Return the LinAPI model ID for a frontend model key.
 
     Returns "" for gemini_image when no Gemini image model is configured — the
     caller MUST treat an empty id as a configuration error (no silent fallback).
+
+    Raises UnknownModelKeyError for a key outside _MODEL_KEY_TO_MODEL_ID.
+
+    ── WHY THIS RAISES INSTEAD OF FALLING BACK ────────────────────────────────
+    This function used to end with `return GPT_IMAGE_MODEL or "gpt-image-2"`, so
+    ANY unrecognised key silently became a specific PAID model. Combined with the
+    (now fixed) lack of validation on /api/generate's `model_key`, arbitrary
+    client-supplied text chose which provider the account was billed for — and,
+    because _model_supports_image_input() branches on the RESOLVED model id, it
+    also changed what the request could do with image inputs.
+
+    The web route (web/src/app/api/generate/route.ts, Step 2a) is the real trust
+    boundary and now rejects anything outside the closed set. This raise is
+    DEFENSE IN DEPTH: the worker also consumes queued generation_jobs.params rows
+    written by other/older code paths, so it must fail closed on its own rather
+    than trust that every producer validated. An empty/missing key is NOT an error
+    here — callers default it to "gemini_image" before this point.
     """
     key = (model_key or "").strip()
     if key in _MODEL_KEY_TO_MODEL_ID:
         return _MODEL_KEY_TO_MODEL_ID[key]
-    return GPT_IMAGE_MODEL or "gpt-image-2"
+    raise UnknownModelKeyError(
+        f"Unsupported image model key. Supported keys: {', '.join(sorted(_MODEL_KEY_TO_MODEL_ID))}"
+    )
 
 
 def _model_supports_image_input(model_id: str) -> bool:
@@ -1632,6 +1660,20 @@ async def run_from_stdin() -> None:
         _emit({"ok": False, "error": f"Failed to parse stdin payload: {e}", "urls": []})
         return
 
+    result = await generate_from_payload(data)
+    _emit(result)
+
+
+async def prepare_generation(data: dict) -> dict:
+    """
+    Setup phase of a generation request: parse fields, validate inputs, load
+    images, run the enhancer, and build the final prompt + per-slot variant
+    prompts. Emits NOTHING — on a validation/early-exit error it returns
+    ``{"ok": False, "phase": "prepare", "emit": {...}}`` carrying the exact dict
+    that run_from_stdin's original body passed to ``_emit``. On success it returns
+    ``{"ok": True, "plan": {...}}`` with every value the per-slot loop and the
+    final emit need. All stderr ``print(...)`` calls are preserved verbatim.
+    """
     t_total_start      = time.time()
     keyword            = str(data.get("keyword") or "").strip()
     style              = str(data.get("style") or "lifestyle")
@@ -1678,7 +1720,17 @@ async def run_from_stdin() -> None:
     direction_brief    = str(data.get("directionBrief") or "").strip()
     image_inputs = _normalize_image_inputs(data, product_images, style_ref)
     image_manifest = _build_image_manifest(image_inputs)
-    model_id           = _resolve_model_id(model_key)
+    # Defense in depth. The web route validates model_key at the trust boundary, but
+    # this worker also runs against queued generation_jobs.params written elsewhere
+    # (or by stale code), so an unknown key fails CLOSED here with a structured error
+    # instead of silently resolving to a paid model. Note this is a DIFFERENT failure
+    # from the gemini_image configuration guard below: that one is a valid key with a
+    # missing env var; this one is a key the product does not support at all.
+    try:
+        model_id       = _resolve_model_id(model_key)
+    except UnknownModelKeyError as exc:
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": str(exc),
+               "error_type": "invalid_model_key", "urls": [], "keyword": keyword}}
     category_passed    = category
     inferred_category  = _infer_category(category, output_type, custom_prompt, product_metadata)
     category           = inferred_category
@@ -1686,24 +1738,20 @@ async def run_from_stdin() -> None:
     fashion_safety_applied = category in _FASHION_IDS
 
     if not keyword:
-        _emit({"ok": False, "error": "keyword is required", "urls": []})
-        return
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": "keyword is required", "urls": []}}
     if not LINAPI_KEY and provider_mode != "mock":
-        _emit({"ok": False, "error": "LINAPI_KEY not set in environment", "urls": [], "keyword": keyword})
-        return
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": "LINAPI_KEY not set in environment", "urls": [], "keyword": keyword}}
 
     # ── Provider / capability validation (never silently fall back to text-only) ──
     if model_key == "gemini_image" and not (model_id or "").strip():
-        _emit({"ok": False, "error": "Gemini image model is not configured.",
-               "error_type": "configuration_error", "urls": [], "keyword": keyword})
-        return
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": "Gemini image model is not configured.",
+               "error_type": "configuration_error", "urls": [], "keyword": keyword}}
     _has_image_inputs    = bool(product_images) or bool(style_ref)
     _supports_image_input = _model_supports_image_input(model_id)
     if _has_image_inputs and not _supports_image_input:
-        _emit({"ok": False,
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False,
                "error": "The selected image model does not support product/reference image inputs through the current provider configuration.",
-               "error_type": "api_payload_error", "urls": [], "keyword": keyword})
-        return
+               "error_type": "api_payload_error", "urls": [], "keyword": keyword}}
 
     # ── Collect image parts: reference first, then products ────────────────────
     print(
@@ -1786,15 +1834,14 @@ async def run_from_stdin() -> None:
             "imageManifest": image_manifest,
             "usedTextOnlyFallback": False,
         }), file=sys.stderr)
-        _emit({
+        return {"ok": False, "phase": "prepare", "emit": {
             "ok": False,
             "error": missing_msg,
             "error_type": ERR_IMAGE_LOAD,
             "urls": [],
             "keyword": keyword,
             "style": style,
-        })
-        return
+        }}
 
     if expected_input_count == 0:
         print(f"[generator] image_inputs = NONE (text-only generation allowed)", file=sys.stderr)
@@ -1822,15 +1869,14 @@ async def run_from_stdin() -> None:
     }), file=sys.stderr)
     if bad_parts:
         print(json.dumps({"event": "image_input_invalid_parts", "badParts": bad_parts}), file=sys.stderr)
-        _emit({
+        return {"ok": False, "phase": "prepare", "emit": {
             "ok": False,
             "error": "One of the input images could not be processed.",
             "error_type": ERR_IMAGE_LOAD,
             "urls": [],
             "keyword": keyword,
             "style": style,
-        })
-        return
+        }}
 
     provider_endpoint = (
         "/images/edits" if image_parts and "gpt-image" in model_id.lower()
@@ -2055,7 +2101,6 @@ async def run_from_stdin() -> None:
     }), file=sys.stderr)
 
     print(f"[generator] starting {count} image generation(s) in parallel via {model_id} (key={model_key})", file=sys.stderr)
-    t_gen_start = time.time()
     variant_prompts = [
         f"{final_prompt}\n\n{_variant_prompt_suffix(i, count, variation_mode, output_variants)}".strip()
         for i in range(count)
@@ -2094,21 +2139,132 @@ async def run_from_stdin() -> None:
             "perOutputPromptPreview":      _vp[-500:],
         }), file=sys.stderr)
 
-    tasks   = [
-        _generate_one(
-            keyword, s, i, variant_prompts[i], image_parts or None, pin_format,
-            model_id=model_id,
-            image_input_order=image_input_order,
-            image_manifest=image_manifest,
-            generation_request_id=generation_request_id,
-            variant_role=variant_roles[i],
-            provider_mode=provider_mode,
-            mock_provider_behavior=mock_provider_behavior,
-            mock_provider_delay_ms=mock_provider_delay_ms,
-        )
-        for i, s in enumerate(styles)
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Everything needed by the per-slot loop and the final emit is captured here.
+    plan = {
+        "keyword": keyword,
+        "style": style,
+        "count": count,
+        "styles": styles,
+        "pin_format": pin_format,
+        "model_id": model_id,
+        "model_key": model_key,
+        "image_parts": image_parts,
+        "image_input_order": image_input_order,
+        "image_manifest": image_manifest,
+        "generation_request_id": generation_request_id,
+        "variation_mode": variation_mode,
+        "output_variants": output_variants,
+        "provider_mode": provider_mode,
+        "mock_provider_behavior": mock_provider_behavior,
+        "mock_provider_delay_ms": mock_provider_delay_ms,
+        "variant_prompts": variant_prompts,
+        "variant_roles": variant_roles,
+        "t_total_start": t_total_start,
+        "t_img_elapsed": t_img_elapsed,
+        # Fields the final _emit prompt_snapshot needs.
+        "custom_prompt": custom_prompt,
+        "output_type": output_type,
+        "reference_strength": reference_strength,
+        "product_count_requested": product_count_requested,
+        "reference_count_requested": reference_count_requested,
+        "provider_endpoint": provider_endpoint,
+        "product_parts": product_parts,
+        "loaded_products": loaded_products,
+        "loaded_references": loaded_references,
+        "enhancer_result": enhancer_result,
+        "enhanced_custom_prompt": enhanced_custom_prompt,
+        "final_prompt": final_prompt,
+        "category_passed": category_passed,
+        "inferred_category": inferred_category,
+        "category": category,
+        "prompt_mode": prompt_mode,
+        "prompt_version": prompt_version,
+        "creative_direction_meta": creative_direction_meta,
+        "requested_image_count": requested_image_count,
+        "actual_image_count": actual_image_count,
+        "count_clamped": count_clamped,
+        "output_count": output_count,
+        "selected_tags": selected_tags,
+        "primary_format_tag": primary_format_tag,
+        "direction_brief": direction_brief,
+        "image_manifest_log": image_manifest_log,
+        "fashion_safety_applied": fashion_safety_applied,
+    }
+    return {"ok": True, "plan": plan}
+
+
+async def generate_slot(plan: dict, slot_index: int) -> str:
+    """
+    Run ONE generation slot. This is the idempotent, per-slot unit a worker can
+    retry independently. Returns the image URL string, or lets the
+    ``ValueError("type::detail")`` raised by ``_generate_one`` propagate (never
+    caught here) so the caller can classify it.
+    """
+    return await _generate_one(
+        plan["keyword"], plan["styles"][slot_index], slot_index,
+        plan["variant_prompts"][slot_index], plan["image_parts"] or None, plan["pin_format"],
+        model_id=plan["model_id"],
+        image_input_order=plan["image_input_order"],
+        image_manifest=plan["image_manifest"],
+        generation_request_id=plan["generation_request_id"],
+        variant_role=plan["variant_roles"][slot_index],
+        provider_mode=plan["provider_mode"],
+        mock_provider_behavior=plan["mock_provider_behavior"],
+        mock_provider_delay_ms=plan["mock_provider_delay_ms"],
+    )
+
+
+async def generate_from_payload(data: dict) -> dict:
+    """
+    End-to-end generation for one request. Reproduces the ORIGINAL
+    run_from_stdin body's behavior byte-for-byte (same stderr logs, same final
+    result dict) but RETURNS the final dict instead of calling ``_emit``.
+    """
+    prep = await prepare_generation(data)
+    if not prep["ok"]:
+        return prep["emit"]
+    plan = prep["plan"]
+
+    keyword                   = plan["keyword"]
+    style                     = plan["style"]
+    count                     = plan["count"]
+    image_parts               = plan["image_parts"]
+    variant_roles             = plan["variant_roles"]
+    t_total_start             = plan["t_total_start"]
+    t_img_elapsed             = plan["t_img_elapsed"]
+    custom_prompt             = plan["custom_prompt"]
+    output_type               = plan["output_type"]
+    reference_strength        = plan["reference_strength"]
+    product_count_requested   = plan["product_count_requested"]
+    reference_count_requested = plan["reference_count_requested"]
+    provider_endpoint         = plan["provider_endpoint"]
+    product_parts             = plan["product_parts"]
+    loaded_references         = plan["loaded_references"]
+    enhancer_result           = plan["enhancer_result"]
+    enhanced_custom_prompt    = plan["enhanced_custom_prompt"]
+    final_prompt              = plan["final_prompt"]
+    category_passed           = plan["category_passed"]
+    inferred_category         = plan["inferred_category"]
+    category                  = plan["category"]
+    prompt_mode               = plan["prompt_mode"]
+    prompt_version            = plan["prompt_version"]
+    creative_direction_meta   = plan["creative_direction_meta"]
+    requested_image_count     = plan["requested_image_count"]
+    actual_image_count        = plan["actual_image_count"]
+    count_clamped             = plan["count_clamped"]
+    output_count              = plan["output_count"]
+    variation_mode            = plan["variation_mode"]
+    output_variants           = plan["output_variants"]
+    generation_request_id     = plan["generation_request_id"]
+    image_input_order         = plan["image_input_order"]
+    image_manifest            = plan["image_manifest"]
+    fashion_safety_applied    = plan["fashion_safety_applied"]
+
+    t_gen_start = time.time()
+    results = await asyncio.gather(
+        *[generate_slot(plan, i) for i in range(count)],
+        return_exceptions=True,
+    )
 
     t_gen_elapsed = time.time() - t_gen_start
 
@@ -2163,7 +2319,7 @@ async def run_from_stdin() -> None:
         file=sys.stderr,
     )
 
-    _emit({
+    return {
         "ok":         len(urls) > 0,
         "keyword":    keyword,
         "style":      style,
@@ -2212,7 +2368,7 @@ async def run_from_stdin() -> None:
             "output_variants":        output_variants,
             "created_at":             int(time.time()),
         },
-    })
+    }
 
 
 async def run(keyword: str, style: str, count: int) -> None:
@@ -2241,6 +2397,7 @@ async def run(keyword: str, style: str, count: int) -> None:
 
 
 def main() -> None:
+    _force_utf8_streams()
     ap = argparse.ArgumentParser(description="VibePin keyword-to-image batch generator")
     ap.add_argument("--keyword",    default="",          help="Trend keyword (legacy CLI mode)")
     ap.add_argument("--style",      default="lifestyle",  help="Visual style preset")

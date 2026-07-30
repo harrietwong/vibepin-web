@@ -1304,8 +1304,6 @@ const es: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "La conexión con Pinterest no se completó. Vuelve a seleccionar el Pin.",
   "plan.error.pinNotFound": "No se pudo encontrar este Pin.",
   "plan.error.needsImage": "Este Pin necesita una imagen antes de poder programarse.",
-  "plan.error.needsTitle": "Este Pin necesita un título antes de poder programarse.",
-  "plan.error.needsDescription": "Este Pin necesita una descripción antes de poder programarse.",
   "plan.error.needsBoard": "Añade un tablero antes de publicar.",
   "plan.dropBlock.editSmartSchedule": "Editar Programación inteligente",
   "plan.dropBlock.allPastTitle": "No queda tiempo disponible el {date}.",
@@ -1316,7 +1314,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Este día ya tiene {n} Pin{plural} programados llenando cada franja de Programación inteligente. Aumenta los Pines por día o elige otro día.",
   "plan.toast.timeLocked": "Hora bloqueada — se conserva durante el reequilibrio.",
   "plan.toast.timeUnlocked": "Hora desbloqueada.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural}: falta imagen, título o descripción antes de programar.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural}: falta una imagen, un tablero o un título/descripción más corto antes de programar.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} ya en el calendario",
   "plan.toast.couldNotSchedule": "No se pudieron programar los Pines seleccionados.",
   "plan.toast.scheduledCount": "Programados {n} Pin{plural}{alreadySuffix}",
@@ -1324,7 +1322,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Se generaron los detalles faltantes",
   "plan.toast.movedPins": "Se movió {n} Pin{plural} a {date}",
   "plan.toast.removedPins": "Se quitó {n} Pin{plural} del plan",
-  "plan.toast.selectedNeedDetails": "Los Pines seleccionados necesitan una imagen, título o descripción antes de programar.",
+  "plan.toast.selectedNeedDetails": "Los Pines seleccionados necesitan una imagen, un tablero o un título/descripción más corto antes de programar.",
   "plan.toast.noUnscheduledSelected": "No hay Pines sin programar seleccionados — se omiten los que ya están programados.",
 
   // ── planViews: PlanListView — status labels ──
@@ -2878,6 +2876,9 @@ const es: Partial<Record<MessageKey, string>> = {
   "trends.toast.addedToPlan": "\"{keyword}\" añadido al plan semanal",
   "trends.toast.viewPlan": "Ver Plan",
   "trends.toast.signInToSave": "Inicia sesión para guardar esta palabra clave",
+
+  "studioBoard.toast.fieldTooLong": "Acorta el título o la descripción antes de programar o publicar.",
+
 };
 
 export default es;

@@ -1304,8 +1304,6 @@ const pl: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Połączenie z Pinterestem nie zostało zakończone. Wybierz Pin ponownie.",
   "plan.error.pinNotFound": "Nie można znaleźć tego Pina.",
   "plan.error.needsImage": "Ten Pin potrzebuje obrazu, zanim będzie można go zaplanować.",
-  "plan.error.needsTitle": "Ten Pin potrzebuje tytułu, zanim będzie można go zaplanować.",
-  "plan.error.needsDescription": "Ten Pin potrzebuje opisu, zanim będzie można go zaplanować.",
   "plan.error.needsBoard": "Dodaj tablicę przed publikacją.",
   "plan.dropBlock.editSmartSchedule": "Edytuj Inteligentny harmonogram",
   "plan.dropBlock.allPastTitle": "Brak wolnego czasu {date}.",
@@ -1316,7 +1314,7 @@ const pl: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Ten dzień ma już {n} zaplanowanych Pin{plural} wypełniających każdy slot Inteligentnego harmonogramu. Zwiększ liczbę Pinów dziennie lub wybierz inny dzień.",
   "plan.toast.timeLocked": "Godzina zablokowana — zachowana podczas równoważenia.",
   "plan.toast.timeUnlocked": "Godzina odblokowana.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} wymaga obrazu, tytułu lub opisu przed zaplanowaniem.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} wymaga obrazu, tablicy lub krótszego tytułu/opisu przed zaplanowaniem.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} już zaplanowanych",
   "plan.toast.couldNotSchedule": "Nie udało się zaplanować zaznaczonych Pinów.",
   "plan.toast.scheduledCount": "Zaplanowano {n} Pin{plural}{alreadySuffix}",
@@ -1324,7 +1322,7 @@ const pl: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Wygenerowano brakujące szczegóły",
   "plan.toast.movedPins": "Przeniesiono {n} Pin{plural} do {date}",
   "plan.toast.removedPins": "Usunięto {n} Pin{plural} z planu",
-  "plan.toast.selectedNeedDetails": "Zaznaczone Piny wymagają obrazu, tytułu lub opisu przed zaplanowaniem.",
+  "plan.toast.selectedNeedDetails": "Zaznaczone Piny wymagają obrazu, tablicy lub krótszego tytułu/opisu przed zaplanowaniem.",
   "plan.toast.noUnscheduledSelected": "Nie zaznaczono niezaplanowanych Pinów — już zaplanowane Piny są pomijane.",
   "planViews.list.status.scheduled": "Zaplanowane",
   "planViews.list.status.unscheduled": "Niezaplanowane",
@@ -2597,6 +2595,9 @@ const pl: Partial<Record<MessageKey, string>> = {
   "trends.toast.addedToPlan": "„{keyword}” dodano do planu tygodniowego",
   "trends.toast.viewPlan": "Zobacz Plan",
   "trends.toast.signInToSave": "Zaloguj się, aby zapisać to słowo kluczowe",
+
+  "studioBoard.toast.fieldTooLong": "Skróć tytuł lub opis przed zaplanowaniem lub opublikowaniem.",
+
 };
 
 export default pl;

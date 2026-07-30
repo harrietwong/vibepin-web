@@ -1636,8 +1636,6 @@ const id: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Koneksi Pinterest belum selesai. Silakan pilih Pin lagi.",
   "plan.error.pinNotFound": "Pin ini tidak ditemukan.",
   "plan.error.needsImage": "Pin ini memerlukan gambar sebelum dapat dijadwalkan.",
-  "plan.error.needsTitle": "Pin ini memerlukan judul sebelum dapat dijadwalkan.",
-  "plan.error.needsDescription": "Pin ini memerlukan deskripsi sebelum dapat dijadwalkan.",
   "plan.error.needsBoard": "Tambahkan board sebelum menerbitkan.",
   "plan.dropBlock.editSmartSchedule": "Edit Jadwal Pintar",
   "plan.dropBlock.allPastTitle": "Tidak ada waktu tersisa pada {date}.",
@@ -1648,7 +1646,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Hari ini sudah memiliki {n} Pin{plural} terjadwal yang memenuhi semua slot Jadwal Pintar. Tambah jumlah Pin per hari atau pilih hari lain.",
   "plan.toast.timeLocked": "Waktu terkunci — dipertahankan saat penyeimbangan ulang.",
   "plan.toast.timeUnlocked": "Waktu terbuka kunci.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} memerlukan gambar, judul, atau deskripsi sebelum dijadwalkan.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} memerlukan gambar, board, atau judul/deskripsi yang lebih pendek sebelum dijadwalkan.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} sudah terjadwal",
   "plan.toast.couldNotSchedule": "Pin yang dipilih tidak dapat dijadwalkan.",
   "plan.toast.scheduledCount": "{n} Pin{plural} terjadwal{alreadySuffix}",
@@ -1656,7 +1654,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Detail yang hilang telah dibuat",
   "plan.toast.movedPins": "{n} Pin{plural} dipindahkan ke {date}",
   "plan.toast.removedPins": "{n} Pin{plural} dihapus dari rencana",
-  "plan.toast.selectedNeedDetails": "Pin yang dipilih memerlukan gambar, judul, atau deskripsi sebelum dijadwalkan.",
+  "plan.toast.selectedNeedDetails": "Pin yang dipilih memerlukan gambar, board, atau judul/deskripsi yang lebih pendek sebelum dijadwalkan.",
   "plan.toast.noUnscheduledSelected": "Tidak ada Pin belum dijadwalkan yang dipilih — Pin yang sudah terjadwal dilewati.",
 
   // ── connectPage ──
@@ -2639,6 +2637,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioCreative.direction.keepMyEdits": "Pertahankan edit saya",
   "studioCreative.direction.manualBrief": "Brief manual",
   "studioCreative.direction.generatedFromDirection": "Dibuat dari arahan yang dipilih",
+  "studioBoard.toast.fieldTooLong": "Persingkat judul atau deskripsi sebelum menjadwalkan atau memublikasikan.",
   "studioCreative.direction.moderationNotice": "Prompt disaring sebelum pembuatan. Konten seksual, NSFW, eksploitatif, berbahaya, ilegal, deepfake, dan manipulasi wajah dilarang.",
   "studioCreative.direction.moderationNoticeLink": "Lihat kebijakan",
 };

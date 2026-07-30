@@ -96,6 +96,12 @@ function logModeration(fields: {
  * call. It is IGNORED in every other case, so production can never mock
  * moderation. Accepted values: allow | flag | deny | timeout | error |
  * malformed | non2xx | unknown | missing_key.
+ *
+ * MODERATION_MOCK_MAP (same gate) refines that for the per-field gate: a JSON
+ * object of {substring: decision}. The FIRST substring found in the prompt wins;
+ * if none match, MODERATION_MOCK_DECISION applies. This lets a test make one raw
+ * field deny while the composite allows (and vice versa) — the context-dilution
+ * shapes the flat seam cannot express.
  */
 export async function moderatePrompt(
   input: ModeratePromptInput,
@@ -105,6 +111,8 @@ export async function moderatePrompt(
 
   // ── Test-only deterministic seam (never active in production) ────────────────
   if (process.env.ALLOW_GENERATION_MOCK_PROVIDER === "true") {
+    const mapped = lookupMockMap(input.prompt, externalId);
+    if (mapped) return mapped;
     const forced = (process.env.MODERATION_MOCK_DECISION ?? "").trim().toLowerCase();
     if (forced) {
       return applyMockDecision(forced, externalId);
@@ -182,6 +190,35 @@ export async function moderatePrompt(
     logModeration({ resultId: null, decision, externalId, httpStatus, durationMs: Date.now() - start });
     return { ok: false, reason: "unavailable" };
   }
+}
+
+/**
+ * Test-only: resolve a decision from MODERATION_MOCK_MAP. Keys are matched in
+ * declaration order against the check's externalId SUFFIX first (`prompt`,
+ * `composite`, … — exact, so the composite is addressable even though it
+ * contains every field's text) and then as a prompt substring. Returns null when
+ * nothing matches, so the caller falls back to MODERATION_MOCK_DECISION.
+ * Never active unless ALLOW_GENERATION_MOCK_PROVIDER==="true".
+ */
+function lookupMockMap(prompt: string, externalId: string | null): ModerationResult | null {
+  const raw = (process.env.MODERATION_MOCK_MAP ?? "").trim();
+  if (!raw) return null;
+  let map: Record<string, string>;
+  try {
+    map = JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return null;
+  }
+  const suffix = externalId?.includes(":") ? externalId.slice(externalId.lastIndexOf(":") + 1) : null;
+  for (const [key, decision] of Object.entries(map)) {
+    if (suffix && key === `@${suffix}`) return applyMockDecision(String(decision).toLowerCase(), externalId);
+  }
+  for (const [key, decision] of Object.entries(map)) {
+    if (!key.startsWith("@") && prompt.includes(key)) {
+      return applyMockDecision(String(decision).toLowerCase(), externalId);
+    }
+  }
+  return null;
 }
 
 function applyMockDecision(forced: string, externalId: string | null): ModerationResult {

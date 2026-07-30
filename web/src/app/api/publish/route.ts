@@ -21,11 +21,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-// Use service role key server-side to bypass RLS on publishing_queue
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+export const dynamic = "force-dynamic";
+
+// Use service role key server-side to bypass RLS on publishing_queue.
+// Lazy: a clean `next build` collects page data without Supabase env vars.
+const mkClient = () =>
+  createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+let _supabase: ReturnType<typeof mkClient> | null = null;
+const supabase = () => (_supabase ??= mkClient());
 
 // ── POST — enqueue images for Pinterest publishing ────────────────────────────
 export async function POST(req: NextRequest) {
@@ -68,7 +74,7 @@ export async function POST(req: NextRequest) {
     retry_count:  0,
   }));
 
-  const { data, error } = await supabase
+  const { data, error } = await supabase()
     .from("publishing_queue")
     .insert(rows)
     .select("id, image_url, board_name, scheduled_at, status");
@@ -92,7 +98,7 @@ export async function POST(req: NextRequest) {
 
 // ── GET — fetch upcoming queue ────────────────────────────────────────────────
 export async function GET() {
-  const { data, error } = await supabase
+  const { data, error } = await supabase()
     .from("publishing_queue")
     .select("id, image_url, product_url, board_name, caption, keyword, scheduled_at, status, error_message")
     .order("scheduled_at", { ascending: true })
@@ -118,7 +124,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const { error } = await supabase
+  const { error } = await supabase()
     .from("publishing_queue")
     .update({ status: "done", published_at: new Date().toISOString() })
     .eq("id", id);

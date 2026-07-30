@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
+import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
 import { retrievePinterestKeywords, type KeywordContextResult } from "@/lib/ai-copy/keywordContext";
 import { appendShopifyProductDetails } from "@/lib/ai-copy/shopifyGrounding";
+import {
+  usageMeteringMode,
+  reserveTextGeneration,
+  settleTextGeneration,
+  releaseTextGeneration,
+  aiTextLimitResponseBody,
+  type TextReservation,
+} from "@/lib/server/usage/meterTextGeneration";
 import {
   CopyError,
   GENERIC_COPY_MESSAGE,
@@ -202,10 +212,44 @@ async function refineCopyWithKeywords(args: {
 
 // ── Handler ──────────────────────────────────────────────────────────────────
 
+/**
+ * User-safe 401 message. Mirrors the shape of every other failure on this route
+ * ({ ok:false, error, userMessage }) so the client's existing error path renders
+ * it without special-casing, while `error: "unauthenticated"` lets callers tell a
+ * sign-in problem apart from an AI/provider problem.
+ */
+const UNAUTHENTICATED_MESSAGE = "Please sign in to generate copy.";
+
 export async function POST(req: Request) {
   const requestId = nowId();
   const started = performance.now();
   const timings: Record<string, number> = {};
+
+  // AUTHENTICATION FIRST — before body parsing, provider configuration, image
+  // fetching and every provider call below. This route spends real provider money
+  // per request; an anonymous caller must not be able to reach a single outbound
+  // call, nor to make us parse an attacker-sized body.
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) {
+    return NextResponse.json(
+      { ok: false, requestId, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE },
+      { status: 401 },
+    );
+  }
+
+  // RATE LIMIT SECOND — still before body parsing, provider configuration, image
+  // fetching and every provider call below. Authentication alone only converted
+  // unlimited anonymous spend into unlimited per-account spend; this bounds what a
+  // single account can cost. Fails OPEN when the limiter's own infrastructure is
+  // down — deliberate, see lib/server/rateLimit.ts.
+  const limit = await consumeRateLimit(userId, "ai_copy");
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { ok: false, requestId, error: RATE_LIMITED_ERROR, userMessage: RATE_LIMITED_MESSAGE },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
+    );
+  }
+
   const body = await req.json() as RequestBody;
   const cfg = providerConfig();
   const mode = body.mode ?? "initial";
@@ -258,6 +302,24 @@ export async function POST(req: Request) {
   let retryCount = 0;
   let gateResult = "pass";
   let promptCharsEstimate = 0;
+
+  // ── USAGE METERING (Phase 4T — shadow by default) ─────────────────────────────
+  // Reserve ONE text unit up front, settle once at the single success return, release
+  // in the catch. Reserving here (before any provider call) means the reservation
+  // exists for the WHOLE request — including the internal quality-gate retries and the
+  // keyword-refine call — yet is settled exactly once, so 1 request = 1 charge no
+  // matter how many model calls fire. `off` (default) touches the ledger not at all;
+  // `shadow` never blocks (fail-open); `enforce` (Phase 6A, off in prod) refuses when
+  // the account is out of text capacity. userId is already resolved (401'd otherwise).
+  let textReservation: TextReservation = { kind: "off" };
+  if (usageMeteringMode() !== "off") {
+    textReservation = await reserveTextGeneration({ userId, generationRequestId: requestId });
+    if (textReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
+      return NextResponse.json(aiTextLimitResponseBody(requestId), { status: 402 });
+    }
+    // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
+    // the moderation gate). enforce with a live reservation continues below.
+  }
 
   try {
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);
@@ -412,6 +474,12 @@ export async function POST(req: Request) {
     }));
     devLog("success", { ...diagnostics, output, contextUsed, marks });
 
+    // Settle the single reserved text unit as succeeded — a pure side-effect between
+    // generation and the response (does NOT read or mutate `output`; the response body
+    // stays byte-identical). Reached only on the ONE success path, so it fires exactly
+    // once per request regardless of internal retries. Swallow-on-failure inside.
+    await settleTextGeneration({ reservation: textReservation });
+
     return NextResponse.json({
       ok: true,
       requestId,
@@ -441,6 +509,11 @@ export async function POST(req: Request) {
       diagnostics: isDev ? { ...diagnostics, recommended, modelUsed, retryCount, qualityGateResult: gateResult, promptChars: promptCharsEstimate, marks } : undefined,
     });
   } catch (err) {
+    // Any failure (quality-gate CopyError, provider error, invalid JSON, timeout,
+    // unconfigured provider) → return the whole reservation so no capacity is billed:
+    // failure/timeout/moderation-reject/invalid-JSON/empty = 0 charge. Idempotent and
+    // swallow-on-failure; a no-op when metering is off or nothing was reserved.
+    await releaseTextGeneration({ reservation: textReservation, reason: "ai_copy_failed" });
     diagnostics.totalLatencyMs = elapsed(started);
     const isCopyErr = err instanceof CopyError;
     const status = isCopyErr ? err.status : 502;

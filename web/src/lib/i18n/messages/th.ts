@@ -1318,8 +1318,6 @@ const th: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "การเชื่อมต่อ Pinterest ยังไม่เสร็จสมบูรณ์ กรุณาเลือก Pin อีกครั้ง",
   "plan.error.pinNotFound": "ไม่พบ Pin นี้",
   "plan.error.needsImage": "Pin นี้ต้องมีรูปภาพก่อนจึงจะตั้งเวลาได้",
-  "plan.error.needsTitle": "Pin นี้ต้องมีชื่อก่อนจึงจะตั้งเวลาได้",
-  "plan.error.needsDescription": "Pin นี้ต้องมีคำอธิบายก่อนจึงจะตั้งเวลาได้",
   "plan.error.needsBoard": "เพิ่มบอร์ดก่อนเผยแพร่",
   "plan.dropBlock.editSmartSchedule": "แก้ไขตารางอัจฉริยะ",
   "plan.dropBlock.allPastTitle": "ไม่มีเวลาว่างเหลือในวันที่ {date}",
@@ -1330,7 +1328,7 @@ const th: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "วันนี้มี Pin{plural} ที่ตั้งเวลาไว้แล้ว {n} รายการเต็มทุกช่วงเวลาตารางอัจฉริยะ เพิ่มจำนวน Pin ต่อวันหรือเลือกวันอื่น",
   "plan.toast.timeLocked": "ล็อกเวลาแล้ว — คงไว้ระหว่างการจัดสมดุลใหม่",
   "plan.toast.timeUnlocked": "ปลดล็อกเวลาแล้ว",
-  "plan.toast.blockedNeedsDetails": "Pin{plural} {n} รายการต้องมีรูปภาพ ชื่อ หรือคำอธิบายก่อนตั้งเวลา",
+  "plan.toast.blockedNeedsDetails": "Pin{plural} {n} รายการต้องมีรูปภาพ บอร์ด หรือชื่อ/คำอธิบายที่สั้นลงก่อนตั้งเวลา",
   "plan.toast.alreadyScheduled": "ตั้งเวลาแล้ว {n} Pin{plural}",
   "plan.toast.couldNotSchedule": "ไม่สามารถตั้งเวลา Pin ที่เลือกได้",
   "plan.toast.scheduledCount": "ตั้งเวลาแล้ว {n} Pin{plural}{alreadySuffix}",
@@ -1338,7 +1336,7 @@ const th: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "สร้างรายละเอียดที่ขาดหายไปแล้ว",
   "plan.toast.movedPins": "ย้าย {n} Pin{plural} ไปยัง {date} แล้ว",
   "plan.toast.removedPins": "ลบ {n} Pin{plural} ออกจากแผนแล้ว",
-  "plan.toast.selectedNeedDetails": "Pin ที่เลือกต้องมีรูปภาพ ชื่อ หรือคำอธิบายก่อนตั้งเวลา",
+  "plan.toast.selectedNeedDetails": "Pin ที่เลือกต้องมีรูปภาพ บอร์ด หรือชื่อ/คำอธิบายที่สั้นลงก่อนตั้งเวลา",
   "plan.toast.noUnscheduledSelected": "ไม่มี Pin ที่ยังไม่ได้ตั้งเวลาถูกเลือก — Pin ที่ตั้งเวลาแล้วจะถูกข้าม",
   // ── planViews ──
   "planViews.list.status.scheduled": "ตั้งเวลาแล้ว",
@@ -2620,6 +2618,9 @@ const th: Partial<Record<MessageKey, string>> = {
   "trends.toast.addedToPlan": "เพิ่ม \"{keyword}\" ลงแผนรายสัปดาห์แล้ว",
   "trends.toast.viewPlan": "ดูแผน",
   "trends.toast.signInToSave": "เข้าสู่ระบบเพื่อบันทึกคีย์เวิร์ดนี้",
+
+  "studioBoard.toast.fieldTooLong": "ย่อชื่อหรือคำอธิบายให้สั้นลงก่อนกำหนดเวลาหรือเผยแพร่",
+
 };
 
 export default th;

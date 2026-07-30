@@ -20,7 +20,19 @@ import os                            from "os";
 import crypto                        from "crypto";
 import { promises as fs }            from "fs";
 import { getUserIdFromBearer, getUserIdFromCookies } from "@/lib/server/authUser";
+import { createServerClient }        from "@/lib/supabase";
 import { moderatePrompt, type ModerationResult } from "@/lib/server/creem/moderatePrompt";
+import { validateImageModelKey, DEFAULT_IMAGE_MODEL_KEY } from "@/lib/server/imageModelKey";
+import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
+import {
+  usageMeteringMode,
+  reserveGenerationJobViaLedger,
+  reserveInline,
+  settleInline,
+  releaseInline,
+  aiImageLimitResponseBody,
+  type InlineReservation,
+} from "@/lib/server/usage/meterGeneration";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -45,6 +57,19 @@ const MAX_IMAGES_PER_REQUEST = Math.max(1, Math.min(
   Number(process.env.MAX_IMAGES_PER_REQUEST ?? 2) || 2,
 ));
 const USER_GENERATION_LOCK_TTL_MS = Number(process.env.USER_GENERATION_LOCK_TTL_MS ?? GENERATOR_TIMEOUT_MS + 60_000);
+
+// ── WP3-P1: DB-as-queue enqueue mode ────────────────────────────────────────────
+// See docs/设计/WP3-生图后端迁移设计.md. GENERATION_MODE=worker enqueues a
+// generation_jobs row and returns {jobId, slots} immediately; a VPS worker (not this
+// process) claims + fulfills it. Unset / "inline" keeps the existing spawn-generator.py
+// behavior below completely unchanged (grey-out fallback — this switch does not remove
+// the spawn path; that removal is WP3-P3).
+const GENERATION_MODE = process.env.GENERATION_MODE ?? "inline";
+// A worker is considered dead if its heartbeat row is missing or older than this —
+// enqueuing onto a dead worker would create a job nobody will ever claim (a zombie),
+// so POST fails honestly with 503 instead.
+const WORKER_HEARTBEAT_STALE_MS = Number(process.env.GENERATION_WORKER_HEARTBEAT_STALE_MS ?? 90_000);
+const WORKER_STATUS_NAME = process.env.GENERATION_WORKER_STATUS_NAME ?? "generator";
 
 type ResponseMeta = {
   requested_image_count?: number;
@@ -176,14 +201,34 @@ function requestFallbackIdentity(req: NextRequest, body: Record<string, unknown>
   return `anon:${safeLockName(`${forwarded}|${ua}`).slice(0, 24)}`;
 }
 
-async function resolveGenerationOwner(req: NextRequest, body: Record<string, unknown>): Promise<string> {
+/**
+ * Resolve the authenticated user ONCE per request. Called at the very top of the
+ * handler so authentication precedes any outbound moderation call; the result is
+ * threaded through both the worker enqueue path and the inline lock owner, so
+ * auth is never parsed twice (and a request never pays for two token
+ * verifications).
+ *
+ * Honours the same `ALLOW_GENERATION_AUTH_TEST_HEADER` seam the lock owner used,
+ * so tests can present a deterministic user without a live Supabase session. The
+ * seam is gated on an env flag that production never sets.
+ */
+async function resolveAuthenticatedUserId(req: NextRequest): Promise<string | null> {
   if (process.env.ALLOW_GENERATION_AUTH_TEST_HEADER === "true") {
     const testUserId = req.headers.get("x-vibepin-test-user-id")?.trim();
-    if (testUserId) return `user:${testUserId}`;
+    if (testUserId) return testUserId;
   }
   const bearerUser = await getUserIdFromBearer(req).catch(() => null);
-  const cookieUser = bearerUser ? null : await getUserIdFromCookies().catch(() => null);
-  const userId = bearerUser ?? cookieUser;
+  if (bearerUser) return bearerUser;
+  return getUserIdFromCookies().catch(() => null);
+}
+
+/**
+ * Lock owner for the inline path. Takes the ALREADY-RESOLVED user id (see
+ * resolveAuthenticatedUserId) rather than re-parsing auth. Anonymous callers keep
+ * their historical `session:`/`anon:` fallback identity — the inline path has
+ * always allowed them, and the lock is what bounds their concurrency.
+ */
+function resolveGenerationOwner(req: NextRequest, body: Record<string, unknown>, userId: string | null): string {
   return userId ? `user:${userId}` : requestFallbackIdentity(req, body);
 }
 
@@ -212,22 +257,251 @@ function buildImageInputs(productImages: string[], styleRef: string | null): Gen
 // generation path flows through (single, batch, retry, AiVersions, and the
 // Python chat fallback all sit behind this route), so a single gate here covers
 // all of them.
-function buildModeratedText(fields: {
+type ModeratedFields = {
   keyword: string;
   prompt: string;
   directionBrief: string;
   category: string;
   selectedTags: Array<{ label?: string }>;
-}): string {
+  productMetadata?: Array<{ title?: string }> | null;
+};
+
+// NOT exported: Next.js App Router forbids non-handler exports from route files
+// (the production build fails route type validation). No test imports this
+// helper — the moderation-gate suite drives it through buildModerationChecks /
+// POST — so un-exporting is a zero-behaviour change that keeps the build green.
+function buildModeratedText(fields: ModeratedFields): string {
   return [
     fields.keyword,
     fields.prompt,
     fields.directionBrief,
     fields.category,
     ...fields.selectedTags.map(t => t?.label ?? ""),
+    ...(fields.productMetadata ?? []).map(p => p?.title ?? ""),
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// ── Per-field checks (context-dilution fix) ───────────────────────────────────
+// Moderating ONLY the joined text is exploitable: measured against the live
+// Creem endpoint, a violent prompt that is denied on its own is ALLOWED once
+// benign context (a keyword, a category, tag labels) is prepended — the added
+// context dilutes the signal. Creem's guidance is to moderate raw user input,
+// so every free-text field is now screened INDIVIDUALLY with its raw value —
+// no prefixes, no labels, no sibling field's text — and the composite check is
+// kept ON TOP to still catch intent split across fields. Both layers must pass.
+//
+// `category` and `selectedTags[].label` are chosen from a hard-coded UI
+// catalogue (creativeDirections.ts CategoryPlaybookId / creativeControls.ts
+// CATEGORY_TAGS), but this route does NOT whitelist them server-side — both are
+// taken straight off the body (`String(body.category)`, a blind cast for
+// selectedTags), so a caller hitting the HTTP API directly can put arbitrary
+// text in either. They are therefore screened individually too: the
+// fixed-option exemption only holds where the server actually enforces it.
+// `product_metadata[].title` is likewise DB-derived in the UI but unchecked on
+// the wire, so it is screened as well.
+//
+// The `externalId` suffix is content-free (`:keyword`, `:prompt`, `:direction`,
+// `:category`, `:tag1`, `:product1`, `:composite`) so logs stay text-free while
+// remaining attributable to a check.
+// ── Input bounds (request amplification fix) ──────────────────────────────────
+// Every free-text field becomes its own OUTBOUND Creem moderation call, so an
+// unbounded array on the wire is an amplification primitive: 10,000 tags = 10,000
+// paid third-party calls from one request. The route previously blind-cast
+// `selectedTags` and `product_metadata` with no length or structure validation.
+//
+// Each cap below is DERIVED from an existing UI/product constraint, with modest
+// headroom so a legitimate maximum request never trips it:
+//
+//   KEYWORD 200          — `keyword` is a Pinterest search phrase sourced from
+//                          trend_keywords.keyword (schema.sql:12, unbounded
+//                          `text`); real values are a few words. 200 is far above
+//                          any observed value and far below an abuse payload.
+//   PROMPT 4000          — `prompt` is the machine-assembled hidden prompt
+//                          (studio/hiddenPromptBuilder.ts): ~10 fixed sections
+//                          plus directionBrief (≤1200) + customInstructions
+//                          (≤600) + product titles. 4000 covers the largest
+//                          assembly with room to spare.
+//   CATEGORY 64          — CategoryPlaybookId is an 8-value closed catalogue
+//                          (studio/creativeDirections.ts:87-95); the longest is
+//                          "digital-products" (16 chars). 64 = 4x headroom for
+//                          the raw DB category that can also arrive here.
+//   DIRECTION_BRIEF 1200 — the UI's own hard cap
+//                          (CreativeDirectionPanel.tsx:281 slice(0,1200), counter
+//                          at :313). Sibling brief inputs cap lower (600, 800).
+//   TAG_LABEL 64         — CATEGORY_TAGS (studio/creativeControls.ts:101-183)
+//                          longest label is "Street-style outfit" (19 chars).
+//                          64 = 3x headroom.
+//   TAGS 24              — the largest category set is `fashion` with 16 tags
+//                          (creativeControls.ts:102-119) and the format group is
+//                          single-select (toggleTagSelection, :229-239), so at
+//                          most 13 can be selected at once. 24 is ~2x that.
+//   PRODUCT_TITLE 300    — product title columns are unbounded `text`
+//                          (migrate_v22.sql:152, schema.sql:100); the nearest UI
+//                          title cap in the repo is 100 (StudioBoard.tsx:196,
+//                          maxLength={100} pin-title inputs). 300 = 3x that.
+//   PRODUCTS 24          — no selection cap exists; the evidenced ceilings are 4
+//                          (basket prefill, studio/page.tsx:2267) and 20 per bulk
+//                          URL paste (InlineCreateAssetPicker.tsx:790). 24 lets a
+//                          full 20-URL paste through with headroom.
+//
+// Over a limit → 400 invalid_request. We deliberately do NOT truncate and
+// proceed: silently dropping fields would moderate less text than the user
+// actually submitted, which is exactly the dilution failure the per-field gate
+// exists to prevent.
+export const INPUT_LIMITS = {
+  KEYWORD: 200,
+  PROMPT: 4000,
+  CATEGORY: 64,
+  DIRECTION_BRIEF: 1200,
+  TAG_LABEL: 64,
+  TAG_ID: 128,
+  TAG_GROUP: 64,
+  TAGS: 24,
+  PRODUCT_TITLE: 300,
+  PRODUCT_URL: 2048,
+  PRODUCTS: 24,
+} as const;
+
+// Absolute ceiling on outbound moderation calls for ONE request. Derived from
+// the caps above — the maximum legitimate check list is:
+//   keyword + prompt + direction + category   =  4
+//   selectedTags                              = 24  (INPUT_LIMITS.TAGS)
+//   product_metadata                          = 24  (INPUT_LIMITS.PRODUCTS)
+//   composite                                 =  1
+//                                             = 53
+// 56 leaves a small margin without meaningfully widening the blast radius. This
+// is a HARD backstop, checked after the list is built and before ANY call is
+// issued: over the ceiling → 400 with ZERO outbound requests. It is never used to
+// truncate the list, and a partial batch is never fired — a bounded-but-wrong
+// request must fail loudly rather than be silently screened in part.
+export const MAX_MODERATION_CHECKS = 56;
+
+function invalidRequestResponse(generationRequestId: string, detail: string): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error_type: "invalid_request",
+      code: "invalid_request",
+      error: `This request could not be processed: ${detail}. Please reduce the size of your request and try again.`,
+      urls: [],
+      generation_request_id: generationRequestId,
+    },
+    { status: 400 },
+  );
+}
+
+/** A plain object — not null, not an array, not a boxed primitive. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export type InputValidation =
+  | { ok: true; selectedTags: Array<{ id: string; label: string; group: string }>; productMetadata: Array<{ title?: string; productUrl?: string }> | null }
+  | { ok: false; detail: string };
+
+/**
+ * Validate and bound every user-controlled field that feeds the moderation gate,
+ * BEFORE the check list is built. Replaces the previous blind `as` casts on
+ * `selectedTags` / `product_metadata` with real structural validation: each entry
+ * must be a plain object (arrays / null / primitives rejected) whose text fields
+ * are strings within their caps.
+ *
+ * Exported so the bound can be unit-tested without driving the whole handler.
+ */
+export function validateGenerationInput(raw: {
+  keyword: string;
+  prompt: string;
+  directionBrief: string;
+  category: string;
+  selectedTags: unknown;
+  productMetadata: unknown;
+}): InputValidation {
+  const tooLong = (name: string, value: string, max: number) =>
+    value.length > max ? `${name} exceeds the maximum length of ${max} characters` : null;
+
+  const scalarError =
+    tooLong("keyword", raw.keyword, INPUT_LIMITS.KEYWORD) ??
+    tooLong("prompt", raw.prompt, INPUT_LIMITS.PROMPT) ??
+    tooLong("directionBrief", raw.directionBrief, INPUT_LIMITS.DIRECTION_BRIEF) ??
+    tooLong("category", raw.category, INPUT_LIMITS.CATEGORY);
+  if (scalarError) return { ok: false, detail: scalarError };
+
+  // selectedTags: absent → []. Present but not an array → reject (a blind cast
+  // previously turned `{}` or a string into an empty list silently).
+  let selectedTags: Array<{ id: string; label: string; group: string }> = [];
+  if (raw.selectedTags !== undefined && raw.selectedTags !== null) {
+    if (!Array.isArray(raw.selectedTags)) return { ok: false, detail: "selectedTags must be an array" };
+    if (raw.selectedTags.length > INPUT_LIMITS.TAGS) {
+      return { ok: false, detail: `selectedTags exceeds the maximum of ${INPUT_LIMITS.TAGS} tags` };
+    }
+    const validated: Array<{ id: string; label: string; group: string }> = [];
+    for (let i = 0; i < raw.selectedTags.length; i++) {
+      const entry = raw.selectedTags[i] as unknown;
+      if (!isPlainObject(entry)) return { ok: false, detail: `selectedTags[${i}] must be an object` };
+      const { id, label, group } = entry;
+      if (id !== undefined && typeof id !== "string") return { ok: false, detail: `selectedTags[${i}].id must be a string` };
+      if (label !== undefined && typeof label !== "string") return { ok: false, detail: `selectedTags[${i}].label must be a string` };
+      if (group !== undefined && typeof group !== "string") return { ok: false, detail: `selectedTags[${i}].group must be a string` };
+      const idStr = (id as string | undefined) ?? "";
+      const labelStr = (label as string | undefined) ?? "";
+      const groupStr = (group as string | undefined) ?? "";
+      if (idStr.length > INPUT_LIMITS.TAG_ID) return { ok: false, detail: `selectedTags[${i}].id exceeds the maximum length of ${INPUT_LIMITS.TAG_ID} characters` };
+      if (labelStr.length > INPUT_LIMITS.TAG_LABEL) return { ok: false, detail: `selectedTags[${i}].label exceeds the maximum length of ${INPUT_LIMITS.TAG_LABEL} characters` };
+      if (groupStr.length > INPUT_LIMITS.TAG_GROUP) return { ok: false, detail: `selectedTags[${i}].group exceeds the maximum length of ${INPUT_LIMITS.TAG_GROUP} characters` };
+      validated.push({ id: idStr, label: labelStr, group: groupStr });
+    }
+    selectedTags = validated;
+  }
+
+  // product_metadata: absent / non-array → null (matches the previous shape so
+  // the generator payload is unchanged), but a PRESENT array is fully validated.
+  let productMetadata: Array<{ title?: string; productUrl?: string }> | null = null;
+  if (Array.isArray(raw.productMetadata)) {
+    if (raw.productMetadata.length > INPUT_LIMITS.PRODUCTS) {
+      return { ok: false, detail: `product_metadata exceeds the maximum of ${INPUT_LIMITS.PRODUCTS} products` };
+    }
+    const validated: Array<{ title?: string; productUrl?: string }> = [];
+    for (let i = 0; i < raw.productMetadata.length; i++) {
+      const entry = raw.productMetadata[i] as unknown;
+      if (!isPlainObject(entry)) return { ok: false, detail: `product_metadata[${i}] must be an object` };
+      const { title, productUrl } = entry;
+      if (title !== undefined && typeof title !== "string") return { ok: false, detail: `product_metadata[${i}].title must be a string` };
+      if (productUrl !== undefined && typeof productUrl !== "string") return { ok: false, detail: `product_metadata[${i}].productUrl must be a string` };
+      if (typeof title === "string" && title.length > INPUT_LIMITS.PRODUCT_TITLE) {
+        return { ok: false, detail: `product_metadata[${i}].title exceeds the maximum length of ${INPUT_LIMITS.PRODUCT_TITLE} characters` };
+      }
+      if (typeof productUrl === "string" && productUrl.length > INPUT_LIMITS.PRODUCT_URL) {
+        return { ok: false, detail: `product_metadata[${i}].productUrl exceeds the maximum length of ${INPUT_LIMITS.PRODUCT_URL} characters` };
+      }
+      validated.push({
+        ...(title !== undefined ? { title: title as string } : {}),
+        ...(productUrl !== undefined ? { productUrl: productUrl as string } : {}),
+      });
+    }
+    productMetadata = validated;
+  }
+
+  return { ok: true, selectedTags, productMetadata };
+}
+
+export function buildModerationChecks(fields: ModeratedFields): Array<{ suffix: string; text: string }> {
+  const checks: Array<{ suffix: string; text: string }> = [];
+  const push = (suffix: string, raw: string) => {
+    if (raw.trim()) checks.push({ suffix, text: raw });
+  };
+
+  push("keyword", fields.keyword);
+  push("prompt", fields.prompt);
+  push("direction", fields.directionBrief);
+  push("category", fields.category);
+  fields.selectedTags.forEach((t, i) => push(`tag${i + 1}`, t?.label ?? ""));
+  (fields.productMetadata ?? []).forEach((p, i) => push(`product${i + 1}`, p?.title ?? ""));
+
+  // Composite last: catches intent that is only harmful once the fields combine.
+  push("composite", buildModeratedText(fields));
+  return checks;
 }
 
 export type ModerationGateOutcome =
@@ -264,21 +538,35 @@ function unavailableResponse(generationRequestId: string): NextResponse {
   );
 }
 
-/**
- * Pure decision helper — maps a ModerationResult to whether the request may
- * proceed and, if not, the exact HTTP response. Exported so the gate can be
- * unit-tested without a live Creem call. On {ok:true} the caller continues to
- * the dispatch branches; anything else STOPS before lock acquisition/dispatch.
+/*
+ * NOTE (lineage merge): the single-check helper `evaluateModerationForRequest`
+ * was removed here. The create-pin lineage un-exported it as a production build
+ * fix (Next.js App Router forbids non-handler exports from route files); the
+ * master lineage had already replaced its only call site with the per-field
+ * `evaluateModerationResults` below, leaving it dead code kept alive solely by
+ * the `export` keyword. It has no callers and no test importers, and
+ * evaluateModerationResults implements the identical fail-closed contract for
+ * the N-check batch, so deleting it is a zero-behaviour change.
  */
-function evaluateModerationForRequest(
-  result: ModerationResult,
+
+/**
+ * Combine the per-field + composite results under the SAME fail-closed contract
+ * as the single-check gate: the request proceeds only when EVERY check allows.
+ * `rejected` wins over `unavailable` so a genuinely policy-violating field still
+ * reports 400 prompt_rejected even if a sibling check happened to be unreachable.
+ * Exported for unit tests.
+ */
+export function evaluateModerationResults(
+  results: ModerationResult[],
   generationRequestId: string,
 ): ModerationGateOutcome {
-  if (result.ok) return { proceed: true };
-  if (result.reason === "rejected") {
+  if (results.some(r => !r.ok && r.reason === "rejected")) {
     return { proceed: false, response: rejectedResponse(generationRequestId) };
   }
-  return { proceed: false, response: unavailableResponse(generationRequestId) };
+  if (results.some(r => !r.ok)) {
+    return { proceed: false, response: unavailableResponse(generationRequestId) };
+  }
+  return { proceed: true };
 }
 
 function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}): Promise<NextResponse> {
@@ -389,6 +677,62 @@ function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}
   });
 }
 
+// ── WP3-P1: enqueue path (GENERATION_MODE=worker) ───────────────────────────────
+// Contract shared byte-for-byte with the VPS worker (package A): table
+// generation_jobs(id, vibepin_user_id, status, params, results, claimed_at,
+// worker_heartbeat_at, created_at, updated_at, finished_at) and
+// generation_worker_status(name PK, last_seen). See design doc §4-5.
+type GenerationJobResult = { slot: number; status: "pending" | "done" | "failed"; imageUrl: string | null; error: string | null };
+
+async function isWorkerHealthy(): Promise<boolean> {
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("generation_worker_status")
+    .select("last_seen")
+    .eq("name", WORKER_STATUS_NAME)
+    .maybeSingle();
+  if (error || !data?.last_seen) return false;
+  const lastSeenMs = Date.parse(data.last_seen as string);
+  if (Number.isNaN(lastSeenMs)) return false;
+  return Date.now() - lastSeenMs <= WORKER_HEARTBEAT_STALE_MS;
+}
+
+/**
+ * Enqueue a generation_jobs row and return immediately (<1s). Honest-failure gate:
+ * if the worker's heartbeat is missing/stale we return null WITHOUT inserting a row —
+ * inserting anyway would create a job nobody will ever claim (a zombie task).
+ */
+async function enqueueGenerationJob(
+  slotCount: number,
+  params: Record<string, unknown>,
+  userId: string,
+): Promise<{ jobId: string; slots: number } | null> {
+  const healthy = await isWorkerHealthy();
+  if (!healthy) return null;
+
+  const results: GenerationJobResult[] = Array.from({ length: slotCount }, (_, i) => ({
+    slot: i, status: "pending", imageUrl: null, error: null,
+  }));
+
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("generation_jobs")
+    .insert({
+      vibepin_user_id: userId,
+      status: "queued",
+      params,
+      results,
+    })
+    .select("id")
+    .single();
+
+  if (error || !data?.id) {
+    console.error("[generate] enqueue insert failed:", error?.message);
+    return null;
+  }
+  return { jobId: data.id as string, slots: slotCount };
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -416,19 +760,16 @@ export async function POST(req: NextRequest) {
   const referenceStrength  = String(body.reference_strength ?? "moderate");
   const outputType         = String(body.output_type ?? "");
   const pinFormat          = String(body.format ?? "vertical 2:3");
-  const productMetadata    = Array.isArray(body.product_metadata)
-    ? (body.product_metadata as Array<{ title?: string; productUrl?: string }>)
-    : null;
-  const modelKey           = String(body.model_key ?? "gemini_image");
+  // `model_key` is NOT read here. It is client-controlled and selects which PAID
+  // provider the account is billed for, so it is validated against the closed
+  // contract in Step 2a below and only then bound to `modelKey`. Reading it into a
+  // plain `String(...)` at this point is exactly the defect being removed.
   const contentLanguage    = String(body.content_language ?? "en").trim() || "en";
   const promptMode         = body.prompt_mode === "creative_direction_v2" ? "creative_direction_v2" : "legacy";
   const promptVersion      = Number(body.prompt_version ?? (promptMode === "creative_direction_v2" ? 2 : 1));
   const creativeDirectionMeta = body.creative_direction_meta && typeof body.creative_direction_meta === "object"
     ? body.creative_direction_meta as Record<string, unknown>
     : null;
-  const selectedTags = Array.isArray(body.selectedTags)
-    ? body.selectedTags as Array<{ id: string; label: string; group: string }>
-    : [];
   const primaryFormatTag = String(body.primaryFormatTag ?? "");
   const directionBrief = String(body.directionBrief ?? "");
   const briefManuallyEdited = Boolean(body.briefManuallyEdited ?? false);
@@ -455,15 +796,175 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "keyword is required" }, { status: 400 });
   }
 
-  // ── Moderation gate (Creem AI-compliance) — BEFORE both dispatch branches and
-  // BEFORE lock acquisition, so a rejected/unscreenable prompt never spawns the
-  // generator, never hits FastAPI, and never acquires the per-user lock. Runs for
-  // real AND mock-provider requests (mock is about the image provider, not
-  // compliance). The moderated text is the user's actual intent; the Python
-  // enhancer only rewrites it.
-  const moderatedText = buildModeratedText({ keyword, prompt, directionBrief, category, selectedTags });
-  const moderation = await moderatePrompt({ prompt: moderatedText, externalId: generationRequestId });
-  const gate = evaluateModerationForRequest(moderation, generationRequestId);
+  // ── Step 1: AUTHENTICATE — before any outbound moderation call ────────────────
+  // Moderation is a PAID third-party API. Resolving the user AFTER the moderation
+  // batch (as this route previously did, 60 lines later in the worker branch) let
+  // an unauthenticated request burn up to N outbound Creem calls before being
+  // rejected 401 — request amplification and unauthorized consumption of a paid
+  // API in one. The user is resolved ONCE here and the same `userId` is reused by
+  // the worker enqueue path below; auth is never re-parsed.
+  //
+  // NON-WORKER PATHS (inline generator.py / FastAPI): these have always tolerated
+  // an anonymous caller — resolveGenerationOwner() falls back to a
+  // `session:<studioClientId>` or `anon:<ip+ua hash>` lock owner (see
+  // requestFallbackIdentity), which only exists because anonymous requests can
+  // reach the inline generator. That is the local-dev / self-hosted shape, so we
+  // do NOT break it: an anonymous request still proceeds on those paths, and the
+  // `anon:` lock still bounds it to one concurrent generation per browser/IP.
+  // GENERATION_MODE=worker is the PRODUCTION setting, and it is now strictly
+  // authenticated: 401 before a single moderation call. The bound/validation work
+  // below applies to every path, so the anonymous inline path is amplification-
+  // capped even though it is not authenticated.
+  const authUserId = await resolveAuthenticatedUserId(req);
+  if (GENERATION_MODE === "worker" && !authUserId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  // ── Step 2: VALIDATE AND BOUND the moderated inputs — still before any call ───
+  // Structural + length validation replacing the old blind `as` casts. An
+  // over-limit or malformed request is rejected with 400 invalid_request having
+  // issued ZERO outbound moderation requests. Never truncates.
+  const validated = validateGenerationInput({
+    keyword,
+    prompt,
+    directionBrief,
+    category,
+    selectedTags: body.selectedTags,
+    productMetadata: body.product_metadata,
+  });
+  if (!validated.ok) {
+    return invalidRequestResponse(generationRequestId, validated.detail);
+  }
+  const selectedTags = validated.selectedTags;
+  const productMetadata = validated.productMetadata;
+
+  // ── Step 2a: VALIDATE model_key — the paid-provider selector ──────────────────
+  // `model_key` is client-controlled and decides which PAID image model the account
+  // is billed for. It used to be taken verbatim (`String(body.model_key ?? …)`) and
+  // forwarded to both dispatch branches; generator.py::_resolve_model_id then mapped
+  // ANY unknown key onto GPT Image, so arbitrary body text silently chose a specific
+  // paid model AND changed capability (_model_supports_image_input branches on the
+  // resolved model, not the key). This is the trust boundary that closes that.
+  //
+  // WHY HERE — after input bounds, BEFORE the moderation batch:
+  //   * It is a pure, local, zero-cost string check. A request that is going to 400
+  //     on an invalid model must not first buy up to MAX_MODERATION_CHECKS outbound
+  //     Creem calls; placing a free check after a paid one is the amplification
+  //     mistake this route already fixed once for auth and input bounds.
+  //   * It CANNOT move ahead of moderation's own position in any way that weakens
+  //     the gate: this step only ever returns 400 or falls through. Moderation still
+  //     runs unconditionally for every request that proceeds, still fails closed,
+  //     and still sits before enqueue / FastAPI / inline dispatch. Rejecting earlier
+  //     strictly shrinks what an invalid request can reach — it never lets an
+  //     unmoderated request through.
+  //   * It sits with the other Step 2 structural validation because it IS structural
+  //     validation: same 400 invalid_request envelope, same "never truncate, never
+  //     coerce" rule.
+  // Absent → DEFAULT_IMAGE_MODEL_KEY; legacy `nano_banana` → `gemini_image`; anything
+  // else → 400. Never silently coerced onto a valid (paid) model.
+  const modelKeyValidation = validateImageModelKey(body.model_key);
+  if (!modelKeyValidation.ok) {
+    return invalidRequestResponse(generationRequestId, modelKeyValidation.detail);
+  }
+  const modelKey: string = modelKeyValidation.modelKey;
+
+  // ── Step 2b: DURABLE per-user rate limit — before any PAID work ───────────────
+  // An ABUSE CEILING on request velocity, not allowance metering (that is a later
+  // phase). This route is the most expensive in the product: one admitted request
+  // buys up to MAX_IMAGES_PER_REQUEST paid image generations plus a moderation batch
+  // of up to MAX_MODERATION_CHECKS outbound Creem calls.
+  //
+  // WHY DURABLE: the existing os.tmpdir() TTL lock further down is PER-LAMBDA-
+  // INSTANCE, so N concurrent instances admit N concurrent generations. Only the
+  // shared Postgres window (ai_rate_limit_windows, v53) can bound total spend.
+  //
+  // WHY HERE — after auth (Step 1) and the free structural checks, but strictly
+  // BEFORE the moderation batch and every dispatch path: a throttled request must
+  // cost ZERO outbound Creem calls and ZERO provider work. Moderation's own position
+  // relative to dispatch is untouched — it still runs, unconditionally and
+  // fail-closed, for every request that gets past this point.
+  //
+  // ANONYMOUS INLINE CALLERS: /api/generate only requires auth in
+  // GENERATION_MODE=worker (production). The inline/FastAPI paths deliberately serve
+  // anonymous callers (local dev / self-hosted), and Step 1's comment records that as
+  // a supported shape. Breaking it would be a scope violation — but leaving it
+  // unlimited would make the limiter trivially bypassable by simply dropping the
+  // Authorization header. So an anonymous caller is limited under its EXISTING
+  // stable identity: `resolveGenerationOwner`'s `session:<studioClientId>` /
+  // `anon:<hash(ip|ua)>` fallback, the same string the per-user TTL lock already
+  // keys on. It is a weaker identity than an account id (a client can rotate
+  // studioClientId), but it is the identity this route has always had for those
+  // callers, it is not unlimited, and in production the worker path's 401 means an
+  // anonymous request never reaches this line at all.
+  const rateLimitIdentity = resolveGenerationOwner(req, body, authUserId);
+  const rateLimit = await consumeRateLimit(rateLimitIdentity, "image_generation");
+  if (!rateLimit.allowed) {
+    // Two distinct refusals, deliberately given different status codes:
+    //   limit_exceeded      → 429, the user really did go too fast.
+    //   limiter_unavailable → 503, the limiter FAILED CLOSED. That is the opposite
+    //     of the ai-copy routes' fail-open choice and is intentional for this route
+    //     only — see the `image_generation` note in lib/server/rateLimit.ts. Do not
+    //     "unify" it. 503 (not 429) because an outage is not the caller's fault and
+    //     is honestly a server-side unavailability.
+    const unavailable = rateLimit.reason === "limiter_unavailable";
+    console.warn(JSON.stringify({
+      event: unavailable ? "generation_rate_limiter_unavailable" : "generation_rate_limited",
+      generationRequestId,
+      identityKind: rateLimitIdentity.startsWith("user:") ? "user" : "anonymous",
+    }));
+    return NextResponse.json(
+      {
+        ok: false,
+        error_type: unavailable ? "rate_limiter_unavailable" : RATE_LIMITED_ERROR,
+        code: unavailable ? "rate_limiter_unavailable" : RATE_LIMITED_ERROR,
+        error: unavailable
+          ? "Image generation is temporarily unavailable. Please try again in a moment."
+          : RATE_LIMITED_MESSAGE,
+        urls: [],
+        generation_request_id: generationRequestId,
+      },
+      {
+        status: unavailable ? 503 : 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+      },
+    );
+  }
+
+  // ── Step 3: Moderation gate (Creem AI-compliance) — BEFORE both dispatch
+  // branches and BEFORE lock acquisition, so a rejected/unscreenable prompt never
+  // spawns the generator, never hits FastAPI, and never acquires the per-user
+  // lock. Runs for real AND mock-provider requests (mock is about the image
+  // provider, not compliance). The moderated text is the user's actual intent;
+  // the Python enhancer only rewrites it.
+  // Every free-text field is screened on its OWN raw value, plus one composite
+  // check over the joined text — see buildModerationChecks. Run in parallel so
+  // the added layers cost ~one moderation round-trip, not N.
+  const moderationChecks = buildModerationChecks({
+    keyword, prompt, directionBrief, category, selectedTags, productMetadata,
+  });
+  // Hard, unbypassable backstop. Step 2's per-field caps should already make this
+  // unreachable; it stands as a second, independent line of defence so that ANY
+  // future field added to buildModerationChecks without a matching cap fails
+  // closed instead of silently multiplying outbound calls. Zero requests are
+  // issued when it trips — the list is never truncated and no partial batch fires.
+  if (moderationChecks.length > MAX_MODERATION_CHECKS) {
+    console.warn(JSON.stringify({
+      event: "moderation_check_limit_exceeded",
+      generationRequestId,
+      checkCount: moderationChecks.length,
+      maxChecks: MAX_MODERATION_CHECKS,
+    }));
+    return invalidRequestResponse(
+      generationRequestId,
+      `it requires ${moderationChecks.length} content checks, above the maximum of ${MAX_MODERATION_CHECKS}`,
+    );
+  }
+  const moderationResults = await Promise.all(
+    moderationChecks.map(check =>
+      moderatePrompt({ prompt: check.text, externalId: `${generationRequestId}:${check.suffix}` }),
+    ),
+  );
+  const gate = evaluateModerationResults(moderationResults, generationRequestId);
   if (!gate.proceed) {
     return gate.response;
   }
@@ -513,7 +1014,105 @@ export async function POST(req: NextRequest) {
     mockProviderDelayMs: providerMode === "mock" ? mockProviderDelayMs : undefined,
   }));
 
+  // Path 0: WP3-P1 worker enqueue (GENERATION_MODE=worker). Short-circuits everything
+  // below — the VPS worker fulfills the job, this process never spawns generator.py.
+  if (GENERATION_MODE === "worker") {
+    // Auth already resolved (and enforced) in Step 1 above — reused, never
+    // re-parsed. The `!authUserId` case returned 401 before any moderation call,
+    // so this narrowing can only fail if that guard is ever removed.
+    const userId = authUserId;
+    if (!userId) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+
+    const promptWithLangForQueue = contentLanguage !== "en"
+      ? `${prompt}\n\n[Important: Generate any on-image text and descriptive copy in ${contentLanguage}. Keep Pinterest-native tone.]`
+      : prompt;
+    const jobParams: GeneratorPayload = {
+      keyword, style, count, prompt: promptWithLangForQueue, style_ref: styleRef, product_images: productImages, image_inputs: imageInputs, category,
+      text_overlay: textOverlay, reference_strength: referenceStrength,
+      output_type: outputType, format: pinFormat, product_metadata: productMetadata,
+      model_key: modelKey, content_language: contentLanguage,
+      prompt_mode: promptMode, prompt_version: promptVersion,
+      creative_direction_meta: creativeDirectionMeta,
+      selectedTags,
+      primaryFormatTag,
+      directionBrief,
+      briefManuallyEdited,
+      inferredCategory,
+      selectedOpportunity,
+      productImageCountRequested,
+      referenceImageCountRequested,
+      outputCount,
+      variationMode,
+      outputVariants,
+      requestedImageCount: imageCountClamp.requested,
+      actualImageCount: count,
+      countClamped: imageCountClamp.clamped,
+      generationRequestId,
+      generationOwnerId: `user:${userId}`,
+      studioClientId,
+      providerMode,
+      mockProviderBehavior,
+      mockProviderDelayMs,
+      mode: isRetrySingleOutput ? "retry_single_output" : undefined,
+      retryOfOutputId: body.retryOfOutputId,
+      retryOutputIndex: body.retryOutputIndex,
+    };
+
+    // ── Phase 4I: image metering (SHADOW by default; off = today's behaviour) ────
+    // Reserve slots against the usage ledger BEFORE dispatch, AFTER the moderation
+    // gate above (moderation is unmoved — see Step 3 at line ~926). Only authenticated
+    // `user:<id>` callers reach here (worker mode is strictly authenticated), so this
+    // is exactly the metered identity; anon callers cannot reach this branch.
+    //
+    // usage_reserve_generation_job inserts the job AND the reservation in ONE
+    // transaction (closing the reserve-then-crash-before-enqueue gap), so in metering
+    // mode it REPLACES the plain enqueueGenerationJob insert. When the ledger reserve
+    // succeeds we use its jobId directly. In `off` mode the plain path is untouched.
+    const meterMode = usageMeteringMode();
+    if (meterMode !== "off") {
+      // Worker liveness is still an honest-failure gate even under metering: a job
+      // nobody will claim must not be reserved-and-enqueued. Reuse isWorkerHealthy().
+      if (!(await isWorkerHealthy())) {
+        return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
+      }
+      const ledger = await reserveGenerationJobViaLedger({
+        userId,
+        count,
+        generationRequestId,
+        params: jobParams as unknown as Record<string, unknown>,
+      });
+      if (ledger.kind === "reserved") {
+        console.log(`[/api/generate] enqueued job=${ledger.jobId} slots=${ledger.slots} user=${userId} (metered)`);
+        return NextResponse.json({ jobId: ledger.jobId, slots: ledger.slots });
+      }
+      if (ledger.kind === "insufficient" && meterMode === "enforce") {
+        // ENFORCE (reserved for a later phase; NOT enabled in prod this phase):
+        // insufficient balance → limit response in the route's error envelope.
+        return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+      }
+      // SHADOW fail-open: insufficient / error / skipped → fall through to the plain
+      // (unmetered) enqueue so the user still generates. Deliberately inverse to the
+      // moderation gate — see meterGeneration.ts.
+    }
+
+    const enqueued = await enqueueGenerationJob(count, jobParams as unknown as Record<string, unknown>, userId);
+    if (!enqueued) {
+      return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
+    }
+    console.log(`[/api/generate] enqueued job=${enqueued.jobId} slots=${enqueued.slots} user=${userId}`);
+    return NextResponse.json({ jobId: enqueued.jobId, slots: enqueued.slots });
+  }
+
   // Path 1: FastAPI (async task queue — only when server is running)
+  //
+  // Phase 4I: this branch is DELIBERATELY EXCLUDED from metering. tryFastAPI is
+  // fire-and-forget — the route hands the task to an external FastAPI queue and never
+  // learns its outcome (nothing polls the task id back here). Reserving capacity for a
+  // job whose success/failure we can never observe would leak reserved capacity until
+  // the expiry sweeper reclaimed it, charging the user for nothing in the meantime. So
+  // no reserve happens here; metering resumes on the inline (Path 2) fallback below.
   const requiresFullPayload = promptMode === "creative_direction_v2" || productImages.length > 0 || !!styleRef;
   if (!requiresFullPayload) {
     const fastapiResult = await tryFastAPI(keyword, style, undefined);
@@ -530,7 +1129,10 @@ export async function POST(req: NextRequest) {
   const promptWithLang = contentLanguage !== "en"
     ? `${prompt}\n\n[Important: Generate any on-image text and descriptive copy in ${contentLanguage}. Keep Pinterest-native tone.]`
     : prompt;
-  const generationOwnerId = await resolveGenerationOwner(req, body);
+  // Same identity the rate limiter keyed on in Step 2b — resolved once, reused, so
+  // the durable window and the per-instance lock can never disagree about who the
+  // caller is.
+  const generationOwnerId = rateLimitIdentity;
   const userLock = await acquireTtlLock("active-generation", generationOwnerId, USER_GENERATION_LOCK_TTL_MS);
   if (!userLock.acquired) {
     console.warn(JSON.stringify({
@@ -551,8 +1153,26 @@ export async function POST(req: NextRequest) {
     }, { status: 429 });
   }
 
+  // ── Phase 4I: inline image metering (SHADOW by default; off = unchanged) ──────
+  // Reserve AFTER the per-user lock is held (so a lock-denied 429 leaks no
+  // reservation) and BEFORE runGenerator dispatches. Only authenticated `user:<id>`
+  // callers meter: anonymous inline callers (session:/anon:) have no usage account,
+  // so they are skipped entirely — metering never touches the documented anonymous
+  // path. `enforce` refuses an insufficient balance; `shadow` proceeds regardless.
+  // Moderation (Step 3, ~line 926) already ran and is unmoved.
+  let inlineReservation: InlineReservation = { kind: "off" };
+  if (authUserId && usageMeteringMode() !== "off") {
+    inlineReservation = await reserveInline({ userId: authUserId, count, generationRequestId });
+    if (inlineReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
+      await userLock.release();
+      return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+    }
+    // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
+    // the moderation gate).
+  }
+
   try {
-    return await runGenerator({
+    const response = await runGenerator({
       keyword, style, count, prompt: promptWithLang, style_ref: styleRef, product_images: productImages, image_inputs: imageInputs, category,
       text_overlay: textOverlay, reference_strength: referenceStrength,
       output_type: outputType, format: pinFormat, product_metadata: productMetadata,
@@ -588,6 +1208,30 @@ export async function POST(req: NextRequest) {
       count_clamped: imageCountClamp.clamped,
       generation_request_id: generationRequestId,
     });
+
+    // Settle per slot from the parsed result: N urls succeeded → s0..s{N-1}
+    // succeeded, the rest terminal failure. runGenerator ALWAYS resolves a
+    // NextResponse (never throws), so read the count off a clone. Every settle
+    // failure is swallowed inside settleInline (the expiry sweeper is the net).
+    if (inlineReservation.kind === "reserved") {
+      let successCount = 0;
+      try {
+        const parsed = (await response.clone().json()) as { urls?: unknown };
+        successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
+      } catch {
+        successCount = 0; // unparseable body → treat as zero success (all released)
+      }
+      await settleInline({ reservation: inlineReservation, successCount });
+    }
+    return response;
+  } catch (err) {
+    // A synchronous failure before any slot could run → release the whole
+    // reservation. runGenerator itself does not throw, so this covers only unexpected
+    // errors; release is idempotent and swallow-on-failure.
+    if (inlineReservation.kind === "reserved") {
+      await releaseInline({ reservation: inlineReservation, reason: "generation_error" });
+    }
+    throw err;
   } finally {
     await userLock.release();
   }

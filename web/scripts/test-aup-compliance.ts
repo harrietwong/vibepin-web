@@ -51,7 +51,7 @@ function main() {
 
   const aup = read("src/app/acceptable-use-policy/page.tsx");
 
-  test("AUP page exists and has all 10 section titles", () => {
+  test("AUP page exists and has all 11 section titles", () => {
     const titles = [
       "1. Permitted Use",
       "2. Sexual and Adult Content",
@@ -62,13 +62,14 @@ function main() {
       "7. Platform Abuse",
       "8. Prompt Screening and Enforcement",
       "9. Reporting Violations",
-      "10. Changes to This Policy",
+      "10. Third-Party AI Services",
+      "11. Changes to This Policy",
     ];
     for (const t of titles) assert(aup.includes(t), `AUP missing section: ${t}`);
   });
 
   test("AUP page uses a constant Last-updated string (no runtime Date)", () => {
-    assert(aup.includes('const UPDATED = "July 19, 2026"'), "UPDATED constant present");
+    assert(aup.includes('const UPDATED = "July 20, 2026"'), "UPDATED constant present");
     assert(!/new Date\(/.test(aup), "AUP must not use runtime new Date()");
   });
 

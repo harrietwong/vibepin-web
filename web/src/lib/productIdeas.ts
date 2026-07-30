@@ -23,7 +23,9 @@ import {
 
 export type ProductIdea = {
   id:                    string;
-  product_name:          string;
+  // NULL when the merchant page could not be read (v47 nullable; Etsy-class
+  // WAF-403 rows always). Never coerce to a fabricated string — carry the absence.
+  product_name:          string | null;
   price:                 number | null;
   currency:              string | null;
   source_url:            string | null;
@@ -85,7 +87,9 @@ export type ProductIdea = {
 export type ProductIdeaPickerAsset = {
   id:           string;
   imageUrl:     string;
-  title:        string;
+  // Optional: absent when the source row has no readable product_name. Consumers
+  // render nothing / their own fallback rather than a fabricated placeholder.
+  title?:       string;
   source:       "product_ideas";
   assetRole:    "product_image";
   category?:    string;
@@ -175,7 +179,7 @@ export function isAmazonProductIdea(product: ProductIdea): boolean {
 function mapApiRow(r: Record<string, unknown>): ProductIdea {
   return {
     id:                    r.id as string,
-    product_name:          r.product_name as string,
+    product_name:          (r.product_name as string | null) ?? null,
     price:                 r.price as number | null,
     currency:              r.currency as string | null,
     source_url:            r.source_url as string | null,
@@ -338,7 +342,9 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
     if (restRes.error) throw new Error(restRes.error.message);
 
     type PinProductRow = {
-      id: string; product_name: string; price: number | null; currency: string | null;
+      // product_name is nullable in the DB (v47) — type it honestly so the null
+      // reaches the UI as a genuine absence, not a fabricated string.
+      id: string; product_name: string | null; price: number | null; currency: string | null;
       source_url: string | null; domain: string | null; merchant: string | null;
       image_url: string | null; save_count: number | null; reaction_count: number | null;
       source_pin_save_count: number | null; seed_keyword: string | null;
@@ -481,7 +487,9 @@ export function filterProductIdeas(
 
   if (q) {
     list = list.filter(p =>
-      p.product_name.toLowerCase().includes(q) ||
+      // NULL product_name simply doesn't participate in name matching — never a
+      // fabricated value in the haystack.
+      (p.product_name ?? "").toLowerCase().includes(q) ||
       (p.seed_keyword ?? "").toLowerCase().includes(q) ||
       (p.domain ?? "").toLowerCase().includes(q),
     );
@@ -506,7 +514,9 @@ export function filterProductIdeas(
       });
     } else {
       list = list.filter(p =>
-        matchesCategory(`${p.product_name} ${p.seed_keyword ?? ""}`, opts.categoryLabel),
+        // Join only present fields — a NULL product_name must not render the
+        // literal string "null" into the category-match text.
+        matchesCategory([p.product_name, p.seed_keyword].filter(Boolean).join(" "), opts.categoryLabel),
       );
     }
   }
@@ -525,7 +535,7 @@ export function mapProductIdeaToPickerAsset(
   return {
     id:           idea.id,
     imageUrl:     idea.image_url,
-    title:        idea.product_name,
+    title:        idea.product_name ?? undefined,
     source:       "product_ideas",
     assetRole:    "product_image",
     category:     dbCat ? catLabel(dbCat) : undefined,

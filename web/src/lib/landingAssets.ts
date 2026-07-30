@@ -47,7 +47,29 @@ export function bucketCategory(raw?: string | null): string {
 }
 
 interface ApiPin { id: string; image_url: string; category?: string | null; title?: string | null; source_url?: string | null; outbound_link?: string | null; }
-interface ApiProduct { id: string; image_url: string; product_name?: string | null; seed_keyword?: string | null; price?: number | null; currency?: string | null; source_url?: string | null; opportunity_score?: number | null; }
+export interface ApiProduct { id: string; image_url: string; product_name?: string | null; seed_keyword?: string | null; price?: number | null; currency?: string | null; source_url?: string | null; opportunity_score?: number | null; }
+
+/**
+ * Map one Product Opportunity API row to a landing tile.
+ *
+ * HONESTY RULE (PRD v3.1 §4③): product_name is a NULLABLE enrichment field — NULL
+ * exactly when the merchant page could not be read (Etsy-class WAF-403, always). The
+ * caption carries that absence through as an EMPTY string; it must NEVER be a
+ * fabricated "Product", nor the seed keyword / category / URL / domain standing in for
+ * a name we do not have. The tile still conveys category, price and score truthfully.
+ */
+export function mapProductAsset(p: ApiProduct): LandingAsset {
+  return {
+    id: String(p.id),
+    imageUrl: p.image_url,
+    title: p.product_name || "",
+    category: bucketCategory(p.seed_keyword),
+    sourceType: "product_opportunity" as const,
+    url: p.source_url ?? undefined,
+    price: p.price != null ? `${!p.currency || p.currency === "USD" ? "$" : ""}${p.price}` : null,
+    score: p.opportunity_score ?? null,
+  };
+}
 
 export function useLandingAssets() {
   const [pinSamples, setPinSamples] = useState<LandingAsset[]>([]);
@@ -77,16 +99,7 @@ export function useLandingAssets() {
         }
         if (prodRes.status === "fulfilled" && prodRes.value) {
           const items = (prodRes.value.items ?? prodRes.value.data ?? []) as ApiProduct[];
-          setProducts(items.filter(p => !!p.image_url).map(p => ({
-            id: String(p.id),
-            imageUrl: p.image_url,
-            title: p.product_name || "Product",
-            category: bucketCategory(p.seed_keyword),
-            sourceType: "product_opportunity" as const,
-            url: p.source_url ?? undefined,
-            price: p.price != null ? `${!p.currency || p.currency === "USD" ? "$" : ""}${p.price}` : null,
-            score: p.opportunity_score ?? null,
-          })));
+          setProducts(items.filter(p => !!p.image_url).map(mapProductAsset));
         }
       } catch {
         /* network/parse failure ⇒ callers fall back to placeholders */

@@ -1641,8 +1641,6 @@ const pt: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "A conexão com o Pinterest não foi concluída. Selecione o Pin novamente.",
   "plan.error.pinNotFound": "Não foi possível encontrar este Pin.",
   "plan.error.needsImage": "Este Pin precisa de uma imagem antes de ser agendado.",
-  "plan.error.needsTitle": "Este Pin precisa de um título antes de ser agendado.",
-  "plan.error.needsDescription": "Este Pin precisa de uma descrição antes de ser agendado.",
   "plan.error.needsBoard": "Adicione um painel antes de publicar.",
   "plan.dropBlock.editSmartSchedule": "Editar Agenda inteligente",
   "plan.dropBlock.allPastTitle": "Não há mais horários livres em {date}.",
@@ -1653,7 +1651,7 @@ const pt: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Este dia já tem {n} Pin{plural} agendado preenchendo todos os horários da Agenda inteligente. Aumente os pins por dia ou escolha outro dia.",
   "plan.toast.timeLocked": "Horário travado — mantido durante o reequilíbrio.",
   "plan.toast.timeUnlocked": "Horário destravado.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} precisam de uma imagem, título ou descrição antes de agendar.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} precisam de uma imagem, um painel ou um título/descrição mais curto antes de agendar.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} já agendado",
   "plan.toast.couldNotSchedule": "Não foi possível agendar os Pins selecionados.",
   "plan.toast.scheduledCount": "{n} Pin{plural} agendado{alreadySuffix}",
@@ -1661,7 +1659,7 @@ const pt: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Detalhes ausentes gerados",
   "plan.toast.movedPins": "{n} Pin{plural} movido para {date}",
   "plan.toast.removedPins": "{n} Pin{plural} removido do plano",
-  "plan.toast.selectedNeedDetails": "Os Pins selecionados precisam de uma imagem, título ou descrição antes de agendar.",
+  "plan.toast.selectedNeedDetails": "Os Pins selecionados precisam de uma imagem, um painel ou um título/descrição mais curto antes de agendar.",
   "plan.toast.noUnscheduledSelected": "Nenhum Pin não agendado selecionado — Pins já agendados são ignorados.",
 
   // ── products (added) ──
@@ -2641,6 +2639,9 @@ const pt: Partial<Record<MessageKey, string>> = {
   "trends.toast.addedToPlan": "\"{keyword}\" adicionada ao plano semanal",
   "trends.toast.viewPlan": "Ver Plano",
   "trends.toast.signInToSave": "Entre para salvar esta palavra-chave",
+
+  "studioBoard.toast.fieldTooLong": "Encurte o título ou a descrição antes de agendar ou publicar.",
+
 };
 
 export default pt;

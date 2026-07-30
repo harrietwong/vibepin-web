@@ -27,11 +27,12 @@ import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
 import { beginPublish, endPublish, isActionablePublishFailure, listActionablePublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
-import { isPinReady, isPublishableImage } from "@/lib/pinReadiness";
+import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
-import { generateAiVersions } from "@/lib/studio/generateAiVersions";
+import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
+import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { type SelectedReference } from "@/lib/studio/selectedReferences";
 import { runAiGeneration } from "@/lib/studio/runAiGeneration";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
@@ -193,9 +194,12 @@ export function StudioBoard() {
     // A stray/stale flag must never silently seed "publish" when not on the failed filter.
     const urlSub = parseSubParam(searchParams.get("sub"));
     setFailedSubFilter(restored === "failed" ? (urlSub ?? consumeFailedSubEntryDefault()) : "all");
-    // Client-driven generation can't survive a reload — any draft still marked
-    // "generating" now is unrecoverable. Fail it so cards never stick in Generating.
-    pinDraftStore.failStaleGeneratingDrafts();
+    // WP3-P2: reconcile in-flight generation jobs instead of blindly failing every
+    // "generating" card. Worker-mode placeholders (generationJobId set) resume
+    // polling or apply their already-terminal result; only jobId-less (inline-mode)
+    // leftovers are judged dead, matching the pre-P2 behavior for that partition.
+    // (Supersedes the old unconditional pinDraftStore.failStaleGeneratingDrafts().)
+    void reconcileGeneratingDrafts();
   }, [searchParams]);
 
   const [uploading, setUploading] = useState(false);
@@ -265,6 +269,9 @@ export function StudioBoard() {
   // In-place field validation errors from Schedule (PRD: missing Board shows a
   // field-level error, not just a toast). Cleared as soon as a board is chosen.
   const [scheduleErrors, setScheduleErrors] = useState<Record<string, string>>({});
+  // Title ≤100 / description ≤500 over-limit errors (WP1 follow-up). Keyed by draft id,
+  // cleared as soon as the offending field is edited back under the cap.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, PinFieldErrors>>({});
 
   const handlePersist = useCallback((id: string, patch: Partial<PinDraft>) => {
     let next = patch;
@@ -285,6 +292,14 @@ export function StudioBoard() {
     }
     pinDraftStore.updateDraft(id, next); flashSaved();
     if (patch.boardId) setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
+    if ("title" in patch || "description" in patch) {
+      setFieldErrors(prev => {
+        const cur = pinDraftStore.getDraft(id);
+        const next = pinFieldErrors({ title: cur?.title, description: cur?.description });
+        if (!next.title && !next.description && !prev[id]) return prev;
+        return { ...prev, [id]: next };
+      });
+    }
   }, [flashSaved]);
 
   // AI Copy generation now lives inside <PinAICopyPanel> (shared across Create Pins,
@@ -304,6 +319,15 @@ export function StudioBoard() {
       toast.error(tr("studioBoard.toast.completeDetailsToSchedule"));
       return;
     }
+    // Title ≤100 / description ≤500 — over-limit blocks (empty stays fine). Field-level
+    // errors render next to the title/description inputs; the toast is a summary only.
+    const lenErrors = pinFieldErrors({ title: d.title, description: d.description });
+    if (lenErrors.title || lenErrors.description) {
+      setActiveId(id);
+      setFieldErrors(prev => ({ ...prev, [id]: lenErrors }));
+      toast.error(tr("studioBoard.toast.fieldTooLong"));
+      return;
+    }
     setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
     const result = ensureScheduledPlanTime(id);
     if (result.ok) {
@@ -321,10 +345,17 @@ export function StudioBoard() {
     const d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
     if (noBoardAccess || !isPinReady(draftReadiness(d))) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
+    const lenErrors = pinFieldErrors({ title: d.title, description: d.description });
+    if (lenErrors.title || lenErrors.description) {
+      setActiveId(id);
+      setFieldErrors(prev => ({ ...prev, [id]: lenErrors }));
+      toast.error(tr("studioBoard.toast.fieldTooLong"));
+      return;
+    }
     if (!beginPublish(id)) return;
     pinDraftStore.updateDraft(id, { publishError: undefined });
     try {
-      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id });
+      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id, draftId: id, source: "immediate" });
       pinDraftStore.updateDraft(id, { postedAt: new Date().toISOString(), remotePinId: res.pin.id, remotePinUrl: res.pin.url, publishError: undefined, failureType: undefined, errorCategory: undefined, publishErrorCode: undefined });
       toast.success(tr("studioBoard.toast.publishSuccess"));
     } catch (e) {
@@ -379,6 +410,119 @@ export function StudioBoard() {
     // Regenerating from an existing pin (version mode) is a "regenerate" action.
     if (parent) track("regenerate_clicked", { draftId: parent.id });
 
+    // ── Worker mode first (WP3-P1 response-shape probe) ─────────────────────
+    // GENERATION_MODE=worker is the PRODUCTION setting: enqueue + poll a durable
+    // job. A null result means the server answered in inline mode, in which case we
+    // fall through to the create-pin grouped run below (runAiGeneration), which is
+    // the only path that implements per-reference groups. The probe therefore adds
+    // the durable path WITHOUT removing grouped generation.
+    //
+    // LINEAGE MERGE NOTE: the probe runs BEFORE any placeholder is created. The
+    // master lineage created its N placeholders first (it had no other path to fall
+    // back to); doing that here would flash — then delete — cards on every inline
+    // run, because runAiGeneration creates its own per-group placeholders. Nothing
+    // is written to the store until we know which mode is live.
+    let enqueued: Awaited<ReturnType<typeof enqueueGeneration>> = null;
+    let workerProbeFailed = false;
+    try {
+      enqueued = await enqueueGeneration({ source: parent, setup: opts });
+    } catch {
+      // Worker path errored (e.g. 503 generation_unavailable) — surface it rather
+      // than silently falling back to the (likely also broken) inline path.
+      workerProbeFailed = true;
+    }
+    if (workerProbeFailed) {
+      setAiDrawer(null);
+      setAiGenerating(false);
+      toast.error(tr("studioBoard.toast.couldNotGenerate"));
+      return;
+    }
+
+    if (enqueued) {
+    // 1) Create N Generating placeholder cards IMMEDIATELY so the user sees the
+    //    task started (PRD 8.9). Stable keys gen:{requestId}:{i}; lineage preserved;
+    //    the original upload is never touched.
+    const requestId = `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const requested = Math.max(1, opts.count || 1);
+    const setupSnapshot = {
+      mode: parent ? ("board_ai_version" as const) : ("board_ai_scratch" as const),
+      keyword: parent?.keyword,
+      category: opts.category || parent?.category,
+      opportunityTitle: parent?.opportunity,
+      noTextOverlay: true,
+      imagesPerReference: opts.count,
+      selectedProducts: opts.productImages.map((imageUrl, index) => ({
+        imageUrl,
+        title: opts.productMetadata[index]?.title || parent?.title || `Product ${index + 1}`,
+        productUrl: opts.productMetadata[index]?.productUrl,
+      })),
+      selectedReferences: opts.referenceImages.map(imageUrl => ({ imageUrl })),
+      promptSnapshot: opts.directionBrief,
+      creativeDirectionSnapshot: opts.creativeDirectionMeta,
+      createdFrom: "studio_board",
+      format: opts.format,
+      model: resolveModelLabel(undefined, opts.modelKey),
+      modelKey: opts.modelKey,
+    };
+    const placeholders = Array.from({ length: requested }, (_, i) =>
+      pinDraftStore.createBoardDraft({
+        // Placeholder shows the parent image while generating; scratch mode has none.
+        imageUrl: parent?.imageUrl ?? "",
+        source: "ai_generated_from_upload",
+        idempotencyKey: `gen:${requestId}:${i}`,
+        generationStatus: "generating",
+        parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
+        title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
+        model: resolveModelLabel(undefined, opts.modelKey),
+        format: opts.format,
+        generationSessionId: requestId,
+        promptSnapshot: opts.directionBrief,
+        setupSnapshot,
+        // WP3-P2: this index IS the worker-mode results[] slot (placeholders[i] ↔
+        // slot i, 1:1 — see the enqueue block below). Stamped unconditionally, even
+        // in what may turn out to be the inline-mode fallback, since it's a stable
+        // per-card fact and harmless when unused.
+        generationSlot: i,
+      }),
+    );
+    // Close the drawer right away — generation continues and the cards update.
+    setAiDrawer(null);
+    setAiGenerating(false);
+    toast.success(requested === 1 ? tr("studioBoard.toast.generatingOne") : tr("studioBoard.toast.generatingMany").replace("{n}", String(requested)));
+
+      // Stamp the job id on each placeholder (slot i ↔ placeholders[i], 1:1 by index —
+      // no new cards are ever created in this path, matching the P1 contract).
+      placeholders.forEach(p => pinDraftStore.updateDraft(p.id, { generationJobId: enqueued!.jobId }));
+      let doneCount = 0, failCount = 0;
+      pollGenerationJob(enqueued.jobId, {
+        onSlot: (slot, status, url) => {
+          const placeholder = placeholders[slot];
+          if (!placeholder) return;
+          if (status === "done" && url) {
+            pinDraftStore.completeGeneratedDraft(placeholder.id, url);
+            void startImageAnalysis(placeholder.id);
+            doneCount++;
+          } else {
+            pinDraftStore.failGeneratedDraft(placeholder.id);
+            failCount++;
+          }
+        },
+        onEnd: () => {
+          if (doneCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(doneCount)).replace("{okPlural}", doneCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
+          else if (doneCount) toast.success(parent
+            ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s")
+            : tr("studioBoard.toast.createdAiPins").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s"));
+          else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+        },
+      });
+      return;
+    }
+
+    // ── Inline mode: the create-pin grouped run ─────────────────────────────
+    // Reached only when the server is NOT in worker mode. No placeholders exist yet
+    // (the worker branch above owns its own and returns), so runAiGeneration owns
+    // the full lifecycle — it creates per-group placeholders and closes the drawer
+    // via onPlaceholdersReady.
     // The run itself lives in lib/studio/runAiGeneration so it can be driven by
     // tests with a real store and a fake generate() — see test-ai-generation-run.
     const batchToastId = `gen-batch-${Date.now()}`;
@@ -738,6 +882,8 @@ export function StudioBoard() {
                 boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}
                 boardFieldError={scheduleErrors[draft.id] || undefined}
+                titleFieldError={fieldErrors[draft.id]?.title}
+                descriptionFieldError={fieldErrors[draft.id]?.description}
                 onPersist={handlePersist}
                 onSchedule={handleSchedule} onGenerateAiImage={handleGenerateAiImage} onPublish={handlePublish}
                 onDelete={handleDelete} onArchive={handleArchive} onDuplicate={handleDuplicate}

@@ -1,0 +1,155 @@
+{
+  "analyzeRequestBody": {
+    "draftId": "pd_1783903458365_9600z3",
+    "imageUrl": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?w=600",
+    "language": "en"
+  },
+  "rawDraftKeyPresent": false,
+  "analyzeStatus": 200,
+  "analyzeResponseBody": {
+    "ok": true,
+    "analysis": {
+      "imageSummary": "A flat lay composition of various makeup products and accessories, including brushes, mascara, lipstick, and compact powder, arranged on a solid beige background.",
+      "visibleObjects": [
+        "large makeup brush",
+        "small makeup brush",
+        "lightning bolt earrings",
+        "round container with cream product",
+        "mascara tube",
+        "mascara wand",
+        "lipstick",
+        "compact powder",
+        "scrunchie"
+      ],
+      "colors": [
+        "beige",
+        "pink",
+        "rose gold",
+        "brown",
+        "orange",
+        "red",
+        "gold",
+        "black"
+      ],
+      "style": "flat lay, beauty, modern",
+      "ocrText": "",
+      "category": "beauty",
+      "model": "gemini-2.5-flash"
+    },
+    "recommendedKeywords": [],
+    "keywordSource": "pinterest_high_search",
+    "timingsMs": {
+      "analysis": 8788,
+      "keywords": 1664,
+      "total": 10456
+    },
+    "diagnostics": {
+      "queryTerms": [
+        "flat lay, beauty, modern",
+        "makeup brush",
+        "bolt earrings",
+        "cream product",
+        "mascara tube",
+        "mascara wand",
+        "compact powder",
+        "brush",
+        "earrings",
+        "product"
+      ],
+      "poolSize": 7,
+      "rejected": [
+        {
+          "keyword": "procreate brushes free rendering",
+          "reason": "low_relevance:0.14"
+        },
+        {
+          "keyword": "procreate brushes free lineart",
+          "reason": "low_relevance:0.14"
+        },
+        {
+          "keyword": "procreate brushes free",
+          "reason": "low_relevance:0.18"
+        },
+        {
+          "keyword": "procreate brushes download",
+          "reason": "low_relevance:0.18"
+        },
+        {
+          "keyword": "procreate brushes tutorials",
+          "reason": "low_relevance:0.18"
+        },
+        {
+          "keyword": "procreate lettering brushes",
+          "reason": "low_relevance:0.18"
+        },
+        {
+          "keyword": "procreate brush pack",
+          "reason": "low_relevance:0.18"
+        }
+      ]
+    }
+  },
+  "draftAfterAnalysis": {
+    "imageAnalysisStatus": "ready",
+    "imageCategory": "beauty",
+    "style": "flat lay, beauty, modern",
+    "colors": [
+      "beige",
+      "pink",
+      "rose gold",
+      "brown",
+      "orange",
+      "red",
+      "gold",
+      "black"
+    ],
+    "visibleObjects": [
+      "large makeup brush",
+      "small makeup brush",
+      "lightning bolt earrings",
+      "round container with cream product",
+      "mascara tube",
+      "mascara wand",
+      "lipstick",
+      "compact powder",
+      "scrunchie"
+    ],
+    "imageSummary": "A flat lay composition of various makeup products and accessories, including brushes, mascara, lipstick, and compact powder, arranged on a solid beige background.",
+    "imageAnalysisModel": "gemini-2.5-flash",
+    "recommendedKeywords": [],
+    "keywordStatus": "ready"
+  },
+  "referenceRequestBody": {
+    "category": "beauty",
+    "imageAnalysis": {
+      "category": "beauty",
+      "style": "flat lay, beauty, modern",
+      "colors": [
+        "beige",
+        "pink",
+        "rose gold",
+        "brown",
+        "orange",
+        "red",
+        "gold",
+        "black"
+      ],
+      "visibleObjects": [
+        "large makeup brush",
+        "small makeup brush",
+        "lightning bolt earrings",
+        "round container with cream product",
+        "mascara tube",
+        "mascara wand",
+        "lipstick",
+        "compact powder",
+        "scrunchie"
+      ],
+      "imageSummary": "A flat lay composition of various makeup products and accessories, including brushes, mascara, lipstick, and compact powder, arranged on a solid beige background."
+    },
+    "product": {
+      "title": "makeup"
+    },
+    "limit": 9
+  }
+}

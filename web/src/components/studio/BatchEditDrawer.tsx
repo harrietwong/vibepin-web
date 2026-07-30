@@ -21,9 +21,9 @@ import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinterestClientError } from "@/lib/pinterestClient";
-import { generatePinterestPinCopy } from "@/lib/ai-copy/generatePinCopy";
+import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
-import { isPinReady, pinMissingFieldLabels, type ReadinessInput } from "@/lib/pinReadiness";
+import { isPinReady, pinMissingFieldLabels, pinFieldErrors, type ReadinessInput } from "@/lib/pinReadiness";
 import { combineLocalPlannedAt } from "@/lib/weeklyPlanHandoff";
 import { getPinDisplayContext } from "@/lib/studio/pinDisplayContext";
 import { resolveProductLinkDisplay, isAmazonProduct, linkDomain } from "@/lib/studio/productLink";
@@ -193,6 +193,17 @@ function pubReadinessInput(pin: BatchPinRow, edits: Record<string, RowEdit>): Re
     destinationUrl: getVal(pin, edits, "destinationUrl"),
     boardId:        effBoard(pin, edits).id,
   };
+}
+
+/** Missing required fields + over-limit title/description, as one combined label list
+ *  (empty title/description are never a problem; over-cap always is). */
+function pubBlockingLabels(pin: BatchPinRow, edits: Record<string, RowEdit>): string[] {
+  const input = pubReadinessInput(pin, edits);
+  const labels = pinMissingFieldLabels(input);
+  const lenErrors = pinFieldErrors(input);
+  if (lenErrors.title) labels.push("Title too long");
+  if (lenErrors.description) labels.push("Description too long");
+  return labels;
 }
 
 function sourceShortLabel(src: string | null | undefined): string {
@@ -938,6 +949,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     setGenProgress({ current: 0, total: targets.length, failed: 0 });
     const next: Record<string, RowEdit> = { ...rowEdits };
     let updated = 0, failed = 0;
+    let rateLimited = false;
     for (let i = 0; i < targets.length; i++) {
       const pin = targets[i];
       setGenProgress({ current: i + 1, total: targets.length, failed });
@@ -961,13 +973,24 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           altText: res.fields.altText,
         };
         updated++;
-      } catch {
+      } catch (err) {
+        // 429 = the per-user AI cost ceiling. Stop the loop immediately: every
+        // remaining Pin in this batch would get the same 429, so continuing would
+        // just report N spurious "failed" rows. Pins already updated keep their copy.
+        if (isRateLimitError(err)) { rateLimited = true; break; }
         failed++;
       }
     }
     commit(next);
     setGenProgress(null);
-    if (updated && failed) toast.error(tr("studioModals.genCopy.updatedAndFailed").replace("{updated}", String(updated)).replace("{failed}", String(failed)));
+    // Rate limit is a "wait a moment", not a failure — neutral toast severity,
+    // matching how /api/generate's user_generation_limit is surfaced in Studio.
+    // Reuses the existing all-locale rate-limit strings.
+    if (rateLimited) {
+      toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
+      if (updated) toast.success(tr("studioModals.genCopy.updated").replace("{n}", String(updated)));
+    }
+    else if (updated && failed) toast.error(tr("studioModals.genCopy.updatedAndFailed").replace("{updated}", String(updated)).replace("{failed}", String(failed)));
     else if (updated) toast.success(tr("studioModals.genCopy.updated").replace("{n}", String(updated)));
     else toast.error(tr("studioModals.genCopy.failedCount").replace("{n}", String(failed)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1205,7 +1228,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       return;
     }
     const blocked = checkedPins
-      .map(p => ({ pinId: p.pinId, title: getVal(p, rowEdits, "title") || p.title || tr("studioModals.untitledPin"), missing: pinMissingFieldLabels(pubReadinessInput(p, rowEdits)) }))
+      .map(p => ({ pinId: p.pinId, title: getVal(p, rowEdits, "title") || p.title || tr("studioModals.untitledPin"), missing: pubBlockingLabels(p, rowEdits) }))
       .filter(b => b.missing.length > 0);
     // Some selected Pins are incomplete → validation summary (never silently skip).
     if (blocked.length) { setPublishBlocked(blocked); setPublishPhase("blocked"); return; }
@@ -1224,6 +1247,8 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       const input = pubReadinessInput(p, rowEdits);
       const title = input.title || p.title || tr("studioModals.untitledPin");
       if (!isPinReady(input)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") }); continue; }
+      const lenErrors = pinFieldErrors(input);
+      if (lenErrors.title || lenErrors.description) { results.push({ pinId: p.pinId, title, status: "skipped", message: lenErrors.title || lenErrors.description }); continue; }
       // Shared in-flight lock (StudioBoard.tsx's card publish uses the same registry) —
       // skip a pin that's already being published from another surface rather than
       // double-submitting it.
@@ -1234,6 +1259,10 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           title: input.title || undefined, description: input.description || undefined,
           link: input.destinationUrl || undefined, altText: input.altText || undefined,
           sourcePinId: p.pinId,
+          // p.pinId is the pinDraftStore draft id in the Weekly-Plan context (joins to a
+          // draft) but NOT in the Studio context — draftId is best-effort, so a non-draft
+          // id simply won't join downstream. source is the immediate batch publish.
+          draftId: p.pinId, source: "immediate",
         });
         results.push({ pinId: p.pinId, title, status: "published", url: res.pin.url });
         publishedIds.push(p.pinId);
