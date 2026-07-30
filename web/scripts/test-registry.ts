@@ -56,6 +56,7 @@ export const CORE: string[] = [
   "test-creative-recommendations",
   "test-creative-intelligence-metrics",
   "test-judge-verdict",
+  "test-ai-cost-log",
   "test-reference-scoring",
   "test-top-pick",
   // Products / opportunity
@@ -70,6 +71,8 @@ export const CORE: string[] = [
   "test-amazon-affiliate-wiring",
   // Billing (Creem)
   "test-entitlements-security",
+  "test-usage-metering",
+  "test-plan-entitlements",
   "test-creem-checkout-api",
   "test-creem-webhook-ordering",
   "test-creem-billing-status",

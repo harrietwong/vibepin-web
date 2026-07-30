@@ -17,8 +17,12 @@
 
 import { HELP_ARTICLES } from "./helpArticles";
 import { SUPPORT_CATEGORY_LABELS, type SupportCategory } from "./types";
+import { recordAiCost, estimateCost } from "../server/aiCostLog";
 
 const TIMEOUT_MS = 15_000;
+
+/** Optional — enables best-effort cost logging to ai_cost_events (never affects the call). */
+export type TranslatorCostContext = { userId?: string | null; referenceId?: string | null };
 
 // Product terms that must NEVER be translated — kept verbatim in every
 // translation/summary/suggestion prompt below.
@@ -35,7 +39,34 @@ function getConfig(): { key: string; baseUrl: string; model: string } | null {
   return { key, baseUrl, model };
 }
 
-async function callChatJson(system: string, userPrompt: string): Promise<string | null> {
+/**
+ * Best-effort cost-log for a translator call. Never throws — see
+ * aiCostLog.recordAiCost. Fire-and-forget; this function never awaits.
+ */
+function logTranslatorCost(
+  costContext: TranslatorCostContext | undefined,
+  model: string,
+  usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined,
+  requestStatus: "success" | "failed",
+): void {
+  try {
+    const inputTokens = typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : null;
+    const outputTokens = typeof usage?.completion_tokens === "number" ? usage.completion_tokens : null;
+    void recordAiCost({
+      userId: costContext?.userId ?? null,
+      provider: "linapi",
+      model,
+      operationType: "support_translate",
+      inputTokens,
+      outputTokens,
+      estimatedCost: estimateCost({ model, inputTokens, outputTokens }),
+      requestStatus,
+      referenceId: costContext?.referenceId ?? null,
+    });
+  } catch { /* cost logging must never affect the caller */ }
+}
+
+async function callChatJson(system: string, userPrompt: string, costContext?: TranslatorCostContext): Promise<string | null> {
   const config = getConfig();
   if (!config) return null;
 
@@ -57,14 +88,19 @@ async function callChatJson(system: string, userPrompt: string): Promise<string 
       }),
       signal: controller.signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      logTranslatorCost(costContext, config.model, undefined, "failed");
+      return null;
+    }
 
     const data = (await res.json().catch(() => null)) as
-      | { choices?: Array<{ message?: { content?: string } }> }
+      | { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
       | null;
     const content = data?.choices?.[0]?.message?.content;
+    logTranslatorCost(costContext, config.model, data?.usage, content ? "success" : "failed");
     return content || null;
   } catch {
+    logTranslatorCost(costContext, config.model, undefined, "failed");
     return null;
   } finally {
     clearTimeout(timer);
@@ -111,7 +147,7 @@ export function parseTranslateToZhOutput(raw: string): TranslateToZhOutput | nul
  * source language. If the text is already Chinese, detectedLanguage="zh"
  * and zh is the original text unchanged.
  */
-export async function translateToZh(text: string): Promise<TranslateToZhOutput | null> {
+export async function translateToZh(text: string, costContext?: TranslatorCostContext): Promise<TranslateToZhOutput | null> {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
@@ -122,7 +158,7 @@ ${GLOSSARY_RULE}
 Output STRICT JSON only, with exactly this shape and no other text before or after it: {"language": "<ISO 639-1 code such as en, es, zh, fr, ja>", "translation": "<Simplified Chinese translation>"}`;
   const userPrompt = `Text to translate:\n${trimmed}`;
 
-  const content = await callChatJson(system, userPrompt);
+  const content = await callChatJson(system, userPrompt, costContext);
   if (!content) return null;
   return parseTranslateToZhOutput(content);
 }
@@ -137,7 +173,7 @@ export function parseTranslationOutput(raw: string): string | null {
 }
 
 /** Translates a Chinese admin draft into the customer's language. Returns just the translated text, or null on any failure. */
-export async function translateFromZh(zhText: string, targetLanguage: string): Promise<string | null> {
+export async function translateFromZh(zhText: string, targetLanguage: string, costContext?: TranslatorCostContext): Promise<string | null> {
   const trimmed = zhText.trim();
   if (!trimmed) return null;
 
@@ -148,7 +184,7 @@ ${GLOSSARY_RULE}
 Output STRICT JSON only, with exactly this shape and no other text before or after it: {"translation": "<translated text in the target language>"}`;
   const userPrompt = `Target language (ISO 639-1 or name): ${targetLanguage}\n\nChinese text to translate:\n${trimmed}`;
 
-  const content = await callChatJson(system, userPrompt);
+  const content = await callChatJson(system, userPrompt, costContext);
   if (!content) return null;
   return parseTranslationOutput(content);
 }
@@ -177,7 +213,7 @@ function buildTicketPrompt(input: TicketSummaryInput): string {
 }
 
 /** Concise Chinese summary of a ticket for a Chinese-speaking support agent. Never invents facts not present in the ticket/conversation. */
-export async function summarizeTicketZh(input: TicketSummaryInput): Promise<string | null> {
+export async function summarizeTicketZh(input: TicketSummaryInput, costContext?: TranslatorCostContext): Promise<string | null> {
   const system = `You are VibePin's internal support tooling. Write a concise SUMMARY IN SIMPLIFIED CHINESE of a support ticket for a human support agent, using ONLY facts present in the ticket and conversation JSON provided — never invent anything.
 
 ${GLOSSARY_RULE}
@@ -191,7 +227,7 @@ Structure the summary as plain text (no markdown headers) with these four labele
 Keep the whole summary under about 200 Chinese characters. Output STRICT JSON only, with exactly this shape and no other text before or after it: {"summary": "<the Chinese summary text>"}`;
   const userPrompt = buildTicketPrompt(input);
 
-  const content = await callChatJson(system, userPrompt);
+  const content = await callChatJson(system, userPrompt, costContext);
   if (!content) return null;
   const obj = tolerantJsonParse(content);
   if (!obj) return null;
@@ -204,7 +240,7 @@ Keep the whole summary under about 200 Chinese characters. Output STRICT JSON on
 export type SuggestReplyInput = TicketSummaryInput;
 
 /** Drafts a Chinese-language reply for a human agent to review before sending, grounded ONLY in the static help articles + conversation. Same no-invention rules as aiResponder.ts. */
-export async function suggestReplyZh(input: SuggestReplyInput): Promise<string | null> {
+export async function suggestReplyZh(input: SuggestReplyInput, costContext?: TranslatorCostContext): Promise<string | null> {
   const articles = HELP_ARTICLES.map((a) => ({
     title: a.title,
     shortAnswer: a.shortAnswer,
@@ -224,7 +260,7 @@ ${GLOSSARY_RULE}
 Keep the reply short (under about 150 Chinese characters worth of content), friendly, and specific. Output STRICT JSON only, with exactly this shape and no other text before or after it: {"reply": "<the Chinese draft reply>"}`;
   const userPrompt = [`Help articles (JSON — your ONLY source of product facts):\n${JSON.stringify(articles)}`, buildTicketPrompt(input)].join("\n\n");
 
-  const content = await callChatJson(system, userPrompt);
+  const content = await callChatJson(system, userPrompt, costContext);
   if (!content) return null;
   const obj = tolerantJsonParse(content);
   if (!obj) return null;

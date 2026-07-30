@@ -296,7 +296,6 @@ export type UserDetail = {
     lastLoginAt: string | null;
     plan: string | null;
     status: AccountStatus;
-    tokenBalance: number | null;
     internalTags: string[];
   } | null;
   workspaces: { available: boolean; derived: boolean; rows: WorkspaceRow[] };
@@ -353,8 +352,6 @@ export async function getUserDetail(userId: string): Promise<UserDetail> {
     };
   }
 
-  const tokenMeta = authUser.user_metadata?.["tokens"] ?? authUser.app_metadata?.["tokens"];
-  const tokenBalance = typeof tokenMeta === "number" ? tokenMeta : null;
   const tagsMeta = authUser.app_metadata?.["internal_tags"] ?? authUser.user_metadata?.["internal_tags"];
   const internalTags = Array.isArray(tagsMeta) ? tagsMeta.filter((t): t is string => typeof t === "string") : [];
 
@@ -378,7 +375,6 @@ export async function getUserDetail(userId: string): Promise<UserDetail> {
       lastLoginAt: authUser.last_sign_in_at,
       plan: planOf(authUser),
       status: accountStatusOf(authUser),
-      tokenBalance,
       internalTags,
     },
     workspaces,

@@ -15,6 +15,7 @@
 import { HELP_ARTICLES } from "./helpArticles";
 import { safeContextSubset } from "./aiResponder";
 import { SUPPORT_CATEGORIES, type SupportCategory } from "./types";
+import { recordAiCost, estimateCost } from "../server/aiCostLog";
 
 const TIMEOUT_MS = 15_000;
 
@@ -31,6 +32,9 @@ export type ChatReplyResult = {
 export type GenerateChatReplyInput = {
   messages: ChatMessageInput[];
   context: Record<string, unknown> | null;
+  /** Optional — enables best-effort cost logging to ai_cost_events. */
+  userId?: string | null;
+  referenceId?: string | null;
 };
 
 // Machine-readable escalation reasons the model may emit. Not exhaustive of
@@ -184,20 +188,55 @@ export async function generateChatReply(input: GenerateChatReplyInput): Promise<
       }),
       signal: controller.signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      logSupportChatCost(input, model, undefined, "failed");
+      return null;
+    }
 
     const data = (await res.json().catch(() => null)) as
-      | { choices?: Array<{ message?: { content?: string } }> }
+      | { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
       | null;
     const content = data?.choices?.[0]?.message?.content;
-    if (!content) return null;
+    if (!content) {
+      logSupportChatCost(input, model, data?.usage, "failed");
+      return null;
+    }
 
+    logSupportChatCost(input, model, data?.usage, "success");
     return parseChatReplyOutput(content);
   } catch {
+    logSupportChatCost(input, model, undefined, "failed");
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Best-effort cost-log for a support-chat turn. Never throws — see
+ * aiCostLog.recordAiCost. Fire-and-forget; this function never awaits.
+ */
+function logSupportChatCost(
+  input: GenerateChatReplyInput,
+  model: string,
+  usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined,
+  requestStatus: "success" | "failed",
+): void {
+  try {
+    const inputTokens = typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : null;
+    const outputTokens = typeof usage?.completion_tokens === "number" ? usage.completion_tokens : null;
+    void recordAiCost({
+      userId: input.userId ?? null,
+      provider: "linapi",
+      model,
+      operationType: "support_chat",
+      inputTokens,
+      outputTokens,
+      estimatedCost: estimateCost({ model, inputTokens, outputTokens }),
+      requestStatus,
+      referenceId: input.referenceId ?? null,
+    });
+  } catch { /* cost logging must never affect the caller */ }
 }
 
 // Fallback category for route handlers when the AI call itself returned
