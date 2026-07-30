@@ -88,6 +88,7 @@ export const CORE: string[] = [
   "test-moderate-prompt",
   "test-generation-moderation-gate",
   "test-generation-metering",
+  "test-text-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
   // Settings / support
@@ -204,6 +205,15 @@ export const EXCLUDED: Record<string, string> = {
     "TS module and worker both produce → reservation ends PARTIAL with counters exact), " +
     "which only real Postgres can testify to. Fails loudly rather than skipping when " +
     "credentials are absent, like the other test-db-* channels.",
+  "test-db-text-metering":
+    "REAL-POSTGRES integration test for Phase 4T TEXT metering — writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. It drives the exact RPC cycle /api/ai-copy " +
+    "now depends on (usage_reserve with usage_type ai_text_generation + the single " +
+    "['s0'] slot the TS module produces → settle s0 succeeded bills the account exactly " +
+    "once → release returns capacity → a replayed settle bills exactly once), which only " +
+    "real Postgres can testify to. Fails loudly rather than skipping when credentials " +
+    "are absent, like the other test-db-* channels.",
   "test-usage-ledger-db":
     "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +

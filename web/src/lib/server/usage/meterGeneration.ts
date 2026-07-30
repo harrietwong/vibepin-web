@@ -92,8 +92,12 @@ export function deriveRequestKey(userId: string, generationRequestId: string): s
     .slice(0, 48);
 }
 
-/** Structured log — identifiers and counts only, never prompts/keys/bytes. */
-function logEvent(event: string, fields: Record<string, unknown>): void {
+/**
+ * Structured log — identifiers and counts only, never prompts/keys/bytes.
+ * Exported so the text sibling (meterTextGeneration.ts) reuses the SAME emitter
+ * rather than duplicating the swallow-on-failure idiom (F1: share, do not copy).
+ */
+export function logEvent(event: string, fields: Record<string, unknown>): void {
   try {
     console.warn(JSON.stringify({ event, ...fields }));
   } catch {
@@ -101,12 +105,16 @@ function logEvent(event: string, fields: Record<string, unknown>): void {
   }
 }
 
-type RpcRunner = (
+export type RpcRunner = (
   fn: string,
   args: Record<string, unknown>,
 ) => Promise<{ data: unknown; error: { message: string; code?: string } | null }>;
 
-function defaultRpc(): RpcRunner {
+/**
+ * The default RPC seam over createServerClient().rpc — exported so the text sibling
+ * shares the ONE Supabase-client boundary (and the ONE injectable seam tests spy on).
+ */
+export function defaultRpc(): RpcRunner {
   return async (fn, args) => {
     const { data, error } = await createServerClient().rpc(fn, args);
     return { data, error: error ? { message: error.message, code: error.code } : null };
