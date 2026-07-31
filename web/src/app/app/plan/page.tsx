@@ -2108,7 +2108,7 @@ function PlanPageInner() {
     window.addEventListener(pinDraftStore.DRAFT_STORE_EVENT, refreshFailureCount);
     return () => window.removeEventListener(pinDraftStore.DRAFT_STORE_EVENT, refreshFailureCount);
   }, []);
-  const { visibleCount: failureBannerCount, dismiss: dismissFailureBanner } = useFailureBannerDismiss(publishFailureCount);
+  const { visibleCount: failureBannerCount, dismiss: dismissFailureBanner } = useFailureBannerDismiss(publishFailureCount, "plan");
   // Review-failures entry (Banner CTA + stats-bar "N failed"). Previously this hard-
   // navigated to /app/studio, but non-board-source failures (Plan drawer / cron fails)
   // never render on the Create Pins board, so the user landed on an empty view. Instead

@@ -2095,6 +2095,10 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.generationFailedPlaceholder": "Error al generar",
 
   // ── studioBoard: PinBoardCard — recommended fix copy ──
+  "studioBoard.card.publishError.auth": "La conexión con Pinterest ha caducado. Vuelve a conectar e inténtalo de nuevo.",
+  "studioBoard.card.publishError.content": "Hay un problema con el tablero, la imagen o el enlace de este Pin. Edita el Pin e inténtalo de nuevo.",
+  "studioBoard.card.publishError.transient": "La publicación falló por un error temporal. Puedes volver a intentarlo.",
+  "studioBoard.card.publishError.unknown": "La publicación falló, pero no se registró información detallada del error.",
   "studioBoard.card.fix.auth": "Tu conexión con Pinterest debe reconectarse antes de que este Pin pueda publicarse.",
   "studioBoard.card.fix.transient": "Pinterest o la conexión fallaron al publicar. Inténtalo de nuevo ahora, o mueve este Pin de vuelta a Sin programar.",
   "studioBoard.card.fix.default": "Algo en este Pin necesita atención antes de poder publicarse. Revisa los detalles y corrige el problema.",

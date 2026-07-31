@@ -146,7 +146,7 @@ export function StudioBoard() {
   // so layering the core actionable predicate here is equivalent to the board selector
   // (listBoardActionablePublishFailures over the full population) — same board, same predicate.
   const publishFailureCount = useMemo(() => listActionablePublishFailures(allItems.map(x => x.draft)).length, [allItems]);
-  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount);
+  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount, "studio");
   // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
   // depends on the current filter view; the badge transfers automatically as cards change.
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);

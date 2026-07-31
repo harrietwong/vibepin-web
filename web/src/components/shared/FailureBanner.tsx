@@ -12,10 +12,9 @@
  * count === 0 → renders nothing. Dismiss semantics (PRD §2.2):
  *   - Clicking the CTA counts as "read" — it dismisses the banner AND navigates.
  *   - The × close button dismisses without navigating.
- *   - Either way this is a session-scoped dismiss: it hides the banner for the rest of
- *     the browser session UNLESS the failure count goes up again (a NEW failure), in
- *     which case it reappears automatically. sessionStorage (not localStorage): the
- *     banner is meant to resurface on a fresh session/tab.
+ *   - Either way the dismiss is PERSISTENT (localStorage) and PER-SURFACE: it hides
+ *     that surface's banner across reloads/tabs/sessions UNLESS the failure count goes
+ *     up again (a NEW failure), in which case it reappears automatically.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -28,29 +27,43 @@ import { AlertTriangle, X } from "lucide-react";
 // themes because it's a saturated accent color, not a light-mode-only value.
 const WARN = "#D97706";
 
-// ── Session-scoped dismiss ──────────────────────────────────────────────────────
-// "Dismiss" (× or CTA) hides the banner for the rest of this browser session, but a
-// NEW failure (count increasing past what was dismissed) makes it reappear — dismiss
-// never hides an unrelated, later failure. sessionStorage (not localStorage): the
-// banner is meant to resurface on a fresh session/tab.
-const DISMISS_KEY = "vp:failure_banner:dismissed_at_count";
+// ── Persistent, per-surface dismiss ─────────────────────────────────────────────
+// "Dismiss" (× or CTA) hides that surface's banner until a NEW failure (count
+// increasing past what was dismissed) makes it reappear — dismiss never hides an
+// unrelated, later failure.
+//
+// Two deliberate properties (real-device QA fixes):
+//  1. localStorage, not sessionStorage — a user who already clicked "Review" should
+//     not get the same banner again in a new tab / after a browser restart.
+//  2. The key is namespaced per SURFACE ("plan" | "studio"). The two mounts count
+//     different populations (Plan = whole population, Create Pins = board-scoped), so
+//     a shared key let Plan's larger count (e.g. dismissed at 28) permanently suppress
+//     Create Pins' smaller-but-growing count (3 → 4 = a NEW failure), silently hiding
+//     real failures. Separate keys keep each surface's dismiss to itself.
 
-function readDismissedCount(): number | null {
+/** Surface namespace for the dismiss key — must be stable (persisted). */
+export type FailureBannerSurface = "plan" | "studio";
+
+export function failureBannerDismissKey(surface: FailureBannerSurface): string {
+  return `vp:failure_banner:dismissed_at_count:${surface}`;
+}
+
+function readDismissedCount(surface: FailureBannerSurface): number | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(DISMISS_KEY);
+    const raw = window.localStorage.getItem(failureBannerDismissKey(surface));
     if (raw === null) return null;
     const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   } catch { return null; }
 }
-function writeDismissedCount(n: number): void {
+function writeDismissedCount(surface: FailureBannerSurface, n: number): void {
   if (typeof window === "undefined") return;
-  try { window.sessionStorage.setItem(DISMISS_KEY, String(n)); } catch { /* storage unavailable — non-fatal */ }
+  try { window.localStorage.setItem(failureBannerDismissKey(surface), String(n)); } catch { /* storage unavailable — non-fatal */ }
 }
-function clearDismissedCount(): void {
+function clearDismissedCount(surface: FailureBannerSurface): void {
   if (typeof window === "undefined") return;
-  try { window.sessionStorage.removeItem(DISMISS_KEY); } catch { /* storage unavailable — non-fatal */ }
+  try { window.localStorage.removeItem(failureBannerDismissKey(surface)); } catch { /* storage unavailable — non-fatal */ }
 }
 
 /**
@@ -65,27 +78,30 @@ export function computeVisibleFailureCount(count: number, dismissedAt: number | 
 }
 
 /**
- * Session-scoped dismiss for a FailureBanner driven by `count`. Returns the count to
- * actually render (0 while dismissed-and-not-worsened) and a dismiss callback.
+ * Persistent, per-surface dismiss for a FailureBanner driven by `count`. Returns the
+ * count to actually render (0 while dismissed-and-not-worsened) and a dismiss callback.
  * When `count` drops to 0 the dismiss flag is cleared, so a later failure starts fresh.
+ *
+ * `surface` is REQUIRED: Plan and Create Pins must not share dismiss state (see the
+ * key comment above).
  */
-export function useFailureBannerDismiss(count: number): { visibleCount: number; dismiss: () => void } {
+export function useFailureBannerDismiss(count: number, surface: FailureBannerSurface): { visibleCount: number; dismiss: () => void } {
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
 
-  // Hydrate from sessionStorage once mounted (avoids SSR/client mismatch).
-  useEffect(() => { setDismissedAt(readDismissedCount()); }, []);
+  // Hydrate from localStorage once mounted (avoids SSR/client mismatch).
+  useEffect(() => { setDismissedAt(readDismissedCount(surface)); }, [surface]);
 
   useEffect(() => {
     if (count === 0 && dismissedAt !== null) {
       setDismissedAt(null);
-      clearDismissedCount();
+      clearDismissedCount(surface);
     }
-  }, [count, dismissedAt]);
+  }, [count, dismissedAt, surface]);
 
   const dismiss = useCallback(() => {
     setDismissedAt(count);
-    writeDismissedCount(count);
-  }, [count]);
+    writeDismissedCount(surface, count);
+  }, [count, surface]);
 
   const visibleCount = computeVisibleFailureCount(count, dismissedAt);
   return { visibleCount, dismiss };

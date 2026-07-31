@@ -2270,6 +2270,10 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.generationFailedPlaceholder": "Generazione non riuscita",
 
   // ── studioBoard: PinBoardCard recommended fix copy ──
+  "studioBoard.card.publishError.auth": "La connessione a Pinterest è scaduta. Riconnetti e riprova.",
+  "studioBoard.card.publishError.content": "C’è un problema con la bacheca, l’immagine o il link di questo Pin. Modifica il Pin e riprova.",
+  "studioBoard.card.publishError.transient": "Pubblicazione non riuscita per un errore temporaneo. Puoi riprovare.",
+  "studioBoard.card.publishError.unknown": "La pubblicazione non è riuscita, ma non sono state registrate informazioni dettagliate sull’errore.",
   "studioBoard.card.fix.auth": "La tua connessione a Pinterest deve essere riconnessa prima che questo Pin possa essere pubblicato.",
   "studioBoard.card.fix.transient": "Pinterest o la connessione hanno avuto un problema durante la pubblicazione. Riprova ora, oppure sposta questo Pin in Non pianificati.",
   "studioBoard.card.fix.default": "Qualcosa in questo Pin richiede attenzione prima che possa essere pubblicato. Rivedi i dettagli e correggi il problema.",

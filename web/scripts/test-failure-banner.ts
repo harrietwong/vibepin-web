@@ -12,7 +12,7 @@
  */
 
 import assert from "node:assert";
-import { getFailureBannerCopy, computeVisibleFailureCount } from "../src/components/shared/FailureBanner";
+import { getFailureBannerCopy, computeVisibleFailureCount, failureBannerDismissKey } from "../src/components/shared/FailureBanner";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
@@ -67,6 +67,64 @@ test("visible: dismissed, NEW failure pushes count above dismissedAt → reappea
 
 test("visible: dismissed at 0 is a no-op state — any positive count shows", () => {
   assert.equal(computeVisibleFailureCount(1, 0), 1);
+});
+
+// ── Per-surface, persistent dismiss storage (real-device QA fixes) ───────────────
+// The hook itself needs React, so these exercise the storage contract it is built on:
+// failureBannerDismissKey() namespacing + the same read → computeVisibleFailureCount
+// pipeline useFailureBannerDismiss runs on mount. A tiny localStorage stand-in lets us
+// model "same browser, new tab/session" (localStorage survives) precisely.
+
+type Surface = "plan" | "studio";
+class FakeStorage {
+  private map = new Map<string, string>();
+  getItem(k: string): string | null { return this.map.has(k) ? this.map.get(k)! : null; }
+  setItem(k: string, v: string): void { this.map.set(k, v); }
+  removeItem(k: string): void { this.map.delete(k); }
+  get size(): number { return this.map.size; }
+}
+/** Mirrors the hook's write path. */
+function dismissAt(store: FakeStorage, surface: Surface, count: number): void {
+  store.setItem(failureBannerDismissKey(surface), String(count));
+}
+/** Mirrors the hook's mount path: hydrate dismissedAt from storage, then compute. */
+function visibleOnMount(store: FakeStorage, surface: Surface, count: number): number {
+  const raw = store.getItem(failureBannerDismissKey(surface));
+  const n = raw === null ? null : Number(raw);
+  const dismissedAt = n !== null && Number.isFinite(n) ? n : null;
+  return computeVisibleFailureCount(count, dismissedAt);
+}
+
+test("key: plan and studio get distinct, surface-namespaced storage keys", () => {
+  assert.equal(failureBannerDismissKey("plan"), "vp:failure_banner:dismissed_at_count:plan");
+  assert.equal(failureBannerDismissKey("studio"), "vp:failure_banner:dismissed_at_count:studio");
+  assert.notEqual(failureBannerDismissKey("plan"), failureBannerDismissKey("studio"));
+});
+
+test("surfaces are independent: Plan dismissed at 28 does NOT suppress Create Pins' 3→4", () => {
+  // The exact QA repro: Plan counts the whole population (28), Create Pins counts only
+  // board-scoped failures (3). With one shared key, 28 swallowed the studio banner
+  // forever — computeVisibleFailureCount(4, 28) === 0 — hiding a brand-new failure.
+  const store = new FakeStorage();
+  dismissAt(store, "plan", 28);
+  assert.equal(visibleOnMount(store, "plan", 28), 0);   // Plan stays dismissed
+  assert.equal(visibleOnMount(store, "studio", 3), 3);  // studio never dismissed → shows
+  assert.equal(visibleOnMount(store, "studio", 4), 4);  // NEW studio failure → still shows
+  // And the reverse direction is equally isolated.
+  dismissAt(store, "studio", 4);
+  assert.equal(visibleOnMount(store, "studio", 4), 0);
+  assert.equal(visibleOnMount(store, "plan", 29), 29);  // new Plan failure breaks through
+});
+
+test("persistence: a dismiss survives a fresh session/tab (localStorage), until count rises", () => {
+  // localStorage (not sessionStorage): a new tab / browser restart re-reads the SAME
+  // store, so a banner the user already reviewed must NOT come back.
+  const store = new FakeStorage();
+  dismissAt(store, "studio", 3);
+  // "New session": fresh mount, in-memory state gone, storage retained.
+  assert.equal(visibleOnMount(store, "studio", 3), 0);
+  assert.equal(visibleOnMount(store, "studio", 2), 0);  // count dropped → still hidden
+  assert.equal(visibleOnMount(store, "studio", 5), 5);  // NEW failures → reappears
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
