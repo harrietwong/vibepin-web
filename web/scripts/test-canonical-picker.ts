@@ -106,7 +106,10 @@ test("first pick is primary only when the Pin has no primary yet", () => {
 
 test("StudioBoard's product select opens the AI drawer, not a bare draft", () => {
   const src = read("components/studio/StudioBoard.tsx");
-  const handler = src.slice(src.indexOf("const handleProductSelect"), src.indexOf("const handleProductSelect") + 700);
+  // Slice a generous window: the merged handler gained a scratch-cache reset
+  // (create-pin lineage) ahead of the drawer open, pushing setAiDrawer past the
+  // old 700-char cutoff. 1500 covers the whole callback with headroom.
+  const handler = src.slice(src.indexOf("const handleProductSelect"), src.indexOf("const handleProductSelect") + 1500);
   assert.ok(handler.includes('setAiDrawer({ mode: "scratch"'), "must open the scratch AI drawer");
   assert.ok(!handler.includes("createBoardDraft"), "must NOT create a draft on selection");
 });

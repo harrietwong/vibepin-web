@@ -168,6 +168,18 @@ export type ProviderConfig = ReturnType<typeof providerConfig>;
 // ── Chat / JSON ─────────────────────────────────────────────────────────────────
 
 /**
+ * Optional cost-logging context passed to chatJson by its callers. Purely
+ * observability — never affects the request, its response, or any quota
+ * decision. Best-effort: see recordAiCost in aiCostLog.ts (never throws,
+ * fire-and-forget). Omit it and no cost row is written.
+ */
+export type ChatCostContext = {
+  userId?: string | null;
+  operationType: string;
+  referenceId?: string | null;
+};
+
+/**
  * Tolerant JSON parse — strips markdown fences and extracts the JSON object.
  *
  * ONLY a non-null, non-array JSON OBJECT is a valid structured response. An array or
@@ -227,6 +239,43 @@ export function thinkingExtras(provider: string, model: string): Record<string, 
   return { reasoning_effort: "none", thinking_budget: 0, thinking: { type: "disabled" } };
 }
 
+/**
+ * Best-effort cost-log a chat/completions call from its parsed response envelope.
+ * Never throws — see aiCostLog.recordAiCost. Fire-and-forget; callers do not await,
+ * so cost logging adds no latency and cannot fail the AI call.
+ */
+function logChatCost(
+  provider: string,
+  model: string,
+  usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined,
+  context: ChatCostContext | undefined,
+  requestStatus: "success" | "failed",
+): void {
+  if (!context) return;
+  // Lazy import: aiCostLog → supabase.ts builds a client at module load, which
+  // throws in env-less contexts (pure-function test scripts import this module
+  // for its prompt helpers). Importing only when a costContext is present keeps
+  // those consumers free of the supabase dependency.
+  void (async () => {
+    try {
+      const { recordAiCost, estimateCost } = await import("@/lib/server/aiCostLog");
+      const inputTokens = typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : null;
+      const outputTokens = typeof usage?.completion_tokens === "number" ? usage.completion_tokens : null;
+      await recordAiCost({
+        userId: context.userId ?? null,
+        provider,
+        model,
+        operationType: context.operationType,
+        inputTokens,
+        outputTokens,
+        estimatedCost: estimateCost({ model, inputTokens, outputTokens }),
+        requestStatus,
+        referenceId: context.referenceId ?? null,
+      });
+    } catch { /* cost logging must never affect the caller */ }
+  })();
+}
+
 /** Call chat/completions. Throws CopyError(502) for genuine upstream failures. */
 export async function chatJson(opts: {
   key: string;
@@ -237,6 +286,10 @@ export async function chatJson(opts: {
   timeoutMs: number;
   maxTokens?: number;
   extraBody?: Record<string, unknown>;
+  /** Optional — enables best-effort cost logging to ai_cost_events (never affects behavior). */
+  costContext?: ChatCostContext;
+  /** Provider label recorded on the cost-log row (e.g. "linapi" | "openai"). Defaults to "unknown". */
+  provider?: string;
 }): Promise<Record<string, unknown>> {
   let res: Response;
   try {
@@ -254,14 +307,25 @@ export async function chatJson(opts: {
       signal: AbortSignal.timeout(opts.timeoutMs),
     });
   } catch (err) {
+    logChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
     throw new CopyError(`provider_network_error:${(err as Error)?.message?.slice(0, 120) || "unknown"}`, 502, PROVIDER_MESSAGE);
   }
   const text = await res.text();
-  if (!res.ok) throw new CopyError(`provider_http_${res.status}:${text.slice(0, 180)}`, 502, PROVIDER_MESSAGE);
-  let parsed: { choices?: Array<{ message?: { content?: string } }> };
-  try { parsed = JSON.parse(text); } catch { throw new CopyError("provider_envelope_unparseable", 502, PROVIDER_MESSAGE); }
+  if (!res.ok) {
+    logChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
+    throw new CopyError(`provider_http_${res.status}:${text.slice(0, 180)}`, 502, PROVIDER_MESSAGE);
+  }
+  let parsed: { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
+  try { parsed = JSON.parse(text); } catch {
+    logChatCost(opts.provider ?? "unknown", opts.model, undefined, opts.costContext, "failed");
+    throw new CopyError("provider_envelope_unparseable", 502, PROVIDER_MESSAGE);
+  }
   const content = parsed.choices?.[0]?.message?.content;
-  if (!content) throw new CopyError("provider_empty_response", 502, PROVIDER_MESSAGE);
+  if (!content) {
+    logChatCost(opts.provider ?? "unknown", opts.model, parsed.usage, opts.costContext, "failed");
+    throw new CopyError("provider_empty_response", 502, PROVIDER_MESSAGE);
+  }
+  logChatCost(opts.provider ?? "unknown", opts.model, parsed.usage, opts.costContext, "success");
   return parseJsonLoose(content);
 }
 
@@ -410,6 +474,7 @@ export function stuffingIssues(text: string, keywords: string[]): string[] {
 export async function analyzeImageStructured(args: {
   cfg: ProviderConfig;
   dataUrl: string;
+  costContext?: ChatCostContext;
 }): Promise<StructuredImageAnalysis> {
   const schema = `{
   "imageSummary": "1-2 sentence description of exactly what is visible",
@@ -426,6 +491,8 @@ export async function analyzeImageStructured(args: {
     timeoutMs: 26_000,
     temperature: 0.1,
     extraBody: thinkingExtras(args.cfg.provider, args.cfg.visionModel),
+    costContext: args.costContext,
+    provider: args.cfg.provider,
     messages: [
       {
         role: "system",
@@ -584,6 +651,7 @@ export async function generateCopyFromAnalysis(args: {
   length?: CopyLength;
   mode: "initial" | "regenerate";
   previousCopy?: PreviousCopy;
+  costContext?: ChatCostContext;
 }): Promise<VisionResult> {
   const parts = buildFastPathPrompt(args);
 
@@ -599,6 +667,8 @@ export async function generateCopyFromAnalysis(args: {
     // guards against truncation. See AI_COPY_TEXT_MODEL to swap in a faster model.
     maxTokens: 512,
     extraBody: thinkingExtras(args.cfg.provider, args.cfg.textModel),
+    costContext: args.costContext,
+    provider: args.cfg.provider,
     messages: [
       { role: "system", content: "You are an expert Pinterest copywriter. Image-grounded, readable, never keyword-stuff. Output JSON only." },
       { role: "user", content: parts },
@@ -673,6 +743,7 @@ export async function analyzeAndWriteCopy(args: {
   mode: "initial" | "regenerate";
   cachedAnalysis?: GroundingAnalysis | null;
   previousCopy?: PreviousCopy;
+  costContext?: ChatCostContext;
 }): Promise<VisionResult> {
   const promptText = buildVisionPrompt(args);
 
@@ -683,6 +754,8 @@ export async function analyzeAndWriteCopy(args: {
     timeoutMs: 26_000,
     temperature: args.mode === "regenerate" ? 0.85 : 0.4,
     extraBody: thinkingExtras(args.cfg.provider, args.cfg.visionModel),
+    costContext: args.costContext,
+    provider: args.cfg.provider,
     messages: [
       { role: "system", content: "You are a precise visual analyst and expert Pinterest copywriter. You describe only what you can see and you write accurate, specific, image-grounded copy. Output JSON only." },
       {

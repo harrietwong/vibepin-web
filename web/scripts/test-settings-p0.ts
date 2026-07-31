@@ -24,10 +24,15 @@ test("Settings navigation exposes six real routes", () => {
   }
 });
 
-test("Billing has Current plan and Credits sections without fake subscription data", () => {
+test("Billing has Current plan and the three-quota usage section without fake subscription data", () => {
   assert.match(billing, /t\("billing\.currentPlan"\)/);
-  assert.match(billing, /t\("billing\.tokenBalance"\)/);
-  assert.match(billing, /t\("billing\.usageHistory"\)/);
+  // The old "Token balance" card was replaced by three independent quota meters
+  // (adapted from acb6810 onto the v55/v56 ledger). No aggregated token number
+  // may reappear — that was the fake-34 lesson.
+  assert.doesNotMatch(billing, /t\("billing\.tokenBalance"\)/);
+  assert.match(billing, /t\("billing\.usageAiImages"\)/);
+  assert.match(billing, /t\("billing\.usageAiText"\)/);
+  assert.match(billing, /t\("billing\.usageScheduledPosts"\)/);
   assert.match(billing, /t\("billing\.noUsage"\)/);
   assert.match(billing, /t\("billing\.manageBilling"\)/);
 });

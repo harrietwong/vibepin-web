@@ -33,6 +33,7 @@ import {
   aiImageLimitResponseBody,
   type InlineReservation,
 } from "@/lib/server/usage/meterGeneration";
+import { recordAiCost, estimateCost, type AiCostRequestStatus } from "@/lib/server/aiCostLog";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -966,6 +967,21 @@ export async function POST(req: NextRequest) {
   );
   const gate = evaluateModerationResults(moderationResults, generationRequestId);
   if (!gate.proceed) {
+    // Internal cost-log row only (ai_cost_events, PRD §9). The request never
+    // dispatched to the image provider, so this is a 0-cost audit entry
+    // (tokens/estimated cost stay null) recording that we paid for moderation
+    // and produced nothing. Purely a side effect: recordAiCost never throws and
+    // is not awaited, so it cannot alter or delay the moderation decision below
+    // — the gate's response is returned exactly as before.
+    void recordAiCost({
+      userId: authUserId,
+      provider: "n/a",
+      operationType: "image_generation",
+      requestedImageCount: imageCountClamp.requested,
+      successfulImageCount: 0,
+      requestStatus: "moderation_rejected",
+      referenceId: generationRequestId,
+    });
     return gate.response;
   }
 
@@ -1209,18 +1225,50 @@ export async function POST(req: NextRequest) {
       generation_request_id: generationRequestId,
     });
 
+    // How many images actually came back. runGenerator ALWAYS resolves a
+    // NextResponse (never throws), so read the count off a clone. Computed once
+    // here and shared by the settle path below and the internal cost log — an
+    // unparseable body counts as zero success (all slots released).
+    let successCount = 0;
+    try {
+      const parsed = (await response.clone().json()) as { urls?: unknown };
+      successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
+    } catch {
+      successCount = 0;
+    }
+
+    // Internal cost-log row (ai_cost_events, PRD §9) for EVERY real generator
+    // run — success, partial or total failure — because the provider bills us
+    // for attempts. This is business cost analytics ONLY: it is deliberately
+    // independent of the quota ledger settled just below, is never awaited, and
+    // recordAiCost never throws, so it cannot affect the response, its latency,
+    // or any metering decision. estimateCost returns null while rates are
+    // unverified (aiCostRates.ts), leaving estimated_cost null rather than a
+    // fabricated number; the raw image counts are recorded either way.
+    const imageModel = process.env.LINAPI_IMAGE_MODEL || "gemini-3.1-flash-image-preview";
+    const requestStatus: AiCostRequestStatus =
+      successCount <= 0 ? "failed" : successCount < count ? "partial" : "success";
+    void recordAiCost({
+      userId: authUserId,
+      provider: "linapi",
+      model: imageModel,
+      operationType: "image_generation",
+      requestedImageCount: imageCountClamp.requested,
+      successfulImageCount: successCount,
+      estimatedCost: estimateCost({ model: imageModel, imageCount: successCount }),
+      // No pixel width/height is known at this route (the provider returns only
+      // image URLs) — record the requested aspect-ratio/format string as the
+      // closest available signal rather than fabricating a resolution.
+      resolution: pinFormat || null,
+      requestStatus,
+      referenceId: generationRequestId,
+      metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count },
+    });
+
     // Settle per slot from the parsed result: N urls succeeded → s0..s{N-1}
-    // succeeded, the rest terminal failure. runGenerator ALWAYS resolves a
-    // NextResponse (never throws), so read the count off a clone. Every settle
-    // failure is swallowed inside settleInline (the expiry sweeper is the net).
+    // succeeded, the rest terminal failure. Every settle failure is swallowed
+    // inside settleInline (the expiry sweeper is the net).
     if (inlineReservation.kind === "reserved") {
-      let successCount = 0;
-      try {
-        const parsed = (await response.clone().json()) as { urls?: unknown };
-        successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
-      } catch {
-        successCount = 0; // unparseable body → treat as zero success (all released)
-      }
       await settleInline({ reservation: inlineReservation, successCount });
     }
     return response;

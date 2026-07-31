@@ -86,6 +86,10 @@ export async function POST(req: Request) {
         productTitle: body.productTitle,
         directionHint: body.directionHint,
       },
+      // Internal cost accounting only (ai_cost_events) — best-effort, never
+      // affects the verdict or the response. `userId` is the authenticated
+      // caller resolved above.
+      costContext: { userId, operationType: "quality_judge", referenceId: body.draftId ?? null },
     });
 
     // 3) Pure verdict logic (clamp + overall + conservative verdict).

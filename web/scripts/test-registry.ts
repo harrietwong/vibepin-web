@@ -82,6 +82,8 @@ export const CORE: string[] = [
   // Billing (Creem)
   "test-plan-entitlements",
   "test-usage-period-math",
+  "test-billing-usage-api",
+  "test-ai-cost-log",
   "test-entitlements-security",
   "test-creem-checkout-api",
   "test-creem-webhook-ordering",
