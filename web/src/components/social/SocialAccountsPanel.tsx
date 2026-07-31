@@ -64,6 +64,10 @@ const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: s
     type: "error",
     msg: "Your Facebook account has no Page to manage. Create a Facebook Page (or get admin access to one), then reconnect.",
   },
+  graph_api_error: {
+    type: "error",
+    msg: "Facebook returned an error while reading your Pages — please try connecting again.",
+  },
   cancelled: { type: "info", msg: "Facebook connection was cancelled. You can try again when ready." },
   session_expired: { type: "error", msg: "Your session expired — please sign in and retry" },
   state_expired: { type: "error", msg: "Connection request expired — please try again" },

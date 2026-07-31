@@ -21,6 +21,11 @@
  * On success the redirect carries `?facebook=connected` (exactly one Page,
  * auto-selected) or `?facebook=select_page` (several — user must choose a Page).
  *
+ * FAILURE-STATUS TRIAGE: any Graph call that actually FAILS (FacebookApiError)
+ * redirects `?facebook=graph_api_error` — never `no_pages` / `permissions_failed`
+ * / `discovery_failed`. `no_pages` is reserved for the one honest case: Graph
+ * returned 2xx, every required scope is granted, and `data` was empty.
+ *
  * SELECTION POLICY: with exactly ONE managed Page we select it (there is nothing
  * to choose). With several we store them all as candidates and DO NOT auto-pick
  * index 0 — the user selects one later via the Page picker.
@@ -36,6 +41,8 @@ import {
   safeReturnTo,
 } from "@/lib/server/facebook/oauthState";
 import {
+  FacebookApiError,
+  debugProbePageById,
   exchangeCodeForTokens,
   fetchFacebookUser,
   fetchGrantedPermissions,
@@ -47,6 +54,16 @@ import { missingRequiredScopes } from "@/lib/server/facebook/config";
 export const dynamic = "force-dynamic";
 
 const SOCIAL_SETTINGS_PATH = "/app/settings/social";
+
+/**
+ * Development-only diagnostic log for the callback (mirrors service.fbDebug).
+ * Never prints tokens or request URLs — only ids, counts, and scope names.
+ */
+const FB_DEBUG_ENABLED = process.env.NODE_ENV !== "production";
+function fbDebug(...parts: unknown[]): void {
+  if (!FB_DEBUG_ENABLED) return;
+  console.log("[facebook-oauth-debug]", ...parts);
+}
 
 function redirectAfterOAuth(req: NextRequest, status: string, returnTo = SOCIAL_SETTINGS_PATH): NextResponse {
   const url = req.nextUrl.clone();
@@ -113,11 +130,21 @@ export async function GET(req: NextRequest) {
   // ── Verify granted permissions ──────────────────────────────────────────────
   // Facebook can return a code even if the user unchecked some permissions. Read
   // what was ACTUALLY granted and gate on the four required business scopes.
+  //
+  // ERROR TRIAGE: a Graph call that FAILED (FacebookApiError) is a different
+  // problem from a Graph call that SUCCEEDED and told us something is missing.
+  // Collapsing both into one status is what made "no Pages" the catch-all
+  // explanation for every Facebook failure. Failures → `graph_api_error`;
+  // successful-but-incomplete → the specific status (reconnect_required/no_pages).
   let grantedScopes: string[];
   try {
     grantedScopes = await fetchGrantedPermissions(tokens.accessToken);
   } catch (err) {
     console.error("[Facebook OAuth Callback] permissions fetch failed:", (err as Error).message);
+    if (err instanceof FacebookApiError) {
+      fbDebug(`permissions fetch FAILED status=${err.status} code=${err.code}`);
+      return redirectAfterOAuth(req, "graph_api_error", verdict.returnTo);
+    }
     return redirectAfterOAuth(req, "permissions_failed", verdict.returnTo);
   }
 
@@ -127,11 +154,20 @@ export async function GET(req: NextRequest) {
     fbUser = await fetchFacebookUser(tokens.accessToken);
   } catch (err) {
     console.error("[Facebook OAuth Callback] user fetch failed:", (err as Error).message);
+    if (err instanceof FacebookApiError) {
+      fbDebug(`user fetch FAILED status=${err.status} code=${err.code}`);
+      return redirectAfterOAuth(req, "graph_api_error", verdict.returnTo);
+    }
     return redirectAfterOAuth(req, "profile_failed", verdict.returnTo);
   }
 
   const missing = missingRequiredScopes(grantedScopes);
   if (missing.length > 0) {
+    fbDebug(
+      `reconnect_required — missing_scopes=[${missing.join(", ")}]`,
+      `granted=[${grantedScopes.join(", ")}]`,
+      `fb_user=${fbUser.id}`,
+    );
     // Not usable — persist granted scopes + reconnect_required, never mark active.
     // The frontend reads metadata to show exactly which permissions are missing.
     try {
@@ -159,12 +195,32 @@ export async function GET(req: NextRequest) {
     pages = await fetchManagedPages(tokens.accessToken);
   } catch (err) {
     console.error("[Facebook OAuth Callback] page discovery failed:", (err as Error).message);
+    if (err instanceof FacebookApiError) {
+      // Graph itself errored — do NOT tell the user they have no Pages.
+      fbDebug(`page discovery FAILED status=${err.status} code=${err.code}`);
+      return redirectAfterOAuth(req, "graph_api_error", verdict.returnTo);
+    }
     return redirectAfterOAuth(req, "discovery_failed", verdict.returnTo);
   }
 
+  fbDebug(
+    `accounts_count=${pages.length}`,
+    `permissions=[${grantedScopes.join(", ")}]`,
+    `fb_user=${fbUser.id}`,
+  );
+
   if (pages.length === 0) {
-    // Scopes are fine, but the user manages no Facebook Page. We NEVER bypass this
-    // with a known id — the user must create or gain admin of a Page first.
+    // Reaching here means Graph SUCCEEDED, all required scopes are granted, and
+    // `data` was genuinely empty — the only case that legitimately means "no Page".
+    //
+    // Development-only: probe one known Page id (FACEBOOK_DEBUG_PAGE_ID env, never
+    // hard-coded) with the SAME user token to tell "user truly administers nothing"
+    // apart from "the Page is reachable but Meta omitted it from /me/accounts". The
+    // probe only writes debug logs — it never influences the outcome below.
+    await debugProbePageById(tokens.accessToken);
+
+    // We NEVER bypass this with a known id — the user must create or gain admin of
+    // a Page first.
     try {
       await upsertFacebookConnection(uid, {
         accessToken: tokens.accessToken,

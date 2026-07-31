@@ -46,6 +46,8 @@ export const CORE: string[] = [
   "test-pinterest-client-dedupe",
   "test-published-pin-summary",
   "test-social-provider-status",
+  // Facebook Page OAuth
+  "test-facebook-pages",
   // AI copy / creative intelligence
   "test-ai-copy-keyword-context",
   "test-ai-copy-language-guardrail",
