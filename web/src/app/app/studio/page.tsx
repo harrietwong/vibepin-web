@@ -120,6 +120,8 @@ const PinDetailsModal = dynamic(() =>
   import("@/components/pin-details/PinDetailsModal").then(m => m.PinDetailsModal), { ssr: false });
 const InlineCreateAssetPicker = dynamic(() =>
   import("@/components/studio/InlineCreateAssetPicker").then(m => m.InlineCreateAssetPicker), { ssr: false });
+const WeeklyPlanWorkspace = dynamic(() =>
+  import("@/components/plan/WeeklyPlanWorkspace").then(m => m.WeeklyPlanWorkspace), { ssr: false });
 
 // ── Theme palette ─────────────────────────────────────────────────────────────
 // Surfaces/text/borders resolve from the app-shell theme tokens (--app-*) so the
@@ -4985,7 +4987,7 @@ function CreatePinsContent() {
   );
 }
 
-export default function CreatePinsPage() {
+function CreatePinsPageInner() {
   // Resolve WHICH Studio experience to render as one atomic decision, so the legacy
   // Studio (and its heavy history/DB/generation-feed effects) never mounts when V2
   // is intended — no legacy flash, no wasted network calls.
@@ -4999,12 +5001,18 @@ export default function CreatePinsPage() {
   // override. In that (dev/local) window the initial state is "resolving" and we show
   // a neutral, board-shaped skeleton — never the legacy Studio.
   const { t: tr } = useLocale();
+  const searchParams = useSearchParams();
+  const workspaceView = searchParams.get("view");
   const envDecision = resolveStudioExperienceFromEnv();
   const [experience, setExperience] = useState<StudioExperience>(envDecision ?? "resolving");
 
   useEffect(() => {
     if (envDecision === null) setExperience(resolveStudioExperienceFromClient());
   }, [envDecision]);
+
+  if (workspaceView === "plan") {
+    return <WeeklyPlanWorkspace />;
+  }
 
   if (experience === "board-v2") {
     return (
@@ -5031,6 +5039,14 @@ export default function CreatePinsPage() {
   return (
     <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--app-text-sec, #8892A4)", fontSize: "13px", background: "var(--app-bg, #0B0E17)" }}>{tr("common.loading")}</div>}>
       <CreatePinsContent />
+    </Suspense>
+  );
+}
+
+export default function CreatePinsPage() {
+  return (
+    <Suspense fallback={<StudioBoardSkeleton />}>
+      <CreatePinsPageInner />
     </Suspense>
   );
 }

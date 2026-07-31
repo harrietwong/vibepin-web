@@ -12,10 +12,8 @@
  * count === 0 → renders nothing. Dismiss semantics (PRD §2.2):
  *   - Clicking the CTA counts as "read" — it dismisses the banner AND navigates.
  *   - The × close button dismisses without navigating.
- *   - Either way this is a session-scoped dismiss: it hides the banner for the rest of
- *     the browser session UNLESS the failure count goes up again (a NEW failure), in
- *     which case it reappears automatically. sessionStorage (not localStorage): the
- *     banner is meant to resurface on a fresh session/tab.
+ *   - Either way this is a session-scoped dismiss. The banner reappears whenever the
+ *     actionable failure identity changes, even if the total count stays equal.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -30,27 +28,23 @@ const WARN = "#D97706";
 
 // ── Session-scoped dismiss ──────────────────────────────────────────────────────
 // "Dismiss" (× or CTA) hides the banner for the rest of this browser session, but a
-// NEW failure (count increasing past what was dismissed) makes it reappear — dismiss
-// never hides an unrelated, later failure. sessionStorage (not localStorage): the
-// banner is meant to resurface on a fresh session/tab.
-const DISMISS_KEY = "vp:failure_banner:dismissed_at_count";
+// NEW failure-set identity makes it reappear. Plan weeks and Studio use separate keys.
+const DISMISS_KEY = "vp:failure_banner:dismissed_failure_set";
+function dismissKey(scope: string): string { return `${DISMISS_KEY}:${scope}`; }
 
-function readDismissedCount(): number | null {
+function readDismissedIdentity(scope: string): string | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(DISMISS_KEY);
-    if (raw === null) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
+    return window.sessionStorage.getItem(dismissKey(scope));
   } catch { return null; }
 }
-function writeDismissedCount(n: number): void {
+function writeDismissedIdentity(scope: string, identity: string): void {
   if (typeof window === "undefined") return;
-  try { window.sessionStorage.setItem(DISMISS_KEY, String(n)); } catch { /* storage unavailable — non-fatal */ }
+  try { window.sessionStorage.setItem(dismissKey(scope), identity); } catch { /* storage unavailable — non-fatal */ }
 }
-function clearDismissedCount(): void {
+function clearDismissedIdentity(scope: string): void {
   if (typeof window === "undefined") return;
-  try { window.sessionStorage.removeItem(DISMISS_KEY); } catch { /* storage unavailable — non-fatal */ }
+  try { window.sessionStorage.removeItem(dismissKey(scope)); } catch { /* storage unavailable — non-fatal */ }
 }
 
 /**
@@ -69,25 +63,25 @@ export function computeVisibleFailureCount(count: number, dismissedAt: number | 
  * actually render (0 while dismissed-and-not-worsened) and a dismiss callback.
  * When `count` drops to 0 the dismiss flag is cleared, so a later failure starts fresh.
  */
-export function useFailureBannerDismiss(count: number): { visibleCount: number; dismiss: () => void } {
-  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+export function useFailureBannerDismiss(count: number, failureSetIdentity = `count:${count}`, scope = "default"): { visibleCount: number; dismiss: () => void } {
+  const [dismissedIdentity, setDismissedIdentity] = useState<string | null>(null);
 
   // Hydrate from sessionStorage once mounted (avoids SSR/client mismatch).
-  useEffect(() => { setDismissedAt(readDismissedCount()); }, []);
+  useEffect(() => { setDismissedIdentity(readDismissedIdentity(scope)); }, [scope]);
 
   useEffect(() => {
-    if (count === 0 && dismissedAt !== null) {
-      setDismissedAt(null);
-      clearDismissedCount();
+    if (count === 0 && dismissedIdentity !== null) {
+      setDismissedIdentity(null);
+      clearDismissedIdentity(scope);
     }
-  }, [count, dismissedAt]);
+  }, [count, dismissedIdentity, scope]);
 
   const dismiss = useCallback(() => {
-    setDismissedAt(count);
-    writeDismissedCount(count);
-  }, [count]);
+    setDismissedIdentity(failureSetIdentity);
+    writeDismissedIdentity(scope, failureSetIdentity);
+  }, [failureSetIdentity, scope]);
 
-  const visibleCount = computeVisibleFailureCount(count, dismissedAt);
+  const visibleCount = dismissedIdentity === failureSetIdentity ? 0 : count;
   return { visibleCount, dismiss };
 }
 

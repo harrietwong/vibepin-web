@@ -3,7 +3,7 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  Sparkles, ClipboardList, Clock,
+  Sparkles, Clock,
   BarChart2, Compass, ShoppingBag, Settings, Target,
   User, CreditCard, HelpCircle, LogOut, Moon, Sun, Monitor,
 } from "lucide-react";
@@ -46,7 +46,6 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { id: "create-pins",    href: "/app/studio",               icon: Sparkles,      labelKey: "nav.createPins",     matchFn: (p) => p === "/app/studio" || p.startsWith("/app/studio/") },
-  { id: "weekly-plan",    href: "/app/plan",                 icon: ClipboardList, labelKey: "nav.weeklyPlan",     matchFn: (p) => p === "/app/plan" || p.startsWith("/app/plan/") },
   { id: "my-pins",        href: "/app/history",              icon: Clock,         labelKey: "nav.myPins",         matchFn: (p) => p === "/app/history" || p.startsWith("/app/history/") },
   // Opportunities = the keyword-opportunity workspace page. matchFn covers the full
   // /app/workspace/* prefix so the item stays highlighted on any category.

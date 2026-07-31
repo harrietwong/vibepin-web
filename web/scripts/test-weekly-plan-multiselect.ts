@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
-const plan = readFileSync(join(root, "src/app/app/plan/page.tsx"), "utf8");
+const plan = readFileSync(join(root, "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const studio = readFileSync(join(root, "src/app/app/studio/page.tsx"), "utf8");
 const list = readFileSync(join(root, "src/components/plan/PlanListView.tsx"), "utf8");
 const batch = readFileSync(join(root, "src/components/studio/BatchEditDrawer.tsx"), "utf8");

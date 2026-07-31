@@ -40,7 +40,7 @@ function test(name: string, fn: () => void) {
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
 function reset() { _store.clear(); for (const k of Object.keys(listeners)) delete listeners[k]; }
 
-const srcPlan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const srcPlan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const srcForm = readFileSync(join(process.cwd(), "src/components/plan/SmartScheduleConfigForm.tsx"), "utf8");
 const srcHover = readFileSync(join(process.cwd(), "src/components/plan/PinHoverPreview.tsx"), "utf8");
 

@@ -25,7 +25,7 @@ import { publishPin, startPinterestConnect } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
-import { beginPublish, endPublish, isActionablePublishFailure, listActionablePublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+import { beginPublish, endPublish, isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, mapPublishErrorToCategory, publishFailureSetIdentity, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { isPinReady, isPublishableImage } from "@/lib/pinReadiness";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
@@ -124,6 +124,17 @@ export function StudioBoard() {
   // sub-filter to "all" — only the one-shot sessionStorage entry signal (consumed on
   // mount, see the hydration effect below) can seed "publish".
   const [failedSubFilter, setFailedSubFilter] = useState<FailedSubFilter>("all");
+  const planWeekScope = searchParams.get("week");
+  const setFailedSub = useCallback((sub: FailedSubFilter) => {
+    setFailedSubFilter(sub);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("filter", "failed");
+      url.searchParams.set("sub", sub);
+      if (sub !== "publish") url.searchParams.delete("week");
+      window.history.replaceState({}, "", url.toString());
+    } catch { /* URL persistence is best-effort. */ }
+  }, []);
   // `subDefault` lets a caller (the Banner CTA) request "publish" as the sub-filter
   // default in the SAME state transition — avoids a two-render race where a plain
   // setFailedSubFilter call before/after setFilter could be seen out of order.
@@ -131,8 +142,19 @@ export function StudioBoard() {
     setFilterState(f);
     if (f === "failed") setFailedSubFilter(subDefault);
     try { window.sessionStorage.setItem(FILTER_STORAGE_KEY, f); } catch { /* storage unavailable — filter still works in-memory */ }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("view");
+      url.searchParams.set("filter", f);
+      if (f === "failed") url.searchParams.set("sub", subDefault);
+      else {
+        url.searchParams.delete("sub");
+        url.searchParams.delete("week");
+      }
+      window.history.replaceState({}, "", url.toString());
+    } catch { /* URL persistence is best-effort; the state transition already happened. */ }
   }, []);
-  const { items: rawItems, allItems, counts, isPublishing } = usePinBoardDrafts(filter);
+  const { items: rawItems, allItems, activeDrafts, counts, isPublishing } = usePinBoardDrafts(filter);
   // Sub-filter is applied on TOP of the main "failed" filter — never touches
   // usePinBoardDrafts/BoardFilter itself (PRD: no change to the primary filter enum).
   // Shared, source-agnostic actionable-publish-failure predicate (pinLifecycle) —
@@ -142,21 +164,22 @@ export function StudioBoard() {
   const isPublishFailureItem = useCallback((d: PinDraft) => isActionablePublishFailure(d), []);
   const failedSubCounts = useMemo(() => {
     if (filter !== "failed") return { publish: 0, generation: 0, all: 0 };
-    const publish = rawItems.filter(x => isPublishFailureItem(x.draft)).length;
-    return { publish, generation: rawItems.length - publish, all: rawItems.length };
-  }, [filter, rawItems, isPublishFailureItem]);
+    const publish = rawItems.filter(x => isPublishFailureItem(x.draft)
+      && (!planWeekScope || isActionablePublishFailureInWeek(x.draft, planWeekScope))).length;
+    const generation = rawItems.filter(x => !isPublishFailureItem(x.draft)).length;
+    return { publish, generation, all: publish + generation };
+  }, [filter, rawItems, isPublishFailureItem, planWeekScope]);
   const items = useMemo(() => {
     if (filter !== "failed" || failedSubFilter === "all") return rawItems;
-    return rawItems.filter(x => (failedSubFilter === "publish" ? isPublishFailureItem(x.draft) : !isPublishFailureItem(x.draft)));
-  }, [filter, failedSubFilter, rawItems, isPublishFailureItem]);
-  // Publish-failure banner (PRD §12, WP-F) — computed from the FULL board so it's
-  // independent of the current filter view; count is a derived value from `allItems`,
-  // so Retry/Move to Unscheduled/Delete are reflected immediately via re-render.
-  // `allItems` is already board-scoped (!archivedAt && isBoardSource, see usePinBoardDrafts),
-  // so layering the core actionable predicate here is equivalent to the board selector
-  // (listBoardActionablePublishFailures over the full population) — same board, same predicate.
-  const publishFailureCount = useMemo(() => listActionablePublishFailures(allItems.map(x => x.draft)).length, [allItems]);
-  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount);
+    return rawItems.filter(x => failedSubFilter === "publish"
+      ? isPublishFailureItem(x.draft) && (!planWeekScope || isActionablePublishFailureInWeek(x.draft, planWeekScope))
+      : !isPublishFailureItem(x.draft));
+  }, [filter, failedSubFilter, rawItems, isPublishFailureItem, planWeekScope]);
+  // Publish failures are workspace-wide. Plan/cron/legacy drafts use the same core
+  // predicate and are visible in Failed even when they are not V2 board-origin cards.
+  const publishFailureCount = useMemo(() => listActionablePublishFailures(activeDrafts).length, [activeDrafts]);
+  const publishFailureIdentity = useMemo(() => publishFailureSetIdentity(activeDrafts), [activeDrafts]);
+  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount, publishFailureIdentity, "studio");
   // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
   // depends on the current filter view; the badge transfers automatically as cards change.
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
@@ -657,7 +680,7 @@ export function StudioBoard() {
             the card grid/empty state. Purely a client-side re-filter of the "failed"
             BoardFilter results; never touches usePinBoardDrafts' own counts. */}
         {filter === "failed" && (
-          <div data-testid="failed-sub-filters" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+          <div data-testid="failed-sub-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
             {([
               { id: "publish" as const, label: "Publish failures", n: failedSubCounts.publish },
               { id: "generation" as const, label: "Generation failures", n: failedSubCounts.generation },
@@ -665,7 +688,7 @@ export function StudioBoard() {
             ]).map(chip => {
               const active = failedSubFilter === chip.id;
               return (
-                <button key={chip.id} type="button" data-testid={`failed-sub-${chip.id}`} onClick={() => setFailedSubFilter(chip.id)}
+                <button key={chip.id} type="button" data-testid={`failed-sub-${chip.id}`} onClick={() => setFailedSub(chip.id)}
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 999,
                     border: `1px solid ${active ? BUI.purple : BUI.border}`,
@@ -677,6 +700,21 @@ export function StudioBoard() {
                 </button>
               );
             })}
+            {planWeekScope && failedSubFilter === "publish" && (
+              <span data-testid="failed-plan-week-scope" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 4, padding: "5px 9px", borderRadius: 999, border: `1px solid ${BUI.border}`, color: BUI.textSec, background: BUI.surface, fontSize: 11.5, fontWeight: 700 }}>
+                Plan week {planWeekScope}
+                <button type="button" onClick={() => {
+                  try {
+                    const url = new URL(window.location.href);
+                    url.searchParams.delete("week");
+                    window.history.replaceState({}, "", url.toString());
+                    window.location.reload();
+                  } catch { /* no-op */ }
+                }} aria-label="View all publish failures" style={{ border: "none", background: "none", color: BUI.purple, padding: 0, cursor: "pointer", font: "inherit" }}>
+                  View all
+                </button>
+              </span>
+            )}
           </div>
         )}
         {items.length === 0 && counts.all === 0 ? (

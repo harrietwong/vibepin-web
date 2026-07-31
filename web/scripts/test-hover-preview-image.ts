@@ -37,7 +37,7 @@ function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
 const hover = readFileSync(join(process.cwd(), "src/components/plan/PinHoverPreview.tsx"), "utf8");
 const thumb = readFileSync(join(process.cwd(), "src/components/plan/PinThumbnail.tsx"), "utf8");
 const css   = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
-const plan  = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const plan  = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 
 console.log("Hover preview image — no white flash");
 

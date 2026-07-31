@@ -253,6 +253,38 @@ async function main() {
     }
   });
 
+  await test("unified Failed includes actionable Plan/cron drafts outside the V2 board", async () => {
+    reset();
+    const { deriveBoardCollections } = await import("../src/hooks/usePinBoardDrafts");
+    const board = store.createBoardDraft({ imageUrl: "https://x/board.png", source: "uploaded_image" });
+    store.updateDraft(board.id, { failureType: "publish", publishError: "failed" });
+    const plan = store.createDraft({
+      imageUrl: "https://x/plan.png", keyword: "plan", category: "home-decor",
+      weeklyPlanItemId: "wp1", generationSessionId: "gs1",
+    });
+    store.updateDraft(plan.id, { failureType: "publish", publishError: "failed" });
+
+    const collections = deriveBoardCollections(store.getAllDrafts());
+    assert.equal(collections.boardItems.some(x => x.draft.id === plan.id), false, "Plan draft must not leak into All");
+    assert.equal(collections.failureItems.some(x => x.draft.id === plan.id), true, "Plan failure must be recoverable in Failed");
+  });
+
+  await test("Plan week scope uses the failed schedule and excludes other weeks", () => {
+    const base = {
+      failureType: "publish" as const, publishError: "failed", archivedAt: undefined,
+      scheduledDate: "", plannedAt: "", previousScheduledTime: "2026-07-30T09:00:00Z",
+    };
+    assert.equal(life.isActionablePublishFailureInWeek(base, "2026-07-27"), true);
+    assert.equal(life.isActionablePublishFailureInWeek(base, "2026-08-03"), false);
+  });
+
+  await test("failure-set identity changes when the same Pin fails again", () => {
+    const base = { id: "pin-1", failureType: "publish" as const, publishError: "failed", archivedAt: undefined };
+    const before = life.publishFailureSetIdentity([{ ...base, updatedAt: "2026-07-31T10:00:00Z" }]);
+    const after = life.publishFailureSetIdentity([{ ...base, updatedAt: "2026-07-31T10:05:00Z" }]);
+    assert.notEqual(before, after);
+  });
+
   console.log(`\nPin board store: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }
