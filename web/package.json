@@ -64,7 +64,7 @@
     "scan:secrets": "node ../scripts/scan-secrets.mjs",
     "check:test-registry": "npx tsx scripts/check-test-registry.ts",
     "test:browser": "npx tsx scripts/run-browser-qa.ts",
-    "test:db": "npx tsx scripts/test-db-integration-rate-limit.ts && npx tsx scripts/test-usage-ledger-db.ts && npx tsx scripts/test-db-usage-lifecycle.ts && npx tsx scripts/test-db-usage-metering.ts && npx tsx scripts/test-db-text-metering.ts",
+    "test:db": "npx tsx scripts/test-db-integration-rate-limit.ts && npx tsx scripts/test-usage-ledger-db.ts && npx tsx scripts/test-db-usage-lifecycle.ts && npx tsx scripts/test-db-usage-metering.ts && npx tsx scripts/test-db-text-metering.ts && npx tsx scripts/test-db-post-metering.ts",
     "predeploy:guard": "node scripts/predeploy-guard.mjs",
     "dev:testdb": "node scripts/dev-testdb.mjs"
   },

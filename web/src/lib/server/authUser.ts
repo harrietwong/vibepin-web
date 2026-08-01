@@ -4,7 +4,7 @@
  *
  *   getUserIdFromBearer(req) — JSON API routes called via fetch() from the client
  *     with `Authorization: Bearer <supabase access token>` (matches
- *     /api/composer-drafts and /api/publish-jobs).
+ *     /api/composer-drafts).
  *
  *   getUserIdFromCookies()  — browser-navigation routes (OAuth connect/callback)
  *     that can only carry the Supabase SSR session cookies (matches

@@ -64,6 +64,16 @@ export type RecordAiCostInput = {
 const TABLE = "ai_cost_events";
 
 /**
+ * True only when SUPABASE_SERVICE_ROLE_KEY looks like a real credential rather
+ * than the placeholder the hermetic test gate injects. A JWT has three
+ * dot-separated segments; the test value ("test-service-key") has none.
+ */
+function isRealServiceCredential(): boolean {
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  return key.split(".").length === 3;
+}
+
+/**
  * Best-effort write to the ai_cost_events audit ledger. NEVER throws — any
  * failure (network, schema, RLS, etc.) is caught and logged with console.error
  * only, so a broken cost-logging path can never fail the calling business
@@ -73,6 +83,12 @@ export async function recordAiCost(
   input: RecordAiCostInput,
   db?: AiCostDbClient,
 ): Promise<{ recorded: boolean }> {
+  // A caller-supplied client is always honoured (that is the test seam). Without
+  // one, only attempt the write when a real service-role credential is present:
+  // the hermetic `npm test` gate sets placeholder Supabase env vars, and firing a
+  // doomed network insert there is both pointless and slow — it made the parallel
+  // runner flap on unrelated suites. No credential ⇒ silently not recorded.
+  if (!db && !isRealServiceCredential()) return { recorded: false };
   try {
     const client = db ?? (await import("../supabase")).createServerClient();
     const { error } = await client.from(TABLE).insert([

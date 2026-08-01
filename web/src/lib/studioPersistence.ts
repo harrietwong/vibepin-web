@@ -203,7 +203,7 @@ export function clearDraft(): void {
 // ── HistoryEntry ──────────────────────────────────────────────────────────────
 
 // Canonical type. Imported for use in this file AND re-exported so callers
-// (studio/page.tsx, _studio-legacy.tsx) that import GenerationStatus from this
+// (studio/page.tsx) that import GenerationStatus from this
 // module continue to work without changes.
 import type { GenerationStatus } from "./status/pinStatuses";
 export type { GenerationStatus };
