@@ -377,6 +377,62 @@ async function main() {
     }
   });
 
+  // ── restorePreviousPage (reconnect auto-restore) ────────────────────────────
+
+  await test("restorePreviousPage returns the page when the saved id verifies", async () => {
+    const m = mockFetch([{ body: { id: "777", name: "Saved Page", access_token: "PAGE-TOKEN-777" } }]);
+    try {
+      const page = await service.restorePreviousPage(USER_TOKEN, "777");
+      assert(page !== null, "restore should succeed");
+      assertEq(page!.pageId, "777", "pageId");
+      assertEq(page!.pageName, "Saved Page", "pageName");
+      assertEq(page!.pageAccessToken, "PAGE-TOKEN-777", "fresh page token");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage returns null on a saved/returned id mismatch", async () => {
+    const m = mockFetch([{ body: { id: "999", name: "Different Page", access_token: "T" } }]);
+    try {
+      assertEq(await service.restorePreviousPage(USER_TOKEN, "777"), null, "id mismatch → null");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage returns null when the page has no access_token", async () => {
+    const m = mockFetch([{ body: { id: "777", name: "Read-Only Page" } }]);
+    try {
+      assertEq(await service.restorePreviousPage(USER_TOKEN, "777"), null, "no token → null");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage returns null on a Graph OAuthException (never throws)", async () => {
+    const m = mockFetch([{
+      status: 400,
+      body: { error: { message: "(#190) token expired", type: "OAuthException", code: 190 } },
+    }]);
+    try {
+      assertEq(await service.restorePreviousPage(USER_TOKEN, "777"), null, "OAuthException → null");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage request carries no tasks field and swallows token-free", async () => {
+    const m = mockFetch([{ body: { id: "777", name: "P", access_token: "SECRET-PAGE-TOKEN" } }]);
+    try {
+      await service.restorePreviousPage(USER_TOKEN, "777");
+      assertEq(m.calls.length, 1, "one request");
+      assert(!m.calls[0].includes("tasks"), "no tasks field in the URL");
+    } finally {
+      m.restore();
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

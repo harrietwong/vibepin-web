@@ -131,6 +131,17 @@ export type UpsertFacebookInput = {
     pageId: string;
     pageName: string | null;
   } | null;
+  /**
+   * Carried forward on a FAILED reconnect auto-restore: preserves the previously
+   * selected Page id/name in metadata (lastKnownPageId/Name) without selecting
+   * it — the invalid-for-now Page must not look connected, but its id must
+   * survive for the next restore attempt. Ignored when `selected` is set
+   * (a live selection always refreshes lastKnown itself).
+   */
+  lastKnownPage?: {
+    pageId: string;
+    pageName: string | null;
+  } | null;
 };
 
 /**
@@ -150,6 +161,15 @@ export type FacebookConnectionMetadata = {
   selectedPageName: string | null;
   /** Page-scoped token for the selected Page (ciphertext), or null. */
   selectedPageTokenEncrypted: string | null;
+  /**
+   * The last Page this user EVER had selected (server-only, survives a failed
+   * reconnect auto-restore). When a re-auth's /me/accounts comes back empty we
+   * verify this id with the fresh user token; on verification failure the
+   * selection is cleared but this record is kept, so the saved Page id is never
+   * wiped and a later retry (or manual entry) can still find it.
+   */
+  lastKnownPageId: string | null;
+  lastKnownPageName: string | null;
   /** All managed Pages (display-safe fields + encrypted page token). */
   candidatePages: Array<
     FacebookCandidatePage & { pageAccessTokenEncrypted: string }
@@ -196,6 +216,10 @@ export async function upsertFacebookConnection(
     selectedPageId: input.selected?.pageId ?? null,
     selectedPageName: input.selected?.pageName ?? null,
     selectedPageTokenEncrypted,
+    // A live selection refreshes lastKnown; otherwise carry the caller's value
+    // (failed-restore path) so the saved Page id is never wiped by a reconnect.
+    lastKnownPageId: input.selected?.pageId ?? input.lastKnownPage?.pageId ?? null,
+    lastKnownPageName: input.selected?.pageName ?? input.lastKnownPage?.pageName ?? null,
     candidatePages,
     updatedAt: now,
   };
@@ -323,6 +347,8 @@ export async function selectFacebookPage(
     selectedPageId: chosen.pageId,
     selectedPageName: chosen.pageName,
     selectedPageTokenEncrypted: chosen.pageAccessTokenEncrypted,
+    lastKnownPageId: chosen.pageId,
+    lastKnownPageName: chosen.pageName,
     updatedAt: now,
   };
 
@@ -451,6 +477,8 @@ export async function connectFacebookPageManually(
     selectedPageId: page.pageId,
     selectedPageName: page.pageName,
     selectedPageTokenEncrypted: pageAccessTokenEncrypted,
+    lastKnownPageId: page.pageId,
+    lastKnownPageName: page.pageName,
     candidatePages,
     updatedAt: now,
   };
@@ -476,6 +504,30 @@ export async function connectFacebookPageManually(
   }
 
   return { pageId: page.pageId, pageName: page.pageName };
+}
+
+/**
+ * The Page this user last had selected (live selection first, else the
+ * preserved lastKnown record). Server-only — feeds the reconnect auto-restore.
+ * Returns null when there is no prior connection or no Page was ever selected;
+ * a first-time connect therefore NEVER guesses a Page id from anywhere.
+ */
+export async function getStoredFacebookSelection(
+  uid: string,
+): Promise<{ pageId: string; pageName: string | null } | null> {
+  const { data, error } = await db()
+    .from(TABLE)
+    .select("metadata")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .maybeSingle();
+  if (error || !data) return null;
+  const fb = (data.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  if (!fb) return null;
+  const pageId = fb.selectedPageId ?? fb.lastKnownPageId ?? null;
+  if (!pageId) return null;
+  const pageName = fb.selectedPageId ? fb.selectedPageName : fb.lastKnownPageName;
+  return { pageId, pageName: pageName ?? null };
 }
 
 /**

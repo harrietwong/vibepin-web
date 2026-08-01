@@ -594,6 +594,36 @@ export async function fetchPageById(userToken: string, pageId: string): Promise<
 }
 
 /**
+ * RECONNECT AUTO-RESTORE: after a re-authorization whose /me/accounts came back
+ * empty, try to re-validate the user's PREVIOUSLY selected Page with the FRESH
+ * user token. Delegates to fetchPageById, which already enforces everything the
+ * restore needs: returned id === saved id, name present, page access_token
+ * present, Graph errors classified — and never embeds a token in messages/URLs.
+ *
+ * Never throws: any verification failure (denied / not found / Graph error /
+ * unexpected) returns null so the caller can fall back to manual Page entry
+ * WITHOUT wiping the saved Page id. The old stored Page token is deliberately
+ * never used as evidence here — only the fresh user token decides.
+ */
+export async function restorePreviousPage(
+  userToken: string,
+  savedPageId: string,
+): Promise<ManagedPage | null> {
+  try {
+    const page = await fetchPageById(userToken, savedPageId);
+    fbDebug(`restorePreviousPage ok page=${page.pageId} name=${page.pageName ?? "-"} has_token=true`);
+    return page;
+  } catch (err) {
+    if (err instanceof FacebookApiError) {
+      fbDebug(`restorePreviousPage failed code=${err.code} status=${err.status}`);
+    } else {
+      fbDebug(`restorePreviousPage threw: ${(err as Error).message}`);
+    }
+    return null;
+  }
+}
+
+/**
  * DEVELOPMENT-ONLY diagnostic probe: read ONE specific Page by id with the user
  * token (GET /{page-id}?fields=id,name,tasks).
  *

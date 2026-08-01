@@ -66,6 +66,15 @@ const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: s
     type: "info",
     msg: "Facebook didn't list your Pages automatically. Enter your Page URL or Page ID to finish connecting.",
   },
+  // Reconnect auto-restore: the previously selected Page was re-verified with the
+  // fresh token — fully connected again with zero typing.
+  reconnected: { type: "success", msg: "Facebook Page reconnected successfully." },
+  // Auto-restore ran but the saved Page failed verification with the new token.
+  // The saved id is preserved server-side; the manual form takes over.
+  page_reconnect_verification_failed: {
+    type: "info",
+    msg: "We couldn't automatically reconnect your previous Page. Enter a Page ID to continue.",
+  },
   graph_api_error: {
     type: "error",
     msg: "Facebook returned an error while reading your Pages — please try connecting again.",

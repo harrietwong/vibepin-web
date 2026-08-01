@@ -55,8 +55,9 @@ import {
   fetchFacebookUser,
   fetchGrantedPermissions,
   fetchManagedPages,
+  restorePreviousPage,
 } from "@/lib/server/facebook/service";
-import { upsertFacebookConnection } from "@/lib/server/facebook/connectionStore";
+import { upsertFacebookConnection, getStoredFacebookSelection } from "@/lib/server/facebook/connectionStore";
 import { missingRequiredScopes } from "@/lib/server/facebook/config";
 
 export const dynamic = "force-dynamic";
@@ -230,7 +231,76 @@ export async function GET(req: NextRequest) {
 
     // An empty enumeration is NOT "you administer no Pages". Meta omits Pages the
     // user reaches through a Business portfolio rather than a direct personal
-    // role, so the Page can be perfectly reachable by id. Keep the authorization
+    // role, so the Page can be perfectly reachable by id.
+    //
+    // RECONNECT AUTO-RESTORE: if this user previously had a Page selected, verify
+    // that saved id with the FRESH user token (never the old stored Page token).
+    // Success → the connection comes back fully connected with zero typing.
+    // Failure → fall through to manual entry, PRESERVING the saved Page id
+    // (lastKnownPage) so nothing is wiped. A first-time connect has no saved id
+    // and never reaches the restore path — we never guess.
+    let previous: { pageId: string; pageName: string | null } | null = null;
+    try {
+      previous = await getStoredFacebookSelection(uid);
+    } catch {
+      previous = null; // storage hiccup → behave like a first connect
+    }
+
+    if (previous) {
+      const restored = await restorePreviousPage(tokens.accessToken, previous.pageId);
+      fbDebug(
+        `reconnect auto-restore attempted page=${previous.pageId}`,
+        `outcome=${restored ? "restored" : "verification_failed"}`,
+      );
+      if (restored) {
+        try {
+          await upsertFacebookConnection(uid, {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            expiresAt: tokens.accessTokenExpiresAt,
+            scopes: grantedScopes,
+            accountId: fbUser.id,
+            accountName: fbUser.name,
+            state: "connected",
+            pages: [restored],
+            selected: { pageId: restored.pageId, pageName: restored.pageName },
+          });
+        } catch (persistErr) {
+          console.error(
+            "[Facebook OAuth Callback] persist (auto-restore) failed:",
+            (persistErr as Error).message,
+          );
+          return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
+        }
+        return redirectAfterOAuth(req, "reconnected", verdict.returnTo);
+      }
+
+      // Verification failed: keep the fresh authorization, clear the (now
+      // unverifiable) selection, but carry the old Page id forward untouched.
+      try {
+        await upsertFacebookConnection(uid, {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresAt: tokens.accessTokenExpiresAt,
+          scopes: grantedScopes,
+          accountId: fbUser.id,
+          accountName: fbUser.name,
+          state: "page_discovery_empty",
+          pages: [],
+          selected: null,
+          lastKnownPage: previous,
+        });
+      } catch (persistErr) {
+        console.error(
+          "[Facebook OAuth Callback] persist (restore-failed) failed:",
+          (persistErr as Error).message,
+        );
+        return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
+      }
+      return redirectAfterOAuth(req, "page_reconnect_verification_failed", verdict.returnTo);
+    }
+
+    // First-time connect with an empty enumeration: keep the authorization
     // (user token + granted scopes) and let the user name the Page manually via
     // POST /api/integrations/facebook/connect-page. We never guess an id here.
     try {
