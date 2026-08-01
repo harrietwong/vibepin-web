@@ -175,8 +175,13 @@ export function StudioBoard() {
       ? isPublishFailureItem(x.draft) && (!planWeekScope || isActionablePublishFailureInWeek(x.draft, planWeekScope))
       : !isPublishFailureItem(x.draft));
   }, [filter, failedSubFilter, rawItems, isPublishFailureItem, planWeekScope]);
-  // Publish failures are workspace-wide. Plan/cron/legacy drafts use the same core
-  // predicate and are visible in Failed even when they are not V2 board-origin cards.
+  // Publish-failure banner — computed from the FULL workspace population (not the
+  // current filter view), so Retry/Move to Unscheduled/Delete are reflected immediately
+  // via re-render. Publish failures are workspace-wide: Plan/cron/legacy drafts share
+  // the same core predicate and are visible in Failed even when they are not V2
+  // board-origin cards, so the banner counts `activeDrafts`, not just board items.
+  // Dismiss is keyed on the failure-set IDENTITY (not the count) so a same-size but
+  // different failure set still resurfaces the banner.
   const publishFailureCount = useMemo(() => listActionablePublishFailures(activeDrafts).length, [activeDrafts]);
   const publishFailureIdentity = useMemo(() => publishFailureSetIdentity(activeDrafts), [activeDrafts]);
   const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount, publishFailureIdentity, "studio");

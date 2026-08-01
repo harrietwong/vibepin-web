@@ -21,6 +21,7 @@ import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { getSourceBadge, getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
+import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
@@ -87,11 +88,6 @@ function recommendedFix(tr: (key: MessageKey) => string, category: "transient" |
   if (category === "auth") return "Reconnect Pinterest, then retry.";
   if (category === "transient") return "Usually temporary — try publishing again.";
   return "Fix the Pin details, then retry.";
-}
-function safeFailureReason(isPublishFailure: boolean): string {
-  return isPublishFailure
-    ? "Pinterest couldn’t publish this Pin. Review the Pin and try again."
-    : "We couldn’t generate this image. Review the source images and try again.";
 }
 function menuItemStyle(withTopBorder: boolean, danger: boolean): React.CSSProperties {
   return {
@@ -307,6 +303,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // `status` so the badge override below can use it.
   const isPublishFailure = isActionablePublishFailure(draft);
   const failureCategory = draft.errorCategory ?? (isPublishFailure ? mapPublishErrorToCategory(draft.publishErrorCode, draft.publishError) : undefined);
+  // SAFE reason line. `draft.publishError` holds the RAW upstream message (cron/batch
+  // paths store err.message straight from the Pinterest API) — it must never reach the
+  // DOM. We render a fixed, translated sentence instead; the raw string stays on the
+  // draft for internal diagnostics (support context / logs).
+  //   publish failure  → category-chosen sentence (publishErrorDisplay, never raw)
+  //   generation failure → its own fixed sentence (no upstream text to leak)
+  const failureReasonText = isPublishFailure || draft.publishError?.trim()
+    ? tr(getPublishErrorDisplayKey(draft))
+    : tr("studioBoard.card.generationError.generic");
 
   const status = getStatusBadge(draft);
   // Badge copy override for the failed lifecycle only (PRD "失败情况优化" §5): the
@@ -471,7 +476,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           {failed && (
             <div data-testid="card-failed-info" style={{ display: "flex", flexDirection: "column", gap: 3, padding: "8px 10px", borderRadius: 8, background: "rgba(239,68,68,0.08)", border: `1px solid ${BUI.error}33` }}>
               <p data-testid="card-failed-reason" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 5, lineHeight: 1.35 }}>
-                <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} /> {safeFailureReason(isPublishFailure)}
+                <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} /> {failureReasonText}
               </p>
               {isPublishFailure && (
                 <p data-testid="card-failed-fix" style={{ margin: 0, fontSize: 10.5, color: BUI.textSec, lineHeight: 1.4 }}>{recommendedFix(tr, failureCategory)}</p>
@@ -681,8 +686,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             via Edit. PRD 13. */}
         {failed && (
           <div data-testid="card-failed-info-expanded" style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", borderRadius: 9, background: "rgba(239,68,68,0.08)", border: `1px solid ${BUI.error}33` }}>
-            <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 6, lineHeight: 1.4 }}>
-              <AlertTriangle style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }} /> {safeFailureReason(isPublishFailure)}
+            <p data-testid="card-failed-reason-expanded" style={{ margin: 0, fontSize: 12, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 6, lineHeight: 1.4 }}>
+              <AlertTriangle style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }} /> {failureReasonText}
             </p>
             {isPublishFailure && (
               <p style={{ margin: 0, fontSize: 11, color: BUI.textSec, lineHeight: 1.45 }}>{recommendedFix(tr, failureCategory)}</p>

@@ -12,8 +12,9 @@
  * count === 0 → renders nothing. Dismiss semantics (PRD §2.2):
  *   - Clicking the CTA counts as "read" — it dismisses the banner AND navigates.
  *   - The × close button dismisses without navigating.
- *   - Either way this is a session-scoped dismiss. The banner reappears whenever the
- *     actionable failure identity changes, even if the total count stays equal.
+ *   - Either way the dismiss is PERSISTENT (localStorage) and PER-SCOPE: it hides that
+ *     scope's banner across reloads/tabs/sessions UNLESS the actionable failure
+ *     identity changes (a NEW failure), in which case it reappears automatically.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -26,47 +27,65 @@ import { AlertTriangle, X } from "lucide-react";
 // themes because it's a saturated accent color, not a light-mode-only value.
 const WARN = "#D97706";
 
-// ── Session-scoped dismiss ──────────────────────────────────────────────────────
-// "Dismiss" (× or CTA) hides the banner for the rest of this browser session, but a
-// NEW failure-set identity makes it reappear. Plan weeks and Studio use separate keys.
+// ── Persistent, per-scope dismiss ───────────────────────────────────────────────
+// "Dismiss" (× or CTA) hides that scope's banner until a NEW failure-set identity
+// makes it reappear — a dismiss never hides an unrelated, later failure.
+//
+// Two deliberate properties (real-device QA fixes):
+//  1. localStorage, not sessionStorage — a user who already clicked "Review" should
+//     not get the same banner again in a new tab / after a browser restart.
+//  2. The key is namespaced per SCOPE ("plan:<weekStart>" | "studio"). The mounts
+//     count different populations (Plan = that week's failures, Create Pins = the
+//     whole board), so a shared key would let one surface's dismiss silently suppress
+//     the other's real failures. Separate keys keep each scope's dismiss to itself.
 const DISMISS_KEY = "vp:failure_banner:dismissed_failure_set";
-function dismissKey(scope: string): string { return `${DISMISS_KEY}:${scope}`; }
+export function failureBannerDismissKey(scope: string): string { return `${DISMISS_KEY}:${scope}`; }
 
 function readDismissedIdentity(scope: string): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.sessionStorage.getItem(dismissKey(scope));
+    return window.localStorage.getItem(failureBannerDismissKey(scope));
   } catch { return null; }
 }
 function writeDismissedIdentity(scope: string, identity: string): void {
   if (typeof window === "undefined") return;
-  try { window.sessionStorage.setItem(dismissKey(scope), identity); } catch { /* storage unavailable — non-fatal */ }
+  try { window.localStorage.setItem(failureBannerDismissKey(scope), identity); } catch { /* storage unavailable — non-fatal */ }
 }
 function clearDismissedIdentity(scope: string): void {
   if (typeof window === "undefined") return;
-  try { window.sessionStorage.removeItem(dismissKey(scope)); } catch { /* storage unavailable — non-fatal */ }
+  try { window.localStorage.removeItem(failureBannerDismissKey(scope)); } catch { /* storage unavailable — non-fatal */ }
 }
 
 /**
- * Pure decision: given the live failure count and the count the user dismissed at
- * (null = never dismissed / already reset), what count should the banner render?
- * Dismissing hides the banner until `count` exceeds `dismissedAt` — a NEW failure
- * (count went up since the dismiss) always breaks through.
+ * Pure decision: given the live failure count, the identity of the currently actionable
+ * failure set, and the identity the user dismissed at (null = never dismissed / already
+ * reset), what count should the banner render?
+ *
+ * Identity — not count — is the dismiss key (publishFailureSetIdentity in
+ * pinLifecycle.ts, "id:updatedAt" per failure). A count-based rule silently swallowed
+ * real failures: dismissing at 3 hid a later, different set of 3, and one Pin being
+ * fixed while another newly failed kept the count flat. Any change to the actionable
+ * set (new failure, retry-failure on the same Pin, a failure resolved) yields a new
+ * identity, so the banner breaks through.
  */
-export function computeVisibleFailureCount(count: number, dismissedAt: number | null): number {
-  if (dismissedAt !== null && count <= dismissedAt) return 0;
+export function computeVisibleFailureCount(count: number, failureSetIdentity: string, dismissedIdentity: string | null): number {
+  if (dismissedIdentity !== null && dismissedIdentity === failureSetIdentity) return 0;
   return count;
 }
 
 /**
- * Session-scoped dismiss for a FailureBanner driven by `count`. Returns the count to
- * actually render (0 while dismissed-and-not-worsened) and a dismiss callback.
- * When `count` drops to 0 the dismiss flag is cleared, so a later failure starts fresh.
+ * Persistent, per-scope dismiss for a FailureBanner driven by `count`. Returns the
+ * count to actually render (0 while dismissed at the current identity) and a dismiss
+ * callback. When `count` drops to 0 the dismiss record is cleared, so a later failure
+ * starts fresh.
+ *
+ * `scope` namespaces the persisted key: Plan (per week) and Create Pins must not share
+ * dismiss state (see the key comment above).
  */
 export function useFailureBannerDismiss(count: number, failureSetIdentity = `count:${count}`, scope = "default"): { visibleCount: number; dismiss: () => void } {
   const [dismissedIdentity, setDismissedIdentity] = useState<string | null>(null);
 
-  // Hydrate from sessionStorage once mounted (avoids SSR/client mismatch).
+  // Hydrate from localStorage once mounted (avoids SSR/client mismatch).
   useEffect(() => { setDismissedIdentity(readDismissedIdentity(scope)); }, [scope]);
 
   useEffect(() => {
@@ -81,7 +100,7 @@ export function useFailureBannerDismiss(count: number, failureSetIdentity = `cou
     writeDismissedIdentity(scope, failureSetIdentity);
   }, [failureSetIdentity, scope]);
 
-  const visibleCount = dismissedIdentity === failureSetIdentity ? 0 : count;
+  const visibleCount = computeVisibleFailureCount(count, failureSetIdentity, dismissedIdentity);
   return { visibleCount, dismiss };
 }
 

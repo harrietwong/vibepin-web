@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, Suspense, useCallback } from "react";
 import Link from "next/link";
-import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Moon, Sun, Monitor, Check, LifeBuoy } from "lucide-react";
+import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Clock, Moon, Sun, Monitor, Check, LifeBuoy } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
 import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
@@ -51,7 +51,6 @@ import {
   type PublishingFormat,
 } from "@/lib/publishingPrefsStore";
 import { SmartScheduleConfigForm } from "@/components/plan/SmartScheduleConfigForm";
-import { EXISTING_APP_TOKEN_BALANCE } from "@/lib/accountSummary";
 import {
   getAmazonAffiliateSettings,
   saveAmazonAffiliateSettings,
@@ -313,6 +312,54 @@ function AccountTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => Pr
 
 // ── Billing Tab ───────────────────────────────────────────────────────────────
 
+/**
+ * One usage row (used/limit + a simple progress bar). `limit === null` means no
+ * monthly cap for that metric — shown as "used" with "No monthly limit" and no
+ * bar, EXCEPT Scheduled posts on Business, which is a genuine advertised
+ * "Unlimited" (per pricing page), not merely an unmetered/unlimited field.
+ */
+function UsageRow({ icon: Icon, label, bucket, plan, t, isScheduledPosts }: {
+  icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  label: string;
+  bucket: { used: number; limit: number | null };
+  plan: "free" | "starter" | "pro" | "business";
+  t: (key: MessageKey) => string;
+  isScheduledPosts?: boolean;
+}) {
+  const { used, limit } = bucket;
+  const isUnlimitedBusinessPosts = isScheduledPosts && plan === "business" && limit === null;
+  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const remaining = limit !== null ? Math.max(0, limit - used) : null;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <Icon size={13} style={{ color: UI.textSec }} />
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: UI.text, flex: 1 }}>{label}</span>
+        <span style={{ fontSize: 12, color: UI.textSec }}>
+          {isUnlimitedBusinessPosts
+            ? t("billing.usageUnlimited")
+            : limit !== null
+              ? t("billing.usageUsedOfLimit").replace("{used}", String(used)).replace("{limit}", String(limit))
+              : t("billing.usageUsedNoLimit").replace("{used}", String(used))}
+        </span>
+      </div>
+      {isUnlimitedBusinessPosts ? null : limit !== null ? (
+        <>
+          <div style={{ height: 6, borderRadius: 999, background: UI.surface2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${pct}%`, borderRadius: 999, background: UI.gradient }} />
+          </div>
+          <p style={{ margin: "4px 0 0", fontSize: 11, color: UI.textMuted }}>
+            {t("billing.usageRemaining").replace("{remaining}", String(remaining))}
+          </p>
+        </>
+      ) : (
+        <p style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>{t("billing.usageNoLimit")}</p>
+      )}
+    </div>
+  );
+}
+
 type CreemBillingStatus = {
   hasBillingAccount: boolean;
   /** The plan the user CURRENTLY has access to (highest granting sub, else free). */
@@ -327,13 +374,31 @@ type CreemBillingStatus = {
   scheduledCancel?: boolean;
 };
 
+type UsageBucket = { used: number; limit: number | null };
+
+type BillingUsage = {
+  plan: "free" | "starter" | "pro" | "business";
+  periodStart: string;
+  periodEnd: string;
+  aiImages: UsageBucket;
+  aiTextGenerations: UsageBucket;
+  scheduledPosts: UsageBucket;
+};
+
 function BillingTab() {
   const { t } = useLocale();
   const [summary, setSummary] = useState<AccountBillingSummary>(() => deriveAccountBillingSummary(null));
   const [loaded, setLoaded] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const [billing, setBilling] = useState<CreemBillingStatus | null>(null);
+  // Sync error is tracked separately from "billing is null before the first
+  // response arrives" — a non-200/thrown fetch must NEVER be displayed as Free.
+  const [billingSyncError, setBillingSyncError] = useState(false);
   const [portalPending, setPortalPending] = useState(false);
+  const [usage, setUsage] = useState<BillingUsage | null>(null);
+  const [usageSyncError, setUsageSyncError] = useState(false);
+  const [usageLoaded, setUsageLoaded] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -343,8 +408,12 @@ function BillingTab() {
   }, []);
 
   // Live billing status from the Creem mirror (source of truth for plan/renewal).
+  // SYNC ERROR STATE: any non-ok response or thrown fetch sets billingSyncError
+  // and leaves `billing` as-is — the UI below renders an explicit "Couldn't sync
+  // billing data" state and NEVER falls back to displaying Free (PRD requirement).
   useEffect(() => {
     let active = true;
+    setBillingSyncError(false);
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -352,17 +421,51 @@ function BillingTab() {
         const res = await fetch("/api/billing/creem/status", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (active) setBillingSyncError(true);
+          return;
+        }
         const json = (await res.json()) as CreemBillingStatus;
         if (active) setBilling(json);
       } catch {
-        /* leave billing null → fall back to metadata-derived display */
+        if (active) setBillingSyncError(true);
       }
     })();
     return () => {
       active = false;
     };
-  }, []);
+  }, [retryTick]);
+
+  // Usage this period (AI images / AI text / scheduled posts) — same sync-error
+  // discipline as billing status: a failed fetch never silently renders zeros.
+  useEffect(() => {
+    let active = true;
+    setUsageSyncError(false);
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        const res = await fetch("/api/billing/usage", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) {
+          if (active) { setUsageSyncError(true); setUsageLoaded(true); }
+          return;
+        }
+        const json = (await res.json()) as BillingUsage;
+        if (active) { setUsage(json); setUsageLoaded(true); }
+      } catch {
+        if (active) { setUsageSyncError(true); setUsageLoaded(true); }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [retryTick]);
+
+  function handleRetrySync() {
+    setRetryTick(v => v + 1);
+  }
 
   // Current plan = the EFFECTIVE plan (what the user has access to right now);
   // fall back to the metadata-derived name only before the live status loads.
@@ -383,7 +486,6 @@ function BillingTab() {
   const previousPlanName = billing?.previousPlan
     ? normalizePlanName(billing.previousPlan)
     : null;
-  const lastActivity = summary.lastCreditActivityAt ? formatEnglishDateTime(summary.lastCreditActivityAt) : null;
 
   // Status badge: green ONLY when access is granted and the raw status is
   // active/trialing; scheduled_cancel → amber "Cancels on <date>"; any lapsed
@@ -437,6 +539,29 @@ function BillingTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {billingSyncError && (
+        <SectionCard testId="billing-sync-error">
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <AlertCircle size={16} style={{ color: UI.warning, flexShrink: 0, marginTop: 1 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ margin: "0 0 3px", fontSize: 13, fontWeight: 700, color: UI.text }}>{t("billing.usageSyncError")}</p>
+              <p style={{ margin: 0, fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>{t("billing.usageSyncErrorDesc")}</p>
+            </div>
+            <button
+              type="button"
+              data-testid="billing-sync-error-retry"
+              onClick={handleRetrySync}
+              style={{
+                flexShrink: 0, padding: "7px 13px", borderRadius: 9, border: `1px solid ${UI.border}`,
+                background: UI.surface2, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer",
+              }}
+            >
+              {t("billing.usageRetry")}
+            </button>
+          </div>
+        </SectionCard>
+      )}
+
       <SectionCard testId="billing-current-plan">
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
           <div>
@@ -505,36 +630,40 @@ function BillingTab() {
         )}
       </SectionCard>
 
-      <SectionCard testId="billing-token-balance">
+      <SectionCard testId="billing-usage-period">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <SectionTitle>{t("billing.tokenBalance")}</SectionTitle>
-          <Link href={PRICING_PATH} style={{ fontSize: 12, color: UI.blue, textDecoration: "none", fontWeight: 700 }}>
-            {t("billing.aboutTokens")} ↗
-          </Link>
+          <SectionTitle>{t("billing.usageThisPeriod")}</SectionTitle>
+          {usage?.periodEnd && !usageSyncError && formatEnglishDateTime(usage.periodEnd) && (
+            <span style={{ fontSize: 11, color: UI.textMuted }}>
+              {t("billing.usagePeriod").replace("{date}", formatEnglishDateTime(usage.periodEnd) as string)}
+            </span>
+          )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: "50%",
-            background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)",
-            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-          }}>
-            <Zap size={16} style={{ color: "#60A5FA" }} />
+        {usageSyncError ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+            <p data-testid="billing-usage-sync-error" style={{ margin: 0, fontSize: 12, color: UI.textSec }}>
+              {t("billing.usageSyncError")}
+            </p>
+            <button
+              type="button"
+              data-testid="billing-usage-retry"
+              onClick={handleRetrySync}
+              style={{ padding: "7px 13px", borderRadius: 9, border: `1px solid ${UI.border}`, background: UI.surface2, color: UI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+            >
+              {t("billing.usageRetry")}
+            </button>
           </div>
-          <span style={{ fontSize: 28, fontWeight: 800, color: UI.text }}>{loaded ? summary.tokenBalance : "…"}</span>
-          <span style={{ fontSize: 13, color: UI.textSec }}>{t("billing.tokensAvailable")}</span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          {[
-            { label: t("billing.usedThisMonth"), value: loaded ? String(summary.usedThisMonth ?? "—") : "—" },
-            { label: t("billing.remaining"),     value: loaded ? String(summary.tokenBalance) : "—" },
-            { label: t("billing.lastActivity"),  value: lastActivity ?? "—" },
-          ].map(({ label, value }) => (
-            <div key={label} style={{ padding: "10px 12px", borderRadius: 10, background: UI.surface2, border: `1px solid ${UI.border}` }}>
-              <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 700, color: UI.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</p>
-              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: UI.textSec }}>{value}</p>
-            </div>
-          ))}
-        </div>
+        ) : !usageLoaded ? (
+          <p style={{ margin: 0, fontSize: 12, color: UI.textSec, display: "flex", alignItems: "center", gap: 7 }}>
+            <Loader2 size={13} className="animate-spin" /> {t("billing.usageLoading")}
+          </p>
+        ) : usage ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <UsageRow icon={Zap} label={t("billing.usageAiImages")} bucket={usage.aiImages} plan={usage.plan} t={t} />
+            <UsageRow icon={Zap} label={t("billing.usageAiText")} bucket={usage.aiTextGenerations} plan={usage.plan} t={t} />
+            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} bucket={usage.scheduledPosts} plan={usage.plan} t={t} isScheduledPosts />
+          </div>
+        ) : null}
       </SectionCard>
 
       <SectionCard testId="billing-usage-history">

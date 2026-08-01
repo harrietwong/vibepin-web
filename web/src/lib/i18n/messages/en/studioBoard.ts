@@ -92,6 +92,15 @@ export const studioBoardMessages = {
   // parent) instead of a generated result — it must not read as a success.
   "studioBoard.card.originalImageFallback": "Original image",
 
+  // ── PinBoardCard: user-facing publish-failure reason (NEVER the raw API error) ──
+  "studioBoard.card.publishError.auth": "Pinterest connection expired. Reconnect and retry.",
+  "studioBoard.card.publishError.content": "This Pin's board, image, or link has a problem. Edit the Pin and retry.",
+  "studioBoard.card.publishError.transient": "Publishing failed due to a temporary error. You can retry.",
+  "studioBoard.card.publishError.unknown": "Publishing failed, but detailed error information was not recorded.",
+
+  // ── PinBoardCard: user-facing GENERATION-failure reason (image never finished) ──
+  "studioBoard.card.generationError.generic": "We couldn't generate this image. Review the source images and try again.",
+
   // ── PinBoardCard: recommended fix copy ──
   "studioBoard.card.fix.auth": "Your Pinterest connection needs to be reconnected before this Pin can publish.",
   "studioBoard.card.fix.transient": "Pinterest or the connection failed while publishing. Try again now, or move this Pin back to Unscheduled.",

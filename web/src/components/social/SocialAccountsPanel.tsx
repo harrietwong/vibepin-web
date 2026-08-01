@@ -60,9 +60,15 @@ const FACEBOOK_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: s
     type: "error",
     msg: "Facebook connected, but some required permissions were not granted. Please reconnect and allow all of them.",
   },
-  no_pages: {
+  // Authorization succeeded — Meta just didn't enumerate the Pages (it omits
+  // Pages reached through a Business portfolio). Informational, never an error.
+  page_discovery_empty: {
+    type: "info",
+    msg: "Facebook didn't list your Pages automatically. Enter your Page URL or Page ID to finish connecting.",
+  },
+  graph_api_error: {
     type: "error",
-    msg: "Your Facebook account has no Page to manage. Create a Facebook Page (or get admin access to one), then reconnect.",
+    msg: "Facebook returned an error while reading your Pages — please try connecting again.",
   },
   cancelled: { type: "info", msg: "Facebook connection was cancelled. You can try again when ready." },
   session_expired: { type: "error", msg: "Your session expired — please sign in and retry" },
@@ -421,6 +427,121 @@ function maskPageId(pageId: string): string {
  * metadata.facebook projection (page tokens are stripped server-side). Instagram
  * is fully decoupled and not rendered here.
  */
+/**
+ * Manual Page connect — shown when Meta authorized us but `/me/accounts` came
+ * back empty (`page_discovery_empty`). That happens when the Page is owned by a
+ * Business portfolio: it is unreachable via enumeration yet perfectly reachable
+ * by id, so we let the user name it instead of dead-ending them.
+ *
+ * The server holds the user token; this form only ever sends an id/URL and only
+ * ever receives display fields back. No token is read, rendered, or stored here.
+ */
+const CONNECT_PAGE_ERRORS: Record<string, string> = {
+  FACEBOOK_PAGE_ACCESS_DENIED:
+    "You don't have access to that Page with the permissions you granted. Make sure you're an admin of it, then try again.",
+  FACEBOOK_PAGE_NOT_FOUND: "No Facebook Page matches that ID. Double-check the number and try again.",
+  FACEBOOK_GRAPH_API_ERROR: "Facebook returned an error — please try again in a moment.",
+  no_facebook_connection: "Connect Facebook first, then add your Page.",
+};
+
+function FacebookManualPageForm({ onConnected }: { onConnected: () => void }) {
+  const [pageId, setPageId] = useState("");
+  const [pageUrl, setPageUrl] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const canSubmit = (pageId.trim() !== "" || pageUrl.trim() !== "") && !submitting;
+
+  async function handleSubmit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/integrations/facebook/connect-page", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          pageId.trim() ? { pageId: pageId.trim() } : { pageUrl: pageUrl.trim() },
+        ),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        pageName?: string | null;
+        error?: string;
+        code?: string;
+      };
+      if (!res.ok || !body.ok) {
+        // Prefer our copy for known codes; fall back to the server's message,
+        // which is already stripped of anything token-shaped.
+        const known = body.code ? CONNECT_PAGE_ERRORS[body.code] : undefined;
+        toast.error(known ?? body.error ?? "Could not connect that Page — please try again");
+        return;
+      }
+      toast.success(body.pageName ? `Publishing to ${body.pageName}` : "Facebook Page connected");
+      setPageId("");
+      setPageUrl("");
+      onConnected();
+    } catch {
+      toast.error("Could not connect that Page — please try again");
+    } finally {
+      // Always restores, including on the throw path above.
+      setSubmitting(false);
+    }
+  }
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "7px 9px",
+    borderRadius: 7,
+    border: `1px solid ${UI.border}`,
+    background: UI.surface,
+    color: UI.text,
+    fontSize: 12,
+  };
+
+  return (
+    <div data-testid="facebook-manual-page-form" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <p style={{ margin: 0, fontSize: 11.5, color: UI.textSec, lineHeight: 1.5 }}>
+        Facebook didn&apos;t list your Pages automatically — this is common when the Page belongs to a
+        Business portfolio. Enter the Page ID (find it under your Page&apos;s <strong>About</strong> section)
+        or paste the Page URL.
+      </p>
+      <input
+        aria-label="Facebook Page ID"
+        placeholder="Page ID — e.g. 1234567890"
+        value={pageId}
+        onChange={e => setPageId(e.target.value)}
+        disabled={submitting}
+        style={inputStyle}
+      />
+      <input
+        aria-label="Facebook Page URL"
+        placeholder="or Page URL — https://www.facebook.com/…"
+        value={pageUrl}
+        onChange={e => setPageUrl(e.target.value)}
+        disabled={submitting}
+        style={inputStyle}
+      />
+      <button
+        type="button"
+        onClick={() => void handleSubmit()}
+        disabled={!canSubmit}
+        style={{
+          alignSelf: "flex-start",
+          padding: "7px 14px",
+          borderRadius: 7,
+          border: "none",
+          background: canSubmit ? UI.blue : UI.surface2,
+          color: canSubmit ? "#fff" : UI.textMuted,
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: canSubmit ? "pointer" : "not-allowed",
+        }}
+      >
+        {submitting ? "Connecting…" : "Connect this Page"}
+      </button>
+    </div>
+  );
+}
+
 function FacebookDetails({ summary, onRefresh }: { summary: PlatformConnectionSummary; onRefresh: () => void }) {
   const fb = readFacebookMeta(summary);
   const account = summary.accounts[0];
@@ -488,11 +609,8 @@ function FacebookDetails({ summary, onRefresh }: { summary: PlatformConnectionSu
         </div>
       ))}
 
-      {state === "no_pages" && (
-        <p style={{ margin: 0, fontSize: 11.5, color: UI.warning, lineHeight: 1.5 }}>
-          Your Facebook account has no Page to manage. Create a Facebook Page (or get admin access to one),
-          then reconnect.
-        </p>
+      {state === "page_discovery_empty" && (
+        <FacebookManualPageForm onConnected={onRefresh} />
       )}
 
       {(state === "reconnect_required" || missing.length > 0) && (

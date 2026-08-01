@@ -24,6 +24,7 @@ import {
   isDev,
 } from "@/lib/ai-copy/visionServer";
 import { retrievePinterestKeywords } from "@/lib/ai-copy/keywordContext";
+import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
 
 export const runtime = "nodejs";
 
@@ -45,13 +46,21 @@ export async function POST(req: Request) {
   const started = performance.now();
   const body = await req.json() as Body;
   const cfg = providerConfig();
+  // Best-effort — cost logging only; this route's auth posture is unchanged (no
+  // auth gate added/removed here). A missing/failed session resolves to null and
+  // the cost row is simply recorded without a user_id.
+  const costUserId = await getUserIdFromSameOriginSession(req).catch(() => null);
 
   try {
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);
 
     // 1) Fetch + analyze the image (structured JSON, no copy).
     const img = await fetchImageAsDataUrl(body.imageUrl);
-    const analysis = await analyzeImageStructured({ cfg, dataUrl: img.dataUrl });
+    const analysis = await analyzeImageStructured({
+      cfg,
+      dataUrl: img.dataUrl,
+      costContext: { userId: costUserId, operationType: "vision_analysis", referenceId: body.draftId ?? null },
+    });
     if (!analysis.imageSummary) {
       throw new CopyError("empty_image_summary", 502, PROVIDER_MESSAGE);
     }

@@ -24,7 +24,66 @@
  * NEVER echoes the request URL — only the HTTP status / Meta message.
  */
 
+import { createHash } from "node:crypto";
 import { FACEBOOK_TOKEN_URL, FACEBOOK_GRAPH_URL, getFacebookEnv } from "./config";
+
+/**
+ * ── Diagnostics (development only) ──────────────────────────────────────────
+ *
+ * Meta's Graph API can return an EMPTY /me/accounts with NO error even when the
+ * user demonstrably administers a Page (Business-Portfolio-owned Pages that were
+ * not selected in the Login-for-Business asset picker behave this way). Without
+ * per-request visibility that failure is indistinguishable from "user has no
+ * Page", so these logs exist purely to tell those two apart during development.
+ *
+ * HARD RULES (never relax):
+ *   - NEVER log an access token — not the user token, not a Page token. Tokens
+ *     are only ever summarized through tokenFingerprint() (length + sha256 head),
+ *     which is one-way and useless to an attacker but still lets us confirm that
+ *     three consecutive Graph calls used the SAME token.
+ *   - NEVER log a request URL. Every Graph call in this module carries the token
+ *     in the query string, so a URL is a credential.
+ *   - NEVER JSON.stringify a raw Graph object (a Page row contains access_token).
+ *     Always hand-pick the fields to print.
+ *   - Silent in production (NODE_ENV === "production") — zero output on Vercel.
+ */
+const FB_DEBUG_ENABLED = process.env.NODE_ENV !== "production";
+
+function fbDebug(...parts: unknown[]): void {
+  if (!FB_DEBUG_ENABLED) return;
+  console.log("[facebook-oauth-debug]", ...parts);
+}
+
+/**
+ * One-way summary of a token: its length plus the first 8 hex chars of its
+ * SHA-256. Enough to prove two calls used the same token; not enough to
+ * reconstruct any part of it. NEVER print the token itself.
+ */
+export function tokenFingerprint(token: string | null | undefined): string {
+  if (!token) return "len=0 sha8=none";
+  const sha8 = createHash("sha256").update(token).digest("hex").slice(0, 8);
+  return `len=${token.length} sha8=${sha8}`;
+}
+
+/** Safe (token-free) description of a Graph error body, for logs only. */
+function describeGraphError(json: unknown): string {
+  const err = (json as { error?: unknown } | null | undefined)?.error;
+  if (!err) return "ok";
+  if (typeof err === "string") return `error=${err}`;
+  const e = err as { code?: unknown; error_subcode?: unknown; type?: unknown; message?: unknown };
+  return [
+    `code=${e.code ?? "-"}`,
+    `subcode=${e.error_subcode ?? "-"}`,
+    `type=${e.type ?? "-"}`,
+    `message=${typeof e.message === "string" ? e.message : "-"}`,
+  ].join(" ");
+}
+
+/** True when a 2xx Graph body still carries an `error` object (Graph does this). */
+function hasGraphError(json: unknown): boolean {
+  const err = (json as { error?: unknown } | null | undefined)?.error;
+  return Boolean(err);
+}
 
 export class FacebookApiError extends Error {
   status: number;
@@ -138,6 +197,18 @@ export async function fetchFacebookProfile(accessToken: string): Promise<Faceboo
   const params = new URLSearchParams({ fields: "id,name", access_token: accessToken });
   const res = await fetch(`${FACEBOOK_GRAPH_URL}/me?${params.toString()}`, { method: "GET" });
   const json = (await res.json().catch(() => ({}))) as { id?: string; name?: string } & Record<string, unknown>;
+
+  // Diagnostics: status + token fingerprint + the id/name Graph resolved. No URL,
+  // no token — the fingerprint lets us confirm this is the same token /me/accounts
+  // will use a moment later.
+  fbDebug(
+    `GET /me status=${res.status}`,
+    `token[${tokenFingerprint(accessToken)}]`,
+    describeGraphError(json),
+    `id=${typeof json.id === "string" ? json.id : "-"}`,
+    `name=${typeof json.name === "string" ? json.name : "-"}`,
+  );
+
   if (!res.ok || typeof json.id !== "string" || !json.id) {
     throw new FacebookApiError(
       extractError(json) || `Facebook profile request failed (${res.status})`,
@@ -175,6 +246,20 @@ export async function fetchGrantedPermissions(userToken: string): Promise<string
     data?: Array<{ permission?: string; status?: string }>;
   } & Record<string, unknown>;
 
+  const rows = Array.isArray(json.data) ? json.data : [];
+
+  // Diagnostics: status + every permission with its granted/declined status. A
+  // required scope silently declined on the consent screen is the #1 cause of an
+  // empty /me/accounts, so we log the full grant map (no token, no URL).
+  fbDebug(
+    `GET /me/permissions status=${res.status}`,
+    `token[${tokenFingerprint(userToken)}]`,
+    describeGraphError(json),
+    `permissions=[${rows
+      .map(r => `${r?.permission ?? "?"}=${r?.status ?? "?"}`)
+      .join(", ")}]`,
+  );
+
   if (!res.ok) {
     throw new FacebookApiError(
       extractError(json) || `Facebook permissions request failed (${res.status})`,
@@ -183,7 +268,6 @@ export async function fetchGrantedPermissions(userToken: string): Promise<string
     );
   }
 
-  const rows = Array.isArray(json.data) ? json.data : [];
   return rows
     .filter(r => r && typeof r.permission === "string" && r.status === "granted")
     .map(r => r.permission as string);
@@ -204,12 +288,49 @@ export type ManagedPage = {
 };
 
 /**
- * True when the user's Page tasks include a role that permits publishing content.
- * "CREATE_CONTENT" is the direct content-publishing task; "MANAGE" (full admin)
- * implies it. Any other combination is treated as read-only for our purposes.
+ * Task names that permit publishing content to a Page.
+ *
+ * META USES TWO PARALLEL NAMINGS and /me/accounts can return either, depending on
+ * whether the Page is on the classic Page roles model or the New Pages Experience
+ * ("Profile Plus"):
+ *
+ *   classic       CREATE_CONTENT · MANAGE · MODERATE
+ *   Profile Plus  PROFILE_PLUS_CREATE_CONTENT · PROFILE_PLUS_MANAGE ·
+ *                 PROFILE_PLUS_MODERATE · PROFILE_PLUS_FULL_CONTROL ·
+ *                 PROFILE_PLUS_FACEBOOK_ACCESS
+ *
+ * We normalize by stripping the `PROFILE_PLUS_` prefix and matching the remainder
+ * against this whitelist, so both namings resolve to the same verdict. Matching
+ * only the classic names (the previous behaviour) silently marked every New Pages
+ * Experience Page as read-only.
+ */
+const PUBLISHABLE_PAGE_TASKS = new Set([
+  "CREATE_CONTENT",
+  "MANAGE",
+  "MODERATE",
+  // Profile Plus only — no classic equivalent. FULL_CONTROL is the strongest
+  // role; FACEBOOK_ACCESS grants acting as the Page on Facebook (incl. posting).
+  "FULL_CONTROL",
+  "FACEBOOK_ACCESS",
+]);
+
+/** Strip Meta's `PROFILE_PLUS_` prefix and normalize case/whitespace. */
+function normalizePageTask(task: string): string {
+  const upper = task.trim().toUpperCase();
+  return upper.startsWith("PROFILE_PLUS_") ? upper.slice("PROFILE_PLUS_".length) : upper;
+}
+
+/**
+ * True when the user's Page tasks include a role that permits publishing content,
+ * under EITHER of Meta's two task namings (see PUBLISHABLE_PAGE_TASKS).
+ *
+ * Note: this is a display/capability HINT only. An empty or unrecognized task list
+ * never removes a Page from the candidate list — Graph sometimes omits `tasks`
+ * entirely, and dropping the Page would leave the user with no publish target at
+ * all. See fetchManagedPages.
  */
 export function canPublishToPage(tasks: readonly string[]): boolean {
-  return tasks.includes("CREATE_CONTENT") || tasks.includes("MANAGE");
+  return tasks.some(t => typeof t === "string" && PUBLISHABLE_PAGE_TASKS.has(normalizePageTask(t)));
 }
 
 type RawPageRow = {
@@ -235,15 +356,18 @@ type RawAccountsPage = {
  * diagnostic instead of a hard error.
  *
  * Pagination: Graph returns Pages in batches with a `paging.next` cursor. We
- * follow it up to a small defensive cap (3 pages of results) so an account with
- * many Pages is enumerated without an unbounded fetch loop. The user token is in
- * the query string; errors never echo the URL.
+ * follow it up to a small defensive cap (5 pages of results) so an account with
+ * many Pages is enumerated without an unbounded fetch loop; results are de-duped
+ * by pageId (a cursor replay can repeat a row). The user token is in the query
+ * string; errors never echo the URL.
  *
  * Every returned id/name comes from Graph — never from the client.
  */
 export async function fetchManagedPages(userToken: string): Promise<ManagedPage[]> {
-  const MAX_PAGES_OF_RESULTS = 3;
-  const discovered: ManagedPage[] = [];
+  const MAX_PAGES_OF_RESULTS = 5;
+  // Keyed by pageId so a repeated cursor row cannot produce a duplicate Page.
+  const discovered = new Map<string, ManagedPage>();
+  let requests = 0;
 
   // First request is built server-side; subsequent requests follow paging.next
   // (a full Graph URL that already carries the token + cursor).
@@ -256,6 +380,22 @@ export async function fetchManagedPages(userToken: string): Promise<ManagedPage[
   for (let fetched = 0; nextUrl && fetched < MAX_PAGES_OF_RESULTS; fetched += 1) {
     const res = await fetch(nextUrl, { method: "GET" });
     const json = (await res.json().catch(() => ({}))) as RawAccountsPage;
+    requests += 1;
+
+    const rows = Array.isArray(json.data) ? json.data : [];
+
+    // Diagnostics: status, row count, and each Page's id/name/tasks. Fields are
+    // hand-picked ON PURPOSE — a raw Page row carries `access_token`, so it must
+    // never be stringified wholesale. No URL is logged (the cursor carries the token).
+    fbDebug(
+      `GET /me/accounts[req#${requests}] status=${res.status}`,
+      `token[${tokenFingerprint(userToken)}]`,
+      describeGraphError(json),
+      `rows=${rows.length}`,
+      `pages=[${rows
+        .map(p => `{id=${p?.id ?? "-"} name=${p?.name ?? "-"} tasks=${Array.isArray(p?.tasks) ? p!.tasks!.join("|") : "-"}}`)
+        .join(", ")}]`,
+    );
 
     if (!res.ok) {
       throw new FacebookApiError(
@@ -265,7 +405,17 @@ export async function fetchManagedPages(userToken: string): Promise<ManagedPage[
       );
     }
 
-    const rows = Array.isArray(json.data) ? json.data : [];
+    // Graph occasionally returns HTTP 200 with an `error` object and no data.
+    // Treating that as "no Pages" would show the user a false "you have no Page"
+    // diagnostic, so surface it as a genuine API failure.
+    if (hasGraphError(json)) {
+      throw new FacebookApiError(
+        extractError(json) || "Facebook accounts request returned an error",
+        502,
+        "accounts_fetch_failed",
+      );
+    }
+
     for (const page of rows) {
       // Require a real Page id and a page-scoped token (needed to publish). Skip
       // anything missing rather than surfacing a dead option.
@@ -276,7 +426,9 @@ export async function fetchManagedPages(userToken: string): Promise<ManagedPage[
       ) {
         continue;
       }
-      discovered.push({
+      // NOTE: an empty/unknown `tasks` array is deliberately NOT a reason to drop
+      // the Page — tasks only decide the canPublish HINT (see canPublishToPage).
+      discovered.set(page.id, {
         pageId: page.id,
         pageName: typeof page.name === "string" ? page.name : null,
         pageAccessToken: page.access_token,
@@ -286,7 +438,208 @@ export async function fetchManagedPages(userToken: string): Promise<ManagedPage[
 
     const next = json.paging?.next;
     nextUrl = typeof next === "string" && next ? next : null;
+
+    if (nextUrl && fetched + 1 >= MAX_PAGES_OF_RESULTS) {
+      // Hit the defensive cap with a cursor still pending — the enumeration is
+      // truncated. Worth knowing: it would look like "some Pages are missing".
+      fbDebug(
+        `GET /me/accounts pagination cap reached (max=${MAX_PAGES_OF_RESULTS} requests) —`,
+        `more results remain unfetched; discovered=${discovered.size}`,
+      );
+    }
   }
 
-  return discovered;
+  fbDebug(`fetchManagedPages done requests=${requests} unique_pages=${discovered.size}`);
+  return [...discovered.values()];
+}
+
+/**
+ * Fetch ONE specific Facebook Page by id with the user token:
+ *   GET /{page-id}?fields=id,name,access_token
+ *
+ * WHY THIS EXISTS (the manual-Page fallback):
+ * Meta's /me/accounts edge can return HTTP 200 with `{"data":[]}` and NO error even
+ * when the user demonstrably administers a Page — Business-Portfolio-owned Pages
+ * that were not selected in the Login-for-Business asset picker behave exactly this
+ * way. The same user token nevertheless resolves the Page node directly AND yields
+ * its page-scoped access token. So "enumeration empty" is NOT "user has no Page",
+ * and this call is the escape hatch: the user supplies the numeric Page id and we
+ * verify + resolve it against Graph.
+ *
+ * (/me/businesses would enumerate those Pages, but it requires business_management,
+ * a scope this project deliberately does not request.)
+ *
+ * FIELD NOTE — `tasks` MUST NOT be requested here. `tasks` is a field of the
+ * /me/accounts EDGE (the user's role on each Page), not of the Page NODE. Asking
+ * for it on a direct Page read fails the whole request with
+ * `(#100) Tried accessing nonexisting field (tasks) on node type (Page)`. We
+ * therefore return `tasks: []`; the caller treats an empty task list as "unknown
+ * role", which only downgrades the canPublish display hint (see canPublishToPage)
+ * and never drops the Page.
+ *
+ * VALIDATION (all mandatory — a soft pass here would persist a dead Page):
+ *   - the returned `id` must EXACTLY equal the requested pageId (no aliasing);
+ *   - `name` must be present;
+ *   - `access_token` (the page-scoped token) must be present — without it we cannot
+ *     publish, so a Page without one is rejected rather than stored.
+ *
+ * ERROR CODES (the route maps these to HTTP):
+ *   page_not_found      — Graph code 100 / 803, or HTTP 404 (bad or invisible id)
+ *   page_access_denied  — OAuthException permission failure (code 10 / 200 / 190)
+ *   page_no_access_token— Page resolved but Graph returned no page-scoped token
+ *   page_id_mismatch    — Graph answered with a different node id
+ *   page_name_missing   — Graph answered without a name
+ *   graph_api_error     — anything else
+ *
+ * The token is in the query string, so (as everywhere in this module) errors and
+ * logs NEVER echo the URL, and the page token is only ever logged as a boolean.
+ */
+export async function fetchPageById(userToken: string, pageId: string): Promise<ManagedPage> {
+  // `tasks` intentionally omitted — see FIELD NOTE above.
+  const params = new URLSearchParams({ fields: "id,name,access_token", access_token: userToken });
+  const res = await fetch(`${FACEBOOK_GRAPH_URL}/${encodeURIComponent(pageId)}?${params.toString()}`, {
+    method: "GET",
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    id?: unknown;
+    name?: unknown;
+    access_token?: unknown;
+  } & Record<string, unknown>;
+
+  const returnedId = typeof json.id === "string" ? json.id : null;
+  const returnedName = typeof json.name === "string" ? json.name : null;
+  const pageToken = typeof json.access_token === "string" && json.access_token ? json.access_token : null;
+
+  // Diagnostics: hand-picked fields ONLY. The page-scoped token is reduced to a
+  // boolean — never printed, never fingerprinted into the same line as the id.
+  fbDebug(
+    `GET /{pageId} requested_page_id=${pageId} status=${res.status}`,
+    `token[${tokenFingerprint(userToken)}]`,
+    describeGraphError(json),
+    `id=${returnedId ?? "-"}`,
+    `name=${returnedName ?? "-"}`,
+    `hasPageToken=${Boolean(pageToken)}`,
+  );
+
+  // Graph errors first: a 2xx body can still carry `error`, so check both.
+  if (!res.ok || hasGraphError(json)) {
+    const err = (json as { error?: { code?: unknown; type?: unknown; message?: unknown } }).error;
+    const graphCode = typeof err?.code === "number" ? err.code : null;
+    const graphType = typeof err?.type === "string" ? err.type : "";
+    const graphMessage = typeof err?.message === "string" ? err.message : "";
+
+    // 100 = nonexistent field/node, 803 = "Some of the aliases you requested do not
+    // exist" — both mean "this id is not a Page we can see".
+    if (graphCode === 100 || graphCode === 803 || res.status === 404) {
+      throw new FacebookApiError(
+        graphMessage || `Facebook could not find that Page (${res.status})`,
+        404,
+        "page_not_found",
+      );
+    }
+    // Permission-class OAuthException: 10 = permission denied, 200 = insufficient
+    // permission, 190 = invalid/expired token.
+    if (
+      graphCode === 10 ||
+      graphCode === 200 ||
+      graphCode === 190 ||
+      (graphType === "OAuthException" && /permission/i.test(graphMessage))
+    ) {
+      throw new FacebookApiError(
+        graphMessage || "Facebook denied access to that Page",
+        403,
+        "page_access_denied",
+      );
+    }
+    throw new FacebookApiError(
+      graphMessage || `Facebook Page request failed (${res.status})`,
+      res.ok ? 502 : res.status,
+      "graph_api_error",
+    );
+  }
+
+  // ── Strict shape validation ────────────────────────────────────────────────
+  if (!returnedId) {
+    throw new FacebookApiError("Facebook returned no Page id", 502, "graph_api_error");
+  }
+  if (returnedId !== pageId) {
+    // Graph resolved a DIFFERENT node than the one asked for — never persist that.
+    throw new FacebookApiError(
+      "Facebook returned a different Page than requested",
+      502,
+      "page_id_mismatch",
+    );
+  }
+  if (!returnedName) {
+    throw new FacebookApiError("Facebook returned no Page name", 502, "page_name_missing");
+  }
+  if (!pageToken) {
+    // The node exists but yields no page-scoped token — usually the user is not an
+    // admin of it, or the Page scopes were not granted. Publishing would be
+    // impossible, so this is a hard failure rather than a partial success.
+    throw new FacebookApiError(
+      "Facebook did not return a Page access token for that Page",
+      422,
+      "page_no_access_token",
+    );
+  }
+
+  return {
+    pageId: returnedId,
+    pageName: returnedName,
+    pageAccessToken: pageToken,
+    // Empty ON PURPOSE: `tasks` cannot be read from a Page node (see FIELD NOTE).
+    tasks: [],
+  };
+}
+
+/**
+ * DEVELOPMENT-ONLY diagnostic probe: read ONE specific Page by id with the user
+ * token (GET /{page-id}?fields=id,name,tasks).
+ *
+ * Purpose: when /me/accounts comes back empty with no error, this distinguishes
+ * "the user really administers nothing" from "the Page exists and is reachable
+ * with this very token, but Meta excluded it from the accounts edge" (typically a
+ * Business-Portfolio-owned Page that was not selected in the Login-for-Business
+ * asset picker). That distinction is invisible from /me/accounts alone.
+ *
+ * The Page id comes ONLY from the FACEBOOK_DEBUG_PAGE_ID env var — never
+ * hard-coded, never from a request, never from a user record. It has NO effect on
+ * the connection outcome: nothing here is persisted, returned to the browser, or
+ * used to select a Page. It writes fbDebug lines and nothing else, and it is a
+ * no-op in production (fbDebug is silent) — but we also skip the network call
+ * entirely so production never issues an extra Graph request.
+ */
+export async function debugProbePageById(userToken: string): Promise<void> {
+  if (!FB_DEBUG_ENABLED) return;
+  const pageId = process.env.FACEBOOK_DEBUG_PAGE_ID?.trim();
+  if (!pageId) {
+    fbDebug("debugProbePageById skipped — FACEBOOK_DEBUG_PAGE_ID is not set");
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams({ fields: "id,name,tasks", access_token: userToken });
+    const res = await fetch(`${FACEBOOK_GRAPH_URL}/${encodeURIComponent(pageId)}?${params.toString()}`, {
+      method: "GET",
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      id?: string;
+      name?: string;
+      tasks?: unknown;
+    } & Record<string, unknown>;
+
+    // Hand-picked fields only (a Page node can echo tokens on other edges).
+    fbDebug(
+      `GET /{FACEBOOK_DEBUG_PAGE_ID} status=${res.status}`,
+      `token[${tokenFingerprint(userToken)}]`,
+      describeGraphError(json),
+      `id=${typeof json.id === "string" ? json.id : "-"}`,
+      `name=${typeof json.name === "string" ? json.name : "-"}`,
+      `tasks=${Array.isArray(json.tasks) ? json.tasks.join("|") : "-"}`,
+    );
+  } catch (err) {
+    // A diagnostic must never break the connect flow.
+    fbDebug("debugProbePageById threw:", (err as Error).message);
+  }
 }
