@@ -826,6 +826,88 @@ export function PinDetailsModal({
     setTrialAccess(false);
     setPublishAttempts((n) => n + 1);
 
+    // ── Social-only publish: Pinterest deliberately unchecked ────────────────
+    // The merchant may repurpose to connected channels (e.g. a Facebook Page)
+    // without creating a Pin at all. Every guard below this block is a Pinterest
+    // concern (board choice, connection, board status), so a social-only publish
+    // skips them and drives the fan-out as the PRIMARY action with real
+    // success/failure feedback instead of the fire-and-forget "also published".
+    if (!socialDestinations.includes("pinterest")) {
+      const extras = socialDestinations.filter(p => p !== "pinterest");
+      if (!extras.length) {
+        setPublishError(t("pinDetails.toast.completeRequired"));
+        toast.error(t("pinDetails.toast.completeRequired"));
+        return;
+      }
+      if (!isPublishableImage(publicImage)) {
+        const msg = "This Pin needs an image before it can be published.";
+        setPublishError(msg);
+        toast.error(msg);
+        return;
+      }
+      if (!beginPublish(activeDraft.id)) return;
+      setPublishing(true);
+      try {
+        const r = await publishToSocial({
+          postId: activeDraft.id,
+          post: {
+            imageUrls: publicImage ? [publicImage] : [],
+            title: title.trim() || undefined,
+            caption: description.trim() || undefined,
+            destinationUrl: destinationUrl.trim() || undefined,
+            altText: altText.trim() || undefined,
+          },
+          destinations: extras.map(provider => ({ provider })),
+        });
+        const published = r.destinations.filter(d => d.status === "published");
+        const failed = r.destinations.filter(d => d.status === "failed");
+        const refs = published
+          .filter(d => d.externalPostId)
+          .map(d => ({
+            provider: d.provider,
+            postId: d.externalPostId as string,
+            postUrl: d.externalPostUrl ?? "",
+            publishedAt: new Date().toISOString(),
+          }));
+        if (refs.length) {
+          // Same merge-by-provider persistence as the post-Pinterest fan-out, so
+          // the published view (View on Facebook) survives a reload.
+          const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
+            .filter(p => !refs.some(r2 => r2.provider === p.provider));
+          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: [...existing, ...refs] });
+        }
+        if (published.length) {
+          const withLink = published.find(d => d.externalPostUrl);
+          toast.success(
+            t("pinDetails.publishedSuccess"),
+            withLink?.externalPostUrl
+              ? {
+                  action: {
+                    label: viewOnLabel(withLink.provider),
+                    onClick: () => window.open(withLink.externalPostUrl as string, "_blank", "noopener,noreferrer"),
+                  },
+                }
+              : undefined,
+          );
+          setPublishError(null);
+        }
+        if (failed.length) {
+          const msg =
+            failed[0].error ||
+            `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`;
+          setPublishError(msg);
+          toast.error(msg);
+        }
+      } catch {
+        setPublishError(t("pinDetails.error.publishFailed"));
+        toast.error(t("pinDetails.error.publishFailed"));
+      } finally {
+        setPublishing(false);
+        endPublish(activeDraft.id);
+      }
+      return;
+    }
+
     // "Publish now" publishes immediately — branching happens here.
     // Every branch below produces visible feedback (footer message / redirect / loading).
 

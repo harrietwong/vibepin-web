@@ -304,9 +304,17 @@ export function PublishDestinations({
     return () => window.removeEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
   }, [load, selected, onSelectedChange]);
 
+  // Default Pinterest ON once when it resolves as connected — but never fight the
+  // merchant. The previous version re-added Pinterest on EVERY render where it was
+  // connected-but-unselected, which made the checkbox impossible to uncheck (it
+  // sprang back instantly) and forced every publish through the Pinterest leg.
+  // Social-only publishes (e.g. Facebook Page only) are legitimate.
+  const didDefaultPinterest = useRef(false);
   useEffect(() => {
+    if (didDefaultPinterest.current) return;
     const connected = pinterestOverride.loaded ? pinterestOverride.connected : !!pinterestConnected;
     if (!connected || selected.includes("pinterest")) return;
+    didDefaultPinterest.current = true;
     onSelectedChange(["pinterest", ...selected.filter(p => p !== "pinterest")]);
   }, [onSelectedChange, pinterestConnected, pinterestOverride.connected, selected]);
 
