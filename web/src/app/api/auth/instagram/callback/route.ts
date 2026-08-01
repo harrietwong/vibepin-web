@@ -38,6 +38,7 @@ import {
 } from "@/lib/server/instagram/service";
 import { upsertInstagramConnection } from "@/lib/server/instagram/connectionStore";
 import { INSTAGRAM_SCOPES } from "@/lib/server/instagram/config";
+import { ConnectionLimitError } from "@/lib/server/social/connectionLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -139,6 +140,10 @@ export async function GET(req: NextRequest) {
       state: "connected",
     });
   } catch (persistErr) {
+    // A plan ceiling is user-actionable, not broken storage — surface it distinctly.
+    if (persistErr instanceof ConnectionLimitError) {
+      return redirectAfterOAuth(req, "account_limit", verdict.returnTo);
+    }
     console.error("[Instagram OAuth Callback] persist failed:", (persistErr as Error).message);
     return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
   }

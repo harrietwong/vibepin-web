@@ -26,6 +26,7 @@
 import { createServerClient } from "@/lib/supabase";
 import { createTokenCipher } from "@/lib/server/crypto";
 import type { InstagramAccountType } from "./service";
+import { canConnectAnotherAccount, ConnectionLimitError } from "@/lib/server/social/connectionLimit";
 
 const TABLE = "social_connections";
 const PROVIDER = "instagram";
@@ -158,6 +159,13 @@ export async function upsertInstagramConnection(
       throw new Error("Instagram connection could not be saved");
     }
     return;
+  }
+
+  // Only a NEW connection consumes a per-platform slot — the update branch above
+  // already returned, so re-authing an existing account is never blocked.
+  const verdict = await canConnectAnotherAccount(uid, PROVIDER);
+  if (!verdict.allowed) {
+    throw new ConnectionLimitError(verdict);
   }
 
   const { error } = await db()

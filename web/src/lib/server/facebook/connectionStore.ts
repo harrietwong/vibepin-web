@@ -35,6 +35,7 @@ import { createServerClient } from "@/lib/supabase";
 import { createTokenCipher } from "@/lib/server/crypto";
 import type { ManagedPage } from "./service";
 import { canPublishToPage } from "./service";
+import { canConnectAnotherAccount, ConnectionLimitError } from "@/lib/server/social/connectionLimit";
 
 const TABLE = "social_connections";
 const PROVIDER = "facebook";
@@ -232,6 +233,14 @@ export async function upsertFacebookConnection(
       throw new Error("Facebook connection could not be saved");
     }
     return;
+  }
+
+  // Only a NEW connection consumes a per-platform slot. The update branch above
+  // returned already, so re-authing an account you already have is never blocked
+  // — an at-limit user can still repair an existing connection.
+  const verdict = await canConnectAnotherAccount(uid, "facebook");
+  if (!verdict.allowed) {
+    throw new ConnectionLimitError(verdict);
   }
 
   const { error } = await db()
