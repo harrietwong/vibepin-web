@@ -16,7 +16,6 @@ const tr: Partial<Record<MessageKey, string>> = {
   // ── Account dropdown ──
   "account.myAccount": "Hesabım",
   "account.profile": "Profil",
-  "account.credits": "Krediler",
   "account.language": "Dil",
   "account.help": "Yardım",
   "account.logout": "Çıkış yap",
@@ -28,7 +27,6 @@ const tr: Partial<Record<MessageKey, string>> = {
   "account.signOut": "Çıkış yap",
 
   // ── Common ──
-  "common.token": "Token",
   "common.save": "Kaydet",
   "common.cancel": "İptal",
   "common.saving": "Kaydediliyor…",
@@ -108,9 +106,6 @@ const tr: Partial<Record<MessageKey, string>> = {
   "billing.scheduledCancelNotice": "Planınız mevcut fatura döneminin sonunda iptal edilecek şekilde ayarlandı. O zamana kadar erişiminiz devam eder.",
   "billing.noBillingAccount": "Henüz bir fatura hesabınız yok — başlamak için Fiyatlandırma sayfasından abone olun.",
   "billing.upgradePlan": "Planı yükselt",
-  "billing.tokenBalance": "Token bakiyesi",
-  "billing.aboutTokens": "Token'lar hakkında",
-  "billing.tokensAvailable": "token kullanılabilir",
   "billing.usedThisMonth": "Bu ay kullanılan",
   "billing.remaining": "Kalan",
   "billing.lastActivity": "Son işlem",
@@ -376,7 +371,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "pinDetails.viewOnPinterest": "Pinterest'te görüntüle",
   "pinDetails.contactSupport": "Destek ile iletişime geç",
   "pinDetails.viewPin": "Pin'i görüntüle",
-  "pinDetails.reportCreditsIssue": "Kredi sorununu bildir",
+  "pinDetails.reportCreditsIssue": "Kullanım sorununu bildir",
   "pinDetails.tryAgain": "Yeniden dene",
   "pinDetails.publishNow": "Şimdi yayınla",
   "pinDetails.updateSchedule": "Zamanlamayı güncelle",
@@ -1109,6 +1104,8 @@ const tr: Partial<Record<MessageKey, string>> = {
   "pinDrawer.recommended.heading": "Bu ürün için önerilen",
   "pinDrawer.recommended.headingCategory": "Kategori ilhamı",
   "pinDrawer.recommended.refreshedForNewProduct": "Öneriler yeni ürün için yenilendi",
+  "pinDrawer.recommended.analyzing": "Ürününüz analiz ediliyor ve uygun ilham aranıyor…",
+  "pinDrawer.recommended.loadError": "Öneriler yüklenemedi.",
   "pinDrawer.recommended.inspirationDisclaimer": "Bunlar yalnızca stil ilhamıdır — oluşturma, kompozisyon ve ruh hali gibi görsel ipuçlarından yararlanır ve bu görselleri asla kopyalamaz.",
   "pinDrawer.recommended.styleCuesUsed": "Kullanılan stil ipuçları:",
   "pinDrawer.recommended.viewOnPinterest": "Pinterest'te görüntüle",

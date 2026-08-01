@@ -37,7 +37,6 @@ const en = {
   // ── Account dropdown ──
   "account.myAccount": "My Account",
   "account.profile": "Profile",
-  "account.credits": "Credits",
   "account.language": "Language",
   "account.help": "Help",
   "account.logout": "Log out",
@@ -49,7 +48,6 @@ const en = {
   "account.signOut": "Sign out",
 
   // ── Common ──
-  "common.token": "Token",
   "common.save": "Save",
   "common.cancel": "Cancel",
   "common.saving": "Saving…",
@@ -129,9 +127,6 @@ const en = {
   "billing.perYear": "Yearly",
   "billing.scheduledCancelNotice": "Your plan is set to cancel at the end of the current billing period. You keep access until then.",
   "billing.noBillingAccount": "No billing account yet — subscribe on the Pricing page to get started.",
-  "billing.tokenBalance": "Token balance",
-  "billing.aboutTokens": "About tokens",
-  "billing.tokensAvailable": "tokens available",
   "billing.usedThisMonth": "Used this month",
   "billing.remaining": "Remaining",
   "billing.lastActivity": "Last activity",
@@ -397,7 +392,7 @@ const en = {
   "pinDetails.viewOnPinterest": "View on Pinterest",
   "pinDetails.contactSupport": "Contact support",
   "pinDetails.viewPin": "View Pin",
-  "pinDetails.reportCreditsIssue": "Report credits issue",
+  "pinDetails.reportCreditsIssue": "Report usage issue",
   "pinDetails.tryAgain": "Try again",
   "pinDetails.publishNow": "Publish now",
   "pinDetails.updateSchedule": "Update schedule",

@@ -45,7 +45,7 @@ export const KNOWLEDGE_BASE: KnowledgeEntry[] = [
   {
     id: "pricing",
     highRisk: true,
-    keywords: ["pricing", "price of vibepin", "how much", "cost", "subscription", "plan", "plans", "tier", "upgrade", "downgrade", "credits", "tokens", "quota", "limit"],
+    keywords: ["pricing", "price of vibepin", "how much", "cost", "subscription", "plan", "plans", "tier", "upgrade", "downgrade", "credits", "tokens", "quota", "limit", "usage", "ai images", "scheduled posts", "allowance"],
     answer:
       "VibePin's current plans and limits live on the Pricing page, and your own plan is in Settings → Billing. I won't quote a figure that might be out of date — check there for exact numbers, or contact support if you need help choosing a plan.",
   },
