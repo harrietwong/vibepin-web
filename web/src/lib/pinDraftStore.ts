@@ -103,6 +103,11 @@ export interface PinDraft {
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published
    *  before this field existed) fall back to reconstructing the URL from remotePinId. */
   remotePinUrl?:       string;
+  /** Results of the non-Pinterest fan-out publish (/api/publish/social), captured
+   *  at publish time so the Posted view can link straight to each live post.
+   *  Only successful destinations are recorded. Rides the v38 payload sync
+   *  automatically (whole draft is serialized) — no migration. */
+  socialPosts?:        SocialPostRef[];
   /** Last publish error message. Present ⇒ lifecycle is "failed" until retried. */
   publishError?:       string;
   // ── Failure semantics (PRD WP-B §11.5) ──────────────────────────────────────
@@ -154,6 +159,22 @@ export interface PinDraft {
   // payload sync automatically — no migration. Scores/reasons are INTERNAL (never
   // shown to users); only an `invalid` verdict changes the card (collapsed/dimmed).
   qualityJudge?:           QualityJudge;
+}
+
+/**
+ * A successfully published post on a non-Pinterest platform, as returned by
+ * /api/publish/social. Display-safe only: a remote id, a public permalink, and a
+ * timestamp — never a token, connection id, or any credential-adjacent value.
+ */
+export interface SocialPostRef {
+  /** "facebook" | "instagram" | ... — the SocialProvider that published it. */
+  provider:   string;
+  /** Remote post id on that platform (Facebook: `{page-id}_{post-id}`). */
+  postId:     string;
+  /** Public permalink to the live post. May be empty if the platform gave none. */
+  postUrl:    string;
+  /** ISO timestamp of when we recorded the successful publish. */
+  publishedAt: string;
 }
 
 /**
@@ -756,6 +777,9 @@ export function duplicateDraft(id: string): PinDraft | null {
     postedAt:          undefined,
     remotePinId:       undefined,
     remotePinUrl:      undefined,
+    // A copy has published nothing — it must never inherit the original's live
+    // Facebook/Instagram posts (they belong to the source Pin, not the duplicate).
+    socialPosts:       undefined,
     publishError:      undefined,
     archivedAt:        undefined,
     scheduledDate:     "",
