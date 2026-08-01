@@ -454,6 +454,146 @@ export async function fetchManagedPages(userToken: string): Promise<ManagedPage[
 }
 
 /**
+ * Fetch ONE specific Facebook Page by id with the user token:
+ *   GET /{page-id}?fields=id,name,access_token
+ *
+ * WHY THIS EXISTS (the manual-Page fallback):
+ * Meta's /me/accounts edge can return HTTP 200 with `{"data":[]}` and NO error even
+ * when the user demonstrably administers a Page — Business-Portfolio-owned Pages
+ * that were not selected in the Login-for-Business asset picker behave exactly this
+ * way. The same user token nevertheless resolves the Page node directly AND yields
+ * its page-scoped access token. So "enumeration empty" is NOT "user has no Page",
+ * and this call is the escape hatch: the user supplies the numeric Page id and we
+ * verify + resolve it against Graph.
+ *
+ * (/me/businesses would enumerate those Pages, but it requires business_management,
+ * a scope this project deliberately does not request.)
+ *
+ * FIELD NOTE — `tasks` MUST NOT be requested here. `tasks` is a field of the
+ * /me/accounts EDGE (the user's role on each Page), not of the Page NODE. Asking
+ * for it on a direct Page read fails the whole request with
+ * `(#100) Tried accessing nonexisting field (tasks) on node type (Page)`. We
+ * therefore return `tasks: []`; the caller treats an empty task list as "unknown
+ * role", which only downgrades the canPublish display hint (see canPublishToPage)
+ * and never drops the Page.
+ *
+ * VALIDATION (all mandatory — a soft pass here would persist a dead Page):
+ *   - the returned `id` must EXACTLY equal the requested pageId (no aliasing);
+ *   - `name` must be present;
+ *   - `access_token` (the page-scoped token) must be present — without it we cannot
+ *     publish, so a Page without one is rejected rather than stored.
+ *
+ * ERROR CODES (the route maps these to HTTP):
+ *   page_not_found      — Graph code 100 / 803, or HTTP 404 (bad or invisible id)
+ *   page_access_denied  — OAuthException permission failure (code 10 / 200 / 190)
+ *   page_no_access_token— Page resolved but Graph returned no page-scoped token
+ *   page_id_mismatch    — Graph answered with a different node id
+ *   page_name_missing   — Graph answered without a name
+ *   graph_api_error     — anything else
+ *
+ * The token is in the query string, so (as everywhere in this module) errors and
+ * logs NEVER echo the URL, and the page token is only ever logged as a boolean.
+ */
+export async function fetchPageById(userToken: string, pageId: string): Promise<ManagedPage> {
+  // `tasks` intentionally omitted — see FIELD NOTE above.
+  const params = new URLSearchParams({ fields: "id,name,access_token", access_token: userToken });
+  const res = await fetch(`${FACEBOOK_GRAPH_URL}/${encodeURIComponent(pageId)}?${params.toString()}`, {
+    method: "GET",
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    id?: unknown;
+    name?: unknown;
+    access_token?: unknown;
+  } & Record<string, unknown>;
+
+  const returnedId = typeof json.id === "string" ? json.id : null;
+  const returnedName = typeof json.name === "string" ? json.name : null;
+  const pageToken = typeof json.access_token === "string" && json.access_token ? json.access_token : null;
+
+  // Diagnostics: hand-picked fields ONLY. The page-scoped token is reduced to a
+  // boolean — never printed, never fingerprinted into the same line as the id.
+  fbDebug(
+    `GET /{pageId} requested_page_id=${pageId} status=${res.status}`,
+    `token[${tokenFingerprint(userToken)}]`,
+    describeGraphError(json),
+    `id=${returnedId ?? "-"}`,
+    `name=${returnedName ?? "-"}`,
+    `hasPageToken=${Boolean(pageToken)}`,
+  );
+
+  // Graph errors first: a 2xx body can still carry `error`, so check both.
+  if (!res.ok || hasGraphError(json)) {
+    const err = (json as { error?: { code?: unknown; type?: unknown; message?: unknown } }).error;
+    const graphCode = typeof err?.code === "number" ? err.code : null;
+    const graphType = typeof err?.type === "string" ? err.type : "";
+    const graphMessage = typeof err?.message === "string" ? err.message : "";
+
+    // 100 = nonexistent field/node, 803 = "Some of the aliases you requested do not
+    // exist" — both mean "this id is not a Page we can see".
+    if (graphCode === 100 || graphCode === 803 || res.status === 404) {
+      throw new FacebookApiError(
+        graphMessage || `Facebook could not find that Page (${res.status})`,
+        404,
+        "page_not_found",
+      );
+    }
+    // Permission-class OAuthException: 10 = permission denied, 200 = insufficient
+    // permission, 190 = invalid/expired token.
+    if (
+      graphCode === 10 ||
+      graphCode === 200 ||
+      graphCode === 190 ||
+      (graphType === "OAuthException" && /permission/i.test(graphMessage))
+    ) {
+      throw new FacebookApiError(
+        graphMessage || "Facebook denied access to that Page",
+        403,
+        "page_access_denied",
+      );
+    }
+    throw new FacebookApiError(
+      graphMessage || `Facebook Page request failed (${res.status})`,
+      res.ok ? 502 : res.status,
+      "graph_api_error",
+    );
+  }
+
+  // ── Strict shape validation ────────────────────────────────────────────────
+  if (!returnedId) {
+    throw new FacebookApiError("Facebook returned no Page id", 502, "graph_api_error");
+  }
+  if (returnedId !== pageId) {
+    // Graph resolved a DIFFERENT node than the one asked for — never persist that.
+    throw new FacebookApiError(
+      "Facebook returned a different Page than requested",
+      502,
+      "page_id_mismatch",
+    );
+  }
+  if (!returnedName) {
+    throw new FacebookApiError("Facebook returned no Page name", 502, "page_name_missing");
+  }
+  if (!pageToken) {
+    // The node exists but yields no page-scoped token — usually the user is not an
+    // admin of it, or the Page scopes were not granted. Publishing would be
+    // impossible, so this is a hard failure rather than a partial success.
+    throw new FacebookApiError(
+      "Facebook did not return a Page access token for that Page",
+      422,
+      "page_no_access_token",
+    );
+  }
+
+  return {
+    pageId: returnedId,
+    pageName: returnedName,
+    pageAccessToken: pageToken,
+    // Empty ON PURPOSE: `tasks` cannot be read from a Page node (see FIELD NOTE).
+    tasks: [],
+  };
+}
+
+/**
  * DEVELOPMENT-ONLY diagnostic probe: read ONE specific Page by id with the user
  * token (GET /{page-id}?fields=id,name,tasks).
  *

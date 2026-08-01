@@ -11,7 +11,8 @@
  *      the required Page scopes → store 'reconnect_required' (never mark active)
  *      and redirect ?facebook=reconnect_required.
  *   6. Fetch the Facebook user (id + name) and discover the Pages the user manages
- *      (/me/accounts). Zero managed Pages → 'no_pages' (?facebook=no_pages). We
+ *      (/me/accounts). An EMPTY (but successful) enumeration →
+ *      'page_discovery_empty' (?facebook=page_discovery_empty) — see below. We
  *      NEVER bypass with a hard-coded id. Instagram is fully decoupled — this flow
  *      never reads instagram_business_account.
  *   7. Encrypt + persist into social_connections (provider='facebook') incl. each
@@ -22,9 +23,16 @@
  * auto-selected) or `?facebook=select_page` (several — user must choose a Page).
  *
  * FAILURE-STATUS TRIAGE: any Graph call that actually FAILS (FacebookApiError)
- * redirects `?facebook=graph_api_error` — never `no_pages` / `permissions_failed`
- * / `discovery_failed`. `no_pages` is reserved for the one honest case: Graph
- * returned 2xx, every required scope is granted, and `data` was empty.
+ * redirects `?facebook=graph_api_error` — never a Page-state status.
+ *
+ * EMPTY ENUMERATION IS NOT "NO PAGE": when Graph returns 2xx with every required
+ * scope granted but `data` is empty, that is `page_discovery_empty` — an
+ * AUTHORIZED connection awaiting a manually-specified Page id, NOT an error.
+ * Business-Portfolio-owned Pages routinely come back this way even though
+ * GET /{page-id} with the very same user token resolves them and returns a Page
+ * token. The user token is therefore preserved so the manual fallback
+ * (POST /api/integrations/facebook/connect-page) can use it. The old `no_pages`
+ * status — which asserted the user owns no Page — has been removed entirely.
  *
  * SELECTION POLICY: with exactly ONE managed Page we select it (there is nothing
  * to choose). With several we store them all as candidates and DO NOT auto-pick
@@ -135,7 +143,8 @@ export async function GET(req: NextRequest) {
   // problem from a Graph call that SUCCEEDED and told us something is missing.
   // Collapsing both into one status is what made "no Pages" the catch-all
   // explanation for every Facebook failure. Failures → `graph_api_error`;
-  // successful-but-incomplete → the specific status (reconnect_required/no_pages).
+  // successful-but-incomplete → the specific status (reconnect_required /
+  // page_discovery_empty).
   let grantedScopes: string[];
   try {
     grantedScopes = await fetchGrantedPermissions(tokens.accessToken);
@@ -219,8 +228,11 @@ export async function GET(req: NextRequest) {
     // probe only writes debug logs — it never influences the outcome below.
     await debugProbePageById(tokens.accessToken);
 
-    // We NEVER bypass this with a known id — the user must create or gain admin of
-    // a Page first.
+    // An empty enumeration is NOT "you administer no Pages". Meta omits Pages the
+    // user reaches through a Business portfolio rather than a direct personal
+    // role, so the Page can be perfectly reachable by id. Keep the authorization
+    // (user token + granted scopes) and let the user name the Page manually via
+    // POST /api/integrations/facebook/connect-page. We never guess an id here.
     try {
       await upsertFacebookConnection(uid, {
         accessToken: tokens.accessToken,
@@ -229,15 +241,18 @@ export async function GET(req: NextRequest) {
         scopes: grantedScopes,
         accountId: fbUser.id,
         accountName: fbUser.name,
-        state: "no_pages",
+        state: "page_discovery_empty",
         pages: [],
         selected: null,
       });
     } catch (persistErr) {
-      console.error("[Facebook OAuth Callback] persist (no-pages) failed:", (persistErr as Error).message);
+      console.error(
+        "[Facebook OAuth Callback] persist (page-discovery-empty) failed:",
+        (persistErr as Error).message,
+      );
       return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
     }
-    return redirectAfterOAuth(req, "no_pages", verdict.returnTo);
+    return redirectAfterOAuth(req, "page_discovery_empty", verdict.returnTo);
   }
 
   // Exactly one Page → select it (nothing to choose). Several → store all as

@@ -15,6 +15,9 @@
  */
 
 import { randomBytes } from "node:crypto";
+// Type-only: erased at compile time, so it cannot trigger the module's
+// import-time env reads (the runtime module is still loaded dynamically in main).
+import type { FacebookApiError } from "../src/lib/server/facebook/service";
 
 // Env must be set BEFORE the server modules load (config reads env at call time,
 // but crypto-backed modules read at import time — mirror test-pinterest-oauth.ts).
@@ -257,6 +260,121 @@ async function main() {
     assert(/sha8=[0-9a-f]{8}/.test(fp), "fingerprint reports an 8-hex-char sha head");
     assertEq(service.tokenFingerprint(USER_TOKEN), fp, "fingerprint is stable for one token");
     assert(service.tokenFingerprint("other-token") !== fp, "different tokens differ");
+  });
+
+  // ── fetchPageById (manual Page connect fallback) ────────────────────────────
+
+  await test("fetchPageById returns id/name/token on success", async () => {
+    const m = mockFetch([{ body: { id: "555", name: "My Biz Page", access_token: "PAGE-TOKEN-555" } }]);
+    try {
+      const page = await service.fetchPageById(USER_TOKEN, "555");
+      assertEq(page.pageId, "555", "pageId");
+      assertEq(page.pageName, "My Biz Page", "pageName");
+      assertEq(page.pageAccessToken, "PAGE-TOKEN-555", "pageAccessToken");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("fetchPageById direct request never asks for tasks", async () => {
+    // tasks is a /me/accounts-edge-only field; requesting it on a Page node is a
+    // Graph 400 ("Tried accessing nonexisting field"). Guard the request shape.
+    const m = mockFetch([{ body: { id: "555", name: "P", access_token: "T" } }]);
+    try {
+      await service.fetchPageById(USER_TOKEN, "555");
+      assertEq(m.calls.length, 1, "exactly one request");
+      assert(!m.calls[0].includes("tasks"), "request URL must not contain tasks");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("fetchPageById rejects an id mismatch as not-found", async () => {
+    const m = mockFetch([{ body: { id: "999", name: "Other Page", access_token: "T" } }]);
+    try {
+      await service.fetchPageById(USER_TOKEN, "555");
+      assert(false, "should have thrown");
+    } catch (e) {
+      const err = e as FacebookApiError;
+      assert(err instanceof service.FacebookApiError, "FacebookApiError expected");
+      assert(
+        err.code === "page_not_found" || err.code === "page_id_mismatch",
+        `not-found-class code expected, got ${err.code}`,
+      );
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("fetchPageById without access_token is access-denied class", async () => {
+    const m = mockFetch([{ body: { id: "555", name: "Read-Only Page" } }]);
+    try {
+      await service.fetchPageById(USER_TOKEN, "555");
+      assert(false, "should have thrown");
+    } catch (e) {
+      const err = e as FacebookApiError;
+      assert(err instanceof service.FacebookApiError, "FacebookApiError expected");
+      assert(
+        err.code === "page_access_denied" || err.code === "page_no_access_token",
+        `access-denied-class code expected, got ${err.code}`,
+      );
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("fetchPageById surfaces an OAuthException as access-denied class", async () => {
+    const m = mockFetch([{
+      status: 400,
+      body: { error: { message: "(#10) Permission denied", type: "OAuthException", code: 10 } },
+    }]);
+    try {
+      await service.fetchPageById(USER_TOKEN, "555");
+      assert(false, "should have thrown");
+    } catch (e) {
+      const err = e as FacebookApiError;
+      assert(err instanceof service.FacebookApiError, "FacebookApiError expected");
+      assert(
+        err.code === "page_access_denied",
+        `page_access_denied expected, got ${err.code}`,
+      );
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("fetchPageById maps an unknown-object error to not-found", async () => {
+    const m = mockFetch([{
+      status: 404,
+      body: { error: { message: "(#803) Some of the aliases you requested do not exist", type: "OAuthException", code: 803 } },
+    }]);
+    try {
+      await service.fetchPageById(USER_TOKEN, "555");
+      assert(false, "should have thrown");
+    } catch (e) {
+      const err = e as FacebookApiError;
+      assert(err.code === "page_not_found", `page_not_found expected, got ${err.code}`);
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("fetchPageById error message never embeds the user token", async () => {
+    // Even if Meta echoed something token-shaped, the thrown message must not
+    // carry OUR user token (the URL embeds it — a naive "include the URL in the
+    // error" would leak it).
+    const m = mockFetch([{
+      status: 400,
+      body: { error: { message: "Bad signature", type: "OAuthException", code: 190 } },
+    }]);
+    try {
+      await service.fetchPageById(USER_TOKEN, "555");
+      assert(false, "should have thrown");
+    } catch (e) {
+      assert(!(e as Error).message.includes(USER_TOKEN), "error message must not contain the token");
+    } finally {
+      m.restore();
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
