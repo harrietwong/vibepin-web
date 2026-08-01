@@ -403,6 +403,79 @@ export async function getFacebookUserToken(uid: string): Promise<string | null> 
 }
 
 /**
+ * The decrypted PAGE-scoped token for the user's currently selected Page, plus
+ * the Page's display-safe identity. Publishing uses this — never the user token.
+ */
+export type SelectedPageToken = {
+  pageId: string;
+  pageName: string | null;
+  /** PLAINTEXT page access token. SERVER-ONLY — never log/return/serialize it. */
+  pageAccessToken: string;
+};
+
+/**
+ * Read + decrypt the PAGE-scoped access token for this user's selected Facebook
+ * Page.
+ *
+ * SERVER-ONLY. The plaintext token is returned so the publisher can make Graph
+ * calls as the Page — it must never be logged, echoed into a response body, put
+ * in a URL, or crossed over an API route boundary to the browser.
+ *
+ * Returns null (never throws) for every "not publishable yet" state, so callers
+ * can map a single null to a clean "connect a Page first" outcome:
+ *   - no Facebook row at all / row deleted;
+ *   - disconnected (metadata nulled by disconnectFacebookConnection);
+ *   - connection_status !== 'connected' (expired / reconnect required / pending);
+ *   - connectionState !== 'connected' (page_selection_required, page_discovery_empty);
+ *   - no selectedPageId or no selectedPageTokenEncrypted;
+ *   - the stored ciphertext fails to decrypt (rotated/mismatched key).
+ *
+ * The DB status AND the finer metadata state are BOTH required to be "connected":
+ * dbStatusFor() collapses two distinct pending states onto 'not_connected', so
+ * trusting either one alone would let a half-configured connection publish.
+ */
+export async function getSelectedPageToken(uid: string): Promise<SelectedPageToken | null> {
+  const { data, error } = await db()
+    .from(TABLE)
+    .select("connection_status, metadata")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingTable(error.code)) return null;
+    console.error("[facebook] read page token:", error.message);
+    return null;
+  }
+
+  const row = data as { connection_status?: string | null; metadata?: Record<string, unknown> | null } | null;
+  if (!row) return null;
+  if (row.connection_status !== "connected") return null;
+
+  const fb = (row.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  if (!fb) return null;
+  if (fb.connectionState !== "connected") return null;
+  if (!fb.selectedPageId || !fb.selectedPageTokenEncrypted) return null;
+
+  let pageAccessToken: string;
+  try {
+    pageAccessToken = cipher.decrypt(fb.selectedPageTokenEncrypted);
+  } catch {
+    // A rotated/mismatched FACEBOOK_TOKEN_ENC_KEY makes the stored token
+    // unusable — never surface the ciphertext or the decrypt error detail.
+    console.error("[facebook] selected page token could not be decrypted");
+    return null;
+  }
+  if (!pageAccessToken) return null;
+
+  return {
+    pageId: fb.selectedPageId,
+    pageName: fb.selectedPageName ?? null,
+    pageAccessToken,
+  };
+}
+
+/**
  * Persist a MANUALLY-specified Facebook Page as the active publishing target.
  *
  * Used when Graph's /me/accounts enumeration came back empty (page_discovery_empty)

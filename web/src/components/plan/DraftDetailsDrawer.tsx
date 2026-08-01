@@ -782,6 +782,18 @@ export function PinDetailsModal({
     toast.success(t("pinDetails.toast.productAttached"));
   }
 
+  // "View on <Platform>" label for any social destination, derived from the single
+  // existing catalog string ("View on Pinterest") by swapping the platform name in.
+  // Deliberately NOT a new i18n key: all 18 locales already carry this sentence, and
+  // adding an English-only key would leave 17 catalogs incomplete. Falls back to the
+  // untouched Pinterest string if the catalog value ever stops containing "Pinterest".
+  function viewOnLabel(provider: SocialProvider): string {
+    const base = t("pinDetails.viewOnPinterest");
+    const target = platformName(provider);
+    const pinterest = platformName("pinterest");
+    return base.includes(pinterest) ? base.replace(pinterest, target) : `${base} — ${target}`;
+  }
+
   // User clicked a "Publish now" affordance (footer / overflow / failed-retry). Publishing
   // is immediate and irreversible, so confirm first (the actual publish runs on confirm).
   // Silent guards mirror handlePublish's own: never open the dialog while a publish or an
@@ -945,7 +957,41 @@ export function PinDetailsModal({
             const published = r.destinations.filter(d => d.status === "published");
             const failed = r.destinations.filter(d => d.status === "failed");
             if (published.length) {
-              toast.success(`${t("pinDetails.toast.alsoPublishedPrefix")}${published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"))}`);
+              // Persist the live remote posts on the draft so the published view
+              // can link straight to them (View on Facebook) after a reload — the
+              // toast alone is transient. Only successes are recorded, and only
+              // display-safe fields (id + permalink), never a token/connection id.
+              const refs = published
+                .filter(d => d.externalPostId)
+                .map(d => ({
+                  provider: d.provider,
+                  postId: d.externalPostId as string,
+                  postUrl: d.externalPostUrl ?? "",
+                  publishedAt: new Date().toISOString(),
+                }));
+              if (refs.length) {
+                // Merge by provider: republishing to the same platform replaces
+                // that platform's entry rather than appending a stale duplicate.
+                const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
+                  .filter(p => !refs.some(r2 => r2.provider === p.provider));
+                pinDraftStore.updateDraft(activeDraft.id, { socialPosts: [...existing, ...refs] });
+              }
+              const withLink = published.find(d => d.externalPostUrl);
+              toast.success(
+                `${t("pinDetails.toast.alsoPublishedPrefix")}${published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"))}`,
+                withLink?.externalPostUrl
+                  ? {
+                      action: {
+                        // Label reuses the shared viewOnPinterest string with the
+                        // platform name swapped in, so no new catalog key is
+                        // introduced (18 locales stay complete) and the wording
+                        // stays consistent with the Pinterest button.
+                        label: viewOnLabel(withLink.provider),
+                        onClick: () => window.open(withLink.externalPostUrl as string, "_blank", "noopener,noreferrer"),
+                      },
+                    }
+                  : undefined,
+              );
             }
             if (failed.length) {
               toast.info(failed[0].error || `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`);
@@ -1085,6 +1131,11 @@ export function PinDetailsModal({
   // fallback ONLY for legacy drafts published before remotePinUrl existed. Same
   // preference order as Studio's board card (PinBoardCard.tsx).
   const publishedPinUrl = activeDraft.remotePinUrl || (activeDraft.remotePinId ? `https://www.pinterest.com/pin/${activeDraft.remotePinId}/` : "");
+  // Non-Pinterest destinations this Pin was ALSO published to (Facebook Page today).
+  // Recorded on the draft at publish time from /api/publish/social's response, so the
+  // links survive a reload. Only entries with a real permalink get a button — a
+  // missing URL renders nothing rather than a dead link.
+  const socialPostRefs = (activeDraft.socialPosts ?? []).filter(p => p.postUrl?.trim());
 
   function openScheduleEditor() {
     if (!isScheduled) {
@@ -1328,6 +1379,16 @@ export function PinDetailsModal({
                     {t("pinDetails.publishedUrlUnavailable")}
                   </span>
                 )}
+                {/* One link per non-Pinterest platform this Pin also went live on
+                    (e.g. "View on Facebook"). Secondary-styled — the Pinterest Pin
+                    stays the primary action. Rendered only when a real permalink
+                    was captured, so there is never a broken link. */}
+                {isPosted && socialPostRefs.map(ref => (
+                  <a key={ref.provider} data-testid={`draft-view-on-${ref.provider}`}
+                    href={ref.postUrl} target="_blank" rel="noopener noreferrer" style={lightBtn}>
+                    {viewOnLabel(ref.provider as SocialProvider)} <ExternalLink size={12} />
+                  </a>
+                ))}
               </div>
             </div>
           </div>
