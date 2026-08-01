@@ -13,7 +13,6 @@
  */
 
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { isBoardSource } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 
 export type PinLifecycle = "generating" | "failed" | "unscheduled" | "scheduled" | "posted";
@@ -99,7 +98,8 @@ export function mapPublishErrorToCategory(code?: string, message?: string): Erro
  *  publish error, and it is NOT archived. Source is deliberately NOT part of this:
  *  the Plan drawer / cron can fail non-board-source drafts too, and those are real
  *  failures the user can Retry from Plan — so we must not filter them out by source.
- *  Callers that need a board-scoped count layer isBoardSource on top of this. */
+ *  Plan and Create Pins are one workspace (PRD v1.1 §6.3) and share this one set;
+ *  the Plan week view only layers a time-range filter on top (see …InWeek below). */
 export function isActionablePublishFailure(
   d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
 ): boolean {
@@ -143,13 +143,6 @@ export function listActionablePublishFailuresInWeek<T extends PublishFailureSche
   weekStart: string,
 ): T[] {
   return drafts.filter(d => isActionablePublishFailureInWeek(d, weekStart));
-}
-
-/** Legacy board-scoped helper. Do not use for the unified Create Pins Failed view. */
-export function listBoardActionablePublishFailures<
-  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt" | "source">,
->(drafts: T[]): T[] {
-  return drafts.filter(d => isActionablePublishFailure(d) && isBoardSource(d));
 }
 
 /** Count drafts whose most recent PUBLISH attempt failed (drives a "N failed" banner).
