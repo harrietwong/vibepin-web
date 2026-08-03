@@ -47,13 +47,25 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Best-effort revoke at the provider, then remove the local row.
+    // Best-effort revoke at the provider first (clears tokens for our own
+    // OAuth platforms; a no-op for aggregators).
     await getSocialProviderById(connection.authProvider).disconnect({
       userId: uid,
       connectionId,
       externalConnectionId: connection.externalConnectionId,
       provider: connection.provider,
     });
+
+    // Facebook keeps its row (tokens already nulled by the step above), mirroring
+    // the Pinterest disconnect semantics. Deleting it would also erase
+    // metadata.facebook.lastKnownPageId — the Page the merchant already
+    // identified — so a later reconnect would fall back to asking for the Page id
+    // by hand even though we knew it. Credentials are gone either way; only the
+    // (non-secret) Page identity survives.
+    if (connection.provider === "facebook") {
+      return Response.json({ ok: true });
+    }
+
     await deleteConnection(uid, connectionId);
     return Response.json({ ok: true });
   } catch (err) {

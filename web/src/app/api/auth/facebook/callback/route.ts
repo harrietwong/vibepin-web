@@ -56,6 +56,7 @@ import {
   fetchGrantedPermissions,
   fetchManagedPages,
   restorePreviousPage,
+  type ManagedPage,
 } from "@/lib/server/facebook/service";
 import { upsertFacebookConnection, getStoredFacebookSelection } from "@/lib/server/facebook/connectionStore";
 import { missingRequiredScopes } from "@/lib/server/facebook/config";
@@ -328,7 +329,28 @@ export async function GET(req: NextRequest) {
   // Exactly one Page → select it (nothing to choose). Several → store all as
   // candidates and DO NOT auto-pick index 0; the user selects one later.
   const single = pages.length === 1 ? pages[0] : null;
-  const selected = single ? { pageId: single.pageId, pageName: single.pageName } : null;
+
+  // Reconnect with several Pages listed: if one of them is the Page this user
+  // already had, re-select it instead of making them choose again. This is a
+  // RESTORE of a prior explicit choice, not an auto-pick — with no prior choice
+  // the picker still appears and index 0 is never assumed.
+  let restoredChoice: ManagedPage | null = null;
+  if (!single) {
+    try {
+      const previous = await getStoredFacebookSelection(uid);
+      if (previous) {
+        restoredChoice = pages.find(p => p.pageId === previous.pageId) ?? null;
+        if (restoredChoice) {
+          fbDebug(`reconnect restored prior Page from ${pages.length} candidates page=${restoredChoice.pageId}`);
+        }
+      }
+    } catch {
+      restoredChoice = null; // storage hiccup → fall through to the picker
+    }
+  }
+
+  const chosen = single ?? restoredChoice;
+  const selected = chosen ? { pageId: chosen.pageId, pageName: chosen.pageName } : null;
 
   try {
     await upsertFacebookConnection(uid, {
@@ -340,7 +362,7 @@ export async function GET(req: NextRequest) {
       accountName: fbUser.name,
       // One selected Page = a usable connection. Multiple = authorized but pending
       // the user's Page choice (page_selection_required).
-      state: single ? "connected" : "page_selection_required",
+      state: chosen ? "connected" : "page_selection_required",
       pages,
       selected,
     });

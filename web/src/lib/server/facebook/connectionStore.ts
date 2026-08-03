@@ -610,6 +610,43 @@ export async function getStoredFacebookSelection(
  * the disconnected marker here.
  */
 export async function disconnectFacebookConnection(uid: string): Promise<void> {
+  // Read first: every CREDENTIAL is dropped below, but the Page the merchant
+  // already identified (lastKnownPageId/Name — a public id, not a secret) is
+  // carried over. Without it a reconnect would have to ask for the Page id by
+  // hand again, even for a Page we had already resolved. Everything token-shaped
+  // — selectedPageTokenEncrypted and every candidatePages[].pageAccessTokenEncrypted
+  // — is deliberately NOT copied forward.
+  const { data: existing } = await db()
+    .from(TABLE)
+    .select("metadata")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .maybeSingle();
+
+  const prior = (existing?.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  const rememberedPageId = prior?.selectedPageId ?? prior?.lastKnownPageId ?? null;
+  const rememberedPageName = prior?.selectedPageId
+    ? prior.selectedPageName
+    : (prior?.lastKnownPageName ?? null);
+
+  const metadata = rememberedPageId
+    ? {
+        facebook: {
+          authMethod: "facebook_login" as const,
+          connectionState: "page_discovery_empty" as const,
+          facebookUserId: null,
+          facebookUserName: null,
+          selectedPageId: null,
+          selectedPageName: null,
+          selectedPageTokenEncrypted: null,
+          lastKnownPageId: rememberedPageId,
+          lastKnownPageName: rememberedPageName,
+          candidatePages: [],
+          updatedAt: new Date().toISOString(),
+        } satisfies FacebookConnectionMetadata,
+      }
+    : null;
+
   const { error } = await db()
     .from(TABLE)
     .update({
@@ -617,8 +654,7 @@ export async function disconnectFacebookConnection(uid: string): Promise<void> {
       refresh_token_encrypted: null,
       token_expires_at: null,
       connection_status: "not_connected",
-      // Drop the Facebook metadata block incl. every encrypted page token on disconnect.
-      metadata: null,
+      metadata,
       updated_at: new Date().toISOString(),
     })
     .eq("user_id", uid)
