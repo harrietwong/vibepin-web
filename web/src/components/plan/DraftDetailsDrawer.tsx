@@ -826,6 +826,68 @@ export function PinDetailsModal({
     setTrialAccess(false);
     setPublishAttempts((n) => n + 1);
 
+    // Publish the selected non-Pinterest channels. Called after a successful
+    // Pinterest publish AND after a failed one — those channels stand on their
+    // own, so a Pinterest refusal (Trial access, dead token, bad board) must not
+    // silently swallow them. Guarded to run at most once per publish attempt.
+    async function fanOutToExtraChannels(): Promise<void> {
+      const extras = socialDestinations.filter(p => p !== "pinterest");
+      if (!extras.length || socialFannedOutRef.current) return;
+      socialFannedOutRef.current = true;
+      try {
+        const r = await publishToSocial({
+          postId: activeDraft.id,
+          post: {
+            imageUrls: publicImage ? [publicImage] : [],
+            title: title.trim() || undefined,
+            caption: description.trim() || undefined,
+            destinationUrl: destinationUrl.trim() || undefined,
+            altText: altText.trim() || undefined,
+          },
+          destinations: extras.map(provider => ({ provider })),
+        });
+        const published = r.destinations.filter(d => d.status === "published");
+        const failed = r.destinations.filter(d => d.status === "failed");
+        const refs = published
+          .filter(d => d.externalPostId)
+          .map(d => ({
+            provider: d.provider,
+            postId: d.externalPostId as string,
+            postUrl: d.externalPostUrl ?? "",
+            publishedAt: new Date().toISOString(),
+          }));
+        if (refs.length) {
+          // Merge by provider so republishing replaces that platform's entry
+          // rather than appending a stale duplicate.
+          const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
+            .filter(p => !refs.some(r2 => r2.provider === p.provider));
+          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: [...existing, ...refs] });
+        }
+        if (published.length) {
+          const withLink = published.find(d => d.externalPostUrl);
+          toast.success(
+            `${t("pinDetails.toast.alsoPublishedPrefix")}${published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"))}`,
+            withLink?.externalPostUrl
+              ? {
+                  action: {
+                    label: viewOnLabel(withLink.provider),
+                    onClick: () => window.open(withLink.externalPostUrl as string, "_blank", "noopener,noreferrer"),
+                  },
+                }
+              : undefined,
+          );
+        }
+        if (failed.length) {
+          toast.info(
+            failed[0].error ||
+              `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`,
+          );
+        }
+      } catch {
+        /* non-blocking — never let a fan-out error mask the Pinterest outcome */
+      }
+    }
+
     // ── Social-only publish: Pinterest deliberately unchecked ────────────────
     // The merchant may repurpose to connected channels (e.g. a Facebook Page)
     // without creating a Pin at all. Every guard below this block is a Pinterest
@@ -1017,70 +1079,10 @@ export function PinDetailsModal({
           onClick: () => window.open(res.pin.url, "_blank", "noopener,noreferrer"),
         },
       });
-
-      // Fan out to any additional connected channels the merchant selected.
-      // Dormant until non-Pinterest providers are connectable; guarded so it
-      // runs at most once per publish.
-      const extras = socialDestinations.filter(p => p !== "pinterest");
-      if (extras.length && !socialFannedOutRef.current) {
-        socialFannedOutRef.current = true;
-        void publishToSocial({
-          postId: activeDraft.id,
-          post: {
-            imageUrls: publicImage ? [publicImage] : [],
-            title: title.trim() || undefined,
-            caption: description.trim() || undefined,
-            destinationUrl: destinationUrl.trim() || undefined,
-            altText: altText.trim() || undefined,
-          },
-          destinations: extras.map(provider => ({ provider })),
-        })
-          .then(r => {
-            const published = r.destinations.filter(d => d.status === "published");
-            const failed = r.destinations.filter(d => d.status === "failed");
-            if (published.length) {
-              // Persist the live remote posts on the draft so the published view
-              // can link straight to them (View on Facebook) after a reload — the
-              // toast alone is transient. Only successes are recorded, and only
-              // display-safe fields (id + permalink), never a token/connection id.
-              const refs = published
-                .filter(d => d.externalPostId)
-                .map(d => ({
-                  provider: d.provider,
-                  postId: d.externalPostId as string,
-                  postUrl: d.externalPostUrl ?? "",
-                  publishedAt: new Date().toISOString(),
-                }));
-              if (refs.length) {
-                // Merge by provider: republishing to the same platform replaces
-                // that platform's entry rather than appending a stale duplicate.
-                const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
-                  .filter(p => !refs.some(r2 => r2.provider === p.provider));
-                pinDraftStore.updateDraft(activeDraft.id, { socialPosts: [...existing, ...refs] });
-              }
-              const withLink = published.find(d => d.externalPostUrl);
-              toast.success(
-                `${t("pinDetails.toast.alsoPublishedPrefix")}${published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"))}`,
-                withLink?.externalPostUrl
-                  ? {
-                      action: {
-                        // Label reuses the shared viewOnPinterest string with the
-                        // platform name swapped in, so no new catalog key is
-                        // introduced (18 locales stay complete) and the wording
-                        // stays consistent with the Pinterest button.
-                        label: viewOnLabel(withLink.provider),
-                        onClick: () => window.open(withLink.externalPostUrl as string, "_blank", "noopener,noreferrer"),
-                      },
-                    }
-                  : undefined,
-              );
-            }
-            if (failed.length) {
-              toast.info(failed[0].error || `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`);
-            }
-          })
-          .catch(() => {/* non-blocking — Pinterest already succeeded */});
-      }
+      // Fan out to the other selected channels. Extracted so the same logic can
+      // also run when Pinterest FAILS (see the catch block) — those channels are
+      // independent and must not be withheld because Pinterest refused.
+      await fanOutToExtraChannels();
     } catch (e) {
       const err = e as PinterestClientError;
       if (process.env.NODE_ENV !== "production") {
@@ -1129,6 +1131,17 @@ export function PinDetailsModal({
         // Modal stays open and edits are preserved (nothing is reset on failure).
         setPublishError(t("pinDetails.error.publishFailed"));
         toast.error(t("pinDetails.error.publishFailed"));
+      }
+
+      // The other channels are INDEPENDENT of Pinterest. Pinterest failing (a
+      // Trial-access block, a bad board, a dead token) is no reason to withhold
+      // a post from a healthy Facebook Page — previously the fan-out lived after
+      // the Pinterest call inside `try`, so one Pinterest error silently dropped
+      // every other selected destination. Reconnect is the exception: the user is
+      // being navigated away to Pinterest OAuth, so publishing mid-redirect would
+      // be lost.
+      if (!needsPinterestConnect(err)) {
+        await fanOutToExtraChannels();
       }
     } finally {
       setPublishing(false);

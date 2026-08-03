@@ -494,12 +494,16 @@ export class PinterestClient {
       // Preserve Pinterest's own code field (e.g. numeric "2") for frontend error display.
       const pinterestApiCode =
         body && ("code" in body) ? String(body.code) : undefined;
+      // Trial access is checked FIRST: its opaque shape (401 + code 3) also
+      // matches the missing-scope heuristic, and treating it as a scope problem
+      // marks the connection needs_reconnect — pushing the user through a
+      // reconnect loop that cannot fix an app-review state.
+      if (isTrialAccessResponse(res.status, json, msg)) {
+        throw new PinterestTrialAccessError();
+      }
       if (isMissingScopeResponse(res.status, json, msg)) {
         await this.hooks.markReconnect(this.uid);
         throw new MissingPinterestScopesError(extractMissingScopes(json));
-      }
-      if (isTrialAccessResponse(res.status, json, msg)) {
-        throw new PinterestTrialAccessError();
       }
       throw new PinterestApiError(msg, res.status, "pinterest_api_error", pinterestApiCode);
     }
@@ -620,10 +624,33 @@ function isMissingScopeResponse(status: number, json: unknown, message: string):
   return text.includes("scope") || text.includes("permission") || text.includes("not sufficient");
 }
 
+/**
+ * Is this Pinterest refusing to WRITE because the app only has Trial access?
+ *
+ * Two shapes, both meaning "your app may not create Pins in production yet":
+ *
+ *  1. The explicit one — 403 naming trial access and the sandbox host.
+ *  2. The opaque one — 401 with Pinterest error code 3 ("Your token does not
+ *     have sufficient permissions...") on a WRITE, even though the granted
+ *     scopes DO include pins:write and reads (user_account, boards) succeed on
+ *     the same token. A Trial-access app is handed the scope but not the
+ *     capability, so the only tell is that reads work and writes don't.
+ *
+ * Shape 2 used to fall through to the generic scope check, which marked the
+ * connection needs_reconnect — sending the user to reconnect over and over for
+ * something reconnecting cannot fix (it is an app-review state, not a token
+ * state). Recognising it lets the UI say what is actually required: request
+ * Standard access.
+ */
 function isTrialAccessResponse(status: number, json: unknown, message: string): boolean {
-  if (status !== 403) return false;
   const text = `${message} ${JSON.stringify(json)}`.toLowerCase();
-  return text.includes("trial access") && text.includes("api-sandbox.pinterest.com");
+  if (status === 403 && text.includes("trial access") && text.includes("api-sandbox.pinterest.com")) {
+    return true;
+  }
+  // Shape 2: Pinterest's numeric code 3 on a write.
+  const code = (json as { code?: unknown } | null)?.code;
+  const isCode3 = code === 3 || code === "3";
+  return status === 401 && isCode3 && text.includes("sufficient permissions");
 }
 
 function extractMissingScopes(json: unknown): string[] {
