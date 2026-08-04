@@ -41,6 +41,10 @@ import {
   startSocialConnect,
 } from "@/lib/social/socialClient";
 import { startPinterestConnect, disconnectPinterest } from "@/lib/pinterestClient";
+import {
+  SOCIAL_CONNECTIONS_CHANGED_EVENT,
+  notifyConnectionsChanged,
+} from "@/lib/social/connectionsCache";
 import { isMultiSocialAccountsEnabled } from "@/lib/socialFeatureFlags";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -487,6 +491,9 @@ function FacebookManualPageForm({ onConnected }: { onConnected: () => void }) {
       toast.success(body.pageName ? `Publishing to ${body.pageName}` : "Facebook Page connected");
       setPageId("");
       setPageUrl("");
+      // Tell every other mounted surface (the publish drawer's destination rows)
+      // that this platform just became connected.
+      notifyConnectionsChanged();
       onConnected();
     } catch {
       toast.error("Could not connect that Page — please try again");
@@ -795,6 +802,17 @@ export function SocialAccountsPanel() {
     void load();
   }, [load]);
 
+  // Stay in step with the publish drawer: connecting a platform from a Pin's
+  // destination rows must be reflected here too (and vice versa), so the two
+  // surfaces can never show contradictory connection states.
+  useEffect(() => {
+    function onChanged() {
+      void load();
+    }
+    window.addEventListener(SOCIAL_CONNECTIONS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(SOCIAL_CONNECTIONS_CHANGED_EVENT, onChanged);
+  }, [load]);
+
   // `?facebook=<status>` OAuth-return consumption (see FACEBOOK_CALLBACK_MESSAGES
   // above) — mirrors PinterestSettingsPanel / ShopifyTab: toast once, clear the
   // query param via router.replace so a refresh never re-fires it, then refresh
@@ -810,7 +828,7 @@ export function SocialAccountsPanel() {
     router.replace(SETTINGS_SOCIAL_PATH);
     // Refresh on both a completed connection and a pending Page choice so the card
     // flips to "connected" (or shows the Page picker) immediately.
-    if (flag === "connected" || flag === "select_page") void load();
+    if (flag === "connected" || flag === "select_page") { notifyConnectionsChanged(); void load(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
@@ -827,7 +845,7 @@ export function SocialAccountsPanel() {
       notify(m.msg);
     }
     router.replace(SETTINGS_SOCIAL_PATH);
-    if (flag === "connected") void load();
+    if (flag === "connected") { notifyConnectionsChanged(); void load(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
@@ -868,7 +886,7 @@ export function SocialAccountsPanel() {
         toast.success(tr("socialPanel.toast.pinterestDisconnected"));
         disconnectPinterest()
           .catch(() => { toast.error(tr("socialPanel.toast.pinterestDisconnectFailed")); })
-          .finally(() => { void load(); });
+          .finally(() => { notifyConnectionsChanged(); void load(); });
         return;
       } else {
         const primary = summary.accounts[0];

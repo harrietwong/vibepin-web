@@ -15,7 +15,7 @@ import { PlatformIcon } from "@/components/social/PlatformIcon";
 import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
-import { getCachedConnections, setCachedConnections } from "@/lib/social/connectionsCache";
+import { getCachedConnections, setCachedConnections, SOCIAL_CONNECTIONS_CHANGED_EVENT } from "@/lib/social/connectionsCache";
 import { fetchPinterestStatusCached, PINTEREST_DISCONNECTED_EVENT } from "@/lib/pinterestClient";
 import { isRealPinterestConnection } from "@/lib/pinterest/connection";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -49,15 +49,16 @@ function DestinationRow({
   summary,
   selected,
   onToggle,
-  onConnectPinterest,
-  connectingPinterest,
+  onConnect,
+  connecting,
   checkingConnection,
 }: {
   summary: PlatformConnectionSummary;
   selected: boolean;
   onToggle: () => void;
-  onConnectPinterest?: () => void;
-  connectingPinterest?: boolean;
+  /** Start this platform's connect flow from the row itself. */
+  onConnect?: () => void;
+  connecting?: boolean;
   checkingConnection?: boolean;
 }) {
   const { t } = useLocale();
@@ -67,7 +68,11 @@ function DestinationRow({
   // (mock returns coming_soon / not_implemented), but even a stray "connected" DB
   // row must not make an unimplemented platform selectable for publishing.
   const publishable = summary.connected && meta.liveConnect;
-  const canConnectHere = summary.provider === "pinterest" && !publishable && !!onConnectPinterest && !checkingConnection;
+  // Any live platform can be connected from right here. Previously only Pinterest
+  // offered this, so an unconnected Facebook Page was a dead row: the merchant
+  // was told "Not connected" with no way forward, and had to find Settings on
+  // their own and then navigate back to the Pin they were publishing.
+  const canConnectHere = !publishable && meta.liveConnect && !!onConnect && !checkingConnection;
   const statusText = !meta.liveConnect
     ? t("publishDestinations.comingSoon")
     : publishable
@@ -156,9 +161,9 @@ function DestinationRow({
           {canConnectHere && (
             <button
               type="button"
-              data-testid="publish-dest-pinterest-connect"
-              onClick={(e) => { e.stopPropagation(); onConnectPinterest?.(); }}
-              disabled={connectingPinterest}
+              data-testid={`publish-dest-${summary.provider}-connect`}
+              onClick={(e) => { e.stopPropagation(); onConnect?.(); }}
+              disabled={connecting}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -170,11 +175,11 @@ function DestinationRow({
                 color: UI.blue,
                 fontSize: 11,
                 fontWeight: 800,
-                cursor: connectingPinterest ? "wait" : "pointer",
+                cursor: connecting ? "wait" : "pointer",
               }}
             >
-              {connectingPinterest ? <Loader2 size={12} className="animate-spin" /> : <LinkIcon size={12} />}
-              {connectingPinterest ? t("publishDestinations.redirecting") : "Connect"}
+              {connecting ? <Loader2 size={12} className="animate-spin" /> : <LinkIcon size={12} />}
+              {connecting ? t("publishDestinations.redirecting") : "Connect"}
             </button>
           )}
         </div>
@@ -198,6 +203,18 @@ export function PublishDestinations({
   pinterestConnected?: boolean;
   pinterestAccountName?: string | null;
 }) {
+  // Non-Pinterest platforms start their own OAuth from the row. returnTo carries
+  // the CURRENT url (path + query), so the callback lands the merchant back on
+  // the exact Pin they were publishing instead of a bare Settings page.
+  const [connectingProvider, setConnectingProvider] = useState<SocialProvider | null>(null);
+  const connectProvider = useCallback((provider: SocialProvider) => {
+    if (provider === "pinterest") return; // Pinterest keeps its dedicated handler
+    setConnectingProvider(provider);
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(
+      `/api/auth/${provider}/connect?next=${encodeURIComponent(returnTo)}`,
+    );
+  }, []);
   const { t } = useLocale();
   const cached = getCachedConnections();
   const [summaries, setSummaries] = useState<PlatformConnectionSummary[]>(
@@ -300,8 +317,17 @@ export function PublishDestinations({
       if (selected.includes("pinterest")) onSelectedChange(selected.filter(p => p !== "pinterest"));
       void load();
     }
+    // Any provider's connection change (connect / disconnect / Page re-select)
+    // refetches, so these rows can never disagree with the Settings panel.
+    function onConnectionsChanged() {
+      void load();
+    }
+    window.addEventListener(SOCIAL_CONNECTIONS_CHANGED_EVENT, onConnectionsChanged);
     window.addEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
-    return () => window.removeEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
+    return () => {
+      window.removeEventListener(SOCIAL_CONNECTIONS_CHANGED_EVENT, onConnectionsChanged);
+      window.removeEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
+    };
   }, [load, selected, onSelectedChange]);
 
   // Default Pinterest ON once when it resolves as connected — but never fight the
@@ -387,8 +413,16 @@ export function PublishDestinations({
               summary={summary}
               selected={selected.includes(provider)}
               onToggle={() => toggle(provider)}
-              onConnectPinterest={provider === "pinterest" ? onConnectPinterest : undefined}
-              connectingPinterest={provider === "pinterest" ? connectingPinterest : undefined}
+              onConnect={
+                provider === "pinterest"
+                  ? onConnectPinterest
+                  : () => connectProvider(provider)
+              }
+              connecting={
+                provider === "pinterest"
+                  ? connectingPinterest
+                  : connectingProvider === provider
+              }
               checkingConnection={provider === "pinterest" && !effectivePinterestConnected && !pinterestOverride.loaded}
             />
           );
