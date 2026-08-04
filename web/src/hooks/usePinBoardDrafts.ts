@@ -8,14 +8,22 @@
  * selection via useMemo. Ordering: createdAt desc, id desc.
  *
  * Filters are lifecycle-only (P0): all / unscheduled / scheduled / posted / failed.
- * Normal board views contain active board-origin drafts (uploads + AI pins). Failed is
- * deliberately workspace-wide: Plan / cron / legacy handoff drafts must be recoverable
- * from Create Pins even when they were not created by the V2 board.
+ * EVERY bucket reads the same population: active (non-archived) workspace drafts,
+ * regardless of origin. Plan / cron / legacy handoff drafts count exactly like V2
+ * board cards.
+ *
+ * Why (0731 merge fix): the buckets used to split — all/unscheduled/scheduled/posted
+ * counted `isBoardSource` drafts only, while `failed` counted the whole workspace
+ * (PRD v1.1 §6.3 moved failures to the workspace-wide population when Plan merged into
+ * Create Pins). Two different base sets under one filter bar produced the impossible
+ * "All (4), Failed (5)" — a non-board-source failure could enter Failed but not All.
+ * The failure was the SYMPTOM; the real defect was the split base set, so all four
+ * remaining buckets were widened to match, keeping All === the sum of its parts.
  */
 
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import { isBoardSource, type PinDraft } from "@/lib/pinDraftStore";
+import { type PinDraft } from "@/lib/pinDraftStore";
 import {
   getPinLifecycle,
   getInFlightPublishSet,
@@ -33,12 +41,16 @@ export function deriveBoardCollections(all: PinDraft[]): { activeDrafts: PinDraf
   const activeDrafts = all.filter(d => !d.archivedAt);
   const byCreated = (a: BoardItem, b: BoardItem) =>
     b.draft.createdAt.localeCompare(a.draft.createdAt) || b.draft.id.localeCompare(a.draft.id);
+  // One population for every bucket (see file header): active workspace drafts, origin
+  // agnostic. `failureItems` below is the same set narrowed to lifecycle === "failed",
+  // so counts.all is always >= counts.failed and All is the sum of its parts.
   const boardItems = activeDrafts
-    .filter(isBoardSource)
     .map(d => ({ draft: d, lifecycle: getPinLifecycle(d) }))
     .sort(byCreated);
-  const failureItems = activeDrafts
-    .map(d => ({ draft: d, lifecycle: getPinLifecycle(d) }))
+  // Derived FROM boardItems (not re-derived from activeDrafts) so the subset relation
+  // failed ⊆ all is structural, not a coincidence two call sites have to keep in sync.
+  // Only the ordering differs: most recently failed first.
+  const failureItems = boardItems
     .filter(item => item.lifecycle === "failed")
     .sort((a, b) => b.draft.updatedAt.localeCompare(a.draft.updatedAt) || byCreated(a, b));
   return { activeDrafts, boardItems, failureItems };

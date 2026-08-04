@@ -19,6 +19,8 @@
 import assert from "node:assert";
 import { getFailureBannerCopy, computeVisibleFailureCount, failureBannerDismissKey } from "../src/components/shared/FailureBanner";
 import { publishFailureSetIdentity } from "../src/lib/studio/pinLifecycle";
+import { deriveBoardCollections } from "../src/hooks/usePinBoardDrafts";
+import type { PinDraft } from "../src/lib/pinDraftStore";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
@@ -156,6 +158,83 @@ test("identity source: publishFailureSetIdentity is order-independent and update
   // Archived / non-publish failures never enter the identity (core predicate applies).
   const archived = { ...mk("z", "2026-07-29T10:00:00.000Z"), archivedAt: "2026-07-29T13:00:00.000Z" };
   assert.equal(publishFailureSetIdentity([a, b, archived]), publishFailureSetIdentity([a, b]));
+});
+
+// ── "CTA click = dismiss" end-to-end over the storage contract (0731) ───────────
+// Browser case 10: clicking "Review failed Pins" must itself count as a dismiss — the
+// user went and looked, so returning to Plan must NOT re-show the big banner. But the
+// SMALL "N failed" filter-bar count is derived from the workspace counts, never from
+// banner dismiss state, so it must keep showing. These model both halves against the
+// same helpers the component/hook use, so a regression in either direction trips here.
+
+/** Models FailureBanner.handleReview: onDismiss() (persists) then onReview() (navigates). */
+function clickReviewCta(store: FakeStorage, scope: string, identity: string): { navigated: boolean } {
+  dismissAt(store, scope, identity);
+  return { navigated: true };
+}
+/** Models the × button (aria-label "Hide for now"): dismiss WITHOUT navigating. */
+function clickHideForNow(store: FakeStorage, scope: string, identity: string): { navigated: boolean } {
+  dismissAt(store, scope, identity);
+  return { navigated: false };
+}
+
+test("case 10: Review CTA dismisses AND navigates; banner stays hidden on return", () => {
+  const store = new FakeStorage();
+  const identity = "a:1|b:1|c:1";
+  assert.equal(visibleOnMount(store, "plan:2026-07-27", 3, identity), 3, "starts visible");
+  const { navigated } = clickReviewCta(store, "plan:2026-07-27", identity);
+  assert.equal(navigated, true, "CTA must still navigate to the Failed list");
+  // Back on Plan (fresh mount, same failure set) → the big banner must not nag again.
+  assert.equal(visibleOnMount(store, "plan:2026-07-27", 3, identity), 0, "banner must not reappear after Review");
+});
+
+test("case 10: a CTA dismiss survives a closed/reopened page (localStorage)", () => {
+  const store = new FakeStorage();
+  const identity = "a:1|b:1|c:1";
+  clickReviewCta(store, "studio", identity);
+  // "Close the tab, reopen the app": in-memory state gone, localStorage retained.
+  assert.equal(visibleOnMount(store, "studio", 3, identity), 0, "still hidden in a new session");
+  assert.equal(visibleOnMount(store, "studio", 3, identity), 0, "and after another reload");
+});
+
+test("case 10: a NEW failure after the CTA dismiss brings the banner back", () => {
+  const store = new FakeStorage();
+  clickReviewCta(store, "studio", "a:1|b:1|c:1");
+  assert.equal(visibleOnMount(store, "studio", 4, "a:1|b:1|c:1|d:1"), 4, "new failure → new identity → reappears");
+  // Even a retry-failure on an already-known Pin (updatedAt bumps) must break through.
+  assert.equal(visibleOnMount(store, "studio", 3, "a:2|b:1|c:1"), 3);
+});
+
+test('case 10/11: "Hide for now" hides ONLY the big banner — the small failed count is untouched', () => {
+  // The small "N failed" chip comes from usePinBoardDrafts' counts.failed, computed off
+  // the draft population — it never reads dismiss state. Derive it from the REAL
+  // deriveBoardCollections here (not a hardcoded 3) so this can't pass while the chip
+  // silently starts honoring a dismiss.
+  const drafts = [
+    { id: "a", updatedAt: "2026-07-29T10:00:00.000Z" },
+    { id: "b", updatedAt: "2026-07-29T11:00:00.000Z" },
+    { id: "c", updatedAt: "2026-07-29T12:00:00.000Z" },
+  ].map(d => ({
+    ...d, source: "uploaded_image", imageUrl: "https://x/a.png",
+    keyword: "", category: "", title: "T", description: "D", altText: "A",
+    destinationUrl: "", boardId: "b", boardName: "B",
+    weeklyPlanItemId: "", generationSessionId: "", scheduledDate: "", status: "ready",
+    createdAt: "2026-07-29T09:00:00.000Z",
+    failureType: "publish" as const, publishError: "Publish failed",
+  })) as unknown as PinDraft[];
+
+  const smallCount = deriveBoardCollections(drafts).failureItems.length;
+  assert.equal(smallCount, 3, "fixture sanity: 3 failed drafts");
+  const identity = publishFailureSetIdentity(drafts);
+
+  const store = new FakeStorage();
+  const { navigated } = clickHideForNow(store, "studio", identity);
+  assert.equal(navigated, false, '"Hide for now" must not navigate');
+  assert.equal(visibleOnMount(store, "studio", smallCount, identity), 0, "big banner hidden");
+  // The chip is recomputed from the same (unchanged) population AFTER the dismiss:
+  // dismissing hides a warning, it does not resolve or hide any failure.
+  assert.equal(deriveBoardCollections(drafts).failureItems.length, 3,
+    "small failed count must survive a dismiss — it is derived from counts, not banner state");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

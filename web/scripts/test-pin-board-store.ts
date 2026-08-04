@@ -253,7 +253,12 @@ async function main() {
     }
   });
 
-  await test("unified Failed includes actionable Plan/cron drafts outside the V2 board", async () => {
+  // Updated 0731: this test used to assert `boardItems` EXCLUDED Plan-origin drafts
+  // ("must not leak into All") while `failureItems` included them. That split base set
+  // is exactly what produced the impossible "All (4) / Failed (5)" filter bar. Under
+  // PRD v1.1 §6.3 (Plan merged into Create Pins) both buckets read the same
+  // workspace-wide population, so a Plan draft belongs in BOTH.
+  await test("unified board: Plan/cron drafts outside the V2 board are in All AND Failed", async () => {
     reset();
     const { deriveBoardCollections } = await import("../src/hooks/usePinBoardDrafts");
     const board = store.createBoardDraft({ imageUrl: "https://x/board.png", source: "uploaded_image" });
@@ -265,8 +270,12 @@ async function main() {
     store.updateDraft(plan.id, { failureType: "publish", publishError: "failed" });
 
     const collections = deriveBoardCollections(store.getAllDrafts());
-    assert.equal(collections.boardItems.some(x => x.draft.id === plan.id), false, "Plan draft must not leak into All");
+    assert.equal(collections.boardItems.some(x => x.draft.id === plan.id), true,
+      "Plan draft must be in All — Failed counts it, so All must too");
     assert.equal(collections.failureItems.some(x => x.draft.id === plan.id), true, "Plan failure must be recoverable in Failed");
+    // The invariant the old split violated: Failed can never exceed All.
+    assert.ok(collections.failureItems.length <= collections.boardItems.length,
+      "Failed must be a subset of All");
   });
 
   await test("Plan week scope uses the failed schedule and excludes other weeks", () => {

@@ -187,6 +187,10 @@ export function StudioBoard() {
   const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount, publishFailureIdentity, "studio");
   // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
   // depends on the current filter view; the badge transfers automatically as cards change.
+  // `allItems` is now the whole active workspace (0731 count-base unification), but no
+  // extra isBoardSource filter is needed here: deriveTopPickIds' own `qualifies()` already
+  // admits only source === "ai_generated_from_upload" cards with a ready quality judge,
+  // so the wider input cannot change which ids come back.
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
