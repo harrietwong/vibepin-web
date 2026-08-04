@@ -147,13 +147,27 @@ async function postToken(env: PinterestEnv, body: URLSearchParams): Promise<RawT
   return json;
 }
 
-/** Exchange an authorization code for tokens (server-side, Basic auth). */
+/**
+ * Exchange an authorization code for tokens (server-side, Basic auth).
+ *
+ * `continuous_refresh=true` asks Pinterest to issue a CONTINUOUS refresh token —
+ * one that keeps working as long as it is used, instead of dying at a fixed expiry.
+ * Apps created before 2025-09-25 default to the old fixed-lifetime refresh token, so
+ * without this flag a connection silently stops being refreshable once that token
+ * expires: publishing worked for months and then began failing with invalid_grant →
+ * needs_reconnect. Apps created after that date issue continuous tokens anyway and
+ * ignore the field, so sending it is safe for both.
+ *
+ * ONLY the authorization_code grant takes this flag; refreshAccessToken() must not
+ * send it (the refresh grant has no such parameter).
+ */
 export async function exchangeCodeForTokens(code: string): Promise<TokenSet> {
   const env = getPinterestEnv();
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
     redirect_uri: env.redirectUri,
+    continuous_refresh: "true",
   });
   return parseTokenResponse(await postToken(env, body));
 }
