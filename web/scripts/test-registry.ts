@@ -127,6 +127,8 @@ export const STUDIO: string[] = [
   "test-pin-details-drawer",
   "test-pin-details-persistence",
   "test-failure-banner",
+  "test-publish-error-display",
+  "test-publish-failure-consistency",
   "test-pin-readiness",
   "test-pin-display-context",
   "test-pin-details-model",

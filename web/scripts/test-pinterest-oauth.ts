@@ -512,6 +512,77 @@ await test("refresh CAS: invalid_grant with NO version bump is a real reconnect"
   assert(marked, "a real invalid_grant (no concurrent refresh) MUST mark needs_reconnect");
 });
 
+// ── continuous_refresh (Standard Access token-renewal fix, 2026-08-01) ─────────
+// Apps created before 2025-09-25 get a FIXED-lifetime refresh token unless the code
+// exchange asks for a continuous one. Without the flag, publishing works until that
+// token expires and then fails with invalid_grant → needs_reconnect forever.
+
+/** Capture the form body of the next token POST without hitting the network. */
+async function captureTokenBody(run: () => Promise<unknown>): Promise<URLSearchParams> {
+  const realFetch = globalThis.fetch;
+  let captured: URLSearchParams | null = null;
+  let sawAuthHeader = false;
+  globalThis.fetch = (async (_input: string | URL, init?: RequestInit) => {
+    captured = new URLSearchParams(String(init?.body ?? ""));
+    const h = new Headers(init?.headers as HeadersInit);
+    sawAuthHeader = !!h.get("Authorization");
+    return new Response(JSON.stringify({
+      access_token: "AT_new", refresh_token: "RT_new",
+      expires_in: 3600, refresh_token_expires_in: 31536000,
+      scope: "boards:read pins:read pins:write",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try { await run(); } finally { globalThis.fetch = realFetch; }
+  assert(captured, "token endpoint was not called");
+  assert(sawAuthHeader, "token request must use Basic auth header (secret never in body)");
+  return captured!;
+}
+
+await test("authorization_code exchange sends continuous_refresh=true (+ code, redirect_uri)", async () => {
+  const body = await captureTokenBody(() => service.exchangeCodeForTokens("AUTH_CODE_123"));
+  assertEq(body.get("grant_type"), "authorization_code", "grant_type");
+  assertEq(body.get("code"), "AUTH_CODE_123", "code");
+  assertEq(body.get("redirect_uri"), "http://localhost:3000/api/auth/pinterest/callback", "redirect_uri");
+  assertEq(body.get("continuous_refresh"), "true", "continuous_refresh must be requested");
+  // The app secret must ride in the Basic auth header, never the form body.
+  assert(!body.get("client_secret"), "client_secret must NOT be in the token request body");
+});
+
+await test("refresh_token grant does NOT send continuous_refresh", async () => {
+  const body = await captureTokenBody(() => service.refreshAccessToken("RT_old"));
+  assertEq(body.get("grant_type"), "refresh_token", "grant_type");
+  assertEq(body.get("refresh_token"), "RT_old", "refresh_token");
+  assert(body.get("continuous_refresh") === null, "refresh grant must NOT include continuous_refresh");
+});
+
+await test("successful exchange parses access/refresh tokens, both expiries, and granted scopes", async () => {
+  type Tokens = Awaited<ReturnType<typeof service.exchangeCodeForTokens>>;
+  const box: { t?: Tokens } = {};
+  await captureTokenBody(async () => { box.t = await service.exchangeCodeForTokens("AUTH_CODE_123"); });
+  assert(box.t, "exchange returned nothing");
+  const t = box.t as Tokens;
+  assertEq(t.accessToken, "AT_new", "access token");
+  assertEq(t.refreshToken, "RT_new", "rotated refresh token");
+  assert(t.accessTokenExpiresAt, "access_token_expires_at must be derived from expires_in");
+  assert(t.refreshTokenExpiresAt, "refresh_token_expires_at must be derived");
+  assertEq(t.scopes.join(","), "boards:read,pins:read,pins:write", "granted scopes captured");
+});
+
+await test("token exchange failure never echoes code/secret/token in the error message", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(
+    JSON.stringify({ error: "invalid_grant", error_description: "Refresh token is invalid" }),
+    { status: 400, headers: { "Content-Type": "application/json" } },
+  )) as typeof fetch;
+  let msg = "";
+  try { await service.exchangeCodeForTokens("SUPER_SECRET_CODE"); }
+  catch (e) { msg = `${(e as Error).message}`; }
+  finally { globalThis.fetch = realFetch; }
+  assert(msg.length > 0, "a 400 must throw");
+  assert(!msg.includes("SUPER_SECRET_CODE"), "error must not leak the authorization code");
+  assert(!msg.includes("test-app-secret"), "error must not leak the app secret");
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
 }
