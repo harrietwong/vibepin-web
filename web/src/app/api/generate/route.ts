@@ -27,6 +27,15 @@ import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/li
 import { resolvePlan, type PlanKey } from "@/lib/server/entitlements";
 import { checkAllowance, recordUsage } from "@/lib/server/usage";
 import { recordAiCost, estimateCost, type AiCostRequestStatus } from "@/lib/server/aiCostLog";
+import {
+  usageMeteringMode,
+  reserveGenerationJobViaLedger,
+  reserveInline,
+  settleInline,
+  releaseInline,
+  aiImageLimitResponseBody,
+  type InlineReservation,
+} from "@/lib/server/usage/meterGeneration";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -1136,6 +1145,43 @@ export async function POST(req: NextRequest) {
       retryOutputIndex: body.retryOutputIndex,
     };
 
+    // ── Phase 4I: image metering (SHADOW by default; off = today's behaviour) ────
+    // Reserve slots against the usage ledger BEFORE dispatch, AFTER the moderation
+    // gate above (moderation is unmoved — see Step 3 at line ~926). Only authenticated
+    // `user:<id>` callers reach here (worker mode is strictly authenticated), so this
+    // is exactly the metered identity; anon callers cannot reach this branch.
+    //
+    // usage_reserve_generation_job inserts the job AND the reservation in ONE
+    // transaction (closing the reserve-then-crash-before-enqueue gap), so in metering
+    // mode it REPLACES the plain enqueueGenerationJob insert. When the ledger reserve
+    // succeeds we use its jobId directly. In `off` mode the plain path is untouched.
+    const meterMode = usageMeteringMode();
+    if (meterMode !== "off") {
+      // Worker liveness is still an honest-failure gate even under metering: a job
+      // nobody will claim must not be reserved-and-enqueued. Reuse isWorkerHealthy().
+      if (!(await isWorkerHealthy())) {
+        return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
+      }
+      const ledger = await reserveGenerationJobViaLedger({
+        userId,
+        count,
+        generationRequestId,
+        params: jobParams as unknown as Record<string, unknown>,
+      });
+      if (ledger.kind === "reserved") {
+        console.log(`[/api/generate] enqueued job=${ledger.jobId} slots=${ledger.slots} user=${userId} (metered)`);
+        return NextResponse.json({ jobId: ledger.jobId, slots: ledger.slots });
+      }
+      if (ledger.kind === "insufficient" && meterMode === "enforce") {
+        // ENFORCE (reserved for a later phase; NOT enabled in prod this phase):
+        // insufficient balance → limit response in the route's error envelope.
+        return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+      }
+      // SHADOW fail-open: insufficient / error / skipped → fall through to the plain
+      // (unmetered) enqueue so the user still generates. Deliberately inverse to the
+      // moderation gate — see meterGeneration.ts.
+    }
+
     const enqueued = await enqueueGenerationJob(count, jobParams as unknown as Record<string, unknown>, userId);
     if (!enqueued) {
       return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
@@ -1145,6 +1191,13 @@ export async function POST(req: NextRequest) {
   }
 
   // Path 1: FastAPI (async task queue — only when server is running)
+  //
+  // Phase 4I: this branch is DELIBERATELY EXCLUDED from metering. tryFastAPI is
+  // fire-and-forget — the route hands the task to an external FastAPI queue and never
+  // learns its outcome (nothing polls the task id back here). Reserving capacity for a
+  // job whose success/failure we can never observe would leak reserved capacity until
+  // the expiry sweeper reclaimed it, charging the user for nothing in the meantime. So
+  // no reserve happens here; metering resumes on the inline (Path 2) fallback below.
   const requiresFullPayload = promptMode === "creative_direction_v2" || productImages.length > 0 || !!styleRef;
   if (!requiresFullPayload) {
     const fastapiResult = await tryFastAPI(keyword, style, undefined);
@@ -1185,8 +1238,26 @@ export async function POST(req: NextRequest) {
     }, { status: 429 });
   }
 
+  // ── Phase 4I: inline image metering (SHADOW by default; off = unchanged) ──────
+  // Reserve AFTER the per-user lock is held (so a lock-denied 429 leaks no
+  // reservation) and BEFORE runGenerator dispatches. Only authenticated `user:<id>`
+  // callers meter: anonymous inline callers (session:/anon:) have no usage account,
+  // so they are skipped entirely — metering never touches the documented anonymous
+  // path. `enforce` refuses an insufficient balance; `shadow` proceeds regardless.
+  // Moderation (Step 3, ~line 926) already ran and is unmoved.
+  let inlineReservation: InlineReservation = { kind: "off" };
+  if (authUserId && usageMeteringMode() !== "off") {
+    inlineReservation = await reserveInline({ userId: authUserId, count, generationRequestId });
+    if (inlineReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
+      await userLock.release();
+      return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+    }
+    // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
+    // the moderation gate).
+  }
+
   try {
-    return await runGenerator({
+    const response = await runGenerator({
       keyword, style, count, prompt: promptWithLang, style_ref: styleRef, product_images: productImages, image_inputs: imageInputs, category,
       text_overlay: textOverlay, reference_strength: referenceStrength,
       output_type: outputType, format: pinFormat, product_metadata: productMetadata,
@@ -1270,6 +1341,30 @@ export async function POST(req: NextRequest) {
         metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count, generationRequestId },
       });
     });
+
+    // Settle per slot from the parsed result: N urls succeeded → s0..s{N-1}
+    // succeeded, the rest terminal failure. runGenerator ALWAYS resolves a
+    // NextResponse (never throws), so read the count off a clone. Every settle
+    // failure is swallowed inside settleInline (the expiry sweeper is the net).
+    if (inlineReservation.kind === "reserved") {
+      let successCount = 0;
+      try {
+        const parsed = (await response.clone().json()) as { urls?: unknown };
+        successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
+      } catch {
+        successCount = 0; // unparseable body → treat as zero success (all released)
+      }
+      await settleInline({ reservation: inlineReservation, successCount });
+    }
+    return response;
+  } catch (err) {
+    // A synchronous failure before any slot could run → release the whole
+    // reservation. runGenerator itself does not throw, so this covers only unexpected
+    // errors; release is idempotent and swallow-on-failure.
+    if (inlineReservation.kind === "reserved") {
+      await releaseInline({ reservation: inlineReservation, reason: "generation_error" });
+    }
+    throw err;
   } finally {
     await userLock.release();
   }

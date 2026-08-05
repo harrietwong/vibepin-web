@@ -5,6 +5,14 @@ import { recordUsage } from "@/lib/server/usage";
 import { retrievePinterestKeywords, type KeywordContextResult } from "@/lib/ai-copy/keywordContext";
 import { appendShopifyProductDetails } from "@/lib/ai-copy/shopifyGrounding";
 import {
+  usageMeteringMode,
+  reserveTextGeneration,
+  settleTextGeneration,
+  releaseTextGeneration,
+  aiTextLimitResponseBody,
+  type TextReservation,
+} from "@/lib/server/usage/meterTextGeneration";
+import {
   CopyError,
   GENERIC_COPY_MESSAGE,
   PROVIDER_MESSAGE,
@@ -304,6 +312,24 @@ export async function POST(req: Request) {
   let gateResult = "pass";
   let promptCharsEstimate = 0;
 
+  // ── USAGE METERING (Phase 4T — shadow by default) ─────────────────────────────
+  // Reserve ONE text unit up front, settle once at the single success return, release
+  // in the catch. Reserving here (before any provider call) means the reservation
+  // exists for the WHOLE request — including the internal quality-gate retries and the
+  // keyword-refine call — yet is settled exactly once, so 1 request = 1 charge no
+  // matter how many model calls fire. `off` (default) touches the ledger not at all;
+  // `shadow` never blocks (fail-open); `enforce` (Phase 6A, off in prod) refuses when
+  // the account is out of text capacity. userId is already resolved (401'd otherwise).
+  let textReservation: TextReservation = { kind: "off" };
+  if (usageMeteringMode() !== "off") {
+    textReservation = await reserveTextGeneration({ userId, generationRequestId: requestId });
+    if (textReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
+      return NextResponse.json(aiTextLimitResponseBody(requestId), { status: 402 });
+    }
+    // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
+    // the moderation gate). enforce with a live reservation continues below.
+  }
+
   try {
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);
     mark("received");
@@ -457,24 +483,14 @@ export async function POST(req: Request) {
     }));
     devLog("success", { ...diagnostics, output, contextUsed, marks });
 
-    // Meter one AI text generation per successful request. The internal
-    // quality-gate retry is the SAME request (same requestId) → counted once; a
-    // client-side "regenerate" is a new request (new requestId) → counted again.
-    // Not enforced (ai_text_generation limit is null everywhere) — metering only.
-    // Only reached on the success path; 422/502/500 throw before here and record
-    // nothing. recordUsage never throws. Awaited so the insert completes before
-    // the serverless response returns (an un-awaited insert can be dropped when
-    // the runtime freezes after resolve → systematic under-count).
-    await recordUsage({
-      ownerId: userId,
-      usageType: "ai_text_generation",
-      operation: "consume",
-      quantity: 1,
-      referenceType: "ai_copy",
-      referenceId: requestId,
-      idempotencyKey: `ai_text_generation:${userId}:${requestId}`,
-      metadata: { draftId: body.draftId ?? null, pathUsed },
-    });
+    // Settle the single reserved text unit as succeeded — a pure side-effect between
+    // generation and the response (does NOT read or mutate `output`; the response body
+    // stays byte-identical). Reached only on the ONE success path, so it fires exactly
+    // once per request regardless of internal retries. Swallow-on-failure inside.
+    // (This reserve/settle/release model supersedes the earlier direct recordUsage
+    // call from the failure-handling lineage: it cannot under-count a request that
+    // dies mid-flight, and it is what the enforce path keys off.)
+    await settleTextGeneration({ reservation: textReservation });
 
     return NextResponse.json({
       ok: true,
@@ -505,6 +521,11 @@ export async function POST(req: Request) {
       diagnostics: isDev ? { ...diagnostics, recommended, modelUsed, retryCount, qualityGateResult: gateResult, promptChars: promptCharsEstimate, marks } : undefined,
     });
   } catch (err) {
+    // Any failure (quality-gate CopyError, provider error, invalid JSON, timeout,
+    // unconfigured provider) → return the whole reservation so no capacity is billed:
+    // failure/timeout/moderation-reject/invalid-JSON/empty = 0 charge. Idempotent and
+    // swallow-on-failure; a no-op when metering is off or nothing was reserved.
+    await releaseTextGeneration({ reservation: textReservation, reason: "ai_copy_failed" });
     diagnostics.totalLatencyMs = elapsed(started);
     const isCopyErr = err instanceof CopyError;
     const status = isCopyErr ? err.status : 502;
