@@ -21,7 +21,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import * as assetStore from "@/lib/assetStore";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { publishPin, startPinterestConnect } from "@/lib/pinterestClient";
+import { publishPin, startPinterestConnect, fetchPinterestDefaultBoard } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
@@ -292,8 +292,20 @@ export function StudioBoard() {
 
   // ── Publish now (from ⋮) ───────────────────────────────────────────────────
   const handlePublish = useCallback(async (id: string) => {
-    const d = pinDraftStore.getDraft(id); if (!d) return;
+    let d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
+    // Publishing straight from the card never opens the details drawer, so the drawer's
+    // board auto-fill never ran for this draft. Without this, a user who has a default
+    // board set is still told to "complete required details" — the board they picked
+    // last time simply was never written onto this draft. Adopt it here before gating.
+    if (!d.boardId?.trim() && !noBoardAccess) {
+      try {
+        const fallback = await fetchPinterestDefaultBoard();
+        if (fallback?.boardId) {
+          d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "" }) ?? d;
+        }
+      } catch { /* leave the draft as-is; the readiness gate below reports it */ }
+    }
     if (noBoardAccess || !isPinReady(draftReadiness(d))) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
     if (!beginPublish(id)) return;
     pinDraftStore.updateDraft(id, { publishError: undefined });
