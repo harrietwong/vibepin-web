@@ -106,7 +106,13 @@ test("first pick is primary only when the Pin has no primary yet", () => {
 
 test("StudioBoard's product select opens the AI drawer, not a bare draft", () => {
   const src = read("components/studio/StudioBoard.tsx");
-  const handler = src.slice(src.indexOf("const handleProductSelect"), src.indexOf("const handleProductSelect") + 700);
+  // Slice to the handler's real end (its `}, [deps]);` line) rather than a fixed
+  // character budget: the handler grew when the scratch-cache reset landed, which
+  // pushed setAiDrawer past a 700-char window and failed this on a correct file.
+  const start = src.indexOf("const handleProductSelect");
+  const end = src.indexOf("\n  }, [", start);
+  assert.ok(start > -1 && end > start, "handleProductSelect not found");
+  const handler = src.slice(start, end);
   assert.ok(handler.includes('setAiDrawer({ mode: "scratch"'), "must open the scratch AI drawer");
   assert.ok(!handler.includes("createBoardDraft"), "must NOT create a draft on selection");
 });
