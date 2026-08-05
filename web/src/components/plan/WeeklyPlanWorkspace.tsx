@@ -58,6 +58,7 @@ import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, b
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "@/lib/planCalendar";
 import { filterUnscheduledPinIds } from "@/lib/smartScheduleActions";
 import { displayTitle, sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
+import { isPublishableImage, pinFieldErrors } from "@/lib/pinReadiness";
 import { fetchPinterestBoards, seedPinterestStatusConnected, syncPinterestAccount } from "@/lib/pinterestClient";
 import { invalidateBoardsCache } from "@/lib/pinterest/boardsCache";
 import { invalidateConnectionsCache } from "@/lib/social/connectionsCache";
@@ -1566,11 +1567,16 @@ export function WeeklyPlanWorkspace() {
 
   function minimumPlanContentError(draft: PinDraft | null | undefined): string | null {
     if (!draft) return tr("plan.error.pinNotFound");
-    // WP1 contract: only image + board block scheduling. An empty title or
-    // description is a recommendation, never a blocker — the needsTitle /
-    // needsDescription checks were deliberately retired with that fix, so this
-    // branch's copies of them are not reinstated here.
-    if (!sanitizeHandoffField(draft.imageUrl)) return tr("plan.error.needsImage");
+    // WP1 contract: an image and a board block scheduling, and so does an
+    // OVER-LIMIT title/description — but an EMPTY one never does (that older
+    // emptiness gate was retired with the WP1 fix, so the branch's copies of
+    // it are not reinstated here). Mirrors the canonical implementation this
+    // function was moved from (app/plan/page.tsx).
+    if (!isPublishableImage(draft.imageUrl)) return tr("plan.error.needsImage");
+    if (!sanitizeHandoffField(draft.boardId)) return tr("studioBoard.toast.chooseBoardToSchedule");
+    const lenErrors = pinFieldErrors({ title: draft.title, description: draft.description });
+    if (lenErrors.title) return lenErrors.title;
+    if (lenErrors.description) return lenErrors.description;
     return null;
   }
 

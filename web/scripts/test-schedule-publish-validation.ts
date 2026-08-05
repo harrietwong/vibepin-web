@@ -97,7 +97,10 @@ async function main() {
     );
     assert.match(
       src,
-      /const handlePublish = useCallback\(async \(id: string\) => \{\s*\n\s*const d = pinDraftStore\.getDraft\(id\); if \(!d\) return;/,
+      // `let` is allowed here (not just `const`): the board auto-adopt fix
+      // reassigns `d` after re-reading the store. What matters for this
+      // contract is that the draft is READ FRESH at call time, not closed over.
+      /const handlePublish = useCallback\(async \(id: string\) => \{\s*\n\s*(?:const|let) d = pinDraftStore\.getDraft\(id\); if \(!d\) return;/,
       "handlePublish must read the store fresh, not a closed-over draft",
     );
   });
@@ -260,8 +263,10 @@ async function main() {
     const src = readFileSync(join(root, "src/lib/smartSchedule.ts"), "utf8");
     assert.match(src, /const lenErrors = pinFieldErrors\(\{ title: draft\.title, description: draft\.description \}\);/);
   });
-  await test("Weekly Plan batch-schedule precheck (plan/page.tsx minimumPlanContentError) honors the image+board contract — empty title/description never block", () => {
-    const src = readFileSync(join(root, "src/app/app/plan/page.tsx"), "utf8");
+  // Weekly Plan was folded into Create Pins (app/plan/page.tsx is now only a
+  // redirect shell), so this precheck now lives in WeeklyPlanWorkspace.
+  await test("Weekly Plan batch-schedule precheck (WeeklyPlanWorkspace minimumPlanContentError) honors the image+board contract — empty title/description never block", () => {
+    const src = readFileSync(join(root, "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
     const start = src.indexOf("function minimumPlanContentError(");
     const end = src.indexOf("\n  }", start);
     assert.ok(start > -1 && end > start, "minimumPlanContentError not found");
