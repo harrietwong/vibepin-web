@@ -66,18 +66,20 @@ await test("authorization URL has correct params, exact redirect URI, and scopes
   assertEq(url.searchParams.get("response_type"), "code", "response_type");
   assertEq(url.searchParams.get("redirect_uri"), "http://localhost:3000/api/auth/pinterest/callback", "exact redirect URI");
   assertEq(url.searchParams.get("state"), "STATE123", "state");
-  // Default env resolves to production → minimum scopes, NO boards:write.
-  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,pins:read,pins:write", "production scopes");
+  // Default env resolves to production. boards:write IS included: Pinterest v5
+  // POST /pins rejects a token without it (401 code 3 "Missing: ['boards:write']"),
+  // so it is part of the minimum publish set — see PRODUCTION_SCOPES in config.ts.
+  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,boards:write,pins:read,pins:write", "production scopes");
 });
 
-await test("production requests minimum scopes; no boards:write, no forbidden / secret scopes", () => {
+await test("production requests the minimum publish set; no forbidden / secret scopes", () => {
   const s = config.pinterestScopeString();
   for (const bad of ["ads:", "catalogs:", "_secret"]) {
     assert(!s.includes(bad), `scope string must not include ${bad}`);
   }
   assert(s.includes("pins:write"), "pins:write required for publishing");
-  assert(!s.includes("boards:write"), "production must NOT request boards:write");
-  assertEq(config.PRODUCTION_SCOPES.length, 4, "exactly 4 production scopes");
+  assert(s.includes("boards:write"), "boards:write required — POST /pins rejects tokens without it");
+  assertEq(config.PRODUCTION_SCOPES.length, 5, "exactly 5 production scopes");
 });
 
 await test("sandbox requests boards:write for the demo-board helper", () => {
@@ -101,7 +103,9 @@ await test("VERCEL_ENV=production forces production regardless of PINTEREST_API_
   try {
     assertEq(config.getPinterestApiEnv(), "production", "prod deploy forces production");
     assertEq(config.getPinterestApiBase(), "https://api.pinterest.com/v5", "prod uses production base, NOT api-sandbox");
-    assert(!config.pinterestScopeString().includes("boards:write"), "prod scopes even with sandbox flag");
+    // The point of this test is env forcing, not scope contents: prove the scope
+    // string is the PRODUCTION set (not sandbox's) even with a stray sandbox flag.
+    assertEq(config.pinterestScopeString(), config.PRODUCTION_SCOPES.join(","), "prod scopes even with sandbox flag");
   } finally {
     if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
     if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
