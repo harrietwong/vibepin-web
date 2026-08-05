@@ -629,14 +629,32 @@ function safeJsonParse(text: string): unknown {
 }
 
 function isMissingScopeResponse(status: number, json: unknown, message: string): boolean {
-  if (status !== 403) return false;
   const text = `${message} ${JSON.stringify(json)}`.toLowerCase();
-  return text.includes("scope") || text.includes("permission") || text.includes("not sufficient");
+  if (status === 403) {
+    return text.includes("scope") || text.includes("permission") || text.includes("not sufficient");
+  }
+  // Pinterest also reports a missing scope as 401 + numeric code 3, naming the scope in
+  // the body ("Missing: ['boards:write']"). Matched narrowly — code 3 AND the scope
+  // wording — so a genuinely invalid/expired token (401 code 2) still reads as a token
+  // problem and keeps its refresh-then-reconnect path. This request already survived one
+  // refresh-and-retry before reaching here, so a repeat 401 is not a stale-token case.
+  if (status === 401) {
+    const code = (json as { code?: unknown } | null)?.code;
+    const isCode3 = code === 3 || code === "3";
+    return isCode3 && (text.includes("scope") || text.includes("sufficient permissions"));
+  }
+  return false;
 }
 
 function isTrialAccessResponse(status: number, json: unknown, message: string): boolean {
   if (status !== 403) return false;
   const text = `${message} ${JSON.stringify(json)}`.toLowerCase();
+  // Only the explicit 403 shape is trial access. 401 + code 3 + "sufficient permissions"
+  // is Pinterest's MISSING-SCOPE error (its body names the scope, e.g.
+  // "Missing: ['boards:write']") — it used to be claimed here as a second trial-access
+  // shape, which showed an "awaiting API approval" notice for what is really a
+  // reconnect-fixable permission gap: a dead end, since no review was ever pending.
+  // That shape now falls through to isMissingScopeResponse, which marks for reconnect.
   return text.includes("trial access") && text.includes("api-sandbox.pinterest.com");
 }
 
