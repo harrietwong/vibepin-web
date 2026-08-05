@@ -203,6 +203,15 @@ export const pinDrawerMessages = {
 
   // ── AiVersionDrawer: recommended references ──
   "pinDrawer.recommended.heading": "Recommended for this product",
+  // Shown when the API reports recommendationBasis=category_fallback — category-only
+  // results must not claim product-level personalisation.
+  "pinDrawer.recommended.headingCategory": "Category inspiration",
+  // Shown after a product swap: the grid refreshed, but the user's already-selected
+  // references were intentionally kept.
+  "pinDrawer.recommended.refreshedForNewProduct": "Recommendations refreshed for the new product",
+  // Loading + failure states — a failed request must not look like "no results".
+  "pinDrawer.recommended.analyzing": "Analyzing your product and finding matching inspiration…",
+  "pinDrawer.recommended.loadError": "Couldn't load recommendations.",
   "pinDrawer.recommended.inspirationDisclaimer": "These are style inspiration only — generation borrows visual cues like composition and mood, and never copies these images.",
   "pinDrawer.recommended.styleCuesUsed": "Style cues used:",
   "pinDrawer.recommended.viewOnPinterest": "View on Pinterest",
@@ -223,6 +232,9 @@ export const pinDrawerMessages = {
   // ── AiVersionDrawer: Pin settings ──
   "pinDrawer.settings.heading": "Pin settings",
   "pinDrawer.settings.numberOfPins": "Number of Pins",
+  // Used instead of numberOfPins when references are selected — the value is
+  // per-reference, so the batch total is references × this.
+  "pinDrawer.settings.pinsPerReference": "Pins per reference",
   "pinDrawer.settings.aspectRatio": "Aspect ratio",
   "pinDrawer.settings.resultVariety": "Result variety",
   "pinDrawer.settings.distinct": "Distinct",
@@ -233,6 +245,8 @@ export const pinDrawerMessages = {
 
   // ── AiVersionDrawer: footer ──
   "pinDrawer.footer.generatingEllipsis": "Generating...",
+  // Makes the references × pins-each multiplication explicit next to the CTA.
+  "pinDrawer.footer.batchMath": "{refs} references × {each} Pins each",
   "pinDrawer.footer.generateCountSingular": "Generate {n} Pin",
   "pinDrawer.footer.generateCountPlural": "Generate {n} Pins",
 } as const;

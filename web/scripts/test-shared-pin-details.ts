@@ -14,7 +14,7 @@ function assert(value: unknown, message: string): asserts value {
 }
 
 const studio = readFileSync(join(process.cwd(), "src/app/app/studio/page.tsx"), "utf8");
-const plan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const plan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const history = readFileSync(join(process.cwd(), "src/app/app/history/page.tsx"), "utf8");
 const modal = readFileSync(join(process.cwd(), "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
 const drawer = readFileSync(join(process.cwd(), "src/components/studio/PinDetailsDrawer.tsx"), "utf8");

@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -20,11 +21,11 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import * as assetStore from "@/lib/assetStore";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { publishPin, startPinterestConnect } from "@/lib/pinterestClient";
+import { publishPin, startPinterestConnect, fetchPinterestDefaultBoard } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
-import { beginPublish, endPublish, countPublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+import { beginPublish, endPublish, isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, mapPublishErrorToCategory, publishFailureSetIdentity, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
@@ -32,6 +33,8 @@ import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
+import { type SelectedReference } from "@/lib/studio/selectedReferences";
+import { runAiGeneration } from "@/lib/studio/runAiGeneration";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
@@ -39,12 +42,20 @@ import { PinBoardCard } from "@/components/studio/PinBoardCard";
 import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI } from "@/components/studio/boardUI";
-import { ProductPickerModal, type ProductSelection } from "@/components/studio/ProductPickerModal";
-import { normalizeProductSource, type LinkedProduct } from "@/lib/pinMetadata";
+import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
+import { selectionFromLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
+import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
+import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
-type AiDrawerState = { mode: "version"; draft: PinDraft } | { mode: "scratch" } | null;
+type AiDrawerState =
+  // `product` on the version variant carries a RETRY's own product forward, so a
+  // failed run that chose a different product than its parent is not re-inherited
+  // from the parent on retry.
+  | { mode: "version"; draft: PinDraft; product?: CanonicalProductSelection }
+  | { mode: "scratch"; product?: CanonicalProductSelection }
+  | null;
 
 // Deep link into /app/plan that reopens the Edit-details drawer for a specific Pin.
 // Reuses the SAME "?modal=publish&pinId=…" contract Plan already parses (see the
@@ -70,12 +81,13 @@ function readStoredFilter(): BoardFilter {
 // ── Failed-view sub-filter (PRD §4) ─────────────────────────────────────────────
 // Second-level chips shown only while the main filter is "failed": Publish failures /
 // Generation failures / All. Entry-point default differs by how the user got here:
-//   - Banner CTA / stats-bar "N failed" click (openFailedInStudio-style entry) → "publish"
+//   - A `?sub=publish` deep link (or the Banner CTA within Create Pins) → "publish"
 //     (matches the Banner's count, which is publish-failures only).
 //   - Manually clicking the "Failed" filter chip → "all" (no assumption about intent).
-// The signal is passed via a ONE-SHOT sessionStorage flag written by the caller right
-// before navigating (Plan's openFailedInStudio) — read once on mount here, then cleared,
-// so it never sticks around and overrides a later manual chip click.
+// Two seed channels, URL-first: a reload-durable `?sub=` query param (see the mount
+// effect) takes priority; the legacy ONE-SHOT sessionStorage flag (FAILED_SUB_ENTRY_KEY)
+// is retained as a fallback for any in-session caller that still writes it — read once
+// on mount here, then cleared, so it never overrides a later manual chip click.
 export type FailedSubFilter = "publish" | "generation" | "all";
 function consumeFailedSubEntryDefault(): FailedSubFilter {
   if (typeof window === "undefined") return "all";
@@ -86,8 +98,25 @@ function consumeFailedSubEntryDefault(): FailedSubFilter {
   } catch { return "all"; }
 }
 
+// ── URL query-param entry (deep link / reload-durable) ──────────────────────────
+// A `?filter=<board-filter>&sub=<publish|generation|all>` query param takes priority
+// over the sessionStorage session memory, so a shared/reloaded link like
+// `/app/studio?filter=failed&sub=publish` reliably lands on Failed → Publish failures
+// even after a refresh (sessionStorage alone doesn't survive a fresh deep link). When
+// present, the filter is still written back to sessionStorage so the rest of the
+// session remembers it — the existing behavior is preserved, URL just seeds it.
+function parseFilterParam(raw: string | null | undefined): BoardFilter | null {
+  return raw && (VALID_FILTERS as string[]).includes(raw) ? (raw as BoardFilter) : null;
+}
+function parseSubParam(raw: string | null | undefined): FailedSubFilter | null {
+  return raw === "publish" || raw === "generation" || raw === "all" ? raw : null;
+}
+
 export function StudioBoard() {
   const { t: tr } = useLocale();
+  // Deep-link filter/sub source of truth (reload-durable). Read here (component is inside
+  // the page's Suspense boundary — see app/studio/page.tsx) and consumed once on mount.
+  const searchParams = useSearchParams();
   // SSR/first-render always starts at the default; the real (possibly session-
   // remembered) filter is applied post-mount alongside the hydration gate below,
   // so this never causes a hydration mismatch.
@@ -96,6 +125,17 @@ export function StudioBoard() {
   // sub-filter to "all" — only the one-shot sessionStorage entry signal (consumed on
   // mount, see the hydration effect below) can seed "publish".
   const [failedSubFilter, setFailedSubFilter] = useState<FailedSubFilter>("all");
+  const planWeekScope = searchParams.get("week");
+  const setFailedSub = useCallback((sub: FailedSubFilter) => {
+    setFailedSubFilter(sub);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("filter", "failed");
+      url.searchParams.set("sub", sub);
+      if (sub !== "publish") url.searchParams.delete("week");
+      window.history.replaceState({}, "", url.toString());
+    } catch { /* URL persistence is best-effort. */ }
+  }, []);
   // `subDefault` lets a caller (the Banner CTA) request "publish" as the sub-filter
   // default in the SAME state transition — avoids a two-render race where a plain
   // setFailedSubFilter call before/after setFilter could be seen out of order.
@@ -103,27 +143,55 @@ export function StudioBoard() {
     setFilterState(f);
     if (f === "failed") setFailedSubFilter(subDefault);
     try { window.sessionStorage.setItem(FILTER_STORAGE_KEY, f); } catch { /* storage unavailable — filter still works in-memory */ }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("view");
+      url.searchParams.set("filter", f);
+      if (f === "failed") url.searchParams.set("sub", subDefault);
+      else {
+        url.searchParams.delete("sub");
+        url.searchParams.delete("week");
+      }
+      window.history.replaceState({}, "", url.toString());
+    } catch { /* URL persistence is best-effort; the state transition already happened. */ }
   }, []);
-  const { items: rawItems, allItems, counts, isPublishing } = usePinBoardDrafts(filter);
+  const { items: rawItems, allItems, activeDrafts, counts, isPublishing } = usePinBoardDrafts(filter);
   // Sub-filter is applied on TOP of the main "failed" filter — never touches
   // usePinBoardDrafts/BoardFilter itself (PRD: no change to the primary filter enum).
-  const isPublishFailureItem = useCallback((d: PinDraft) => !!d.publishError?.trim(), []);
+  // Shared, source-agnostic actionable-publish-failure predicate (pinLifecycle) —
+  // one predicate for Plan + Create Pins so the two never disagree. Stricter than the
+  // old `!!publishError`: it also requires failureType==="publish" and !archivedAt,
+  // eliminating the third divergent predicate that made counts drift.
+  const isPublishFailureItem = useCallback((d: PinDraft) => isActionablePublishFailure(d), []);
   const failedSubCounts = useMemo(() => {
     if (filter !== "failed") return { publish: 0, generation: 0, all: 0 };
-    const publish = rawItems.filter(x => isPublishFailureItem(x.draft)).length;
-    return { publish, generation: rawItems.length - publish, all: rawItems.length };
-  }, [filter, rawItems, isPublishFailureItem]);
+    const publish = rawItems.filter(x => isPublishFailureItem(x.draft)
+      && (!planWeekScope || isActionablePublishFailureInWeek(x.draft, planWeekScope))).length;
+    const generation = rawItems.filter(x => !isPublishFailureItem(x.draft)).length;
+    return { publish, generation, all: publish + generation };
+  }, [filter, rawItems, isPublishFailureItem, planWeekScope]);
   const items = useMemo(() => {
     if (filter !== "failed" || failedSubFilter === "all") return rawItems;
-    return rawItems.filter(x => (failedSubFilter === "publish" ? isPublishFailureItem(x.draft) : !isPublishFailureItem(x.draft)));
-  }, [filter, failedSubFilter, rawItems, isPublishFailureItem]);
-  // Publish-failure banner (PRD §12, WP-F) — computed from the FULL board so it's
-  // independent of the current filter view; count is a derived value from `allItems`,
-  // so Retry/Move to Unscheduled/Delete are reflected immediately via re-render.
-  const publishFailureCount = useMemo(() => countPublishFailures(allItems.map(x => x.draft)), [allItems]);
-  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount);
+    return rawItems.filter(x => failedSubFilter === "publish"
+      ? isPublishFailureItem(x.draft) && (!planWeekScope || isActionablePublishFailureInWeek(x.draft, planWeekScope))
+      : !isPublishFailureItem(x.draft));
+  }, [filter, failedSubFilter, rawItems, isPublishFailureItem, planWeekScope]);
+  // Publish-failure banner — computed from the FULL workspace population (not the
+  // current filter view), so Retry/Move to Unscheduled/Delete are reflected immediately
+  // via re-render. Publish failures are workspace-wide: Plan/cron/legacy drafts share
+  // the same core predicate and are visible in Failed even when they are not V2
+  // board-origin cards, so the banner counts `activeDrafts`, not just board items.
+  // Dismiss is keyed on the failure-set IDENTITY (not the count) so a same-size but
+  // different failure set still resurfaces the banner.
+  const publishFailureCount = useMemo(() => listActionablePublishFailures(activeDrafts).length, [activeDrafts]);
+  const publishFailureIdentity = useMemo(() => publishFailureSetIdentity(activeDrafts), [activeDrafts]);
+  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount, publishFailureIdentity, "studio");
   // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
   // depends on the current filter view; the badge transfers automatically as cards change.
+  // `allItems` is now the whole active workspace (0731 count-base unification), but no
+  // extra isBoardSource filter is needed here: deriveTopPickIds' own `qualifies()` already
+  // admits only source === "ai_generated_from_upload" cards with a ready quality judge,
+  // so the wider input cannot change which ids come back.
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
@@ -140,22 +208,32 @@ export function StudioBoard() {
   // once mounted. This is separate from the experience decision (which is already
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
+  const didInitFilterRef = useRef(false);
   useEffect(() => {
+    if (didInitFilterRef.current) return;
+    didInitFilterRef.current = true;
     setHydrated(true);
-    // Apply any session-remembered filter now that we're on the client (sessionStorage
-    // is unavailable during SSR). Runs once, before the board is shown.
-    const restored = readStoredFilter();
+    // URL query param wins over session memory (reload-durable deep link). Falls back to
+    // the sessionStorage-remembered filter when no valid ?filter= is present.
+    const urlFilter = parseFilterParam(searchParams.get("filter"));
+    const restored = urlFilter ?? readStoredFilter();
     setFilterState(restored);
-    // Failed-view sub-filter default (PRD §4): consume the one-shot entry signal ONLY
-    // when we actually landed on the failed filter — a stray/stale flag must never
-    // silently seed "publish" the next time the user happens to land elsewhere.
-    setFailedSubFilter(restored === "failed" ? consumeFailedSubEntryDefault() : "all");
+    // Keep sessionStorage in sync so the rest of the session remembers a URL-seeded filter
+    // (preserves the existing session-memory behavior — the URL just seeds it).
+    if (urlFilter) { try { window.sessionStorage.setItem(FILTER_STORAGE_KEY, urlFilter); } catch { /* storage unavailable */ } }
+    // Failed-view sub-filter default (PRD §4): only meaningful when we land on "failed".
+    // A ?sub= param wins; otherwise consume the one-shot sessionStorage entry signal.
+    // A stray/stale flag must never silently seed "publish" when not on the failed filter.
+    const urlSub = parseSubParam(searchParams.get("sub"));
+    setFailedSubFilter(restored === "failed" ? (urlSub ?? consumeFailedSubEntryDefault()) : "all");
     // WP3-P2: reconcile in-flight generation jobs instead of blindly failing every
     // "generating" card. Worker-mode placeholders (generationJobId set) resume
     // polling or apply their already-terminal result; only jobId-less (inline-mode)
-    // leftovers are judged dead, matching the pre-P2 behavior for that partition.
+    // leftovers are judged dead — which is exactly the old
+    // failStaleGeneratingDrafts() behavior for that partition, so nothing sticks
+    // in Generating either way.
     void reconcileGeneratingDrafts();
-  }, []);
+  }, [searchParams]);
 
   const [uploading, setUploading] = useState(false);
   // Per-file upload status: "Uploading 2/5…" while a multi-file batch runs.
@@ -229,7 +307,23 @@ export function StudioBoard() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, PinFieldErrors>>({});
 
   const handlePersist = useCallback((id: string, patch: Partial<PinDraft>) => {
-    pinDraftStore.updateDraft(id, patch); flashSaved();
+    let next = patch;
+    // A URL typed into the card's own field is a manual edit, exactly like the two
+    // other hand-entry points (studio page + batch row). Without this flag, product
+    // selection would later treat the value as auto-derived and overwrite it
+    // (create-pin PRD Section J).
+    if ("destinationUrl" in patch) {
+      const existing = pinDraftStore.getDraft(id);
+      const typed = (patch.destinationUrl ?? "").trim();
+      if (typed !== (existing?.destinationUrl ?? "").trim()) {
+        next = {
+          ...patch,
+          destinationUrlSource: "manual",
+          metadataTouched: { ...EMPTY_TOUCHED, ...existing?.metadataTouched, destinationUrlTouched: true },
+        };
+      }
+    }
+    pinDraftStore.updateDraft(id, next); flashSaved();
     if (patch.boardId) setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
     if ("title" in patch || "description" in patch) {
       setFieldErrors(prev => {
@@ -281,8 +375,20 @@ export function StudioBoard() {
 
   // ── Publish now (from ⋮) ───────────────────────────────────────────────────
   const handlePublish = useCallback(async (id: string) => {
-    const d = pinDraftStore.getDraft(id); if (!d) return;
+    let d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
+    // Publishing straight from the card never opens the details drawer, so the drawer's
+    // board auto-fill never ran for this draft. Without this, a user who has a default
+    // board set is still told to "complete required details" — the board they picked
+    // last time simply was never written onto this draft. Adopt it here before gating.
+    if (!d.boardId?.trim() && !noBoardAccess) {
+      try {
+        const fallback = await fetchPinterestDefaultBoard();
+        if (fallback?.boardId) {
+          d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "" }) ?? d;
+        }
+      } catch { /* leave the draft as-is; the readiness gate below reports it */ }
+    }
     if (noBoardAccess || !isPinReady(draftReadiness(d))) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
     const lenErrors = pinFieldErrors({ title: d.title, description: d.description });
     if (lenErrors.title || lenErrors.description) {
@@ -318,40 +424,26 @@ export function StudioBoard() {
     } finally { endPublish(id); }
   }, [noBoardAccess, tr]);
 
-  // ── Product → Pin (Shopify "Select product", §3.6) ─────────────────────────
-  // Opening/browsing the picker never creates anything — only a confirmed selection
-  // does. destinationUrl is intentionally left empty (never auto-filled, §2).
-  const handleProductSelect = useCallback((p: ProductSelection) => {
+  // ── Top-level "Select product" → AI drawer ─────────────────────────────────
+  // Selecting a product now opens the SAME AiVersionDrawer as "Create with AI",
+  // prefilled with the product, instead of silently creating a bare draft. No draft
+  // exists until the user Generates — cancelling leaves nothing behind. The drawer
+  // derives the Website URL and requests this product's own recommendations.
+  const handleProductSelect = useCallback((selections: CanonicalProductSelection[]) => {
     setShowProductPicker(false);
-    // Multi-image selection → the first chosen image becomes the card's cover.
-    const chosenImageUrl = p.images?.[0]?.url ?? p.imageUrl ?? "";
+    const product = selections[0];
+    const chosenImageUrl = product?.imageUrl ?? "";
     if (!chosenImageUrl) { toast.error(tr("studioBoard.toast.productNoImage")); return; }
-    const linkedProduct: LinkedProduct = {
-      productId:    p.id,
-      title:        p.title?.trim() || "Product",
-      imageUrl:     chosenImageUrl,
-      thumbnailUrl: chosenImageUrl,
-      productUrl:   p.url,
-      canonicalUrl: p.canonicalUrl,
-      store:        p.store,
-      price:        p.price,
-      currency:     p.currency,
-      source:       normalizeProductSource(p.source),
-      linkType:     "auto",
-    };
-    const created = pinDraftStore.createBoardDraft({
-      imageUrl: chosenImageUrl,
-      source:   "uploaded_image",
-      title:    p.title?.trim() || undefined,
+    // Drop any cached scratch setup so a NEW product never inherits a previous scratch
+    // session's references/settings. (A retry seeds this key deliberately and opens the
+    // drawer itself, so it is unaffected.)
+    setAiSetupCache(prev => {
+      if (!prev.scratch) return prev;
+      const { scratch: _dropped, ...rest } = prev;
+      return rest;
     });
-    pinDraftStore.updateDraft(created.id, {
-      linkedProducts: [linkedProduct],
-      primaryProductId: linkedProduct.productId,
-    });
-    void startImageAnalysis(created.id);
-    flashSaved();
-    toast.success(tr("studioBoard.toast.createdPinFromProduct"));
-  }, [flashSaved, tr]);
+    setAiDrawer({ mode: "scratch", product });
+  }, [tr]);
 
   // ── AI drawers ─────────────────────────────────────────────────────────────
   const handleGenerateAiImage = useCallback((d: PinDraft) => setAiDrawer({ mode: "version", draft: d }), []);
@@ -363,9 +455,80 @@ export function StudioBoard() {
     // Regenerating from an existing pin (version mode) is a "regenerate" action.
     if (parent) track("regenerate_clicked", { draftId: parent.id });
 
-    // 1) Create N Generating placeholder cards IMMEDIATELY so the user sees the
-    //    task started (PRD 8.9). Stable keys gen:{requestId}:{i}; lineage preserved;
-    //    the original upload is never touched.
+    // ── Path selection ────────────────────────────────────────────────────────
+    // WP3-P1's worker path and the grouped multi-reference path are BOTH live, and
+    // they are chosen by a runtime probe, not a build flag:
+    //   * GENERATION_MODE=worker (production)  → enqueueGeneration returns a jobId.
+    //     That path is server-authenticated, one job per run, results delivered by
+    //     slot — it owns its own placeholders and is kept exactly as-is below.
+    //   * GENERATION_MODE=inline (dev/self-hosted) → enqueueGeneration returns null
+    //     and we fall through to runAiGeneration, which plans one request PER style
+    //     reference (the API can only carry one style_ref per call and 429s on a
+    //     concurrent second call, so groups must be serial).
+    // Probing FIRST matters: runAiGeneration creates placeholders eagerly, so
+    // letting it run before we know the mode would leave orphan cards behind in
+    // worker mode.
+    const workerProbe = await enqueueGeneration({ source: parent, setup: opts }).catch(() => "error" as const);
+    if (workerProbe === "error") {
+      // Worker path errored (e.g. 503 generation_unavailable) — surface it rather than
+      // silently falling back to the (likely also broken) inline path. No placeholder
+      // cards exist yet, so there is nothing to clean up.
+      setAiDrawer(null);
+      setAiGenerating(false);
+      toast.error(tr("studioBoard.toast.couldNotGenerate"));
+      return;
+    }
+
+    if (!workerProbe) {
+      // ── Inline mode: grouped, one request per style reference ────────────────
+      // The run itself lives in lib/studio/runAiGeneration so it can be driven by
+      // tests with a real store and a fake generate() — see test-ai-generation-run.
+      const batchToastId = `gen-batch-${Date.now()}`;
+      let groupTotal = 1;
+      await runAiGeneration({ parent, opts }, {
+        store: pinDraftStore,
+        generate: ({ styleReference, batchRequestId, setup }) =>
+          generateAiVersions({ source: parent, setup, styleReference, batchRequestId }),
+        resolveModelLabel: (_a, modelKey) => resolveModelLabel(undefined, modelKey),
+        onAnalyze: id => { void startImageAnalysis(id); },
+        onJudge: id => { void startQualityJudge(id); },
+        onPlaceholdersReady: totalPins => {
+          // Close the drawer right away — generation continues and the cards update.
+          setAiDrawer(null);
+          setAiGenerating(false);
+          toast.success(totalPins === 1
+            ? tr("studioBoard.toast.generatingOne")
+            : tr("studioBoard.toast.generatingMany").replace("{n}", String(totalPins)));
+        },
+        onGroupProgress: (current, total) => {
+          groupTotal = total;
+          // Batch progress lives in a toast because the drawer closes as soon as the
+          // placeholders exist (multi-group runs are long — N serial requests).
+          if (total > 1) {
+            toast.loading(
+              tr("studioBoard.toast.generatingReferenceProgress")
+                .replace("{current}", String(current))
+                .replace("{total}", String(total)),
+              { id: batchToastId },
+            );
+          }
+        },
+        onSettled: ({ okCount, failCount }) => {
+          if (groupTotal > 1) toast.dismiss(batchToastId);
+          if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
+          else if (okCount) toast.success(parent
+            ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
+            : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
+          else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+        },
+      });
+      return;
+    }
+
+    // ── Worker mode (WP3-P1/P2) ───────────────────────────────────────────────
+    // Create N Generating placeholder cards so the user sees the task started
+    // (PRD 8.9). Stable keys gen:{requestId}:{i}; lineage preserved; the original
+    // upload is never touched.
     const requestId = `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const requested = Math.max(1, opts.count || 1);
     const setupSnapshot = {
@@ -498,7 +661,49 @@ export function StudioBoard() {
       placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
       toast.error(tr("studioBoard.toast.couldNotGenerate"));
     }
+    // The run itself lives in lib/studio/runAiGeneration so it can be driven by
+    // tests with a real store and a fake generate() — see test-ai-generation-run.
+    const batchToastId = `gen-batch-${Date.now()}`;
+    let groupTotal = 1;
+    await runAiGeneration({ parent, opts }, {
+      store: pinDraftStore,
+      generate: ({ styleReference, batchRequestId, setup }) =>
+        generateAiVersions({ source: parent, setup, styleReference, batchRequestId }),
+      resolveModelLabel: (_a, modelKey) => resolveModelLabel(undefined, modelKey),
+      onAnalyze: id => { void startImageAnalysis(id); },
+      onJudge: id => { void startQualityJudge(id); },
+      onPlaceholdersReady: totalPins => {
+        // Close the drawer right away — generation continues and the cards update.
+        setAiDrawer(null);
+        setAiGenerating(false);
+        toast.success(totalPins === 1
+          ? tr("studioBoard.toast.generatingOne")
+          : tr("studioBoard.toast.generatingMany").replace("{n}", String(totalPins)));
+      },
+      onGroupProgress: (current, total) => {
+        groupTotal = total;
+        // Batch progress lives in a toast because the drawer closes as soon as the
+        // placeholders exist (multi-group runs are long — N serial requests).
+        if (total > 1) {
+          toast.loading(
+            tr("studioBoard.toast.generatingReferenceProgress")
+              .replace("{current}", String(current))
+              .replace("{total}", String(total)),
+            { id: batchToastId },
+          );
+        }
+      },
+      onSettled: ({ okCount, failCount }) => {
+        if (groupTotal > 1) toast.dismiss(batchToastId);
+        if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
+        else if (okCount) toast.success(parent
+          ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
+          : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
+        else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+      },
+    });
   }, [aiDrawer, tr]);
+
 
   const handleDelete = useCallback((d: PinDraft) => {
     if (typeof window !== "undefined" && !window.confirm(tr("studioBoard.confirm.deleteDraft"))) return;
@@ -564,7 +769,83 @@ export function StudioBoard() {
   const handleTryAgain = useCallback((d: PinDraft) => {
     if (d.publishError?.trim()) { void handlePublish(d.id); return; }
     const parent = d.parentDraftId ? pinDraftStore.getDraft(d.parentDraftId) : null;
-    setAiDrawer(parent ? { mode: "version", draft: parent } : d.imageUrl ? { mode: "version", draft: d } : { mode: "scratch" });
+    // Restore the failed card's OWN generation group reference, so retrying a failed
+    // reference group regenerates against the same reference instead of reopening a
+    // blank drawer (acceptance criterion 24). The association is persisted on the
+    // draft, so this survives refresh and cross-device — unlike the in-memory setup
+    // cache the drawer otherwise falls back to.
+    const groupReference: SelectedReference[] = d.referenceImageUrl
+      ? [{
+          id: d.referenceId || d.referenceImageUrl,
+          imageUrl: d.referenceImageUrl,
+          source: (d.referenceSource as SelectedReference["source"]) || "saved",
+          role: "style_reference",
+        }]
+      : [];
+    // Restore the product images the failed run used. An EMPTY list here would be
+    // treated as authoritative by buildInitialProductSelections (initialSetup wins
+    // over the parent fallback), leaving the drawer with no product and Generate
+    // permanently disabled — so only build a setup when we can supply them.
+    const snapshotProducts = (d.setupSnapshot?.selectedProducts ?? [])
+      .map(p => p.imageUrl)
+      .filter((u): u is string => !!u);
+    const productImages = snapshotProducts.length
+      ? snapshotProducts
+      : parent?.imageUrl ? [parent.imageUrl] : d.sourceImageUrl ? [d.sourceImageUrl] : [];
+
+    // Preserve the ORIGINAL model. Only a known model key is accepted — a blank or
+    // unrecognised persisted value falls back rather than being passed through to a
+    // provider that does not exist.
+    const KNOWN_MODELS = ["gemini_image", "gpt_image"];
+    const snapshotModel = (d.setupSnapshot?.modelKey ?? "").trim();
+    const retryModelKey = KNOWN_MODELS.includes(snapshotModel) ? snapshotModel : "gemini_image";
+
+    // Build a setup whenever there is ANYTHING worth restoring. Gating on
+    // `groupReference.length && productImages.length` meant a zero-reference failure
+    // never restored its model — the drawer silently reopened on the default.
+    // productImages may be empty here only when there is genuinely nothing to restore,
+    // in which case no setup is cached at all (an empty list would otherwise be taken
+    // as authoritative and leave Generate disabled).
+    const retrySetup = productImages.length
+      ? {
+          productImages,
+          referenceImages: groupReference.map(r => r.imageUrl),
+          referenceSelections: groupReference,
+          count: 1,
+          format: d.format ?? "Pinterest 2:3",
+          modelKey: retryModelKey,
+          variationMode: "distinct" as const,
+          selectedDirectionId: null,
+          selectedTagIds: [],
+          directionBrief: d.promptSnapshot ?? "",
+          briefManuallyEdited: false,
+        }
+      : undefined;
+
+    // The drawer opens in version mode when there is a parent or an own image, and
+    // reads aiSetupCache under the DRAFT ID in that case; a true scratch drawer reads
+    // the literal key "scratch". Cache under whichever key will actually be read —
+    // keying a scratch retry by draft id silently discarded the restored reference.
+    // Carry the failed draft's OWN product forward. A scratch retry reopens without a
+    // parent, and a restored image URL alone is classified as an implicit draft image
+    // — which sends primaryProductSelection: null and silently drops the product link,
+    // its Shopify id, and the Website URL the failed run had. Passing the product as
+    // an explicit selection is what preserves them.
+    const failedPrimary = d.linkedProducts?.length
+      ? (d.linkedProducts.find(p => p.productId === d.primaryProductId) ?? d.linkedProducts[0])
+      : null;
+    const retryProduct = failedPrimary ? selectionFromLinkedProduct(failedPrimary) : undefined;
+
+    // The failed draft's OWN product must survive every retry branch. Previously
+    // retryProduct was computed but only reached the scratch branch, so a version
+    // retry re-inherited the PARENT's product: if the failed run explicitly chose
+    // product B from a parent linked to A, retrying silently produced A.
+    const nextDrawer: AiDrawerState = parent
+      ? { mode: "version", draft: parent, product: retryProduct }
+      : d.imageUrl ? { mode: "version", draft: d, product: retryProduct } : { mode: "scratch", product: retryProduct };
+    const cacheKey = nextDrawer.mode === "version" ? nextDrawer.draft.id : "scratch";
+    if (retrySetup) setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
+    setAiDrawer(nextDrawer);
   }, [handlePublish]);
 
   // Persist failure is re-read on every render; the store emits (via
@@ -604,8 +885,8 @@ export function StudioBoard() {
           count={bannerCount}
           onReview={() => {
             // Banner CTA → Failed view defaults to "Publish failures" (matches the
-            // Banner's own count, which is publish-failures only). Same rule Plan's
-            // openFailedInStudio applies via the sessionStorage entry signal.
+            // Banner's own count, which is publish-failures only). Plan applies the same
+            // rule on its own surface now (stays in Plan's Failed list, no cross-nav).
             setFilter("failed", "publish");
           }}
           onDismiss={dismissBanner}
@@ -658,7 +939,7 @@ export function StudioBoard() {
             the card grid/empty state. Purely a client-side re-filter of the "failed"
             BoardFilter results; never touches usePinBoardDrafts' own counts. */}
         {filter === "failed" && (
-          <div data-testid="failed-sub-filters" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+          <div data-testid="failed-sub-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
             {([
               { id: "publish" as const, label: "Publish failures", n: failedSubCounts.publish },
               { id: "generation" as const, label: "Generation failures", n: failedSubCounts.generation },
@@ -666,7 +947,7 @@ export function StudioBoard() {
             ]).map(chip => {
               const active = failedSubFilter === chip.id;
               return (
-                <button key={chip.id} type="button" data-testid={`failed-sub-${chip.id}`} onClick={() => setFailedSubFilter(chip.id)}
+                <button key={chip.id} type="button" data-testid={`failed-sub-${chip.id}`} onClick={() => setFailedSub(chip.id)}
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 999,
                     border: `1px solid ${active ? BUI.purple : BUI.border}`,
@@ -678,6 +959,21 @@ export function StudioBoard() {
                 </button>
               );
             })}
+            {planWeekScope && failedSubFilter === "publish" && (
+              <span data-testid="failed-plan-week-scope" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 4, padding: "5px 9px", borderRadius: 999, border: `1px solid ${BUI.border}`, color: BUI.textSec, background: BUI.surface, fontSize: 11.5, fontWeight: 700 }}>
+                Plan week {planWeekScope}
+                <button type="button" onClick={() => {
+                  try {
+                    const url = new URL(window.location.href);
+                    url.searchParams.delete("week");
+                    window.history.replaceState({}, "", url.toString());
+                    window.location.reload();
+                  } catch { /* no-op */ }
+                }} aria-label="View all publish failures" style={{ border: "none", background: "none", color: BUI.purple, padding: 0, cursor: "pointer", font: "inherit" }}>
+                  View all
+                </button>
+              </span>
+            )}
           </div>
         )}
         {items.length === 0 && counts.all === 0 ? (
@@ -755,11 +1051,23 @@ export function StudioBoard() {
 
       {aiDrawer && (
         <AiVersionDrawer
-          key={aiDrawer.mode === "version" ? aiDrawer.draft.id : "scratch"}
+          // A scratch drawer opened WITH a product gets a per-product key so a fresh
+          // "Select product" never inherits a previous scratch session's cached setup.
+          key={aiDrawer.mode === "version" ? aiDrawer.draft.id
+            : aiDrawer.product ? `scratch:${aiDrawer.product.id ?? aiDrawer.product.imageUrl}`
+            : "scratch"}
           draft={aiDrawer.mode === "version" ? aiDrawer.draft : null}
           title={aiDrawer.mode === "version" ? tr("studioBoard.aiDrawer.generateAiImage") : tr("studioBoard.aiDrawer.createWithAi")}
           open generating={aiGenerating}
+          // A product prefill takes precedence over a cached scratch setup.
+          // A cached setup wins when one exists (a retry seeds it with the failed
+          // run's reference + products). Only a FRESH Select-product scratch — which
+          // has a product but no cached setup — starts clean, so a previous scratch
+          // session's settings are not inherited by a different product.
           initialSetup={aiSetupKey ? aiSetupCache[aiSetupKey] : undefined}
+          // Both modes may carry a product: scratch from Select product, version from
+          // a retry restoring the failed draft's own product.
+          initialProductSelection={aiDrawer.product ?? null}
           onSetupChange={setup => {
             if (!aiSetupKey) return;
             setAiSetupCache(prev => ({ ...prev, [aiSetupKey]: setup }));
@@ -770,10 +1078,9 @@ export function StudioBoard() {
       )}
 
       {showProductPicker && (
-        <ProductPickerModal
-          title={tr("studioBoard.productPicker.title")}
-          subtitle={tr("studioBoard.productPicker.subtitle")}
-          initialTab="shopify"
+        <CanonicalProductPicker
+          hasPrimary={false}
+          selectionMode="single"
           onSelect={handleProductSelect}
           onClose={() => setShowProductPicker(false)}
         />

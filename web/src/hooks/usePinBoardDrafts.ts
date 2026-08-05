@@ -8,12 +8,22 @@
  * selection via useMemo. Ordering: createdAt desc, id desc.
  *
  * Filters are lifecycle-only (P0): all / unscheduled / scheduled / posted / failed.
- * Board = active (non-archived) board-origin drafts (uploads + AI pins).
+ * EVERY bucket reads the same population: active (non-archived) workspace drafts,
+ * regardless of origin. Plan / cron / legacy handoff drafts count exactly like V2
+ * board cards.
+ *
+ * Why (0731 merge fix): the buckets used to split — all/unscheduled/scheduled/posted
+ * counted `isBoardSource` drafts only, while `failed` counted the whole workspace
+ * (PRD v1.1 §6.3 moved failures to the workspace-wide population when Plan merged into
+ * Create Pins). Two different base sets under one filter bar produced the impossible
+ * "All (4), Failed (5)" — a non-board-source failure could enter Failed but not All.
+ * The failure was the SYMPTOM; the real defect was the split base set, so all four
+ * remaining buckets were widened to match, keeping All === the sum of its parts.
  */
 
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import { isBoardSource, type PinDraft } from "@/lib/pinDraftStore";
+import { type PinDraft } from "@/lib/pinDraftStore";
 import {
   getPinLifecycle,
   getInFlightPublishSet,
@@ -26,6 +36,25 @@ export type BoardFilter = "all" | "unscheduled" | "scheduled" | "posted" | "fail
 
 export type BoardItem = { draft: PinDraft; lifecycle: PinLifecycle };
 export type BoardCounts = Record<BoardFilter, number>;
+
+export function deriveBoardCollections(all: PinDraft[]): { activeDrafts: PinDraft[]; boardItems: BoardItem[]; failureItems: BoardItem[] } {
+  const activeDrafts = all.filter(d => !d.archivedAt);
+  const byCreated = (a: BoardItem, b: BoardItem) =>
+    b.draft.createdAt.localeCompare(a.draft.createdAt) || b.draft.id.localeCompare(a.draft.id);
+  // One population for every bucket (see file header): active workspace drafts, origin
+  // agnostic. `failureItems` below is the same set narrowed to lifecycle === "failed",
+  // so counts.all is always >= counts.failed and All is the sum of its parts.
+  const boardItems = activeDrafts
+    .map(d => ({ draft: d, lifecycle: getPinLifecycle(d) }))
+    .sort(byCreated);
+  // Derived FROM boardItems (not re-derived from activeDrafts) so the subset relation
+  // failed ⊆ all is structural, not a coincidence two call sites have to keep in sync.
+  // Only the ordering differs: most recently failed first.
+  const failureItems = boardItems
+    .filter(item => item.lifecycle === "failed")
+    .sort((a, b) => b.draft.updatedAt.localeCompare(a.draft.updatedAt) || byCreated(a, b));
+  return { activeDrafts, boardItems, failureItems };
+}
 
 export function matchesFilter(item: BoardItem, filter: BoardFilter): boolean {
   if (filter === "all") return true;
@@ -48,25 +77,20 @@ export function usePinBoardDrafts(filter: BoardFilter = "all") {
   // Primitive version so React re-renders the "Publishing…" button state.
   const inFlightVersion = useSyncExternalStore(subscribeInFlight, getInFlightVersion, () => 0);
 
-  const items = useMemo<BoardItem[]>(() => {
-    return all
-      .filter(d => !d.archivedAt && isBoardSource(d))
-      .map(d => ({ draft: d, lifecycle: getPinLifecycle(d) }))
-      .sort((a, b) =>
-        b.draft.createdAt.localeCompare(a.draft.createdAt) ||
-        b.draft.id.localeCompare(a.draft.id),
-      );
-  }, [all]);
+  const { activeDrafts, boardItems, failureItems } = useMemo(() => deriveBoardCollections(all), [all]);
 
   const counts = useMemo<BoardCounts>(() => ({
-    all:         items.length,
-    unscheduled: items.filter(x => x.lifecycle === "unscheduled").length,
-    scheduled:   items.filter(x => x.lifecycle === "scheduled").length,
-    posted:      items.filter(x => x.lifecycle === "posted").length,
-    failed:      items.filter(x => x.lifecycle === "failed").length,
-  }), [items]);
+    all:         boardItems.length,
+    unscheduled: boardItems.filter(x => x.lifecycle === "unscheduled" || x.lifecycle === "generating").length,
+    scheduled:   boardItems.filter(x => x.lifecycle === "scheduled").length,
+    posted:      boardItems.filter(x => x.lifecycle === "posted").length,
+    failed:      failureItems.length,
+  }), [boardItems, failureItems]);
 
-  const filtered = useMemo(() => items.filter(x => matchesFilter(x, filter)), [items, filter]);
+  const filtered = useMemo(
+    () => filter === "failed" ? failureItems : boardItems.filter(x => matchesFilter(x, filter)),
+    [boardItems, failureItems, filter],
+  );
 
   const isPublishing = useCallback((id: string) => {
     void inFlightVersion; // re-evaluate when the in-flight set changes
@@ -76,12 +100,12 @@ export function usePinBoardDrafts(filter: BoardFilter = "all") {
   // ── Selection ────────────────────────────────────────────────────────────────
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const liveSelected = useMemo(() => {
-    const present = new Set(items.map(x => x.draft.id));
+    const present = new Set([...boardItems, ...failureItems].map(x => x.draft.id));
     let changed = false;
     const next = new Set<string>();
     selected.forEach(id => { if (present.has(id)) next.add(id); else changed = true; });
     return changed ? next : selected;
-  }, [items, selected]);
+  }, [boardItems, failureItems, selected]);
 
   const isSelected = useCallback((id: string) => liveSelected.has(id), [liveSelected]);
   const toggle = useCallback((id: string) => {
@@ -90,14 +114,19 @@ export function usePinBoardDrafts(filter: BoardFilter = "all") {
   const clearSelection = useCallback(() => setSelected(new Set()), []);
   const selectAll = useCallback(() => setSelected(new Set(filtered.map(x => x.draft.id))), [filtered]);
   const selectedDrafts = useMemo(
-    () => items.filter(x => liveSelected.has(x.draft.id)).map(x => x.draft),
-    [items, liveSelected],
+    () => [...boardItems, ...failureItems]
+      .filter((x, index, rows) => rows.findIndex(row => row.draft.id === x.draft.id) === index)
+      .filter(x => liveSelected.has(x.draft.id))
+      .map(x => x.draft),
+    [boardItems, failureItems, liveSelected],
   );
 
   return {
     items: filtered,
     drafts: filtered.map(x => x.draft),
-    allItems: items,
+    allItems: boardItems,
+    failureItems,
+    activeDrafts,
     counts,
     isPublishing,
     selectedIds: liveSelected,

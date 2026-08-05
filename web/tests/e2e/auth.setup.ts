@@ -1,5 +1,5 @@
 import { test as setup, expect } from "@playwright/test";
-import path from "path";
+import { STORAGE_STATE } from "../../playwright.config";
 
 /**
  * Authentication setup.
@@ -11,11 +11,10 @@ import path from "path";
  * Saves the authenticated browser storage state to .auth/user.json
  * so all other tests can reuse the session without logging in again.
  *
- * Run once before running the full test suite:
- *   E2E_USER_EMAIL=you@example.com E2E_USER_PASSWORD=yourpassword npx playwright test tests/e2e/auth.setup.ts
+ * This runs automatically as the "setup" project that "chromium" depends on, so a
+ * plain `npm run test:e2e` produces an authenticated run. The credentials must
+ * belong to the TEST Supabase project, never production.
  */
-
-export const STORAGE_STATE = path.join(process.cwd(), "tests", ".auth", "user.json");
 
 setup("authenticate", async ({ page }) => {
   const email    = process.env.E2E_USER_EMAIL;

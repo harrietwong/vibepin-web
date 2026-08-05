@@ -615,15 +615,21 @@ export function PinDetailsModal({
     const next = chooseBoardId(boards, draft?.boardId);
     if (!next) return;
     setBoardId(next);
-    if (!defaultBoard) {
-      const board = boards.find(b => b.id === next);
-      if (board) {
-        const value = { boardId: board.id, boardName: board.name };
-        setDefaultBoard(value);
-        void savePinterestDefaultBoard(value).catch(() => {});
-      }
+    const board = boards.find(b => b.id === next);
+    // Persist the auto-selected board ONTO THE DRAFT, not just into local state.
+    // The publish gate (StudioBoard's isPinReady(draftReadiness(d))) reads the stored
+    // draft, so a board that was only ever auto-filled into this drawer's state left
+    // the card failing the "Pinterest board" required-field check — the user saw their
+    // default board selected and was still told required details were missing.
+    if (board && draft && !draft.boardId?.trim()) {
+      pinDraftStore.updateDraft(draft.id, { boardId: board.id, boardName: board.name });
     }
-  }, [open, boardsStatus, boards, boardId, draft?.boardId, chooseBoardId, defaultBoard]);
+    if (!defaultBoard && board) {
+      const value = { boardId: board.id, boardName: board.name };
+      setDefaultBoard(value);
+      void savePinterestDefaultBoard(value).catch(() => {});
+    }
+  }, [open, boardsStatus, boards, boardId, draft, chooseBoardId, defaultBoard]);
 
   // Disconnecting Pinterest in Settings does not unmount this drawer when Settings is
   // opened as an overlay on top of it — nothing would otherwise tell this already-open

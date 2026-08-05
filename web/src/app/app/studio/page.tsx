@@ -35,7 +35,7 @@ import {
   loadAllSetupSnapshots as loadAllRemixSetups,
   pruneSetupSnapshots as pruneRemixSetups,
 } from "@/lib/remixRecoveryStore";
-import type { PinMetadataFormState, PinDetailsGenStatus, DrawerTab, RemixDraftSetup } from "@/components/studio/PinDetailsDrawer";
+import type { PinMetadataFormState, PinMetadataFormPatch, PinDetailsGenStatus, DrawerTab, RemixDraftSetup } from "@/components/studio/PinDetailsDrawer";
 import type { BatchPinRow, BatchApplyOpts } from "@/components/studio/BatchEditDrawer";
 import { StudioBoard } from "@/components/studio/StudioBoard";
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
@@ -76,6 +76,7 @@ import {
   writePinProducts,
   type PinMetadataDraft, type MetadataTouchedFlags,
 } from "@/lib/pinMetadata";
+import { reconcileProtectedUrl } from "@/lib/studio/destinationUrlDerivation";
 import { resolveCanonicalPinProducts } from "@/lib/studio/pinProducts";
 import { usePublishAssistantContext } from "@/lib/assistant/useAssistant";
 import { detectCreatePins } from "@/lib/assistant/detectors/createPins";
@@ -119,6 +120,8 @@ const PinDetailsModal = dynamic(() =>
   import("@/components/pin-details/PinDetailsModal").then(m => m.PinDetailsModal), { ssr: false });
 const InlineCreateAssetPicker = dynamic(() =>
   import("@/components/studio/InlineCreateAssetPicker").then(m => m.InlineCreateAssetPicker), { ssr: false });
+const WeeklyPlanWorkspace = dynamic(() =>
+  import("@/components/plan/WeeklyPlanWorkspace").then(m => m.WeeklyPlanWorkspace), { ssr: false });
 
 // ── Theme palette ─────────────────────────────────────────────────────────────
 // Surfaces/text/borders resolve from the app-shell theme tokens (--app-*) so the
@@ -1284,7 +1287,7 @@ function MasonryPinFeed({
   onOpenPinDetail:     (sessionId: string, entryKey: string, tab?: DrawerTab) => void;
   onClosePinDetail:    () => void;
   onRetryGenerateDetails: () => void;
-  onMetadataChange:    (patch: Partial<PinMetadataFormState>) => void;
+  onMetadataChange:    (patch: PinMetadataFormPatch) => void;
   onSelectTitleCandidate: (title: string) => void;
   onRegenerateTitles: () => void;
   onRegenerateDescription: () => void;
@@ -3165,7 +3168,10 @@ function CreatePinsContent() {
     const formState = buildPinDetailsForm(pinDetailPin);
     setMetadataForm(formState);
     setFormBaseline(formState);
-    setMetadataFormTouched({});
+    // Seed from the PERSISTED flags rather than clearing. Resetting to {} meant a
+    // manual URL edit was forgotten on close/reopen, after which the next product
+    // change treated the hand-typed value as auto-managed and overwrote it.
+    setMetadataFormTouched(pinDetailPin.metadataTouched ?? {});
     setShowSaved(false);
 
     const isCompleted = pinDetailView?.statusLabel === "Completed" || pinDetailView?.statusLabel === "Added to Plan";
@@ -3253,26 +3259,143 @@ function CreatePinsContent() {
         title: metadataForm.title, description: metadataForm.description,
         altText: metadataForm.altText, destinationUrl: metadataForm.destinationUrl,
         scheduledDate: metadataForm.plannedDate,
+        // The URL's protection must travel WITH it. Syncing the value but not its
+        // touched flag / provenance left the same Pin "manually protected" in the
+        // session store and "auto-managed" in the board draft, so the board's
+        // product flow could overwrite a hand-edited URL (Section J).
+        metadataTouched: { ...EMPTY_TOUCHED, ...existingDraft.metadataTouched, ...metadataFormTouched },
+        destinationUrlSource: updatedDraft?.destinationUrlSource ?? existingDraft.destinationUrlSource,
       });
     }
     setFormBaseline({ ...metadataForm });
     setShowSaved(true);
   }
 
-  function handleMetadataChange(patch: Partial<PinMetadataFormState>) {
+  function handleMetadataChange(patch: PinMetadataFormPatch) {
     setShowSaved(false);
-    setMetadataForm(prev => prev ? { ...prev, ...patch } : prev);
+
+    // Protection has to be decided BEFORE the visible form is updated, not just before
+    // the store writes. setMetadataForm ran unconditionally here, so a protected Pin
+    // still showed the automated URL in the open drawer — and handleSave writes
+    // metadataForm.destinationUrl into BOTH stores, silently destroying the manual URL
+    // on the next Save. Guarding only the immediate writes produced a third divergent
+    // copy (form) rather than fixing the divergence.
+    const isAutomatedUrlPatch = !!patch.automatedUrlFill && "destinationUrl" in patch;
+    const boardDraft = isAutomatedUrlPatch
+      ? pinDraftStore.getDraftByImageUrl(pinDetailPin?.url ?? "")
+      : null;
+
+    // Decide which existing copy — if any — is a hand-edited URL that an automated
+    // fill must not clobber. EITHER the board draft or the session Pin can be the
+    // manual one, and they can DISAGREE (board manual `M`, session stale auto `A`).
+    // Three previous attempts each protected one surface and let another keep the
+    // stale value, so Save (which reads the FORM top level) resurrected it. The fix
+    // is not to drop the patch's URL but to pick the authoritative manual value and
+    // reconcile every surface to it: form top level, session top level + draft, and
+    // board draft. isAutoManaged treats an empty URL as auto-managed, so a brand-new
+    // Pin with no URL is never mistaken for manual.
+    // The whole authoritative-copy decision lives in reconcileProtectedUrl (pure,
+    // unit-tested against the conflicting-copy states this bug kept slipping through).
+    const reconciled = isAutomatedUrlPatch
+      ? reconcileProtectedUrl(
+          boardDraft
+            ? {
+                destinationUrl: boardDraft.destinationUrl,
+                destinationUrlSource: boardDraft.destinationUrlSource,
+                destinationUrlTouched: boardDraft.metadataTouched?.destinationUrlTouched,
+              }
+            : null,
+          pinDetailPin
+            ? {
+                destinationUrl: pinDetailPin.destinationUrl,
+                destinationUrlSource: pinDetailPin.metadataDraft?.destinationUrlSource,
+                destinationUrlTouched: pinDetailPin.metadataTouched?.destinationUrlTouched,
+              }
+            : null,
+        )
+      : null;
+    const authoritativeManual = reconciled
+      ? { url: reconciled.url, source: reconciled.source, touched: reconciled.touched }
+      : null;
+
+    // When protected, force the automated URL in the patch (top level AND the copy
+    // riding inside metadataDraft) to the authoritative manual value, so the form the
+    // user sees, and every store Save reads, all show the protected URL — not a
+    // deleted field that leaves a stale form value behind.
+    const effectivePatch: PinMetadataFormPatch = authoritativeManual
+      ? {
+          ...patch,
+          ...("destinationUrl" in patch ? { destinationUrl: authoritativeManual.url ?? "" } : {}),
+          // Reconcile the FORM's touched flag too. Save copies metadataForm's touched
+          // state into both stores; leaving it false would let Save re-mark a manual
+          // URL as auto-managed (a hand-edited product URL is manual only WITH the
+          // flag). The reconciled value is manual, so the form must carry touched:true.
+          destinationUrlTouched: authoritativeManual.touched,
+          ...(patch.metadataDraft
+            ? { metadataDraft: {
+                ...patch.metadataDraft,
+                destinationUrl: authoritativeManual.url,
+                destinationUrlSource: authoritativeManual.source,
+              } }
+            : {}),
+        }
+      : patch;
+
+    // Keep the form's touched map in sync with the reconciled flag (metadataForm holds
+    // the value; metadataFormTouched holds its touched bits, read by Save).
+    if (authoritativeManual) {
+      setMetadataFormTouched(t => ({ ...t, destinationUrlTouched: authoritativeManual.touched }));
+    }
+    setMetadataForm(prev => prev ? { ...prev, ...effectivePatch } : prev);
     // Product / board changes ride on metadataDraft — persist them immediately so they
     // survive closing & reopening the drawer without requiring an explicit Save (Test F).
-    if ("metadataDraft" in patch && patch.metadataDraft && pinDetailView && pinDetailView.pinIdx !== undefined) {
-      const draft = patch.metadataDraft;
-      updatePinMetadata(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx, p => ({ ...p, metadataDraft: draft }));
+    if ("metadataDraft" in effectivePatch && effectivePatch.metadataDraft && pinDetailView && pinDetailView.pinIdx !== undefined) {
+      const draft = effectivePatch.metadataDraft;
+      const isAutomatedUrl = isAutomatedUrlPatch;
+
+      // The URL to persist: the authoritative manual value when protected, otherwise
+      // the automated fill. buildPinDetailsForm reads pin.destinationUrl (not the
+      // draft), so this MUST reach the top level too, or a URL vanishes on reopen.
+      const persistUrl = authoritativeManual ? (authoritativeManual.url ?? "") : (effectivePatch.destinationUrl ?? "");
+      const urlPatch = isAutomatedUrl
+        ? {
+            destinationUrl: persistUrl,
+            // When protected, EVERY surface adopts the reconciled touched flag (true —
+            // the value is manual). A hand-edited product URL is manual only WITH the
+            // flag, so writing false here (as an earlier version keyed on sessionManual
+            // did) would auto-manage the very copy we just protected. For a fresh
+            // automated fill (not protected) the flag stays false so a later product
+            // change may still update it.
+            metadataTouched: {
+              ...EMPTY_TOUCHED, ...pinDetailPin?.metadataTouched,
+              destinationUrlTouched: authoritativeManual ? authoritativeManual.touched : false,
+            },
+          }
+        : {};
+      updatePinMetadata(pinDetailView.sessionId, pinDetailView.groupIdx, pinDetailView.pinIdx, p => ({
+        ...p, metadataDraft: draft, ...urlPatch,
+      }));
+      // Reconcile the board draft to the SAME value AND touched flag so no surface is
+      // left divergent or wrongly auto-managed.
+      if (isAutomatedUrl && boardDraft) {
+        pinDraftStore.updateDraft(boardDraft.id, {
+          destinationUrl: persistUrl,
+          destinationUrlSource: draft.destinationUrlSource,
+          metadataTouched: {
+            ...EMPTY_TOUCHED, ...boardDraft.metadataTouched,
+            destinationUrlTouched: authoritativeManual ? authoritativeManual.touched : false,
+          },
+        });
+      }
     }
     const touched: Partial<MetadataTouchedFlags> = {};
     if ("title" in patch) touched.titleTouched = true;
     if ("description" in patch) touched.descriptionTouched = true;
     if ("altText" in patch) touched.altTextTouched = true;
-    if ("destinationUrl" in patch) touched.destinationUrlTouched = true;
+    // An AUTOMATIC product-derived fill must NOT be recorded as a manual edit —
+    // otherwise the very next product change refuses to update its own auto value.
+    // The drawer sets `automatedUrlFill` when it derived/cleared the URL itself.
+    if ("destinationUrl" in patch && !patch.automatedUrlFill) touched.destinationUrlTouched = true;
     if ("plannedDate" in patch) touched.plannedDateTouched = true;
     if (Object.keys(touched).length) setMetadataFormTouched(t => ({ ...t, ...touched }));
   }
@@ -4695,7 +4818,7 @@ function CreatePinsContent() {
             pinDetailOpen={pinDetailSelection !== null && pinDetailView !== null}
             pinDetailInitialTab={pinDetailSelection?.initialTab ?? "remix"}
             pinDetail={pinDetailView}
-            metadataForm={metadataForm}
+            metadataForm={metadataForm && { ...metadataForm, destinationUrlTouched: metadataFormTouched.destinationUrlTouched }}
             pinDetailsGenStatus={pinDetailsGenStatus}
             readinessLabel={pinReadinessLabel}
             isDirty={isFormDirty}
@@ -4864,7 +4987,7 @@ function CreatePinsContent() {
   );
 }
 
-export default function CreatePinsPage() {
+function CreatePinsPageInner() {
   // Resolve WHICH Studio experience to render as one atomic decision, so the legacy
   // Studio (and its heavy history/DB/generation-feed effects) never mounts when V2
   // is intended — no legacy flash, no wasted network calls.
@@ -4878,6 +5001,8 @@ export default function CreatePinsPage() {
   // override. In that (dev/local) window the initial state is "resolving" and we show
   // a neutral, board-shaped skeleton — never the legacy Studio.
   const { t: tr } = useLocale();
+  const searchParams = useSearchParams();
+  const workspaceView = searchParams.get("view");
   const envDecision = resolveStudioExperienceFromEnv();
   const [experience, setExperience] = useState<StudioExperience>(envDecision ?? "resolving");
 
@@ -4885,10 +5010,18 @@ export default function CreatePinsPage() {
     if (envDecision === null) setExperience(resolveStudioExperienceFromClient());
   }, [envDecision]);
 
+  if (workspaceView === "plan") {
+    return <WeeklyPlanWorkspace />;
+  }
+
   if (experience === "board-v2") {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "var(--app-bg, #F8FAFC)", overflow: "hidden", minHeight: 0 }}>
-        <StudioBoard />
+        {/* StudioBoard reads useSearchParams (deep-link ?filter=&sub=), which requires a
+            Suspense boundary or the production build fails (missing-suspense-with-csr). */}
+        <Suspense fallback={<StudioBoardSkeleton />}>
+          <StudioBoard />
+        </Suspense>
       </div>
     );
   }
@@ -4906,6 +5039,14 @@ export default function CreatePinsPage() {
   return (
     <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--app-text-sec, #8892A4)", fontSize: "13px", background: "var(--app-bg, #0B0E17)" }}>{tr("common.loading")}</div>}>
       <CreatePinsContent />
+    </Suspense>
+  );
+}
+
+export default function CreatePinsPage() {
+  return (
+    <Suspense fallback={<StudioBoardSkeleton />}>
+      <CreatePinsPageInner />
     </Suspense>
   );
 }

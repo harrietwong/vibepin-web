@@ -24,25 +24,34 @@ test("Settings navigation exposes six real routes", () => {
   }
 });
 
-test("Billing has Current plan and Credits sections without fake subscription data", () => {
+test("Billing has Current plan and real usage sections, no fake token balance", () => {
   assert.match(billing, /t\("billing\.currentPlan"\)/);
-  assert.match(billing, /t\("billing\.tokenBalance"\)/);
+  assert.match(billing, /t\("billing\.usageThisPeriod"\)/);
   assert.match(billing, /t\("billing\.usageHistory"\)/);
   assert.match(billing, /t\("billing\.noUsage"\)/);
   assert.match(billing, /t\("billing\.manageBilling"\)/);
+  // The old fabricated token-balance card/keys must be gone.
+  assert.doesNotMatch(billing, /billing\.tokenBalance/);
+  assert.doesNotMatch(billing, /EXISTING_APP_TOKEN_BALANCE/);
+});
+
+test("Billing shows an explicit sync-error state and never falls back to Free on fetch failure", () => {
+  assert.match(billing, /t\("billing\.usageSyncError"\)/);
+  assert.match(billing, /t\("billing\.usageSyncErrorDesc"\)/);
+  assert.match(billing, /setBillingSyncError\(true\)/);
+  assert.match(billing, /setUsageSyncError\(true\)/);
+  assert.match(billing, /\/api\/billing\/usage/);
 });
 
 test("Billing reads the plan from app_metadata (trusted); other fields from merged metadata", () => {
   // Plan is security-sensitive: it must come from app_metadata (service-role
-  // writable), never user_metadata. Display fields (status, tokens) stay merged.
+  // writable), never user_metadata. Display fields (status) stay merged.
   const value = deriveAccountBillingSummary({
     app_metadata: { plan_name: "Pro" },
-    user_metadata: { subscription_status: "active", token_balance: 91, tokens_used_this_month: 9 },
+    user_metadata: { subscription_status: "active" },
   });
   assert.equal(value.planName, "Pro");
   assert.equal(value.planStatus, "active");
-  assert.equal(value.tokenBalance, 91);
-  assert.equal(value.usedThisMonth, 9);
 });
 
 test("Billing IGNORES a forged user_metadata plan (only app_metadata is trusted)", () => {
@@ -51,12 +60,12 @@ test("Billing IGNORES a forged user_metadata plan (only app_metadata is trusted)
   assert.equal(value.planName, null);
 });
 
-test("Billing shows NO fabricated token balance when metadata is unavailable", () => {
-  // The old fake-34 constant is gone: with no real metered value, tokenBalance
-  // must be null (an honest "unavailable" state), never a placeholder number.
+test("Billing surfaces no fabricated token balance when metadata is unavailable", () => {
+  // The old fake-34 constant is gone, and so is the whole tokenBalance field:
+  // real metering now comes from /api/billing/usage, never from metadata.
   const value = deriveAccountBillingSummary(null);
   assert.equal(value.planName, null);
-  assert.equal(value.tokenBalance, null);
+  assert.equal("tokenBalance" in value, false, "tokenBalance must not be derived from metadata anymore");
 });
 
 test("The fabricated EXISTING_APP_TOKEN_BALANCE export no longer exists", () => {
@@ -67,16 +76,14 @@ test("The fabricated EXISTING_APP_TOKEN_BALANCE export no longer exists", () => 
   );
 });
 
-test("Billing card shows the honest no-usage state instead of a balance number", () => {
-  // The Token balance card must render billing.noUsage, not a numeric balance
-  // derived from summary.tokenBalance.
-  assert.match(billing, /t\("billing\.noUsage"\)/);
+test("Billing card never renders a metadata-derived balance number", () => {
   assert.doesNotMatch(billing, /summary\.tokenBalance/);
 });
 
 test("The app chrome no longer renders a fabricated token balance", () => {
   assert.doesNotMatch(layout, /EXISTING_APP_TOKEN_BALANCE/);
 });
+
 
 test("Pinterest derives all three safe states", () => {
   assert.equal(derivePinterestSettingsState(null), "not_connected");
@@ -115,6 +122,11 @@ test("Account dropdown routes work and logout calls Supabase", () => {
   assert.match(layout, /openSettings\("account"\)/);
   assert.match(layout, /openSettings\("billing"\)/);
   assert.match(layout, /supabase\.auth\.signOut\(\)/);
+});
+
+test("Sidebar no longer shows a fabricated token count", () => {
+  assert.doesNotMatch(layout, /EXISTING_APP_TOKEN_BALANCE/);
+  assert.doesNotMatch(layout, /\d+ Tokens/);
 });
 
 console.log(`\nSettings P0: ${passed} passed, 0 failed`);

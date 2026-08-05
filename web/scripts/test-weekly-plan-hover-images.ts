@@ -12,7 +12,7 @@ import { join } from "node:path";
 const root = process.cwd();
 const hover = readFileSync(join(root, "src/components/plan/PinHoverPreview.tsx"), "utf8");
 const thumb = readFileSync(join(root, "src/components/plan/PinThumbnail.tsx"), "utf8");
-const plan  = readFileSync(join(root, "src/app/app/plan/page.tsx"), "utf8");
+const plan  = readFileSync(join(root, "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {

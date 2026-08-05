@@ -214,7 +214,6 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
               <Field label="Last login" value={fmtRelative(a.lastLoginAt)} />
               <Field label="Plan" value={na(a.plan)} />
               <Field label="Status" value={a.status} />
-              <Field label="Token balance" value={na(a.tokenBalance !== null ? a.tokenBalance.toLocaleString() : null)} />
               <Field label="Internal tags" value={a.internalTags.length ? a.internalTags.join(", ") : na(null)} />
               <Field label="Support notes" value={<span className="text-gray-500">See section below</span>} />
             </dl>

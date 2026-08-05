@@ -41,6 +41,9 @@ function candidateChain(draft: FailureMediaDraft): string[] {
   push(draft.imageUrl);
   push(draft.sourceImageUrl);
   push(draft.setupSnapshot?.selectedProducts?.[0]?.imageUrl);
+  // This card's own group reference before the batch-wide list — for groups 2..N the
+  // snapshot's first reference is a DIFFERENT reference and would be misleading.
+  push(draft.referenceImageUrl);
   push(draft.setupSnapshot?.selectedReferences?.[0]?.imageUrl);
   if (draft.parentDraftId) {
     const parent = lookupParent(draft.parentDraftId);
@@ -48,10 +51,24 @@ function candidateChain(draft: FailureMediaDraft): string[] {
       push(parent.imageUrl);
       push(parent.sourceImageUrl);
       push(parent.setupSnapshot?.selectedProducts?.[0]?.imageUrl);
+      push(parent.referenceImageUrl);
       push(parent.setupSnapshot?.selectedReferences?.[0]?.imageUrl);
     }
   }
   return out;
+}
+
+/**
+ * True when the displayed candidate is an INPUT image (product / reference / parent)
+ * rather than this draft's own generated result.
+ *
+ * Index 0 is `draft.imageUrl` — the real generated image when it exists. Anything
+ * beyond it is a fallback, and showing a product or reference photo unlabelled would
+ * read as "generation succeeded". PRD acceptance test 44 requires these be marked.
+ */
+function isFallbackCandidate(draft: FailureMediaDraft, index: number): boolean {
+  const own = (draft.imageUrl ?? "").trim();
+  return index > 0 || !own;
 }
 
 /** A loaded image no real upload/generation could ever produce — a 1x1 (or similarly
@@ -99,9 +116,19 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
       ? tr("studioBoard.card.noImage")
       : tr("studioBoard.card.generationFailedPlaceholder");
     return (
+      // Neutral, self-contained and inline — no external URL, so it always ships in
+      // the production build. role/aria-label give it the alt text an <img> would
+      // carry (PRD: "Pin image unavailable").
       <div data-testid="card-generation-failed-placeholder"
+        role="img"
+        aria-label={tr("studioBoard.card.pinImageUnavailable")}
+        // Soft neutral GRADIENT (theme-aware via CSS vars: light ≈ #F1F5F9→#E2E8F0,
+        // the same gentle gray the earlier Studio used), overlaid with the status
+        // label so the card still reads as "failed / no image" and stays actionable.
         style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center",
-          justifyContent: "center", gap: 6, background: BUI.surface3, color: BUI.textMuted, ...style }}
+          justifyContent: "center", gap: 6,
+          background: `linear-gradient(135deg, ${BUI.surface3}, ${BUI.border})`,
+          color: BUI.textMuted, ...style }}
         className={className}>
         <ImageOff style={{ width: 22, height: 22 }} />
         <span style={{ fontSize: 11, fontWeight: 700 }}>{placeholderCopy}</span>
@@ -109,7 +136,7 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
     );
   }
 
-  return (
+  const img = (
     /* eslint-disable-next-line @next/next/no-img-element */
     <img
       data-testid="card-generation-failed-image"
@@ -118,10 +145,10 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
       loading="lazy"
       onError={() => setIdx(i => i + 1)}
       onLoad={e => {
-        const img = e.currentTarget;
+        const el = e.currentTarget;
         // A "successfully loaded" 1x1/2x2 pixel is junk (e.g. a stray placeholder PNG
         // data URL) — treat it exactly like a decode error and advance the chain.
-        if (img.naturalWidth <= JUNK_IMAGE_MAX_DIMENSION || img.naturalHeight <= JUNK_IMAGE_MAX_DIMENSION) {
+        if (el.naturalWidth <= JUNK_IMAGE_MAX_DIMENSION || el.naturalHeight <= JUNK_IMAGE_MAX_DIMENSION) {
           setIdx(i => i + 1);
         }
       }}
@@ -131,5 +158,30 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
         ...style }}
       className={className}
     />
+  );
+
+  // A product/reference/parent image standing in for a failed generation must never
+  // pass as the generated result. Only badge it once generation has actually failed —
+  // a healthy card showing its own source image is not a fallback.
+  const showOriginalBadge = placeholderVariant === "generationFailed"
+    && !generating
+    && isFallbackCandidate(draft, idx);
+
+  if (!showOriginalBadge) return img;
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {img}
+      <span
+        data-testid="card-original-image-badge"
+        style={{
+          position: "absolute", left: 6, bottom: 6, padding: "2px 7px", borderRadius: 5,
+          background: "rgba(15,23,42,0.82)", color: "#F8FAFC",
+          fontSize: 9, fontWeight: 800, letterSpacing: "0.02em", pointerEvents: "none",
+        }}
+      >
+        {tr("studioBoard.card.originalImageFallback")}
+      </span>
+    </div>
   );
 }

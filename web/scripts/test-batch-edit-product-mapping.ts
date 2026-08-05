@@ -90,7 +90,7 @@ test("no product sources → empty (product is optional)", () => {
 // ── Both row mappers use the canonical resolver ─────────────────────────────
 test("Create Pins + Plan batch mappers use resolveCanonicalPinProducts", () => {
   const studio = readFileSync("src/app/app/studio/page.tsx", "utf8");
-  const plan = readFileSync("src/app/app/plan/page.tsx", "utf8");
+  const plan = readFileSync("src/components/plan/WeeklyPlanWorkspace.tsx", "utf8");
   assert.match(studio, /resolveCanonicalPinProducts\(\{/);
   assert.match(plan, /resolveCanonicalPinProducts\(\{/);
   // Plan mapper feeds every canonical source (incl. top-level linkedProducts + setup).

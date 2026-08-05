@@ -18,6 +18,7 @@
 
 import { HELP_ARTICLES } from "./helpArticles";
 import { SUPPORT_CATEGORY_LABELS, type SupportCategory } from "./types";
+import { recordAiCost, estimateCost } from "../server/aiCostLog";
 
 const TIMEOUT_MS = 10_000;
 
@@ -26,6 +27,9 @@ export type AiResponderInput = {
   subject: string | null;
   description: string;
   context: Record<string, unknown> | null;
+  /** Optional — enables best-effort cost logging to ai_cost_events. */
+  userId?: string | null;
+  referenceId?: string | null;
 };
 
 export type AiResponderOutput = { canAnswer: boolean; reply: string };
@@ -160,19 +164,54 @@ export async function generateAiFirstResponse(input: AiResponderInput): Promise<
       }),
       signal: controller.signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      logSupportCost(input, model, undefined, "failed");
+      return null;
+    }
 
     const data = (await res.json().catch(() => null)) as
-      | { choices?: Array<{ message?: { content?: string } }> }
+      | { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
       | null;
     const content = data?.choices?.[0]?.message?.content;
-    if (!content) return null;
+    if (!content) {
+      logSupportCost(input, model, data?.usage, "failed");
+      return null;
+    }
 
+    logSupportCost(input, model, data?.usage, "success");
     return parseAiResponderOutput(content);
   } catch {
     // Network error, non-JSON envelope, or the AbortController firing on timeout.
+    logSupportCost(input, model, undefined, "failed");
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Best-effort cost-log for a support-reply call. Never throws — see
+ * aiCostLog.recordAiCost. Fire-and-forget; this function never awaits.
+ */
+function logSupportCost(
+  input: AiResponderInput,
+  model: string,
+  usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined,
+  requestStatus: "success" | "failed",
+): void {
+  try {
+    const inputTokens = typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : null;
+    const outputTokens = typeof usage?.completion_tokens === "number" ? usage.completion_tokens : null;
+    void recordAiCost({
+      userId: input.userId ?? null,
+      provider: "linapi",
+      model,
+      operationType: "support_reply",
+      inputTokens,
+      outputTokens,
+      estimatedCost: estimateCost({ model, inputTokens, outputTokens }),
+      requestStatus,
+      referenceId: input.referenceId ?? null,
+    });
+  } catch { /* cost logging must never affect the caller */ }
 }

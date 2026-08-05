@@ -253,6 +253,47 @@ async function main() {
     }
   });
 
+  // Updated 0731: this test used to assert `boardItems` EXCLUDED Plan-origin drafts
+  // ("must not leak into All") while `failureItems` included them. That split base set
+  // is exactly what produced the impossible "All (4) / Failed (5)" filter bar. Under
+  // PRD v1.1 §6.3 (Plan merged into Create Pins) both buckets read the same
+  // workspace-wide population, so a Plan draft belongs in BOTH.
+  await test("unified board: Plan/cron drafts outside the V2 board are in All AND Failed", async () => {
+    reset();
+    const { deriveBoardCollections } = await import("../src/hooks/usePinBoardDrafts");
+    const board = store.createBoardDraft({ imageUrl: "https://x/board.png", source: "uploaded_image" });
+    store.updateDraft(board.id, { failureType: "publish", publishError: "failed" });
+    const plan = store.createDraft({
+      imageUrl: "https://x/plan.png", keyword: "plan", category: "home-decor",
+      weeklyPlanItemId: "wp1", generationSessionId: "gs1",
+    });
+    store.updateDraft(plan.id, { failureType: "publish", publishError: "failed" });
+
+    const collections = deriveBoardCollections(store.getAllDrafts());
+    assert.equal(collections.boardItems.some(x => x.draft.id === plan.id), true,
+      "Plan draft must be in All — Failed counts it, so All must too");
+    assert.equal(collections.failureItems.some(x => x.draft.id === plan.id), true, "Plan failure must be recoverable in Failed");
+    // The invariant the old split violated: Failed can never exceed All.
+    assert.ok(collections.failureItems.length <= collections.boardItems.length,
+      "Failed must be a subset of All");
+  });
+
+  await test("Plan week scope uses the failed schedule and excludes other weeks", () => {
+    const base = {
+      failureType: "publish" as const, publishError: "failed", archivedAt: undefined,
+      scheduledDate: "", plannedAt: "", previousScheduledTime: "2026-07-30T09:00:00Z",
+    };
+    assert.equal(life.isActionablePublishFailureInWeek(base, "2026-07-27"), true);
+    assert.equal(life.isActionablePublishFailureInWeek(base, "2026-08-03"), false);
+  });
+
+  await test("failure-set identity changes when the same Pin fails again", () => {
+    const base = { id: "pin-1", failureType: "publish" as const, publishError: "failed", archivedAt: undefined };
+    const before = life.publishFailureSetIdentity([{ ...base, updatedAt: "2026-07-31T10:00:00Z" }]);
+    const after = life.publishFailureSetIdentity([{ ...base, updatedAt: "2026-07-31T10:05:00Z" }]);
+    assert.notEqual(before, after);
+  });
+
   console.log(`\nPin board store: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

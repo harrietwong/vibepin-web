@@ -34,6 +34,7 @@ const MOCK_SETUP: AiVersionOptions = {
   hiddenPrompt: "",
   productImages: ["https://cdn/product.jpg"],
   referenceImages: [],
+  selectedReferences: [],
   count: 3,
   format: "vertical 2:3",
   modelKey: "gemini_image",

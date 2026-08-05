@@ -21,7 +21,7 @@ import {
   SHOPIFY_OAUTH_STATE_COOKIE,
   shopifyStateCookieOptions,
 } from "@/lib/server/shopify/oauthState";
-import { prepareShopifyConnect } from "../connect/route";
+import { prepareShopifyConnect } from "@/lib/server/shopify/connectPrep";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

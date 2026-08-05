@@ -17,11 +17,13 @@ import type { SocialPublishingProvider } from "../types";
 import { mockProvider } from "./mock";
 import { zernioProvider, isZernioConfigured, zernioMissingEnv, zernioConfig } from "./zernio";
 import { oneupProvider } from "./oneup";
+import { officialProvider } from "./official";
 
 const REGISTRY: Partial<Record<AuthProvider, SocialPublishingProvider>> = {
   mock: mockProvider,
   zernio: zernioProvider,
   oneup: oneupProvider,
+  official: officialProvider,
 };
 
 /** The provider id configured via env (defaults to "mock"). */
@@ -64,4 +66,4 @@ export function getSocialProviderById(id: AuthProvider | null | undefined): Soci
   return REGISTRY[id] ?? getSocialProvider();
 }
 
-export { mockProvider, zernioProvider, oneupProvider };
+export { mockProvider, zernioProvider, oneupProvider, officialProvider };

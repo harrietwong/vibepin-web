@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
+import { recordUsage } from "@/lib/server/usage";
 import { retrievePinterestKeywords, type KeywordContextResult } from "@/lib/ai-copy/keywordContext";
 import { appendShopifyProductDetails } from "@/lib/ai-copy/shopifyGrounding";
 import {
@@ -166,6 +167,7 @@ async function refineCopyWithKeywords(args: {
   directionHint?: string;
   boardName?: string;
   language: string;
+  costContext?: { userId?: string | null; operationType: string; referenceId?: string | null };
 }): Promise<{ title: string; description: string }> {
   const prompt = [
     "Rewrite this Pinterest Pin's title and description to naturally incorporate relevant high-search keyword concepts.",
@@ -190,6 +192,8 @@ async function refineCopyWithKeywords(args: {
     model: args.cfg.textModel,
     timeoutMs: 14_000,
     temperature: 0.5,
+    costContext: args.costContext,
+    provider: args.cfg.provider,
     messages: [
       { role: "system", content: "You are an expert Pinterest copywriter. You write natural, readable, image-grounded copy and never keyword-stuff. Output JSON only." },
       { role: "user", content: prompt },
@@ -221,6 +225,11 @@ export async function POST(req: Request) {
   // fetching and every provider call below. This route spends real provider money
   // per request; an anonymous caller must not be able to reach a single outbound
   // call, nor to make us parse an attacker-sized body.
+  // (Audit finding: this route previously had NO authentication — the v53
+  // migration comment claimed auth existed but the handler resolved no user.)
+  // Bearer first, then the network-VERIFIED SSR cookie session — deliberately not
+  // the unverified local cookie read, because this handler spends money and meters
+  // usage against the resolved account.
   const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!userId) {
     return NextResponse.json(
@@ -322,14 +331,14 @@ export async function POST(req: Request) {
 
       const modelStart = performance.now();
       mark("modelStart");
-      result = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, category: body.category, language, length: copyLength, mode, previousCopy: body.previousCopy });
+      result = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, category: body.category, language, length: copyLength, mode, previousCopy: body.previousCopy, costContext: { userId, operationType: "copy_generation", referenceId: requestId } });
       mark("modelDone");
       let issues = [...qualityIssues(result, body.previousCopy), ...stuffingIssues(result.description, recommended)];
       mark("gateDone");
       // Retry ONLY when the gate actually failed (rare on a grounded cached analysis).
       if (issues.length) {
         retryCount = 1;
-        const retry = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, category: body.category, language, length: copyLength, mode: "regenerate", previousCopy: { title: result.title, description: result.description } });
+        const retry = await generateCopyFromAnalysis({ cfg, analysis: cachedAnalysis, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, category: body.category, language, length: copyLength, mode: "regenerate", previousCopy: { title: result.title, description: result.description }, costContext: { userId, operationType: "copy_generation", referenceId: requestId } });
         const retryIssues = [...qualityIssues(retry, body.previousCopy), ...stuffingIssues(retry.description, recommended)];
         if (retryIssues.length < issues.length || !retryIssues.length) { result = retry; issues = retryIssues; }
         mark("retryDone");
@@ -359,13 +368,13 @@ export async function POST(req: Request) {
 
       const modelStart = performance.now();
       mark("modelStart");
-      result = await analyzeAndWriteCopy({ cfg, dataUrl: img.dataUrl, contextBlock, language, mode, previousCopy: body.previousCopy });
+      result = await analyzeAndWriteCopy({ cfg, dataUrl: img.dataUrl, contextBlock, language, mode, previousCopy: body.previousCopy, costContext: { userId, operationType: "copy_generation", referenceId: requestId } });
       mark("modelDone");
       let issues = qualityIssues(result, body.previousCopy);
       mark("gateDone");
       if (issues.length) {
         retryCount = 1;
-        const retry = await analyzeAndWriteCopy({ cfg, dataUrl: img.dataUrl, contextBlock, language, mode: "regenerate", cachedAnalysis: result, previousCopy: { title: result.title, description: result.description } });
+        const retry = await analyzeAndWriteCopy({ cfg, dataUrl: img.dataUrl, contextBlock, language, mode: "regenerate", cachedAnalysis: result, previousCopy: { title: result.title, description: result.description }, costContext: { userId, operationType: "copy_generation", referenceId: requestId } });
         const retryIssues = qualityIssues(retry, body.previousCopy);
         if (retryIssues.length < issues.length || !retryIssues.length) { result = retry; issues = retryIssues; }
       }
@@ -387,7 +396,7 @@ export async function POST(req: Request) {
       recommended = kw.recommended;
       if (recommended.length) {
         try {
-          const refined = await refineCopyWithKeywords({ cfg, analysis: groundingAnalysis, baseTitle: result.title, baseDescription: result.description, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, language });
+          const refined = await refineCopyWithKeywords({ cfg, analysis: groundingAnalysis, baseTitle: result.title, baseDescription: result.description, recommendedKeywords: recommended, directionHint, boardName: boardContext.name, language, costContext: { userId, operationType: "copy_refine", referenceId: requestId } });
           const refinedVision: VisionResult = { ...result, title: refined.title, description: refined.description };
           const refineIssues = [...qualityIssues(refinedVision, body.previousCopy), ...stuffingIssues(refined.description, recommended)];
           if (!refineIssues.length && refined.title && refined.description) { result = refinedVision; }
@@ -447,6 +456,25 @@ export async function POST(req: Request) {
       latencyMs: totalLatencyMs, modelMs: timings.model,
     }));
     devLog("success", { ...diagnostics, output, contextUsed, marks });
+
+    // Meter one AI text generation per successful request. The internal
+    // quality-gate retry is the SAME request (same requestId) → counted once; a
+    // client-side "regenerate" is a new request (new requestId) → counted again.
+    // Not enforced (ai_text_generation limit is null everywhere) — metering only.
+    // Only reached on the success path; 422/502/500 throw before here and record
+    // nothing. recordUsage never throws. Awaited so the insert completes before
+    // the serverless response returns (an un-awaited insert can be dropped when
+    // the runtime freezes after resolve → systematic under-count).
+    await recordUsage({
+      ownerId: userId,
+      usageType: "ai_text_generation",
+      operation: "consume",
+      quantity: 1,
+      referenceType: "ai_copy",
+      referenceId: requestId,
+      idempotencyKey: `ai_text_generation:${userId}:${requestId}`,
+      metadata: { draftId: body.draftId ?? null, pathUsed },
+    });
 
     return NextResponse.json({
       ok: true,

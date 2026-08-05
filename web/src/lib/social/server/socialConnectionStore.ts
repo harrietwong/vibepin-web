@@ -62,6 +62,84 @@ function isMissingSocialConnectionsTable(error: { code?: string; message?: strin
   );
 }
 
+/**
+ * Rebuild a display-safe `metadata.facebook` block by WHITELIST — keeping only
+ * Page identifiers / publish capability / state, and dropping every encrypted-token
+ * field (`selectedPageTokenEncrypted` and each
+ * `candidatePages[].pageAccessTokenEncrypted`), which, even encrypted, must NEVER
+ * leave the server. Returns null when there is no facebook block.
+ */
+function sanitizeFacebook(
+  fb: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  if (!fb || typeof fb !== "object") return null;
+
+  const rawPages = Array.isArray((fb as { candidatePages?: unknown }).candidatePages)
+    ? ((fb as { candidatePages: unknown[] }).candidatePages)
+    : [];
+  const safePages = rawPages.map(p => {
+    const page = (p ?? {}) as Record<string, unknown>;
+    // Deliberately OMIT pageAccessTokenEncrypted — never send a token, encrypted or not.
+    return {
+      pageId: page.pageId ?? null,
+      pageName: page.pageName ?? null,
+      canPublish: page.canPublish ?? false,
+    };
+  });
+
+  return {
+    authMethod: (fb as { authMethod?: unknown }).authMethod ?? null,
+    connectionState: (fb as { connectionState?: unknown }).connectionState ?? null,
+    facebookUserId: (fb as { facebookUserId?: unknown }).facebookUserId ?? null,
+    facebookUserName: (fb as { facebookUserName?: unknown }).facebookUserName ?? null,
+    selectedPageId: (fb as { selectedPageId?: unknown }).selectedPageId ?? null,
+    selectedPageName: (fb as { selectedPageName?: unknown }).selectedPageName ?? null,
+    // selectedPageTokenEncrypted is deliberately dropped — never leaves the server.
+    candidatePages: safePages,
+  };
+}
+
+/**
+ * Rebuild a display-safe `metadata.instagram` block by WHITELIST. Instagram never
+ * stores any token in metadata (its only token lives, encrypted, in the top-level
+ * access_token_encrypted column), so this block is already display-safe — but we
+ * still reconstruct it from a fixed field set so a future field can never leak
+ * something token-shaped by accident. Returns null when there is no instagram block.
+ */
+function sanitizeInstagram(
+  ig: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  if (!ig || typeof ig !== "object") return null;
+  return {
+    authMethod: (ig as { authMethod?: unknown }).authMethod ?? null,
+    connectionState: (ig as { connectionState?: unknown }).connectionState ?? null,
+    accountType: (ig as { accountType?: unknown }).accountType ?? null,
+  };
+}
+
+/**
+ * Strip every token-shaped value out of a connection's metadata before it can
+ * reach the client. Facebook (metadata.facebook) carries encrypted page tokens;
+ * Instagram (metadata.instagram) carries only display fields. Both are rebuilt by
+ * whitelist so nothing token-shaped can escape, and every other metadata key is
+ * preserved unchanged.
+ */
+function sanitizeMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== "object") return metadata ?? null;
+  const fb = (metadata as { facebook?: Record<string, unknown> }).facebook;
+  const ig = (metadata as { instagram?: Record<string, unknown> }).instagram;
+  if ((!fb || typeof fb !== "object") && (!ig || typeof ig !== "object")) return metadata;
+
+  const next: Record<string, unknown> = { ...metadata };
+  const safeFacebook = sanitizeFacebook(fb);
+  if (safeFacebook) next.facebook = safeFacebook;
+  const safeInstagram = sanitizeInstagram(ig);
+  if (safeInstagram) next.instagram = safeInstagram;
+  return next;
+}
+
 function rowToSafe(row: SocialConnectionRow): SocialConnection {
   return {
     id: row.id,
@@ -76,7 +154,7 @@ function rowToSafe(row: SocialConnectionRow): SocialConnection {
     externalConnectionId: row.external_connection_id,
     scopes: row.scopes ?? [],
     tokenExpiresAt: row.token_expires_at,
-    metadata: row.metadata,
+    metadata: sanitizeMetadata(row.metadata),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

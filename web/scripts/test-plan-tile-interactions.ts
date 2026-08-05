@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
-const plan  = readFileSync(join(root, "src/app/app/plan/page.tsx"), "utf8");
+const plan  = readFileSync(join(root, "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const hover = readFileSync(join(root, "src/components/plan/PinHoverPreview.tsx"), "utf8");
 const thumb = readFileSync(join(root, "src/components/plan/PinThumbnail.tsx"), "utf8");
 const css   = readFileSync(join(root, "src/app/globals.css"), "utf8");

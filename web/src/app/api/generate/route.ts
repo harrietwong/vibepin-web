@@ -24,6 +24,9 @@ import { createServerClient }        from "@/lib/supabase";
 import { moderatePrompt, type ModerationResult } from "@/lib/server/creem/moderatePrompt";
 import { validateImageModelKey, DEFAULT_IMAGE_MODEL_KEY } from "@/lib/server/imageModelKey";
 import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
+import { resolvePlan, type PlanKey } from "@/lib/server/entitlements";
+import { checkAllowance, recordUsage } from "@/lib/server/usage";
+import { recordAiCost, estimateCost, type AiCostRequestStatus } from "@/lib/server/aiCostLog";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -195,9 +198,12 @@ function requestFallbackIdentity(req: NextRequest, body: Record<string, unknown>
 /**
  * Resolve the authenticated user ONCE per request. Called at the very top of the
  * handler so authentication precedes any outbound moderation call; the result is
- * threaded through both the worker enqueue path and the inline lock owner, so
- * auth is never parsed twice (and a request never pays for two token
- * verifications).
+ * threaded through the worker enqueue path, the inline lock owner, AND usage
+ * metering / AI cost logging, so auth is never parsed twice (and a request never
+ * pays for two token verifications).
+ *
+ * A null result means an anonymous browser session: the fallback session/anon
+ * identity used by the generation lock is NOT a user, so it is never metered.
  *
  * Honours the same `ALLOW_GENERATION_AUTH_TEST_HEADER` seam the lock owner used,
  * so tests can present a deterministic user without a live Supabase session. The
@@ -531,7 +537,7 @@ function unavailableResponse(generationRequestId: string): NextResponse {
  * unit-tested without a live Creem call. On {ok:true} the caller continues to
  * the dispatch branches; anything else STOPS before lock acquisition/dispatch.
  */
-export function evaluateModerationForRequest(
+function evaluateModerationForRequest(
   result: ModerationResult,
   generationRequestId: string,
 ): ModerationGateOutcome {
@@ -562,7 +568,11 @@ export function evaluateModerationResults(
   return { proceed: true };
 }
 
-function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}): Promise<NextResponse> {
+function runGenerator(
+  payload: GeneratorPayload,
+  responseMeta: ResponseMeta = {},
+  onComplete?: (result: { ok: boolean; successfulImageCount: number }) => void | Promise<void>,
+): Promise<NextResponse> {
   return new Promise((resolve) => {
     const child = spawn(
       PYTHON_BIN,
@@ -658,7 +668,16 @@ function runGenerator(payload: GeneratorPayload, responseMeta: ResponseMeta = {}
           ? result.errors[0]
           : undefined;
         console.log("[generate]", result.keyword, "→", result.urls?.length ?? 0, "urls", topError ? `| error: ${topError}` : "");
-        resolve(NextResponse.json({ ...result, ...responseMeta, error: topError, source: "generator_py" }));
+        // Report the ACTUAL number of images produced (urls.length) for usage
+        // metering — a partial/zero success is metered at its real count only.
+        const successfulImageCount = result.ok && Array.isArray(result.urls) ? result.urls.length : 0;
+        // AWAIT metering before resolving: on Vercel serverless the runtime can
+        // freeze right after the response resolves, dropping any in-flight insert
+        // (systematic under-count). recordUsage never throws and the insert is
+        // fast, so this does not affect perceived latency.
+        Promise.resolve(onComplete?.({ ok: !!result.ok, successfulImageCount }))
+          .catch(() => { /* metering must never break the response */ })
+          .then(() => resolve(NextResponse.json({ ...result, ...responseMeta, error: topError, source: "generator_py" })));
       } catch (parseErr) {
         console.error("[generate] JSON parse failed:", parseErr, "raw stdout:", stdout.slice(0, 500));
         resolve(NextResponse.json(
@@ -952,14 +971,78 @@ export async function POST(req: NextRequest) {
       `it requires ${moderationChecks.length} content checks, above the maximum of ${MAX_MODERATION_CHECKS}`,
     );
   }
+  // `costContext` attributes each moderation call's spend to the account in the
+  // internal AI cost log. `authUserId` is the SAME already-resolved user from
+  // Step 1 — never re-parse auth here.
   const moderationResults = await Promise.all(
     moderationChecks.map(check =>
-      moderatePrompt({ prompt: check.text, externalId: `${generationRequestId}:${check.suffix}` }),
+      moderatePrompt({
+        prompt: check.text,
+        externalId: `${generationRequestId}:${check.suffix}`,
+        costContext: { userId: authUserId },
+      }),
     ),
   );
   const gate = evaluateModerationResults(moderationResults, generationRequestId);
   if (!gate.proceed) {
+    // Best-effort internal cost-log row (PRD §9) — the request never dispatched
+    // to the image provider, so this is a 0-cost audit entry (tokens/cost stay
+    // null). The moderation call itself is separately cost-logged inside
+    // moderatePrompt (operationType="moderation"). Never affects the response
+    // (recordAiCost never throws); fire-and-forget.
+    void recordAiCost({
+      userId: authUserId,
+      provider: "n/a",
+      operationType: "image_generation",
+      requestedImageCount: imageCountClamp.requested,
+      successfulImageCount: 0,
+      requestStatus: "moderation_rejected",
+      referenceId: generationRequestId,
+    });
     return gate.response;
+  }
+
+  // ── Usage quota gate (AI images) ────────────────────────────────────────────
+  // AFTER moderation, BEFORE any dispatch (FastAPI or generator.py) or lock
+  // acquisition. Only signed-in users are metered/enforced; anonymous browser
+  // sessions fall through unmetered (they cannot resolve a plan). A quota outage
+  // fails OPEN (checkAllowance returns allowed on read error) so metering can
+  // never block generation. USAGE_ENFORCEMENT=0 disables enforcement (kill switch)
+  // while still metering on success.
+  // Same already-resolved user as Step 1 — auth is parsed exactly once per
+  // request, and metering keys on the identical id the auth gate admitted.
+  const meteringUserId = authUserId;
+  // Resolved alongside the allowance check below; reused ONLY for the internal
+  // cost-log row (never re-drives any quota/entitlement decision).
+  let meteringPlan: PlanKey | null = null;
+  if (meteringUserId) {
+    try {
+      const plan = await resolvePlan(meteringUserId);
+      meteringPlan = plan;
+      const allowance = await checkAllowance(meteringUserId, "ai_image", count, plan);
+      if (!allowance.allowed) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "quota_exceeded",
+            error_type: "quota_exceeded",
+            code: "quota_exceeded",
+            quota: { used: allowance.used, limit: allowance.limit },
+            userMessage:
+              "You've reached this month's AI image limit for your plan. Upgrade your plan or wait until next month to generate more.",
+            urls: [],
+            requested_image_count: imageCountClamp.requested,
+            actual_image_count: count,
+            count_clamped: imageCountClamp.clamped,
+            generation_request_id: generationRequestId,
+          },
+          { status: 429 },
+        );
+      }
+    } catch (err) {
+      // Fail open — a metering failure must not block generation.
+      console.error("[/api/generate] allowance check error:", (err as Error)?.message ?? String(err));
+    }
   }
 
   console.log(
@@ -1138,6 +1221,54 @@ export async function POST(req: NextRequest) {
       actual_image_count: count,
       count_clamped: imageCountClamp.clamped,
       generation_request_id: generationRequestId,
+    }, async ({ ok, successfulImageCount }) => {
+      // Internal cost-log row (PRD §9) — best-effort, records the outcome of
+      // EVERY real generator.py run (success/partial/failed), independent of
+      // the quota/metering decision below. Never throws (recordAiCost) and
+      // never affects the response; fire-and-forget so it cannot add latency.
+      const requestStatus: AiCostRequestStatus =
+        successfulImageCount <= 0 ? "failed" : successfulImageCount < count ? "partial" : "success";
+      void recordAiCost({
+        userId: meteringUserId,
+        provider: "linapi",
+        model: process.env.LINAPI_IMAGE_MODEL || "gemini-3.1-flash-image-preview",
+        operationType: "image_generation",
+        requestedImageCount: imageCountClamp.requested,
+        successfulImageCount,
+        estimatedCost: estimateCost({
+          model: process.env.LINAPI_IMAGE_MODEL || "gemini-3.1-flash-image-preview",
+          imageCount: successfulImageCount,
+        }),
+        // No pixel width/height is known at this route (the provider returns
+        // only image URLs) — record the requested aspect-ratio/format string as
+        // the closest available signal rather than fabricating a resolution.
+        resolution: pinFormat || null,
+        requestStatus,
+        plan: meteringPlan,
+        referenceId: generationRequestId,
+        metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count },
+      });
+
+      // Meter ONLY the actual successful images, ONLY for a signed-in user, and
+      // ONLY on a non-zero success. Failures / timeouts / zero-success record
+      // nothing. Idempotency key = a SERVER-generated uuid per real execution
+      // (NOT generationRequestId, which is client-controllable): every actual
+      // generation run costs money and is metered exactly once — a client cannot
+      // reuse an id to skip metering, and there is no cross-user collision.
+      // referenceId keeps generationRequestId for correlation. Awaited so the
+      // insert completes before the serverless response returns.
+      if (!meteringUserId || !ok || successfulImageCount <= 0) return;
+      const serverRunId = crypto.randomUUID();
+      await recordUsage({
+        ownerId: meteringUserId,
+        usageType: "ai_image",
+        operation: "consume",
+        quantity: successfulImageCount,
+        referenceType: "generation",
+        referenceId: generationRequestId,
+        idempotencyKey: `ai_image:${meteringUserId}:${serverRunId}`,
+        metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count, generationRequestId },
+      });
     });
   } finally {
     await userLock.release();

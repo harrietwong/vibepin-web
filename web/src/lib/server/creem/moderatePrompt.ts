@@ -33,6 +33,8 @@
  * the key with NEXT_PUBLIC_.
  */
 
+import { recordAiCost } from "../aiCostLog";
+
 const PROD_BASE_URL = "https://api.creem.io";
 const TEST_BASE_URL = "https://test-api.creem.io";
 const MODERATION_PATH = "/v1/moderation/prompt";
@@ -45,6 +47,8 @@ export type ModerationResult =
 export type ModeratePromptInput = {
   prompt: string;
   externalId?: string;
+  /** Optional — enables best-effort cost logging to ai_cost_events (never affects the moderation decision). */
+  costContext?: { userId?: string | null };
 };
 
 export type ModeratePromptDeps = {
@@ -64,7 +68,31 @@ export function moderationBaseUrl(apiKey: string): string {
 type RawModerationResponse = {
   id?: unknown;
   decision?: unknown;
+  usage?: { units?: unknown };
 };
+
+/**
+ * Best-effort cost-log a moderation call. Never throws — see aiCostLog.recordAiCost.
+ * `units` (Creem's moderation usage unit) is stored in metadata since it is not a
+ * token/image count; input/output_tokens stay null for this operation type.
+ */
+function logModerationCost(
+  externalId: string | null,
+  costContext: ModeratePromptInput["costContext"],
+  units: unknown,
+  requestStatus: "success" | "failed",
+): void {
+  try {
+    void recordAiCost({
+      userId: costContext?.userId ?? null,
+      provider: "creem",
+      operationType: "moderation",
+      requestStatus,
+      referenceId: externalId,
+      metadata: typeof units === "number" ? { units } : null,
+    });
+  } catch { /* cost logging must never affect moderation */ }
+}
 
 function logModeration(fields: {
   resultId: string | null;
@@ -159,6 +187,7 @@ export async function moderatePrompt(
 
     if (!res.ok) {
       logModeration({ resultId: null, decision: null, externalId, httpStatus, durationMs: Date.now() - start });
+      logModerationCost(externalId, input.costContext, undefined, "failed");
       return { ok: false, reason: "unavailable" };
     }
 
@@ -167,12 +196,14 @@ export async function moderatePrompt(
       data = (await res.json()) as RawModerationResponse;
     } catch {
       logModeration({ resultId: null, decision: "malformed", externalId, httpStatus, durationMs: Date.now() - start });
+      logModerationCost(externalId, input.costContext, undefined, "failed");
       return { ok: false, reason: "unavailable" };
     }
 
     const decision = typeof data.decision === "string" ? data.decision : null;
     const resultId = typeof data.id === "string" ? data.id : undefined;
     logModeration({ resultId: resultId ?? null, decision, externalId, httpStatus, durationMs: Date.now() - start });
+    logModerationCost(externalId, input.costContext, data.usage?.units, decision ? "success" : "failed");
 
     if (decision === "allow") {
       // A valid allow must carry an id; a missing id is malformed → block.
@@ -188,6 +219,7 @@ export async function moderatePrompt(
     // Network error OR AbortError (timeout) → unavailable.
     const decision = (err as Error)?.name === "TimeoutError" || (err as Error)?.name === "AbortError" ? "timeout" : "network_error";
     logModeration({ resultId: null, decision, externalId, httpStatus, durationMs: Date.now() - start });
+    logModerationCost(externalId, input.costContext, undefined, "failed");
     return { ok: false, reason: "unavailable" };
   }
 }

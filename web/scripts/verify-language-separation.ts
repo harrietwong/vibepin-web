@@ -80,7 +80,7 @@ ok("zh-CN content template produces Chinese titles", zhTitles.some(t => hasCJK(t
 
 // Generation entry points pass the resolved content language.
 const studio = readFileSync(join(process.cwd(), "src/app/app/studio/page.tsx"), "utf8");
-const plan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const plan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 ok("studio passes resolved content language into generation",
    studio.includes("contentLanguage: readResolvedContentLanguage()"));
 ok("plan 'Generate missing details' passes resolved content language",

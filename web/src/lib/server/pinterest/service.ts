@@ -147,13 +147,27 @@ async function postToken(env: PinterestEnv, body: URLSearchParams): Promise<RawT
   return json;
 }
 
-/** Exchange an authorization code for tokens (server-side, Basic auth). */
+/**
+ * Exchange an authorization code for tokens (server-side, Basic auth).
+ *
+ * `continuous_refresh=true` asks Pinterest to issue a CONTINUOUS refresh token —
+ * one that keeps working as long as it is used, instead of dying at a fixed expiry.
+ * Apps created before 2025-09-25 default to the old fixed-lifetime refresh token, so
+ * without this flag a connection silently stops being refreshable once that token
+ * expires: publishing worked for months and then began failing with invalid_grant →
+ * needs_reconnect. Apps created after that date issue continuous tokens anyway and
+ * ignore the field, so sending it is safe for both.
+ *
+ * ONLY the authorization_code grant takes this flag; refreshAccessToken() must not
+ * send it (the refresh grant has no such parameter).
+ */
 export async function exchangeCodeForTokens(code: string): Promise<TokenSet> {
   const env = getPinterestEnv();
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
     redirect_uri: env.redirectUri,
+    continuous_refresh: "true",
   });
   return parseTokenResponse(await postToken(env, body));
 }
@@ -615,14 +629,32 @@ function safeJsonParse(text: string): unknown {
 }
 
 function isMissingScopeResponse(status: number, json: unknown, message: string): boolean {
-  if (status !== 403) return false;
   const text = `${message} ${JSON.stringify(json)}`.toLowerCase();
-  return text.includes("scope") || text.includes("permission") || text.includes("not sufficient");
+  if (status === 403) {
+    return text.includes("scope") || text.includes("permission") || text.includes("not sufficient");
+  }
+  // Pinterest also reports a missing scope as 401 + numeric code 3, naming the scope in
+  // the body ("Missing: ['boards:write']"). Matched narrowly — code 3 AND the scope
+  // wording — so a genuinely invalid/expired token (401 code 2) still reads as a token
+  // problem and keeps its refresh-then-reconnect path. This request already survived one
+  // refresh-and-retry before reaching here, so a repeat 401 is not a stale-token case.
+  if (status === 401) {
+    const code = (json as { code?: unknown } | null)?.code;
+    const isCode3 = code === 3 || code === "3";
+    return isCode3 && (text.includes("scope") || text.includes("sufficient permissions"));
+  }
+  return false;
 }
 
 function isTrialAccessResponse(status: number, json: unknown, message: string): boolean {
   if (status !== 403) return false;
   const text = `${message} ${JSON.stringify(json)}`.toLowerCase();
+  // Only the explicit 403 shape is trial access. 401 + code 3 + "sufficient permissions"
+  // is Pinterest's MISSING-SCOPE error (its body names the scope, e.g.
+  // "Missing: ['boards:write']") — it used to be claimed here as a second trial-access
+  // shape, which showed an "awaiting API approval" notice for what is really a
+  // reconnect-fixable permission gap: a dead end, since no review was ever pending.
+  // That shape now falls through to isMissingScopeResponse, which marks for reconnect.
   return text.includes("trial access") && text.includes("api-sandbox.pinterest.com");
 }
 

@@ -128,6 +128,12 @@ async function main() {
     assertEq(ent.normalizePlanKey(undefined), null, "undefined");
   });
 
+  await test("normalizePlanKey maps legacy plan aliases (creator/growth/agency)", () => {
+    assertEq(ent.normalizePlanKey("creator"), "starter", "creator → starter");
+    assertEq(ent.normalizePlanKey("Growth "), "pro", "growth → pro (trim/case)");
+    assertEq(ent.normalizePlanKey("AGENCY"), "business", "agency → business");
+  });
+
   // ── resolvePlan: app_metadata plan cache ───────────────────────────────────
   await test("resolvePlan reads app_metadata.plan for all four plans", async () => {
     assertEq(await ent.resolvePlan("u1", deps({ email: "a@example.com", appPlan: "free" })), "free", "free");

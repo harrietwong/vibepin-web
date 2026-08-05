@@ -38,7 +38,7 @@ function test(name: string, fn: () => void) {
 }
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
 
-const planSrc = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const planSrc = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const listSrc = readFileSync(join(process.cwd(), "src/components/plan/PlanListView.tsx"), "utf8");
 
 console.log("Weekly Plan List view + IA");

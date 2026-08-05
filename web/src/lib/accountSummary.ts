@@ -7,26 +7,12 @@ export type AccountBillingSummary = {
   planName: string | null;
   planStatus: string | null;
   renewalAt: string | null;
-  // Real balance only. Null when no metered value exists yet (nothing populates
-  // token_balance/credits today). Callers MUST render an honest unavailable
-  // state for null — never substitute 0 or any placeholder number.
-  tokenBalance: number | null;
-  usedThisMonth: number | null;
-  lastCreditActivityAt: string | null;
 };
 
 function firstString(source: Record<string, unknown>, keys: string[]): string | null {
   for (const key of keys) {
     const value = source[key];
     if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
-}
-
-function firstNumber(source: Record<string, unknown>, keys: string[]): number | null {
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
   }
   return null;
 }
@@ -70,8 +56,5 @@ export function deriveAccountBillingSummary(user: UserLike | null | undefined): 
     planName: firstString(appMeta, ["plan_name", "planName", "plan"]),
     planStatus: firstString(metadata, ["subscription_status", "subscriptionStatus", "plan_status"]),
     renewalAt: firstString(metadata, ["renewal_at", "renewalAt", "current_period_end"]),
-    tokenBalance: firstNumber(metadata, ["token_balance", "tokenBalance", "credits"]),
-    usedThisMonth: firstNumber(metadata, ["tokens_used_this_month", "usedThisMonth", "monthly_usage"]),
-    lastCreditActivityAt: firstString(metadata, ["last_credit_activity_at", "lastCreditActivityAt"]),
   };
 }

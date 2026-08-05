@@ -3,7 +3,7 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  Sparkles, ClipboardList, Clock,
+  Sparkles, Clock,
   BarChart2, Compass, ShoppingBag, Settings, Target,
   User, CreditCard, HelpCircle, LogOut, Moon, Sun, Monitor,
 } from "lucide-react";
@@ -45,7 +45,6 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { id: "create-pins",    href: "/app/studio",               icon: Sparkles,      labelKey: "nav.createPins",     matchFn: (p) => p === "/app/studio" || p.startsWith("/app/studio/") },
-  { id: "weekly-plan",    href: "/app/plan",                 icon: ClipboardList, labelKey: "nav.weeklyPlan",     matchFn: (p) => p === "/app/plan" || p.startsWith("/app/plan/") },
   { id: "my-pins",        href: "/app/history",              icon: Clock,         labelKey: "nav.myPins",         matchFn: (p) => p === "/app/history" || p.startsWith("/app/history/") },
   // Opportunities = the keyword-opportunity workspace page. matchFn covers the full
   // /app/workspace/* prefix so the item stays highlighted on any category.
@@ -472,7 +471,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           </span>
           <span data-sidebar-label="" style={{ minWidth: 0, flex: 1 }}>
             <span data-sidebar-label="" style={{ display: "block", fontSize: 13, fontWeight: 700, lineHeight: 1.15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              Zoe
+              {t("account.billing")}
             </span>
           </span>
         </button>
@@ -481,7 +480,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* ── Main area ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
-        {/* App top bar (token + avatar) */}
+        {/* App top bar (sync status + language/theme + avatar) */}
         <div style={{
           height: 40, flexShrink: 0,
           display: "flex", alignItems: "center", justifyContent: "flex-end",

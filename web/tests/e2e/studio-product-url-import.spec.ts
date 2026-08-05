@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true }); // guarded: never production
 
 const MOCK_IMPORT_RESPONSE = {
   results: [
@@ -59,7 +60,7 @@ async function setupMocks(page: Page) {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [] }) });
   });
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async route => {
-    if (route.request().method() !== "GET") { await route.continue(); return; }
+    if (route.request().method() !== "GET") { await route.abort(); return; }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   await page.route("**/api/generate", async route => {

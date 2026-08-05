@@ -11,7 +11,7 @@ function test(name: string, fn: () => void) {
 
 const studioSource  = readFileSync("src/app/app/studio/page.tsx", "utf8");
 const batchSource   = readFileSync("src/components/studio/BatchEditDrawer.tsx", "utf8");
-const planSource    = readFileSync("src/app/app/plan/page.tsx", "utf8");
+const planSource    = readFileSync("src/components/plan/WeeklyPlanWorkspace.tsx", "utf8");
 const actionsSource = readFileSync("src/components/studio/PinCardActions.tsx", "utf8");
 
 // Helper: extract a status' matrix block from PinCardActions MATRIX.
