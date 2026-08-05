@@ -633,9 +633,21 @@ function safeJsonParse(text: string): unknown {
 }
 
 function isMissingScopeResponse(status: number, json: unknown, message: string): boolean {
-  if (status !== 403) return false;
   const text = `${message} ${JSON.stringify(json)}`.toLowerCase();
-  return text.includes("scope") || text.includes("permission") || text.includes("not sufficient");
+  if (status === 403) {
+    return text.includes("scope") || text.includes("permission") || text.includes("not sufficient");
+  }
+  // Pinterest also reports a missing scope as 401 + numeric code 3, naming the scope in
+  // the body ("Missing: ['boards:write']"). Matched narrowly — code 3 AND the scope
+  // wording — so a genuinely invalid/expired token (401 code 2) still reads as a token
+  // problem and keeps its refresh-then-reconnect path. This request already survived one
+  // refresh-and-retry before reaching here, so a repeat 401 is not a stale-token case.
+  if (status === 401) {
+    const code = (json as { code?: unknown } | null)?.code;
+    const isCode3 = code === 3 || code === "3";
+    return isCode3 && (text.includes("scope") || text.includes("sufficient permissions"));
+  }
+  return false;
 }
 
 /**
@@ -661,10 +673,13 @@ function isTrialAccessResponse(status: number, json: unknown, message: string): 
   if (status === 403 && text.includes("trial access") && text.includes("api-sandbox.pinterest.com")) {
     return true;
   }
-  // Shape 2: Pinterest's numeric code 3 on a write.
-  const code = (json as { code?: unknown } | null)?.code;
-  const isCode3 = code === 3 || code === "3";
-  return status === 401 && isCode3 && text.includes("sufficient permissions");
+  // NOTE: 401 + code 3 + "sufficient permissions" is NOT trial access — it is Pinterest's
+  // missing-scope error, and its body names the scope (e.g. "Missing: ['boards:write']").
+  // It used to be treated as trial access here, which showed an "awaiting API approval"
+  // notice for what is really a reconnect-fixable scope gap — a dead end for the user,
+  // since no approval was ever pending. Scope errors now fall through to
+  // isMissingScopeResponse, which marks the connection for reconnect.
+  return false;
 }
 
 function extractMissingScopes(json: unknown): string[] {
