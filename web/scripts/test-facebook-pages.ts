@@ -377,6 +377,149 @@ async function main() {
     }
   });
 
+  // ── restorePreviousPage (reconnect auto-restore) ────────────────────────────
+
+  await test("restorePreviousPage returns the page when the saved id verifies", async () => {
+    const m = mockFetch([{ body: { id: "777", name: "Saved Page", access_token: "PAGE-TOKEN-777" } }]);
+    try {
+      const page = await service.restorePreviousPage(USER_TOKEN, "777");
+      assert(page !== null, "restore should succeed");
+      assertEq(page!.pageId, "777", "pageId");
+      assertEq(page!.pageName, "Saved Page", "pageName");
+      assertEq(page!.pageAccessToken, "PAGE-TOKEN-777", "fresh page token");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage returns null on a saved/returned id mismatch", async () => {
+    const m = mockFetch([{ body: { id: "999", name: "Different Page", access_token: "T" } }]);
+    try {
+      assertEq(await service.restorePreviousPage(USER_TOKEN, "777"), null, "id mismatch → null");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage returns null when the page has no access_token", async () => {
+    const m = mockFetch([{ body: { id: "777", name: "Read-Only Page" } }]);
+    try {
+      assertEq(await service.restorePreviousPage(USER_TOKEN, "777"), null, "no token → null");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage returns null on a Graph OAuthException (never throws)", async () => {
+    const m = mockFetch([{
+      status: 400,
+      body: { error: { message: "(#190) token expired", type: "OAuthException", code: 190 } },
+    }]);
+    try {
+      assertEq(await service.restorePreviousPage(USER_TOKEN, "777"), null, "OAuthException → null");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("restorePreviousPage request carries no tasks field and swallows token-free", async () => {
+    const m = mockFetch([{ body: { id: "777", name: "P", access_token: "SECRET-PAGE-TOKEN" } }]);
+    try {
+      await service.restorePreviousPage(USER_TOKEN, "777");
+      assertEq(m.calls.length, 1, "one request");
+      assert(!m.calls[0].includes("tasks"), "no tasks field in the URL");
+    } finally {
+      m.restore();
+    }
+  });
+
+  // ── publishToPage (Page publishing + permalink) ─────────────────────────────
+
+  const PAGE_TOKEN = "TEST-PAGE-TOKEN-not-a-real-credential";
+
+  await test("publishToPage text-only posts to /feed and returns id+permalink", async () => {
+    const m = mockFetch([
+      { body: { id: "965_111" } },
+      { body: { id: "965_111", permalink_url: "https://www.facebook.com/965/posts/111" } },
+    ]);
+    try {
+      const r = await service.publishToPage(PAGE_TOKEN, "965", { message: "hello" });
+      assertEq(r.externalPostId, "965_111", "post id");
+      assertEq(r.permalink, "https://www.facebook.com/965/posts/111", "permalink");
+      assertEq(r.permalinkFallback, false, "no fallback needed");
+      assert(m.calls[0].includes("/965/feed"), "first call posts to /feed");
+      assert(!m.calls[0].includes("photos"), "text post must not hit /photos");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("publishToPage with an image posts to /photos and uses post_id", async () => {
+    const m = mockFetch([
+      { body: { id: "photo-node-9", post_id: "965_222" } },
+      { body: { id: "965_222", permalink_url: "https://www.facebook.com/965/posts/222" } },
+    ]);
+    try {
+      const r = await service.publishToPage(PAGE_TOKEN, "965", {
+        message: "with pic",
+        imageUrl: "https://cdn.example.com/pic.jpg",
+      });
+      assert(m.calls[0].includes("/965/photos"), "image post hits /photos");
+      assertEq(r.externalPostId, "965_222", "post_id (feed post) preferred over photo node id");
+      assert(m.calls[1].includes("965_222"), "permalink queried for the FEED post id");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("publishToPage falls back to a constructed URL when permalink fails", async () => {
+    const m = mockFetch([
+      { body: { id: "965_333" } },
+      { status: 400, body: { error: { message: "perm lookup failed", type: "OAuthException", code: 100 } } },
+    ]);
+    try {
+      const r = await service.publishToPage(PAGE_TOKEN, "965", { message: "x" });
+      assertEq(r.externalPostId, "965_333", "post id survives");
+      assert(r.permalink.includes("965_333"), "fallback URL embeds the post id");
+      assertEq(r.permalinkFallback, true, "flagged as fallback");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("publishToPage surfaces a Graph publish failure without leaking the token", async () => {
+    const m = mockFetch([
+      { status: 403, body: { error: { message: "(#200) Requires pages_manage_posts", type: "OAuthException", code: 200 } } },
+    ]);
+    try {
+      await service.publishToPage(PAGE_TOKEN, "965", { message: "x" });
+      assert(false, "should have thrown");
+    } catch (e) {
+      const err = e as FacebookApiError;
+      assert(err instanceof service.FacebookApiError, "FacebookApiError expected");
+      assert(!err.message.includes(PAGE_TOKEN), "error message must not contain the page token");
+    } finally {
+      m.restore();
+    }
+  });
+
+  await test("publishToPage rejects a non-public image URL before any Graph call", async () => {
+    const m = mockFetch([]);
+    try {
+      await service.publishToPage(PAGE_TOKEN, "965", {
+        message: "x",
+        imageUrl: "http://localhost:9000/internal.jpg",
+      });
+      assert(false, "should have thrown");
+    } catch (e) {
+      const err = e as FacebookApiError;
+      assertEq(err.code, "publish_image_not_public", "SSRF-guard code");
+      assertEq(m.calls.length, 0, "no Graph request was made");
+    } finally {
+      m.restore();
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

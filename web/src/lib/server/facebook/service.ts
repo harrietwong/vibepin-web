@@ -594,6 +594,286 @@ export async function fetchPageById(userToken: string, pageId: string): Promise<
 }
 
 /**
+ * RECONNECT AUTO-RESTORE: after a re-authorization whose /me/accounts came back
+ * empty, try to re-validate the user's PREVIOUSLY selected Page with the FRESH
+ * user token. Delegates to fetchPageById, which already enforces everything the
+ * restore needs: returned id === saved id, name present, page access_token
+ * present, Graph errors classified — and never embeds a token in messages/URLs.
+ *
+ * Never throws: any verification failure (denied / not found / Graph error /
+ * unexpected) returns null so the caller can fall back to manual Page entry
+ * WITHOUT wiping the saved Page id. The old stored Page token is deliberately
+ * never used as evidence here — only the fresh user token decides.
+ */
+export async function restorePreviousPage(
+  userToken: string,
+  savedPageId: string,
+): Promise<ManagedPage | null> {
+  try {
+    const page = await fetchPageById(userToken, savedPageId);
+    fbDebug(`restorePreviousPage ok page=${page.pageId} name=${page.pageName ?? "-"} has_token=true`);
+    return page;
+  } catch (err) {
+    if (err instanceof FacebookApiError) {
+      fbDebug(`restorePreviousPage failed code=${err.code} status=${err.status}`);
+    } else {
+      fbDebug(`restorePreviousPage threw: ${(err as Error).message}`);
+    }
+    return null;
+  }
+}
+
+// ── Publishing to a Page ──────────────────────────────────────────────────────
+
+/** What a Page publish accepts. Kept platform-neutral at the call site. */
+export type PublishToPageInput = {
+  /** Post copy (Graph `message`). Optional — a photo post may be caption-less. */
+  message?: string | null;
+  /**
+   * Publicly reachable image URL. Present → photo post (POST /{page-id}/photos
+   * with `url`); absent → plain text post (POST /{page-id}/feed).
+   *
+   * Graph FETCHES this URL itself, so it must be a public http(s) address —
+   * blob:/data:/localhost URLs cannot work and are rejected before we call out.
+   */
+  imageUrl?: string | null;
+  /**
+   * Destination link, appended to the message for a photo post. Graph's `link`
+   * param belongs to /feed only — on /photos it is silently ignored, so for a
+   * photo we fold the URL into the caption instead of pretending it took.
+   */
+  link?: string | null;
+};
+
+export type PublishToPageResult = {
+  /** The Page post id (`{page-id}_{post-id}`) — what a permalink resolves from. */
+  externalPostId: string;
+  /** Direct link to the published post on facebook.com. Never null. */
+  permalink: string;
+  /**
+   * True when Graph did not return a permalink_url and we constructed
+   * `https://www.facebook.com/{externalPostId}` instead (it 302s to the post).
+   */
+  permalinkFallback: boolean;
+};
+
+/** Only a public http(s) image can be fetched by Graph. */
+function isPubliclyFetchableImage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    return host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Classify a Graph error body from a PUBLISH call into a FacebookApiError.
+ * Mirrors fetchPageById's mapping so callers get one consistent code vocabulary.
+ * NEVER echoes the request URL (it carries the page token in the query string).
+ */
+function publishGraphError(json: unknown, httpStatus: number): FacebookApiError {
+  const err = (json as { error?: { code?: unknown; type?: unknown; message?: unknown } }).error;
+  const graphCode = typeof err?.code === "number" ? err.code : null;
+  const graphType = typeof err?.type === "string" ? err.type : "";
+  const graphMessage = typeof err?.message === "string" ? err.message : "";
+
+  // 190 invalid/expired token · 200 insufficient permission · 10 permission denied.
+  if (
+    graphCode === 190 ||
+    graphCode === 200 ||
+    graphCode === 10 ||
+    (graphType === "OAuthException" && /permission|token|expired|session/i.test(graphMessage))
+  ) {
+    return new FacebookApiError(
+      graphMessage || "Facebook denied permission to publish to that Page",
+      403,
+      "publish_permission_denied",
+    );
+  }
+  // 100 = nonexistent node/field, 803 = unresolvable alias.
+  if (graphCode === 100 || graphCode === 803 || httpStatus === 404) {
+    return new FacebookApiError(
+      graphMessage || "Facebook could not find that Page",
+      404,
+      "page_not_found",
+    );
+  }
+  // 4 / 17 / 32 / 613 are Meta's rate-limit family.
+  if (graphCode === 4 || graphCode === 17 || graphCode === 32 || graphCode === 613 || httpStatus === 429) {
+    return new FacebookApiError(
+      graphMessage || "Facebook is rate limiting this Page right now",
+      429,
+      "publish_rate_limited",
+    );
+  }
+  return new FacebookApiError(
+    graphMessage || `Facebook publish failed (${httpStatus})`,
+    httpStatus >= 400 ? httpStatus : 502,
+    "publish_failed",
+  );
+}
+
+/**
+ * Read the direct permalink for a just-created post: GET /{id}?fields=permalink_url
+ * with the SAME page token that created it.
+ *
+ * Returns null on ANY failure (Graph occasionally has not materialized the node
+ * yet, or omits the field). Never throws — the post already exists, so a missing
+ * permalink must degrade to the constructed fallback, not fail the publish.
+ */
+async function fetchPostPermalink(pageToken: string, postId: string): Promise<string | null> {
+  try {
+    const params = new URLSearchParams({ fields: "permalink_url", access_token: pageToken });
+    const res = await fetch(`${FACEBOOK_GRAPH_URL}/${encodeURIComponent(postId)}?${params.toString()}`, {
+      method: "GET",
+    });
+    const json = (await res.json().catch(() => ({}))) as { permalink_url?: unknown } & Record<string, unknown>;
+    const permalink = typeof json.permalink_url === "string" && json.permalink_url ? json.permalink_url : null;
+
+    // Hand-picked fields only; no URL (it carries the page token), no token.
+    fbDebug(
+      `GET /{postId}?fields=permalink_url status=${res.status}`,
+      `token[${tokenFingerprint(pageToken)}]`,
+      describeGraphError(json),
+      `post_id=${postId}`,
+      `hasPermalink=${Boolean(permalink)}`,
+    );
+
+    if (!res.ok || hasGraphError(json)) return null;
+    return permalink;
+  } catch (err) {
+    // A permalink read must never break a successful publish.
+    fbDebug(`fetchPostPermalink threw: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Publish a post to a Facebook Page using that Page's PAGE-SCOPED access token.
+ *
+ * TWO ENDPOINTS, chosen by whether an image is supplied:
+ *
+ *   imageUrl present → POST /{page-id}/photos   body: url, caption
+ *       Graph fetches `url` server-side (so it must be public http(s)) and answers
+ *       `{ id: <photo-id>, post_id: <page-post-id> }`. The PHOTO id is NOT the
+ *       feed post — `post_id` is. We therefore prefer `post_id` for both the
+ *       stored external id and the permalink lookup, falling back to `id` only
+ *       when Graph omits post_id (older API behaviour).
+ *
+ *   no imageUrl      → POST /{page-id}/feed     body: message, link
+ *       Answers `{ id: "<page-id>_<post-id>" }`.
+ *
+ * `link` is a /feed-only parameter. On a photo post it is folded into the caption
+ * instead of being sent as a param that Graph would silently drop.
+ *
+ * The response id is then resolved to a real permalink via
+ * GET /{id}?fields=permalink_url (same page token). When that read yields nothing
+ * we fall back to `https://www.facebook.com/{externalPostId}`, which 302s to the
+ * post — a working link is better than none, and the fallback is recorded both in
+ * the return value (`permalinkFallback`) and in fbDebug.
+ *
+ * SECURITY: the page token goes in the POST BODY (not the query string) so it is
+ * never part of a URL; errors and logs never echo the body, the URL, or the token.
+ */
+export async function publishToPage(
+  pageToken: string,
+  pageId: string,
+  input: PublishToPageInput,
+): Promise<PublishToPageResult> {
+  const message = (input.message ?? "").trim();
+  const imageUrl = (input.imageUrl ?? "").trim();
+  const link = (input.link ?? "").trim();
+
+  if (imageUrl && !isPubliclyFetchableImage(imageUrl)) {
+    throw new FacebookApiError(
+      "The image must be a publicly reachable http(s) URL for Facebook to fetch it",
+      422,
+      "publish_image_not_public",
+    );
+  }
+  if (!imageUrl && !message) {
+    throw new FacebookApiError(
+      "A Facebook post needs either text or an image",
+      422,
+      "publish_empty_post",
+    );
+  }
+
+  const body = new URLSearchParams({ access_token: pageToken });
+  let edge: "photos" | "feed";
+
+  if (imageUrl) {
+    edge = "photos";
+    body.set("url", imageUrl);
+    // /photos takes `caption`, not `message`; `link` is not honoured here, so the
+    // destination URL is appended to the caption to stay truthful.
+    const caption = [message, link].filter(Boolean).join("\n\n");
+    if (caption) body.set("caption", caption);
+  } else {
+    edge = "feed";
+    body.set("message", message);
+    if (link) body.set("link", link);
+  }
+
+  const res = await fetch(`${FACEBOOK_GRAPH_URL}/${encodeURIComponent(pageId)}/${edge}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    id?: unknown;
+    post_id?: unknown;
+  } & Record<string, unknown>;
+
+  const rawId = typeof json.id === "string" && json.id ? json.id : null;
+  const rawPostId = typeof json.post_id === "string" && json.post_id ? json.post_id : null;
+
+  // Hand-picked fields ONLY — never stringify a Graph body wholesale, and never
+  // log the request (its body carries the page token).
+  fbDebug(
+    `POST /{pageId}/${edge} status=${res.status}`,
+    `token[${tokenFingerprint(pageToken)}]`,
+    describeGraphError(json),
+    `page_id=${pageId}`,
+    `hasImage=${Boolean(imageUrl)}`,
+    `id=${rawId ?? "-"}`,
+    `post_id=${rawPostId ?? "-"}`,
+  );
+
+  // A 2xx body can still carry `error` (Graph does this) — check both.
+  if (!res.ok || hasGraphError(json)) {
+    throw publishGraphError(json, res.status);
+  }
+
+  // Prefer post_id (the Page FEED post) over id (a photo node id on /photos).
+  const externalPostId = rawPostId ?? rawId;
+  if (!externalPostId) {
+    throw new FacebookApiError(
+      "Facebook accepted the post but returned no post id",
+      502,
+      "publish_no_post_id",
+    );
+  }
+
+  const permalink = await fetchPostPermalink(pageToken, externalPostId);
+  if (permalink) {
+    return { externalPostId, permalink, permalinkFallback: false };
+  }
+
+  // Graph gave us no permalink — construct the canonical redirect form. Recorded
+  // as a fallback so the difference stays visible in diagnostics.
+  const fallback = `https://www.facebook.com/${externalPostId}`;
+  fbDebug(
+    `permalink_url unavailable — falling back to constructed URL`,
+    `post_id=${externalPostId}`,
+  );
+  return { externalPostId, permalink: fallback, permalinkFallback: true };
+}
+
+/**
  * DEVELOPMENT-ONLY diagnostic probe: read ONE specific Page by id with the user
  * token (GET /{page-id}?fields=id,name,tasks).
  *

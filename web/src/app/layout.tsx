@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Toaster } from "sonner";
+import { PreviewBadge } from "@/components/dev/PreviewBadge";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -57,6 +58,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         {children}
         <Toaster position="bottom-right" richColors closeButton />
+        {/* Non-production only (self-hides in production) — makes "which
+            deployment is this?" answerable without reading the address bar. */}
+        <PreviewBadge />
       </body>
     </html>
   );

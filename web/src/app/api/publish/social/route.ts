@@ -20,8 +20,12 @@
  *     ok: boolean,                       // true when every destination published
  *     jobId: string | null,              // null if the v32 tables aren't applied
  *     status: SocialPublishJobStatus,
- *     destinations: Array<{ provider, status, externalPostUrl?, error? }>
+ *     destinations: Array<{ provider, status, externalPostId?, externalPostUrl?, error? }>
  *   }
+ *
+ * A destination's externalPostId/externalPostUrl are persisted to
+ * social_publish_job_destinations (v32 columns) AND returned, so the UI can link
+ * straight to the live post ("View on Facebook").
  *
  * Pinterest is intentionally NOT published here — it keeps its dedicated,
  * tested flow (/api/pinterest/pins). If a pinterest destination is sent it is
@@ -178,6 +182,11 @@ export async function POST(req: Request) {
         provider,
         connection,
         post,
+        // Providers backed by our OWN OAuth (Facebook) read server-only,
+        // per-user credentials (the encrypted PAGE token) that are deliberately
+        // absent from the client-safe SocialConnection projection. `uid` is the
+        // bearer-verified session user — never a client-supplied value.
+        userId: uid,
       });
       outcomes.push({
         provider,
@@ -207,6 +216,10 @@ export async function POST(req: Request) {
     destinations: outcomes.map(o => ({
       provider: o.provider,
       status: o.status,
+      // The remote post id/url are the ONLY provider-side identifiers exposed to
+      // the client — never a token, never a connection secret. The UI needs both:
+      // the url powers "View on Facebook", the id is the durable reference.
+      externalPostId: o.externalPostId ?? null,
       externalPostUrl: o.externalPostUrl ?? null,
       error: o.error ?? null,
     })),

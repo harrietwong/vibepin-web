@@ -131,6 +131,17 @@ export type UpsertFacebookInput = {
     pageId: string;
     pageName: string | null;
   } | null;
+  /**
+   * Carried forward on a FAILED reconnect auto-restore: preserves the previously
+   * selected Page id/name in metadata (lastKnownPageId/Name) without selecting
+   * it — the invalid-for-now Page must not look connected, but its id must
+   * survive for the next restore attempt. Ignored when `selected` is set
+   * (a live selection always refreshes lastKnown itself).
+   */
+  lastKnownPage?: {
+    pageId: string;
+    pageName: string | null;
+  } | null;
 };
 
 /**
@@ -150,6 +161,15 @@ export type FacebookConnectionMetadata = {
   selectedPageName: string | null;
   /** Page-scoped token for the selected Page (ciphertext), or null. */
   selectedPageTokenEncrypted: string | null;
+  /**
+   * The last Page this user EVER had selected (server-only, survives a failed
+   * reconnect auto-restore). When a re-auth's /me/accounts comes back empty we
+   * verify this id with the fresh user token; on verification failure the
+   * selection is cleared but this record is kept, so the saved Page id is never
+   * wiped and a later retry (or manual entry) can still find it.
+   */
+  lastKnownPageId: string | null;
+  lastKnownPageName: string | null;
   /** All managed Pages (display-safe fields + encrypted page token). */
   candidatePages: Array<
     FacebookCandidatePage & { pageAccessTokenEncrypted: string }
@@ -196,6 +216,10 @@ export async function upsertFacebookConnection(
     selectedPageId: input.selected?.pageId ?? null,
     selectedPageName: input.selected?.pageName ?? null,
     selectedPageTokenEncrypted,
+    // A live selection refreshes lastKnown; otherwise carry the caller's value
+    // (failed-restore path) so the saved Page id is never wiped by a reconnect.
+    lastKnownPageId: input.selected?.pageId ?? input.lastKnownPage?.pageId ?? null,
+    lastKnownPageName: input.selected?.pageName ?? input.lastKnownPage?.pageName ?? null,
     candidatePages,
     updatedAt: now,
   };
@@ -323,6 +347,8 @@ export async function selectFacebookPage(
     selectedPageId: chosen.pageId,
     selectedPageName: chosen.pageName,
     selectedPageTokenEncrypted: chosen.pageAccessTokenEncrypted,
+    lastKnownPageId: chosen.pageId,
+    lastKnownPageName: chosen.pageName,
     updatedAt: now,
   };
 
@@ -374,6 +400,79 @@ export async function getFacebookUserToken(uid: string): Promise<string | null> 
   const encrypted = (data as { access_token_encrypted?: string | null } | null)?.access_token_encrypted;
   if (!encrypted) return null;
   return cipher.decrypt(encrypted);
+}
+
+/**
+ * The decrypted PAGE-scoped token for the user's currently selected Page, plus
+ * the Page's display-safe identity. Publishing uses this — never the user token.
+ */
+export type SelectedPageToken = {
+  pageId: string;
+  pageName: string | null;
+  /** PLAINTEXT page access token. SERVER-ONLY — never log/return/serialize it. */
+  pageAccessToken: string;
+};
+
+/**
+ * Read + decrypt the PAGE-scoped access token for this user's selected Facebook
+ * Page.
+ *
+ * SERVER-ONLY. The plaintext token is returned so the publisher can make Graph
+ * calls as the Page — it must never be logged, echoed into a response body, put
+ * in a URL, or crossed over an API route boundary to the browser.
+ *
+ * Returns null (never throws) for every "not publishable yet" state, so callers
+ * can map a single null to a clean "connect a Page first" outcome:
+ *   - no Facebook row at all / row deleted;
+ *   - disconnected (metadata nulled by disconnectFacebookConnection);
+ *   - connection_status !== 'connected' (expired / reconnect required / pending);
+ *   - connectionState !== 'connected' (page_selection_required, page_discovery_empty);
+ *   - no selectedPageId or no selectedPageTokenEncrypted;
+ *   - the stored ciphertext fails to decrypt (rotated/mismatched key).
+ *
+ * The DB status AND the finer metadata state are BOTH required to be "connected":
+ * dbStatusFor() collapses two distinct pending states onto 'not_connected', so
+ * trusting either one alone would let a half-configured connection publish.
+ */
+export async function getSelectedPageToken(uid: string): Promise<SelectedPageToken | null> {
+  const { data, error } = await db()
+    .from(TABLE)
+    .select("connection_status, metadata")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingTable(error.code)) return null;
+    console.error("[facebook] read page token:", error.message);
+    return null;
+  }
+
+  const row = data as { connection_status?: string | null; metadata?: Record<string, unknown> | null } | null;
+  if (!row) return null;
+  if (row.connection_status !== "connected") return null;
+
+  const fb = (row.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  if (!fb) return null;
+  if (fb.connectionState !== "connected") return null;
+  if (!fb.selectedPageId || !fb.selectedPageTokenEncrypted) return null;
+
+  let pageAccessToken: string;
+  try {
+    pageAccessToken = cipher.decrypt(fb.selectedPageTokenEncrypted);
+  } catch {
+    // A rotated/mismatched FACEBOOK_TOKEN_ENC_KEY makes the stored token
+    // unusable — never surface the ciphertext or the decrypt error detail.
+    console.error("[facebook] selected page token could not be decrypted");
+    return null;
+  }
+  if (!pageAccessToken) return null;
+
+  return {
+    pageId: fb.selectedPageId,
+    pageName: fb.selectedPageName ?? null,
+    pageAccessToken,
+  };
 }
 
 /**
@@ -451,6 +550,8 @@ export async function connectFacebookPageManually(
     selectedPageId: page.pageId,
     selectedPageName: page.pageName,
     selectedPageTokenEncrypted: pageAccessTokenEncrypted,
+    lastKnownPageId: page.pageId,
+    lastKnownPageName: page.pageName,
     candidatePages,
     updatedAt: now,
   };
@@ -479,12 +580,73 @@ export async function connectFacebookPageManually(
 }
 
 /**
+ * The Page this user last had selected (live selection first, else the
+ * preserved lastKnown record). Server-only — feeds the reconnect auto-restore.
+ * Returns null when there is no prior connection or no Page was ever selected;
+ * a first-time connect therefore NEVER guesses a Page id from anywhere.
+ */
+export async function getStoredFacebookSelection(
+  uid: string,
+): Promise<{ pageId: string; pageName: string | null } | null> {
+  const { data, error } = await db()
+    .from(TABLE)
+    .select("metadata")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .maybeSingle();
+  if (error || !data) return null;
+  const fb = (data.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  if (!fb) return null;
+  const pageId = fb.selectedPageId ?? fb.lastKnownPageId ?? null;
+  if (!pageId) return null;
+  const pageName = fb.selectedPageId ? fb.selectedPageName : fb.lastKnownPageName;
+  return { pageId, pageName: pageName ?? null };
+}
+
+/**
  * Disconnect: null out the stored tokens and mark the row not_connected (kept).
  * Mirrors the Pinterest disconnect (invalidate tokens, keep the row) — the
  * social_connections schema has no disconnected_at column, so connection_status is
  * the disconnected marker here.
  */
 export async function disconnectFacebookConnection(uid: string): Promise<void> {
+  // Read first: every CREDENTIAL is dropped below, but the Page the merchant
+  // already identified (lastKnownPageId/Name — a public id, not a secret) is
+  // carried over. Without it a reconnect would have to ask for the Page id by
+  // hand again, even for a Page we had already resolved. Everything token-shaped
+  // — selectedPageTokenEncrypted and every candidatePages[].pageAccessTokenEncrypted
+  // — is deliberately NOT copied forward.
+  const { data: existing } = await db()
+    .from(TABLE)
+    .select("metadata")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .maybeSingle();
+
+  const prior = (existing?.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  const rememberedPageId = prior?.selectedPageId ?? prior?.lastKnownPageId ?? null;
+  const rememberedPageName = prior?.selectedPageId
+    ? prior.selectedPageName
+    : (prior?.lastKnownPageName ?? null);
+
+  const metadata = rememberedPageId
+    ? {
+        facebook: {
+          authMethod: "facebook_login" as const,
+          connectionState: "page_discovery_empty" as const,
+          facebookUserId: null,
+          facebookUserName: null,
+          selectedPageId: null,
+          selectedPageName: null,
+          selectedPageTokenEncrypted: null,
+          lastKnownPageId: rememberedPageId,
+          lastKnownPageName: rememberedPageName,
+          candidatePages: [],
+          updatedAt: new Date().toISOString(),
+        } satisfies FacebookConnectionMetadata,
+      }
+    : null;
+
   const { error } = await db()
     .from(TABLE)
     .update({
@@ -492,8 +654,7 @@ export async function disconnectFacebookConnection(uid: string): Promise<void> {
       refresh_token_encrypted: null,
       token_expires_at: null,
       connection_status: "not_connected",
-      // Drop the Facebook metadata block incl. every encrypted page token on disconnect.
-      metadata: null,
+      metadata,
       updated_at: new Date().toISOString(),
     })
     .eq("user_id", uid)

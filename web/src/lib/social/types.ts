@@ -95,6 +95,14 @@ export interface PublishPostInput {
   provider: SocialProvider;
   connection: SocialConnection;
   post: SocialPostPayload;
+  /**
+   * Owner of the connection. Required by providers that read server-only,
+   * per-user credentials keyed on the user (Facebook's encrypted PAGE token lives
+   * in social_connections.metadata and is deliberately absent from the
+   * client-safe SocialConnection projection). Mirrors DisconnectInput.userId.
+   * Aggregator providers (Zernio/OneUp/mock) ignore it.
+   */
+  userId?: string;
 }
 
 export type PublishStatus = "published" | "failed" | "not_implemented";

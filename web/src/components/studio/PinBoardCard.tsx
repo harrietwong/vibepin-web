@@ -26,6 +26,7 @@ import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
+import { platformName, type SocialProvider } from "@/lib/social/platforms";
 import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
 
@@ -332,6 +333,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
   // remotePinId only for legacy drafts published before remotePinUrl existed.
   const pinUrl = draft.remotePinUrl || (draft.remotePinId ? `https://www.pinterest.com/pin/${draft.remotePinId}/` : "");
+  // Non-Pinterest platforms this Pin also went live on (Facebook Page today).
+  // Written by the publish fan-out (/api/publish/social → draft.socialPosts), so
+  // the links survive a reload. Entries without a real permalink are dropped —
+  // a missing URL renders no button rather than a dead link.
+  const socialPostRefs = (draft.socialPosts ?? []).filter(p => p.postUrl?.trim());
+  // "View on Facebook" etc. Reuses the existing "View on Pinterest" catalog string
+  // with the platform name swapped in, so no English-only key is added to the 18
+  // locale catalogs. Falls back to appending the platform if the string changes.
+  const viewOnLabel = (provider: string): string => {
+    const base = tr("pinDetails.viewOnPinterest");
+    const target = platformName(provider as SocialProvider);
+    const pinterest = platformName("pinterest");
+    return base.includes(pinterest) ? base.replace(pinterest, target) : `${base} — ${target}`;
+  };
   const boardSummary = draft.boardName?.trim() || tr("studioBoard.card.noBoardYet");
   const schedLabel = scheduledSummary(draft);
   // Recommended high-search Pinterest keywords (only real, ready results — no empty
@@ -570,6 +585,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 {pinUrl && (
                   <button type="button" data-testid="card-details" onClick={expand} style={secondaryBtn}>{tr("studioBoard.action.details")}</button>
                 )}
+                {/* Also-published destinations (e.g. "View on Facebook"). Secondary —
+                    the Pinterest Pin stays the primary action on a Posted card. */}
+                {socialPostRefs.map(ref => (
+                  <a key={ref.provider} data-testid={`card-view-on-${ref.provider}`}
+                    href={ref.postUrl} target="_blank" rel="noopener noreferrer"
+                    style={{ ...secondaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    {viewOnLabel(ref.provider)} <ExternalLink style={{ width: 11, height: 11 }} />
+                  </a>
+                ))}
               </>
             ) : (
               <>
@@ -745,15 +769,25 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           ) : posted ? (
             // Already published — re-scheduling makes no sense here. Same "View Pin"
             // affordance as the compact card, kept minimal (out of this task's scope
-            // to redesign the Posted footer further).
-            pinUrl ? (
-              <a data-testid="card-view-pin" href={pinUrl} target="_blank" rel="noopener noreferrer"
-                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, textDecoration: "none" }}>
-                {tr("studioBoard.action.viewPin")} <ExternalLink style={{ width: 12, height: 12 }} />
-              </a>
-            ) : (
-              <span style={{ fontSize: 12, fontWeight: 700, color: BUI.textSec }}>{tr("studioBoard.expanded.posted")}</span>
-            )
+            // to redesign the Posted footer further), plus one link per non-Pinterest
+            // platform this Pin also went live on.
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+              {pinUrl ? (
+                <a data-testid="card-view-pin" href={pinUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, textDecoration: "none" }}>
+                  {tr("studioBoard.action.viewPin")} <ExternalLink style={{ width: 12, height: 12 }} />
+                </a>
+              ) : (
+                <span style={{ fontSize: 12, fontWeight: 700, color: BUI.textSec }}>{tr("studioBoard.expanded.posted")}</span>
+              )}
+              {socialPostRefs.map(ref => (
+                <a key={ref.provider} data-testid={`card-view-on-${ref.provider}`}
+                  href={ref.postUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ ...secondaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  {viewOnLabel(ref.provider)} <ExternalLink style={{ width: 11, height: 11 }} />
+                </a>
+              ))}
+            </div>
           ) : (
             <button type="button" data-testid="card-schedule" onClick={doSchedule} disabled={publishing}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>

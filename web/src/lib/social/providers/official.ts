@@ -46,8 +46,64 @@ export const officialProvider: SocialPublishingProvider = {
     return [];
   },
 
-  async publishPost(_input: PublishPostInput): Promise<PublishResult> {
-    return { ok: false, status: "not_implemented", error: "Publishing not yet wired for this platform." };
+  /**
+   * Publish to a platform that owns its own OAuth integration.
+   *
+   * FACEBOOK — posts to the user's SELECTED Page with that Page's page-scoped
+   * token (decrypted server-side by connectionStore; the plaintext token never
+   * leaves this function and is never logged or returned).
+   *
+   * Failure shapes (PublishResult has no per-reason status beyond
+   * published/failed/not_implemented, so the distinction rides `error`):
+   *   - no publishable Page  → ok:false, status:"failed", "Connect a Facebook Page first."
+   *   - Graph rejected it    → ok:false, status:"failed", classified FacebookApiError message
+   * Everything else stays "not_implemented" (Instagram is not wired here yet;
+   * Pinterest never reaches this provider — see the module comment).
+   */
+  async publishPost(input: PublishPostInput): Promise<PublishResult> {
+    if (input.provider !== "facebook") {
+      return { ok: false, status: "not_implemented", error: "Publishing not yet wired for this platform." };
+    }
+
+    // The encrypted PAGE token is keyed on the user, not on the client-safe
+    // SocialConnection projection — without a userId we cannot read it, and we
+    // must NOT silently fall back to any other credential.
+    const userId = input.userId?.trim();
+    if (!userId) {
+      return { ok: false, status: "failed", error: "Connect a Facebook Page first." };
+    }
+
+    const { getSelectedPageToken } = await import("@/lib/server/facebook/connectionStore");
+    const selected = await getSelectedPageToken(userId);
+    // null covers every not-publishable state (no row, disconnected, reconnect
+    // required, no Page selected, undecryptable token) — one clean message.
+    if (!selected) {
+      return { ok: false, status: "failed", error: "Connect a Facebook Page first." };
+    }
+
+    const { publishToPage, FacebookApiError } = await import("@/lib/server/facebook/service");
+    try {
+      const result = await publishToPage(selected.pageAccessToken, selected.pageId, {
+        // Facebook has no separate title field — title and caption are one body.
+        message: [input.post.title?.trim(), input.post.caption?.trim()].filter(Boolean).join("\n\n"),
+        imageUrl: input.post.imageUrls?.[0] ?? null,
+        link: input.post.destinationUrl ?? null,
+      });
+      return {
+        ok: true,
+        status: "published",
+        externalPostId: result.externalPostId,
+        externalPostUrl: result.permalink,
+      };
+    } catch (err) {
+      // FacebookApiError messages are Meta's own text (already token-free — the
+      // service never embeds the token or the request URL). Anything else gets a
+      // generic message so no internal detail reaches the merchant.
+      const message = err instanceof FacebookApiError
+        ? err.message
+        : "Could not publish to Facebook. Please try again.";
+      return { ok: false, status: "failed", error: message };
+    }
   },
 
   async disconnect(input: DisconnectInput): Promise<void> {
