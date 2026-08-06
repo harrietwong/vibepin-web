@@ -76,7 +76,15 @@ def _stl_goto_timeout_ms() -> int:
 
 DISCOVERY_METHOD = "stl"
 DISCOVERY_DETAIL = "pinterest_product_card_bootstrap"
-STL_TEXT = re.compile(r"shop the look|shop similar|more to shop|shop this|buyable", re.I)
+# Module wording drifts as Pinterest reships the shopping surface. "shop the pin"
+# is the wording observed in the live UI on 2026-08-05; the older variants are
+# kept because historical/regional renders still use them. Detection is a
+# best-effort signal only — the authoritative evidence is product JSON.
+STL_TEXT = re.compile(
+    r"shop the look|shop the pin|shop similar|more to shop|shop this|"
+    r"shop related|similar products|shoppable|buyable",
+    re.I,
+)
 COMMERCIAL_HINTS = re.compile(
     r"outfit|dress|shoe|bag|jewelry|jewellery|furniture|decor|rug|lamp|mirror|"
     r"bedding|curtain|product|shop|style|wear|room|home",
@@ -481,7 +489,11 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     issue = None
     shop_tab_clicked = False
     chip_labels: list[str] = []
+    dom_eval_error: str | None = None
     started = time.monotonic()
+    # Count product JSON responses seen for THIS pin only.
+    network_before = len(state.get("network") or [])
+    responses_before = int(state.get("productJsonResponses") or 0)
 
     try:
         await page.goto(source_url, wait_until="domcontentloaded",
@@ -516,8 +528,10 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
         html = ""
     shop_detected = bool(STL_TEXT.search(html))
 
+    tab_count = 0
     try:
         tabs = await page.query_selector_all('[data-test-id="shopping-tab"], [data-test-id*="shopping-tab" i], [role="tab"]')
+        tab_count = len(tabs)
         for tab in tabs[:10]:
             try:
                 label = ((await tab.inner_text()) or "").strip()[:80]
@@ -551,8 +565,11 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
                     image_url: img ? img.src : null, price};
           });
         }""")
-    except Exception:
+    except Exception as exc:
+        # Never swallow this: an evaluate() failure means we did NOT look for
+        # cards, which is not the same as "there are no cards".
         dom_cards = []
+        dom_eval_error = f"dom_eval_failed:{type(exc).__name__}:{str(exc)[:120]}"
 
     raw_candidates = list(state.get("network") or [])
     for card in dom_cards:
@@ -575,6 +592,24 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
         _prepare_candidate(c, source, index=i, shop_detected=shop_detected or bool(state.get("network")), shop_tab_clicked=shop_tab_clicked)
         for i, c in enumerate(raw_candidates)
     ]
+
+    product_json_responses = int(state.get("productJsonResponses") or 0) - responses_before
+    network_candidates = len(state.get("network") or []) - network_before
+
+    # Distinguish "the page never gave us a usable shell" from "this pin genuinely
+    # has no products". A rendered-but-empty pin still produces a real interactive
+    # shell (cards, tabs, or product JSON); a skeleton/blocked/unauthenticated page
+    # produces none of the three. Conflating the two is what previously produced a
+    # false 'data source exhausted' conclusion — keep them separable forever.
+    page_skeleton = (
+        len(dom_cards) <= 1
+        and tab_count == 0
+        and product_json_responses == 0
+    )
+    render_failure = bool(page_skeleton and not shop_detected)
+    if render_failure and not issue:
+        issue = "render_failure_or_unauthenticated"
+
     return {
         "source": source,
         "issue": issue,
@@ -582,6 +617,12 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
         "shopTabClicked": shop_tab_clicked,
         "chipLabels": sorted(set(chip_labels)),
         "visibleCardCount": len(dom_cards),
+        "tabCount": tab_count,
+        "productJsonResponses": product_json_responses,
+        "networkCandidates": network_candidates,
+        "domEvalError": dom_eval_error,
+        "pageSkeleton": page_skeleton,
+        "renderFailure": render_failure,
         "candidates": prepared,
         "elapsedSec": round(time.monotonic() - started, 2),
     }
@@ -743,6 +784,8 @@ def _build_report(
     elapsed: float,
     apply: bool,
     source_report_validation: dict | None = None,
+    session_health: dict | None = None,
+    response_errors: dict | None = None,
 ) -> tuple[dict, list[dict]]:
     raw = [c for pin in per_pin for c in pin.get("candidates", [])]
     rejected: list[dict] = []
@@ -808,6 +851,44 @@ def _build_report(
         "projectedUpdateCount": 0,
         "legacyTouchedProjected": 0,
         "conflictKeysChecked": preflight["conflictKeysChecked"],
+        # Honest-failure accounting. A pin with zero products is only meaningful
+        # when the page actually rendered and we were authenticated.
+        "renderFailureCount": sum(1 for pin in per_pin if pin.get("renderFailure")),
+        "pageSkeletonCount": sum(1 for pin in per_pin if pin.get("pageSkeleton")),
+        "domEvalErrorCount": sum(1 for pin in per_pin if pin.get("domEvalError")),
+        "productJsonResponses": sum(int(pin.get("productJsonResponses") or 0) for pin in per_pin),
+        "pinsWithZeroProductJson": sum(
+            1 for pin in per_pin if not int(pin.get("productJsonResponses") or 0)
+        ),
+    }
+
+    health = dict(session_health or {})
+    authenticated_run = health.get("authValid") is True
+    render_failures = aggregate["renderFailureCount"]
+    # Verdict: is this run's product count trustworthy as evidence about supply?
+    if health.get("issue") in ("session_expired",):
+        trust = "untrusted:session_expired"
+    elif health and not health.get("sessionFileLoaded"):
+        trust = "untrusted:unauthenticated"
+    elif health.get("authValid") is False:
+        trust = "untrusted:not_logged_in"
+    elif per_pin and render_failures == len(per_pin):
+        trust = "untrusted:all_pins_failed_to_render"
+    elif render_failures:
+        trust = "partial:some_pins_failed_to_render"
+    elif health.get("authValid") is None and health:
+        trust = "unverified:auth_state_unknown"
+    else:
+        trust = "trusted"
+    data_quality = {
+        "resultTrust": trust,
+        "authenticatedRun": authenticated_run,
+        "zeroProductsIsEvidenceOfNoSupply": trust == "trusted",
+        "note": (
+            "Zero products from an unauthenticated, expired-session, or "
+            "non-rendering run is NOT evidence that these pins have no products. "
+            "The Shop-the-Look module is auth-gated."
+        ),
     }
     report = {
         "mode": "apply" if apply else "dry-run",
@@ -819,6 +900,9 @@ def _build_report(
         "discoveryMethodDetail": DISCOVERY_DETAIL,
         "sourceSelection": selection,
         "sourceReportValidation": source_report_validation,
+        "sessionHealth": health or None,
+        "responseErrors": response_errors or None,
+        "dataQuality": data_quality,
         "preflight": {k: v for k, v in preflight.items() if k != "insertCandidates"},
         "aggregate": aggregate,
         "previous20PinAcceptLinkDelta": _previous_spike_delta(),
@@ -835,8 +919,13 @@ def _build_report(
             "shopTabClicked": pin.get("shopTabClicked", False),
             "chipLabels": pin.get("chipLabels", []),
             "visibleCardCount": pin.get("visibleCardCount", 0),
+            "tabCount": pin.get("tabCount", 0),
+            "productJsonResponses": pin.get("productJsonResponses", 0),
             "rawCandidates": len(pin.get("candidates", [])),
             "issue": pin.get("issue"),
+            "domEvalError": pin.get("domEvalError"),
+            "pageSkeleton": pin.get("pageSkeleton", False),
+            "renderFailure": pin.get("renderFailure", False),
             "elapsedSec": pin.get("elapsedSec"),
         } for pin in per_pin],
         "writes": {"pin_products": 0},
@@ -1025,6 +1114,120 @@ def _insert_with_duplicate_fallback(insert_rows, payload: list[dict]) -> dict:
 # behaviour unchanged. The URL/credentials are NEVER logged (only presence + used flag).
 CRAWL_PROXY_ENV = "PINTEREST_CRAWL_PROXY_URL"
 
+# ---------------------------------------------------------------------------
+# Authenticated session support.
+#
+# The Shop-the-Look module is auth-gated: measured on the same 3 pins with the
+# same code path, an anonymous context yields 0 shop-keyword matches and 0
+# product JSON responses, while an authenticated context yields 42-45 product
+# JSON responses per pin. Running anonymously therefore reports "no products"
+# for pins that DO have products — which is exactly how a rendering/auth failure
+# once got mistaken for "the data source is exhausted".
+#
+# The session is a Playwright storage_state JSON captured from a real login. It
+# holds live cookies and must never be committed or logged (see backend/.gitignore).
+# ---------------------------------------------------------------------------
+SESSION_PATH_ENV = "PINTEREST_SESSION_PATH"
+DEFAULT_SESSION_FILENAME = "pinterest_session.json"
+# Cookies that only exist for a logged-in Pinterest session.
+AUTH_COOKIE_NAMES = frozenset({"_auth", "_pinterest_sess"})
+# HTML markers of a logged-in Pinterest shell (checked in _verify_session_logged_in).
+LOGGED_IN_MARKERS = (
+    "header-profile",
+    "headeraccountswitcher",
+    '"is_authenticated":true',
+    "user-menu",
+)
+# Markers that only appear on a logged-OUT shell.
+LOGGED_OUT_MARKERS = ("unauth-header", "unauthhomepage")
+
+
+def _stl_session_path() -> Path:
+    """Resolve the storage_state path: PINTEREST_SESSION_PATH, else backend/pinterest_session.json."""
+    raw = (os.environ.get(SESSION_PATH_ENV) or "").strip()
+    return Path(raw) if raw else (ROOT / DEFAULT_SESSION_FILENAME)
+
+
+def _load_session_state() -> dict:
+    """Load the saved storage_state, returning a status dict — never raises.
+
+    Returns keys:
+      storageState : dict|None  -> pass to browser.new_context(storage_state=...)
+      authenticated: bool       -> a session file with auth cookies was loaded
+      sessionPath  : str        -> path we looked at (no cookie values, ever)
+      issue        : str|None   -> session_file_missing / session_file_unreadable
+                                   / session_file_no_auth_cookies
+      cookieCount  : int
+      authCookiesPresent: list[str]  (names only)
+
+    A missing or unreadable file is NOT fatal: the run continues anonymously and
+    the report records that it did, so a degraded run can never look like a
+    clean "no products found" result.
+    """
+    path = _stl_session_path()
+    status: dict[str, Any] = {
+        "storageState": None,
+        "authenticated": False,
+        "sessionPath": str(path),
+        "issue": None,
+        "cookieCount": 0,
+        "authCookiesPresent": [],
+    }
+    if not path.exists():
+        status["issue"] = "session_file_missing"
+        return status
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        # Record the exception TYPE only — the file content is secret material.
+        status["issue"] = f"session_file_unreadable:{type(exc).__name__}"
+        return status
+    if not isinstance(data, dict) or not isinstance(data.get("cookies"), list):
+        status["issue"] = "session_file_unreadable:malformed_storage_state"
+        return status
+
+    cookies = data["cookies"]
+    names = {str(c.get("name") or "") for c in cookies if isinstance(c, dict)}
+    present = sorted(AUTH_COOKIE_NAMES & names)
+    status["cookieCount"] = len(cookies)
+    status["authCookiesPresent"] = present
+    status["storageState"] = data
+    if not present:
+        # File exists but carries no login cookies — treat as unauthenticated.
+        status["issue"] = "session_file_no_auth_cookies"
+        return status
+    status["authenticated"] = True
+    return status
+
+
+async def _verify_session_logged_in(page) -> dict:
+    """Check that the loaded session is actually still logged in.
+
+    Must be called after a Pinterest page load. An expired session still has
+    cookies on disk, so file-level checks are not sufficient — only the served
+    page can tell us. Returns {"authValid": bool|None, "signal": str}.
+    authValid is None when the check itself could not run (unknown, not "false").
+    """
+    try:
+        url = (page.url or "").lower()
+        if "/login" in url or "/signup" in url or "business/convert" in url:
+            return {"authValid": False, "signal": "redirected_to_login"}
+        html = ((await page.content()) or "").lower()
+    except Exception as exc:
+        return {"authValid": None, "signal": f"probe_failed:{type(exc).__name__}"}
+
+    if not html:
+        return {"authValid": None, "signal": "empty_html"}
+    # Logged-out shells advertise themselves loudly.
+    if any(marker in html for marker in LOGGED_OUT_MARKERS):
+        return {"authValid": False, "signal": "unauth_header_present"}
+    for marker in LOGGED_IN_MARKERS:
+        if marker in html:
+            return {"authValid": True, "signal": f"marker:{marker}"}
+    if "log in" in html and "sign up" in html and "createpinbutton" not in html:
+        return {"authValid": False, "signal": "login_signup_cta_present"}
+    return {"authValid": None, "signal": "no_conclusive_marker"}
+
 
 def _stl_proxy_option() -> dict | None:
     """Build a Playwright proxy option dict from PINTEREST_CRAWL_PROXY_URL, or None
@@ -1090,7 +1293,14 @@ async def run_shop_the_look_expand(
         if len(sources) != limit:
             selection["warning"] = f"selected {len(sources)} of requested {limit} source pins"
 
-    state: dict[str, Any] = {"pin_id": None, "chip_label": None, "network": []}
+    state: dict[str, Any] = {
+        "pin_id": None,
+        "chip_label": None,
+        "network": [],
+        "productJsonResponses": 0,
+        "responseErrors": 0,
+        "responseErrorSamples": [],
+    }
     per_pin: list[dict] = []
     started = time.monotonic()
 
@@ -1100,6 +1310,20 @@ async def run_shop_the_look_expand(
     print(f"[stl] proxy present={bool((os.environ.get(CRAWL_PROXY_ENV) or '').strip())} "
           f"| STL proxy used={proxy_opt is not None}")
 
+    # Load the authenticated Pinterest session. The shopping module is auth-gated,
+    # so an anonymous run systematically under-reports products. Never fatal: we
+    # continue anonymously but flag the run so the numbers are not read as truth.
+    session = _load_session_state()
+    if session["authenticated"]:
+        print(f"[stl] session loaded from {session['sessionPath']} "
+              f"| cookies={session['cookieCount']} "
+              f"| auth cookies={','.join(session['authCookiesPresent'])}")
+    else:
+        print("[stl] !! WARNING: running UNAUTHENTICATED "
+              f"({session['issue']}) at {session['sessionPath']} — the Shop-the-Look "
+              "module is auth-gated, so product counts from this run are NOT "
+              "evidence that these pins have no products.", flush=True)
+
     async with async_playwright() as pw:
         launch_kwargs: dict[str, Any] = {
             "headless": True,
@@ -1108,13 +1332,16 @@ async def run_shop_the_look_expand(
         if proxy_opt is not None:
             launch_kwargs["proxy"] = proxy_opt
         browser = await pw.chromium.launch(**launch_kwargs)
-        context = await browser.new_context(
-            viewport={"width": 1380, "height": 1700},
-            locale="en-US",
-            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"),
-        )
+        context_kwargs: dict[str, Any] = {
+            "viewport": {"width": 1380, "height": 1700},
+            "locale": "en-US",
+            "user_agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0.0.0 Safari/537.36"),
+        }
+        if session.get("storageState") is not None:
+            context_kwargs["storage_state"] = session["storageState"]
+        context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
 
         async def on_response(response) -> None:
@@ -1131,17 +1358,49 @@ async def run_shop_the_look_expand(
                     response_url=response.url,
                     chip_label=state.get("chip_label"),
                 )
-                if state.get("pin_id") == pin_id and candidates:
-                    state["network"].extend(candidates[:500])
-            except Exception:
+                if state.get("pin_id") == pin_id:
+                    state["productJsonResponses"] = int(state.get("productJsonResponses") or 0) + 1
+                    if candidates:
+                        state["network"].extend(candidates[:500])
+            except Exception as exc:
+                # Do not swallow: a run where every response failed to parse looks
+                # identical to a run with no products unless we count these.
+                state["responseErrors"] = int(state.get("responseErrors") or 0) + 1
+                samples = state.setdefault("responseErrorSamples", [])
+                if len(samples) < 10:
+                    # Type + message only; never the response body or any cookie/token.
+                    samples.append(f"{type(exc).__name__}:{str(exc)[:120]}")
                 return
 
         page.on("response", lambda response: asyncio.create_task(on_response(response)))
+        auth_check: dict = {"authValid": None, "signal": "not_checked"}
         try:
             await page.goto("https://www.pinterest.com", wait_until="domcontentloaded", timeout=30_000)
             await asyncio.sleep(1.5)
-        except Exception:
-            pass
+            auth_check = await _verify_session_logged_in(page)
+        except Exception as exc:
+            auth_check = {"authValid": None, "signal": f"landing_load_failed:{type(exc).__name__}"}
+
+        session_health = {
+            "sessionFileLoaded": session.get("storageState") is not None,
+            "sessionPath": session.get("sessionPath"),
+            "cookieCount": session.get("cookieCount", 0),
+            "authCookiesPresent": session.get("authCookiesPresent", []),
+            "authValid": auth_check.get("authValid"),
+            "authSignal": auth_check.get("signal"),
+            "issue": session.get("issue"),
+        }
+        # An EXPIRED session must never masquerade as "no products found".
+        if session["authenticated"] and auth_check.get("authValid") is False:
+            session_health["issue"] = "session_expired"
+            print("[stl] !!!! SESSION EXPIRED !!!! the saved Pinterest session is no "
+                  f"longer logged in (signal={auth_check.get('signal')}). The "
+                  "Shop-the-Look module is auth-gated: every pin in this run will "
+                  "look empty REGARDLESS of whether it has products. Re-capture "
+                  f"{session.get('sessionPath')} before trusting any result below.",
+                  flush=True)
+        elif not session["authenticated"]:
+            session_health["issue"] = session.get("issue") or "unauthenticated"
 
         for index, source in enumerate(sources, 1):
             result = await _extract_source_pin(page, source, state)
@@ -1149,7 +1408,11 @@ async def run_shop_the_look_expand(
             print(
                 f"[product-supply-expand] {index}/{len(sources)} pin={source.get('pin_id')} "
                 f"category={source.get('category')} shop={result.get('shopModuleDetected', False)} "
-                f"candidates={len(result.get('candidates', []))} issue={result.get('issue')}",
+                f"candidates={len(result.get('candidates', []))} "
+                f"productJson={result.get('productJsonResponses', 0)} "
+                f"tabs={result.get('tabCount', 0)} cards={result.get('visibleCardCount', 0)} "
+                f"renderFailure={result.get('renderFailure', False)} "
+                f"issue={result.get('issue')}",
                 flush=True,
             )
         await browser.close()
@@ -1178,6 +1441,11 @@ async def run_shop_the_look_expand(
         elapsed=elapsed,
         apply=apply,
         source_report_validation=source_report_validation,
+        session_health=session_health,
+        response_errors={
+            "count": int(state.get("responseErrors") or 0),
+            "samples": list(state.get("responseErrorSamples") or []),
+        },
     )
     report["v28SchemaCheck"] = v28_status
 
