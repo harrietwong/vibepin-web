@@ -703,6 +703,16 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "無法發起連接",
   "socialPanel.toast.disconnectedSuffix": " 已中斷連接",
   "socialPanel.toast.couldNotDisconnect": "無法中斷連接",
+  "socialPanel.mismatch.title": "這是另一個 Pinterest 帳號",
+  "socialPanel.mismatch.bodyPrefix": "你登入的是 ",
+  "socialPanel.mismatch.bodyMiddle": ",但你要重新連結的是 ",
+  "socialPanel.mismatch.bodySuffix": "。未做任何變更——你現有的連結保持原樣。請選擇要執行的操作。",
+  "socialPanel.mismatch.signInPrefix": "登入 ",
+  "socialPanel.mismatch.addPrefix": "將 ",
+  "socialPanel.mismatch.addSuffix": " 新增為新帳號",
+  "socialPanel.mismatch.dismiss": "暫時不要",
+  "socialPanel.mismatch.theOriginalAccount": "原帳號",
+  "socialPanel.mismatch.aDifferentAccount": "另一個帳號",
 
   // ── productLibrary ──
   "productLibrary.source.viralPin": "熱門 Pin",

@@ -95,13 +95,24 @@ function warnOnSlowServerSteps(res: Response): void {
  * `resolveUserId` falls back to that cookie whenever no Bearer header is present.
  * That lets us skip `authHeaders()` (which awaits `auth.getSession()`) entirely on
  * this hot path and go straight to the network call.
+ *
+ * `reconnectConnectionId` declares "repair THIS connection" rather than "connect an
+ * account". The callback needs it to tell a reconnect that landed on the wrong
+ * Pinterest account (refuse — PRD §10) apart from an intentional second account
+ * (accept). Omit it for Connect and for "Add another account".
  */
-export async function startPinterestConnect(returnTo?: string): Promise<PinterestConnectResult> {
+export async function startPinterestConnect(
+  returnTo?: string,
+  reconnectConnectionId?: string | null,
+): Promise<PinterestConnectResult> {
   const next = returnTo ?? currentReturnTo();
   const tDirect = DEV ? performance.now() : 0;
   try {
     if (DEV) console.log(`[Pinterest OAuth Start] direct navigation assigned: ${(performance.now() - tDirect).toFixed(1)}ms`);
-    window.location.assign(`/api/auth/pinterest/connect?next=${encodeURIComponent(next)}`);
+    const reconnectParam = reconnectConnectionId
+      ? `&reconnect=${encodeURIComponent(reconnectConnectionId)}`
+      : "";
+    window.location.assign(`/api/auth/pinterest/connect?next=${encodeURIComponent(next)}${reconnectParam}`);
     return { ok: true, redirected: true };
   } catch {
     return { ok: false, message: "Could not open Pinterest authorization." };

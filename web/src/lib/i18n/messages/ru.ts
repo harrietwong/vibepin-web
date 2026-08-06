@@ -866,6 +866,16 @@ const ru: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Не удалось начать подключение",
   "socialPanel.toast.disconnectedSuffix": " отключён",
   "socialPanel.toast.couldNotDisconnect": "Не удалось отключиться",
+  "socialPanel.mismatch.title": "Это другой аккаунт Pinterest",
+  "socialPanel.mismatch.bodyPrefix": "Вы вошли как ",
+  "socialPanel.mismatch.bodyMiddle": ", но повторно подключали ",
+  "socialPanel.mismatch.bodySuffix": ". Ничего не изменено — существующее подключение не затронуто. Выберите, что делать дальше.",
+  "socialPanel.mismatch.signInPrefix": "Войти в ",
+  "socialPanel.mismatch.addPrefix": "Добавить ",
+  "socialPanel.mismatch.addSuffix": " как новый аккаунт",
+  "socialPanel.mismatch.dismiss": "Не сейчас",
+  "socialPanel.mismatch.theOriginalAccount": "исходный аккаунт",
+  "socialPanel.mismatch.aDifferentAccount": "другой аккаунт",
 
   // ── queue ──
   "queue.status.pending": "Ожидает",

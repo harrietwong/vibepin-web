@@ -149,6 +149,23 @@ const PINTEREST_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: 
   error: { type: "error", msg: "Pinterest authorization failed" },
 };
 
+/**
+ * Whether a platform's "Add another account" entry is offered.
+ *
+ * Pinterest is on unconditionally as of v59: the storage now keys a connection by
+ * (user, provider, account), and the callback refuses to overwrite one account with
+ * another — so adding a second account creates a second row instead of silently
+ * replacing the first. That was the entire reason the entry was hidden behind a flag.
+ *
+ * Every other platform still stores at most one row per user, so their entry stays
+ * behind NEXT_PUBLIC_ENABLE_MULTI_SOCIAL_ACCOUNTS until their storage is unified too;
+ * showing it earlier would offer an action that quietly overwrites the connection
+ * the merchant already has.
+ */
+function isMultiAccountAllowed(provider: SocialProvider, flagEnabled: boolean): boolean {
+  return provider === "pinterest" ? true : flagEnabled;
+}
+
 /** Human-readable labels for the required Facebook permissions (for the missing-scope hint). */
 const FACEBOOK_SCOPE_LABELS: Record<string, string> = {
   pages_show_list: "See your Pages",
@@ -280,6 +297,7 @@ function PlatformCard({
   connecting,
   multiAccount,
   onConnect,
+  onReconnect,
   onDisconnect,
   onRefresh,
 }: {
@@ -288,7 +306,14 @@ function PlatformCard({
   connecting: boolean;
   /** Whether the "Add another account" entry is enabled (advanced feature flag). */
   multiAccount: boolean;
+  /** Connect a first account, or ADD another one — never targets an existing row. */
   onConnect: () => void;
+  /**
+   * Repair one existing connection. Separate from onConnect because the server has
+   * to treat them differently: a reconnect that comes back as a different account is
+   * refused (PRD §10), while an add is exactly how you connect a different account.
+   */
+  onReconnect: (connectionId: string | null) => void;
   onDisconnect: () => void;
   /** Re-fetch the connection list (used after a Facebook Page selection). */
   onRefresh: () => void;
@@ -413,7 +438,9 @@ function PlatformCard({
             <button
               type="button"
               data-testid={`social-reconnect-${summary.provider}`}
-              onClick={onConnect}
+              // Names the row being repaired so the callback can require that the
+              // account coming back is that same account.
+              onClick={() => onReconnect(summary.accounts[0]?.id ?? null)}
               disabled={busy || connecting}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
@@ -816,6 +843,101 @@ function DisconnectButton({ provider, busy, onClick }: { provider: SocialProvide
   );
 }
 
+/**
+ * PRD §10: the reconnect that landed on the wrong Pinterest account.
+ *
+ * Nothing was written — the original connection is untouched and still publishing to
+ * the account it always did. The user is offered the two things they could actually
+ * have meant, named by account so the choice is unambiguous, and neither option is
+ * pre-taken for them. Dismissing changes nothing either way.
+ */
+function AccountMismatchNotice({
+  expected,
+  got,
+  busy,
+  onSignInToOriginal,
+  onAddAsNew,
+  onDismiss,
+}: {
+  expected: string | null;
+  got: string | null;
+  busy: boolean;
+  onSignInToOriginal: () => void;
+  onAddAsNew: () => void;
+  onDismiss: () => void;
+}) {
+  const { t: tr } = useLocale();
+  // Usernames come from Pinterest and may be absent (a connection whose profile
+  // never synced). Fall back to a neutral phrase rather than printing "@null".
+  const expectedLabel = expected ? `@${expected}` : tr("socialPanel.mismatch.theOriginalAccount");
+  const gotLabel = got ? `@${got}` : tr("socialPanel.mismatch.aDifferentAccount");
+
+  return (
+    <div
+      data-testid="pinterest-account-mismatch"
+      role="alert"
+      style={{
+        padding: "12px 14px",
+        borderRadius: 12,
+        background: "rgba(245,158,11,0.10)",
+        border: "1px solid rgba(245,158,11,0.30)",
+      }}
+    >
+      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.warning }}>
+        {tr("socialPanel.mismatch.title")}
+      </p>
+      <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
+        {tr("socialPanel.mismatch.bodyPrefix")}{gotLabel}{tr("socialPanel.mismatch.bodyMiddle")}{expectedLabel}
+        {tr("socialPanel.mismatch.bodySuffix")}
+      </p>
+      <div style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <button
+          type="button"
+          data-testid="pinterest-mismatch-signin-original"
+          onClick={onSignInToOriginal}
+          disabled={busy}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "8px 14px", borderRadius: 10,
+            border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.14)",
+            color: UI.warning, fontSize: 12, fontWeight: 700,
+            cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+          }}
+        >
+          <RefreshCw size={13} /> {tr("socialPanel.mismatch.signInPrefix")}{expectedLabel}
+        </button>
+        <button
+          type="button"
+          data-testid="pinterest-mismatch-add-new"
+          onClick={onAddAsNew}
+          disabled={busy}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "8px 14px", borderRadius: 10,
+            border: `1px solid ${UI.border}`, background: "transparent",
+            color: UI.textSec, fontSize: 12, fontWeight: 700,
+            cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+          }}
+        >
+          <Plus size={13} /> {tr("socialPanel.mismatch.addPrefix")}{gotLabel}{tr("socialPanel.mismatch.addSuffix")}
+        </button>
+        <button
+          type="button"
+          data-testid="pinterest-mismatch-dismiss"
+          onClick={onDismiss}
+          style={{
+            padding: "8px 12px", borderRadius: 10,
+            border: "1px solid transparent", background: "transparent",
+            color: UI.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer",
+          }}
+        >
+          {tr("socialPanel.mismatch.dismiss")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function SocialAccountsPanel() {
   const { t: tr } = useLocale();
   const params = useSearchParams();
@@ -825,6 +947,12 @@ export function SocialAccountsPanel() {
   const [busyProvider, setBusyProvider] = useState<SocialProvider | null>(null);
   /** Only set while a connect click is redirecting the browser away — drives the button label. */
   const [connectingProvider, setConnectingProvider] = useState<SocialProvider | null>(null);
+  /**
+   * A reconnect the server refused because a different Pinterest account authorized
+   * (PRD §10). Holds both usernames so the offer can name them; null when there is
+   * no pending decision.
+   */
+  const [accountMismatch, setAccountMismatch] = useState<{ expected: string | null; got: string | null } | null>(null);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
   const multiAccountEnabled = isMultiSocialAccountsEnabled();
 
@@ -882,6 +1010,20 @@ export function SocialAccountsPanel() {
   useEffect(() => {
     const flag = params.get("pinterest");
     if (!flag) return;
+
+    // A refused reconnect is NOT a toast. Nothing was written and the user has a
+    // real decision to make (sign in as the original account, or add the one that
+    // just authorized as a second account — PRD §10), so it stays on screen as a
+    // banner with both options rather than vanishing after a few seconds.
+    if (flag === "account_mismatch") {
+      setAccountMismatch({
+        expected: params.get("expected"),
+        got: params.get("got"),
+      });
+      router.replace(SETTINGS_SOCIAL_PATH);
+      return;
+    }
+
     const m = PINTEREST_CALLBACK_MESSAGES[flag];
     if (m) {
       const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
@@ -889,6 +1031,8 @@ export function SocialAccountsPanel() {
     }
     router.replace(SETTINGS_SOCIAL_PATH);
     if (flag === "connected") {
+      // A successful authorization resolves any pending mismatch offer.
+      setAccountMismatch(null);
       notifyConnectionsChanged();
       void load();
       void syncPinterestAccount().then(synced => { if (synced) void load(); });
@@ -913,12 +1057,20 @@ export function SocialAccountsPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
-  async function handleConnect(provider: SocialProvider) {
+  /**
+   * Start a connect / reconnect / add-another flow.
+   *
+   * `reconnectConnectionId` is what separates "repair this account" from "add an
+   * account": only the former makes the callback refuse a different Pinterest
+   * account instead of writing it. Reconnect passes it; Connect and Add another
+   * deliberately do not.
+   */
+  async function handleConnect(provider: SocialProvider, reconnectConnectionId?: string | null) {
     setBusyProvider(provider);
     setConnectingProvider(provider);
     try {
       if (provider === "pinterest") {
-        const result = await startPinterestConnect();
+        const result = await startPinterestConnect(undefined, reconnectConnectionId ?? null);
         if (!result.ok) toast.error(result.message);
         return; // navigates away on success
       }
@@ -977,6 +1129,26 @@ export function SocialAccountsPanel() {
           {tr("socialPanel.description")}
         </p>
       </div>
+
+      {accountMismatch && (
+        <AccountMismatchNotice
+          expected={accountMismatch.expected}
+          got={accountMismatch.got}
+          busy={busyProvider === "pinterest"}
+          onSignInToOriginal={() => {
+            // Retry the SAME repair: still a reconnect, so a second wrong account is
+            // refused again rather than quietly taking over the connection.
+            const pinterest = summaries?.find(s => s.provider === "pinterest");
+            void handleConnect("pinterest", pinterest?.accounts[0]?.id ?? null);
+          }}
+          onAddAsNew={() => {
+            // Deliberately NOT a reconnect: this is the user accepting the account
+            // that authorized, so it goes down the plain Add path and gets its own row.
+            void handleConnect("pinterest");
+          }}
+          onDismiss={() => setAccountMismatch(null)}
+        />
+      )}
 
       {loadError && (
         <div
@@ -1044,8 +1216,9 @@ export function SocialAccountsPanel() {
               summary={summary}
               busy={busyProvider === provider}
               connecting={connectingProvider === provider}
-              multiAccount={multiAccountEnabled}
+              multiAccount={isMultiAccountAllowed(provider, multiAccountEnabled)}
               onConnect={() => void handleConnect(provider)}
+              onReconnect={id => void handleConnect(provider, id)}
               onDisconnect={() => void handleDisconnect(summary)}
               onRefresh={() => void load()}
             />

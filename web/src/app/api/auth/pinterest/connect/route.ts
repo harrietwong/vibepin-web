@@ -85,17 +85,32 @@ function buildConnectPayload(): ConnectPayload {
   return { authorizeUrl, state };
 }
 
+/**
+ * A `reconnect=<connectionId>` param means "repair THIS connection", not "add an
+ * account". It is sealed into the state cookie so the callback can require that the
+ * account which comes back is the one that connection belongs to (PRD §10). Only the
+ * shape is validated here — ownership is checked in the callback against the user's
+ * own rows, so a forged id can only ever fail to match.
+ */
+function sanitizeReconnectId(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!/^[0-9a-fA-F-]{16,64}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
 function attachOAuthStateCookie(
   res: NextResponse,
   req: NextRequest,
   state: string,
   uid: string,
   returnTo: string,
+  reconnectConnectionId: string | null,
 ): NextResponse {
   try {
     res.cookies.set(
       OAUTH_STATE_COOKIE,
-      sealState(state, uid, returnTo),
+      sealState(state, uid, returnTo, reconnectConnectionId),
       stateCookieOptions(req.nextUrl.protocol === "https:"),
     );
     return res;
@@ -157,6 +172,7 @@ export async function GET(req: NextRequest) {
   const timings: Partial<ConnectTimings> = {};
   const tReturnTo = performance.now();
   const returnTo = sanitizeReturnTo(req.nextUrl.searchParams.get("next"));
+  const reconnectId = sanitizeReconnectId(req.nextUrl.searchParams.get("reconnect"));
   timings.returnTo = performance.now() - tReturnTo;
 
   const tAuth = performance.now();
@@ -191,7 +207,7 @@ export async function GET(req: NextRequest) {
   res.cookies.set(OAUTH_RETURN_COOKIE, returnTo, returnCookieOptions(req.nextUrl.protocol === "https:"));
   try {
     const tStateStore = performance.now();
-    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo);
+    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo, reconnectId);
     timings.state = (timings.state ?? 0) + (performance.now() - tStateStore);
     timings.total = performance.now() - t0;
     warnOnSlowSteps(timings as Record<string, number>);
@@ -212,9 +228,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const t0 = performance.now();
   let returnTo = PINTEREST_INTEGRATIONS_PATH;
+  let reconnectId: string | null = null;
   try {
-    const body = await req.json() as { next?: string };
+    const body = await req.json() as { next?: string; reconnect?: string };
     returnTo = sanitizeReturnTo(body.next ?? null);
+    reconnectId = sanitizeReconnectId(body.reconnect ?? null);
   } catch {
     /* empty body ok */
   }
@@ -242,7 +260,7 @@ export async function POST(req: NextRequest) {
 
   const res = NextResponse.json({ url: payload.authorizeUrl });
   try {
-    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo);
+    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo, reconnectId);
     const total = performance.now() - t0;
     warnOnSlowSteps({ auth: authDur, state: stateDur, total });
     return withServerTiming(sealed, { auth: authDur, state: stateDur, total });

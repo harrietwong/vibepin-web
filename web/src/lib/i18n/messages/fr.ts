@@ -543,6 +543,16 @@ const fr: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Impossible de démarrer la connexion",
   "socialPanel.toast.disconnectedSuffix": " déconnecté",
   "socialPanel.toast.couldNotDisconnect": "Impossible de déconnecter",
+  "socialPanel.mismatch.title": "C'est un autre compte Pinterest",
+  "socialPanel.mismatch.bodyPrefix": "Vous vous êtes connecté en tant que ",
+  "socialPanel.mismatch.bodyMiddle": ", mais vous reconnectiez ",
+  "socialPanel.mismatch.bodySuffix": ". Rien n'a été modifié — votre connexion existante est intacte. Choisissez ce que vous voulez faire.",
+  "socialPanel.mismatch.signInPrefix": "Se connecter à ",
+  "socialPanel.mismatch.addPrefix": "Ajouter ",
+  "socialPanel.mismatch.addSuffix": " comme nouveau compte",
+  "socialPanel.mismatch.dismiss": "Pas maintenant",
+  "socialPanel.mismatch.theOriginalAccount": "le compte d'origine",
+  "socialPanel.mismatch.aDifferentAccount": "un autre compte",
 
   // ── discover ──
   "discover.signal.productRelated": "Lié à un produit",

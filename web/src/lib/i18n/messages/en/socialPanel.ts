@@ -41,6 +41,22 @@ export const socialPanelMessages = {
   // ── Loading state ──
   "socialPanel.loading": "Loading social accounts…",
 
+  // ── Reconnect landed on a different Pinterest account (PRD §10) ──
+  //    Split into prefix/middle/suffix so the two @usernames can be interpolated
+  //    without HTML in the catalog; translators keep the sentence natural in their
+  //    own word order by moving the punctuation between the parts.
+  "socialPanel.mismatch.title": "That's a different Pinterest account",
+  "socialPanel.mismatch.bodyPrefix": "You signed in as ",
+  "socialPanel.mismatch.bodyMiddle": ", but you were reconnecting ",
+  "socialPanel.mismatch.bodySuffix":
+    ". Nothing was changed — your existing connection is untouched. Choose what you'd like to do.",
+  "socialPanel.mismatch.signInPrefix": "Sign in to ",
+  "socialPanel.mismatch.addPrefix": "Add ",
+  "socialPanel.mismatch.addSuffix": " as a new account",
+  "socialPanel.mismatch.dismiss": "Not now",
+  "socialPanel.mismatch.theOriginalAccount": "the original account",
+  "socialPanel.mismatch.aDifferentAccount": "a different account",
+
   // ── Toasts ──
   "socialPanel.toast.pinterestDisconnected": "Pinterest disconnected",
   "socialPanel.toast.pinterestDisconnectFailed": "Could not disconnect Pinterest. Please try again.",

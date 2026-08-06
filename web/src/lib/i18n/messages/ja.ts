@@ -548,6 +548,16 @@ const ja: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "接続を開始できませんでした",
   "socialPanel.toast.disconnectedSuffix": " の接続を解除しました",
   "socialPanel.toast.couldNotDisconnect": "接続を解除できませんでした",
+  "socialPanel.mismatch.title": "別の Pinterest アカウントです",
+  "socialPanel.mismatch.bodyPrefix": "サインインしたのは ",
+  "socialPanel.mismatch.bodyMiddle": " ですが、再接続しようとしていたのは ",
+  "socialPanel.mismatch.bodySuffix": " です。何も変更されていません — 既存の接続はそのままです。次の操作を選んでください。",
+  "socialPanel.mismatch.signInPrefix": "サインイン: ",
+  "socialPanel.mismatch.addPrefix": "「",
+  "socialPanel.mismatch.addSuffix": "」を新しいアカウントとして追加",
+  "socialPanel.mismatch.dismiss": "今はしない",
+  "socialPanel.mismatch.theOriginalAccount": "元のアカウント",
+  "socialPanel.mismatch.aDifferentAccount": "別のアカウント",
 
   // ── trendChart.* ──
   "trendChart.noData": "トレンドデータがありません",

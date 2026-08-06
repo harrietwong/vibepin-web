@@ -98,7 +98,9 @@ async function main() {
     const idx = connectionStore.indexOf("export async function disconnect");
     const body = connectionStore.slice(idx, idx + 500);
     assert(/access_token_encrypted: null/.test(body), "disconnect must null the access token");
-    assert(/disconnected_at: new Date/.test(body), "disconnect must set disconnected_at");
+    // v59 sets it from a shared `now` variable (one timestamp for the whole patch)
+    // instead of an inline `new Date()` — match the behaviour, not the spelling.
+    assert(/disconnected_at:\s*(now|new Date)/.test(body), "disconnect must set disconnected_at");
   });
 
   await test("Settings never sees a sandbox connection at all (filtered server-side, not in the UI)", () => {

@@ -25,6 +25,8 @@ import {
 } from "./config";
 import {
   getActiveConnection,
+  getConnectionById,
+  reloadConnectionRow,
   decryptTokens,
   updateTokens,
   markNeedsReconnect,
@@ -172,6 +174,35 @@ export async function exchangeCodeForTokens(code: string): Promise<TokenSet> {
   return parseTokenResponse(await postToken(env, body));
 }
 
+/**
+ * Read the Pinterest account identity for a RAW access token — before any row has
+ * been written for it.
+ *
+ * The OAuth callback needs this: it has to know which Pinterest account authorized
+ * BEFORE it decides which row (if any) to write, and PinterestClient can't help
+ * because building one requires a stored connection to exist. Deliberately no
+ * refresh/retry: the token is seconds old, and the callback treats any failure as
+ * "identity unknown" rather than stalling the redirect.
+ */
+export async function fetchAccountIdentity(accessToken: string): Promise<PinterestUser | null> {
+  try {
+    const res = await fetch(`${getPinterestApiBase()}/user_account`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!data) return null;
+    return {
+      id: typeof data.id === "string" ? data.id : null,
+      username: typeof data.username === "string" ? data.username : null,
+      accountType: typeof data.account_type === "string" ? data.account_type : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Refresh an access token using a stored refresh token. */
 export async function refreshAccessToken(refreshToken: string): Promise<TokenSet> {
   const env = getPinterestEnv();
@@ -216,18 +247,25 @@ const REFRESH_SKEW_MS = 60_000; // refresh if the access token expires within 60
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
-/** Injectable seams (production defaults). Overridable only via forTest(). */
+/**
+ * Injectable seams (production defaults). Overridable only via forTest().
+ *
+ * Every hook is addressed by CONNECTION id, not user id (v59). A user-scoped
+ * persist would write one connection's freshly rotated tokens onto every Pinterest
+ * connection that user holds; a user-scoped needs_reconnect would take all of them
+ * offline because one expired.
+ */
 type ClientHooks = {
   fetchImpl: FetchLike;
   refreshFn: (refreshToken: string) => Promise<TokenSet>;
-  persistTokens: (uid: string, t: {
+  persistTokens: (connectionId: string, t: {
     accessToken: string; refreshToken: string | null;
     accessTokenExpiresAt: string | null; refreshTokenExpiresAt: string | null;
   }, expectedVersion?: number) => Promise<{ applied: boolean }>;
-  markReconnect: (uid: string) => Promise<void>;
+  markReconnect: (connectionId: string) => Promise<void>;
   /** Re-read the persisted connection — used after a lost refresh CAS to adopt the
    *  tokens another instance just rotated in, instead of failing. */
-  reloadConnection: (uid: string) => Promise<ReloadedConnection | null>;
+  reloadConnection: (connectionId: string) => Promise<ReloadedConnection | null>;
 };
 
 /** What a re-read of the connection yields for adopting another instance's refresh. */
@@ -238,8 +276,8 @@ type ReloadedConnection = {
   tokenVersion: number;
 };
 
-async function reloadConnectionTokens(uid: string): Promise<ReloadedConnection | null> {
-  const row = await getActiveConnection(uid);
+async function reloadConnectionTokens(connectionId: string): Promise<ReloadedConnection | null> {
+  const row = await reloadConnectionRow(connectionId);
   if (!row || !row.access_token_encrypted) return null;
   const t = decryptTokens(row);
   return {
@@ -268,17 +306,24 @@ type RefreshResult = {
 
 // ── Concurrent-refresh coalescing ─────────────────────────────────────────────
 // Pinterest rotates the refresh token on every refresh: the OLD refresh token is
-// invalidated the moment a new one is issued. If two requests for the same user
-// refresh concurrently, the second would send an already-consumed refresh token
-// (invalid_grant → false needs_reconnect) or clobber the newer token with an older
-// persist. We coalesce concurrent refreshes for the same user onto ONE shared
-// in-flight refresh so exactly one token exchange + one atomic persist happens; all
-// callers then adopt the same fresh tokens. The entry clears when the refresh
-// settles, so a later, genuinely-needed refresh still runs.
+// invalidated the moment a new one is issued. If two requests for the same
+// CONNECTION refresh concurrently, the second would send an already-consumed refresh
+// token (invalid_grant → false needs_reconnect) or clobber the newer token with an
+// older persist. We coalesce concurrent refreshes for the same connection onto ONE
+// shared in-flight refresh so exactly one token exchange + one atomic persist
+// happens; all callers then adopt the same fresh tokens. The entry clears when the
+// refresh settles, so a later, genuinely-needed refresh still runs.
+//
+// Keyed by connection id since v59 (it was the user id while one user could only
+// hold one connection). A user-keyed lock would make two DIFFERENT accounts of the
+// same user share one refresh: the second caller would adopt the first account's
+// access token and start publishing to the wrong Pinterest account.
 const _refreshInFlight = new Map<string, Promise<RefreshResult>>();
 
 export class PinterestClient {
   private uid: string;
+  /** social_connections row id — the CAS/lock/persist key for this connection. */
+  private connectionId: string;
   private row: PinterestConnectionRow;
   private accessToken: string;
   private refreshToken: string | null;
@@ -291,6 +336,7 @@ export class PinterestClient {
 
   private constructor(uid: string, row: PinterestConnectionRow, hooks: ClientHooks = DEFAULT_HOOKS) {
     this.uid = uid;
+    this.connectionId = row.id;
     this.row = row;
     this.hooks = hooks;
     this.shareRefresh = hooks === DEFAULT_HOOKS;
@@ -301,14 +347,46 @@ export class PinterestClient {
     this.tokenVersion = row.token_version;
   }
 
-  /** Build a client for a user, or throw NotConnectedError. */
+  /**
+   * Build a client for a user's single/default Pinterest connection, or throw
+   * NotConnectedError. Behaviour for a single-connection user is unchanged by v59:
+   * getActiveConnection resolves the same row as before, and every check below runs
+   * in the same order against it.
+   */
   static async forUser(uid: string): Promise<PinterestClient> {
-    const row = await getActiveConnection(uid);
+    return PinterestClient.fromRow(uid, await getActiveConnection(uid));
+  }
+
+  /**
+   * Build a client for ONE named connection of a user. Same gate order as forUser();
+   * the only difference is which row is resolved. This is the entry point Phase C's
+   * per-Pin publish targets use — the routes still go through forUser() today.
+   */
+  static async forConnection(uid: string, connectionId: string): Promise<PinterestClient> {
+    return PinterestClient.fromRow(uid, await getConnectionById(uid, connectionId));
+  }
+
+  /**
+   * The social_connections row this client is bound to.
+   *
+   * Callers that write back to storage (the profile sync) MUST address that row by
+   * id: with several connections per user, a user-scoped write would stamp one
+   * account's identity onto another's row.
+   */
+  get boundConnectionId(): string {
+    return this.connectionId;
+  }
+
+  /** Shared gate: usable token → not flagged for reconnect → required scopes present. */
+  private static async fromRow(
+    uid: string,
+    row: PinterestConnectionRow | null,
+  ): Promise<PinterestClient> {
     if (!row || !row.access_token_encrypted) throw new NotConnectedError();
     if (row.needs_reconnect) throw new NeedsReconnectError();
     const missingScopes = missingPinterestScopes(row.scopes);
     if (missingScopes.length) {
-      await markNeedsReconnect(uid);
+      await markNeedsReconnect(row.id);
       throw new MissingPinterestScopesError(missingScopes);
     }
     return new PinterestClient(uid, row);
@@ -357,15 +435,18 @@ export class PinterestClient {
    */
   static forTest(opts: {
     uid?: string;
+    /** Connection id (the CAS/lock key). Defaults to a stable per-uid stand-in. */
+    connectionId?: string;
     accessToken: string;
     refreshToken?: string | null;
     accessExpiresAt?: string | null;
     hooks?: Partial<ClientHooks>;
-    /** Opt into the shared per-user refresh lock (default false for test isolation). */
+    /** Opt into the shared per-connection refresh lock (default false for test isolation). */
     shareRefresh?: boolean;
   }): PinterestClient {
     const c = Object.create(PinterestClient.prototype) as PinterestClient;
     c.uid = opts.uid ?? "test-user";
+    c.connectionId = opts.connectionId ?? `conn-${opts.uid ?? "test-user"}`;
     c.row = {} as PinterestConnectionRow;
     c.accessToken = opts.accessToken;
     c.refreshToken = opts.refreshToken ?? null;
@@ -389,7 +470,7 @@ export class PinterestClient {
    */
   private async doRefresh(): Promise<void> {
     if (!this.refreshToken) {
-      await this.hooks.markReconnect(this.uid);
+      await this.hooks.markReconnect(this.connectionId);
       throw new NeedsReconnectError();
     }
 
@@ -397,14 +478,15 @@ export class PinterestClient {
     // per-instance so unit tests keep deterministic call counts, unless a test opts
     // in via forTest({ shareRefresh: true }).
     const shareable = this.shareRefresh;
-    let promise = shareable ? _refreshInFlight.get(this.uid) : undefined;
+    const lockKey = this.connectionId;
+    let promise = shareable ? _refreshInFlight.get(lockKey) : undefined;
     if (!promise) {
       promise = this.performRefresh(this.refreshToken);
       if (shareable) {
-        _refreshInFlight.set(this.uid, promise);
+        _refreshInFlight.set(lockKey, promise);
         // Clear the entry once settled so a later needed refresh can run again.
         promise.finally(() => {
-          if (_refreshInFlight.get(this.uid) === promise) _refreshInFlight.delete(this.uid);
+          if (_refreshInFlight.get(lockKey) === promise) _refreshInFlight.delete(lockKey);
         }).catch(() => {});
       }
     }
@@ -435,11 +517,11 @@ export class PinterestClient {
         // rotated it out from under us (cross-instance race). Re-read first: if the
         // stored version has moved past ours, someone else refreshed successfully;
         // adopt their tokens rather than falsely marking needs_reconnect.
-        const reloaded = await this.hooks.reloadConnection(this.uid);
+        const reloaded = await this.hooks.reloadConnection(this.connectionId);
         if (reloaded && reloaded.tokenVersion > baseVersion) {
           return { ...reloaded };
         }
-        await this.hooks.markReconnect(this.uid);
+        await this.hooks.markReconnect(this.connectionId);
         throw new NeedsReconnectError();
       }
       throw err;
@@ -447,7 +529,7 @@ export class PinterestClient {
 
     // Compare-and-swap persist: write only while token_version is still ours, then
     // bump it. This is the cross-instance mutex the in-process Map can't provide.
-    const { applied } = await this.hooks.persistTokens(this.uid, {
+    const { applied } = await this.hooks.persistTokens(this.connectionId, {
       accessToken: next.accessToken,
       refreshToken: next.refreshToken,
       accessTokenExpiresAt: next.accessTokenExpiresAt,
@@ -458,10 +540,10 @@ export class PinterestClient {
       // Lost the race: another instance persisted a newer refresh between our read and
       // write. Our `next` tokens may already be invalidated by Pinterest's rotation, so
       // discard them and adopt whatever is now stored.
-      const reloaded = await this.hooks.reloadConnection(this.uid);
+      const reloaded = await this.hooks.reloadConnection(this.connectionId);
       if (reloaded) return { ...reloaded };
       // No connection to reload → genuinely gone.
-      await this.hooks.markReconnect(this.uid);
+      await this.hooks.markReconnect(this.connectionId);
       throw new NeedsReconnectError();
     }
 
@@ -516,7 +598,7 @@ export class PinterestClient {
         throw new PinterestTrialAccessError();
       }
       if (isMissingScopeResponse(res.status, json, msg)) {
-        await this.hooks.markReconnect(this.uid);
+        await this.hooks.markReconnect(this.connectionId);
         throw new MissingPinterestScopesError(extractMissingScopes(json));
       }
       throw new PinterestApiError(msg, res.status, "pinterest_api_error", pinterestApiCode);

@@ -166,20 +166,40 @@ function readDefaultBoardFromMetadata(metadata: Record<string, unknown> | null |
   return boardId ? { boardId, boardName: boardName || null } : null;
 }
 
-async function readPinterestMetadata(uid: string): Promise<Record<string, unknown>> {
+/**
+ * The Pinterest row a user-scoped call means, plus its metadata.
+ *
+ * Listed and reduced rather than `.maybeSingle()`: since v59 a user may hold several
+ * Pinterest rows, and maybeSingle turns that from "pick one" into a query ERROR that
+ * would silently empty the default board for every multi-account user. Preference
+ * order matches connectionStore.pickDefaultConnection — the oldest live connection —
+ * so a single-connection user resolves the exact row they always did.
+ */
+async function readPinterestRow(
+  uid: string,
+): Promise<{ id: string; metadata: Record<string, unknown> } | null> {
   const { data, error } = await db()
     .from(TABLE)
-    .select("metadata")
+    .select("id, metadata, disconnected_at, created_at")
     .eq("user_id", uid)
     .eq("provider", "pinterest")
-    .maybeSingle();
+    .order("created_at", { ascending: true });
 
   if (error) {
-    if (isMissingSocialConnectionsTable(error)) return {};
-    console.error("[social] read pinterest metadata:", error.message);
-    return {};
+    if (isMissingSocialConnectionsTable(error)) return null;
+    console.error("[social] read pinterest row:", error.message);
+    return null;
   }
-  return ((data as { metadata?: Record<string, unknown> | null } | null)?.metadata ?? {}) as Record<string, unknown>;
+  const rows = (data as unknown as Array<{ id: string; metadata: Record<string, unknown> | null; disconnected_at: string | null }> | null) ?? [];
+  if (rows.length === 0) return null;
+  // Prefer a live connection; fall back to the oldest row so a user who has
+  // disconnected everything still keeps the default board they had chosen.
+  const chosen = rows.find(r => !r.disconnected_at) ?? rows[0];
+  return { id: chosen.id, metadata: (chosen.metadata ?? {}) as Record<string, unknown> };
+}
+
+async function readPinterestMetadata(uid: string): Promise<Record<string, unknown>> {
+  return (await readPinterestRow(uid))?.metadata ?? {};
 }
 
 export async function getPinterestDefaultBoard(uid: string): Promise<{ boardId: string; boardName: string | null } | null> {
@@ -195,30 +215,19 @@ export async function savePinterestDefaultBoard(
   const boardName = board.boardName?.trim() || null;
   const now = new Date().toISOString();
 
-  const { data: existing, error: readError } = await db()
-    .from(TABLE)
-    .select("id, metadata")
-    .eq("user_id", uid)
-    .eq("provider", "pinterest")
-    .maybeSingle();
-
-  if (readError) {
-    if (isMissingSocialConnectionsTable(readError)) return null;
-    console.error("[social] read pinterest default board:", readError.message);
-    return null;
-  }
+  const existing = await readPinterestRow(uid);
 
   const metadata = {
-    ...(((existing as { metadata?: Record<string, unknown> | null } | null)?.metadata ?? {}) as Record<string, unknown>),
+    ...(existing?.metadata ?? {}),
     default_board_id: boardId,
     default_board_name: boardName,
   };
 
-  if ((existing as { id?: string } | null)?.id) {
+  if (existing) {
     const { error } = await db()
       .from(TABLE)
       .update({ metadata, updated_at: now })
-      .eq("id", (existing as { id: string }).id)
+      .eq("id", existing.id)
       .eq("user_id", uid);
     if (error) {
       console.error("[social] update pinterest default board:", error.message);
@@ -245,22 +254,33 @@ export async function savePinterestDefaultBoard(
   return { boardId, boardName };
 }
 
-/** Map the live Pinterest connection into a SocialConnection (never tokens). */
+/**
+ * Map the live Pinterest connection into a SocialConnection (never tokens).
+ *
+ * The `id` is the real social_connections row id since v59. It used to be a
+ * SYNTHESIZED `pinterest:<uid>` string, because Pinterest lived in its own table and
+ * had no id the rest of the social layer could use — which also meant every caller
+ * that addressed a connection by id (disconnect, publish targets) could only ever
+ * name "this user's Pinterest", not a specific account. Now that the row is in the
+ * same table as everyone else's, it carries the same kind of id, and callers can
+ * point at one account out of several.
+ */
 async function readPinterestConnection(uid: string): Promise<SocialConnection | null> {
+  let row;
   let safe;
   try {
-    const row = await getActiveConnection(uid);
+    row = await getActiveConnection(uid);
     safe = toSafeStatus(row);
   } catch {
     // Pinterest storage errors shouldn't sink the whole social view.
     return null;
   }
-  if (!safe.connected) return null;
+  if (!safe.connected || !row) return null;
   const status: ConnectionStatus = safe.needsReconnect ? "expired" : "connected";
   const metadata = await readPinterestMetadata(uid);
   if (safe.account?.accountType) metadata.accountType = safe.account.accountType;
   return {
-    id: `pinterest:${uid}`,
+    id: row.id,
     provider: "pinterest",
     workspaceId: null,
     providerAccountId: safe.account?.id ?? null,
@@ -357,6 +377,9 @@ export async function findConnection(
   uid: string,
   connectionId: string,
 ): Promise<SocialConnection | null> {
+  // Legacy synthetic id, still held by any client page loaded before this deploy.
+  // Kept so an in-flight Disconnect click resolves instead of 404-ing; new reads
+  // hand out the real row id, which falls through to the table lookup below.
   if (connectionId === `pinterest:${uid}`) {
     return readPinterestConnection(uid);
   }
