@@ -6,10 +6,7 @@ import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Clock, Moon, Su
 import { createBrowserClient } from "@supabase/ssr";
 import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
-import { PinterestSettingsPanel } from "@/components/pinterest/PinterestSettingsPanel";
-import { PinterestAdvancedSettings } from "@/components/pinterest/PinterestAdvancedSettings";
 import { SocialAccountsPanel } from "@/components/social/SocialAccountsPanel";
-import { isSocialDevToolsEnabled } from "@/lib/socialFeatureFlags";
 import {
   deriveAccountBillingSummary,
   normalizePlanName,
@@ -23,14 +20,6 @@ import {
   type NotificationPrefs,
 } from "@/lib/notificationPrefsStore";
 import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
-import {
-  fetchPinterestStatus,
-  fetchPinterestDebugStatus,
-  type PinterestClientError,
-  type PinterestStatus,
-  type PinterestDebugStatus,
-} from "@/lib/pinterestClient";
-import { derivePinterestSettingsState } from "@/lib/pinterest/pinterestSettingsState";
 import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -72,7 +61,6 @@ const supabase = createBrowserClient(
 export type SettingsTab =
   | "account"
   | "billing"
-  | "pinterest"
   | "social"
   | "publishing"
   | "amazon"
@@ -748,187 +736,13 @@ function BillingTab() {
   );
 }
 
-// ── Pinterest Tab ─────────────────────────────────────────────────────────────
+// ── Social accounts Tab ───────────────────────────────────────────────────────
 
-/**
- * Safe, non-secret sandbox / provider diagnostics — Developer tools only. Makes the
- * "provider configured vs user connected" distinction visible: a sandbox token can
- * make `canAttemptSandboxPublish` true without the user having any connection. Never
- * shows tokens (only presence booleans).
- */
-function SandboxDiagnostics() {
-  const [debug, setDebug] = useState<PinterestDebugStatus | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    fetchPinterestDebugStatus().then(setDebug).catch(() => setFailed(true));
-  }, []);
-
-  const rows: [string, string][] = debug
-    ? [
-        ["API environment", debug.apiEnv],
-        ["Sandbox token present", debug.sandboxTokenPresent ? "Yes" : "No"],
-        ["Can attempt sandbox publish", debug.canAttemptSandboxPublish ? "Yes" : "No"],
-        ["Standard access required", debug.standardAccessRequired ? "Yes" : "No"],
-      ]
-    : [];
-
-  return (
-    <section
-      data-testid="pinterest-sandbox-diagnostics"
-      style={{ border: `1px solid ${UI.border}`, borderRadius: 12, padding: "12px 14px", background: UI.surface2 }}
-    >
-      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.text }}>Provider diagnostics</p>
-      <p style={{ margin: "2px 0 10px", fontSize: 11, color: UI.textSec }}>
-        Sandbox / provider config only — this is not a user connection.
-      </p>
-      {failed ? (
-        <p style={{ margin: 0, fontSize: 12, color: UI.warning }}>Could not load diagnostics.</p>
-      ) : !debug ? (
-        <p style={{ margin: 0, display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: UI.textSec }}>
-          <Loader2 size={13} className="animate-spin" /> Loading…
-        </p>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {rows.map(([k, v]) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span style={{ color: UI.textSec }}>{k}</span>
-              <span style={{ color: UI.text, fontWeight: 600 }}>{v}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * Safe connection diagnostics — Developer tools only. Surfaces the technical status
- * detail (env, connection source, last fetch time, and the raw safe fetch error)
- * that the normal Pinterest card deliberately hides. Never shows tokens/secrets.
- */
-function StatusDiagnostics({ status, statusError, lastFetchAt }: {
-  status: PinterestStatus | null;
-  statusError: string | null;
-  lastFetchAt: number | null;
-}) {
-  const rows: [string, string][] = [
-    ["API environment", status?.apiEnv ?? status?.environment ?? "unknown"],
-    ["Connection source", status?.connectionSource ?? "none"],
-    ["Needs reconnect", status?.needsReconnect ? "Yes" : "No"],
-    ["Last status fetch", lastFetchAt ? new Date(lastFetchAt).toLocaleTimeString() : "—"],
-    ["Status fetch error", statusError ?? "none"],
-  ];
-  return (
-    <section
-      data-testid="pinterest-status-diagnostics"
-      style={{ border: `1px solid ${UI.border}`, borderRadius: 12, padding: "12px 14px", background: UI.surface2 }}
-    >
-      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.text }}>Connection diagnostics</p>
-      <p style={{ margin: "2px 0 10px", fontSize: 11, color: UI.textSec }}>Technical status detail — not shown to normal users.</p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-        {rows.map(([k, v]) => (
-          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
-            <span style={{ color: UI.textSec }}>{k}</span>
-            <span style={{ color: k === "Status fetch error" && statusError ? UI.warning : UI.text, fontWeight: 600, textAlign: "right", wordBreak: "break-word" }}>{v}</span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function PinterestTabContent() {
-  const [pinterestStatus, setPinterestStatus] = useState<PinterestStatus | null>(null);
-  const [pinterestLoaded, setPinterestLoaded] = useState(false);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [lastFetchAt, setLastFetchAt] = useState<number | null>(null);
-  const [devToolsOpen, setDevToolsOpen] = useState(false);
-
-  useEffect(() => {
-    fetchPinterestStatus()
-      .then(s => { setPinterestStatus(s); setStatusError(null); setLastFetchAt(Date.now()); setPinterestLoaded(true); })
-      .catch((e: PinterestClientError) => {
-        // Keep the debug detail here; the normal card never shows this.
-        setPinterestStatus({
-          connected: !!e.needsReconnect,
-          account: null, scopes: [],
-          needsReconnect: !!e.needsReconnect,
-        });
-        setStatusError(e.message || e.code || "status fetch failed");
-        setLastFetchAt(Date.now());
-        setPinterestLoaded(true);
-      });
-  }, []);
-
-  const visualState = pinterestLoaded ? derivePinterestSettingsState(pinterestStatus) : null;
-  const isConnected = visualState === "connected" || visualState === "limited_access";
-  // Sandbox concepts kept separate from a real user connection (see status route).
-  const sandboxDemo = pinterestStatus?.connectionSource === "sandbox_demo";
-  const sandboxEnv = (pinterestStatus?.apiEnv ?? pinterestStatus?.environment) === "sandbox";
-  // Boards actually load (real connection, or sandbox token backing the publish path).
-  const canLoadBoards = isConnected || sandboxDemo;
-  // Board defaults, manual board sync, publishing-access detail, advanced setup, and
-  // diagnostics are developer/debug surfaces. Normal users never see them — they live
-  // behind a collapsed "Developer tools" section shown only outside production. Also
-  // shown in sandbox mode, or when a status fetch error needs diagnosing.
-  const showDevTools = isSocialDevToolsEnabled() && pinterestLoaded && (canLoadBoards || sandboxEnv || !!statusError);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-      <div data-testid="pinterest-connection-card">
-        <PinterestSettingsPanel />
-      </div>
-      {showDevTools && (
-        <div
-          data-testid="pinterest-developer-tools"
-          style={{ marginTop: 16, border: "1px solid var(--app-border)", borderRadius: 12, overflow: "hidden" }}
-        >
-          <button
-            type="button"
-            data-testid="pinterest-developer-tools-toggle"
-            onClick={() => setDevToolsOpen(o => !o)}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
-              padding: "12px 14px", border: "none", background: "transparent", cursor: "pointer", textAlign: "left",
-            }}
-          >
-            <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--app-text-sec)" }}>Developer tools</span>
-            <span style={{ fontSize: 11, color: "#5B6577" }}>{devToolsOpen ? "Hide" : "Show"}</span>
-          </button>
-          {devToolsOpen && (
-            <div style={{ padding: "0 4px 6px", display: "flex", flexDirection: "column", gap: 12 }}>
-              <StatusDiagnostics status={pinterestStatus} statusError={statusError} lastFetchAt={lastFetchAt} />
-              {sandboxEnv && <SandboxDiagnostics />}
-              {canLoadBoards && (
-                <PinterestAdvancedSettings
-                  limited={visualState === "limited_access"}
-                  needsReconnect={!!pinterestStatus?.needsReconnect}
-                />
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PinterestTab() {
-  return (
-    <Suspense fallback={
-      <PinterestTabFallback />
-    }>
-      <PinterestTabContent />
-    </Suspense>
-  );
-}
-
-function PinterestTabFallback() {
+function SocialTabFallback() {
   const { t } = useLocale();
   return (
     <div style={{ padding: 40, textAlign: "center", fontSize: 13, color: UI.textSec, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-      <Loader2 size={16} className="animate-spin" /> {t("pinterest.checkingConnection")}
+      <Loader2 size={16} className="animate-spin" /> {t("socialPanel.loading")}
     </div>
   );
 }
@@ -1413,7 +1227,7 @@ function SupportTab({ onClose }: { onClose: () => void }) {
 const TABS: { id: SettingsTab; labelKey?: MessageKey; label?: string; testId: string }[] = [
   { id: "account",        labelKey: "settings.tab.account",       testId: "settings-tab-account" },
   { id: "billing",        labelKey: "settings.tab.billing",       testId: "settings-tab-billing" },
-  { id: "pinterest",      labelKey: "settings.tab.pinterest",     testId: "settings-tab-pinterest" },
+  // Pinterest has no tab of its own — it is one card inside Social accounts (PRD §2).
   { id: "social",         labelKey: "settings.tab.social",        testId: "settings-tab-social" },
   { id: "publishing",     labelKey: "settings.tab.publishing",    testId: "settings-tab-publishing" },
   { id: "amazon",         labelKey: "settings.tab.amazon",        testId: "settings-tab-amazon" },
@@ -1551,8 +1365,14 @@ export function SettingsModal({
           <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px 52px", minWidth: 0 }}>
             {tab === "account"        && <AccountTab       saveFnRef={accountSaveFn} />}
             {tab === "billing"        && <BillingTab />}
-            {tab === "pinterest"      && <PinterestTab />}
-            {tab === "social"         && <SocialAccountsPanel />}
+            {/* SocialAccountsPanel reads the OAuth-return query via useSearchParams,
+                so it needs its own Suspense boundary (the retired Pinterest tab had
+                the same one). */}
+            {tab === "social"         && (
+              <Suspense fallback={<SocialTabFallback />}>
+                <SocialAccountsPanel />
+              </Suspense>
+            )}
             {tab === "publishing"     && <PublishingTab    saveFnRef={publishingSaveFn} />}
             {tab === "amazon"         && <AmazonTab        saveFnRef={amazonSaveFn} />}
             {/* Rendered whenever the tab is active, regardless of the flag: launch/callback

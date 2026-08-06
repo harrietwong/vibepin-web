@@ -833,6 +833,14 @@ const ru: Partial<Record<MessageKey, string>> = {
   "workspace.tabs.workspaceSuffix": "Рабочее пространство",
 
   // ── socialPanel ──
+  "socialPanel.accountState.connected": "Подключено",
+  "socialPanel.accountState.connectedDesc": "Этот аккаунт подключён и готов к публикации.",
+  "socialPanel.accountState.needsAttention": "Требует внимания",
+  "socialPanel.accountState.needsAttentionDesc": "С этим аккаунтом есть проблема, которая может повлиять на публикацию.",
+  "socialPanel.accountState.needsReconnect": "Требуется повторное подключение",
+  "socialPanel.accountState.needsReconnectDesc": "Подключите этот аккаунт заново, чтобы продолжить публикацию. Ваши черновики и запланированный контент сохранятся.",
+  "socialPanel.accountState.disconnected": "Отключено",
+  "socialPanel.accountState.disconnectedDesc": "Сейчас этот аккаунт не подключён.",
   "socialPanel.status.reconnectNeeded": "Требуется повторное подключение",
   "socialPanel.status.disconnected": "Отключено",
   "socialPanel.status.connectionError": "Ошибка подключения",

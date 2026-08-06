@@ -343,20 +343,10 @@ export function seedPinterestStatusConnected(): void {
   statusInflight.catch(() => {}); // background revalidation must never surface as unhandled
 }
 
-/** Safe, non-secret Pinterest provider diagnostics (Developer tools only). Never tokens. */
-export type PinterestDebugStatus = {
-  apiEnv: "sandbox" | "production";
-  baseUrl: string;
-  sandboxTokenPresent: boolean;
-  canAttemptSandboxPublish: boolean;
-  standardAccessRequired: boolean;
-};
-
-export async function fetchPinterestDebugStatus(): Promise<PinterestDebugStatus> {
-  const res = await fetchPinterestApi("/api/pinterest/debug-status", { headers: await authHeaders(), cache: "no-store" });
-  if (!res.ok) throw toClientError(await parseErrorResponse(res));
-  return res.json();
-}
+// `fetchPinterestDebugStatus` / `PinterestDebugStatus` were removed with the
+// Developer tools section (PRD §7). /api/pinterest/debug-status still exists but is
+// super-admin gated now — it is an operator tool, and no customer-facing client
+// code may call it.
 
 /**
  * Fire-and-forget profile enrichment. Call once after landing back from a

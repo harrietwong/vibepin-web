@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Check, Link } from "lucide-react";
 import NextLink from "next/link";
 import { apiFetch } from "@/lib/utils";
+import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
 interface Settings {
   auto_publish: boolean;
@@ -63,20 +64,20 @@ export default function SettingsPage() {
       <main className="max-w-2xl mx-auto px-6 py-8 space-y-6">
         <h1 className="text-xl font-bold text-neutral-900">Settings</h1>
 
-        {/* Platform connections — Pinterest moved to dark-app Integrations */}
+        {/* Platform connections — Pinterest moved to dark-app Social accounts */}
         <div className="rounded-2xl border border-neutral-200 bg-white p-6">
           <h2 className="font-semibold text-neutral-800 mb-5">Platform connections</h2>
           <div className="space-y-3">
             <div className="rounded-xl border border-neutral-200 p-4">
               <p className="text-sm font-semibold text-neutral-800">Pinterest</p>
               <p className="text-xs mt-0.5 text-neutral-400 mb-3">
-                Connect and manage your Pinterest account in the app Integrations settings.
+                Connect and manage your Pinterest account in the app Social accounts settings.
               </p>
               <NextLink
-                href="/app/settings/pinterest"
+                href={SETTINGS_SOCIAL_PATH}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-700"
               >
-                Open Integrations
+                Open Social accounts
               </NextLink>
             </div>
 

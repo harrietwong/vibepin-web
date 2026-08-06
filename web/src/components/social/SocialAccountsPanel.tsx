@@ -40,7 +40,14 @@ import {
   fetchSocialConnections,
   startSocialConnect,
 } from "@/lib/social/socialClient";
-import { startPinterestConnect, disconnectPinterest } from "@/lib/pinterestClient";
+import { startPinterestConnect, disconnectPinterest, syncPinterestAccount } from "@/lib/pinterestClient";
+import {
+  accountUiState,
+  ACCOUNT_UI_STATE_LABEL_KEY,
+  ACCOUNT_UI_STATE_DESCRIPTION_KEY,
+  ACCOUNT_UI_STATE_TONE,
+  type AccountUiState,
+} from "@/lib/social/accountUiState";
 import {
   SOCIAL_CONNECTIONS_CHANGED_EVENT,
   notifyConnectionsChanged,
@@ -119,6 +126,29 @@ const INSTAGRAM_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: 
   error: { type: "error", msg: "Instagram authorization failed" },
 };
 
+/**
+ * `?pinterest=<status>` OAuth-return consumption. Moved here from the retired
+ * PinterestSettingsPanel when Pinterest joined Social accounts (PRD §2): the
+ * callback redirects to this page now, and a historical redirect to
+ * /app/settings/pinterest is forwarded here with its query intact by that route's
+ * redirect stub — so an authorization outcome is never silently dropped.
+ * Statuses mirror the redirects in api/auth/pinterest/{connect,callback}/route.ts.
+ */
+const PINTEREST_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: string }> = {
+  connected: { type: "success", msg: "Pinterest connected" },
+  // The user backed out of the Pinterest authorization — not an error.
+  cancelled: { type: "info", msg: "Pinterest connection was cancelled. You can try again when ready." },
+  denied: { type: "info", msg: "Pinterest connection was cancelled. You can try again when ready." },
+  state_mismatch: { type: "error", msg: "Security check failed — please try connecting again" },
+  state_expired: { type: "error", msg: "Connection request expired — please try again" },
+  session_expired: { type: "error", msg: "Your session expired — please sign in and retry" },
+  missing_code: { type: "error", msg: "Pinterest did not return an authorization code" },
+  exchange_failed: { type: "error", msg: "Could not complete Pinterest authorization — please try again" },
+  persist_failed: { type: "error", msg: "Pinterest authorized but saving the connection failed — try again" },
+  config_error: { type: "error", msg: "Pinterest is not configured on the server" },
+  error: { type: "error", msg: "Pinterest authorization failed" },
+};
+
 /** Human-readable labels for the required Facebook permissions (for the missing-scope hint). */
 const FACEBOOK_SCOPE_LABELS: Record<string, string> = {
   pages_show_list: "See your Pages",
@@ -185,44 +215,40 @@ const UI = {
 
 type StatusChip = { label: string; color: string; bg: string; border: string };
 
+/** Chip palette per tone (PRD §5): amber = something to do, grey = simply off, green = fine. */
+const TONE_STYLES: Record<"green" | "amber" | "grey", Omit<StatusChip, "label">> = {
+  green: { color: UI.success, bg: "rgba(16,185,129,0.12)", border: "rgba(16,185,129,0.3)" },
+  amber: { color: UI.warning, bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.35)" },
+  grey: { color: UI.textSec, bg: "rgba(255,255,255,0.05)", border: UI.border },
+};
+
+/**
+ * Customer-visible state for a platform that HAS an account, or null for an empty
+ * platform slot. The four account states describe an account; a platform nobody has
+ * connected yet is not an account, so it keeps the plain "Not connected" /
+ * "Setup pending" affordance instead of being mislabelled "Disconnected".
+ */
+function platformAccountState(summary: PlatformConnectionSummary): AccountUiState | null {
+  if (summary.accounts.length === 0) return null;
+  const primary =
+    summary.accounts.find(a => a.connectionStatus === "connected") ?? summary.accounts[0];
+  return accountUiState({
+    connectionStatus: primary.connectionStatus,
+    scopes: primary.scopes,
+    // Scope completeness is only knowable (and only required) for Pinterest today.
+    enforcePinterestScopes: summary.provider === "pinterest",
+  });
+}
+
 function statusChip(summary: PlatformConnectionSummary, tr: (key: MessageKey) => string): StatusChip {
-  switch (summary.status) {
-    case "connected":
-      return {
-        label: tr("publishDestinations.connected"),
-        color: UI.success,
-        bg: "rgba(16,185,129,0.12)",
-        border: "rgba(16,185,129,0.3)",
-      };
-    case "expired":
-      return {
-        label: tr("socialPanel.status.reconnectNeeded"),
-        color: UI.warning,
-        bg: "rgba(245,158,11,0.12)",
-        border: "rgba(245,158,11,0.35)",
-      };
-    case "revoked":
-      return {
-        label: tr("socialPanel.status.disconnected"),
-        color: UI.warning,
-        bg: "rgba(245,158,11,0.12)",
-        border: "rgba(245,158,11,0.35)",
-      };
-    case "error":
-      return {
-        label: tr("socialPanel.status.connectionError"),
-        color: UI.error,
-        bg: "rgba(239,68,68,0.12)",
-        border: "rgba(239,68,68,0.3)",
-      };
-    default:
-      return {
-        label: summary.liveConnect ? tr("publishDestinations.notConnected") : tr("socialPanel.status.setupPending"),
-        color: UI.textSec,
-        bg: "rgba(255,255,255,0.05)",
-        border: UI.border,
-      };
+  const state = platformAccountState(summary);
+  if (state) {
+    return { label: tr(ACCOUNT_UI_STATE_LABEL_KEY[state]), ...TONE_STYLES[ACCOUNT_UI_STATE_TONE[state]] };
   }
+  return {
+    label: summary.liveConnect ? tr("publishDestinations.notConnected") : tr("socialPanel.status.setupPending"),
+    ...TONE_STYLES.grey,
+  };
 }
 
 function Chip({ chip }: { chip: StatusChip }) {
@@ -271,10 +297,13 @@ function PlatformCard({
   const meta = PLATFORMS[summary.provider];
   const chip = statusChip(summary, tr);
   const connected = summary.connected;
-  // A degraded connection (token invalid) is the ONLY case that shows Reconnect.
-  const degraded = summary.status === "expired" || summary.status === "revoked" || summary.status === "error";
-  // Healthy = a usable connection with no token problem → Disconnect only.
-  const healthy = connected && summary.status === "connected";
+  // ONE customer-visible state per account (PRD §6) — null for an empty platform slot.
+  const accountState = platformAccountState(summary);
+  // A degraded connection is the ONLY case that shows Reconnect. Derived from the
+  // same single state as the chip, so the badge and the buttons can never disagree.
+  const degraded = accountState === "needs_reconnect" || accountState === "needs_attention" || accountState === "disconnected";
+  // Healthy = a usable connection with no problem → Disconnect only.
+  const healthy = connected && accountState === "connected";
 
   return (
     <section
@@ -302,6 +331,18 @@ function PlatformCard({
                 ? tr("socialPanel.card.connectToPublish")
                 : tr("socialPanel.card.setupPendingComingSoon")}
           </p>
+          {/* One plain-language explanation for the one state — never a stack of
+              technical reasons (PRD §5/§7). Suppressed for the healthy case, where
+              the green "Connected" chip already says everything. */}
+          {accountState && accountState !== "connected" && (
+            <p
+              data-testid={`social-account-state-${summary.provider}`}
+              data-account-state={accountState}
+              style={{ margin: "4px 0 0", fontSize: 11.5, color: UI.textSec, lineHeight: 1.5 }}
+            >
+              {tr(ACCOUNT_UI_STATE_DESCRIPTION_KEY[accountState])}
+            </p>
+          )}
         </div>
       </div>
 
@@ -829,6 +870,29 @@ export function SocialAccountsPanel() {
     // Refresh on both a completed connection and a pending Page choice so the card
     // flips to "connected" (or shows the Page picker) immediately.
     if (flag === "connected" || flag === "select_page") { notifyConnectionsChanged(); void load(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  // `?pinterest=<status>` OAuth-return consumption (see PINTEREST_CALLBACK_MESSAGES
+  // above). Same contract as the Facebook/Instagram handlers: toast once, clear the
+  // query so a refresh can't re-fire it, refresh the list on success. On a completed
+  // connect it also kicks off the deferred account backfill — the callback skips the
+  // profile read to keep the redirect fast, so without this the card would sit on a
+  // generic name until the next sync.
+  useEffect(() => {
+    const flag = params.get("pinterest");
+    if (!flag) return;
+    const m = PINTEREST_CALLBACK_MESSAGES[flag];
+    if (m) {
+      const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
+      notify(m.msg);
+    }
+    router.replace(SETTINGS_SOCIAL_PATH);
+    if (flag === "connected") {
+      notifyConnectionsChanged();
+      void load();
+      void syncPinterestAccount().then(synced => { if (synced) void load(); });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 

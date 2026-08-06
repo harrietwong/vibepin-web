@@ -1729,6 +1729,14 @@ const id: Partial<Record<MessageKey, string>> = {
   "trendChart.footerNote": "Diperkirakan dari pertumbuhan YoY/MoM · bukan jumlah pencarian mentah",
 
   // ── socialPanel ──
+  "socialPanel.accountState.connected": "Tersambung",
+  "socialPanel.accountState.connectedDesc": "Akun ini tersambung dan siap untuk memublikasikan.",
+  "socialPanel.accountState.needsAttention": "Perlu perhatian",
+  "socialPanel.accountState.needsAttentionDesc": "Ada masalah pada akun ini yang dapat memengaruhi publikasi.",
+  "socialPanel.accountState.needsReconnect": "Perlu sambung ulang",
+  "socialPanel.accountState.needsReconnectDesc": "Sambungkan ulang akun ini untuk terus memublikasikan. Draf dan konten terjadwal Anda tetap aman.",
+  "socialPanel.accountState.disconnected": "Terputus",
+  "socialPanel.accountState.disconnectedDesc": "Akun ini saat ini tidak tersambung.",
   "socialPanel.status.reconnectNeeded": "Perlu sambungkan ulang",
   "socialPanel.status.disconnected": "Terputus",
   "socialPanel.status.connectionError": "Kesalahan koneksi",

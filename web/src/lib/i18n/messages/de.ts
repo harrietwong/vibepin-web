@@ -497,6 +497,14 @@ const de: Partial<Record<MessageKey, string>> = {
   "dashboard.viewWorkspace": "Arbeitsbereich ansehen",
 
   // ── socialPanel ──
+  "socialPanel.accountState.connected": "Verbunden",
+  "socialPanel.accountState.connectedDesc": "Dieses Konto ist verbunden und bereit zum Veröffentlichen.",
+  "socialPanel.accountState.needsAttention": "Aufmerksamkeit erforderlich",
+  "socialPanel.accountState.needsAttentionDesc": "Bei diesem Konto gibt es ein Problem, das die Veröffentlichung beeinträchtigen kann.",
+  "socialPanel.accountState.needsReconnect": "Erneut verbinden",
+  "socialPanel.accountState.needsReconnectDesc": "Verbinde dieses Konto erneut, um weiter zu veröffentlichen. Deine Entwürfe und geplanten Inhalte bleiben erhalten.",
+  "socialPanel.accountState.disconnected": "Getrennt",
+  "socialPanel.accountState.disconnectedDesc": "Dieses Konto ist derzeit nicht verbunden.",
   "socialPanel.status.reconnectNeeded": "Erneute Verbindung nötig",
   "socialPanel.status.disconnected": "Getrennt",
   "socialPanel.status.connectionError": "Verbindungsfehler",

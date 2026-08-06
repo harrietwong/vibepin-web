@@ -515,6 +515,14 @@ const ja: Partial<Record<MessageKey, string>> = {
   "workspace.tabs.workspaceSuffix": "ワークスペース",
 
   // ── socialPanel.* ──
+  "socialPanel.accountState.connected": "接続済み",
+  "socialPanel.accountState.connectedDesc": "このアカウントは接続済みで、公開できます。",
+  "socialPanel.accountState.needsAttention": "確認が必要",
+  "socialPanel.accountState.needsAttentionDesc": "このアカウントに、公開へ影響する可能性のある問題があります。",
+  "socialPanel.accountState.needsReconnect": "再接続が必要",
+  "socialPanel.accountState.needsReconnectDesc": "公開を続けるには、このアカウントを再接続してください。下書きと予約済みのコンテンツはそのまま保持されます。",
+  "socialPanel.accountState.disconnected": "未接続",
+  "socialPanel.accountState.disconnectedDesc": "このアカウントは現在接続されていません。",
   "socialPanel.status.reconnectNeeded": "再接続が必要です",
   "socialPanel.status.disconnected": "未接続",
   "socialPanel.status.connectionError": "接続エラー",

@@ -523,6 +523,14 @@ const pt: Partial<Record<MessageKey, string>> = {
   "workspace.tabs.workspaceSuffix": "Espaço de trabalho",
 
   // ── socialPanel ──
+  "socialPanel.accountState.connected": "Conectada",
+  "socialPanel.accountState.connectedDesc": "Esta conta está conectada e pronta para publicar.",
+  "socialPanel.accountState.needsAttention": "Requer atenção",
+  "socialPanel.accountState.needsAttentionDesc": "Há um problema nesta conta que pode afetar a publicação.",
+  "socialPanel.accountState.needsReconnect": "Requer reconexão",
+  "socialPanel.accountState.needsReconnectDesc": "Reconecte esta conta para continuar publicando. Seus rascunhos e conteúdo agendado permanecerão salvos.",
+  "socialPanel.accountState.disconnected": "Desconectada",
+  "socialPanel.accountState.disconnectedDesc": "Esta conta não está conectada no momento.",
   "socialPanel.status.reconnectNeeded": "Reconexão necessária",
   "socialPanel.status.disconnected": "Desconectado",
   "socialPanel.status.connectionError": "Erro de conexão",

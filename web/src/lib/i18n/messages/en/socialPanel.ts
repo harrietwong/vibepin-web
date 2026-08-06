@@ -1,4 +1,15 @@
 export const socialPanelMessages = {
+  // ── Customer-visible account states (PRD §5) — the only four a customer sees.
+  //    Rendered from lib/social/accountUiState.ts; never combined with each other.
+  "socialPanel.accountState.connected": "Connected",
+  "socialPanel.accountState.connectedDesc": "This account is connected and ready to publish.",
+  "socialPanel.accountState.needsAttention": "Needs attention",
+  "socialPanel.accountState.needsAttentionDesc": "There's an issue with this account that may affect publishing.",
+  "socialPanel.accountState.needsReconnect": "Needs reconnect",
+  "socialPanel.accountState.needsReconnectDesc": "Reconnect this account to continue publishing. Your drafts and scheduled content will stay safe.",
+  "socialPanel.accountState.disconnected": "Disconnected",
+  "socialPanel.accountState.disconnectedDesc": "This account is not currently connected.",
+
   // ── Status chip labels ──
   "socialPanel.status.reconnectNeeded": "Reconnect needed",
   "socialPanel.status.disconnected": "Disconnected",

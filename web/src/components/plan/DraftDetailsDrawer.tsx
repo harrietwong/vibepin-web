@@ -1840,17 +1840,14 @@ export function PinDetailsModal({
             <div data-testid="draft-publish-success" style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.30)" }}>
               <CheckCircle2 size={16} style={{ color: UI.success, flexShrink: 0, marginTop: 1 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Which API environment the server published through is OUR
+                    configuration, not the customer's business (PRD §7). The SANDBOX
+                    badge and the "Environment: …" line that used to sit here leaked
+                    internal wiring into a success message; operators read it from
+                    Internal Admin instead. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: UI.text }}>{t("pinDetails.publishedSuccess")}</p>
-                  {result.environment === "sandbox" && (
-                    <span data-testid="draft-publish-env" style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 0.3, color: UI.info, background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.35)", borderRadius: 999, padding: "1px 7px", textTransform: "uppercase" }}>
-                      {t("pinDetails.sandboxMode")}
-                    </span>
-                  )}
                 </div>
-                <p style={{ margin: "2px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {t("pinDetails.environment")} {result.environment === "sandbox" ? t("pinDetails.envSandbox") : t("pinDetails.envProduction")}
-                </p>
                 <p data-testid="draft-publish-pin-id" style={{ margin: "1px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t("pinDetails.pinIdLabel")} {result.pinId}</p>
                 <p style={{ margin: "1px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t("pinDetails.boardLabel")} {result.boardName}</p>
               </div>

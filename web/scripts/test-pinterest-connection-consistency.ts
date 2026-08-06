@@ -8,10 +8,11 @@
  *     (pinterest_connections), which socialConnectionStore unifies into the social
  *     view — so there is exactly one user-facing "connected" record, no duplicate
  *     Pinterest row written into social_connections.
- *   - When the Pinterest-specific /api/pinterest/status read fails transiently, the
- *     Settings Pinterest panel cross-checks the SHARED social-connections source
- *     before dropping the user to "not connected" — so a status blip can never hide a
- *     live connection or surface "Could not refresh connection status" over a real one.
+ *   - Settings reads that unified source directly. Phase A retired the dedicated
+ *     Pinterest panel and its /api/pinterest/status + social cross-check dance: with
+ *     ONE read there is no second opinion to disagree with, so the class of bug the
+ *     cross-check defended against (a status blip hiding a live connection) is gone
+ *     by construction rather than by compensation.
  *   - A sandbox token alone never renders as connected in Settings.
  */
 
@@ -46,7 +47,7 @@ const root = process.cwd();
 const callbackRoute = readFileSync(join(root, "src/app/api/auth/pinterest/callback/route.ts"), "utf8");
 const socialStore = readFileSync(join(root, "src/lib/social/server/socialConnectionStore.ts"), "utf8");
 const statusRoute = readFileSync(join(root, "src/app/api/pinterest/status/route.ts"), "utf8");
-const panel = readFileSync(join(root, "src/components/pinterest/PinterestSettingsPanel.tsx"), "utf8");
+const panel = readFileSync(join(root, "src/components/social/SocialAccountsPanel.tsx"), "utf8");
 const connectionStore = readFileSync(join(root, "src/lib/server/pinterest/connectionStore.ts"), "utf8");
 
 async function main() {
@@ -67,21 +68,20 @@ async function main() {
     assert(/provider !== "pinterest"/.test(socialStore), "social store must not double-count a pinterest row in social_connections");
   });
 
-  await test("Settings Pinterest panel cross-checks the shared source when status fails", () => {
-    assert(panel.includes("fetchSocialConnections"), "panel must import the shared social-connections reader");
-    assert(panel.includes("pinterestStatusFromSocialFallback"), "panel must define a shared-source fallback");
-    // The fallback is used inside the status-failure path, not the happy path.
-    assert(/const fallback = await pinterestStatusFromSocialFallback\(\)/.test(panel), "fallback must run on status failure");
-    assert(/if \(fallback\) \{[\s\S]*?setRefreshFailed\(false\)/.test(panel), "a confirmed fallback must clear the refresh-failed note");
+  await test("Settings reads Pinterest from the ONE shared source (no second, disagreeing read)", () => {
+    assert(panel.includes("fetchSocialConnections"), "panel must read the shared social-connections source");
+    // The retired panel polled /api/pinterest/status separately and then had to
+    // reconcile the two. Social accounts must not reintroduce that second read —
+    // it is exactly what let the two surfaces disagree.
+    assert(!panel.includes("/api/pinterest/status"), "panel must not add a second Pinterest status read");
+    assert(!panel.includes("pinterestStatusFromSocialFallback"), "the retired cross-check fallback must not return");
   });
 
-  await test("shared-source fallback is sandbox-safe (tags connectionSource db, reads real connection only)", () => {
-    // The fallback synthesizes a db-sourced status; social/connections never reports
-    // the sandbox token as connected, so this can't fake a connection.
-    const idx = panel.indexOf("pinterestStatusFromSocialFallback");
-    const body = panel.slice(idx, idx + 1400);
-    assert(/connectionSource: "db"/.test(body), "fallback status must be tagged connectionSource db");
-    assert(/pin\?\.connected/.test(body) || /pin\.connected/.test(body), "fallback must require the shared source to report connected");
+  await test("a failed load never renders as disconnected (it renders as an explicit error)", () => {
+    // A transient read failure must be visibly an error, not silently "not connected" —
+    // the same invariant the old cross-check protected, now enforced at the load site.
+    assert(/catch \{[\s\S]{0,120}setLoadError\(true\)/.test(panel), "load failure must set an explicit error state");
+    assert(panel.includes("social-load-error"), "the error state must be rendered, not swallowed");
   });
 
   await test("status route prioritizes a real DB connection over the sandbox fallback", () => {
@@ -101,28 +101,14 @@ async function main() {
     assert(/disconnected_at: new Date/.test(body), "disconnect must set disconnected_at");
   });
 
-  await test("derivePinterestSettingsState treats sandbox_demo as not connected", async () => {
-    const { derivePinterestSettingsState } = await import("../src/lib/pinterest/pinterestSettingsState");
-    assert(
-      derivePinterestSettingsState({
-        connected: true,
-        account: { id: "sandbox", username: "sandbox", accountType: "SANDBOX" },
-        scopes: ["pins:write", "boards:read"],
-        needsReconnect: false,
-        connectionSource: "sandbox_demo",
-      }) === "not_connected",
-      "sandbox_demo must never render as connected in Settings",
-    );
-    assert(
-      derivePinterestSettingsState({
-        connected: true,
-        account: { id: "1", username: "demo", accountType: null },
-        scopes: ["pins:write", "boards:read"],
-        needsReconnect: false,
-        connectionSource: "db",
-      }) === "connected",
-      "a real db connection with publish scope must render connected",
-    );
+  await test("Settings never sees a sandbox connection at all (filtered server-side, not in the UI)", () => {
+    // The old panel had to special-case connectionSource "sandbox_demo" so a sandbox
+    // token could not masquerade as a merchant connection. Social accounts reads
+    // socialConnectionStore, which only ever maps a real pinterest_connections row —
+    // the sandbox path never reaches the client, so there is nothing to special-case.
+    assert(/readPinterestConnection/.test(socialStore), "social store must map only the real Pinterest connection record");
+    assert(!socialStore.includes("sandbox"), "the shared social source must never surface a sandbox connection");
+    assert(!panel.includes("sandbox_demo"), "Social accounts must not need a sandbox special case");
   });
 
   await test("shared helpers: strict merchant check vs publish capability (sandbox never 'real')", async () => {

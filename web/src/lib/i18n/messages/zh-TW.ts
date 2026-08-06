@@ -670,6 +670,14 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "workspace.tabs.workspaceSuffix": "工作區",
 
   // ── socialPanel ──
+  "socialPanel.accountState.connected": "已連接",
+  "socialPanel.accountState.connectedDesc": "此帳號已連接，可以正常發布。",
+  "socialPanel.accountState.needsAttention": "需要處理",
+  "socialPanel.accountState.needsAttentionDesc": "此帳號有一個可能影響發布的問題。",
+  "socialPanel.accountState.needsReconnect": "需要重新連接",
+  "socialPanel.accountState.needsReconnectDesc": "請重新連接此帳號以繼續發布。你的草稿與已排程內容都會保留。",
+  "socialPanel.accountState.disconnected": "未連接",
+  "socialPanel.accountState.disconnectedDesc": "此帳號目前未連接。",
   "socialPanel.status.reconnectNeeded": "需要重新連接",
   "socialPanel.status.disconnected": "未連接",
   "socialPanel.status.connectionError": "連接錯誤",

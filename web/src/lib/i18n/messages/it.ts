@@ -2676,6 +2676,14 @@ const it: Partial<Record<MessageKey, string>> = {
   "queue.listEmpty.noPinsInTab": "Nessun Pin {tab}.",
 
   // ── socialPanel ──
+  "socialPanel.accountState.connected": "Collegato",
+  "socialPanel.accountState.connectedDesc": "Questo account è collegato e pronto per pubblicare.",
+  "socialPanel.accountState.needsAttention": "Richiede attenzione",
+  "socialPanel.accountState.needsAttentionDesc": "C'è un problema su questo account che può influire sulla pubblicazione.",
+  "socialPanel.accountState.needsReconnect": "Richiede riconnessione",
+  "socialPanel.accountState.needsReconnectDesc": "Ricollega questo account per continuare a pubblicare. Le bozze e i contenuti programmati resteranno al sicuro.",
+  "socialPanel.accountState.disconnected": "Scollegato",
+  "socialPanel.accountState.disconnectedDesc": "Questo account non è collegato al momento.",
   "socialPanel.status.reconnectNeeded": "Riconnessione necessaria",
   "socialPanel.status.disconnected": "Disconnesso",
   "socialPanel.status.connectionError": "Errore di connessione",

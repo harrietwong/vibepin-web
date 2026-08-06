@@ -2185,6 +2185,14 @@ const nl: Partial<Record<MessageKey, string>> = {
   "trendChart.footerNote": "Geschat op basis van YoY/MoM-groei · geen ruwe zoekaantallen",
 
   // ── socialPanel ──
+  "socialPanel.accountState.connected": "Verbonden",
+  "socialPanel.accountState.connectedDesc": "Dit account is verbonden en klaar om te publiceren.",
+  "socialPanel.accountState.needsAttention": "Aandacht nodig",
+  "socialPanel.accountState.needsAttentionDesc": "Er is een probleem met dit account dat publiceren kan beïnvloeden.",
+  "socialPanel.accountState.needsReconnect": "Opnieuw verbinden",
+  "socialPanel.accountState.needsReconnectDesc": "Verbind dit account opnieuw om te blijven publiceren. Je concepten en geplande content blijven behouden.",
+  "socialPanel.accountState.disconnected": "Niet verbonden",
+  "socialPanel.accountState.disconnectedDesc": "Dit account is momenteel niet verbonden.",
   "socialPanel.status.reconnectNeeded": "Opnieuw verbinden vereist",
   "socialPanel.status.disconnected": "Niet verbonden",
   "socialPanel.status.connectionError": "Verbindingsfout",

@@ -20,14 +20,7 @@ export function isMultiSocialAccountsEnabled(
   return raw === "true";
 }
 
-/**
- * Developer / debug surfaces for the Pinterest connection (board defaults, manual
- * board sync, advanced setup, publishing-access detail). Hidden from normal users;
- * shown only outside production so the connection UI stays "Connect / Disconnect"
- * simple for everyone else.
- */
-export function isSocialDevToolsEnabled(
-  nodeEnv: string | undefined = process.env.NODE_ENV,
-): boolean {
-  return nodeEnv !== "production";
-}
+// `isSocialDevToolsEnabled` was removed with the Developer tools section (PRD §7).
+// Connection diagnostics are Internal Admin surfaces now: a NODE_ENV check is not
+// an access control, and the data it revealed (API environment, connection source,
+// raw status errors) has no place in a customer's Settings at any environment.
