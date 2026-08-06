@@ -68,7 +68,7 @@ test("clearing date removes plannedAt", () => {
 
 const batchSource = readFileSync("src/components/studio/BatchEditDrawer.tsx", "utf8");
 const studioSource = readFileSync("src/app/app/studio/page.tsx", "utf8");
-const planSource = readFileSync("src/app/app/plan/page.tsx", "utf8");
+const planSource = readFileSync("src/components/plan/WeeklyPlanWorkspace.tsx", "utf8");
 
 test("Batch Edit autosaves via onApply — no Preview/Apply/global Save step", () => {
   assert.match(batchSource, /rowEdits: Record<string, RowEdit>/);

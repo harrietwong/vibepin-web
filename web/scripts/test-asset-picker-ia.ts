@@ -36,15 +36,25 @@ function extractConstTabLabels(constName: string): string[] {
   return [...match[1].matchAll(/labelKey:\s*"([^"]+)"/g)].map(m => m[1]);
 }
 
-test("Product picker renders My Products / Product Ideas / From Shopify tabs", () => {
-  // "From Shopify" (WP5) is flag-gated at render time (isShopifyIntegrationEnabled()) —
-  // with the flag off it never appears in the DOM, but it is declared here so the tab
-  // id/type union covers it. See ProductPickerModal.tsx and StudioBoard.tsx for the
-  // matching flag-gated "Select product" entry points.
+test("Product picker renders ONLY My Products and Product Ideas tabs", () => {
+  // "From Shopify" was removed as a primary tab (create-pin PRD Section C, 2026-07-21):
+  // Shopify is a SOURCE of My Products, not a separate selection task. It is now a
+  // source chip, and its connect/import panel shows in that chip's empty state.
   assertEqual(
     extractConstTabLabels("PRODUCT_PICKER_TABS"),
-    ["studioModals.tabs.myProducts", "studioModals.tabs.productIdeas", "studioModals.tabs.fromShopify"],
+    ["studioModals.tabs.myProducts", "studioModals.tabs.productIdeas"],
     "product tabs"
+  );
+});
+
+test("Shopify is a My Products source chip, not a primary tab", () => {
+  assert(
+    !componentSource.includes('productTab === "shopify"'),
+    "the Shopify tab panel must be gone",
+  );
+  assert(
+    componentSource.includes('productFilter === "shopify"'),
+    "Shopify must be reachable as a source filter",
   );
 });
 

@@ -255,5 +255,50 @@ test("resolver ordering: once imageUrl is cleared/unusable, sourceImageUrl is th
   assert.equal(resolveFailureMediaUrl(d), "https://cdn/source.png");
 });
 
+// ── Per-group reference association (create-pin PRD Section G2, 2026-07-21) ────
+
+test("group reference: a reference-group failure shows THAT group's reference", () => {
+  const d = draft({
+    imageUrl: "",
+    referenceImageUrl: "https://cdn/ref-group-2.png",
+    setupSnapshot: { selectedReferences: [{ imageUrl: "https://cdn/ref-group-1.png" }] } as never,
+  });
+  // The snapshot only records the batch's FIRST reference; group 2 must not show it.
+  assert.equal(resolveFailureMediaUrl(d), "https://cdn/ref-group-2.png");
+});
+
+test("group reference: product image still outranks the reference", () => {
+  const d = draft({
+    imageUrl: "",
+    referenceImageUrl: "https://cdn/ref.png",
+    setupSnapshot: { selectedProducts: [{ imageUrl: "https://cdn/product.png" }] } as never,
+  });
+  assert.equal(resolveFailureMediaUrl(d), "https://cdn/product.png");
+});
+
+test("group reference: falls back to the snapshot reference when unset (legacy drafts)", () => {
+  const d = draft({
+    imageUrl: "",
+    referenceImageUrl: undefined,
+    setupSnapshot: { selectedReferences: [{ imageUrl: "https://cdn/ref-legacy.png" }] } as never,
+  });
+  assert.equal(resolveFailureMediaUrl(d), "https://cdn/ref-legacy.png");
+});
+
+test("group reference: a blob reference is skipped, not shown", () => {
+  const d = draft({
+    imageUrl: "",
+    referenceImageUrl: "blob:https://app/abc-123",
+    setupSnapshot: { selectedReferences: [{ imageUrl: "https://cdn/ref-real.png" }] } as never,
+  });
+  assert.equal(resolveFailureMediaUrl(d), "https://cdn/ref-real.png");
+});
+
+test("group reference: parent's group reference is reachable through the chain", () => {
+  const child = draft({ imageUrl: "", parentDraftId: "p1" });
+  const lookup = () => draft({ imageUrl: "", referenceImageUrl: "https://cdn/parent-ref.png" });
+  assert.equal(resolveFailureMediaUrl(child, lookup), "https://cdn/parent-ref.png");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

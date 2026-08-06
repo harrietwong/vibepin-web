@@ -291,6 +291,9 @@ export const studioModalsMessages = {
   "studioModals.picker.noProductIdeasFound": "No product ideas found\nTry another category or refresh the product ideas source.",
   "studioModals.picker.noProductIdeasFoundCategory": "No product ideas found for this category.\nTry another category or refresh the product ideas source.",
   "studioModals.picker.chooseProductImages": "Choose Product Images",
+  // Header by selection mode (PRD Section C).
+  "studioModals.picker.chooseAProduct": "Choose a product",
+  "studioModals.picker.chooseProducts": "Choose products",
   "studioModals.picker.choosePinReferences": "Choose Pin References",
   "studioModals.picker.productsSelectedOne": "1 product selected",
   "studioModals.picker.productsSelectedMany": "{n} products selected",
@@ -330,6 +333,11 @@ export const studioModalsMessages = {
   "studioModals.picker.tryAnotherCategoryPinIdeas": "Try another category or refresh the pin ideas source.",
   "studioModals.picker.selectedReferencesAlsoSaved": "Selected references are also saved to My References.",
   "studioModals.picker.addSelected": "Add Selected",
+  // Explicit footer CTA — "Add Selected" did not say what or how many (Section C).
+  "studioModals.picker.addOneProduct": "Add 1 product",
+  "studioModals.picker.addNProducts": "Add {n} products",
+  "studioModals.picker.addOneReference": "Add 1 reference",
+  "studioModals.picker.addNReferences": "Add {n} references",
 
   // ── Shopify picker panel ──
   "studioModals.shopify.all": "All",

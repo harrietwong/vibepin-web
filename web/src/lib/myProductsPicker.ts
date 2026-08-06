@@ -1,23 +1,79 @@
 import type { AssetItem } from "@/lib/assetStore";
 import { looksLikeAmazon } from "@/lib/affiliate/amazon";
 
+/**
+ * My Products SOURCE filters (create-pin PRD Section C).
+ *
+ * These describe where a product came from. Two former entries were removed:
+ *   - "product_ideas" — Product Ideas is a primary TAB, not a source of the user's
+ *     own products; listing it here made the same items reachable two ways.
+ *   - "recent" — recency is an ordering, not a source. It now lives in
+ *     MY_PRODUCTS_SORTS below.
+ * "shopify" was added: it is a genuine source of My Products (and replaces the old
+ * "From Shopify" primary tab).
+ *
+ * "import_issues" is not a source either; it is a conditional triage chip appended
+ * by the UI only when broken imports exist.
+ */
 export type MyProductsFilter =
   | "all"
+  | "shopify"
   | "amazon"
   | "uploaded"
   | "url_imported"
-  | "product_ideas"
-  | "recent"
   | "import_issues";
 
 export const MY_PRODUCTS_FILTERS: { id: MyProductsFilter; label: string }[] = [
   { id: "all",           label: "All" },
+  { id: "shopify",       label: "Shopify" },
   { id: "amazon",        label: "Amazon" },
   { id: "uploaded",      label: "Uploaded" },
   { id: "url_imported",  label: "URL Imported" },
-  { id: "product_ideas", label: "Product Ideas" },
-  { id: "recent",        label: "Recent" },
 ];
+
+/** Sorting is independent of the source filter (Section C: "Move Recent to sorting"). */
+export type MyProductsSort = "recently_used" | "recently_added" | "name_asc";
+
+export const MY_PRODUCTS_SORTS: { id: MyProductsSort; label: string }[] = [
+  { id: "recently_used",  label: "Recently used" },
+  { id: "recently_added", label: "Recently added" },
+  { id: "name_asc",       label: "Name A–Z" },
+];
+
+/** True when the workspace has any Shopify-sourced product (drives chip visibility). */
+export function hasShopifyProducts(items: AssetItem[]): boolean {
+  return items.some(i => i.source === "shopify");
+}
+
+/** True when the workspace has any Amazon product. */
+export function hasAmazonProducts(items: AssetItem[]): boolean {
+  return items.some(isAmazonProductAsset);
+}
+
+/**
+ * Only show source chips relevant to this workspace (Section C). "All" is always
+ * shown; a source chip appears only when the user actually has such products, so
+ * nobody clicks a chip that can only ever return an empty grid.
+ */
+export function visibleProductSourceFilters(
+  items: AssetItem[],
+  opts: { shopifyEnabled?: boolean } = {},
+): { id: MyProductsFilter; label: string }[] {
+  return MY_PRODUCTS_FILTERS.filter(chip => {
+    switch (chip.id) {
+      case "all":          return true;
+      // Shopify is shown whenever the integration is enabled, NOT only when Shopify
+      // products already exist: its empty state hosts the connect/import panel, so
+      // hiding the chip for an unconnected workspace made connecting impossible —
+      // the exact opposite of what the PRD asks for an unconnected commerce source.
+      case "shopify":      return !!opts.shopifyEnabled || hasShopifyProducts(items);
+      case "amazon":       return hasAmazonProducts(items);
+      case "uploaded":     return items.some(i => i.source === "upload");
+      case "url_imported": return items.some(i => i.source === "url");
+      default:             return false;
+    }
+  });
+}
 
 /** True when a saved product asset points at an Amazon product. */
 export function isAmazonProductAsset(item: AssetItem): boolean {
@@ -45,12 +101,9 @@ export function isBrokenProductImport(item: AssetItem): boolean {
   return !isValidProductImageUrl(item.imageUrl);
 }
 
-export function productSourceBucket(item: AssetItem): MyProductsFilter | null {
-  if (item.source === "upload") return "uploaded";
-  if (item.source === "url") return "url_imported";
-  if (item.source === "product_signal" || item.source === "product_ideas") return "product_ideas";
-  return null;
-}
+// productSourceBucket() was removed with the "product_ideas" source chip — it had
+// no callers and its only non-trivial branch mapped to a filter that no longer
+// exists. Source labelling goes through productSourceLabel() below.
 
 export function productSourceLabel(item: AssetItem): string {
   if (item.source === "upload") return "Uploaded";
@@ -84,10 +137,29 @@ export function dedupeProductAssets(items: AssetItem[]): AssetItem[] {
   return out;
 }
 
+function sortProducts(list: AssetItem[], sort: MyProductsSort): AssetItem[] {
+  const time = (v: string | undefined) => {
+    const t = new Date(v ?? "").getTime();
+    return Number.isNaN(t) ? 0 : t;
+  };
+  switch (sort) {
+    case "recently_added":
+      return [...list].sort((a, b) => time(b.createdAt) - time(a.createdAt));
+    case "name_asc":
+      return [...list].sort((a, b) =>
+        productDisplayTitle(a).localeCompare(productDisplayTitle(b), undefined, { sensitivity: "base" }),
+      );
+    case "recently_used":
+    default:
+      return [...list].sort((a, b) => time(b.lastUsedAt) - time(a.lastUsedAt));
+  }
+}
+
 export function filterMyProducts(
   items: AssetItem[],
   filter: MyProductsFilter,
   search: string,
+  sort: MyProductsSort = "recently_used",
 ): AssetItem[] {
   const q = search.trim().toLowerCase();
   const healthy = dedupeProductAssets(items).filter(item => {
@@ -97,23 +169,19 @@ export function filterMyProducts(
   });
 
   let list = healthy;
-  if (filter === "amazon") {
+  if (filter === "shopify") {
+    list = list.filter(i => i.source === "shopify");
+  } else if (filter === "amazon") {
     list = list.filter(isAmazonProductAsset);
   } else if (filter === "uploaded") {
     list = list.filter(i => i.source === "upload");
   } else if (filter === "url_imported") {
     list = list.filter(i => i.source === "url" && isValidProductImageUrl(i.imageUrl));
-  } else if (filter === "product_ideas") {
-    list = list.filter(i => i.source === "product_signal" || i.source === "product_ideas");
-  } else if (filter === "recent") {
-    list = [...list].sort(
-      (a, b) => new Date(b.lastUsedAt).getTime() - new Date(a.lastUsedAt).getTime(),
-    );
-  } else if (filter === "all") {
-    list = [...list].sort(
-      (a, b) => new Date(b.lastUsedAt).getTime() - new Date(a.lastUsedAt).getTime(),
-    );
   }
+
+  // Sorting is orthogonal to the source filter — including for "import_issues",
+  // which is a triage view over the same records.
+  list = sortProducts(list, sort);
 
   if (q) {
     list = list.filter(i =>

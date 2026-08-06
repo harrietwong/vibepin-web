@@ -96,6 +96,17 @@ export interface PinDraft {
   parentDraftId?:      string;
   /** Snapshot of the parent's image at generation time — display only, NOT the link. */
   sourceImageUrl?:     string;
+  // ── Reference → result association (create-pin PRD Section G2) ─────────────
+  // Each generation group uses exactly one style reference; these record WHICH
+  // reference produced this Pin so History/Retry/Regenerate and the failure
+  // fallback can resolve it. Absent on drafts generated before 2026-07-21 and on
+  // reference-less (product/prompt-only) generations — always treat as optional.
+  /** Stable id of the style reference for this Pin's generation group. */
+  referenceId?:        string;
+  /** That reference's image URL — also the generation-failure fallback image. */
+  referenceImageUrl?:  string;
+  /** Provenance of the reference, e.g. "recommended_pin" | "upload" | "saved". */
+  referenceSource?:    string;
   /** User‑approved tags/hashtags. `metadataDraft.topics` stays the raw AI result. */
   tags?:               string[];
   /** Remote Pinterest Pin id captured after a successful publish. */
@@ -443,6 +454,10 @@ export function createBoardDraft(input: {
   destinationUrl?:  string;
   parentDraftId?:   string;
   sourceImageUrl?:  string;
+  /** Style reference that produced this Pin (PRD Section G2). */
+  referenceId?:        string;
+  referenceImageUrl?:  string;
+  referenceSource?:    string;
   keyword?:         string;
   category?:        string;
   model?:           string;
@@ -485,6 +500,9 @@ export function createBoardDraft(input: {
     source:              input.source,
     parentDraftId:       input.parentDraftId,
     sourceImageUrl:      input.sourceImageUrl,
+    referenceId:         input.referenceId,
+    referenceImageUrl:   input.referenceImageUrl,
+    referenceSource:     input.referenceSource,
     tags:                input.tags,
     idempotencyKey:      input.idempotencyKey,
     model:               input.model,

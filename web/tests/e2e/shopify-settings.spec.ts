@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
 /**
  * Shopify Settings tab E2E (WP8, §9 of the Phase 1 implementation plan).
@@ -23,7 +24,7 @@ import { test, expect, type Page } from "@playwright/test";
  * Run:  npx playwright test tests/e2e/shopify-settings.spec.ts
  */
 
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true }); // guarded: never production
 const SHOPIFY_FLAG_KEY = "vp:shopify_integration";
 
 // ── Mock payload builders (shapes mirror shopifyClient.ts types / §6.5) ───────
@@ -89,7 +90,7 @@ async function setupBaseMocks(page: Page) {
     }
   });
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async route => {
-    if (route.request().method() !== "GET") { await route.continue(); return; }
+    if (route.request().method() !== "GET") { await route.abort(); return; }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
 }

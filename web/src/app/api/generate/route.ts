@@ -224,7 +224,7 @@ function buildImageInputs(productImages: string[], styleRef: string | null): Gen
 // generation path flows through (single, batch, retry, AiVersions, and the
 // Python chat fallback all sit behind this route), so a single gate here covers
 // all of them.
-export function buildModeratedText(fields: {
+function buildModeratedText(fields: {
   keyword: string;
   prompt: string;
   directionBrief: string;
@@ -282,7 +282,7 @@ function unavailableResponse(generationRequestId: string): NextResponse {
  * unit-tested without a live Creem call. On {ok:true} the caller continues to
  * the dispatch branches; anything else STOPS before lock acquisition/dispatch.
  */
-export function evaluateModerationForRequest(
+function evaluateModerationForRequest(
   result: ModerationResult,
   generationRequestId: string,
 ): ModerationGateOutcome {

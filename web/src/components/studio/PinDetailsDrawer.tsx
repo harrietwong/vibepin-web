@@ -24,15 +24,16 @@ import {
   productSourceLabel,
   productKey,
   normalizeProductSource,
-  type LinkedProduct,
   type MetadataReadinessLabel,
   type PinMetadataDraft,
 } from "@/lib/pinMetadata";
+import { selectionFromLinkedProduct, toLinkedProduct } from "@/lib/studio/productSelection";
+import { clearDestinationUrlForUnlink, deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDerivation";
 import type { SetupSnapshot, ProductSnapshot, ReferenceSnapshot, CategoryAudit } from "@/lib/studioPersistence";
 import type { PinDetailView, GenerationSetupSnapshot, RecoveryQuality } from "./pinDetails";
 import { getGenerationSetupSnapshot } from "./pinDetails";
-import { ProductPickerModal } from "./ProductPickerModal";
-import type { ProductSelection } from "./ProductPickerModal";
+import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
+import type { CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { getShopifyProductFreshness, type ShopifyFreshnessState } from "@/lib/shopifyClient";
 
 const UI = {
@@ -495,6 +496,17 @@ export type PinMetadataFormState = {
   destinationUrl: string;
   plannedDate: string;
   metadataDraft: PinMetadataDraft | null;
+  /** Whether the user has hand-edited the Website URL (Section J protection). */
+  destinationUrlTouched?: boolean;
+};
+
+/** Patch shape accepted by onMetadataChange. */
+export type PinMetadataFormPatch = Partial<PinMetadataFormState> & {
+  /**
+   * Set when the drawer itself derived or cleared destinationUrl from a product.
+   * The caller uses it to avoid recording an automatic fill as a manual edit.
+   */
+  automatedUrlFill?: boolean;
 };
 
 export type PinDetailsDrawerProps = {
@@ -507,7 +519,7 @@ export type PinDetailsDrawerProps = {
   isDirty: boolean;
   showSaved: boolean;
   onClose: () => void;
-  onMetadataChange: (patch: Partial<PinMetadataFormState>) => void;
+  onMetadataChange: (patch: PinMetadataFormPatch) => void;
   onSelectTitleCandidate: (title: string) => void;
   onRegenerateTitles: () => void;
   onRegenerateDescription: () => void;
@@ -690,43 +702,71 @@ export function PinDetailsDrawer({
     if (detail.format) failedSetupParts.push(detail.format);
   }
 
-  function toLinkedProductFromSelection(p: ProductSelection): LinkedProduct {
-    return {
-      productId:    p.id,
-      title:        p.title?.trim() || tr("pinDrawer.product.fallbackTitle"),
-      imageUrl:     p.imageUrl,
-      thumbnailUrl: p.imageUrl,
-      productUrl:   p.url,
-      canonicalUrl: p.canonicalUrl,
-      store:        p.store,
-      price:        p.price,
-      currency:     p.currency,
-      source:       normalizeProductSource(p.source),
-      linkType:     "manual",
-    };
-  }
-
-  function handleProductSelect(p: ProductSelection) {
+  function handleProductSelect(selections: CanonicalProductSelection[]) {
     setShowProductPicker(false);
+    const product = selections[0];
     const draft = form?.metadataDraft;
-    if (!draft) { setPickerReplaceKey(null); return; }
+    if (!draft || !product) { setPickerReplaceKey(null); return; }
     let next = draft;
     // "Change" replaces the targeted product before adding the new one.
     if (pickerReplaceKey) {
       next = removeProductFromDraft(next, pickerReplaceKey).draft;
     }
-    const lp = toLinkedProductFromSelection(p);
+    const lp = toLinkedProduct(product);
     // After a primary replace, no primary exists, so honor asPrimary as-is.
-    next = addProductToDraft(next, lp, p.asPrimary);
-    onMetadataChange({ metadataDraft: next });
+    next = addProductToDraft(next, lp, product.asPrimary);
+
+    // Derive the Website URL from the newly linked product (Section J). Skipped
+    // entirely when the field was manually edited — deriveDestinationUrlForProduct
+    // returns null and we leave the value byte-identical.
+    const urlChange = deriveDestinationUrlForProduct(
+      {
+        destinationUrl: form?.destinationUrl ?? next.destinationUrl,
+        destinationUrlSource: next.destinationUrlSource,
+        // Without this the helper cannot see a hand-edit whose provenance was lost,
+        // and would overwrite it on the next product change.
+        destinationUrlTouched: form?.destinationUrlTouched,
+      },
+      product,
+    );
+    if (urlChange) {
+      next = { ...next, destinationUrl: urlChange.destinationUrl, destinationUrlSource: urlChange.destinationUrlSource };
+      // automatedUrlFill: this is OUR derivation, not a user keystroke.
+      onMetadataChange({ metadataDraft: next, destinationUrl: urlChange.destinationUrl ?? "", automatedUrlFill: true });
+    } else {
+      onMetadataChange({ metadataDraft: next });
+    }
     setPickerReplaceKey(null);
   }
 
   function handleRemoveProduct(key: string) {
     const draft = form?.metadataDraft;
     if (!draft) return;
-    const { draft: next } = removeProductFromDraft(draft, key);
-    onMetadataChange({ metadataDraft: next });
+    const { primary } = resolvePinProducts(draft);
+    const removed = primary && productKey(primary) === key ? primary : null;
+    const { draft: after } = removeProductFromDraft(draft, key);
+
+    // Unlinking clears the URL ONLY when it is still that product's derived value
+    // (Section J) — a manual URL, or one from another product, survives.
+    const urlChange = removed
+      ? clearDestinationUrlForUnlink(
+          {
+            destinationUrl: form?.destinationUrl ?? after.destinationUrl,
+            destinationUrlSource: after.destinationUrlSource,
+            destinationUrlTouched: form?.destinationUrlTouched,
+          },
+          selectionFromLinkedProduct(removed),
+        )
+      : null;
+    if (urlChange) {
+      onMetadataChange({
+        metadataDraft: { ...after, destinationUrl: "", destinationUrlSource: undefined },
+        destinationUrl: "",
+        automatedUrlFill: true,
+      });
+    } else {
+      onMetadataChange({ metadataDraft: after });
+    }
   }
 
   function handlePromoteToPrimary(key: string) {
@@ -1389,20 +1429,9 @@ export function PinDetailsDrawer({
         </div>
       </aside>
       {showProductPicker && (
-        <ProductPickerModal
-          title={pickerReplaceKey ? tr("pinDrawer.products.changeProduct") : tr("pinDrawer.products.addProduct")}
-          subtitle={replacingPrimary ? tr("pinDrawer.products.replacePrimaryHelper") : tr("pinDrawer.products.linkProductHelper")}
+        <CanonicalProductPicker
           hasPrimary={pickerHasPrimary}
-          recommendedProducts={
-            (detail?.setupSnapshot?.selectedProducts ?? []).length > 0
-              ? detail!.setupSnapshot!.selectedProducts.map(ps => ({
-                  title:    ps.title,
-                  imageUrl: ps.imageUrl ?? undefined,
-                  url:      ps.productUrl ?? undefined,
-                  source:   ps.source ?? "product_signal",
-                }))
-              : undefined
-          }
+          selectionMode="single"
           onSelect={handleProductSelect}
           onClose={() => { setShowProductPicker(false); setPickerReplaceKey(null); }}
         />

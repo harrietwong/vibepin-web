@@ -1,9 +1,15 @@
 /**
  * test-publish-failure-consistency.ts
  *
- * 验收 P0/P0.5 的核心逻辑（任务书 0722 §十 1-14 中可纯逻辑断言的部分）：
- * 统一后的 actionable-publish-failure 谓词与两个派生 selector 在关键场景下的计数，
- * 以及 Plan 列表 Failed 判定不再漏 publish 失败。不碰任何库/localStorage/服务。
+ * 验收统一失败口径的核心逻辑（0722 任务书 §十 中可纯逻辑断言的部分，口径已按
+ * PRD v1.1 §6.3 更新）：唯一 actionable-publish-failure 谓词、workspace 全集
+ * selector，以及 Plan 周视图用的周范围子集 selector。
+ *
+ * 口径变更(v1.1)：Plan 已并入 Create Pins 同一个工作台，不再是"Plan 全量 vs
+ * Create Pins 板内"两个不同人群 —— 两处读的是**同一个 workspace 全集**，Plan 周
+ * 视图只是在其上叠一层"该周"的时间范围过滤。因此这里断言的是
+ * `listActionablePublishFailuresInWeek(...) ⊆ listActionablePublishFailures(...)`，
+ * 而不是旧的板内/全量边界。不碰任何库/localStorage/服务。
  */
 
 import assert from "node:assert/strict";
@@ -11,7 +17,8 @@ import type { PinDraft } from "../src/lib/pinDraftStore";
 import {
   isActionablePublishFailure,
   listActionablePublishFailures,
-  listBoardActionablePublishFailures,
+  listActionablePublishFailuresInWeek,
+  isActionablePublishFailureInWeek,
   countPublishFailures,
   getPinLifecycle,
 } from "../src/lib/studio/pinLifecycle";
@@ -56,7 +63,7 @@ test("同一 Pin 多次失败只算 1（store 单行覆盖写，无重复行）"
     boardPubFail("C"),
   ];
   assert.equal(countPublishFailures(drafts), 3, "应为 3 个唯一失败 draft");
-  assert.equal(listBoardActionablePublishFailures(drafts).length, 3);
+  assert.equal(listActionablePublishFailures(drafts).length, 3);
 });
 
 console.log("\n=== §十一/§四: 归档失败不计入 actionable ===");
@@ -78,22 +85,48 @@ test("成功发布后清除失败态 → 不计入（postedAt 且失败字段已
   assert.equal(getPinLifecycle(posted), "posted");
 });
 
-console.log("\n=== 边界裁决：Plan 全量含非 board-source，Create Pins 只含板内 ===");
-test("非 board-source 的 publish 失败：Plan 计入、Create Pins 板内不计入", () => {
+console.log("\n=== PRD v1.1 §6.3: workspace 全集，来源无关 ===");
+test("失败口径与来源无关：board-source 与 Weekly-Plan 来源同等计入 workspace 全集", () => {
   const drafts = [boardPubFail("A"), planPubFail("W")]; // 1 板内 + 1 Weekly-Plan 来源
-  // Plan（全量 selector）= 2
-  assert.equal(listActionablePublishFailures(drafts).length, 2, "Plan 全量应含非 board-source");
+  // 合并后 Plan 与 Create Pins 是同一个工作台、同一个人群：全集 = 2。
+  assert.equal(listActionablePublishFailures(drafts).length, 2, "全集应含非 board-source");
   assert.equal(countPublishFailures(drafts), 2);
-  // Create Pins（板内 selector）= 1
-  assert.equal(listBoardActionablePublishFailures(drafts).length, 1, "Create Pins 只含 board-source");
+  assert.equal(isActionablePublishFailure(drafts[1]), true, "非 board-source 也是 actionable");
 });
-test("Plan ≥ Create Pins 是语义正确（Plan 是全量处理入口）", () => {
-  const drafts = [boardPubFail("A"), planPubFail("W1"), planPubFail("W2")];
-  const planN = listActionablePublishFailures(drafts).length;
-  const cpN = listBoardActionablePublishFailures(drafts).length;
-  assert.ok(planN >= cpN, `Plan(${planN}) >= CreatePins(${cpN})`);
-  assert.equal(planN, 3);
-  assert.equal(cpN, 1);
+
+console.log("\n=== PRD v1.1 §6.3: Plan 周视图 = 全集的周范围子集 ===");
+// 周范围取 previousScheduledTime（失败时那个槽），回退 scheduledDate / plannedAt。
+const WEEK = "2026-07-27";           // 周一
+const IN_WEEK = "2026-07-29T10:00:00.000Z";
+const NEXT_WEEK = "2026-08-05T10:00:00.000Z";
+
+test("周范围子集 ⊆ workspace 全集（同一核心谓词，只多一层时间过滤）", () => {
+  const drafts = [
+    boardPubFail("A", { previousScheduledTime: IN_WEEK }),
+    planPubFail("W", { previousScheduledTime: IN_WEEK }),
+    boardPubFail("B", { previousScheduledTime: NEXT_WEEK }),
+  ];
+  const all = listActionablePublishFailures(drafts);
+  const week = listActionablePublishFailuresInWeek(drafts, WEEK);
+  assert.equal(all.length, 3, "全集含三条（含下周那条）");
+  assert.equal(week.length, 2, "本周只含落在本周的两条");
+  const allIds = new Set(all.map(d => d.id));
+  assert.ok(week.every(d => allIds.has(d.id)), "周子集必须是全集的子集");
+  assert.ok(week.length <= all.length, "周子集永不大于全集");
+});
+
+test("周范围过滤只看时间，不看来源（Weekly-Plan 来源同样进本周子集）", () => {
+  const wp = planPubFail("W", { previousScheduledTime: IN_WEEK });
+  assert.equal(isActionablePublishFailureInWeek(wp, WEEK), true);
+  assert.equal(isActionablePublishFailureInWeek(wp, "2026-08-03"), false, "下一周不含它");
+});
+
+test("周范围不改变核心谓词：归档/缺 failureType 在任何周都不计入", () => {
+  const archived = boardPubFail("A", { previousScheduledTime: IN_WEEK, archivedAt: "2026-07-29T12:00:00.000Z" });
+  const noType = draft({ id: "X", source: "uploaded_image", publishError: "err", failureType: undefined, previousScheduledTime: IN_WEEK });
+  assert.equal(isActionablePublishFailureInWeek(archived, WEEK), false);
+  assert.equal(isActionablePublishFailureInWeek(noType, WEEK), false);
+  assert.equal(listActionablePublishFailuresInWeek([archived, noType], WEEK).length, 0);
 });
 
 console.log("\n=== §十 11: 生成失败不计入 publish 失败数 ===");

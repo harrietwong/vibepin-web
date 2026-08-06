@@ -27,7 +27,11 @@ function assert(cond: boolean, msg: string) {
   if (!cond) throw new Error(msg);
 }
 
-const planSource = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const planSource = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
+const legacyPlanRoute = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const studioPage = readFileSync(join(process.cwd(), "src/app/app/studio/page.tsx"), "utf8");
+const studioFilters = readFileSync(join(process.cwd(), "src/components/studio/StudioBoardFilters.tsx"), "utf8");
+const appLayout = readFileSync(join(process.cwd(), "src/app/app/layout.tsx"), "utf8");
 
 function draft(partial: Partial<PinDraft> & Pick<PinDraft, "id">): PinDraft {
   return {
@@ -172,6 +176,20 @@ test("Weekly Plan page has week navigation controls", () => {
   assert(planSource.includes("weekOffset"),       "weekOffset state missing");
   assert(planSource.includes("displayWeekStart"), "displayWeekStart computed value missing");
   assert(planSource.includes('"create-pin-btn"'), "Create Pin button testId missing");
+});
+
+test("Plan is one shared Create Pins workspace view", () => {
+  assert(studioPage.includes('workspaceView === "plan"'), "Create Pins does not render its Plan view");
+  assert(studioPage.includes("@/components/plan/WeeklyPlanWorkspace"), "Create Pins is not using the shared Plan component");
+  assert(studioFilters.includes('/app/studio?view=plan'), "Plan tab does not target Create Pins");
+  assert(legacyPlanRoute.includes('redirect(`/app/studio?'), "legacy /app/plan is not redirected");
+  assert(!appLayout.includes('id: "weekly-plan"'), "standalone Weekly Plan sidebar entry still exists");
+});
+
+test("Plan view state uses planView without replacing workspace view=plan", () => {
+  assert(planSource.includes('searchParams.get("planView")'), "Plan does not restore its Calendar/List mode");
+  assert(planSource.includes('url.searchParams.set("view", "plan")'), "Plan workspace route is not preserved");
+  assert(planSource.includes('url.searchParams.set("planView", mode)'), "Plan mode is not persisted in URL");
 });
 
 test("Unscheduled cards use unadded status label", () => {

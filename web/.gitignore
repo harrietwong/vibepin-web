@@ -56,3 +56,6 @@ report-*.png
 next-env.d.ts
 
 .vercel
+
+# Playwright authenticated session state — contains a real access token.
+tests/.auth/

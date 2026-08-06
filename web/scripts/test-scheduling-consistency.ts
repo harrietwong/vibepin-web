@@ -96,7 +96,7 @@ function reset() {
   seedConfig();
 }
 
-const planSrc = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const planSrc = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 
 console.log("Scheduling consistency");
 
