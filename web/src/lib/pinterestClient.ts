@@ -58,6 +58,9 @@ export type PublishResult = {
   board: { id: string; name: string };
   /** Which Pinterest environment the Pin was created in. Absent = production. */
   environment?: "sandbox" | "production";
+  /** The connection this Pin published through — pinned onto the draft as its target
+   *  when it had none yet (adopt-once, PRD §14). Absent in sandbox mode. */
+  connectionId?: string;
 };
 
 function currentReturnTo(): string {
@@ -383,32 +386,43 @@ export async function syncPinterestAccount(): Promise<boolean> {
 // request instead of hitting Pinterest twice. Only signal-less calls join the
 // shared flight (a caller-supplied AbortSignal must never cancel someone else's
 // request); bookmarked pages are unique and always fetch directly.
-let boardsFirstPageInflight: Promise<{ items: PinterestBoard[]; bookmark: string | null }> | null = null;
+/** First-page coalescing is per TARGET account: two accounts have different boards, so
+ *  they must never share one in-flight promise. Key "" = the default connection. */
+const boardsFirstPageInflight = new Map<string, Promise<{ items: PinterestBoard[]; bookmark: string | null }>>();
 
-export async function fetchPinterestBoards(bookmark?: string, signal?: AbortSignal): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
+/**
+ * The user's Pinterest boards. `connectionId` names WHICH connected account to read from
+ * (a Pin's publish target); omitted ⇒ the default connection, i.e. exactly what every
+ * single-account user got before multi-account existed.
+ */
+export async function fetchPinterestBoards(bookmark?: string, signal?: AbortSignal, connectionId?: string): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
   if (!bookmark && !signal) {
-    if (!boardsFirstPageInflight) {
-      boardsFirstPageInflight = fetchPinterestBoardsDirect().finally(() => {
-        boardsFirstPageInflight = null;
-      });
-    }
-    return boardsFirstPageInflight;
+    const key = connectionId ?? "";
+    const inflight = boardsFirstPageInflight.get(key);
+    if (inflight) return inflight;
+    const started = fetchPinterestBoardsDirect(undefined, undefined, connectionId).finally(() => {
+      boardsFirstPageInflight.delete(key);
+    });
+    boardsFirstPageInflight.set(key, started);
+    return started;
   }
-  return fetchPinterestBoardsDirect(bookmark, signal);
+  return fetchPinterestBoardsDirect(bookmark, signal, connectionId);
 }
 
-export async function fetchPinterestDefaultBoard(signal?: AbortSignal): Promise<PinterestDefaultBoard | null> {
-  const res = await authedPinterestGet("/api/pinterest/default-board", signal);
+export async function fetchPinterestDefaultBoard(signal?: AbortSignal, connectionId?: string): Promise<PinterestDefaultBoard | null> {
+  const qs = connectionId ? `?connectionId=${encodeURIComponent(connectionId)}` : "";
+  const res = await authedPinterestGet(`/api/pinterest/default-board${qs}`, signal);
   if (!res.ok) throw toClientError(await parseErrorResponse(res));
   const body = await res.json() as { board?: PinterestDefaultBoard | null };
   return body.board ?? null;
 }
 
-export async function savePinterestDefaultBoard(board: PinterestDefaultBoard): Promise<PinterestDefaultBoard | null> {
+export async function savePinterestDefaultBoard(board: PinterestDefaultBoard, connectionId?: string): Promise<PinterestDefaultBoard | null> {
+  const payload = JSON.stringify(connectionId ? { ...board, connectionId } : board);
   const res = await fetch("/api/pinterest/default-board", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(board),
+    body: payload,
   });
   if (res.status === 401) {
     const token = await refreshSessionOnce();
@@ -416,7 +430,7 @@ export async function savePinterestDefaultBoard(board: PinterestDefaultBoard): P
       const retry = await fetch("/api/pinterest/default-board", {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(board),
+        body: payload,
       });
       if (!retry.ok) throw toClientError(await parseErrorResponse(retry));
       const retryBody = await retry.json() as { board?: PinterestDefaultBoard | null };
@@ -428,8 +442,11 @@ export async function savePinterestDefaultBoard(board: PinterestDefaultBoard): P
   return body.board ?? null;
 }
 
-async function fetchPinterestBoardsDirect(bookmark?: string, signal?: AbortSignal): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
-  const qs = bookmark ? `?bookmark=${encodeURIComponent(bookmark)}` : "";
+async function fetchPinterestBoardsDirect(bookmark?: string, signal?: AbortSignal, connectionId?: string): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
+  const params = new URLSearchParams();
+  if (bookmark) params.set("bookmark", bookmark);
+  if (connectionId) params.set("connectionId", connectionId);
+  const qs = params.toString() ? `?${params.toString()}` : "";
   // no-store + 401-retry-once (authedPinterestGet): always load the freshly-connected
   // account's real boards, and self-heal a just-expired token so firing this
   // concurrently with fetchPinterestStatus right after OAuth return can't 401-stick.
@@ -461,6 +478,10 @@ export type PublishPinInput = {
   draftId?: string;
   /** Where the publish was initiated. Server defaults to "immediate" when omitted. */
   source?: "immediate" | "scheduled-cron";
+
+  /** The Pin's pinned publish target (social_connections row id). Omitted ⇒ the server
+   *  resolves the user's default connection and reports it back for adopt-once. */
+  connectionId?: string;
   // ── VibePin-side commerce metadata (stored/used internally; never sent to the
   //    Pinterest API as official product tags) ──────────────────────────────────
   attachedProducts?: AttachedProduct[];

@@ -151,10 +151,12 @@ export const STUDIO: string[] = [
   "test-failure-banner",
   "test-publish-error-display",
   "test-publish-failure-consistency",
-  // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store).
+  // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
+  // Phase C pinned publish targets).
   "test-account-ui-state",
   "test-pinterest-callback-identity",
   "test-social-connection-store",
+  "test-publish-target",
   "test-pin-readiness",
   "test-pin-display-context",
   "test-pin-details-model",

@@ -19,6 +19,7 @@ import {
 import { startPinterestConnect, publishPin, type PinterestBoard } from "@/lib/pinterestClient";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+import { readStoredTarget } from "@/lib/studio/publishTarget";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinterestClientError } from "@/lib/pinterestClient";
 import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
@@ -1254,11 +1255,16 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       // double-submitting it.
       if (!beginPublish(p.pinId)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") }); continue; }
       try {
+        // Publish through the Pin's PINNED connection (PRD §14/§17): the draft's stored
+        // target, never the current default. No stored target ⇒ server default (adopted
+        // below). In the Studio context p.pinId isn't a draft id, getDraft returns null
+        // and this degrades to the pre-multi-account behaviour.
+        const targetId = readStoredTarget(pinDraftStore.getDraft(p.pinId));
         const res = await publishPin({
           boardId: effBoard(p, rowEdits).id, imageUrl: p.imageUrl,
           title: input.title || undefined, description: input.description || undefined,
           link: input.destinationUrl || undefined, altText: input.altText || undefined,
-          sourcePinId: p.pinId,
+          sourcePinId: p.pinId, connectionId: targetId || undefined,
           // p.pinId is the pinDraftStore draft id in the Weekly-Plan context (joins to a
           // draft) but NOT in the Studio context — draftId is best-effort, so a non-draft
           // id simply won't join downstream. source is the immediate batch publish.
@@ -1266,6 +1272,10 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         });
         results.push({ pinId: p.pinId, title, status: "published", url: res.pin.url });
         publishedIds.push(p.pinId);
+        // Adopt-once: pin the connection this draft actually published through.
+        if (!targetId && res.connectionId) {
+          pinDraftStore.updateDraft(p.pinId, { targetConnectionId: res.connectionId });
+        }
       } catch (e) {
         const err = e as PinterestClientError;
         results.push({ pinId: p.pinId, title, status: "failed", message: err?.message ?? tr("studioModals.publish.publishFailed") });
