@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -339,10 +340,13 @@ class TestProductIdeasVisibility(unittest.TestCase):
 
 
 class TestInsertOnlyWriteSemantics(unittest.TestCase):
-    """Verify _apply_rows uses insert_rows (ignore-duplicates), never upsert (merge-duplicates).
+    """Verify _apply_rows uses insert_rows as a PLAIN INSERT, never upsert.
 
-    These tests cover Task 1 (write call audit), Task 2 (late-conflict regression),
-    and the insert-only proof required for apply readiness.
+    Updated 2026-08-06: the old contract here asserted
+    on_conflict='normalized_product_url_hash'. That contract was the bug — v47
+    made that unique index PARTIAL, which PostgREST/Postgres cannot use as an
+    ON CONFLICT arbiter, so every real batch died with 42P10 and every scraped
+    product was discarded. The contract is now: NO conflict target at all.
     """
 
     def _make_rows(self, hashes=("h1", "h2")):
@@ -395,12 +399,19 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
 
         self.assertEqual(len(insert_calls), 1, "insert_rows must be called exactly once")
         self.assertEqual(insert_calls[0]["table"], "pin_products")
-        self.assertEqual(insert_calls[0]["on_conflict"], "normalized_product_url_hash")
+        self.assertIsNone(insert_calls[0]["on_conflict"],
+                          "plain INSERT: no conflict target may be sent")
 
-    # ── T1-B: on_conflict key is hash, never parent_pin_id/source_url ───────
+    # ── T1-B: NO conflict target — every candidate target is a PARTIAL index ──
 
-    def test_apply_rows_conflict_key_is_hash(self):
-        """on_conflict must be 'normalized_product_url_hash', not 'parent_pin_id,source_url'."""
+    def test_apply_rows_sends_no_conflict_target(self):
+        """on_conflict must be None.
+
+        Both plausible targets are PARTIAL unique indexes in production:
+          idx_pin_products_active_normalized_url_hash (normalized_product_url_hash)
+          idx_pin_products_active_parent_source_url   (parent_pin_id, source_url)
+        Naming either one yields 42P10 and destroys the entire batch.
+        """
         captured = {}
         def fake_insert(table, payload, on_conflict=None):
             captured["on_conflict"] = on_conflict
@@ -416,9 +427,7 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
             else:
                 sys.modules["db"] = old_db
 
-        self.assertEqual(captured["on_conflict"], "normalized_product_url_hash")
-        self.assertNotIn("parent_pin_id", captured.get("on_conflict", ""))
-        self.assertNotIn("source_url", captured.get("on_conflict", ""))
+        self.assertIsNone(captured["on_conflict"])
 
     # ── T1-C: db.insert_rows sends ignore-duplicates, not merge-duplicates ──
 
@@ -559,6 +568,308 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(write_calls, [], "No write must occur for empty row list")
+
+
+class TestPartialIndexWriteRegression(unittest.TestCase):
+    """Regression for the 2026-08-06 production data-loss bug.
+
+    A real VPS run scraped 28/50 pins successfully, then lost 100% of it:
+        insert pin_products failed [400]: {"code":"42P10","message":"there is no
+        unique or exclusion constraint matching the ON CONFLICT specification"}
+
+    These tests run _apply_rows against a mocked PostgREST that behaves like
+    production: it REJECTS any on_conflict naming a partial index with 42P10,
+    and raises 23505 on a genuine duplicate. No live DB is touched.
+    """
+
+    # Production catalog: both business-key unique indexes are PARTIAL.
+    PARTIAL_INDEX_TARGETS = {
+        "normalized_product_url_hash",
+        "parent_pin_id,source_url",
+        "product_url_hash",
+    }
+
+    def _rows(self, hashes):
+        return [
+            {
+                "source_pin_id": f"p{i}",
+                "product_url": f"https://etsy.com/listing/{i}/item",
+                "product_title": f"Item {i}",
+                "image_url": "https://img/item.jpg",
+                "price": None,
+                "currency": None,
+                "normalized_product_url": f"https://etsy.com/listing/{i}/item",
+                "normalized_product_url_hash": h,
+                "platform": "etsy",
+                "domain": "etsy.com",
+                "source_category": "home-decor",
+                "source_pin_save_count": 1000,
+                "discovery_path": f"p{i}->card[0]->url",
+            }
+            for i, h in enumerate(hashes)
+        ]
+
+    def _fake_postgrest(self, existing_hashes=(), broken_hashes=()):
+        """Mock of db.insert_rows with production's constraint behaviour."""
+        existing = set(existing_hashes)
+        broken = set(broken_hashes)
+        calls = []
+
+        def fake_insert(table, payload, on_conflict=None):
+            calls.append({"count": len(payload), "on_conflict": on_conflict})
+            # Production truth: naming a partial index is a hard 42P10 failure.
+            if on_conflict in self.PARTIAL_INDEX_TARGETS:
+                raise RuntimeError(
+                    f'insert {table} failed [400]: {{"code":"42P10","message":'
+                    f'"there is no unique or exclusion constraint matching the '
+                    f'ON CONFLICT specification"}}'
+                )
+            written = []
+            for row in payload:
+                h = row.get("normalized_product_url_hash")
+                if h in broken:
+                    raise RuntimeError(
+                        f'insert {table} failed [400]: {{"code":"23514",'
+                        f'"message":"violates check constraint"}}'
+                    )
+                if h in existing:
+                    raise RuntimeError(
+                        f'insert {table} failed [409]: {{"code":"23505","message":'
+                        f'"duplicate key value violates unique constraint"}}'
+                    )
+                written.append(row)
+            return written
+
+        return fake_insert, calls
+
+    def _run_apply(self, fake_insert, rows):
+        fake_db = types.ModuleType("db")
+        fake_db.insert_rows = fake_insert
+        old_db = sys.modules.get("db")
+        sys.modules["db"] = fake_db
+        try:
+            return _apply_rows(rows)
+        finally:
+            if old_db is None:
+                sys.modules.pop("db", None)
+            else:
+                sys.modules["db"] = old_db
+
+    # ── 1. The bug itself: the write now succeeds ────────────────────────────
+
+    def test_write_succeeds_against_partial_index_postgrest(self):
+        """The exact production scenario: 28 scraped rows must LAND, not be lost."""
+        fake_insert, calls = self._fake_postgrest()
+        rows = self._rows([f"h{i}" for i in range(28)])
+
+        written = self._run_apply(fake_insert, rows)
+
+        self.assertEqual(written, 28, "all 28 scraped rows must be written")
+        self.assertEqual(len(calls), 1, "a clean batch needs exactly one INSERT")
+        self.assertIsNone(calls[0]["on_conflict"],
+                          "no conflict target may be named — 42P10 otherwise")
+
+    def test_naming_a_partial_index_would_still_fail(self):
+        """Guard the mock's fidelity: the OLD code path really does die with 42P10."""
+        fake_insert, _ = self._fake_postgrest()
+        with self.assertRaises(RuntimeError) as ctx:
+            fake_insert("pin_products", [{"x": 1}],
+                        on_conflict="normalized_product_url_hash")
+        self.assertIn("42P10", str(ctx.exception))
+
+    # ── 2. Duplicates handled without data loss and without silent swallowing ─
+
+    def test_duplicate_does_not_discard_the_other_rows(self):
+        """One late duplicate must not take the whole batch down with it."""
+        fake_insert, calls = self._fake_postgrest(existing_hashes={"h2"})
+        rows = self._rows(["h0", "h1", "h2", "h3", "h4"])
+
+        written = self._run_apply(fake_insert, rows)
+
+        self.assertEqual(written, 4, "the 4 non-duplicate rows must survive")
+        outcome = stl._LAST_WRITE_OUTCOME
+        self.assertEqual(outcome["attempted"], 5)
+        self.assertEqual(outcome["inserted"], 4)
+        self.assertEqual(outcome["duplicates"], 1)
+        self.assertEqual(outcome["failed"], 0)
+        # Batch attempt + per-row retries = accounted for, not swallowed.
+        self.assertEqual(len(calls), 6, "1 batch attempt + 5 per-row retries")
+
+    def test_every_attempted_row_is_accounted_for(self):
+        """attempted == inserted + duplicates + failed. No silent shortfall."""
+        fake_insert, _ = self._fake_postgrest(existing_hashes={"h1"},
+                                              broken_hashes={"h3"})
+        rows = self._rows(["h0", "h1", "h2", "h3"])
+
+        self._run_apply(fake_insert, rows)
+        o = stl._LAST_WRITE_OUTCOME
+        self.assertEqual(o["attempted"], o["inserted"] + o["duplicates"] + o["failed"])
+        self.assertEqual(o["duplicates"], 1)
+        self.assertEqual(o["failed"], 1)
+        self.assertTrue(o["errors"], "a non-duplicate failure must be recorded")
+        self.assertIn("23514", o["errors"][0])
+
+    # ── 3. A genuine write failure is SURFACED, never swallowed ──────────────
+
+    def test_non_duplicate_batch_error_is_raised(self):
+        """42P10 / permission / network errors must propagate, not degrade."""
+        def exploding_insert(table, payload, on_conflict=None):
+            raise RuntimeError(
+                'insert pin_products failed [400]: {"code":"42P10","message":'
+                '"there is no unique or exclusion constraint matching the '
+                'ON CONFLICT specification"}'
+            )
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_apply(exploding_insert, self._rows(["h0", "h1"]))
+        self.assertIn("42P10", str(ctx.exception))
+
+    def test_total_failure_after_duplicate_fallback_is_raised(self):
+        """If nothing lands and it was not merely duplicates, raise loudly.
+
+        This is the anti-pattern the opportunity_* tables suffered for 7 weeks:
+        a broken write quietly reporting success/zero.
+        """
+        fake_insert, _ = self._fake_postgrest(existing_hashes={"h0"},
+                                              broken_hashes={"h1", "h2"})
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_apply(fake_insert, self._rows(["h0", "h1", "h2"]))
+        msg = str(ctx.exception)
+        self.assertIn("failed for all", msg)
+        self.assertIn("23514", msg)
+
+    def test_all_duplicates_returns_zero_without_raising(self):
+        """All-duplicates is a legitimate no-op, reported honestly — not an error."""
+        fake_insert, _ = self._fake_postgrest(existing_hashes={"h0", "h1"})
+        written = self._run_apply(fake_insert, self._rows(["h0", "h1"]))
+        self.assertEqual(written, 0)
+        o = stl._LAST_WRITE_OUTCOME
+        self.assertEqual(o["duplicates"], 2)
+        self.assertEqual(o["failed"], 0)
+
+    def test_only_23505_counts_as_duplicate(self):
+        """Narrow duplicate detection: nothing else may be mistaken for a dup."""
+        self.assertTrue(stl._is_duplicate_error(RuntimeError('{"code":"23505"}')))
+        for code in ("42P10", "23514", "42501", "PGRST204"):
+            self.assertFalse(stl._is_duplicate_error(RuntimeError(f'{{"code":"{code}"}}')),
+                             f"{code} must NOT be treated as a duplicate")
+
+
+class TestLifecycleCoexistence(unittest.TestCase):
+    """A retired row must never block re-collecting its URL as a new active row.
+
+    v47 made the unique indexes partial precisely so a retired row and a new
+    active row can share a URL. The dedup preflight must honour that, otherwise
+    soft retirement silently becomes a permanent blacklist.
+    """
+
+    def _candidates(self):
+        return [
+            {"normalized_product_url_hash": "hash_retired",
+             "product_url": "https://etsy.com/listing/1/retired-item"},
+            {"normalized_product_url_hash": "hash_active",
+             "product_url": "https://etsy.com/listing/2/active-item"},
+        ]
+
+    def test_preflight_query_is_scoped_to_non_retired(self):
+        """The existence query must carry the NULL-safe not-retired filter."""
+        captured = {}
+
+        def fake_select(table, filters=None, **_kw):
+            captured["filters"] = filters
+            return []
+
+        with patch.object(stl, "select_many", side_effect=fake_select):
+            _preflight_existing(self._candidates())
+
+        filters = captured["filters"]
+        self.assertIn("or", filters, "dedup read must be lifecycle-scoped")
+        # NULL-safe form: NULL lifecycle_status means ACTIVE. A bare
+        # neq.retired would drop the entire active corpus (the NULL trap).
+        self.assertIn("lifecycle_status.is.null", filters["or"])
+        self.assertIn("lifecycle_status.neq.retired", filters["or"])
+
+    def test_retired_hash_is_recollectable(self):
+        """DB returns only the ACTIVE row (retired filtered out server-side).
+
+        The retired URL must therefore appear as an INSERT candidate, and the
+        active one as a skip.
+        """
+        def fake_select(table, filters=None, **_kw):
+            # Faithful to PostgREST: the not-retired filter excludes the
+            # retired row, so it never comes back.
+            self.assertIn("or", filters or {})
+            return [{"normalized_product_url_hash": "hash_active",
+                     "lifecycle_status": None}]
+
+        with patch.object(stl, "select_many", side_effect=fake_select):
+            result = _preflight_existing(self._candidates())
+
+        insert_hashes = [c["normalized_product_url_hash"]
+                         for c in result["insertCandidates"]]
+        self.assertIn("hash_retired", insert_hashes,
+                      "a retired row must NOT blacklist its URL")
+        self.assertNotIn("hash_active", insert_hashes,
+                         "an active row must still dedup")
+        self.assertEqual(result["projectedInsertCount"], 1)
+        self.assertEqual(result["projectedSkipExistingCount"], 1)
+        self.assertEqual(result["projectedUpdateCount"], 0)
+
+    def test_recollected_retired_url_writes_without_conflict_target(self):
+        """End-to-end: the re-collected retired URL is written by a plain INSERT.
+
+        With a conflict target this row would have died with 42P10; with a
+        merge-upsert it would have overwritten the retired evidence row.
+        """
+        fake_insert_calls = []
+
+        def fake_insert(table, payload, on_conflict=None):
+            fake_insert_calls.append(on_conflict)
+            if on_conflict is not None:
+                raise RuntimeError('{"code":"42P10"}')
+            return payload
+
+        fake_db = types.ModuleType("db")
+        fake_db.insert_rows = fake_insert
+        # No upsert attribute → any merge-upsert attempt raises AttributeError.
+        old_db = sys.modules.get("db")
+        sys.modules["db"] = fake_db
+        try:
+            written = _apply_rows([{
+                "source_pin_id": "p9",
+                "product_url": "https://etsy.com/listing/1/retired-item",
+                "product_title": "Re-collected item",
+                "normalized_product_url": "https://etsy.com/listing/1/retired-item",
+                "normalized_product_url_hash": "hash_retired",
+                "platform": "etsy", "domain": "etsy.com",
+                "source_category": "home-decor", "source_pin_save_count": 1000,
+            }])
+        finally:
+            if old_db is None:
+                sys.modules.pop("db", None)
+            else:
+                sys.modules["db"] = old_db
+
+        self.assertEqual(written, 1)
+        self.assertEqual(fake_insert_calls, [None])
+
+
+class TestGotoTimeoutConfig(unittest.TestCase):
+    """STL_GOTO_TIMEOUT_MS is configurable; default preserves prior behaviour."""
+
+    def test_default_is_the_previous_hardcoded_value(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(stl.STL_GOTO_TIMEOUT_ENV, None)
+            self.assertEqual(stl._stl_goto_timeout_ms(), 15_000)
+
+    def test_env_override_is_honoured(self):
+        with patch.dict(os.environ, {stl.STL_GOTO_TIMEOUT_ENV: "45000"}):
+            self.assertEqual(stl._stl_goto_timeout_ms(), 45_000)
+
+    def test_invalid_or_nonpositive_falls_back_to_default(self):
+        for bad in ("abc", "0", "-1", "   "):
+            with patch.dict(os.environ, {stl.STL_GOTO_TIMEOUT_ENV: bad}):
+                self.assertEqual(stl._stl_goto_timeout_ms(), 15_000,
+                                 f"{bad!r} must fall back, never disable the timeout")
 
 
 class TestV28SchemaPreflight(unittest.TestCase):

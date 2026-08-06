@@ -36,6 +36,9 @@ from product_harvest import (  # type: ignore
     normalize_product_url,
     url_hash,
 )
+# Single source of truth for the NULL-safe "not retired" dedup filter. Retired
+# rows must never count as "already exists" — see product_lifecycle.py.
+from product_lifecycle import with_not_retired  # type: ignore
 
 DEFAULT_CATEGORY_MIX = {
     "fashion": 18,
@@ -43,6 +46,34 @@ DEFAULT_CATEGORY_MIX = {
     "home-decor": 18,
 }
 EXCLUDED_DEFAULT = frozenset({"beauty", "digital-products"})
+
+# Per-pin Playwright navigation budget. Default 15_000 ms = the previous
+# hard-coded literal, so behaviour is UNCHANGED unless the env var is set.
+# Made configurable because the 2026-08-06 VPS run lost 22/50 pins to
+# goto_timeout at 15 s when navigating through the residential proxy (proxy
+# hops add seconds that a datacenter-direct run never pays). Tuning the value
+# is a SEPARATE decision — this change only makes it tunable without a deploy.
+STL_GOTO_TIMEOUT_ENV = "STL_GOTO_TIMEOUT_MS"
+STL_GOTO_TIMEOUT_DEFAULT_MS = 15_000
+
+
+def _stl_goto_timeout_ms() -> int:
+    """Read STL_GOTO_TIMEOUT_MS; fall back to the historical 15_000 ms.
+
+    A malformed or non-positive value falls back to the default rather than
+    disabling the timeout (timeout=0 means "wait forever" in Playwright, which
+    would hang the crawl).
+    """
+    raw = (os.environ.get(STL_GOTO_TIMEOUT_ENV) or "").strip()
+    if not raw:
+        return STL_GOTO_TIMEOUT_DEFAULT_MS
+    try:
+        value = int(raw)
+    except ValueError:
+        return STL_GOTO_TIMEOUT_DEFAULT_MS
+    return value if value > 0 else STL_GOTO_TIMEOUT_DEFAULT_MS
+
+
 DISCOVERY_METHOD = "stl"
 DISCOVERY_DETAIL = "pinterest_product_card_bootstrap"
 STL_TEXT = re.compile(r"shop the look|shop similar|more to shop|shop this|buyable", re.I)
@@ -453,7 +484,8 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     started = time.monotonic()
 
     try:
-        await page.goto(source_url, wait_until="domcontentloaded", timeout=15_000)
+        await page.goto(source_url, wait_until="domcontentloaded",
+                        timeout=_stl_goto_timeout_ms())
     except Exception as exc:
         # Pause after a navigation failure to avoid rapid-fire retries against a
         # throttling Pinterest CDN. Does not retry — just paces the next pin.
@@ -593,9 +625,10 @@ def _check_v28_schema() -> tuple[bool, list[str]]:
     Uses PostgREST filter params — if a column is absent the API returns 400.
     Returns (all_present: bool, missing_columns: list[str]).
 
-    Note: cannot verify the unique index on normalized_product_url_hash via
-    PostgREST. Column existence is a necessary but not sufficient pre-condition;
-    the unique index must also exist before apply (part of v28).
+    Note: only COLUMNS are checked. The write path no longer depends on any
+    particular unique index: v47 made the pin_products unique indexes PARTIAL
+    (lifecycle-aware), so the writer uses a plain INSERT and treats a genuine
+    23505 as a duplicate. See _apply_rows.
     """
     missing: list[str] = []
     for col in V28_REQUIRED_COLUMNS:
@@ -615,11 +648,19 @@ def _check_v28_schema() -> tuple[bool, list[str]]:
 
 
 def _preflight_existing(unique: list[dict]) -> dict:
-    """Query DB for existing rows by normalized_product_url_hash (read-only).
+    """Query DB for existing ACTIVE rows by normalized_product_url_hash (read-only).
 
     Returns projected insert/skip counts and the filtered insert-only candidate
     list under key 'insertCandidates'. projectedUpdateCount is always 0 — the
     apply path is insert-only; existing rows are skipped, never updated.
+
+    LIFECYCLE COEXISTENCE: the existence check is scoped to NON-RETIRED rows via
+    product_lifecycle.with_not_retired(). A retired row is evidence, not a
+    blacklist — its URL must stay re-collectable as a new active row, which is
+    exactly what the partial unique index permits. An unscoped check would treat
+    retired hashes as "already exists" and silently make retirement permanent
+    (see product_lifecycle.py, and the NULL trap documented there: the filter
+    must be the NULL-safe OR form, since NULL means active).
     """
     hashes = [c["normalized_product_url_hash"] for c in unique
                if c.get("normalized_product_url_hash")]
@@ -643,7 +684,10 @@ def _preflight_existing(unique: list[dict]) -> dict:
             batch = hashes[i : i + batch_size]
             rows = select_many(
                 "pin_products",
-                filters={"normalized_product_url_hash": f"in.({','.join(batch)})"},
+                # NOT_RETIRED-scoped: a retired row's hash must stay re-collectable.
+                filters=with_not_retired(
+                    {"normalized_product_url_hash": f"in.({','.join(batch)})"}
+                ),
                 limit=len(batch) + 10,
             ) or []
             for r in rows:
@@ -807,19 +851,39 @@ def _build_report(
 def _apply_rows(rows: list[dict]) -> int:
     """INSERT-only write to pin_products. Never updates existing rows.
 
-    Uses db.insert_rows with on_conflict=normalized_product_url_hash:
-        Prefer: resolution=ignore-duplicates  (ON CONFLICT DO NOTHING)
+    WRITE SEMANTICS: PLAIN INSERT (no on_conflict, no resolution=ignore-duplicates).
 
-    A late hash conflict (row arrived between preflight and write) is silently
-    skipped. The existing row is NEVER touched. resolution=merge-duplicates is
-    NOT used here.
+    WHY NOT ON CONFLICT (fixed 2026-08-06 — this call silently destroyed every
+    scraped product for weeks):
+        v47 replaced the TOTAL unique index on normalized_product_url_hash with a
+        PARTIAL one:
+            idx_pin_products_active_normalized_url_hash
+              UNIQUE (normalized_product_url_hash)
+              WHERE lifecycle_status IS DISTINCT FROM 'retired'
+                AND normalized_product_url_hash IS NOT NULL
+        Postgres cannot infer a PARTIAL unique index from a bare column list, so
+        `on_conflict=normalized_product_url_hash` has no matching arbiter and the
+        whole batch dies with
+            42P10: there is no unique or exclusion constraint matching the
+                   ON CONFLICT specification
+        A real 2026-08-06 VPS run scraped 28/50 pins successfully and then lost
+        100% of it at this line. Same for `parent_pin_id,source_url` — that index
+        (idx_pin_products_active_parent_source_url) is partial too. There is NO
+        plain unique on any business key of this table, so no conflict target
+        can be named without a schema change.
 
-    Caller must have already run _preflight_existing() and must pass only the
-    insertCandidates list (rows not already in DB). This function is the last
-    safety net — not the primary dedup mechanism.
+    Precedent followed: backend/tools/t2_harvest.py "WRITE SEMANTICS" (lines
+    46-50) and the v47 COMMENT ON INDEX writer warning both mandate exactly this
+    — plain INSERT, and let a genuine collision surface as a loud 23505 rather
+    than swallow rows.
 
-    Requires v28 migration (unique index on normalized_product_url_hash).
-    Call _check_v28_schema() before this in apply path.
+    Dedup is _preflight_existing() (lifecycle-aware; retired rows are not treated
+    as existing). A late collision — a row that landed between preflight and this
+    write — is a genuine 23505 and is retried per-row so one duplicate cannot
+    discard the other N-1 good rows. Rows that still fail are reported, never
+    silently dropped.
+
+    Requires v28 columns. Call _check_v28_schema() before this in apply path.
     """
     from db import insert_rows  # type: ignore
 
@@ -868,11 +932,91 @@ def _apply_rows(rows: list[dict]) -> int:
         })
     if not payload:
         return 0
-    # INSERT ... ON CONFLICT (normalized_product_url_hash) DO NOTHING
-    # Requires v28 unique index idx_pin_products_normalized_product_url_hash.
-    # Late conflicts are skipped; the existing row is unchanged.
-    result = insert_rows("pin_products", payload, on_conflict="normalized_product_url_hash")
-    return len(result) if result else 0
+    outcome = _insert_with_duplicate_fallback(insert_rows, payload)
+    _LAST_WRITE_OUTCOME.clear()
+    _LAST_WRITE_OUTCOME.update(outcome)
+    if outcome["failed"]:
+        # LOUD: a write we could not complete must never look like a quiet success.
+        print(
+            f"[product-supply-expand] WRITE FAILURES: {outcome['failed']} of "
+            f"{outcome['attempted']} rows did not land "
+            f"(duplicates={outcome['duplicates']}, errors={outcome['failed']}). "
+            f"firstError={outcome['errors'][0] if outcome['errors'] else ''}",
+            flush=True,
+        )
+    return outcome["inserted"]
+
+
+# Populated by _apply_rows so the caller can put honest write accounting into the
+# JSON report. Never swallow: every non-inserted row is counted here.
+_LAST_WRITE_OUTCOME: dict = {}
+
+# 23505 = unique_violation. The ONLY error we treat as a benign late collision.
+_PG_UNIQUE_VIOLATION = "23505"
+
+
+def _is_duplicate_error(exc: Exception) -> bool:
+    """True only for a genuine Postgres unique violation (23505).
+
+    Deliberately narrow: 42P10 (no matching ON CONFLICT arbiter), 23514 (CHECK),
+    permission and network errors are NOT duplicates and must stay loud.
+    """
+    return _PG_UNIQUE_VIOLATION in str(exc)
+
+
+def _insert_with_duplicate_fallback(insert_rows, payload: list[dict]) -> dict:
+    """Plain-INSERT the batch; on a genuine 23505 retry row-by-row.
+
+    A single duplicate in a 200-row batch would otherwise abort the whole
+    statement and discard 199 good rows — the data-loss shape we are fixing.
+    Row-by-row retry keeps the good rows and attributes each failure honestly.
+
+    Returns {attempted, inserted, duplicates, failed, errors}. `failed` counts
+    rows lost to NON-duplicate errors; those also re-raise when nothing landed at
+    all, so a broken write can never masquerade as an empty harvest.
+    """
+    attempted = len(payload)
+    try:
+        result = insert_rows("pin_products", payload)
+        inserted = len(result) if result else attempted
+        return {"attempted": attempted, "inserted": inserted,
+                "duplicates": 0, "failed": 0, "errors": []}
+    except Exception as batch_exc:
+        if not _is_duplicate_error(batch_exc):
+            # Not a duplicate (e.g. 42P10, CHECK violation, auth, network).
+            # Fail closed and loud — never degrade to a silent partial write.
+            raise
+        print(
+            f"[product-supply-expand] batch insert hit a duplicate (23505); "
+            f"retrying {attempted} rows individually to preserve the non-duplicate rows",
+            flush=True,
+        )
+
+    inserted = 0
+    duplicates = 0
+    failed = 0
+    errors: list[str] = []
+    for row in payload:
+        try:
+            result = insert_rows("pin_products", [row])
+            inserted += len(result) if result else 1
+        except Exception as row_exc:
+            if _is_duplicate_error(row_exc):
+                duplicates += 1
+            else:
+                failed += 1
+                if len(errors) < 5:
+                    errors.append(str(row_exc)[:300])
+
+    if inserted == 0 and failed:
+        # Nothing landed and it was not merely duplicates → surface the real error.
+        raise RuntimeError(
+            f"insert pin_products failed for all {attempted} rows "
+            f"({failed} errors, {duplicates} duplicates); first error: "
+            f"{errors[0] if errors else 'unknown'}"
+        )
+    return {"attempted": attempted, "inserted": inserted,
+            "duplicates": duplicates, "failed": failed, "errors": errors}
 
 
 # Residential-proxy support for the Shop-the-Look Playwright navigation. Reuses the
@@ -1041,6 +1185,9 @@ async def run_shop_the_look_expand(
         # Use pre-filtered insert-only candidates from preflight, not the full unique list.
         insert_candidates = report.pop("_insertCandidates", unique)
         report["writes"]["pin_products"] = _apply_rows(insert_candidates)
+        # Honest write accounting: every row we attempted is accounted for as
+        # inserted / duplicate / failed. A silent shortfall is not possible.
+        report["writeOutcome"] = dict(_LAST_WRITE_OUTCOME)
     else:
         # Remove the internal field from dry-run reports (not useful in JSON output).
         report.pop("_insertCandidates", None)
