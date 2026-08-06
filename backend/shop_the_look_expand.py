@@ -16,6 +16,8 @@ import os
 import re
 import sys
 import time
+
+import httpx
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -660,11 +662,93 @@ V28_REQUIRED_COLUMNS = (
 )
 
 
+class SchemaCheckUnavailable(RuntimeError):
+    """The v28 schema could not be determined because the probe never got an answer.
+
+    This is NOT evidence that any column is missing. It is the absence of
+    evidence — the database did not respond (connection reset, timeout, DNS,
+    TLS, 5xx). Raised so the caller can report "unknown" instead of asserting
+    a schema defect that was never observed.
+    """
+
+
+def _classify_probe_failure(exc: BaseException) -> str:
+    """Classify a failed column probe as 'missing' | 'unavailable'.
+
+    The distinction is the whole point of this module: only a probe that
+    ACTUALLY REACHED PostgREST and got a structured "no such column" answer is
+    evidence of a missing column. Anything that never reached the server, or
+    that the server failed to answer, is evidence of nothing.
+
+    'missing'      — PostgREST answered and the answer names a schema defect:
+                     a 400/404 with PostgREST's undefined-column signature
+                     (PGRST202/PGRST204, Postgres 42703, "does not exist").
+    'unavailable'  — the probe got no usable answer:
+                       * httpx.TransportError subclasses (ConnectError,
+                         ConnectTimeout, ReadTimeout, ReadError, WriteError,
+                         PoolTimeout, RemoteProtocolError, ProxyError) — these
+                         are what db._request re-raises after exhausting its 4
+                         retries, and they are NOT RuntimeError, which is how
+                         they used to fall through to a bare `except Exception`
+                         and get mislabelled as a missing column.
+                       * ssl.SSLError / socket.timeout / OSError — transport.
+                       * a RuntimeError carrying a 5xx or a transport word.
+                       * anything unrecognised — we default to 'unavailable'
+                         because an unknown failure is by definition not an
+                         observation of a missing column. Fail LOUD, not WRONG.
+    """
+    import ssl
+    import socket
+
+    # Transport-level: the request never completed. httpx.TransportError is the
+    # base class db._request retries on and re-raises verbatim on exhaustion.
+    if isinstance(exc, (httpx.TransportError, ssl.SSLError, socket.timeout)):
+        return "unavailable"
+    # httpx.HTTPError covers InvalidURL/CookieConflict etc.; still not a schema answer.
+    if isinstance(exc, httpx.HTTPError):
+        return "unavailable"
+
+    if isinstance(exc, RuntimeError):
+        err = str(exc)
+        low = err.lower()
+        # PostgREST answered with an explicit undefined-column verdict.
+        # 42703 = Postgres undefined_column; PGRST202/204 = PostgREST schema-cache miss.
+        undefined_column_signature = (
+            "does not exist" in low
+            or "42703" in err
+            or "pgrst204" in low
+            or "pgrst202" in low
+            or "undefined column" in low
+        )
+        got_client_error_status = "[400]" in err or "[404]" in err
+        if undefined_column_signature and got_client_error_status:
+            return "missing"
+        # A 400/404 whose body we could not match to a column verdict is
+        # ambiguous (could be a malformed filter, a gateway page, an auth
+        # rejection). Ambiguous is not evidence of a missing column.
+        if got_client_error_status:
+            return "unavailable"
+        # Server-side failure or a transport error someone wrapped in RuntimeError.
+        return "unavailable"
+
+    # OSError catches lower-level socket failures not wrapped by httpx.
+    if isinstance(exc, OSError):
+        return "unavailable"
+
+    return "unavailable"
+
+
 def _check_v28_schema() -> tuple[bool, list[str]]:
     """Verify every v28 column required for STL bootstrap apply exists in pin_products.
 
     Uses PostgREST filter params — if a column is absent the API returns 400.
     Returns (all_present: bool, missing_columns: list[str]).
+
+    Raises SchemaCheckUnavailable if any probe failed to get an answer from the
+    database. A column is reported missing ONLY when PostgREST explicitly said
+    so; a probe that timed out proves nothing and must never be rendered as a
+    schema defect (that misdiagnosis sends operators to run a migration that
+    was already applied).
 
     Note: only COLUMNS are checked. The write path no longer depends on any
     particular unique index: v47 made the pin_products unique indexes PARTIAL
@@ -672,19 +756,26 @@ def _check_v28_schema() -> tuple[bool, list[str]]:
     23505 as a duplicate. See _apply_rows.
     """
     missing: list[str] = []
+    unavailable: list[str] = []
+    causes: list[str] = []
     for col in V28_REQUIRED_COLUMNS:
         try:
             select_many("pin_products", filters={col: "is.null"}, limit=0)
-        except RuntimeError as exc:
-            err = str(exc)
-            if ("does not exist" in err or "column" in err.lower()
-                    or "[400]" in err or "[404]" in err):
+        except Exception as exc:  # noqa: BLE001 — classified, never swallowed
+            verdict = _classify_probe_failure(exc)
+            if verdict == "missing":
                 missing.append(col)
             else:
-                # Network or auth error — re-raise; don't silently pass
-                raise
-        except Exception:
-            missing.append(col)
+                unavailable.append(col)
+                causes.append(f"{col}: {type(exc).__name__}: {str(exc)[:160]}")
+
+    if unavailable:
+        raise SchemaCheckUnavailable(
+            "could not verify the pin_products schema — the database did not "
+            f"answer the column probe for: {unavailable}. "
+            "This is NOT evidence that any column is missing; the check never "
+            "completed. Probe failures: " + " | ".join(causes)
+        )
     return len(missing) == 0, missing
 
 
@@ -1422,13 +1513,39 @@ async def run_shop_the_look_expand(
     # v28 schema check — always run (read-only); result included in report.
     # In apply mode: fail closed if any required column is missing.
     # In dry-run mode: include result as a warning, do not block.
-    v28_ok, v28_missing = _check_v28_schema()
+    # Three outcomes, never conflated:
+    #   verified present  -> proceed
+    #   verified missing  -> real schema defect; naming the migration is correct
+    #   unverifiable      -> say so; NEVER assert a defect we did not observe
+    v28_unavailable_reason: str | None = None
+    try:
+        v28_ok, v28_missing = _check_v28_schema()
+    except SchemaCheckUnavailable as exc:
+        v28_ok, v28_missing = False, []
+        v28_unavailable_reason = str(exc)
+
     v28_status = {
         "columnsChecked": list(V28_REQUIRED_COLUMNS),
         "allPresent": v28_ok,
         "missingColumns": v28_missing,
+        # None = the probe answered. A string = we never found out.
+        "schemaCheckUnavailable": v28_unavailable_reason,
+        "verdict": (
+            "unknown_db_unreachable" if v28_unavailable_reason
+            else ("all_present" if v28_ok else "columns_missing")
+        ),
         "noteIndexNotChecked": "unique index on normalized_product_url_hash cannot be verified via PostgREST; must confirm manually before apply",
     }
+
+    if apply and v28_unavailable_reason:
+        # Deliberately does NOT say "migration has not been applied" and does
+        # NOT tell anyone to run a migration: we have no evidence for either.
+        raise SchemaCheckUnavailable(
+            "unable to confirm schema (database connection failed) — the "
+            "pin_products column probe never completed, so this run cannot "
+            "safely write. The schema was NOT determined to be wrong; retry "
+            f"when the database is reachable. Details: {v28_unavailable_reason}"
+        )
 
     if apply and not v28_ok:
         raise RuntimeError(

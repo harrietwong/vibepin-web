@@ -1,11 +1,14 @@
 import json
 import os
 import pathlib
+import ssl
 import sys
 import tempfile
 import types
 import unittest
 from unittest.mock import MagicMock, call, patch
+
+import httpx
 
 import shop_the_look_expand as stl
 from shop_the_look_expand import (
@@ -941,6 +944,135 @@ class TestV28SchemaPreflight(unittest.TestCase):
         }
         self.assertIn("noteIndexNotChecked", v28_status)
         self.assertTrue(v28_status["noteIndexNotChecked"])
+
+
+class TestV28SchemaNetworkFailureNotMisreported(unittest.TestCase):
+    """A probe that never got an answer must NOT be reported as a missing column.
+
+    Regression guard for the real incident: after a 50-pin crawl, db._request
+    exhausted its retries and re-raised httpx.ReadTimeout / httpx.ConnectError.
+    Those are NOT RuntimeError, so they fell through to a bare `except Exception`
+    that appended the column to `missing`. The worker then told the operator
+    "v28 migration has not been applied — missing columns: [...]" and exited 1,
+    for four columns that verifiably exist in production.
+    """
+
+    # Every transport failure db._request can re-raise after exhausting retries.
+    TRANSPORT_ERRORS = (
+        httpx.ReadTimeout("timed out"),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
+        httpx.ReadError("peer reset"),
+        httpx.WriteError("broken pipe"),
+        httpx.PoolTimeout("pool exhausted"),
+        httpx.RemoteProtocolError("server disconnected"),
+        ssl.SSLError("handshake failure"),
+        OSError("network unreachable"),
+    )
+
+    def test_transport_error_raises_unavailable_not_missing(self):
+        for exc in self.TRANSPORT_ERRORS:
+            with self.subTest(exc=type(exc).__name__):
+                with patch.object(stl, "select_many", side_effect=exc):
+                    with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                        _check_v28_schema()
+                msg = str(ctx.exception)
+                # The core requirement: never assert a schema defect we did not observe.
+                self.assertNotIn("has not been applied", msg)
+                self.assertNotIn("missing columns", msg)
+                # And never send the operator to run a migration on a guess.
+                self.assertNotIn("migrate_v28", msg)
+                self.assertNotIn("before --apply", msg)
+                # It must say what actually happened.
+                self.assertIn("could not verify", msg.lower())
+                self.assertIn("NOT evidence", msg)
+
+    def test_transport_error_is_classified_unavailable(self):
+        for exc in self.TRANSPORT_ERRORS:
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_genuine_missing_column_still_classified_missing(self):
+        exc = RuntimeError(
+            "select pin_products 失败 [400]: {\"code\":\"PGRST204\","
+            "\"message\":\"Column 'seed_keyword' of relation 'pin_products' does not exist.\"}"
+        )
+        self.assertEqual(stl._classify_probe_failure(exc), "missing")
+
+    def test_postgres_42703_classified_missing(self):
+        exc = RuntimeError(
+            "select pin_products 失败 [400]: {\"code\":\"42703\","
+            "\"message\":\"column pin_products.seed_keyword does not exist\"}"
+        )
+        self.assertEqual(stl._classify_probe_failure(exc), "missing")
+
+    def test_5xx_is_unavailable_not_missing(self):
+        """A gateway/server error is the DB failing to answer, not a schema verdict."""
+        for status in ("[500]", "[502]", "[503]", "[504]"):
+            with self.subTest(status=status):
+                exc = RuntimeError(f"select pin_products 失败 {status}: upstream error")
+                self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_400_without_column_verdict_is_unavailable(self):
+        """A 400 we cannot tie to an undefined column is ambiguous, not proof."""
+        exc = RuntimeError("select pin_products 失败 [400]: <html>Bad Request</html>")
+        self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_401_403_not_reported_as_missing_columns(self):
+        """An auth rejection must never be rendered as a schema defect."""
+        for status in ("[401]", "[403]"):
+            with self.subTest(status=status):
+                exc = RuntimeError(f"select pin_products 失败 {status}: JWT expired")
+                self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_genuine_missing_column_still_raises_original_message(self):
+        """The real-defect path is unchanged: still names the migration."""
+        def fake(table, filters=None, **_kw):
+            col = list((filters or {}).keys())[0] if filters else ""
+            if col == "seed_keyword":
+                raise RuntimeError(
+                    f"select {table} 失败 [400]: {{\"code\":\"PGRST204\","
+                    f"\"message\":\"Column '{col}' of relation '{table}' does not exist.\"}}"
+                )
+            return []
+
+        with patch.object(stl, "select_many", side_effect=fake):
+            ok, missing = _check_v28_schema()
+        self.assertFalse(ok)
+        self.assertEqual(missing, ["seed_keyword"])
+
+    def test_partial_failure_still_unavailable(self):
+        """If ONE column times out, the whole verdict is unknown.
+
+        Three columns answering "present" plus one timeout does not license a
+        conclusion about the fourth column either way.
+        """
+        def fake(table, filters=None, **_kw):
+            col = list((filters or {}).keys())[0] if filters else ""
+            if col == "normalized_product_url_hash":
+                raise httpx.ReadTimeout("timed out")
+            return []
+
+        with patch.object(stl, "select_many", side_effect=fake):
+            with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                _check_v28_schema()
+        msg = str(ctx.exception)
+        self.assertIn("normalized_product_url_hash", msg)
+        self.assertNotIn("has not been applied", msg)
+
+    def test_unavailable_names_the_failing_column_and_cause(self):
+        """Operators need the cause to act; the message must carry it."""
+        with patch.object(stl, "select_many", side_effect=httpx.ConnectError("boom")):
+            with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                _check_v28_schema()
+        msg = str(ctx.exception)
+        self.assertIn("ConnectError", msg)
+        self.assertIn("discovery_method_detail", msg)
+
+    def test_schema_check_unavailable_is_not_confused_with_missing(self):
+        """SchemaCheckUnavailable must be catchable distinctly from the defect error."""
+        self.assertTrue(issubclass(stl.SchemaCheckUnavailable, RuntimeError))
+        self.assertIsNot(stl.SchemaCheckUnavailable, RuntimeError)
 
 
 class TestApplyRowsCurrencyHonesty(unittest.TestCase):
