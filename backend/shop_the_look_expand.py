@@ -1320,6 +1320,57 @@ async def _verify_session_logged_in(page) -> dict:
     return {"authValid": None, "signal": "no_conclusive_marker"}
 
 
+def _build_v28_status() -> dict:
+    """Run _check_v28_schema() and assemble the report's v28SchemaCheck dict.
+
+    Read-only probe; never raises (SchemaCheckUnavailable is caught here and
+    folded into the "unknown_db_unreachable" verdict). Callers that need to
+    fail closed on a bad verdict do so themselves — this function only reports.
+    """
+    v28_unavailable_reason: str | None = None
+    try:
+        v28_ok, v28_missing = _check_v28_schema()
+    except SchemaCheckUnavailable as exc:
+        v28_ok, v28_missing = False, []
+        v28_unavailable_reason = str(exc)
+
+    return {
+        "columnsChecked": list(V28_REQUIRED_COLUMNS),
+        "allPresent": v28_ok,
+        "missingColumns": v28_missing,
+        # None = the probe answered. A string = we never found out.
+        "schemaCheckUnavailable": v28_unavailable_reason,
+        "verdict": (
+            "unknown_db_unreachable" if v28_unavailable_reason
+            else ("all_present" if v28_ok else "columns_missing")
+        ),
+        "noteIndexNotChecked": "unique index on normalized_product_url_hash cannot be verified via PostgREST; must confirm manually before apply",
+    }
+
+
+def _enforce_v28_status(v28_status: dict) -> None:
+    """Raise the apply-mode fail-closed errors implied by an already-built v28_status.
+
+    Kept byte-for-byte identical to the historical inline checks so error
+    messages/types are unaffected by when the schema probe ran.
+    """
+    if v28_status["schemaCheckUnavailable"]:
+        # Deliberately does NOT say "migration has not been applied" and does
+        # NOT tell anyone to run a migration: we have no evidence for either.
+        raise SchemaCheckUnavailable(
+            "unable to confirm schema (database connection failed) — the "
+            "pin_products column probe never completed, so this run cannot "
+            "safely write. The schema was NOT determined to be wrong; retry "
+            f"when the database is reachable. Details: {v28_status['schemaCheckUnavailable']}"
+        )
+
+    if not v28_status["allPresent"]:
+        raise RuntimeError(
+            f"v28 migration has not been applied — missing columns: {v28_status['missingColumns']}. "
+            "Run migrate_v28_product_supply_expansion.sql before --apply."
+        )
+
+
 def _stl_proxy_option() -> dict | None:
     """Build a Playwright proxy option dict from PINTEREST_CRAWL_PROXY_URL, or None
     when unset/blank (→ direct). Playwright wants {server, username, password} with
@@ -1394,6 +1445,18 @@ async def run_shop_the_look_expand(
     }
     per_pin: list[dict] = []
     started = time.monotonic()
+
+    # v28 schema check — a pure read-only preflight (probes column presence).
+    # In apply mode it must run BEFORE any browser/crawl work starts: crawling
+    # is ~25 minutes for 50 pins, and finding out afterwards that the schema
+    # probe failed (or the migration is missing) means that entire run is
+    # discarded for nothing. In dry-run mode nothing is written, so the check
+    # stays where it always ran (after the crawl, informational only) — see
+    # below near report assembly.
+    v28_status: dict | None = None
+    if apply:
+        v28_status = _build_v28_status()
+        _enforce_v28_status(v28_status)
 
     # Route STL navigation through the residential proxy when configured (same env
     # var as pin-crawl). Presence + used flag only — never the URL or credentials.
@@ -1510,48 +1573,17 @@ async def run_shop_the_look_expand(
 
     elapsed = time.monotonic() - started
 
-    # v28 schema check — always run (read-only); result included in report.
-    # In apply mode: fail closed if any required column is missing.
-    # In dry-run mode: include result as a warning, do not block.
+    # v28 schema check — result included in report either way.
+    # apply mode already ran this (and fail-closed on a bad verdict) before the
+    # crawl started, above; reuse that result rather than probing twice.
+    # dry-run mode never writes, so the check runs here instead: informational
+    # only, never blocks.
     # Three outcomes, never conflated:
     #   verified present  -> proceed
     #   verified missing  -> real schema defect; naming the migration is correct
     #   unverifiable      -> say so; NEVER assert a defect we did not observe
-    v28_unavailable_reason: str | None = None
-    try:
-        v28_ok, v28_missing = _check_v28_schema()
-    except SchemaCheckUnavailable as exc:
-        v28_ok, v28_missing = False, []
-        v28_unavailable_reason = str(exc)
-
-    v28_status = {
-        "columnsChecked": list(V28_REQUIRED_COLUMNS),
-        "allPresent": v28_ok,
-        "missingColumns": v28_missing,
-        # None = the probe answered. A string = we never found out.
-        "schemaCheckUnavailable": v28_unavailable_reason,
-        "verdict": (
-            "unknown_db_unreachable" if v28_unavailable_reason
-            else ("all_present" if v28_ok else "columns_missing")
-        ),
-        "noteIndexNotChecked": "unique index on normalized_product_url_hash cannot be verified via PostgREST; must confirm manually before apply",
-    }
-
-    if apply and v28_unavailable_reason:
-        # Deliberately does NOT say "migration has not been applied" and does
-        # NOT tell anyone to run a migration: we have no evidence for either.
-        raise SchemaCheckUnavailable(
-            "unable to confirm schema (database connection failed) — the "
-            "pin_products column probe never completed, so this run cannot "
-            "safely write. The schema was NOT determined to be wrong; retry "
-            f"when the database is reachable. Details: {v28_unavailable_reason}"
-        )
-
-    if apply and not v28_ok:
-        raise RuntimeError(
-            f"v28 migration has not been applied — missing columns: {v28_missing}. "
-            "Run migrate_v28_product_supply_expansion.sql before --apply."
-        )
+    if v28_status is None:
+        v28_status = _build_v28_status()
 
     report, unique = _build_report(
         per_pin, selection,

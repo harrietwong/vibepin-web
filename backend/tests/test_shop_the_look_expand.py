@@ -1339,5 +1339,198 @@ class TestProductIdeasAPIContract(unittest.TestCase):
             )
 
 
+class TestV28PreflightRunsBeforeCrawl(unittest.TestCase):
+    """The v28 schema preflight must run BEFORE any browser/crawl work in apply
+    mode, so a failed probe never discards a completed crawl (the real
+    incident: 50 pins scraped over ~25 minutes, then the schema check failed
+    on a DB timeout and the whole run was thrown away).
+
+    In dry-run mode nothing is written, so the check must keep running after
+    the crawl loop exactly as before (informational only, never blocks).
+    """
+
+    def _patch_common(self, stack, *, sources=None):
+        """Patch everything run_shop_the_look_expand needs besides the schema
+        probe and the browser, so these tests isolate ONLY the preflight
+        ordering question."""
+        import tempfile as _tempfile
+
+        stack.enter_context(patch.object(
+            stl, "select_source_pins",
+            return_value=(sources or [], {"sourceSetFrozen": False, "selectedTotal": 0}),
+        ))
+        stack.enter_context(patch.object(stl, "_load_previous_spike_ids", return_value=set()))
+        stack.enter_context(patch.object(
+            stl, "_load_session_state",
+            return_value={
+                "storageState": None, "authenticated": False,
+                "sessionPath": "unused", "issue": "session_file_missing",
+                "cookieCount": 0, "authCookiesPresent": [],
+            },
+        ))
+        tmp_log_dir = pathlib.Path(_tempfile.mkdtemp(prefix="stl_test_logs_"))
+        stack.enter_context(patch.object(stl, "LOG_DIR", tmp_log_dir))
+        return tmp_log_dir
+
+    def test_apply_mode_schema_failure_never_starts_browser(self):
+        """apply=True + schema probe reports missing columns -> the exact same
+        RuntimeError as before, and async_playwright() is never called."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack)
+            stack.enter_context(patch.object(
+                stl, "_check_v28_schema",
+                return_value=(False, ["normalized_product_url_hash"]),
+            ))
+            mock_async_playwright = MagicMock()
+            stack.enter_context(patch(
+                "playwright.async_api.async_playwright", mock_async_playwright
+            ))
+
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(stl.run_shop_the_look_expand(apply=True))
+
+        msg = str(ctx.exception)
+        self.assertIn("v28 migration has not been applied", msg)
+        self.assertIn("normalized_product_url_hash", msg)
+        self.assertNotIsInstance(ctx.exception, stl.SchemaCheckUnavailable)
+        mock_async_playwright.assert_not_called()
+
+    def test_apply_mode_schema_unavailable_never_starts_browser(self):
+        """apply=True + schema probe cannot reach the DB -> SchemaCheckUnavailable
+        (not a generic RuntimeError, not a claim the migration is missing), and
+        the browser is never launched."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack)
+            stack.enter_context(patch.object(
+                stl, "_check_v28_schema",
+                side_effect=stl.SchemaCheckUnavailable("connection reset"),
+            ))
+            mock_async_playwright = MagicMock()
+            stack.enter_context(patch(
+                "playwright.async_api.async_playwright", mock_async_playwright
+            ))
+
+            with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                asyncio.run(stl.run_shop_the_look_expand(apply=True))
+
+        msg = str(ctx.exception)
+        self.assertIn("unable to confirm schema", msg)
+        self.assertNotIn("migration has not been applied", msg)
+        mock_async_playwright.assert_not_called()
+
+    def _install_fake_playwright(self, stack):
+        """Install a minimal async-context-manager fake standing in for
+        playwright.async_api.async_playwright(), deep enough for
+        run_shop_the_look_expand's browser/context/page setup to complete
+        against zero source pins (the for-loop over sources is then a no-op)."""
+
+        fake_page = MagicMock()
+        fake_page.url = ""
+
+        async def fake_goto(*a, **kw):
+            return None
+
+        async def fake_content():
+            return "<html></html>"
+
+        fake_page.goto = fake_goto
+        fake_page.content = fake_content
+        fake_page.on = MagicMock()
+
+        async def fake_new_page():
+            return fake_page
+
+        fake_context = MagicMock()
+        fake_context.new_page = fake_new_page
+
+        async def fake_new_context(**kw):
+            return fake_context
+
+        fake_browser = MagicMock()
+        fake_browser.new_context = fake_new_context
+
+        async def fake_close():
+            return None
+
+        fake_browser.close = fake_close
+
+        async def fake_launch(**kw):
+            return fake_browser
+
+        fake_chromium = MagicMock()
+        fake_chromium.launch = fake_launch
+
+        fake_pw = MagicMock()
+        fake_pw.chromium = fake_chromium
+
+        class FakeAsyncPlaywrightCM:
+            async def __aenter__(self):
+                return fake_pw
+
+            async def __aexit__(self, *exc):
+                return False
+
+        mock_async_playwright = MagicMock(return_value=FakeAsyncPlaywrightCM())
+        stack.enter_context(patch(
+            "playwright.async_api.async_playwright", mock_async_playwright
+        ))
+        return mock_async_playwright
+
+    def test_apply_mode_schema_ok_crawls_and_checks_schema_exactly_once(self):
+        """apply=True + schema probe passes -> the crawl proceeds (browser is
+        launched) and _check_v28_schema is called exactly once, not twice
+        (the whole point: no redundant re-probe after the moved-up check)."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack, sources=[])
+            stack.enter_context(patch.object(stl, "_apply_rows", return_value=0))
+            check_mock = stack.enter_context(patch.object(
+                stl, "_check_v28_schema", return_value=(True, [])
+            ))
+            mock_async_playwright = self._install_fake_playwright(stack)
+
+            report = asyncio.run(stl.run_shop_the_look_expand(apply=True))
+
+        mock_async_playwright.assert_called_once()
+        self.assertEqual(check_mock.call_count, 1)
+        self.assertEqual(report["v28SchemaCheck"]["verdict"], "all_present")
+        self.assertTrue(report["v28SchemaCheck"]["allPresent"])
+
+    def test_dry_run_mode_unchanged_schema_check_after_crawl_never_blocks(self):
+        """apply=False -> the crawl always proceeds regardless of the schema
+        verdict (even a missing-columns verdict must not raise), and the
+        report still carries a fully-formed v28SchemaCheck block."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack, sources=[])
+            check_mock = stack.enter_context(patch.object(
+                stl, "_check_v28_schema", return_value=(False, ["seed_keyword"])
+            ))
+            mock_async_playwright = self._install_fake_playwright(stack)
+
+            report = asyncio.run(stl.run_shop_the_look_expand(apply=False))
+
+        mock_async_playwright.assert_called_once()
+        self.assertEqual(check_mock.call_count, 1)
+        v28 = report["v28SchemaCheck"]
+        self.assertEqual(v28["verdict"], "columns_missing")
+        self.assertFalse(v28["allPresent"])
+        self.assertEqual(v28["missingColumns"], ["seed_keyword"])
+        self.assertEqual(v28["columnsChecked"], list(stl.V28_REQUIRED_COLUMNS))
+        self.assertIsNone(v28["schemaCheckUnavailable"])
+        self.assertIn("noteIndexNotChecked", v28)
+        self.assertEqual(report["writes"]["pin_products"], 0)  # dry-run never writes rows
+
+
 if __name__ == "__main__":
     unittest.main()
