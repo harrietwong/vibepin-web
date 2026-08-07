@@ -1360,6 +1360,7 @@ class TestV28PreflightRunsBeforeCrawl(unittest.TestCase):
             return_value=(sources or [], {"sourceSetFrozen": False, "selectedTotal": 0}),
         ))
         stack.enter_context(patch.object(stl, "_load_previous_spike_ids", return_value=set()))
+        stack.enter_context(patch.object(stl, "_load_scraped_source_pin_ids", return_value=set()))
         stack.enter_context(patch.object(
             stl, "_load_session_state",
             return_value={

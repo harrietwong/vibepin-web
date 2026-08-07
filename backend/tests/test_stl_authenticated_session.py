@@ -522,6 +522,7 @@ class TestRunWiring(unittest.TestCase):
         with patch.dict(sys.modules, {"playwright.async_api": fake_module}), \
              patch.object(stl, "select_source_pins", return_value=([], {})), \
              patch.object(stl, "_load_previous_spike_ids", return_value=set()), \
+             patch.object(stl, "_load_scraped_source_pin_ids", return_value=set()), \
              patch.object(stl, "_check_v28_schema", return_value=(True, [])), \
              patch.object(stl, "_preflight_existing", return_value={
                  "projectedInsertCount": 0, "projectedSkipExistingCount": 0,
@@ -604,6 +605,7 @@ class TestRunWiring(unittest.TestCase):
             with patch.dict(sys.modules, {"playwright.async_api": fake_module}), \
                  patch.object(stl, "select_source_pins", return_value=([], {})), \
                  patch.object(stl, "_load_previous_spike_ids", return_value=set()), \
+                 patch.object(stl, "_load_scraped_source_pin_ids", return_value=set()), \
                  patch.object(stl, "_check_v28_schema", return_value=(True, [])), \
                  patch.object(stl, "_preflight_existing", return_value={
                      "projectedInsertCount": 0, "projectedSkipExistingCount": 0,

@@ -258,6 +258,63 @@ def _load_previous_spike_ids() -> set[str]:
         return set()
 
 
+class ScrapedPinHistoryUnavailable(RuntimeError):
+    """The set of already-scraped source pins could not be read from the database.
+
+    Raised instead of returning an empty set. An empty set would silently
+    disable the exclusion and send the crawler straight back onto the same
+    highest-save pins it has already harvested — which is precisely the bug
+    this loader exists to fix, only now invisible. The run refuses to select
+    sources it cannot honestly say are new.
+    """
+
+
+def _load_scraped_source_pin_ids() -> set[str]:
+    """Every source pin we have ALREADY scraped products from, read from the DB.
+
+    WHY THE DATABASE AND NOT A LOG FILE: the historical exclusion list came from
+    ``logs/shop_the_look_spike.json`` (_load_previous_spike_ids). That file is
+    per-machine — the VPS and a laptop each keep their own, deleting it erases
+    the memory, and a fresh host starts with none. Meanwhile the crawler kept
+    re-selecting the same top-save pins run after run: measured 2026-08-07, the
+    pin_samples pool held 26,124 pins of which only 260 had ever been scraped
+    (1%), yet consecutive runs kept landing on the same pin ids and produced
+    single-digit new rows out of dozens of candidates. ``pin_products`` is the
+    only record that survives a host change, so it is the source of truth.
+
+    PAGINATION: PostgREST caps a single response at 1000 rows and pin_products
+    already holds 3700+. ``DB().select_many`` (backend/db/db.py) pages in
+    blocks of 1000 when ``limit is None``; the module-level ``select_many`` has
+    no offset support and would silently truncate at the cap. Using the paging
+    helper is therefore load-bearing, not a style choice.
+
+    Not lifecycle-scoped on purpose: a retired PRODUCT row is still proof that
+    its source PIN was visited. Retirement is about the product, re-scraping is
+    about the pin.
+
+    Raises ScrapedPinHistoryUnavailable if the read fails — never returns an
+    empty set to paper over an error.
+    """
+    from db import DB  # type: ignore
+
+    try:
+        rows = DB().select_many(
+            "pin_products",
+            columns="source_pin_id",
+            filters={"source_pin_id": "not.is.null"},
+            limit=None,
+        ) or []
+    except Exception as exc:  # noqa: BLE001 — re-raised as a typed, loud failure
+        raise ScrapedPinHistoryUnavailable(
+            "could not read the already-scraped source pins from pin_products: "
+            f"{type(exc).__name__}: {str(exc)[:200]}. Refusing to select source "
+            "pins without the exclusion list — running without it would silently "
+            "re-scrape pins whose products are already in the database."
+        ) from exc
+
+    return {str(r.get("source_pin_id")) for r in rows if r.get("source_pin_id")}
+
+
 def _selection_score(row: dict) -> tuple:
     text = f"{row.get('title') or ''} {row.get('description') or ''}"
     likely_shop = int(bool(row.get("is_ecommerce"))) + int(bool(COMMERCIAL_HINTS.search(text)))
@@ -280,26 +337,60 @@ def select_source_pins(
     category_mix: dict[str, int],
     since_hours: int = 168,
     avoid_pin_ids: set[str] | None = None,
+    avoid_sources: dict[str, int] | None = None,
 ) -> tuple[list[dict], dict]:
-    """Select balanced recent high-save pins, preferring bootstrap rows."""
+    """Select balanced recent high-save pins, preferring bootstrap rows.
+
+    ``avoid_pin_ids`` is a HARD exclusion. There is deliberately no fallback
+    that re-admits an avoided pin when a category runs short: re-scraping a pin
+    whose products are already in the database costs ~53 s and yields nothing,
+    and a fallback that quietly re-admits them makes the exclusion look like it
+    works while the crawler goes right back to the same pins. When a category
+    cannot be filled, we under-select and say so — in the log and in
+    ``selectionExhaustion`` — rather than fill the quota with known-spent pins.
+
+    ``avoid_sources`` is optional provenance for the report (e.g. how many ids
+    came from the spike log vs the database); it never affects selection.
+    """
     cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=since_hours)).isoformat()
     avoid = set(avoid_pin_ids or set())
     selected: list[dict] = []
     selected_ids: set[str] = set()
     breakdown: dict[str, dict[str, int]] = {}
+    exhaustion: dict[str, dict[str, int]] = {}
 
     for category, wanted in category_mix.items():
         if wanted <= 0:
             breakdown[category] = {"requested": wanted, "selected": 0, "bootstrap": 0, "recentFallback": 0, "overlap": 0}
+            exhaustion[category] = {
+                "requested": wanted,
+                "candidatesBeforeExclusion": 0,
+                "candidatesAfterExclusion": 0,
+                "excludedAlreadyScraped": 0,
+                "selected": 0,
+                "shortfall": 0,
+            }
             continue
         pool = _query_sources(category, cutoff, bootstrap_only=True, limit=max(100, wanted * 8))
         fallback = _query_sources(category, cutoff, bootstrap_only=False, limit=max(100, wanted * 8))
         pool.sort(key=_selection_score)
         fallback.sort(key=_selection_score)
+
+        # Distinct candidate pins this category could draw from. pool and
+        # fallback overlap heavily (fallback is the same query without the
+        # bootstrap filter), so count the UNION by pin_id or the "before"
+        # number double-counts and the exhaustion report lies.
+        distinct_candidates = {
+            str(row.get("pin_id") or "")
+            for row in (pool + fallback)
+            if str(row.get("pin_id") or "")
+        }
+        available_candidates = distinct_candidates - avoid
+
         cat_rows: list[dict] = []
         bootstrap_count = fallback_count = overlap_count = 0
 
-        def take(rows: list[dict], source_kind: str, allow_overlap: bool = False) -> None:
+        def take(rows: list[dict], source_kind: str) -> None:
             nonlocal bootstrap_count, fallback_count, overlap_count
             for row in rows:
                 if len(cat_rows) >= wanted:
@@ -307,7 +398,7 @@ def select_source_pins(
                 pid = str(row.get("pin_id") or "")
                 if not pid or pid in selected_ids:
                     continue
-                if pid in avoid and not allow_overlap:
+                if pid in avoid:
                     continue
                 cat_rows.append(row)
                 selected_ids.add(pid)
@@ -315,32 +406,67 @@ def select_source_pins(
                     bootstrap_count += 1
                 else:
                     fallback_count += 1
-                if pid in avoid:
-                    overlap_count += 1
 
         take(pool, "bootstrap")
         if len(cat_rows) < wanted:
             take(fallback, "recent")
-        if len(cat_rows) < wanted:
-            take(pool + fallback, "recent", allow_overlap=True)
 
         selected.extend(cat_rows)
+        shortfall = max(0, wanted - len(cat_rows))
         breakdown[category] = {
             "requested": wanted,
             "selected": len(cat_rows),
             "bootstrap": bootstrap_count,
             "recentFallback": fallback_count,
+            # Always 0 now that the exclusion is hard — kept so existing report
+            # consumers do not KeyError, and so a non-zero value would be a
+            # visible alarm that something re-admitted an avoided pin.
             "overlap": overlap_count,
-            "shortfall": max(0, wanted - len(cat_rows)),
+            "shortfall": shortfall,
         }
+        exhaustion[category] = {
+            "requested": wanted,
+            "candidatesBeforeExclusion": len(distinct_candidates),
+            "candidatesAfterExclusion": len(available_candidates),
+            "excludedAlreadyScraped": len(distinct_candidates) - len(available_candidates),
+            "selected": len(cat_rows),
+            "shortfall": shortfall,
+        }
+        if shortfall:
+            # LOUD: under-selecting is a legitimate outcome, but it must never
+            # be silent — a quiet short run looks exactly like a healthy one.
+            print(
+                f"[product-supply-expand] category {category}: requested {wanted}, "
+                f"{len(distinct_candidates)} candidates in the freshness window, "
+                f"only {len(available_candidates)} left after excluding "
+                f"already-scraped pins -> selected {len(cat_rows)} "
+                f"(shortfall {shortfall}). NOT falling back to re-scraping "
+                "already-harvested pins; widen --since-hours or crawl more "
+                "pin_samples for this category.",
+                flush=True,
+            )
 
+    exhausted_categories = sorted(c for c, v in exhaustion.items() if v["shortfall"] > 0)
     return selected, {
         "sinceHours": since_hours,
         "requestedTotal": sum(category_mix.values()),
         "selectedTotal": len(selected),
         "avoidedPriorSpikePins": len(avoid),
         "overlapWithPriorSpike": sum(v["overlap"] for v in breakdown.values()),
+        "avoidSources": dict(avoid_sources or {}),
         "byCategory": breakdown,
+        "selectionExhaustion": {
+            "byCategory": exhaustion,
+            "totalShortfall": sum(v["shortfall"] for v in exhaustion.values()),
+            "exhaustedCategories": exhausted_categories,
+            "repeatScrapeFallbackUsed": False,
+            "note": (
+                "Already-scraped source pins are excluded using pin_products "
+                "(the database), not a local log file. When a category cannot "
+                "be filled the run selects fewer pins and reports the shortfall "
+                "here; it never re-admits an already-scraped pin to hit the quota."
+            ),
+        },
     }
 
 
@@ -1688,9 +1814,35 @@ async def run_shop_the_look_expand(
             "overlapWithPriorSpike": 0,
         }
     else:
+        # Two independent memories of "we already scraped this pin", UNIONED:
+        #   spike log  — the historical local JSON. Kept: it is still valid on
+        #                the host that produced it, and dropping it would lose
+        #                whatever that host knows.
+        #   pin_products — the database. The only record that survives a host
+        #                change, and the one that was missing (260 already
+        #                scraped pins were being re-offered every run).
+        # A DB failure raises ScrapedPinHistoryUnavailable and aborts BEFORE the
+        # browser starts: selecting without the exclusion list would just
+        # re-scrape spent pins for ~25 minutes and call it a run.
         prior_ids = _load_previous_spike_ids()
+        scraped_ids = _load_scraped_source_pin_ids()
+        avoid_ids = prior_ids | scraped_ids
+        print(
+            f"[product-supply-expand] excluding {len(avoid_ids)} already-scraped "
+            f"source pins (spikeLog={len(prior_ids)}, database={len(scraped_ids)}, "
+            f"overlap={len(prior_ids & scraped_ids)})",
+            flush=True,
+        )
         sources, selection = select_source_pins(
-            category_mix=mix, since_hours=since_hours, avoid_pin_ids=prior_ids
+            category_mix=mix,
+            since_hours=since_hours,
+            avoid_pin_ids=avoid_ids,
+            avoid_sources={
+                "spikeLog": len(prior_ids),
+                "database": len(scraped_ids),
+                "overlap": len(prior_ids & scraped_ids),
+                "union": len(avoid_ids),
+            },
         )
         if len(sources) != limit:
             selection["warning"] = f"selected {len(sources)} of requested {limit} source pins"
