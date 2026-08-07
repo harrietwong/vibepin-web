@@ -116,6 +116,7 @@ export const CORE: string[] = [
   "test-media-offload",
   // Shopify
   "test-connection-limit",
+  "test-settle-generation-job",
   "test-shopify-entitlements",
   "test-shopify-connection-store",
   "test-shopify-hmac",

@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { getUserIdFromBearer, getUserIdFromCookies } from "@/lib/server/authUser";
+import { settleGenerationJob } from "@/lib/server/usage/settleGenerationJob";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +51,22 @@ export async function GET(
   const reservationId = (data as { usage_reservation_id?: string | null }).usage_reservation_id ?? null;
   let usage: { reserved: number; settledSuccess: number; settledFailed: number } | undefined;
   if (reservationId) {
+    // Close the reservation for a FINISHED job before reading the counters below, so
+    // this same response already reflects what was just banked — the user sees the
+    // count the moment their images arrive, not one poll later.
+    //
+    // The worker path had no settle at all until this call existed (the VPS worker is a
+    // separate codebase and only ever reserved), which is why metered image jobs used
+    // to dangle until they expired. See settleGenerationJob.ts.
+    //
+    // Idempotent per slot inside the RPC, so polling it repeatedly is harmless, and it
+    // never throws — a metering problem must not break a poll that owes the user images.
+    await settleGenerationJob({
+      reservationId,
+      status: data.status as string | null,
+      results: data.results,
+    });
+
     const { data: resRow } = await db
       .from("usage_reservations")
       .select("requested_quantity,consumed_quantity,released_quantity")
