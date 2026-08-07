@@ -1494,6 +1494,31 @@ export function PinDetailsModal({
             </div>
           </div>
 
+          {/* Live posts on the other platforms, shown independently of the Pinterest
+              outcome. A publish is per-destination: Pinterest can fail while a
+              Facebook Page succeeds. In that case the Pin is not "posted", so the
+              published-summary block above renders nothing — and the post the
+              merchant just created would be unreachable from this drawer. Only
+              entries carrying a real permalink appear, so there is never a dead
+              link, and this never double-renders (the summary block owns these
+              links once the Pin itself is posted). */}
+          {!isPosted && socialPostRefs.length > 0 && (
+            <div
+              data-testid="draft-social-posts-standalone"
+              style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 10, border: `1px solid ${UI.border}`, background: UI.surface2 }}
+            >
+              <span style={{ fontSize: 12, fontWeight: 700, color: UI.textSec }}>
+                {t("pinDetails.publishedSuccess")}
+              </span>
+              {socialPostRefs.map(ref => (
+                <a key={ref.provider} data-testid={`draft-view-on-${ref.provider}`}
+                  href={ref.postUrl} target="_blank" rel="noopener noreferrer" style={lightBtn}>
+                  {viewOnLabel(ref.provider as SocialProvider)} <ExternalLink size={12} />
+                </a>
+              ))}
+            </div>
+          )}
+
           {/* Inline schedule editor — revealed by Schedule / Reschedule. */}
           {scheduleEditorOpen && !isPosted && (
             <div data-testid="draft-schedule-editor" style={{ padding: 11, borderRadius: 10, border: `1px solid ${UI.border}`, background: UI.surface2 }}>
