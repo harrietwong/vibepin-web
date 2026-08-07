@@ -535,13 +535,61 @@ export async function createSandboxDemoBoard(): Promise<{ id: string; name: stri
  */
 export const PINTEREST_DISCONNECTED_EVENT = "vp:pinterest_disconnected";
 
-export async function disconnectPinterest(): Promise<void> {
+/**
+ * Disconnect Pinterest.
+ *
+ * `connectionId` narrows this to ONE account (the per-account Remove). Omitting it
+ * keeps the original meaning — disconnect every live Pinterest connection — which is
+ * what the platform-level "Disconnect" button has always done and still does.
+ *
+ * `cancelScheduled` un-schedules the Pins pinned to that account before removing it
+ * (the "Cancel schedules" answer in the Remove dialog). Only meaningful together with
+ * a connectionId; the "Keep" answer passes nothing, because a kept Pin is already
+ * blocked at publish time by the `target_disconnected` retry reason.
+ *
+ * Both ride in the query string: DELETE request bodies are unreliable across proxies
+ * and fetch implementations.
+ */
+export async function disconnectPinterest(
+  connectionId?: string | null,
+  opts?: { cancelScheduled?: boolean },
+): Promise<void> {
+  const params = new URLSearchParams();
+  const id = typeof connectionId === "string" ? connectionId.trim() : "";
+  if (id) params.set("connectionId", id);
+  if (id && opts?.cancelScheduled) params.set("cancelScheduled", "1");
+  const qs = params.toString();
+
   // keepalive: callers are optimistic (UI flips before this settles) — the request
   // must survive the user immediately navigating away from Settings.
-  const res = await fetch("/api/pinterest/disconnect", { method: "DELETE", headers: await authHeaders(), keepalive: true });
+  const res = await fetch(`/api/pinterest/disconnect${qs ? `?${qs}` : ""}`, { method: "DELETE", headers: await authHeaders(), keepalive: true });
   if (!res.ok) throw toClientError(await parseErrorResponse(res));
   invalidateBoardsCache();
   invalidateConnectionsCache();
   invalidatePinterestStatusCache();
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PINTEREST_DISCONNECTED_EVENT));
+}
+
+/**
+ * How many Pins are still scheduled to publish through this connection — asked before
+ * a per-account Remove so the user is never silently stripped of pending work.
+ *
+ * Read-only and best-effort: a failure here answers 0 rather than blocking the Remove.
+ * The consequence of a wrong 0 is a missing prompt, not a lost Pin (Phase C still
+ * blocks publishing to a disconnected target).
+ */
+export async function getScheduledCountForConnection(connectionId: string): Promise<number> {
+  const id = connectionId.trim();
+  if (!id) return 0;
+  try {
+    const res = await fetch(
+      `/api/pinterest/disconnect?connectionId=${encodeURIComponent(id)}`,
+      { headers: await authHeaders() },
+    );
+    if (!res.ok) return 0;
+    const body = await res.json() as { scheduledCount?: number };
+    return typeof body.scheduledCount === "number" && body.scheduledCount > 0 ? body.scheduledCount : 0;
+  } catch {
+    return 0;
+  }
 }

@@ -20,7 +20,7 @@ import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2 } from "lucid
 import { toast } from "sonner";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
 import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
-import type { PlatformConnectionSummary } from "@/lib/social/types";
+import type { PlatformConnectionSummary, SocialConnection } from "@/lib/social/types";
 import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
 /** All-not-connected fallback so a failed fetch still shows the platform grid. */
@@ -40,7 +40,12 @@ import {
   fetchSocialConnections,
   startSocialConnect,
 } from "@/lib/social/socialClient";
-import { startPinterestConnect, disconnectPinterest, syncPinterestAccount } from "@/lib/pinterestClient";
+import {
+  startPinterestConnect,
+  disconnectPinterest,
+  syncPinterestAccount,
+  getScheduledCountForConnection,
+} from "@/lib/pinterestClient";
 import {
   accountUiState,
   ACCOUNT_UI_STATE_LABEL_KEY,
@@ -299,6 +304,8 @@ function PlatformCard({
   onConnect,
   onReconnect,
   onDisconnect,
+  onRemoveAccount,
+  busyAccountId,
   onRefresh,
 }: {
   summary: PlatformConnectionSummary;
@@ -315,6 +322,10 @@ function PlatformCard({
    */
   onReconnect: (connectionId: string | null) => void;
   onDisconnect: () => void;
+  /** Remove ONE account (only reachable when the platform holds more than one). */
+  onRemoveAccount: (account: SocialConnection) => void;
+  /** The account row currently mid-Remove, if any. */
+  busyAccountId: string | null;
   /** Re-fetch the connection list (used after a Facebook Page selection). */
   onRefresh: () => void;
 }) {
@@ -408,6 +419,10 @@ function PlatformCard({
           ))}
         </ul>
       )}
+
+      {/* Per-account rows + their own Remove. Renders only above one account, where
+          the platform-level Disconnect stops being able to express "remove this one". */}
+      <AccountRows summary={summary} busyAccountId={busyAccountId} onRemoveAccount={onRemoveAccount} />
 
       <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
         {healthy ? (
@@ -995,6 +1010,178 @@ function AccountLimitNotice({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
+/**
+ * Per-account rows with their own Remove — Phase D ③.
+ *
+ * Only rendered when a platform actually holds more than one account. With a single
+ * account the card's platform-level Disconnect already IS "remove this account", and
+ * duplicating it would give the same act two buttons with two code paths.
+ *
+ * This exists because until now a multi-account platform had no way to remove one
+ * account: the only control was the platform-level Disconnect, which tore down every
+ * connection at once.
+ */
+function AccountRows({
+  summary,
+  busyAccountId,
+  onRemoveAccount,
+}: {
+  summary: PlatformConnectionSummary;
+  busyAccountId: string | null;
+  onRemoveAccount: (account: SocialConnection) => void;
+}) {
+  const { t: tr } = useLocale();
+  if (summary.accounts.length < 2) return null;
+
+  return (
+    <div
+      data-testid={`social-account-rows-${summary.provider}`}
+      style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}
+    >
+      {summary.accounts.map(account => {
+        const busy = busyAccountId === account.id;
+        const label =
+          account.providerAccountUsername
+          || account.providerAccountName
+          || tr("socialPanel.card.accountConnected");
+        return (
+          <div
+            key={account.id}
+            data-testid={`social-account-row-${account.id}`}
+            style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "8px 10px", borderRadius: 10,
+              border: `1px solid ${UI.border}`, background: UI.surface2,
+            }}
+          >
+            <span
+              style={{
+                flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: UI.text,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </span>
+            <button
+              type="button"
+              data-testid={`social-remove-account-${account.id}`}
+              onClick={() => onRemoveAccount(account)}
+              disabled={busy}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "6px 11px", borderRadius: 9,
+                border: `1px solid ${UI.border}`, background: "transparent", color: UI.textSec,
+                fontSize: 11.5, fontWeight: 700,
+                cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+              }}
+            >
+              {busy ? <Loader2 size={12} className="animate-spin" /> : null}
+              {tr("socialPanel.account.remove")}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The Remove confirmation shown ONLY when the account still has scheduled Pins
+ * pinned to it (count > 0). With nothing scheduled there is no decision to make, so
+ * the Remove happens straight away — a dialog that only ever has one sensible answer
+ * is noise.
+ *
+ * Two answers, deliberately not three:
+ *  · Keep — the Pins stay scheduled. Nothing extra is built for this: a Pin whose
+ *    target is gone is already stopped at publish time with `target_disconnected`
+ *    (Phase C), so "Keep" is genuinely the do-nothing branch.
+ *  · Cancel schedules — un-schedules them server-side before the removal.
+ * Re-assigning them to another account is a separate feature, not a checkbox here.
+ */
+function RemoveAccountDialog({
+  accountLabel,
+  scheduledCount,
+  busy,
+  onKeep,
+  onCancelSchedules,
+  onDismiss,
+}: {
+  accountLabel: string;
+  scheduledCount: number;
+  busy: boolean;
+  onKeep: () => void;
+  onCancelSchedules: () => void;
+  onDismiss: () => void;
+}) {
+  const { t: tr } = useLocale();
+  return (
+    <div
+      data-testid="pinterest-remove-account-dialog"
+      role="alertdialog"
+      aria-label={tr("socialPanel.removeDialog.title")}
+      style={{
+        padding: "12px 14px",
+        borderRadius: 12,
+        background: "rgba(245,158,11,0.10)",
+        border: "1px solid rgba(245,158,11,0.30)",
+      }}
+    >
+      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.warning }}>
+        {tr("socialPanel.removeDialog.title")}
+      </p>
+      <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
+        {`${accountLabel}${tr("socialPanel.removeDialog.bodyPrefix")}${scheduledCount}${tr("socialPanel.removeDialog.bodySuffix")}`}
+      </p>
+      <div style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <button
+          type="button"
+          data-testid="pinterest-remove-keep"
+          onClick={onKeep}
+          disabled={busy}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "8px 14px", borderRadius: 10,
+            border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.14)",
+            color: UI.warning, fontSize: 12, fontWeight: 700,
+            cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+          }}
+        >
+          {tr("socialPanel.removeDialog.keep")}
+        </button>
+        <button
+          type="button"
+          data-testid="pinterest-remove-cancel-schedules"
+          onClick={onCancelSchedules}
+          disabled={busy}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "8px 14px", borderRadius: 10,
+            border: `1px solid ${UI.border}`, background: "transparent",
+            color: UI.textSec, fontSize: 12, fontWeight: 700,
+            cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+          }}
+        >
+          {tr("socialPanel.removeDialog.cancelSchedules")}
+        </button>
+        <button
+          type="button"
+          data-testid="pinterest-remove-dismiss"
+          onClick={onDismiss}
+          disabled={busy}
+          style={{
+            padding: "8px 12px", borderRadius: 10,
+            border: "1px solid transparent", background: "transparent",
+            color: UI.textMuted, fontSize: 12, fontWeight: 600,
+            cursor: busy ? "not-allowed" : "pointer",
+          }}
+        >
+          {tr("socialPanel.removeDialog.dismiss")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function SocialAccountsPanel() {
   const { t: tr } = useLocale();
   const params = useSearchParams();
@@ -1016,6 +1203,16 @@ export function SocialAccountsPanel() {
    * choice, so it persists as a banner instead of a toast.
    */
   const [accountLimitReached, setAccountLimitReached] = useState(false);
+  /**
+   * A per-account Remove waiting on the user because that account still has Pins
+   * scheduled through it. Holds the account plus the count so the prompt can be
+   * specific ("3 Pins"), rather than a vague warning nobody can act on.
+   */
+  const [pendingRemoval, setPendingRemoval] = useState<
+    { account: SocialConnection; label: string; scheduledCount: number } | null
+  >(null);
+  /** The account row currently mid-Remove — disables just that row, not the card. */
+  const [busyAccountId, setBusyAccountId] = useState<string | null>(null);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
   const multiAccountEnabled = isMultiSocialAccountsEnabled();
 
@@ -1193,6 +1390,72 @@ export function SocialAccountsPanel() {
     }
   }
 
+  /**
+   * Remove ONE account (Phase D ③).
+   *
+   * Asks the server what is still scheduled through that account first. Nothing
+   * scheduled ⇒ remove immediately; otherwise hand the decision to the user rather
+   * than quietly stranding work they planned.
+   */
+  async function handleRemoveAccount(provider: SocialProvider, account: SocialConnection) {
+    setBusyAccountId(account.id);
+    try {
+      const label =
+        account.providerAccountUsername
+        || account.providerAccountName
+        || tr("socialPanel.card.accountConnected");
+      const scheduledCount = await getScheduledCountForConnection(account.id);
+      if (scheduledCount > 0) {
+        // The dialog owns the next step. Release the row so the card isn't frozen
+        // behind a prompt the user may legitimately dismiss.
+        setPendingRemoval({ account, label, scheduledCount });
+        setBusyAccountId(null);
+        return;
+      }
+      await removeAccount(provider, account, false);
+      setBusyAccountId(null);
+    } catch (e) {
+      toast.error((e as Error).message || tr("socialPanel.toast.couldNotDisconnect"));
+      setBusyAccountId(null);
+    }
+  }
+
+  /**
+   * The actual removal. Optimistically drops just THIS account from the card —
+   * decrementing the count and re-deriving the displayed name — instead of blanking
+   * the platform, which is what the all-accounts Disconnect path does and what would
+   * be wrong here: the user's other accounts are still connected.
+   */
+  async function removeAccount(
+    provider: SocialProvider,
+    account: SocialConnection,
+    cancelScheduled: boolean,
+  ) {
+    setSummaries(prev => prev?.map(s => {
+      if (s.provider !== provider) return s;
+      const accounts = s.accounts.filter(a => a.id !== account.id);
+      const primary = accounts.find(a => a.connectionStatus === "connected") ?? accounts[0] ?? null;
+      return {
+        ...s,
+        accounts,
+        accountCount: Math.max(0, s.accountCount - 1),
+        accountName: primary?.providerAccountUsername ?? primary?.providerAccountName ?? null,
+        connected: accounts.some(a => a.connectionStatus === "connected"),
+        status: accounts.length ? s.status : ("not_connected" as const),
+      };
+    }) ?? prev);
+
+    try {
+      await disconnectPinterest(account.id, { cancelScheduled });
+      toast.success(tr("socialPanel.toast.accountRemoved"));
+    } catch {
+      toast.error(tr("socialPanel.toast.accountRemoveFailed"));
+    } finally {
+      notifyConnectionsChanged();
+      await load(); // the server is the truth either way — restores the row on failure
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
@@ -1204,6 +1467,29 @@ export function SocialAccountsPanel() {
 
       {accountLimitReached && (
         <AccountLimitNotice onDismiss={() => setAccountLimitReached(false)} />
+      )}
+
+      {pendingRemoval && (
+        <RemoveAccountDialog
+          accountLabel={pendingRemoval.label}
+          scheduledCount={pendingRemoval.scheduledCount}
+          busy={busyAccountId === pendingRemoval.account.id}
+          onKeep={() => {
+            const { account } = pendingRemoval;
+            setPendingRemoval(null);
+            setBusyAccountId(account.id);
+            // Keep = do nothing extra. Those Pins stay scheduled and are stopped at
+            // publish time by the existing target_disconnected block.
+            void removeAccount(account.provider, account, false).finally(() => setBusyAccountId(null));
+          }}
+          onCancelSchedules={() => {
+            const { account } = pendingRemoval;
+            setPendingRemoval(null);
+            setBusyAccountId(account.id);
+            void removeAccount(account.provider, account, true).finally(() => setBusyAccountId(null));
+          }}
+          onDismiss={() => setPendingRemoval(null)}
+        />
       )}
 
       {accountMismatch && (
@@ -1296,6 +1582,8 @@ export function SocialAccountsPanel() {
               onConnect={() => void handleConnect(provider)}
               onReconnect={id => void handleConnect(provider, id)}
               onDisconnect={() => void handleDisconnect(summary)}
+              onRemoveAccount={account => void handleRemoveAccount(provider, account)}
+              busyAccountId={busyAccountId}
               onRefresh={() => void load()}
             />
           );

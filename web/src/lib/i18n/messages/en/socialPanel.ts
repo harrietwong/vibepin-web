@@ -66,7 +66,20 @@ export const socialPanelMessages = {
   "socialPanel.limit.upgrade": "Upgrade",
   "socialPanel.limit.dismiss": "Not now",
 
+  // ── Per-account rows + Remove (PRD §14 / Phase D ③) ──
+  "socialPanel.account.remove": "Remove",
+  //    Composed as: "<account><bodyPrefix><count><bodySuffix>".
+  "socialPanel.removeDialog.title": "This account still has scheduled Pins",
+  "socialPanel.removeDialog.bodyPrefix": " has ",
+  "socialPanel.removeDialog.bodySuffix":
+    " Pin(s) scheduled to publish through it. Keep them scheduled (they'll stop until you connect the account again), or cancel those schedules now.",
+  "socialPanel.removeDialog.keep": "Keep them scheduled",
+  "socialPanel.removeDialog.cancelSchedules": "Cancel those schedules",
+  "socialPanel.removeDialog.dismiss": "Don't remove",
+
   // ── Toasts ──
+  "socialPanel.toast.accountRemoved": "Account removed",
+  "socialPanel.toast.accountRemoveFailed": "Could not remove that account. Please try again.",
   "socialPanel.toast.pinterestDisconnected": "Pinterest disconnected",
   "socialPanel.toast.pinterestDisconnectFailed": "Could not disconnect Pinterest. Please try again.",
   "socialPanel.toast.connectionComingSoonSuffix": " connection is coming soon.",
