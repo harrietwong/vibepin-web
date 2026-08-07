@@ -1,5 +1,11 @@
 # Phase D 任务书 —— 额度执行 / 逐账号移除 / Plan 多账号 / 批量选板
 
+> **已完成(2026-08-07)**。四项落地提交:
+> ① `f4ccaae` 额度执行 · ③ `8a0e39b` 逐账号移除 · ② `afad6a8` Plan 账号筛选+徽标 ·
+> ④ `8847c03` 批量选板按目标 · 另 `b1ea143` 非 Pinterest 平台的移除守卫(硬化)。
+> 门禁:tsc 0、i18n 2663×18、生产 build exit 0、registry 139/138/1。
+> 详见文末「交付记录」。以下为原始任务书,保留作对照。
+
 **分支**:`merge/failure-handling-0731`(worktree `C:/Users/44740/AppData/Local/Temp/wt-merge-0731`)
 **基线**:`998cffa`(Phase C)
 **零迁移**:Phase D **不新增任何 SQL 文件**。额度靠数行(`social_connections`)判定,不落 DB 约束。
@@ -145,3 +151,49 @@ Phase C 记录在案的保留项。`BatchEditDrawer.tsx` 的板*选择器*目前
 
 不 push、不部署、不 apply 任何迁移、不新建迁移文件;不碰 `web/.env*`;
 token/secret 永不进日志;不动工作区里其他会话的未跟踪草稿。
+
+---
+
+# 交付记录(2026-08-07)
+
+## 实现与计划的差异
+
+计划外增加的一项(**本轮排查中发现的真 bug**):
+`/api/pinterest/disconnect` 路由一直调 `disconnect(uid)` 不传 connectionId,
+而 store 层不带 id 时匹配该用户**全部活跃行**。单账号时不可见,
+多账号下点任一账号的 Remove **会断掉全部账号**。③ 的第一步就是修它,
+前置排程检查建立在这之上——Remove 还是"一键全断"时,前置检查没有意义。
+
+各项的关键决策(实现时定的,不在原任务书里):
+
+- ①:额度读取失败 **fail-open**——手里已经拿到 token 的授权,不能因为
+  计费读取抖动而丢弃。并发两个 OAuth 流可能超额 1 个,MVP 接受(禁止加 DB 约束)。
+- ③:Cancel 必须 **bump `payload.updatedAt`**。`mergeServerDrafts` 是按该字段
+  last-write-wins,不 bump 的话浏览器副本仍显得更新,下次同步推回去重新武装
+  `scheduled_at`——用户刚取消的 Pin 照样会发出去。这一条是查 `pinDraftStore.ts:866`
+  确认的,不是推断。
+- ③:排程真相在 **`pin_drafts.scheduled_at` 服务端表**,不在浏览器 store
+  (cron 只扫表)。在本地数就会少数,在本地取消就会留下 cron 仍在发的行。
+- ②:`effectiveTargetFilter` 中和"看不见却仍生效"的筛选——两个账号时设的筛选,
+  删到只剩一个后 select 不再渲染(不变量 4),筛选就会既看不见又没法清除。
+- ④:**未钉定 + 已钉定 = 混合**。未钉定的草稿发布时采用的是**默认**连接,
+  未必是那个已钉定的账号;当成同一个就会给出错的板。
+
+## 记录在案的保留项
+
+- **非 Pinterest 平台的逐账号移除未实现**(`b1ea143` 让它显式失败而不是假成功)。
+  账号行对任何 2+ 账号平台都渲染,但 handler 走的是 Pinterest 专用路由;
+  FB/IG 走多账号时必须补各自分支。
+- Reassign(移除时把 Pin 改指到另一账号)属二期,本轮只做 Keep / Cancel(PRD §11)。
+- `connectedPlatforms` 额度仍未执行(本轮只做 `accountsPerPlatform`)。
+
+## QA 注意
+
+**用户本人测不出 free 档的 1 个上限**:`server/entitlements.ts` 的
+`PRO_EMAIL_WHITELIST` 把 `zhihuihuang321@gmail.com` 托底到 `pro`(= 2 个账号)。
+要验 free 档必须用白名单外的测试账号(且只在测试库 `snulmwprsahzqvdbyenc`)。
+
+## 上线前置(未变)
+
+`v57` + `v59` 迁移**仍未 apply**,Phase B 起的连接存储依赖它们;
+Phase D 本身零迁移。不 push、不部署由用户指定的部署会话统一处理。
