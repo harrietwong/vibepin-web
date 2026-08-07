@@ -142,6 +142,7 @@ export const STUDIO: string[] = [
   "test-asset-picker-ia",
   "test-create-pins-prefill",
   "test-batch-edit-planning",
+  "test-batch-board-target",
   "test-batch-edit-back-close",
   "test-batch-edit-product-mapping",
   "test-edit-pin-composer",

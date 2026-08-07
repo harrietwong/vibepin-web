@@ -224,3 +224,31 @@ export function effectiveTargetFilter(
 ): string {
   return shouldShowAccountPicker(active) ? (filter || ALL_TARGET_ACCOUNTS) : ALL_TARGET_ACCOUNTS;
 }
+
+// ── Editing many Pins at once (Batch edit, Phase D ④) ────────────────────────
+
+/**
+ * The one connection a whole selection publishes through, or "mixed".
+ *
+ * Boards belong to an account, so a board picker is only meaningful when every
+ * selected Pin shares a target. Returns:
+ *   - a connection id → they all publish there;
+ *   - "" → none of them is pinned yet (they will all adopt the same default), so the
+ *     default connection's boards are the right list;
+ *   - null → MIXED. There is no board list that is correct for the whole selection,
+ *     and picking from either account's would write a board the other account cannot
+ *     publish to.
+ *
+ * Note that unpinned drafts mixed with pinned ones count as mixed: an unpinned draft
+ * adopts the DEFAULT connection at publish time, which need not be the pinned one.
+ */
+export function sharedTargetForSelection(
+  drafts: readonly (TargetedDraftLike | null | undefined)[],
+): string | null {
+  if (drafts.length === 0) return "";
+  const first = readStoredTarget(drafts[0]);
+  for (const d of drafts) {
+    if (readStoredTarget(d) !== first) return null;
+  }
+  return first;
+}
