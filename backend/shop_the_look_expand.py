@@ -76,6 +76,38 @@ def _stl_goto_timeout_ms() -> int:
     return value if value > 0 else STL_GOTO_TIMEOUT_DEFAULT_MS
 
 
+# Incremental-write batch size, counted in SOURCE PINS (not candidates).
+#
+# WHY THIS EXISTS (2026-08-06 VPS run): the writer used to run once, after
+# `await browser.close()`, i.e. only when all 50 pins had been crawled. The
+# 2026-08-06 23:02 timer run crawled 45/50 pins, found products on 31 of them,
+# and was then tree-killed by the runner at VIBEPIN_TIMEOUT_SECONDS=2400. Every
+# one of those 31 pins' products was discarded: the write line was never
+# reached. Measured pace is ~53 s/pin, so 50 pins needs ~44 min — the run was
+# structurally guaranteed to die before writing anything.
+#
+# Flushing every N pins bounds the loss to at most the last N pins' harvest.
+STL_WRITE_BATCH_SIZE_ENV = "STL_WRITE_BATCH_SIZE"
+STL_WRITE_BATCH_SIZE_DEFAULT = 10
+
+
+def _stl_write_batch_size() -> int:
+    """Read STL_WRITE_BATCH_SIZE (in source pins); fall back to 10.
+
+    A malformed or non-positive value falls back to the default rather than
+    disabling batching — a 0 would mean "never flush", which is precisely the
+    all-or-nothing behaviour this setting exists to remove.
+    """
+    raw = (os.environ.get(STL_WRITE_BATCH_SIZE_ENV) or "").strip()
+    if not raw:
+        return STL_WRITE_BATCH_SIZE_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return STL_WRITE_BATCH_SIZE_DEFAULT
+    return value if value > 0 else STL_WRITE_BATCH_SIZE_DEFAULT
+
+
 DISCOVERY_METHOD = "stl"
 DISCOVERY_DETAIL = "pinterest_product_card_bootstrap"
 # Module wording drifts as Pinterest reships the shopping surface. "shop the pin"
@@ -1199,6 +1231,220 @@ def _insert_with_duplicate_fallback(insert_rows, payload: list[dict]) -> dict:
             "duplicates": duplicates, "failed": failed, "errors": errors}
 
 
+class _IncrementalWriter:
+    """Flush scraped candidates to pin_products every N source pins.
+
+    THE FAILURE THIS REMOVES: the apply path used to write once, after the
+    crawl loop and after `await browser.close()`. A run killed at 45/50 pins
+    (2026-08-06, runner timeout) lost 100% of the 31 pins' products it had
+    already scraped, because the write line was never reached.
+
+    Each flush repeats the SAME filter chain the end-of-run write uses, in the
+    same order, so an incremental write can never admit a row the old path
+    would have rejected:
+
+        accept_link()          → drops non-product / blocked URLs
+        _dedup_key()           → in-batch AND cross-batch dedup (see below)
+        _preflight_existing()  → lifecycle-aware DB existence check, unchanged
+        _apply_rows()          → plain INSERT with per-row duplicate fallback
+
+    CROSS-BATCH DEDUP: `self._seen_keys` is a process-lifetime set of
+    `_dedup_key(candidate)` values — the exact key `_build_report` uses, which
+    falls back to a title/merchant/image hash when a candidate has no usable
+    URL. A key is added the moment its candidate is handed to `_apply_rows`,
+    so a URL first seen in batch 1 is skipped in batch 3 without another DB
+    round-trip. Using raw `normalized_product_url_hash` instead would let
+    hash-less candidates duplicate across batches.
+
+    ACCOUNTING: every flush's outcome is ADDED to running totals. Nothing is
+    ever assigned, so no batch can overwrite an earlier batch's numbers — the
+    exact way `_LAST_WRITE_OUTCOME` (cleared+rewritten per call) would lie if
+    it were read once at the end.
+
+    ONE BAD FLUSH DOES NOT END THE RUN: `_apply_rows` re-raises non-duplicate
+    errors, and raises when nothing at all landed. A raised flush is caught,
+    counted as `failed += attempted` for that batch, recorded in `errors` and
+    `failedBatches`, logged loudly, and the crawl continues to the next pin.
+    The failure is therefore always visible in the report — never swallowed.
+    """
+
+    # Cap stored error strings so a systematically failing DB cannot grow the
+    # report unboundedly. The COUNTS stay exact; only the samples are capped.
+    MAX_ERROR_SAMPLES = 10
+
+    def __init__(self, *, batch_size: int, enabled: bool = True) -> None:
+        self.batch_size = max(1, int(batch_size))
+        self.enabled = enabled
+        self._pending: list[dict] = []
+        self._pins_since_flush = 0
+        self._seen_keys: set[str] = set()
+        self.batches_written = 0
+        self.batches_failed = 0
+        self.pins_flushed = 0
+        self.totals: dict[str, Any] = {
+            "attempted": 0,
+            "inserted": 0,
+            "duplicates": 0,
+            "failed": 0,
+            "errors": [],
+        }
+        self.failed_batches: list[dict] = []
+        self.rejected_count = 0
+        self.dedup_skipped_count = 0
+        self.preflight_skipped_count = 0
+
+    # ── intake ────────────────────────────────────────────────────────────
+    def add_pin(self, per_pin_result: dict) -> None:
+        """Queue one crawled pin's candidates; flush when the batch is full."""
+        if not self.enabled:
+            return
+        self._pending.extend(per_pin_result.get("candidates") or [])
+        self._pins_since_flush += 1
+        if self._pins_since_flush >= self.batch_size:
+            self.flush(reason="batch_full")
+
+    def flush(self, *, reason: str) -> None:
+        """Write whatever is queued. Safe to call with an empty queue."""
+        if not self.enabled:
+            return
+        pins_in_batch = self._pins_since_flush
+        pending = self._pending
+        self._pending = []
+        self._pins_since_flush = 0
+        if pins_in_batch == 0 and not pending:
+            return
+        self.pins_flushed += pins_in_batch
+
+        rows = self._filter_batch(pending)
+        if not rows:
+            print(
+                f"[product-supply-expand] write batch {self.batches_written + self.batches_failed + 1} "
+                f"({reason}): pins={pins_in_batch} candidates={len(pending)} "
+                f"newRows=0 written=0 cumulativeWritten={self.totals['inserted']}",
+                flush=True,
+            )
+            return
+
+        batch_no = self.batches_written + self.batches_failed + 1
+        try:
+            _apply_rows(rows)
+        except Exception as exc:  # noqa: BLE001 — counted + reported, never swallowed
+            self.batches_failed += 1
+            attempted = len(rows)
+            self.totals["attempted"] += attempted
+            self.totals["failed"] += attempted
+            detail = f"batch {batch_no}: {type(exc).__name__}: {str(exc)[:300]}"
+            self._record_error(detail)
+            self.failed_batches.append({
+                "batch": batch_no,
+                "reason": reason,
+                "attemptedRows": attempted,
+                "error": detail,
+            })
+            print(
+                f"[product-supply-expand] WRITE BATCH {batch_no} FAILED ({reason}): "
+                f"{attempted} rows did not land — {detail}. Crawl continues; this "
+                f"failure IS counted in the report (cumulativeWritten="
+                f"{self.totals['inserted']}).",
+                flush=True,
+            )
+            return
+
+        # _apply_rows just repopulated _LAST_WRITE_OUTCOME. Snapshot it NOW —
+        # the next flush clears it. Accumulate, never assign.
+        outcome = dict(_LAST_WRITE_OUTCOME)
+        self.batches_written += 1
+        self.totals["attempted"] += int(outcome.get("attempted") or 0)
+        self.totals["inserted"] += int(outcome.get("inserted") or 0)
+        self.totals["duplicates"] += int(outcome.get("duplicates") or 0)
+        self.totals["failed"] += int(outcome.get("failed") or 0)
+        for err in (outcome.get("errors") or []):
+            self._record_error(f"batch {batch_no}: {err}")
+
+        print(
+            f"[product-supply-expand] write batch {batch_no} ({reason}): "
+            f"pins={pins_in_batch} candidates={len(pending)} newRows={len(rows)} "
+            f"written={int(outcome.get('inserted') or 0)} "
+            f"duplicates={int(outcome.get('duplicates') or 0)} "
+            f"failed={int(outcome.get('failed') or 0)} "
+            f"cumulativeWritten={self.totals['inserted']}",
+            flush=True,
+        )
+
+    # ── internals ─────────────────────────────────────────────────────────
+    def _record_error(self, message: str) -> None:
+        if len(self.totals["errors"]) < self.MAX_ERROR_SAMPLES:
+            self.totals["errors"].append(message)
+
+    def _filter_batch(self, pending: list[dict]) -> list[dict]:
+        """accept_link → in-batch/cross-batch dedup → DB preflight.
+
+        Mirrors _build_report + _preflight_existing so the incremental path and
+        the historical single write agree on what is writable.
+        """
+        accepted: list[dict] = []
+        for candidate in pending:
+            url = candidate.get("product_url") or ""
+            if not url:
+                self.rejected_count += 1
+                continue
+            ok, _reason = accept_link(url)
+            if not ok:
+                self.rejected_count += 1
+                continue
+            accepted.append(candidate)
+
+        fresh: list[dict] = []
+        for candidate in accepted:
+            key = _dedup_key(candidate)
+            if key in self._seen_keys:
+                # Already written (or already attempted) earlier in this run.
+                self.dedup_skipped_count += 1
+                continue
+            self._seen_keys.add(key)
+            fresh.append(candidate)
+
+        if not fresh:
+            return []
+
+        preflight = _preflight_existing(fresh)
+        rows = preflight.get("insertCandidates", fresh)
+        self.preflight_skipped_count += len(fresh) - len(rows)
+        return rows
+
+    # ── reporting ─────────────────────────────────────────────────────────
+    def write_outcome(self) -> dict:
+        """The accumulated equivalent of a single _apply_rows outcome."""
+        return {
+            "attempted": self.totals["attempted"],
+            "inserted": self.totals["inserted"],
+            "duplicates": self.totals["duplicates"],
+            "failed": self.totals["failed"],
+            "errors": list(self.totals["errors"]),
+        }
+
+    def batching_report(self) -> dict:
+        """Per-run batching accounting for report['incrementalWrite']."""
+        return {
+            "enabled": self.enabled,
+            "batchSizePins": self.batch_size,
+            "batchesAttempted": self.batches_written + self.batches_failed,
+            "batchesWritten": self.batches_written,
+            "batchesFailed": self.batches_failed,
+            "pinsFlushed": self.pins_flushed,
+            "rowsInserted": self.totals["inserted"],
+            "rowsRejectedByAcceptLink": self.rejected_count,
+            "rowsSkippedCrossBatchDuplicate": self.dedup_skipped_count,
+            "rowsSkippedAlreadyInDb": self.preflight_skipped_count,
+            "failedBatches": list(self.failed_batches),
+            "note": (
+                "Rows are written every batchSizePins source pins, so a run "
+                "killed mid-crawl keeps everything already flushed. Counts are "
+                "cumulative across batches."
+            ),
+        }
+
+
 # Residential-proxy support for the Shop-the-Look Playwright navigation. Reuses the
 # SAME env var already validated for pin-crawl (PINTEREST_CRAWL_PROXY_URL). When it is
 # absent/blank, STL navigation falls back to the current direct-from-datacenter-IP
@@ -1458,6 +1704,19 @@ async def run_shop_the_look_expand(
         v28_status = _build_v28_status()
         _enforce_v28_status(v28_status)
 
+    # Incremental writer: flushes every N source pins in apply mode, disabled in
+    # dry-run (which must remain a strict read-only path). Constructed here so
+    # the batch size is fixed for the whole run and appears in the report even
+    # when the crawl produces nothing.
+    writer = _IncrementalWriter(batch_size=_stl_write_batch_size(), enabled=apply)
+    if apply:
+        print(
+            f"[product-supply-expand] incremental write ON — flushing every "
+            f"{writer.batch_size} source pins (env {STL_WRITE_BATCH_SIZE_ENV}). "
+            "A timeout kill now costs at most one unflushed batch.",
+            flush=True,
+        )
+
     # Route STL navigation through the residential proxy when configured (same env
     # var as pin-crawl). Presence + used flag only — never the URL or credentials.
     proxy_opt = _stl_proxy_option()
@@ -1569,6 +1828,14 @@ async def run_shop_the_look_expand(
                 f"issue={result.get('issue')}",
                 flush=True,
             )
+            # Write INSIDE the loop (apply mode only). A tree-kill at pin 45/50
+            # must not discard the 44 pins already harvested — which is exactly
+            # what happened on 2026-08-06 when the only write lived below
+            # browser.close(). Never raises: a failed batch is counted and the
+            # crawl continues.
+            writer.add_pin(result)
+        # Tail batch: whatever is left below batch_size still has to land.
+        writer.flush(reason="final")
         await browser.close()
 
     elapsed = time.monotonic() - started
@@ -1585,7 +1852,9 @@ async def run_shop_the_look_expand(
     if v28_status is None:
         v28_status = _build_v28_status()
 
-    report, unique = _build_report(
+    # `unique` is reporting-only now: the apply path no longer writes from it
+    # (the incremental writer already did, batch by batch, during the crawl).
+    report, _unique = _build_report(
         per_pin, selection,
         elapsed=elapsed,
         apply=apply,
@@ -1598,16 +1867,30 @@ async def run_shop_the_look_expand(
     )
     report["v28SchemaCheck"] = v28_status
 
+    report.pop("_insertCandidates", None)
     if apply:
-        # Use pre-filtered insert-only candidates from preflight, not the full unique list.
-        insert_candidates = report.pop("_insertCandidates", unique)
-        report["writes"]["pin_products"] = _apply_rows(insert_candidates)
-        # Honest write accounting: every row we attempted is accounted for as
-        # inserted / duplicate / failed. A silent shortfall is not possible.
-        report["writeOutcome"] = dict(_LAST_WRITE_OUTCOME)
-    else:
-        # Remove the internal field from dry-run reports (not useful in JSON output).
-        report.pop("_insertCandidates", None)
+        # All writing already happened inside the crawl loop (see writer.add_pin
+        # / writer.flush). Nothing is written here — a second write at this point
+        # would re-attempt the whole run and make the report lie about volume.
+        #
+        # Honest write accounting: totals are SUMMED across every batch, so a
+        # later batch can never overwrite an earlier one's numbers. Every row we
+        # attempted is inserted / duplicate / failed; a silent shortfall is not
+        # possible, and a batch that raised is counted in failed + failedBatches.
+        report["writes"]["pin_products"] = writer.totals["inserted"]
+        report["writeOutcome"] = writer.write_outcome()
+        report["incrementalWrite"] = writer.batching_report()
+        # The preflight block above was computed AFTER those writes landed, so
+        # it sees this run's own rows as pre-existing. Say so, loudly, rather
+        # than let "projectedInsertCount: 0" sit next to "writes: 31" as an
+        # apparent contradiction.
+        if isinstance(report.get("preflight"), dict):
+            report["preflight"]["note"] = (
+                "apply mode: computed AFTER the incremental writes completed, so "
+                "rows this run just inserted are counted as already-existing. "
+                "Use writeOutcome/incrementalWrite for what this run actually "
+                "wrote; these projections are not a pre-write plan in apply mode."
+            )
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")

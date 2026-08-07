@@ -1532,5 +1532,331 @@ class TestV28PreflightRunsBeforeCrawl(unittest.TestCase):
         self.assertEqual(report["writes"]["pin_products"], 0)  # dry-run never writes rows
 
 
+class TestIncrementalBatchWrite(unittest.TestCase):
+    """Products must be written DURING the crawl, not after it.
+
+    THE INCIDENT (2026-08-06 23:02, VPS timer): the run crawled 45/50 pins and
+    found products on 31 of them, then the runner tree-killed it at
+    VIBEPIN_TIMEOUT_SECONDS=2400. The only write call sat below
+    `await browser.close()`, so all 31 pins' products were discarded — the DB
+    received exactly zero rows from a 40-minute authenticated run.
+
+    These tests pin the properties that make that impossible to repeat:
+      * writes happen every STL_WRITE_BATCH_SIZE source pins,
+      * a URL written in an early batch is not rewritten in a later one,
+      * per-batch counts ACCUMULATE (a later batch cannot overwrite an
+        earlier batch's numbers in the report),
+      * one failed batch neither stops the crawl nor disappears from the report.
+    """
+
+    # ── harness ───────────────────────────────────────────────────────────
+    def _candidate(self, url: str, *, pin_id: str = "p1") -> dict:
+        """A candidate shaped like _prepare_candidate's output."""
+        return _prepare_candidate(
+            {"product_url": url, "product_title": "Thing", "merchant": "Etsy",
+             "image_url": "https://img/x.jpg", "price": None, "currency": None,
+             "extraction_method": "network_json"},
+            {"pin_id": pin_id, "category": "home-decor", "save_count": 100},
+            index=0, shop_detected=True, shop_tab_clicked=False,
+        )
+
+    def _pin_result(self, pin_id: str, urls: list[str]) -> dict:
+        return {
+            "source": {"pin_id": pin_id, "category": "home-decor", "save_count": 100},
+            "issue": None,
+            "shopModuleDetected": True,
+            "shopTabClicked": False,
+            "chipLabels": [],
+            "visibleCardCount": len(urls),
+            "tabCount": 1,
+            "productJsonResponses": len(urls),
+            "networkCandidates": len(urls),
+            "domEvalError": None,
+            "pageSkeleton": False,
+            "renderFailure": False,
+            "candidates": [self._candidate(u, pin_id=pin_id) for u in urls],
+            "elapsedSec": 0.1,
+        }
+
+    def _run(self, stack, *, pin_results, batch_size, apply_rows_side_effect=None):
+        """Drive the real run_shop_the_look_expand over canned pins.
+
+        Everything except the batching logic is stubbed: the browser (fake
+        playwright), the source selection, the schema probe, and the DB
+        preflight (pass-through, so dedup decisions come from the writer's own
+        cross-batch set rather than from a mocked database).
+        """
+        import asyncio
+
+        sources = [{"pin_id": r["source"]["pin_id"], "category": "home-decor",
+                    "save_count": 100} for r in pin_results]
+
+        preflight_helper = TestV28PreflightRunsBeforeCrawl()
+        preflight_helper._patch_common(stack, sources=sources)
+        preflight_helper._install_fake_playwright(stack)
+        stack.enter_context(patch.object(stl, "_check_v28_schema", return_value=(True, [])))
+        stack.enter_context(patch.dict(
+            os.environ, {"STL_WRITE_BATCH_SIZE": str(batch_size)}, clear=False
+        ))
+
+        queue = list(pin_results)
+
+        async def fake_extract(page, source, state):
+            return queue.pop(0)
+
+        stack.enter_context(patch.object(stl, "_extract_source_pin", fake_extract))
+        # Pass-through preflight: no row is "already in the DB".
+        stack.enter_context(patch.object(
+            stl, "_preflight_existing",
+            side_effect=lambda unique: {
+                "projectedInsertCount": len(unique),
+                "projectedSkipExistingCount": 0,
+                "projectedUpdateCount": 0,
+                "legacyTouchedProjected": 0,
+                "conflictKeysChecked": ["normalized_product_url_hash"],
+                "skippedDuplicateExamples": [],
+                "insertCandidates": list(unique),
+                "checked": True,
+                "existingHashMatches": 0,
+            },
+        ))
+
+        apply_mock = stack.enter_context(patch.object(
+            stl, "_apply_rows",
+            side_effect=apply_rows_side_effect or (lambda rows: self._land(rows)),
+        ))
+        report = asyncio.run(stl.run_shop_the_look_expand(
+            limit=len(sources),
+            category_mix={"home-decor": len(sources)},
+            apply=True,
+        ))
+        return report, apply_mock
+
+    @staticmethod
+    def _land(rows):
+        """Stand-in for a fully successful _apply_rows, including the
+        _LAST_WRITE_OUTCOME side effect the real one performs."""
+        stl._LAST_WRITE_OUTCOME.clear()
+        stl._LAST_WRITE_OUTCOME.update({
+            "attempted": len(rows), "inserted": len(rows),
+            "duplicates": 0, "failed": 0, "errors": [],
+        })
+        return len(rows)
+
+    # ── T1: batching ──────────────────────────────────────────────────────
+    def test_twenty_pins_with_batch_ten_writes_twice(self):
+        """20 source pins x 1 candidate, batch=10 -> the writer is called twice,
+        with 10 rows each. Before this change it was called once, after the
+        whole crawl — the shape that lost 31 pins to a timeout kill."""
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"pin{i}", [f"https://www.etsy.com/listing/{i}/thing"])
+                for i in range(20)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=10)
+
+        self.assertEqual(apply_mock.call_count, 2)
+        self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [10, 10])
+        self.assertEqual(report["writes"]["pin_products"], 20)
+        self.assertEqual(report["incrementalWrite"]["batchesWritten"], 2)
+        self.assertEqual(report["incrementalWrite"]["batchSizePins"], 10)
+
+    def test_tail_batch_below_batch_size_is_still_written(self):
+        """25 pins at batch=10 -> 10 + 10 + a 5-row tail. A partial tail that
+        never lands is the same data loss in miniature."""
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"pin{i}", [f"https://www.etsy.com/listing/{i}/thing"])
+                for i in range(25)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=10)
+
+        self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [10, 10, 5])
+        self.assertEqual(report["writes"]["pin_products"], 25)
+
+    # ── T2: cross-batch dedup ─────────────────────────────────────────────
+    def test_url_written_in_batch_one_is_not_rewritten_in_batch_two(self):
+        """Batch 2 repeats a URL from batch 1 -> it is written exactly once.
+
+        The old single write deduped the whole run in one pass; batching must
+        not reintroduce duplicates just because the repeat crosses a flush.
+        """
+        from contextlib import ExitStack
+
+        repeat = "https://www.etsy.com/listing/999/repeat"
+        batch1 = [self._pin_result("a0", [repeat])] + [
+            self._pin_result(f"a{i}", [f"https://www.etsy.com/listing/{1000 + i}/x"])
+            for i in range(1, 5)
+        ]
+        batch2 = [self._pin_result("b0", [repeat])] + [
+            self._pin_result(f"b{i}", [f"https://www.etsy.com/listing/{2000 + i}/x"])
+            for i in range(1, 5)
+        ]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(
+                stack, pin_results=batch1 + batch2, batch_size=5
+            )
+
+        self.assertEqual(apply_mock.call_count, 2)
+        written_urls = [row["product_url"]
+                        for call_ in apply_mock.call_args_list
+                        for row in call_.args[0]]
+        self.assertEqual(written_urls.count(repeat), 1,
+                         f"repeat URL written {written_urls.count(repeat)} times")
+        # 10 candidates, one of them a cross-batch repeat -> 9 rows.
+        self.assertEqual(len(written_urls), 9)
+        self.assertEqual(report["writes"]["pin_products"], 9)
+        self.assertEqual(report["incrementalWrite"]["rowsSkippedCrossBatchDuplicate"], 1)
+
+    def test_duplicate_within_the_same_batch_written_once(self):
+        """In-batch dedup must survive too (two pins in one batch, same URL)."""
+        from contextlib import ExitStack
+
+        same = "https://www.etsy.com/listing/777/same"
+        pins = [self._pin_result("c1", [same]), self._pin_result("c2", [same])]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=2)
+
+        self.assertEqual(apply_mock.call_count, 1)
+        self.assertEqual(len(apply_mock.call_args_list[0].args[0]), 1)
+        self.assertEqual(report["writes"]["pin_products"], 1)
+
+    # ── T3: accumulation ──────────────────────────────────────────────────
+    def test_two_batches_of_three_report_six_not_three(self):
+        """The report must SUM batches. _LAST_WRITE_OUTCOME is cleared and
+        rewritten by every _apply_rows call, so reading it once at the end
+        would report only the LAST batch — a report that understates what
+        actually landed is a report that lies."""
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"d{i}", [f"https://www.etsy.com/listing/{3000 + i}/x"])
+                for i in range(6)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=3)
+
+        self.assertEqual(apply_mock.call_count, 2)
+        self.assertEqual(report["writes"]["pin_products"], 6)
+        self.assertEqual(report["writeOutcome"]["inserted"], 6)
+        self.assertEqual(report["writeOutcome"]["attempted"], 6)
+        # And the last batch's own number (3) must NOT be what the report shows.
+        self.assertNotEqual(report["writeOutcome"]["inserted"],
+                            stl._LAST_WRITE_OUTCOME.get("inserted"))
+
+    def test_duplicates_and_failures_accumulate_across_batches(self):
+        """duplicates/failed are summed too, not just inserted."""
+        from contextlib import ExitStack
+
+        def partial(rows):
+            stl._LAST_WRITE_OUTCOME.clear()
+            stl._LAST_WRITE_OUTCOME.update({
+                "attempted": len(rows), "inserted": len(rows) - 2,
+                "duplicates": 1, "failed": 1, "errors": ["boom"],
+            })
+            return len(rows) - 2
+
+        pins = [self._pin_result(f"e{i}", [f"https://www.etsy.com/listing/{4000 + i}/x"])
+                for i in range(6)]
+        with ExitStack() as stack:
+            report, _ = self._run(stack, pin_results=pins, batch_size=3,
+                                  apply_rows_side_effect=partial)
+
+        outcome = report["writeOutcome"]
+        self.assertEqual(outcome["attempted"], 6)
+        self.assertEqual(outcome["inserted"], 2)
+        self.assertEqual(outcome["duplicates"], 2)
+        self.assertEqual(outcome["failed"], 2)
+        self.assertEqual(report["writes"]["pin_products"], 2)
+
+    # ── T4: a failed batch does not end the run ───────────────────────────
+    def test_failed_first_batch_does_not_stop_later_batches(self):
+        """Batch 1 raises -> batch 2 still runs and lands, and the failure is
+        counted in the report. Two red lines meet here: a transient DB error
+        must not throw away the rest of a 40-minute crawl, AND the failure must
+        be visible rather than silently swallowed."""
+        from contextlib import ExitStack
+
+        calls = {"n": 0}
+
+        def flaky(rows):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("connection reset by peer")
+            return TestIncrementalBatchWrite._land(rows)
+
+        pins = [self._pin_result(f"f{i}", [f"https://www.etsy.com/listing/{5000 + i}/x"])
+                for i in range(6)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=3,
+                                           apply_rows_side_effect=flaky)
+
+        # The crawl continued: the second batch was attempted and succeeded.
+        self.assertEqual(apply_mock.call_count, 2)
+        self.assertEqual(report["writes"]["pin_products"], 3)
+
+        inc = report["incrementalWrite"]
+        self.assertEqual(inc["batchesAttempted"], 2)
+        self.assertEqual(inc["batchesWritten"], 1)
+        self.assertEqual(inc["batchesFailed"], 1)
+        # Explicit, not swallowed: the lost rows are counted and the error text kept.
+        self.assertEqual(report["writeOutcome"]["failed"], 3)
+        self.assertEqual(report["writeOutcome"]["attempted"], 6)
+        self.assertEqual(len(inc["failedBatches"]), 1)
+        self.assertEqual(inc["failedBatches"][0]["attemptedRows"], 3)
+        self.assertIn("connection reset by peer", inc["failedBatches"][0]["error"])
+        self.assertTrue(any("connection reset by peer" in e
+                            for e in report["writeOutcome"]["errors"]))
+
+    # ── dry-run must stay read-only ───────────────────────────────────────
+    def test_dry_run_never_writes_and_has_no_incremental_block(self):
+        """apply=False must not touch the DB at all — batching is apply-only."""
+        import asyncio
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"g{i}", [f"https://www.etsy.com/listing/{6000 + i}/x"])
+                for i in range(4)]
+        sources = [{"pin_id": r["source"]["pin_id"], "category": "home-decor",
+                    "save_count": 100} for r in pins]
+        queue = list(pins)
+
+        async def fake_extract(page, source, state):
+            return queue.pop(0)
+
+        with ExitStack() as stack:
+            helper = TestV28PreflightRunsBeforeCrawl()
+            helper._patch_common(stack, sources=sources)
+            helper._install_fake_playwright(stack)
+            stack.enter_context(patch.object(stl, "_check_v28_schema", return_value=(True, [])))
+            stack.enter_context(patch.dict(os.environ, {"STL_WRITE_BATCH_SIZE": "2"}, clear=False))
+            stack.enter_context(patch.object(stl, "_extract_source_pin", fake_extract))
+            stack.enter_context(patch.object(stl, "select_many", return_value=[]))
+            apply_mock = stack.enter_context(patch.object(stl, "_apply_rows", return_value=0))
+
+            report = asyncio.run(stl.run_shop_the_look_expand(
+                limit=4, category_mix={"home-decor": 4}, apply=False,
+            ))
+
+        apply_mock.assert_not_called()
+        self.assertEqual(report["writes"]["pin_products"], 0)
+        self.assertNotIn("incrementalWrite", report)
+        self.assertNotIn("_insertCandidates", report)
+
+
+class TestWriteBatchSizeConfig(unittest.TestCase):
+    def test_default_is_ten_pins(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(stl._stl_write_batch_size(), 10)
+
+    def test_env_override(self):
+        with patch.dict(os.environ, {"STL_WRITE_BATCH_SIZE": "5"}, clear=False):
+            self.assertEqual(stl._stl_write_batch_size(), 5)
+
+    def test_malformed_or_nonpositive_falls_back_to_default(self):
+        """0 would mean 'never flush' — the all-or-nothing behaviour this
+        setting exists to remove. It must not be reachable by misconfiguration."""
+        for bad in ("", "abc", "0", "-3"):
+            with patch.dict(os.environ, {"STL_WRITE_BATCH_SIZE": bad}, clear=False):
+                self.assertEqual(stl._stl_write_batch_size(), 10, f"value={bad!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
