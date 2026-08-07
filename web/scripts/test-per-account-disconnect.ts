@@ -268,6 +268,17 @@ test("UI:逐账号 Remove 的乐观更新只摘掉一条,不清空整个平台",
     "还有其它账号时平台必须保持已连接");
 });
 
+test("逐账号移除只对 Pinterest 放行(账号行对任何 2+ 账号平台都渲染)", () => {
+  // 计数/断开走的都是 Pinterest 专用路由。把别家的 connectionId 递进去会被 store 的
+  // provider 过滤掉 → 0 行 → 200,UI 会显示"已移除",直到下一次 load 把它变回来。
+  assert.match(panelSrc, /if \(provider !== "pinterest"\) \{/,
+    "非 Pinterest 必须显式失败,而不是静默假成功");
+  assert.doesNotMatch(
+    read("src/components/social/SocialAccountsPanel.tsx").split("function AccountRows")[1]?.slice(0, 400) ?? "",
+    /provider === "pinterest"/,
+    "账号行本身不按平台过滤 —— 所以守卫必须在 handleRemoveAccount 里",
+  );
+});
 test("Keep 分支不重复实现拦截:唯一执行点仍是 Phase C 的 retryBlockReason", () => {
   // 前提校验(不推断,直接查):Keep 之所以能是"什么都不做",全靠这条已存在的拦截。
   const publishTarget = read("src/lib/studio/publishTarget.ts");

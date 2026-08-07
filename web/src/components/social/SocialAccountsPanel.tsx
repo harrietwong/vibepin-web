@@ -1396,8 +1396,22 @@ export function SocialAccountsPanel() {
    * Asks the server what is still scheduled through that account first. Nothing
    * scheduled ⇒ remove immediately; otherwise hand the decision to the user rather
    * than quietly stranding work they planned.
+   *
+   * Pinterest-only, asserted rather than assumed. The rows this hangs off render for
+   * any platform holding 2+ accounts, and only Pinterest's storage can produce that
+   * today — but the scheduled-count and disconnect calls below are Pinterest routes.
+   * Handing them a Facebook connection id would hit the store's provider filter,
+   * match zero rows, and return a cheerful 200 that the UI would render as a
+   * successful removal until the next load() silently put the account back. When
+   * another platform goes multi-account it needs its own branch here, and this guard
+   * is what will make that a visible error instead of a phantom success.
    */
   async function handleRemoveAccount(provider: SocialProvider, account: SocialConnection) {
+    if (provider !== "pinterest") {
+      console.error(`[social] per-account removal is not wired for ${provider}`);
+      toast.error(tr("socialPanel.toast.couldNotDisconnect"));
+      return;
+    }
     setBusyAccountId(account.id);
     try {
       const label =
