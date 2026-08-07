@@ -553,6 +553,11 @@ const fr: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Pas maintenant",
   "socialPanel.mismatch.theOriginalAccount": "le compte d'origine",
   "socialPanel.mismatch.aDifferentAccount": "un autre compte",
+  "socialPanel.limit.title": "Vous avez atteint votre limite de comptes sociaux",
+  "socialPanel.limit.body":
+    "Votre offre actuelle n'inclut pas de compte Pinterest connecté supplémentaire. Passez à une offre supérieure ou supprimez un compte sur lequel vous ne publiez plus. Rien n'a été modifié — vos comptes existants restent intacts.",
+  "socialPanel.limit.upgrade": "Passer à l'offre supérieure",
+  "socialPanel.limit.dismiss": "Pas maintenant",
 
   // ── discover ──
   "discover.signal.productRelated": "Lié à un produit",

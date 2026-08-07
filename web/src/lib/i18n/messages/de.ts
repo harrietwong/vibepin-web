@@ -540,6 +540,11 @@ const de: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Nicht jetzt",
   "socialPanel.mismatch.theOriginalAccount": "das ursprüngliche Konto",
   "socialPanel.mismatch.aDifferentAccount": "ein anderes Konto",
+  "socialPanel.limit.title": "Du hast dein Limit für Social-Media-Konten erreicht",
+  "socialPanel.limit.body":
+    "Dein aktueller Tarif enthält kein weiteres verbundenes Pinterest-Konto. Führe ein Upgrade durch oder entferne ein Konto, auf dem du nicht mehr veröffentlichst. Es wurde nichts geändert — deine bestehenden Konten bleiben unberührt.",
+  "socialPanel.limit.upgrade": "Upgrade",
+  "socialPanel.limit.dismiss": "Jetzt nicht",
 
   // ── workspace ──
   "workspace.digitalIdea.eyebrow": "Digitale Produktidee",

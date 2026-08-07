@@ -938,6 +938,63 @@ function AccountMismatchNotice({
   );
 }
 
+/**
+ * PRD §9.2 / §18: the connect attempt refused because the plan's account limit is
+ * already used up.
+ *
+ * A banner rather than a toast, for the same reason as the mismatch notice: nothing
+ * was written, and the user has a real choice to make (upgrade, or remove an account
+ * they no longer publish to). A toast would vanish before either is actionable.
+ */
+function AccountLimitNotice({ onDismiss }: { onDismiss: () => void }) {
+  const { t: tr } = useLocale();
+  return (
+    <div
+      data-testid="pinterest-account-limit"
+      role="alert"
+      style={{
+        padding: "12px 14px",
+        borderRadius: 12,
+        background: "rgba(245,158,11,0.10)",
+        border: "1px solid rgba(245,158,11,0.30)",
+      }}
+    >
+      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.warning }}>
+        {tr("socialPanel.limit.title")}
+      </p>
+      <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
+        {tr("socialPanel.limit.body")}
+      </p>
+      <div style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <a
+          href="/pricing"
+          data-testid="pinterest-limit-upgrade"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "8px 14px", borderRadius: 10, textDecoration: "none",
+            border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.14)",
+            color: UI.warning, fontSize: 12, fontWeight: 700,
+          }}
+        >
+          {tr("socialPanel.limit.upgrade")}
+        </a>
+        <button
+          type="button"
+          data-testid="pinterest-limit-dismiss"
+          onClick={onDismiss}
+          style={{
+            padding: "8px 12px", borderRadius: 10,
+            border: "1px solid transparent", background: "transparent",
+            color: UI.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer",
+          }}
+        >
+          {tr("socialPanel.limit.dismiss")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function SocialAccountsPanel() {
   const { t: tr } = useLocale();
   const params = useSearchParams();
@@ -953,6 +1010,12 @@ export function SocialAccountsPanel() {
    * no pending decision.
    */
   const [accountMismatch, setAccountMismatch] = useState<{ expected: string | null; got: string | null } | null>(null);
+  /**
+   * A connect the server refused because the plan's account limit is used up
+   * (PRD §9.2 / §18). Like the mismatch, nothing was written and the user has a real
+   * choice, so it persists as a banner instead of a toast.
+   */
+  const [accountLimitReached, setAccountLimitReached] = useState(false);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
   const multiAccountEnabled = isMultiSocialAccountsEnabled();
 
@@ -1024,6 +1087,14 @@ export function SocialAccountsPanel() {
       return;
     }
 
+    // Same treatment for the plan limit: a persistent banner with an Upgrade CTA,
+    // not a toast. Both the connect start and the OAuth callback redirect here.
+    if (flag === "limit_reached") {
+      setAccountLimitReached(true);
+      router.replace(SETTINGS_SOCIAL_PATH);
+      return;
+    }
+
     const m = PINTEREST_CALLBACK_MESSAGES[flag];
     if (m) {
       const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
@@ -1031,8 +1102,9 @@ export function SocialAccountsPanel() {
     }
     router.replace(SETTINGS_SOCIAL_PATH);
     if (flag === "connected") {
-      // A successful authorization resolves any pending mismatch offer.
+      // A successful authorization resolves any pending mismatch / limit banner.
       setAccountMismatch(null);
+      setAccountLimitReached(false);
       notifyConnectionsChanged();
       void load();
       void syncPinterestAccount().then(synced => { if (synced) void load(); });
@@ -1129,6 +1201,10 @@ export function SocialAccountsPanel() {
           {tr("socialPanel.description")}
         </p>
       </div>
+
+      {accountLimitReached && (
+        <AccountLimitNotice onDismiss={() => setAccountLimitReached(false)} />
+      )}
 
       {accountMismatch && (
         <AccountMismatchNotice

@@ -57,6 +57,15 @@ export const socialPanelMessages = {
   "socialPanel.mismatch.theOriginalAccount": "the original account",
   "socialPanel.mismatch.aDifferentAccount": "a different account",
 
+  // ── Plan account limit reached (PRD §9.2 / §18) ──
+  //    Shown as a persistent banner, not a toast: the user has a real decision
+  //    (upgrade, or remove an account they no longer use), and nothing was written.
+  "socialPanel.limit.title": "You've reached your social account limit",
+  "socialPanel.limit.body":
+    "Your current plan doesn't include another connected Pinterest account. Upgrade for more, or remove an account you no longer publish to. Nothing was changed — your existing accounts are untouched.",
+  "socialPanel.limit.upgrade": "Upgrade",
+  "socialPanel.limit.dismiss": "Not now",
+
   // ── Toasts ──
   "socialPanel.toast.pinterestDisconnected": "Pinterest disconnected",
   "socialPanel.toast.pinterestDisconnectFailed": "Could not disconnect Pinterest. Please try again.",

@@ -1731,6 +1731,11 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "暂不",
   "socialPanel.mismatch.theOriginalAccount": "原账号",
   "socialPanel.mismatch.aDifferentAccount": "另一个账号",
+  "socialPanel.limit.title": "已达到社交账号数量上限",
+  "socialPanel.limit.body":
+    "当前套餐不包含再连接一个 Pinterest 账号。可以升级套餐，或移除一个不再发布的账号。本次没有做任何改动——你已连接的账号不受影响。",
+  "socialPanel.limit.upgrade": "升级套餐",
+  "socialPanel.limit.dismiss": "暂不",
   // ── studio ──
   "studio.header.title": "创建 Pin",
   "studio.header.saveDraft": "保存草稿",

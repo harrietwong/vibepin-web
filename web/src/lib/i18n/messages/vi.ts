@@ -552,6 +552,11 @@ const vi: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Để sau",
   "socialPanel.mismatch.theOriginalAccount": "tài khoản ban đầu",
   "socialPanel.mismatch.aDifferentAccount": "một tài khoản khác",
+  "socialPanel.limit.title": "Bạn đã đạt giới hạn tài khoản mạng xã hội",
+  "socialPanel.limit.body":
+    "Gói hiện tại của bạn không bao gồm thêm một tài khoản Pinterest được kết nối. Hãy nâng cấp để có thêm, hoặc gỡ một tài khoản bạn không còn đăng bài. Không có gì bị thay đổi — các tài khoản hiện có của bạn vẫn nguyên vẹn.",
+  "socialPanel.limit.upgrade": "Nâng cấp",
+  "socialPanel.limit.dismiss": "Để sau",
   "queue.status.pending": "Đang chờ",
   "queue.status.processing": "Đang xử lý",
   "queue.status.done": "Đã đăng",

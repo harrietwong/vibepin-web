@@ -876,6 +876,11 @@ const ru: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Не сейчас",
   "socialPanel.mismatch.theOriginalAccount": "исходный аккаунт",
   "socialPanel.mismatch.aDifferentAccount": "другой аккаунт",
+  "socialPanel.limit.title": "Вы достигли лимита социальных аккаунтов",
+  "socialPanel.limit.body":
+    "Ваш текущий тариф не включает ещё один подключённый аккаунт Pinterest. Перейдите на более высокий тариф или удалите аккаунт, в который вы больше не публикуете. Ничего не изменилось — существующие аккаунты не затронуты.",
+  "socialPanel.limit.upgrade": "Улучшить тариф",
+  "socialPanel.limit.dismiss": "Не сейчас",
 
   // ── queue ──
   "queue.status.pending": "Ожидает",

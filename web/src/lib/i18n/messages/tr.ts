@@ -2706,6 +2706,11 @@ const tr: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Şimdi değil",
   "socialPanel.mismatch.theOriginalAccount": "orijinal hesap",
   "socialPanel.mismatch.aDifferentAccount": "farklı bir hesap",
+  "socialPanel.limit.title": "Sosyal hesap sınırınıza ulaştınız",
+  "socialPanel.limit.body":
+    "Mevcut planınız başka bir bağlı Pinterest hesabı içermiyor. Daha fazlası için yükseltin ya da artık paylaşım yapmadığınız bir hesabı kaldırın. Hiçbir şey değiştirilmedi — mevcut hesaplarınıza dokunulmadı.",
+  "socialPanel.limit.upgrade": "Yükselt",
+  "socialPanel.limit.dismiss": "Şimdi değil",
   "workspace.digitalIdea.eyebrow": "Dijital Ürün Fikri",
   "workspace.digitalIdea.add": "Haftalık Plana Ekle",
   "workspace.digitalIdea.adding": "Ekleniyor…",

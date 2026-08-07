@@ -2234,6 +2234,11 @@ const nl: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Niet nu",
   "socialPanel.mismatch.theOriginalAccount": "het oorspronkelijke account",
   "socialPanel.mismatch.aDifferentAccount": "een ander account",
+  "socialPanel.limit.title": "Je hebt je limiet voor social accounts bereikt",
+  "socialPanel.limit.body":
+    "Je huidige abonnement bevat geen extra gekoppeld Pinterest-account. Upgrade voor meer, of verwijder een account waarop je niet meer publiceert. Er is niets gewijzigd — je bestaande accounts blijven ongemoeid.",
+  "socialPanel.limit.upgrade": "Upgraden",
+  "socialPanel.limit.dismiss": "Niet nu",
 
   // ── workspace ──
   "workspace.digitalIdea.eyebrow": "Digitaal productidee",

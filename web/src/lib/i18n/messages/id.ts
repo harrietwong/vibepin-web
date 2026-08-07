@@ -1772,6 +1772,11 @@ const id: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Nanti saja",
   "socialPanel.mismatch.theOriginalAccount": "akun asli",
   "socialPanel.mismatch.aDifferentAccount": "akun yang berbeda",
+  "socialPanel.limit.title": "Anda telah mencapai batas akun sosial",
+  "socialPanel.limit.body":
+    "Paket Anda saat ini tidak mencakup akun Pinterest terhubung tambahan. Tingkatkan paket untuk mendapat lebih banyak, atau hapus akun yang tidak lagi Anda gunakan untuk memublikasikan. Tidak ada yang diubah — akun Anda yang ada tetap utuh.",
+  "socialPanel.limit.upgrade": "Tingkatkan",
+  "socialPanel.limit.dismiss": "Nanti saja",
 
   // ── queue ──
   "queue.status.pending": "Tertunda",

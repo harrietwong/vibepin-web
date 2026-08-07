@@ -622,6 +622,11 @@ const hi: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "अभी नहीं",
   "socialPanel.mismatch.theOriginalAccount": "मूल खाता",
   "socialPanel.mismatch.aDifferentAccount": "एक अलग खाता",
+  "socialPanel.limit.title": "आप अपनी सोशल अकाउंट सीमा तक पहुँच गए हैं",
+  "socialPanel.limit.body":
+    "आपके मौजूदा प्लान में एक और कनेक्टेड Pinterest खाता शामिल नहीं है। अधिक के लिए अपग्रेड करें, या ऐसा खाता हटाएँ जिस पर आप अब प्रकाशित नहीं करते। कुछ भी नहीं बदला — आपके मौजूदा खाते अछूते हैं।",
+  "socialPanel.limit.upgrade": "अपग्रेड करें",
+  "socialPanel.limit.dismiss": "अभी नहीं",
   "trendChart.noData": "कोई ट्रेंड डेटा उपलब्ध नहीं है",
   "trendChart.defaultLabel": "ट्रेंड दिशा",
   "trendChart.rising": "↑ बढ़ रहा",

@@ -2725,6 +2725,11 @@ const it: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Non ora",
   "socialPanel.mismatch.theOriginalAccount": "l'account originale",
   "socialPanel.mismatch.aDifferentAccount": "un account diverso",
+  "socialPanel.limit.title": "Hai raggiunto il limite di account social",
+  "socialPanel.limit.body":
+    "Il tuo piano attuale non include un altro account Pinterest collegato. Passa a un piano superiore per averne di più oppure rimuovi un account su cui non pubblichi più. Non è stato modificato nulla: i tuoi account esistenti restano intatti.",
+  "socialPanel.limit.upgrade": "Fai l'upgrade",
+  "socialPanel.limit.dismiss": "Non ora",
 
   // ── workspace ──
   "workspace.digitalIdea.eyebrow": "Idea di prodotto digitale",

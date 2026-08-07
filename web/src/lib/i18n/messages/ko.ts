@@ -2627,6 +2627,11 @@ const ko: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "나중에",
   "socialPanel.mismatch.theOriginalAccount": "원래 계정",
   "socialPanel.mismatch.aDifferentAccount": "다른 계정",
+  "socialPanel.limit.title": "소셜 계정 한도에 도달했습니다",
+  "socialPanel.limit.body":
+    "현재 요금제에는 Pinterest 계정을 추가로 연결할 수 없습니다. 업그레이드하거나 더 이상 게시하지 않는 계정을 제거하세요. 변경된 것은 없습니다 — 기존 계정은 그대로입니다.",
+  "socialPanel.limit.upgrade": "업그레이드",
+  "socialPanel.limit.dismiss": "나중에",
   "workspace.digitalIdea.eyebrow": "디지털 상품 아이디어",
   "workspace.digitalIdea.add": "주간 계획에 추가",
   "workspace.digitalIdea.adding": "추가 중…",

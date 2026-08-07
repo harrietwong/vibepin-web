@@ -546,6 +546,11 @@ const es: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Ahora no",
   "socialPanel.mismatch.theOriginalAccount": "la cuenta original",
   "socialPanel.mismatch.aDifferentAccount": "una cuenta diferente",
+  "socialPanel.limit.title": "Has alcanzado tu límite de cuentas sociales",
+  "socialPanel.limit.body":
+    "Tu plan actual no incluye otra cuenta de Pinterest conectada. Mejora tu plan para tener más o elimina una cuenta en la que ya no publicas. No se ha cambiado nada: tus cuentas actuales siguen intactas.",
+  "socialPanel.limit.upgrade": "Mejorar plan",
+  "socialPanel.limit.dismiss": "Ahora no",
   "trendChart.noData": "No hay datos de tendencias disponibles",
   "trendChart.defaultLabel": "Dirección de la tendencia",
   "trendChart.rising": "↑ En alza",

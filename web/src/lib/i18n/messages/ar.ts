@@ -512,6 +512,11 @@ const ar: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "ليس الآن",
   "socialPanel.mismatch.theOriginalAccount": "الحساب الأصلي",
   "socialPanel.mismatch.aDifferentAccount": "حساب مختلف",
+  "socialPanel.limit.title": "لقد وصلت إلى الحد الأقصى لحسابات التواصل الاجتماعي",
+  "socialPanel.limit.body":
+    "لا تشمل خطتك الحالية حساب Pinterest متصلاً إضافياً. قم بالترقية للمزيد، أو أزل حساباً لم تعد تنشر إليه. لم يتغير شيء — حساباتك الحالية كما هي.",
+  "socialPanel.limit.upgrade": "الترقية",
+  "socialPanel.limit.dismiss": "ليس الآن",
   "workspace.digitalIdea.eyebrow": "فكرة منتج رقمي",
   "workspace.digitalIdea.add": "إضافة إلى الخطة الأسبوعية",
   "workspace.digitalIdea.adding": "جارٍ الإضافة…",

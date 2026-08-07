@@ -549,6 +549,11 @@ const th: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "ไว้ทีหลัง",
   "socialPanel.mismatch.theOriginalAccount": "บัญชีเดิม",
   "socialPanel.mismatch.aDifferentAccount": "บัญชีอื่น",
+  "socialPanel.limit.title": "คุณใช้บัญชีโซเชียลครบตามจำนวนแล้ว",
+  "socialPanel.limit.body":
+    "แพ็กเกจปัจจุบันของคุณไม่รวมบัญชี Pinterest ที่เชื่อมต่อเพิ่มอีก อัปเกรดเพื่อเพิ่มจำนวน หรือลบบัญชีที่คุณไม่ได้ใช้เผยแพร่แล้ว ไม่มีอะไรถูกเปลี่ยนแปลง — บัญชีเดิมของคุณยังอยู่ครบ",
+  "socialPanel.limit.upgrade": "อัปเกรด",
+  "socialPanel.limit.dismiss": "ไว้ก่อน",
   // ── help ──
   "help.pageTitle": "ช่วยเหลือและสนับสนุน",
   "help.searchPlaceholder": "ค้นหาบทความช่วยเหลือ...",

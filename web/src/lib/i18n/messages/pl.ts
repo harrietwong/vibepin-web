@@ -628,6 +628,11 @@ const pl: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Nie teraz",
   "socialPanel.mismatch.theOriginalAccount": "pierwotne konto",
   "socialPanel.mismatch.aDifferentAccount": "inne konto",
+  "socialPanel.limit.title": "Osiągnięto limit kont społecznościowych",
+  "socialPanel.limit.body":
+    "Twój obecny plan nie obejmuje kolejnego połączonego konta Pinterest. Przejdź na wyższy plan lub usuń konto, na którym już nie publikujesz. Nic nie zostało zmienione — istniejące konta pozostają nienaruszone.",
+  "socialPanel.limit.upgrade": "Ulepsz plan",
+  "socialPanel.limit.dismiss": "Nie teraz",
   "workspace.digitalIdea.eyebrow": "Pomysł na produkt cyfrowy",
   "workspace.digitalIdea.add": "Dodaj do planu tygodniowego",
   "workspace.digitalIdea.adding": "Dodawanie…",

@@ -32,6 +32,8 @@ import { OAUTH_STATE_COOKIE, OAUTH_RETURN_COOKIE, verifyState, readSealedReturnT
 import { exchangeCodeForTokens, fetchAccountIdentity } from "@/lib/server/pinterest/service";
 import { upsertConnection, listConnections } from "@/lib/server/pinterest/connectionStore";
 import { decideConnect, type AuthorizedAccount, type ExistingConnection } from "@/lib/server/pinterest/connectDecision";
+import { evaluateAccountQuota } from "@/lib/server/pinterest/accountQuota";
+import { resolvePlan } from "@/lib/server/entitlements";
 
 export const dynamic = "force-dynamic";
 
@@ -174,6 +176,10 @@ export async function GET(req: NextRequest) {
     const tIdentity = performance.now();
     let account: AuthorizedAccount;
     let existing: ExistingConnection[];
+    // Active = the same predicate listActiveConnections uses (not disconnected AND
+    // token-bearing). Derived from the rows we already read, so the quota re-check
+    // below costs no extra Pinterest/DB round trip.
+    let activeCount = 0;
     try {
       const [identity, rows] = await Promise.all([
         fetchAccountIdentity(tokens.accessToken),
@@ -183,6 +189,7 @@ export async function GET(req: NextRequest) {
       // We do NOT guess: with no id, decideConnect can only match an unidentified row
       // (or create), and a reconnect aimed at an identified row is refused below.
       account = identity ?? { id: null, username: null, accountType: null };
+      activeCount = rows.filter(r => !r.disconnected_at && !!r.access_token_encrypted).length;
       existing = rows.map((r): ExistingConnection => ({
         connectionId: r.id,
         accountId: r.pinterest_user_id,
@@ -222,6 +229,41 @@ export async function GET(req: NextRequest) {
       out.cookies.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 });
       out.cookies.set(OAUTH_RETURN_COOKIE, "", { path: "/", maxAge: 0 });
       return finish(out);
+    }
+
+    // ── Plan gate re-check (PRD §9.2 / §18) ───────────────────────────────────
+    // The connect start already checked, but a second flow can consume the last
+    // slot while this one is away at Pinterest, so the write side has to be the
+    // authority. `decideConnect` stays a pure decision — the quota lives here.
+    //
+    // Which decisions add an active account:
+    //   create                  → +1 active → blocked at the cap.
+    //   update && revived       → reviving a DISCONNECTED row. Disconnected rows are
+    //                             not counted as used, so bringing one back is also
+    //                             +1 active. Blocked, deliberately: allowing it would
+    //                             let a capped user hold unlimited accounts by
+    //                             disconnecting and re-authorizing in rotation.
+    //   update && !revived      → repairing an already-active row → count unchanged →
+    //                             always allowed (this is Reconnect).
+    // Fails OPEN on an unexpected error: a tokens-in-hand authorization must not be
+    // thrown away because an entitlement read hiccuped.
+    const addsAnAccount =
+      decision.action === "create" || (decision.action === "update" && decision.revived);
+    if (addsAnAccount) {
+      let overLimit = false;
+      try {
+        const quota = evaluateAccountQuota(await resolvePlan(uid), activeCount);
+        overLimit = !quota.canAddAccount;
+        if (overLimit) {
+          console.warn(
+            `[Pinterest OAuth Callback] account limit reached (plan=${quota.plan}, used=${quota.used}/${quota.limit}) — nothing written`,
+          );
+        }
+      } catch (quotaErr) {
+        console.error("[Pinterest OAuth Callback] quota check failed, allowing:", (quotaErr as Error).message);
+      }
+      // Nothing is written — same refusal shape as account_mismatch.
+      if (overLimit) return finish(redirectAfterOAuth(req, "limit_reached", verdict.returnTo));
     }
 
     try {

@@ -51,6 +51,7 @@ export const CORE: string[] = [
   "test-activation-funnel",
   "test-ai-adoption",
   "test-admin-today-i18n",
+  "test-account-quota",
   // Facebook Page OAuth
   "test-facebook-pages",
   // AI copy / creative intelligence

@@ -558,6 +558,11 @@ const ja: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "今はしない",
   "socialPanel.mismatch.theOriginalAccount": "元のアカウント",
   "socialPanel.mismatch.aDifferentAccount": "別のアカウント",
+  "socialPanel.limit.title": "ソーシャルアカウントの上限に達しました",
+  "socialPanel.limit.body":
+    "現在のプランでは、これ以上 Pinterest アカウントを接続できません。アップグレードするか、公開に使っていないアカウントを削除してください。変更は行われていません — 既存のアカウントはそのままです。",
+  "socialPanel.limit.upgrade": "アップグレード",
+  "socialPanel.limit.dismiss": "後で",
 
   // ── trendChart.* ──
   "trendChart.noData": "トレンドデータがありません",

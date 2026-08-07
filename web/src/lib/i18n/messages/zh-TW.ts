@@ -713,6 +713,11 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "暫時不要",
   "socialPanel.mismatch.theOriginalAccount": "原帳號",
   "socialPanel.mismatch.aDifferentAccount": "另一個帳號",
+  "socialPanel.limit.title": "已達到社群帳號數量上限",
+  "socialPanel.limit.body":
+    "目前方案不包含再連接一個 Pinterest 帳號。可以升級方案，或移除一個不再發布的帳號。本次沒有做任何變更——你已連接的帳號不受影響。",
+  "socialPanel.limit.upgrade": "升級方案",
+  "socialPanel.limit.dismiss": "暫不",
 
   // ── productLibrary ──
   "productLibrary.source.viralPin": "熱門 Pin",

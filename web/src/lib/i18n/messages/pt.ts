@@ -566,6 +566,11 @@ const pt: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.dismiss": "Agora não",
   "socialPanel.mismatch.theOriginalAccount": "a conta original",
   "socialPanel.mismatch.aDifferentAccount": "uma conta diferente",
+  "socialPanel.limit.title": "Você atingiu seu limite de contas sociais",
+  "socialPanel.limit.body":
+    "Seu plano atual não inclui outra conta do Pinterest conectada. Faça upgrade para ter mais ou remova uma conta na qual você não publica mais. Nada foi alterado — suas contas existentes continuam intactas.",
+  "socialPanel.limit.upgrade": "Fazer upgrade",
+  "socialPanel.limit.dismiss": "Agora não",
 
   // ── queue ──
   "queue.status.pending": "Pendente",
