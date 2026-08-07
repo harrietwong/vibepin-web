@@ -1292,6 +1292,9 @@ const es: Partial<Record<MessageKey, string>> = {
   "plan.filters.title": "Filtros",
   "plan.filters.clear": "Borrar",
   "plan.filters.category": "Categoría",
+  "plan.filters.account": "Cuenta de Pinterest",
+  "plan.filters.allAccounts": "Todas las cuentas",
+  "plan.filters.unassignedAccount": "Sin cuenta elegida",
   "plan.filters.footer": "Los filtros de tableros, estado y oportunidad llegarán pronto. La categoría es opcional — los Pines de cualquier categoría se planifican en el mismo calendario.",
   "plan.load.error": "No se pudo cargar tu plan.",
   "plan.load.retry": "Reintentar",
@@ -2430,6 +2433,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioModals.board.setBoardForOne": "Definir tablero para 1 Pin seleccionado",
   "studioModals.board.setBoardForMany": "Definir tablero para {n} Pines seleccionados",
   "studioModals.board.appliesToAll": "Elegir un tablero lo aplica a todos los Pines seleccionados.",
+  "studioModals.board.mixedAccounts": "Estos Pines se publican en cuentas de Pinterest distintas, y los tableros pertenecen a una sola cuenta. Selecciona Pines de una misma cuenta para definir su tablero.",
   "studioModals.board.appliedToOne": "Tablero aplicado a 1 Pin.",
   "studioModals.board.appliedToMany": "Tablero aplicado a {n} Pines.",
 

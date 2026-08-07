@@ -192,6 +192,7 @@ export const PLAN: string[] = [
   "test-my-products-weekly-plan-ui",
   "test-plan-tile-interactions",
   "test-plan-pinterest-connect",
+  "test-plan-account-filter",
   "test-hover-preview-image",
   "test-smart-schedule",
   "test-smart-schedule-sync",

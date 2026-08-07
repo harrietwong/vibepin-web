@@ -1900,6 +1900,9 @@ const ru: Partial<Record<MessageKey, string>> = {
   "plan.filters.title": "Фильтры",
   "plan.filters.clear": "Очистить",
   "plan.filters.category": "Категория",
+  "plan.filters.account": "Аккаунт Pinterest",
+  "plan.filters.allAccounts": "Все аккаунты",
+  "plan.filters.unassignedAccount": "Аккаунт не выбран",
   "plan.filters.footer": "Фильтры по доскам, статусу и возможностям скоро появятся. Категория необязательна — пины любой категории планируются в одном календаре.",
   "plan.load.error": "Не удалось загрузить ваш план.",
   "plan.load.retry": "Повторить",
@@ -2441,6 +2444,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioModals.board.setBoardForOne": "Задать доску для 1 выбранного пина",
   "studioModals.board.setBoardForMany": "Задать доску для {n} выбранных пинов",
   "studioModals.board.appliesToAll": "Выбор доски применяется ко всем выбранным пинам.",
+  "studioModals.board.mixedAccounts": "Эти пины публикуются в разных аккаунтах Pinterest, а доски принадлежат одному аккаунту. Выберите пины одного аккаунта, чтобы задать им доску.",
   "studioModals.board.appliedToOne": "Доска применена к 1 пину.",
   "studioModals.board.appliedToMany": "Доска применена к {n} пинам.",
 

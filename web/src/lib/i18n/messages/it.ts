@@ -507,6 +507,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioModals.board.setBoardForOne": "Imposta bacheca per 1 Pin selezionato",
   "studioModals.board.setBoardForMany": "Imposta bacheca per {n} Pin selezionati",
   "studioModals.board.appliesToAll": "La scelta di una bacheca la applica a tutti i Pin selezionati.",
+  "studioModals.board.mixedAccounts": "Questi Pin vengono pubblicati su account Pinterest diversi e le bacheche appartengono a un solo account. Seleziona Pin di un unico account per impostarne la bacheca.",
   "studioModals.board.appliedToOne": "Bacheca applicata a 1 Pin.",
   "studioModals.board.appliedToMany": "Bacheca applicata a {n} Pin.",
 
@@ -1925,6 +1926,9 @@ const it: Partial<Record<MessageKey, string>> = {
   "plan.filters.title": "Filtri",
   "plan.filters.clear": "Cancella",
   "plan.filters.category": "Categoria",
+  "plan.filters.account": "Account Pinterest",
+  "plan.filters.allAccounts": "Tutti gli account",
+  "plan.filters.unassignedAccount": "Nessun account scelto",
   "plan.filters.footer": "Filtri per bacheche, stato e opportunità in arrivo. La categoria è facoltativa — i Pin di qualsiasi categoria vengono pianificati nello stesso calendario.",
 
   // ── plan: Content area ──

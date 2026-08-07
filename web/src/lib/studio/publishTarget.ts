@@ -177,3 +177,50 @@ export function targetAccountHandle(draft: TargetedDraftLike | null | undefined)
   if (!label) return "";
   return label.startsWith("@") ? label : `@${label}`;
 }
+
+// ── Filtering a list of Pins by which account they publish to (Plan, Phase D ②) ──
+
+/** "Every account" — the Plan account filter is off. */
+export const ALL_TARGET_ACCOUNTS = "__all__";
+/**
+ * "No target yet" — its own bucket, deliberately.
+ *
+ * Every draft made before adopt-once existed carries no `targetConnectionId`, and a
+ * draft only gains one at publish time. Folding those into the default account's bucket
+ * would be a guess rendered as fact, and folding them into nothing at all would make them
+ * vanish from a filtered board. They get a bucket the user can actually select.
+ */
+export const UNASSIGNED_TARGET_ACCOUNT = "__unassigned__";
+
+/**
+ * Does this draft belong in the currently-filtered view?
+ *
+ * `filter` is a connection id, `ALL_TARGET_ACCOUNTS`, or `UNASSIGNED_TARGET_ACCOUNT`.
+ * Blank/whitespace targets are decided by `readStoredTarget`, so "unassigned" means the
+ * same thing here as it does to the resolver — one definition, not two.
+ */
+export function matchesTargetFilter(
+  draft: TargetedDraftLike | null | undefined,
+  filter: string,
+): boolean {
+  if (!filter || filter === ALL_TARGET_ACCOUNTS) return true;
+  const stored = readStoredTarget(draft);
+  if (filter === UNASSIGNED_TARGET_ACCOUNT) return stored === "";
+  return stored === filter;
+}
+
+/**
+ * The filter that is actually in force.
+ *
+ * A filter set while two accounts were connected must NOT keep hiding Pins after one is
+ * removed: the select that would let the user clear it is gone (invariant 4 hides it at
+ * ≤1 connection), so the filter would be both invisible and undoable. Neutralising it
+ * here — rather than resetting state in an effect — means the view can never be filtered
+ * by a control that isn't on screen.
+ */
+export function effectiveTargetFilter(
+  filter: string,
+  active: readonly TargetableConnection[],
+): string {
+  return shouldShowAccountPicker(active) ? (filter || ALL_TARGET_ACCOUNTS) : ALL_TARGET_ACCOUNTS;
+}
