@@ -117,6 +117,7 @@ export const CORE: string[] = [
   // Shopify
   "test-connection-limit",
   "test-settle-generation-job",
+  "test-generation-job-route",
   "test-shopify-entitlements",
   "test-shopify-connection-store",
   "test-shopify-hmac",
