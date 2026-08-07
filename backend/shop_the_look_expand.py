@@ -1292,6 +1292,13 @@ class _IncrementalWriter:
         self.rejected_count = 0
         self.dedup_skipped_count = 0
         self.preflight_skipped_count = 0
+        # Monotonic label for the log line ONLY. It counts flushes, including
+        # those with nothing new to write, so journalctl never shows the same
+        # "write batch N" twice — an operator reading a killed run's log has to
+        # be able to tell two flushes apart. Report counters below deliberately
+        # count only real write ATTEMPTS, which is a different question.
+        self._flush_seq = 0
+        self.empty_flushes = 0
 
     # ── intake ────────────────────────────────────────────────────────────
     def add_pin(self, per_pin_result: dict) -> None:
@@ -1314,18 +1321,20 @@ class _IncrementalWriter:
         if pins_in_batch == 0 and not pending:
             return
         self.pins_flushed += pins_in_batch
+        self._flush_seq += 1
+        batch_no = self._flush_seq
 
         rows = self._filter_batch(pending)
         if not rows:
+            self.empty_flushes += 1
             print(
-                f"[product-supply-expand] write batch {self.batches_written + self.batches_failed + 1} "
+                f"[product-supply-expand] write batch {batch_no} "
                 f"({reason}): pins={pins_in_batch} candidates={len(pending)} "
                 f"newRows=0 written=0 cumulativeWritten={self.totals['inserted']}",
                 flush=True,
             )
             return
 
-        batch_no = self.batches_written + self.batches_failed + 1
         try:
             _apply_rows(rows)
         except Exception as exc:  # noqa: BLE001 — counted + reported, never swallowed
@@ -1428,9 +1437,14 @@ class _IncrementalWriter:
         return {
             "enabled": self.enabled,
             "batchSizePins": self.batch_size,
+            "flushes": self._flush_seq,
             "batchesAttempted": self.batches_written + self.batches_failed,
             "batchesWritten": self.batches_written,
             "batchesFailed": self.batches_failed,
+            # Flushes where nothing survived accept_link/dedup/preflight, so no
+            # write was attempted. Counted separately so `flushes` reconciles:
+            # flushes == batchesAttempted + batchesWithNothingNewToWrite.
+            "batchesWithNothingNewToWrite": self.empty_flushes,
             "pinsFlushed": self.pins_flushed,
             "rowsInserted": self.totals["inserted"],
             "rowsRejectedByAcceptLink": self.rejected_count,
