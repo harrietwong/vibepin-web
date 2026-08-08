@@ -229,3 +229,27 @@ export function buildAuthorizeUrl(env: PinterestEnv, state: string): string {
 export function pinterestPinUrl(pinId: string): string {
   return `https://www.pinterest.com/pin/${pinId}/`;
 }
+
+/**
+ * Name of the board created by the sandbox demo-board helper
+ * (api/pinterest/sandbox/create-demo-board). Shared so the board LIST can
+ * recognise it — see {@link isSandboxDemoBoard}.
+ */
+export const SANDBOX_DEMO_BOARD_NAME = "VibePin Sandbox Demo Board";
+
+/**
+ * Is this the sandbox demo board?
+ *
+ * Pinterest exposes no flag distinguishing a sandbox board from a real one — the
+ * API returns identical shapes — so the only signal is the name our own helper
+ * gave it. That helper is the sole way this board comes into existence, so the
+ * match is exact (not a substring), and a merchant's real board would have to be
+ * named character-for-character the same to be affected.
+ *
+ * This matters because the board is UNPUBLISHABLE in production: Pinterest
+ * rejects the publish with "Cannot add non-sandbox pins on sandbox boards"
+ * (code 15). Listing it in production offers a choice that can only fail.
+ */
+export function isSandboxDemoBoard(board: { name?: string | null }): boolean {
+  return (board.name ?? "").trim() === SANDBOX_DEMO_BOARD_NAME;
+}

@@ -1132,6 +1132,14 @@ export function PinDetailsModal({
       } else if (err.code === "pinterest_trial_access") {
         // Trial/Standard access block → clean, user-facing notice only (never raw API text).
         setTrialAccess(true);
+      } else if (err.pinterestCode === "15") {
+        // "Cannot add non-sandbox pins on sandbox boards" — the draft still points at
+        // the sandbox demo board (production no longer lists it, but a draft saved
+        // earlier can still carry its id). The generic message sent merchants chasing
+        // tokens, scopes and 2FA; name the actual fix instead.
+        const msg = t("pinDetails.board.chooseBoardToPublish");
+        setPublishError(msg);
+        toast.error(msg);
       } else {
         // Any other failure → short, readable message. No raw API/debug details surfaced.
         // Modal stays open and edits are preserved (nothing is reset on failure).

@@ -8,7 +8,7 @@
 
 import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
 import { PinterestClient } from "@/lib/server/pinterest/service";
-import { canAttemptSandboxPublish } from "@/lib/server/pinterest/config";
+import { canAttemptSandboxPublish, isSandboxDemoBoard } from "@/lib/server/pinterest/config";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +28,14 @@ export async function GET(req: Request) {
       ? await PinterestClient.forSandboxDemo(uid)
       : await PinterestClient.forUser(uid);
     const { items, bookmark: next } = await client.listBoards(bookmark);
-    return Response.json({ items, bookmark: next });
+    // The sandbox demo board is unpublishable from production: Pinterest rejects
+    // the Pin with "Cannot add non-sandbox pins on sandbox boards" (code 15).
+    // Offering it in the production board picker is offering a choice that can
+    // only fail — and it failed silently as a generic "Failed to publish", which
+    // sent the merchant chasing tokens, scopes and 2FA instead of the board.
+    // It stays listed in sandbox mode, where it is the whole point.
+    const visible = canAttemptSandboxPublish() ? items : items.filter(b => !isSandboxDemoBoard(b));
+    return Response.json({ items: visible, bookmark: next });
   } catch (err) {
     return pinterestErrorResponse(err);
   }
