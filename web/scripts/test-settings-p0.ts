@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { deriveAccountBillingSummary } from "../src/lib/accountSummary";
+import * as accountSummaryModule from "../src/lib/accountSummary";
 import { formatEnglishDateTime } from "../src/lib/dateTimeFormat";
 import { derivePinterestSettingsState } from "../src/lib/pinterest/pinterestSettingsState";
 
@@ -58,6 +59,31 @@ test("Billing IGNORES a forged user_metadata plan (only app_metadata is trusted)
   const value = deriveAccountBillingSummary({ user_metadata: { plan_name: "Business", plan: "business" } });
   assert.equal(value.planName, null);
 });
+
+test("Billing surfaces no fabricated token balance when metadata is unavailable", () => {
+  // The old fake-34 constant is gone, and so is the whole tokenBalance field:
+  // real metering now comes from /api/billing/usage, never from metadata.
+  const value = deriveAccountBillingSummary(null);
+  assert.equal(value.planName, null);
+  assert.equal("tokenBalance" in value, false, "tokenBalance must not be derived from metadata anymore");
+});
+
+test("The fabricated EXISTING_APP_TOKEN_BALANCE export no longer exists", () => {
+  assert.equal(
+    "EXISTING_APP_TOKEN_BALANCE" in accountSummaryModule,
+    false,
+    "EXISTING_APP_TOKEN_BALANCE must be deleted so no fake balance can reach the UI",
+  );
+});
+
+test("Billing card never renders a metadata-derived balance number", () => {
+  assert.doesNotMatch(billing, /summary\.tokenBalance/);
+});
+
+test("The app chrome no longer renders a fabricated token balance", () => {
+  assert.doesNotMatch(layout, /EXISTING_APP_TOKEN_BALANCE/);
+});
+
 
 test("Pinterest derives all three safe states", () => {
   assert.equal(derivePinterestSettingsState(null), "not_connected");

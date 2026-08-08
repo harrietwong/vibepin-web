@@ -10,10 +10,14 @@ import {
   Lock,
   AlertTriangle,
   ShieldCheck,
+  CheckCircle2,
 } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getUserDetail, type UserDetail } from "@/lib/server/customer360";
+import { getUserBlockers, type BlockerType, type UserHealth } from "@/lib/server/adminActionCenter";
+import { BLOCKER_LABEL_KEY, HEALTH_DRIVER_KEY, HEALTH_BAND_KEY } from "@/lib/admin/adminConsoleKeys";
 import SupportNotesClient from "./SupportNotesClient";
+import { AdminT } from "../../AdminT";
 
 export const dynamic = "force-dynamic";
 
@@ -82,12 +86,72 @@ const GEN_TONE: Record<string, { bg: string; fg: string }> = {
   partial: { bg: "rgba(245,158,11,0.13)", fg: "#B45309" },
 };
 
+// ── Alert strip + health badge (adminActionCenter) ────────────────────────
+
+const HEALTH_TONE: Record<UserHealth["band"], { bg: string; fg: string }> = {
+  green: { bg: "rgba(16,185,129,0.12)", fg: "#047857" },
+  yellow: { bg: "rgba(245,158,11,0.13)", fg: "#B45309" },
+  red: { bg: "rgba(239,68,68,0.12)", fg: "#B91C1C" },
+};
+
+function AlertStrip({ blockers }: { blockers: Array<{ blockerType: BlockerType; dataQuality: "exact" | "inferred" }> }) {
+  if (blockers.length === 0) {
+    return (
+      <div className="mb-2 flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-black uppercase" style={{ background: "rgba(16,185,129,0.12)", color: "#047857" }}>
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          <AdminT k="c360.alerts.none" />
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+      {blockers.map((b, i) => (
+        <span key={i} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black uppercase" style={{ background: "rgba(239,68,68,0.10)", color: "#B91C1C" }}>
+          <AdminT k={BLOCKER_LABEL_KEY[b.blockerType]} />
+          {b.dataQuality === "inferred" && (
+            <span className="ml-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-black normal-case" style={{ background: "rgba(107,114,128,0.14)", color: "#6B7280" }}>
+              <AdminT k="today.dataQuality.inferred" />
+            </span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function HealthBadgeRow({ health }: { health: UserHealth }) {
+  const tone = HEALTH_TONE[health.band];
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 text-[12px]">
+      <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-black uppercase" style={{ background: tone.bg, color: tone.fg }}>
+        <AdminT k={HEALTH_BAND_KEY[health.band]} />
+      </span>
+      {health.drivers.length > 0 && (
+        <span className="text-gray-500">
+          <AdminT k="c360.health.driversPrefix" />{" "}
+          {health.drivers.map((d, i) => (
+            <span key={d}>
+              {i > 0 && "; "}
+              <AdminT k={HEALTH_DRIVER_KEY[d]} />
+            </span>
+          ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default async function UserDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const admin = await getCurrentSuperAdmin();
   if (!admin) redirect("/app?admin=forbidden");
 
   const { id } = await params;
-  const detail: UserDetail = await getUserDetail(id);
+  const [detail, userBlockers]: [UserDetail, Awaited<ReturnType<typeof getUserBlockers>>] = await Promise.all([
+    getUserDetail(id),
+    getUserBlockers(id),
+  ]);
 
   if (!detail.found || !detail.account) {
     return (
@@ -129,6 +193,10 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
             <h1 className="text-[23px] font-black tracking-tight text-gray-950">{a.email ?? "(no email)"}</h1>
           </div>
         </div>
+
+        {/* Alert strip + health badge (adminActionCenter) */}
+        <AlertStrip blockers={userBlockers.blockers} />
+        <HealthBadgeRow health={userBlockers.health} />
 
         {detail.warnings.length > 0 && (
           <div className="mb-4 rounded-lg border px-4 py-3 text-[11.5px] text-gray-500" style={{ background: "#FFFFFF", borderColor: "#E5E7EB" }}>

@@ -5,6 +5,8 @@ import {
   filterMyProducts,
   isBrokenProductImport,
   isValidProductImageUrl,
+  visibleProductSourceFilters,
+  MY_PRODUCTS_FILTERS,
 } from "../src/lib/myProductsPicker";
 import type { AssetItem } from "../src/lib/assetStore";
 
@@ -62,14 +64,42 @@ test("URL Imported filter shows only URL imported products", () => {
   assert(out.length === 1, "broken url should be excluded");
 });
 
-test("Product Ideas filter shows saved product idea assets", () => {
-  const out = filterMyProducts(sample, "product_ideas", "");
-  assert(out.length === 1 && out[0].source === "product_ideas", "product ideas filter failed");
+// "product_ideas" and "recent" were removed as SOURCE filters (create-pin PRD
+// Section C): Product Ideas is a primary tab, and recency is an ordering. Both are
+// covered below in their new form.
+
+test("source filters contain neither Product Ideas nor Recent", () => {
+  const ids = MY_PRODUCTS_FILTERS.map(f => f.id) as string[];
+  assert(!ids.includes("product_ideas"), "Product Ideas must not be a source chip");
+  assert(!ids.includes("recent"), "Recent must not be a source chip");
+  assert(ids.includes("shopify"), "Shopify must be a source chip");
 });
 
-test("Recent does not duplicate assets", () => {
-  const out = filterMyProducts(sample, "recent", "");
-  assert(new Set(out.map(i => i.id)).size === out.length, "recent filter duplicated assets");
+test("Recent is a sort mode and does not duplicate assets", () => {
+  const out = filterMyProducts(sample, "all", "", "recently_used");
+  assert(new Set(out.map(i => i.id)).size === out.length, "recently_used sort duplicated assets");
+});
+
+test("sorts are orthogonal to the source filter", () => {
+  const byName = filterMyProducts(sample, "all", "", "name_asc");
+  const byUsed = filterMyProducts(sample, "all", "", "recently_used");
+  assert(byName.length === byUsed.length, "sorting must not change the result set");
+});
+
+test("source chips are hidden when the workspace has no such products", () => {
+  const onlyUploads = sample.filter(i => i.source === "upload");
+  const ids = visibleProductSourceFilters(onlyUploads).map(f => f.id);
+  assert(ids.includes("all"), "All is always shown");
+  assert(ids.includes("uploaded"), "uploaded present → chip shown");
+  assert(!ids.includes("shopify"), "integration off + no products → no Shopify chip");
+});
+
+test("Shopify chip IS shown when the integration is enabled but no products exist yet", () => {
+  // Its empty state hosts the connect/import panel — hiding the chip made connecting
+  // impossible for exactly the workspace that needs to connect (Codex finding #6).
+  const onlyUploads = sample.filter(i => i.source === "upload");
+  const ids = visibleProductSourceFilters(onlyUploads, { shopifyEnabled: true }).map(f => f.id);
+  assert(ids.includes("shopify"), "an unconnected workspace must be able to reach Connect");
 });
 
 test("broken/missing image imports are not in All grid", () => {

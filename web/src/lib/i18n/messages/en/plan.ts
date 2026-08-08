@@ -167,10 +167,10 @@ export const planMessages = {
   "plan.restore.notCompletedSelectAgain": "Pinterest connection was not completed. Please select the Pin again.",
 
   // ── Errors / validation ──
+  // WP1 contract: only image + board block scheduling — title/description emptiness never
+  // does (needsTitle/needsDescription were removed with the minimumPlanContentError fix).
   "plan.error.pinNotFound": "Could not find this Pin.",
   "plan.error.needsImage": "This Pin needs an image before it can be scheduled.",
-  "plan.error.needsTitle": "This Pin needs a title before it can be scheduled.",
-  "plan.error.needsDescription": "This Pin needs a description before it can be scheduled.",
   "plan.error.needsBoard": "Add a board before publishing.",
 
   // ── Drop-block toasts (assignToDate) ──
@@ -185,7 +185,7 @@ export const planMessages = {
   // ── Other toasts ──
   "plan.toast.timeLocked": "Time locked — kept during rebalancing.",
   "plan.toast.timeUnlocked": "Time unlocked.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} need an image, title, or description before scheduling.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural} need an image, a board, or a shorter title/description before scheduling.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} already scheduled",
   "plan.toast.couldNotSchedule": "Could not schedule selected Pins.",
   "plan.toast.scheduledCount": "Scheduled {n} Pin{plural}{alreadySuffix}",
@@ -193,6 +193,6 @@ export const planMessages = {
   "plan.toast.generatedMissingDetails": "Generated missing details",
   "plan.toast.movedPins": "Moved {n} Pin{plural} to {date}",
   "plan.toast.removedPins": "Removed {n} Pin{plural} from plan",
-  "plan.toast.selectedNeedDetails": "Selected Pins need an image, title, or description before scheduling.",
+  "plan.toast.selectedNeedDetails": "Selected Pins need an image, a board, or a shorter title/description before scheduling.",
   "plan.toast.noUnscheduledSelected": "No unscheduled Pins selected — already scheduled Pins are skipped.",
 } as const;

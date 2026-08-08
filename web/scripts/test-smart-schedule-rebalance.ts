@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Smart Schedule v3 -?reactive preview, fresh-on-save, future-config, rebalance
  * (eligibility / full-repack / skip / overflow / undo) and manual schedule locking.
  * Maps to the spec's "Tests required" 1-?5.
@@ -338,7 +338,7 @@ test("22. Manual date/time edit sets scheduleSource=manual + scheduleLocked=true
   const d2 = pinDraftStore.getDraft("MAN2")!;
   assert(d2.scheduleSource === "manual" && d2.scheduleLocked === true, "manual reschedule not locked");
   // wiring: the plan page routes drag/move/assign through source:manual
-  const srcPlan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+  const srcPlan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
   assert(/source: "manual"/.test(srcPlan), "plan page manual edit paths not marked manual");
   assert(/scheduleSource:\s*"manual"/.test(srcDraftStore), "assignDraftToDate not marking manual");
 });
@@ -413,7 +413,7 @@ test("M5. Inline validation hints exist (lightweight, not an error wall)", () =>
 
 // - Follow-up: saved-mode init, board removal, lock UI, lock behavior, toast copy -
 
-const srcPlan2 = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const srcPlan2 = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const srcDetails = readFileSync(join(process.cwd(), "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
 
 test("F1. Smart Schedule form initializes from the SAVED canonical config", () => {

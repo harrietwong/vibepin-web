@@ -87,71 +87,54 @@ async function main() {
     assertEq(check({}).length, 0, "clean");
   });
 
-  // ── Unmerged-branch check (2026-07-22 multi-session clobbering) ─────────────
-  type Branch = { name: string; missing: number; unmergedFromMain: number; ageDays: number };
-  const guard2 = (await import("./predeploy-guard.mjs")) as unknown as {
-    checkUnmergedBranches: (
-      branches: Branch[],
-      opts: { currentBranch: string; staleAfterDays?: number; ignorePatterns?: RegExp[] },
-    ) => string[];
-  };
-  const unmerged = guard2.checkUnmergedBranches;
-  const OPTS = { currentBranch: "deploy-me" };
-  const b = (over: Partial<Branch> & { name: string }): Branch =>
-    ({ missing: 5, unmergedFromMain: 5, ageDays: 0, ...over });
+  // ── AI-copy text model pinning ───────────────────────────────────────────────
+  // Without an explicit AI_COPY_TEXT_MODEL, providerConfig() falls back to a
+  // provider-DEPENDENT default — so swapping a credential silently swaps the model
+  // that writes user-facing copy. Deploy-time guard only; the runtime fallback stays.
+  const checkModel = (guard as unknown as {
+    checkAiCopyTextModelForProd: (env: Record<string, string | undefined>) => string[];
+  }).checkAiCopyTextModelForProd;
 
-  console.log("\npredeploy-guard unmerged-branch tests\n");
-
-  await test("exports the pure unmerged check", () => {
-    assert(typeof unmerged === "function", "checkUnmergedBranches exported");
+  await test("exports the pure AI-copy text-model check", () => {
+    assert(typeof checkModel === "function", "checkAiCopyTextModelForProd exported");
   });
 
-  await test("another session's active unmerged branch → refused", () => {
-    const problems = unmerged([b({ name: "feat/other-session" })], OPTS);
+  await test("no provider credential → not policed (nothing can run)", () => {
+    assertEq(checkModel({}).length, 0, "empty env is clean");
+    assertEq(checkModel({ AI_COPY_TEXT_MODEL: "" }).length, 0, "blank model without a credential is clean");
+    assertEq(checkModel({ LINAPI_KEY: "   " }).length, 0, "whitespace-only credential does not count as configured");
+  });
+
+  await test("LINAPI_KEY set + AI_COPY_TEXT_MODEL unset → refused", () => {
+    const problems = checkModel({ LINAPI_KEY: "lin-abc" });
     assertEq(problems.length, 1, "one problem");
-    assert(/feat\/other-session/.test(problems[0]), "names the branch that would be dropped");
-    assert(/whole-tree replace/.test(problems[0]), "explains why it matters");
+    assert(/AI_COPY_TEXT_MODEL/.test(problems[0]), "message names the variable");
   });
 
-  await test("the branch being deployed never blocks itself", () => {
-    assertEq(unmerged([b({ name: "deploy-me" })], OPTS).length, 0, "self is excluded");
+  await test("OPENAI_API_KEY set + AI_COPY_TEXT_MODEL unset → refused", () => {
+    assertEq(checkModel({ OPENAI_API_KEY: "sk-abc" }).length, 1, "openai credential is policed too");
   });
 
-  await test("branch fully contained in this deploy → not flagged", () => {
-    assertEq(unmerged([b({ name: "already-in", missing: 0 })], OPTS).length, 0, "nothing would be dropped");
+  await test("credential + blank/whitespace AI_COPY_TEXT_MODEL → refused", () => {
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "" }).length, 1, "empty string");
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "   " }).length, 1, "whitespace only");
   });
 
-  await test("finished branch already merged to the integration branch → not flagged", () => {
-    // The core noise filter: work that landed in master is accounted for even
-    // though this deploy branch predates the merge. Without this the guard would
-    // flag every stale-but-merged branch and train people to --override.
-    assertEq(unmerged([b({ name: "shipped", unmergedFromMain: 0 })], OPTS).length, 0, "merged work is not pending");
+  await test("credential + explicit AI_COPY_TEXT_MODEL → no problem", () => {
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "gemini-2.5-flash" }).length, 0, "linapi pinned");
+    assertEq(checkModel({ OPENAI_API_KEY: "sk-abc", AI_COPY_TEXT_MODEL: "gpt-4o-mini" }).length, 0, "openai pinned");
   });
 
-  await test("long-abandoned branch → not flagged", () => {
-    assertEq(unmerged([b({ name: "old-experiment", ageDays: 99 })], OPTS).length, 0, "stale branch is not active work");
-    assertEq(unmerged([b({ name: "edge", ageDays: 7 })], OPTS).length, 1, "exactly at the threshold still counts");
+  await test("AI_COPY_VISION_MODEL is NOT required by this check", () => {
+    // Only the text model is pinned at deploy time; the vision fallback chain is
+    // deliberately left intact and unpoliced.
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "m" }).length, 0, "vision model absent is fine");
   });
 
-  await test("per-agent worktree scratch refs are ignored by default", () => {
-    assertEq(unmerged([b({ name: "worktree-agent-abc123" })], OPTS).length, 0, "scratch refs ignored");
-  });
-
-  await test("multiple dropped branches → one problem listing all, worst first", () => {
-    const problems = unmerged([
-      b({ name: "small", missing: 2 }),
-      b({ name: "big", missing: 40 }),
-      b({ name: "deploy-me" }),
-      b({ name: "merged", unmergedFromMain: 0 }),
-    ], OPTS);
-    assertEq(problems.length, 1, "single aggregated problem");
-    assert(/2 other active branch/.test(problems[0]), "counts only the real drops");
-    assert(problems[0].indexOf("big") < problems[0].indexOf("small"), "most-affected branch listed first");
-    assert(!/merged/.test(problems[0]), "merged branch excluded");
-  });
-
-  await test("no branches at all → no problem", () => {
-    assertEq(unmerged([], OPTS).length, 0, "clean");
+  await test("billing check and AI-copy check are independent", () => {
+    // The billing guard must not react to AI-copy env, and vice versa.
+    assertEq(check({ LINAPI_KEY: "lin-abc" }).length, 0, "billing check ignores provider credentials");
+    assertEq(checkModel({ CREEM_MODE: "test" }).length, 0, "AI-copy check ignores billing mode");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

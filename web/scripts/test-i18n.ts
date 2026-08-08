@@ -183,7 +183,7 @@ const settingsSrc = readFileSync(join(process.cwd(), "src/components/settings/Se
 const layoutSrc   = readFileSync(join(process.cwd(), "src/app/app/layout.tsx"), "utf8");
 const workspaceSrc = readFileSync(join(process.cwd(), "src/app/app/workspace/[category]/page.tsx"), "utf8");
 const studioSrc    = readFileSync(join(process.cwd(), "src/app/app/studio/page.tsx"), "utf8");
-const planSrc      = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+const planSrc      = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 
 test("Settings modal shell uses translation keys (title, tabs, save/cancel)", () => {
   assert(settingsSrc.includes('t("settings.title")'), "modal title not translated");

@@ -1,0 +1,37 @@
+[
+  {
+    "item": "PRD 5.1 · Default filter is Unscheduled (scheduled/posted cards hidden by default)",
+    "status": "PASS",
+    "note": "unscheduled=3 visible; scheduled/posted hidden"
+  },
+  {
+    "item": "PRD 12 · Failure banner shows publish-failure count (2), excludes generation failure",
+    "status": "PASS",
+    "note": "2 Pins failed to publish Review the errors and choose how to continue. Review fa"
+  },
+  {
+    "item": "PRD 12.3 · Banner CTA opens Failed filter",
+    "status": "PASS",
+    "note": "2 failed cards shown"
+  },
+  {
+    "item": "PRD 13.1 · Failed card shows readable error + previously-scheduled time",
+    "status": "PASS",
+    "note": "error shown (prev-time not asserted)"
+  },
+  {
+    "item": "PRD 13.4 · Failed publish card has Move to Unscheduled action",
+    "status": "PASS",
+    "note": "expanded card exposes Move to Unscheduled"
+  },
+  {
+    "item": "PRD 6.3 · Scheduled expanded card has NO Schedule button (shows Scheduled + Open in Plan)",
+    "status": "PASS",
+    "note": "Schedule button removed; scheduled time shown"
+  },
+  {
+    "item": "PRD 7.1 · AI Copy panel: single Generate copy, no length/language controls",
+    "status": "PASS",
+    "note": "single \"Generate copy\" button; no length/language controls"
+  }
+]

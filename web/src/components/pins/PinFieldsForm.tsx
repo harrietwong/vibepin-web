@@ -39,6 +39,10 @@ export type PinFieldsFormProps = {
   onRetryBoards?: () => void;
   /** Field-level validation error (e.g. Schedule pressed without a board). */
   boardFieldError?: string;
+  /** Field-level validation error (e.g. Schedule/Publish pressed with an over-limit title). */
+  titleFieldError?: string;
+  /** Field-level validation error (e.g. Schedule/Publish pressed with an over-limit description). */
+  descriptionFieldError?: string;
   disabled?: boolean;
   onChange: (patch: Partial<PinFieldsValue>) => void;
   onRegenerateField?: (field: "title" | "description") => void;
@@ -120,7 +124,8 @@ function BoardCombobox({ value, boards, boardsLoading, disabled, onChange }: {
 }
 
 export function PinFieldsForm({
-  value, boards, boardsLoading, disconnected, needsReconnect, boardsError, onRetryBoards, boardFieldError, disabled,
+  value, boards, boardsLoading, disconnected, needsReconnect, boardsError, onRetryBoards, boardFieldError,
+  titleFieldError, descriptionFieldError, disabled,
   onChange, onRegenerateField, onConnect,
 }: PinFieldsFormProps) {
   const { t: tr } = useLocale();
@@ -133,6 +138,11 @@ export function PinFieldsForm({
         <FieldLabel text={tr("pinForm.pinTitle")} onRegen={regen("title")} />
         <input data-testid="board-field-title" value={value.title} disabled={disabled} maxLength={100}
           onChange={e => onChange({ title: e.target.value })} placeholder={tr("pinForm.pinTitlePlaceholder")} style={fieldStyle} />
+        {titleFieldError && (
+          <p data-testid="board-field-title-error" style={{ margin: "5px 0 0", fontSize: 11, fontWeight: 600, color: BUI.error }}>
+            {titleFieldError}
+          </p>
+        )}
       </div>
 
       <div>
@@ -140,6 +150,11 @@ export function PinFieldsForm({
         <textarea data-testid="board-field-description" value={value.description} disabled={disabled} maxLength={500}
           onChange={e => onChange({ description: e.target.value })} placeholder={tr("pinForm.descriptionPlaceholder")}
           rows={3} style={{ ...fieldStyle, resize: "vertical", minHeight: 64 }} />
+        {descriptionFieldError && (
+          <p data-testid="board-field-description-error" style={{ margin: "5px 0 0", fontSize: 11, fontWeight: 600, color: BUI.error }}>
+            {descriptionFieldError}
+          </p>
+        )}
       </div>
 
       <div>

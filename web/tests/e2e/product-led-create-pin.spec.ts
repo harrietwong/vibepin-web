@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
 /**
  * Product Signals → Create Pin (product-led flow)
@@ -11,7 +12,7 @@ import { test, expect } from "@playwright/test";
  */
 
 const MOCK_MODE = process.env.E2E_MOCK_GENERATION !== "false";
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true }); // guarded: never production
 
 const MOCK_KEYWORDS = [
   { id: "a0000001-0000-0000-0000-000000000001", keyword: "cozy bedroom decor",    category: "home-decor", search_volume_level: "High",   priority_score: 95, yearly_change: 42 },
@@ -41,7 +42,7 @@ test.describe("Product Signals → Create Pin (product-led)", () => {
     // Intercept Supabase REST API for trend_keywords (used by RecommendedOpportunitiesSection)
     // — bypasses RLS so anonymous browser sessions see opportunity data
     await page.route(`${SUPABASE_URL}/rest/v1/trend_keywords*`, async (route) => {
-      if (route.request().method() !== "GET") { await route.continue(); return; }
+      if (route.request().method() !== "GET") { await route.abort(); return; }
       await route.fulfill({
         status: 200,
         headers: { "Content-Type": "application/json", "Content-Range": `0-${MOCK_KEYWORDS.length - 1}/${MOCK_KEYWORDS.length}` },
@@ -51,7 +52,7 @@ test.describe("Product Signals → Create Pin (product-led)", () => {
 
     // Intercept Supabase REST API for pin_samples (used by StyleReferencePicker)
     await page.route(`${SUPABASE_URL}/rest/v1/pin_samples*`, async (route) => {
-      if (route.request().method() !== "GET") { await route.continue(); return; }
+      if (route.request().method() !== "GET") { await route.abort(); return; }
       await route.fulfill({
         status: 200,
         headers: { "Content-Type": "application/json", "Content-Range": `0-${MOCK_PIN_SAMPLES.length - 1}/${MOCK_PIN_SAMPLES.length}` },

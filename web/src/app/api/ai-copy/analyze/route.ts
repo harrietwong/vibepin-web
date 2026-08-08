@@ -8,11 +8,14 @@
  * The client caches the result on the Pin draft (localStorage) so that a later
  * "Generate copy" can skip vision entirely and use the fast text path.
  *
- * Status contract: 422 = bad/unreadable image; 502 = upstream provider failure;
- * 500 = provider not configured. Never returns fabricated data.
+ * Status contract: 401 = not signed in; 429 = per-user rate limit (Retry-After set);
+ * 422 = bad/unreadable image; 502 = upstream provider failure; 500 = provider not
+ * configured. Never returns fabricated data.
  */
 
 import { NextResponse } from "next/server";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
+import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
 import {
   CopyError,
   PROVIDER_MESSAGE,
@@ -42,8 +45,34 @@ type Body = {
   productTags?: string[];
 };
 
+/** Same envelope as every other failure on this route; code distinguishes sign-in from provider errors. */
+const UNAUTHENTICATED_MESSAGE = "Please sign in to analyze images.";
+
 export async function POST(req: Request) {
   const started = performance.now();
+
+  // AUTHENTICATION FIRST — before body parsing, provider configuration, the image
+  // fetch and the vision call. An anonymous caller reaches no outbound request.
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) {
+    return NextResponse.json(
+      { ok: false, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE },
+      { status: 401 },
+    );
+  }
+
+  // RATE LIMIT SECOND — still before body parsing, provider configuration, the image
+  // fetch and the vision call. Authentication alone only converted anonymous spend
+  // into per-account spend; this bounds what one account can cost. Fails OPEN when
+  // the limiter's own infrastructure is down (see lib/server/rateLimit.ts).
+  const limit = await consumeRateLimit(userId, "ai_copy_analyze");
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { ok: false, error: RATE_LIMITED_ERROR, userMessage: RATE_LIMITED_MESSAGE },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
+    );
+  }
+
   const body = await req.json() as Body;
   const cfg = providerConfig();
   // Best-effort — cost logging only; this route's auth posture is unchanged (no

@@ -7,13 +7,16 @@
  *
  * Runs only on AI-generated results (the client helper enforces this) — never on uploads.
  *
- * Status contract (mirrors /api/ai-copy/analyze): 422 = bad/unreadable image; 502 = upstream
+ * Status contract (mirrors /api/ai-copy/analyze): 401 = not signed in; 429 = per-user
+ * rate limit (Retry-After set); 422 = bad/unreadable image; 502 = upstream
  * provider failure; 500 = provider not configured. Internal error codes are NEVER surfaced to
  * the UI — only a user-safe message. On any failure the client marks the draft judge "failed"
  * and the card behaves exactly as it does today.
  */
 
 import { NextResponse } from "next/server";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
+import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
 import {
   CopyError,
   PROVIDER_MESSAGE,
@@ -38,8 +41,34 @@ type Body = {
   directionHint?: string;
 };
 
+/** Same envelope as every other failure on this route; code distinguishes sign-in from provider errors. */
+const UNAUTHENTICATED_MESSAGE = "Please sign in to run quality checks.";
+
 export async function POST(req: Request) {
   const started = performance.now();
+
+  // AUTHENTICATION FIRST — before body parsing, provider configuration, the image
+  // fetch and the grading call. An anonymous caller reaches no outbound request.
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) {
+    return NextResponse.json(
+      { ok: false, error: "unauthenticated", userMessage: UNAUTHENTICATED_MESSAGE },
+      { status: 401 },
+    );
+  }
+
+  // RATE LIMIT SECOND — still before body parsing, provider configuration, the image
+  // fetch and the grading call. Authentication alone only converted anonymous spend
+  // into per-account spend; this bounds what one account can cost. Fails OPEN when
+  // the limiter's own infrastructure is down (see lib/server/rateLimit.ts).
+  const limit = await consumeRateLimit(userId, "quality_judge");
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { ok: false, error: RATE_LIMITED_ERROR, userMessage: RATE_LIMITED_MESSAGE },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
+    );
+  }
+
   const body = await req.json() as Body;
   const cfg = providerConfig();
   // Best-effort — cost logging only; this route's auth posture is unchanged.

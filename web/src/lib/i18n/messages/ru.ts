@@ -1236,6 +1236,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.createdPinFromProduct": "Пин создан из вашего товара.",
   "studioBoard.toast.generatingOne": "Генерация 1 пина…",
   "studioBoard.toast.generatingMany": "Генерация {n} пинов…",
+  "studioBoard.toast.generatingReferenceProgress": "Генерация референса {current} из {total}…",
   "studioBoard.toast.generatedSomeFailedSome": "Сгенерировано {okCount} пин{okPlural}, {failCount} с ошибкой.",
   "studioBoard.toast.createdAiPinsKeptOriginal": "Создано {n} пин{plural} ИИ. Исходная загрузка сохранена как отдельный пин.",
   "studioBoard.toast.createdAiPins": "Создано {n} пин{plural} ИИ.",
@@ -1266,12 +1267,15 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.removeKeywordAria": "Удалить ключевое слово {keyword}",
   "studioBoard.card.moreActionsAria": "Больше действий",
   "studioBoard.card.pinImageAlt": "Изображение пина",
+  "studioBoard.card.pinImageUnavailable": "Изображение пина недоступно",
   "studioBoard.card.noImage": "Нет изображения",
   "studioBoard.card.generationFailedPlaceholder": "Не удалось сгенерировать",
+  "studioBoard.card.originalImageFallback": "Исходное изображение",
   "studioBoard.card.publishError.auth": "Срок действия подключения к Pinterest истёк. Подключитесь заново и повторите попытку.",
   "studioBoard.card.publishError.content": "Проблема с доской, изображением или ссылкой этого пина. Отредактируйте пин и повторите попытку.",
   "studioBoard.card.publishError.transient": "Публикация не удалась из-за временной ошибки. Вы можете повторить попытку.",
   "studioBoard.card.publishError.unknown": "Публикация не удалась, но подробная информация об ошибке не была записана.",
+  "studioBoard.card.generationError.generic": "Не удалось сгенерировать это изображение. Проверьте исходные изображения и повторите попытку.",
   "studioBoard.card.fix.auth": "Перед публикацией этого пина нужно переподключить аккаунт Pinterest.",
   "studioBoard.card.fix.transient": "Pinterest или соединение дали сбой при публикации. Повторите попытку сейчас или верните этот пин в незапланированные.",
   "studioBoard.card.fix.default": "Этому пину требуется внимание перед публикацией. Проверьте детали и устраните проблему.",
@@ -1294,6 +1298,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.action.schedule": "Запланировать",
   "studioBoard.expanded.collapseAria": "Свернуть",
   "studioBoard.expanded.generateAiImage": "Сгенерировать изображение ИИ",
+  "studioBoard.expanded.regenerateImage": "Перегенерировать изображение",
   "studioBoard.expanded.moreDetails": "Больше деталей",
   "studioBoard.expanded.productOptional": "Товар · Необязательно",
   "studioBoard.expanded.noLinkedProduct": "Нет связанного товара",
@@ -1750,6 +1755,8 @@ const ru: Partial<Record<MessageKey, string>> = {
   "pinDrawer.asset.chooseProductImages": "Выбрать изображения товаров",
   "pinDrawer.asset.choosePinReferences": "Выбрать референсы пинов",
   "pinDrawer.recommended.heading": "Рекомендовано для этого товара",
+  "pinDrawer.recommended.headingCategory": "Вдохновение по категории",
+  "pinDrawer.recommended.refreshedForNewProduct": "Рекомендации обновлены для нового товара",
   "pinDrawer.recommended.inspirationDisclaimer": "Это только источник стилевого вдохновения — генерация заимствует визуальные подсказки вроде композиции и настроения, но никогда не копирует эти изображения.",
   "pinDrawer.recommended.styleCuesUsed": "Использованные стилевые подсказки:",
   "pinDrawer.recommended.viewOnPinterest": "Посмотреть на Pinterest",
@@ -1764,6 +1771,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "pinDrawer.directions.heading": "Рекомендованные направления",
   "pinDrawer.settings.heading": "Настройки пина",
   "pinDrawer.settings.numberOfPins": "Количество пинов",
+  "pinDrawer.settings.pinsPerReference": "Пинов на референс",
   "pinDrawer.settings.aspectRatio": "Соотношение сторон",
   "pinDrawer.settings.resultVariety": "Разнообразие результатов",
   "pinDrawer.settings.distinct": "Разные",
@@ -1772,6 +1780,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "pinDrawer.settings.referencesCountPrefix": "Референсы: ",
   "pinDrawer.settings.promptWeightPrefix": "Вес промпта: ",
   "pinDrawer.footer.generatingEllipsis": "Генерация...",
+  "pinDrawer.footer.batchMath": "{refs} референсов × {each} пинов каждый",
   "pinDrawer.footer.generateCountSingular": "Сгенерировать {n} пин",
   "pinDrawer.footer.generateCountPlural": "Сгенерировать пинов: {n}",
 
@@ -1904,8 +1913,6 @@ const ru: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "Подключение Pinterest не завершено. Выберите пин снова.",
   "plan.error.pinNotFound": "Не удалось найти этот пин.",
   "plan.error.needsImage": "Для этого пина нужно изображение перед планированием.",
-  "plan.error.needsTitle": "Для этого пина нужен заголовок перед планированием.",
-  "plan.error.needsDescription": "Для этого пина нужно описание перед планированием.",
   "plan.error.needsBoard": "Добавьте доску перед публикацией.",
   "plan.dropBlock.editSmartSchedule": "Редактировать умное расписание",
   "plan.dropBlock.allPastTitle": "На {date} не осталось свободного времени.",
@@ -1916,7 +1923,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "В этот день уже есть {n} запланированн{plural} пин, занимающих все слоты умного расписания. Увеличьте количество пинов в день или выберите другой день.",
   "plan.toast.timeLocked": "Время зафиксировано — сохранится при перебалансировке.",
   "plan.toast.timeUnlocked": "Время разблокировано.",
-  "plan.toast.blockedNeedsDetails": "Пинам ({n}){plural} нужно изображение, заголовок или описание перед планированием.",
+  "plan.toast.blockedNeedsDetails": "Пинам ({n}){plural} нужно изображение, доска или более короткий заголовок/описание перед планированием.",
   "plan.toast.alreadyScheduled": "Пинов уже запланировано: {n}{plural}",
   "plan.toast.couldNotSchedule": "Не удалось запланировать выбранные пины.",
   "plan.toast.scheduledCount": "Запланировано пинов: {n}{plural}{alreadySuffix}",
@@ -1924,7 +1931,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Сгенерированы недостающие детали",
   "plan.toast.movedPins": "Перенесено пинов: {n}{plural} на {date}",
   "plan.toast.removedPins": "Удалено пинов из плана: {n}{plural}",
-  "plan.toast.selectedNeedDetails": "Выбранным пинам нужно изображение, заголовок или описание перед планированием.",
+  "plan.toast.selectedNeedDetails": "Выбранным пинам нужно изображение, доска или более короткий заголовок/описание перед планированием.",
   "plan.toast.noUnscheduledSelected": "Не выбрано ни одного незапланированного пина — уже запланированные пины пропускаются.",
 
   // ── products ──
@@ -2609,6 +2616,8 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioModals.picker.noProductIdeasFound": "Идеи товаров не найдены\nПопробуйте другую категорию или обновите источник идей товаров.",
   "studioModals.picker.noProductIdeasFoundCategory": "Идеи товаров для этой категории не найдены.\nПопробуйте другую категорию или обновите источник идей товаров.",
   "studioModals.picker.chooseProductImages": "Выбрать изображения товаров",
+  "studioModals.picker.chooseAProduct": "Выбрать товар",
+  "studioModals.picker.chooseProducts": "Выбрать товары",
   "studioModals.picker.choosePinReferences": "Выбрать референсы пинов",
   "studioModals.picker.productsSelectedOne": "Выбран 1 товар",
   "studioModals.picker.productsSelectedMany": "Выбрано товаров: {n}",
@@ -2648,6 +2657,10 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioModals.picker.tryAnotherCategoryPinIdeas": "Попробуйте другую категорию или обновите источник идей пинов.",
   "studioModals.picker.selectedReferencesAlsoSaved": "Выбранные референсы также сохраняются в Мои референсы.",
   "studioModals.picker.addSelected": "Добавить выбранное",
+  "studioModals.picker.addOneProduct": "Добавить 1 товар",
+  "studioModals.picker.addNProducts": "Добавить товаров: {n}",
+  "studioModals.picker.addOneReference": "Добавить 1 референс",
+  "studioModals.picker.addNReferences": "Добавить референсов: {n}",
 
   // ── studioModals: Shopify picker panel ──
   "studioModals.shopify.all": "Все",
@@ -2668,6 +2681,9 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioModals.shopify.showDetails": "Показать данные",
   "studioModals.shopify.add": "Добавить",
   "studioModals.shopify.loadMore": "Загрузить ещё",
+
+  "studioBoard.toast.fieldTooLong": "Сократите заголовок или описание перед планированием или публикацией.",
+
 };
 
 export default ru;

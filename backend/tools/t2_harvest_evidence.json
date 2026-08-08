@@ -1,0 +1,721 @@
+{
+  "generatedAt": "2026-07-14T09:18:52.347662+00:00",
+  "mode": "apply",
+  "positioning": "Pinterest Opportunity Discovery — product details are OPTIONAL enrichment",
+  "candidatePool": {
+    "activeNormUrls": 2401,
+    "retiredRows": 798,
+    "retiredUrlsReCollectable": 767,
+    "retiredWithSourcePin": 767,
+    "netNewCandidates": 349
+  },
+  "metrics": {
+    "overall": {
+      "attempted": 19,
+      "discovered": 19,
+      "discoverySuccessRate": "100%",
+      "detailEnriched": 10,
+      "detailEnrichmentRate": "53%",
+      "detailFetchStatus": {
+        "available": 10,
+        "blocked": 7,
+        "not_found": 2
+      }
+    },
+    "byDomain": {
+      "amazon.com": {
+        "bucket": "amazon",
+        "attempted": 4,
+        "discovered": 4,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 2,
+        "detailEnrichmentRate": "50%",
+        "detailFetchStatus": {
+          "available": 2,
+          "not_found": 2
+        },
+        "discoveryFailReasons": {}
+      },
+      "bannersandbeyondbya.etsy.com": {
+        "bucket": "etsy",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 0,
+        "detailEnrichmentRate": "0%",
+        "detailFetchStatus": {
+          "blocked": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "creativefabrica.com": {
+        "bucket": "shopify",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 0,
+        "detailEnrichmentRate": "0%",
+        "detailFetchStatus": {
+          "blocked": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "elpamdesign.etsy.com": {
+        "bucket": "etsy",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 0,
+        "detailEnrichmentRate": "0%",
+        "detailFetchStatus": {
+          "blocked": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "keepcalmcollection.com": {
+        "bucket": "shopify",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "lunaluxestudios.etsy.com": {
+        "bucket": "etsy",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 0,
+        "detailEnrichmentRate": "0%",
+        "detailFetchStatus": {
+          "blocked": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "morninglavender.com": {
+        "bucket": "shopify",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "nestforyourplans.etsy.com": {
+        "bucket": "etsy",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 0,
+        "detailEnrichmentRate": "0%",
+        "detailFetchStatus": {
+          "blocked": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "patrapradeep.gumroad.com": {
+        "bucket": "digital",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "payhip.com": {
+        "bucket": "digital",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "pdbcreativestudio.com": {
+        "bucket": "shopify",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "posterwallprints.com": {
+        "bucket": "shopify",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "prushotam.gumroad.com": {
+        "bucket": "digital",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "retro-stage.com": {
+        "bucket": "shopify",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 1,
+        "detailEnrichmentRate": "100%",
+        "detailFetchStatus": {
+          "available": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "shop.app": {
+        "bucket": "shopify",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 0,
+        "detailEnrichmentRate": "0%",
+        "detailFetchStatus": {
+          "blocked": 1
+        },
+        "discoveryFailReasons": {}
+      },
+      "skyrocketdigitals.etsy.com": {
+        "bucket": "etsy",
+        "attempted": 1,
+        "discovered": 1,
+        "discoverySuccessRate": "100%",
+        "detailEnriched": 0,
+        "detailEnrichmentRate": "0%",
+        "detailFetchStatus": {
+          "blocked": 1
+        },
+        "discoveryFailReasons": {}
+      }
+    }
+  },
+  "redLinesPassPreWrite": true,
+  "violations": [],
+  "discovered": [
+    {
+      "url": "https://www.posterwallprints.com/products/the-botanical-gardens-of-rome?variant=44361906192538",
+      "domain": "posterwallprints.com",
+      "bucket": "shopify",
+      "origin": "retired_reclaim",
+      "pinId": "377387643793781860",
+      "pinTitle": "The Botanical Gardens of Rome Poster - Elegant Lemon and Flower Print",
+      "sourcePinImage": "https://i.pinimg.com/originals/37/04/2b/37042b4545532919df788064737198c2.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:og:title",
+        "image:og:image",
+        "price:og:price:amount",
+        "currency:og/product:price:currency",
+        "merchant:og:site_name"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "The Botanical Gardens of Rome Poster - Elegant Lemon and Flower Print",
+        "image_url": "http://www.posterwallprints.com/cdn/shop/files/botanicalgarden1500.jpg?v=1747041455",
+        "price": 41.0,
+        "currency": "USD",
+        "merchant": "Poster Wall",
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.keepcalmcollection.com/products/relax-were-all-crazy-its-not-a-competition-poster?variant=42842677084339",
+      "domain": "keepcalmcollection.com",
+      "bucket": "shopify",
+      "origin": "retired_reclaim",
+      "pinId": "314126142779838913",
+      "pinTitle": "Relax - We're All Crazy, It's Not A Competition (dictionary background) Poster",
+      "sourcePinImage": "https://i.pinimg.com/originals/c0/0a/e3/c00ae3452184156bae1cbc021bd3f22f.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:schema.org/Product.name",
+        "image:schema.org/Product.image",
+        "merchant:schema.org/Product.brand",
+        "price:schema.org/Offer.price",
+        "currency:schema.org/Offer.priceCurrency",
+        "availability:schema.org/Offer.availability"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "Relax - We're All Crazy, It's Not A Competition (dictionary background) Poster",
+        "image_url": "https://www.keepcalmcollection.com/cdn/shop/products/relax-were-all-crazy.jpg?v=1752191083&width=1920",
+        "price": 11.95,
+        "currency": "USD",
+        "merchant": "Pointless Posters",
+        "availability": "InStock"
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://pdbcreativestudio.com/products/decal-18439?variant=43392633962595",
+      "domain": "pdbcreativestudio.com",
+      "bucket": "shopify",
+      "origin": "retired_reclaim",
+      "pinId": "4599441979865720832",
+      "pinTitle": "DECAL - 18240 - WHITE CAST VINYL",
+      "sourcePinImage": "https://i.pinimg.com/originals/3c/71/05/3c7105596293b1c33a77890ff3e721b8.png",
+      "discovery": "success",
+      "evidence": [
+        "name:schema.org/Product.name",
+        "image:schema.org/Product.image",
+        "merchant:schema.org/Product.brand",
+        "price:schema.org/Offer.price",
+        "currency:schema.org/Offer.priceCurrency",
+        "availability:schema.org/Offer.availability"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "DECAL - 18240",
+        "image_url": "https://pdbcreativestudio.com/cdn/shop/files/PDBUVDTFDECALPRODUCTIMAGE-2025-05-20T203734.905.png?v=1747841536&width=1080",
+        "price": 2.89,
+        "currency": "USD",
+        "merchant": "PDB CREATIVE STUDIO",
+        "availability": "InStock"
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://prushotam.gumroad.com/l/Bellyfatworkoutguide",
+      "domain": "prushotam.gumroad.com",
+      "bucket": "digital",
+      "origin": "net_new",
+      "pinId": "1150740142326227540",
+      "pinTitle": "slip waist workout",
+      "sourcePinImage": "https://i.pinimg.com/originals/3b/49/73/3b497326ca547ed2c2027d9cadb3f88d.png",
+      "discovery": "success",
+      "evidence": [
+        "name:og:title",
+        "image:og:image",
+        "price:product:price:amount",
+        "currency:og/product:price:currency",
+        "merchant:og:site_name"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "28-Day Belly Fat Workout Guide",
+        "image_url": "https://public-files.gumroad.com/i3t778ffj9li4r4xctlx1del3bwy",
+        "price": 7.99,
+        "currency": "USD",
+        "merchant": "Gumroad",
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://elpamdesign.etsy.com/listing/4309596179",
+      "domain": "elpamdesign.etsy.com",
+      "bucket": "etsy",
+      "origin": "retired_reclaim",
+      "pinId": "1056727500071254813",
+      "pinTitle": "Amen Art Print Bold Retro, Christian Artwork, Christian Wall Art, Christian Gifts",
+      "sourcePinImage": "https://i.pinimg.com/originals/13/b7/6f/13b76fd62e99f1267e4df6df458799e9.png",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 403,
+      "detailNote": "HTTP 403 — WAF/bot-wall. Not bypassed (by policy).",
+      "detailFetchStatus": "blocked",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.amazon.com/dp/B0CCNBB4L5/",
+      "domain": "amazon.com",
+      "bucket": "amazon",
+      "origin": "retired_reclaim",
+      "pinId": "4925880838457699",
+      "pinTitle": "Western Cowgirl Canvas Wall Art Trendy Line Vintage Room Aesthetic Poster Black and White Minimalist Print Painting Funky Wild West Cowgirls Wall Decor for Dorm Apartment Bedroom 12x16 in Unframed",
+      "sourcePinImage": "https://i.pinimg.com/originals/0c/2e/ce/0c2ece8504fabffd2b9670d767fc2752.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:<title>"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "Western Cowgirl Canvas Wall Art Trendy Line Vintage Room Aesthetic Poster Black and White Minimalist Print Painting Funky Wild West Cowgirls Wall Decor for Dorm Apartment Bedroom 12x16 in Unframed: Posters & Prints",
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.amazon.com/Motivational-Wall-Art-Inspirational-Business/dp/B0B994X226?ref_=ast_sto_dp&th=1",
+      "domain": "amazon.com",
+      "bucket": "amazon",
+      "origin": "retired_reclaim",
+      "pinId": "128634133103836664",
+      "pinTitle": "Stay Positive, Work Hard, Make It Happen with Inspirational Wall Art | UniqliDecor",
+      "sourcePinImage": "https://i.pinimg.com/originals/cd/56/07/cd5607c4be90246f0806f64066111587.jpg",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 404,
+      "detailNote": "HTTP 404 — delisted/not found",
+      "detailFetchStatus": "not_found",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.amazon.com/TcnScyfell-Newspaper-Aesthetic-Apartment-24x36inch/dp/B0D9BGWRZ6?ref_=pinterest_fplfs",
+      "domain": "amazon.com",
+      "bucket": "amazon",
+      "origin": "retired_reclaim",
+      "pinId": "3448137210872372",
+      "pinTitle": "TcnScyfell Vintage Newspaper Aesthetic Wall Decor, Trendy Black and White Gallery Canvas Wall Art, Retro Newspaper Art Print Painting Poster for Apartment 24x36inch Unframed, style-3",
+      "sourcePinImage": "https://i.pinimg.com/originals/28/54/56/285456b058bccb0ba3aab62155c44aec.jpg",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 404,
+      "detailNote": "HTTP 404 — delisted/not found",
+      "detailFetchStatus": "not_found",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.morninglavender.com/collections/home-accessories-1/products/sticker-sheet?variant=41531160232047",
+      "domain": "morninglavender.com",
+      "bucket": "shopify",
+      "origin": "retired_reclaim",
+      "pinId": "4595853144701901568",
+      "pinTitle": "STICKER SHEET",
+      "sourcePinImage": "https://i.pinimg.com/originals/f6/a1/4a/f6a14a0262236a0a1d7b07ef4480d51d.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:schema.org/Product.name",
+        "image:schema.org/Product.image",
+        "merchant:schema.org/Product.brand",
+        "price:schema.org/Offer.price",
+        "currency:schema.org/Offer.priceCurrency",
+        "availability:schema.org/Offer.availability"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "Sticker Sheet",
+        "image_url": "https://morninglavender.com/cdn/shop/files/StickerSheets_1024x1024.jpg?v=1739208922",
+        "price": 5.99,
+        "currency": "USD",
+        "merchant": "Sticker Mule",
+        "availability": "InStock"
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://bannersandbeyondbya.etsy.com/listing/4470406612",
+      "domain": "bannersandbeyondbya.etsy.com",
+      "bucket": "etsy",
+      "origin": "net_new",
+      "pinId": "725924033731759763",
+      "pinTitle": "Floral Bow Design Graduation Banner Template - Editable Banner Template",
+      "sourcePinImage": "https://i.pinimg.com/originals/b6/cb/af/b6cbaf889bf7871c41214c2bd3b718d2.png",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 403,
+      "detailNote": "HTTP 403 — WAF/bot-wall. Not bypassed (by policy).",
+      "detailFetchStatus": "blocked",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.creativefabrica.com/product/troublemaker/ref/157008",
+      "domain": "creativefabrica.com",
+      "bucket": "shopify",
+      "origin": "retired_reclaim",
+      "pinId": "96194142028383640",
+      "pinTitle": "Troublemaker SVG Cut file by Creative Fabrica Crafts · Creative Fabrica",
+      "sourcePinImage": "https://i.pinimg.com/originals/32/b8/cd/32b8cd65457c1d31acd0dce20e8d87e9.jpg",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 403,
+      "detailNote": "HTTP 403 — WAF/bot-wall. Not bypassed (by policy).",
+      "detailFetchStatus": "blocked",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://nestforyourplans.etsy.com/listing/1824171998",
+      "domain": "nestforyourplans.etsy.com",
+      "bucket": "etsy",
+      "origin": "retired_reclaim",
+      "pinId": "1008454541564008976",
+      "pinTitle": "Digital Planner Aesthetic | Monday Routine in My GoodNotes Planner",
+      "sourcePinImage": "https://i.pinimg.com/originals/3f/21/b4/3f21b44a61f4a525fbfd49e2dddfa14d.jpg",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 403,
+      "detailNote": "HTTP 403 — WAF/bot-wall. Not bypassed (by policy).",
+      "detailFetchStatus": "blocked",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://skyrocketdigitals.etsy.com/listing/1699996472/small-business-plan-template-canva-black",
+      "domain": "skyrocketdigitals.etsy.com",
+      "bucket": "etsy",
+      "origin": "retired_reclaim",
+      "pinId": "910290143422664009",
+      "pinTitle": " Easy to Use Small Business Plan Template Design - Skyrocket Digitals",
+      "sourcePinImage": "https://i.pinimg.com/originals/c3/05/8e/c3058ebe8c1bd047d743b945e00d5b6c.jpg",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 403,
+      "detailNote": "HTTP 403 — WAF/bot-wall. Not bypassed (by policy).",
+      "detailFetchStatus": "blocked",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://shop.app/products/8114798821412?variantId=43222824091684",
+      "domain": "shop.app",
+      "bucket": "shopify",
+      "origin": "net_new",
+      "pinId": "4602115990811031168",
+      "pinTitle": "Lisa Nail Art Dark Gothic Silver Press On Nails Handmade Long Stiletto Set, XS / Short Square",
+      "sourcePinImage": "https://i.pinimg.com/originals/fe/e9/c8/fee9c8e20d0e80b9e8306a580299db62.jpg",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 429,
+      "detailNote": "HTTP 429 — WAF/bot-wall. Not bypassed (by policy).",
+      "detailFetchStatus": "blocked",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.amazon.com/HealSmart-Moving-Easily-Organizer-Shelves/dp/B09CCM1FT6/ref=sr_1_3?crid=3KIFIQ1RAI2TJ&dib=eyJ2IjoiMSJ9.jawCDFWaKabvRYL8hQ17JyMWsHrpR5gcMlcJvD5C7WLiTki7p9uHbXL0VvAFV544K7LcPO6cQaQkGh43pC7EyeHsteRiZCflUHoK3MzZrdWRWgPTgxC5IV_X5EwMlLZW2jqGCS2GQXS5KLoKLZekke7f9lOYHO6b_-zYw4MGPHqZ1wIFgiJok9QxORQ06q5CgaV-Ancll4NbTEQpsPZWsHnMxNXx4ed77NEvJpBJoLiKAuByIqpe40jL3_PeJ1SIFbAneoHFENSrEqaqpFr8jmjdGB91eFPwY15SM5TVwuo.uhqFv0baMs51bBZCCpMoghN95wpq1qpSGzVMhyHQJZA&dib_tag=se&keywords=iron%2Bshelf&qid=1777054851&sprefix=iron%2Bshelf,aps,285&sr=8-3&th=1",
+      "domain": "amazon.com",
+      "bucket": "amazon",
+      "origin": "retired_reclaim",
+      "pinId": "140806235156215",
+      "pinTitle": "Iron shelves, wooden coffee table and wicker chandeliers",
+      "sourcePinImage": "https://i.pinimg.com/originals/06/99/72/0699729b104e252466df7f25df397f19.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:<title>"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "HealSmart 5-Tier Heavy Duty Foldable Metal Rack Storage Shelving Unit with Wheels Moving Easily Organizer Shelves Great for Garage Kitchen Holds up to 1250 lbs Capacity, Black (HKSHLFFOLD28156405B)",
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://www.retro-stage.com/products/red-1940s-polka-dot-halter-bow-one-piece-swimdress?variant=40963491594289",
+      "domain": "retro-stage.com",
+      "bucket": "shopify",
+      "origin": "retired_reclaim",
+      "pinId": "13581236385584770",
+      "pinTitle": "Red 1940s Polka Dot Halter Bow One-Piece Swimdress - Pink / M / 4~6",
+      "sourcePinImage": "https://i.pinimg.com/originals/bb/86/62/bb86625a9a0c213064b13788f70b062b.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:schema.org/Product.name",
+        "image:schema.org/Product.image",
+        "merchant:schema.org/Product.brand",
+        "price:schema.org/Offer.price",
+        "currency:schema.org/Offer.priceCurrency",
+        "availability:schema.org/Offer.availability"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "Red 1940s Polka Dot Halter Bow One-Piece Swimdress",
+        "image_url": "https://www.retro-stage.com/cdn/shop/files/1940s-Polka-Dot-Halter-Bow-OnePiece-Swimdress-SWIM-2_800x.jpg?v=1776671175",
+        "price": 32.99,
+        "currency": "USD",
+        "merchant": "Retro Stage",
+        "availability": "InStock"
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://patrapradeep.gumroad.com/l/kboznv",
+      "domain": "patrapradeep.gumroad.com",
+      "bucket": "digital",
+      "origin": "net_new",
+      "pinId": "1148136498781967346",
+      "pinTitle": "Soft White Pearl Nail Art Inspiration Luxury Wedding Nails with Pearls Soft Glam Wedding Nail Ideas",
+      "sourcePinImage": "https://i.pinimg.com/originals/32/a5/f8/32a5f84f428a6f0f3685b8c07ab3f144.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:og:title",
+        "image:og:image",
+        "price:product:price:amount",
+        "currency:og/product:price:currency",
+        "merchant:og:site_name"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "10 Stunning Nail Design Ideas – Digital Ebook",
+        "image_url": "https://public-files.gumroad.com/88a9nokmtgo3uqgsjqbn1w9sllk8",
+        "price": 99.0,
+        "currency": "INR",
+        "merchant": "Gumroad",
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://lunaluxestudios.etsy.com/listing/1840930304",
+      "domain": "lunaluxestudios.etsy.com",
+      "bucket": "etsy",
+      "origin": "retired_reclaim",
+      "pinId": "955115033479607966",
+      "pinTitle": "Rainbow Logo Design Ideas, Logo Design Canva Template",
+      "sourcePinImage": "https://i.pinimg.com/originals/d9/e5/b9/d9e5b9cfcfbd49103c4852f934fe4802.png",
+      "discovery": "success",
+      "evidence": [],
+      "httpStatus": 403,
+      "detailNote": "HTTP 403 — WAF/bot-wall. Not bypassed (by policy).",
+      "detailFetchStatus": "blocked",
+      "extracted": {
+        "product_name": null,
+        "image_url": null,
+        "price": null,
+        "currency": null,
+        "merchant": null,
+        "availability": null
+      },
+      "result": "ok"
+    },
+    {
+      "url": "https://payhip.com/b/nubBh",
+      "domain": "payhip.com",
+      "bucket": "digital",
+      "origin": "retired_reclaim",
+      "pinId": "1133922012470110981",
+      "pinTitle": "31-Day Daily Planner Printable | Vintage Bunny Cottagecore Planner PDF Cute Aesthetic",
+      "sourcePinImage": "https://i.pinimg.com/originals/49/42/7f/49427f86ae07620bb1b66a03018e037d.jpg",
+      "discovery": "success",
+      "evidence": [
+        "name:schema.org/Product.name",
+        "image:schema.org/Product.image",
+        "price:schema.org/Offer.price",
+        "currency:schema.org/Offer.priceCurrency",
+        "availability:schema.org/Offer.availability",
+        "merchant:og:site_name"
+      ],
+      "httpStatus": 200,
+      "nameFoundInPage": true,
+      "detailFetchStatus": "available",
+      "extracted": {
+        "product_name": "31-Day Vintage Bunny Daily Planner Printable | Cute Cottagecore PDF Planner | Soft Aesthetic Organizer",
+        "image_url": "https://payhip.com/cdn-cgi/image/format=auto/https://pe56d.s3.amazonaws.com/o_1jlh32t6e1ue06d61oqsh5obt1a.png",
+        "price": 5.99,
+        "currency": "USD",
+        "merchant": "Payhip",
+        "availability": "InStock"
+      },
+      "result": "ok"
+    }
+  ],
+  "discoveryFailures": [],
+  "insertError": "{\"code\":\"23505\",\"details\":\"Key (parent_pin_id, source_url)=(377387643793781860, https://www.posterwallprints.com/products/the-botanical-gardens-of-rome?variant=44361906192538) already exists.\",\"hint\":null,\"message\":\"duplicate key value violates unique constraint \\\"idx_pin_products_active_parent_source_url\\\"\"}"
+}

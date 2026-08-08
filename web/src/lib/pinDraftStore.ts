@@ -34,6 +34,21 @@ let _snapshot: PinDraft[] = [];
 let _snapshotVersion = -1;
 const EMPTY_DRAFTS: PinDraft[] = [];
 
+/**
+ * The IANA timezone the current user's wall-clock schedule is expressed in (RC0 WP2).
+ * Stamped onto a draft whenever plannedAt is (re)computed from date+time so the server can
+ * resolve the wall-clock to a real UTC instant (promote.ts::buildScheduledAt) instead of
+ * mis-reading it as UTC. Empty string when Intl is unavailable → server keeps legacy UTC
+ * behavior for that draft. Never throws; safe to call during renders / SSR.
+ */
+export function resolveScheduleTimezone(): string {
+  try {
+    return new Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type DraftStatus = "needs_review" | "needs_link" | "ready";
@@ -54,6 +69,7 @@ export interface PinDraft {
   scheduledDate:       string;   // ISO date string, auto-assigned on Add to Plan
   scheduledTime?:      string;   // "HH:mm" 24h posting slot, optional
   plannedAt?:          string;   // local YYYY-MM-DDTHH:mm, no UTC conversion
+  scheduleTimezone?:   string;   // IANA zone the plannedAt wall-clock was set in (RC0 WP2)
   status:              DraftStatus;
   createdAt:           string;
   updatedAt:           string;
@@ -96,8 +112,26 @@ export interface PinDraft {
   parentDraftId?:      string;
   /** Snapshot of the parent's image at generation time — display only, NOT the link. */
   sourceImageUrl?:     string;
+  // ── Reference → result association (create-pin PRD Section G2) ─────────────
+  // Each generation group uses exactly one style reference; these record WHICH
+  // reference produced this Pin so History/Retry/Regenerate and the failure
+  // fallback can resolve it. Absent on drafts generated before 2026-07-21 and on
+  // reference-less (product/prompt-only) generations — always treat as optional.
+  /** Stable id of the style reference for this Pin's generation group. */
+  referenceId?:        string;
+  /** That reference's image URL — also the generation-failure fallback image. */
+  referenceImageUrl?:  string;
+  /** Provenance of the reference, e.g. "recommended_pin" | "upload" | "saved". */
+  referenceSource?:    string;
   /** User‑approved tags/hashtags. `metadataDraft.topics` stays the raw AI result. */
   tags?:               string[];
+  /** Server-side generation id (generateAiVersions → generation_request_id) captured when
+   *  an AI image resolves this card. Lets the AI-adoption metric join on a stable id
+   *  instead of fragile image-URL string matching. Rides the payload sync — no migration. */
+  sourceGenerationId?: string;
+  /** Stable per-asset key for this generated card (the card's idempotencyKey), so a draft
+   *  keeps a durable handle to which generated asset it is even if its imageUrl changes. */
+  sourceAssetKey?:     string;
   /** Remote Pinterest Pin id captured after a successful publish. */
   remotePinId?:        string;
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published
@@ -127,6 +161,16 @@ export interface PinDraft {
   assetError?:         string;
   /** Explicit dedup key for board creation (upload / generation / migration). */
   idempotencyKey?:     string;
+  /** WP3-P1: generation_jobs row id when this placeholder was created via the
+   *  worker-mode enqueue path. Used to resume polling after a refresh (P2 reconcile);
+   *  P1 only sets/clears it during the live in-page poll. */
+  generationJobId?:    string;
+  /** WP3-P2: this placeholder's index into the generation_jobs row's `results[]`
+   *  array. Stamped at creation time (StudioBoard's worker-mode enqueue maps
+   *  placeholders[i] ↔ slot i 1:1). Reconcile-after-reload matches a reloaded
+   *  draft back to its job result by this field, not by array order — order is
+   *  not stable across a localStorage reload. */
+  generationSlot?:     number;
   /** Set when the card is archived off the active board (recoverable). */
   archivedAt?:         string;
   // ── Async image analysis (AI Copy v5 — computed at upload time) ─────────────
@@ -443,6 +487,10 @@ export function createBoardDraft(input: {
   destinationUrl?:  string;
   parentDraftId?:   string;
   sourceImageUrl?:  string;
+  /** Style reference that produced this Pin (PRD Section G2). */
+  referenceId?:        string;
+  referenceImageUrl?:  string;
+  referenceSource?:    string;
   keyword?:         string;
   category?:        string;
   model?:           string;
@@ -455,6 +503,13 @@ export function createBoardDraft(input: {
   assetError?:      string;
   /** "generating" creates a placeholder card (AI Image run in flight). */
   generationStatus?: string;
+  /** WP3-P1: generation_jobs row id (worker-mode enqueue path only). */
+  generationJobId?: string;
+  /** WP3-P2: this placeholder's slot index in the job's results[] array. */
+  generationSlot?: number;
+  /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
+  sourceGenerationId?: string;
+  sourceAssetKey?:     string;
 }): PinDraft {
   const data = load();
 
@@ -485,6 +540,9 @@ export function createBoardDraft(input: {
     source:              input.source,
     parentDraftId:       input.parentDraftId,
     sourceImageUrl:      input.sourceImageUrl,
+    referenceId:         input.referenceId,
+    referenceImageUrl:   input.referenceImageUrl,
+    referenceSource:     input.referenceSource,
     tags:                input.tags,
     idempotencyKey:      input.idempotencyKey,
     model:               input.model,
@@ -494,6 +552,10 @@ export function createBoardDraft(input: {
     pinCreatedAt:        input.pinCreatedAt,
     assetError:          input.assetError,
     generationStatus:    input.generationStatus,
+    generationJobId:     input.generationJobId,
+    generationSlot:      input.generationSlot,
+    sourceGenerationId:  input.sourceGenerationId,
+    sourceAssetKey:      input.sourceAssetKey,
   };
 
   data.drafts[draft.id] = draft;
@@ -507,7 +569,11 @@ export function createBoardDraft(input: {
  * This is the ONLY sanctioned imageUrl write after creation (updateDraft
  * deliberately forbids imageUrl patches); it also clears the generating state.
  */
-export function completeGeneratedDraft(id: string, imageUrl: string): PinDraft | null {
+export function completeGeneratedDraft(
+  id: string,
+  imageUrl: string,
+  meta?: { generationId?: string; assetKey?: string },
+): PinDraft | null {
   const data = load();
   const draft = data.drafts[id];
   if (!draft) return null;
@@ -515,6 +581,10 @@ export function completeGeneratedDraft(id: string, imageUrl: string): PinDraft |
     ...draft,
     imageUrl,
     generationStatus: "completed",
+    // Persist the server generation id + a stable asset key so the AI-adoption metric can
+    // join on ids, not image-URL strings. Only set when provided (legacy callers unchanged).
+    ...(meta?.generationId ? { sourceGenerationId: meta.generationId } : {}),
+    ...(meta?.assetKey ? { sourceAssetKey: meta.assetKey } : {}),
     updatedAt: new Date().toISOString(),
   };
   data.drafts[id] = updated;
@@ -529,16 +599,24 @@ export function failGeneratedDraft(id: string): PinDraft | null {
 }
 
 /**
- * Refresh recovery: client-driven generation cannot survive a page reload (the
- * awaiting promise is gone, so results can never be delivered). Any board draft
- * still marked "generating" on mount is dead — mark it failed so cards never
- * stay stuck in Generating forever (PRD 12.1).
+ * Refresh recovery: client-driven (inline-mode) generation cannot survive a page
+ * reload (the awaiting promise is gone, so results can never be delivered). Any
+ * board draft still marked "generating" on mount is dead — mark it failed so
+ * cards never stay stuck in Generating forever (PRD 12.1).
+ *
+ * WP3-P2: worker-mode placeholders carry a `generationJobId` — the task lives
+ * server-side and a reload does NOT kill it, so those must NOT be judged here.
+ * `onlyWithoutJobId` (default false, preserving the original call sites/tests)
+ * restricts this sweep to drafts with no jobId; generationRecovery.ts's
+ * reconcileGeneratingDrafts() is the only caller that passes `true`, and it
+ * handles the jobId-bearing drafts itself via the job-status API.
  */
-export function failStaleGeneratingDrafts(): number {
+export function failStaleGeneratingDrafts(onlyWithoutJobId = false): number {
   const data = load();
   let changed = 0;
   for (const d of Object.values(data.drafts)) {
     const s = (d.generationStatus ?? "").toLowerCase();
+    if (onlyWithoutJobId && d.generationJobId) continue;
     if (isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued")) {
       data.drafts[d.id] = { ...d, generationStatus: "failed", updatedAt: new Date().toISOString() };
       changed++;
@@ -546,6 +624,15 @@ export function failStaleGeneratingDrafts(): number {
   }
   if (changed) { persist(data); emit(); }
   return changed;
+}
+
+/** Board drafts currently in a "generating" lifecycle state (any board source). */
+export function generatingDrafts(): PinDraft[] {
+  const data = load();
+  return Object.values(data.drafts).filter(d => {
+    const s = (d.generationStatus ?? "").toLowerCase();
+    return isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued");
+  });
 }
 
 /**
@@ -656,6 +743,10 @@ export function updateDraft(
   if ("scheduledDate" in patch || "scheduledTime" in patch) {
     if (!updated.scheduledDate) updated.scheduledTime = "";
     updated.plannedAt = combineLocalPlannedAt(updated.scheduledDate, updated.scheduledTime);
+    // Stamp the zone the wall-clock was set in unless the caller supplied one explicitly.
+    if (!("scheduleTimezone" in patch)) {
+      updated.scheduleTimezone = updated.plannedAt ? resolveScheduleTimezone() : "";
+    }
   }
 
   // Auto-recompute status from title + description + scheduledDate when not explicitly set.
@@ -1022,6 +1113,9 @@ export function bulkUpdateDrafts(
     if (("scheduledDate" in patch || "scheduledTime" in patch) && !("plannedAt" in patch)) {
       if (!updated.scheduledDate) updated.scheduledTime = "";
       updated.plannedAt = combineLocalPlannedAt(updated.scheduledDate, updated.scheduledTime);
+      if (!("scheduleTimezone" in patch)) {
+        updated.scheduleTimezone = updated.plannedAt ? resolveScheduleTimezone() : "";
+      }
     }
     if (!("status" in patch)) {
       updated.status = recomputeDraftStatus(updated);

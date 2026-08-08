@@ -1,0 +1,149 @@
+Legal
+
+Privacy Policy
+Last updated: July 14, 2026
+
+1. Overview
+
+VibePin ("VibePin," "we," "us," or "our") is a merchant-facing ecommerce content creation, planning, and publishing workflow platform. VibePin helps ecommerce merchants create and manage social-ready product content from product information and content they control.
+
+This Privacy Policy explains what information we collect, how we use and protect it, how we handle Pinterest-related information, and the choices and rights available to users. By using VibePin, you acknowledge the practices described in this Privacy Policy.
+
+2. Pinterest API and OAuth Integration
+
+VibePin uses the official Pinterest API and Pinterest OAuth to allow an authorized merchant to connect the merchant's own Pinterest Business account and use Pinterest-related features within VibePin.
+
+Connecting a Pinterest account is optional and occurs only after the user initiates Pinterest's official OAuth authorization flow and grants the requested permissions. VibePin does not request or store Pinterest passwords.
+
+VibePin requests only the Pinterest permissions reasonably necessary to provide the features selected by the user. Depending on the permissions granted, VibePin may access limited Pinterest account information, profile information, boards, Pins, and publishing-related information to support account connection, board selection, content review, and user-approved publishing.
+
+VibePin does not publish a Pin without the user's explicit action. Before publishing, the user can review the content, selected board, destination URL (if provided), and other applicable publishing settings, and must explicitly approve the publish action.
+
+VibePin does not use the Pinterest API to automate engagement, follows, comments, messages, or other artificial activity. VibePin does not scrape Pinterest or use Pinterest data for unauthorized competitor monitoring.
+
+VibePin is not endorsed by, sponsored by, or affiliated with Pinterest. Pinterest is a trademark of Pinterest, Inc.
+
+3. Information We Collect
+
+We may collect the following categories of information:
+
+Account information:
+Information used to create and manage a VibePin account, such as name, email address, account identifiers, and authentication information.
+
+Merchant and product information:
+Product titles, descriptions, images, product URLs, store information, and other content imported from or provided by the merchant.
+
+Content information:
+Draft images, titles, descriptions, captions, links, publishing selections, and other content created, uploaded, edited, or approved through VibePin.
+
+Pinterest-related information:
+If a user connects Pinterest, we may receive limited information made available through the Pinterest API and the permissions granted by the user, such as Pinterest account identifiers, profile information, board information, Pin information, publishing status, and OAuth tokens.
+
+Usage and technical information:
+Information about how users interact with VibePin, such as pages visited, features used, device and browser information, IP address, logs, and error information.
+
+Communications:
+Information users provide when contacting customer support or communicating with us.
+
+4. How We Use Information
+
+We use information to:
+
+- Provide, operate, maintain, and secure VibePin.
+- Authenticate users and manage connected accounts.
+- Import and organize merchant-provided product information.
+- Create, save, edit, and manage content drafts.
+- Display Pinterest boards and other authorized account information.
+- Publish content only after the user explicitly reviews and approves the publish action.
+- Display publishing status and help diagnose publishing errors.
+- Improve product functionality, reliability, usability, and security.
+- Respond to support requests and communicate service-related information.
+- Send product updates or marketing communications where permitted, with an option to opt out.
+- Comply with legal obligations and enforce our terms and policies.
+
+5. Pinterest Data Handling
+
+Pinterest-related information is used only to provide features requested and authorized by the user.
+
+VibePin does not sell, rent, license, resell, redistribute, or otherwise provide Pinterest content or Pinterest-derived data to third parties for their independent use, advertising, data brokerage, or other unrelated purposes.
+
+We do not use Pinterest-derived data to create profiles for unrelated advertising purposes. We do not combine Pinterest-derived data with data from unrelated sources for sale or redistribution.
+
+We may use service providers that process information on our behalf solely as necessary to host, secure, maintain, monitor, and operate VibePin. These providers may not use Pinterest-related information for their own independent purposes and are subject to contractual or legal confidentiality and data-protection obligations.
+
+6. Disconnecting Pinterest and Deletion of Pinterest-Related Data
+
+A user may disconnect their Pinterest account from VibePin at any time through VibePin Settings or by revoking access through Pinterest.
+
+After a Pinterest account is disconnected or authorization is revoked:
+
+- VibePin stops making new Pinterest API requests using that authorization.
+- Stored Pinterest OAuth access and refresh tokens associated with the connection are deleted, invalidated, or otherwise made unusable.
+- Pinterest-derived account, board, Pin, and publishing information stored solely to provide the connected Pinterest features is deleted or anonymized within 30 days.
+- Limited records may be retained where reasonably necessary for security, fraud prevention, dispute resolution, legal compliance, or the establishment, exercise, or defense of legal claims.
+- Residual copies may remain temporarily in encrypted backups and are removed through the ordinary backup-retention cycle, generally within 90 days, unless a longer period is legally required.
+
+Disconnecting Pinterest does not automatically delete content that the user independently created or uploaded to VibePin, such as product information or draft content, unless the user separately requests its deletion.
+
+Users may request earlier deletion of eligible Pinterest-related data by contacting support@vibepin.co.
+
+7. Data Sharing and Service Providers
+
+We do not sell, rent, or trade personal information.
+
+We may disclose limited information to trusted service providers that help us operate VibePin, including providers of cloud hosting, databases, authentication, security, analytics, communications, and customer support. They may process information only to provide services to VibePin and subject to applicable confidentiality and data-protection obligations.
+
+We may also disclose information:
+
+- When required by law, regulation, legal process, or a valid governmental request.
+- To protect the rights, safety, security, and integrity of VibePin, our users, or others.
+- In connection with a merger, acquisition, financing, reorganization, or sale of assets, subject to appropriate safeguards and notice where required.
+
+8. Data Retention
+
+We retain personal information only for as long as reasonably necessary to provide VibePin, fulfill the purposes described in this Privacy Policy, comply with legal obligations, resolve disputes, and enforce agreements.
+
+Account and merchant content may generally be retained while the account remains active. Users may request deletion of their account and associated eligible information at any time.
+
+Pinterest-related information is handled according to the disconnection and deletion practices described in Section 6.
+
+9. Data Security
+
+We use reasonable administrative, technical, and organizational safeguards designed to protect information against unauthorized access, loss, misuse, alteration, or disclosure.
+
+Pinterest OAuth tokens are stored using appropriate security controls and are not exposed to other users or included in public client-side code. However, no system or method of transmission is completely secure, and we cannot guarantee absolute security.
+
+10. International Processing
+
+VibePin and its service providers may process information in countries other than the user's country of residence. Where required, we use appropriate safeguards for international data transfers.
+
+11. Your Choices and Rights
+
+Depending on applicable law, users may have the right to:
+
+- Request access to personal information we hold about them.
+- Request correction of inaccurate or incomplete information.
+- Request deletion of eligible personal information.
+- Request restriction of or object to certain processing.
+- Request a portable copy of certain information.
+- Withdraw consent where processing is based on consent.
+- Disconnect Pinterest or revoke Pinterest authorization at any time.
+- Opt out of marketing communications.
+
+To exercise a privacy right, contact support@vibepin.co. We may need to verify the requester's identity before completing a request.
+
+12. Children's Privacy
+
+VibePin is not directed to children under 13, or a higher minimum age where required by applicable law. We do not knowingly collect personal information from children in violation of applicable law.
+
+13. Changes to This Privacy Policy
+
+We may update this Privacy Policy from time to time. When we make material changes, we will update the "Last updated" date and provide additional notice where required.
+
+14. Contact
+
+For privacy questions, requests, or concerns, contact:
+
+VibePin
+Email: support@vibepin.co
+Website: https://www.vibepin.co

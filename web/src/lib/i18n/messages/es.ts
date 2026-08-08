@@ -1155,6 +1155,8 @@ const es: Partial<Record<MessageKey, string>> = {
   "pinDrawer.asset.chooseProductImages": "Elegir imágenes de producto",
   "pinDrawer.asset.choosePinReferences": "Elegir referencias de Pin",
   "pinDrawer.recommended.heading": "Recomendado para este producto",
+  "pinDrawer.recommended.headingCategory": "Inspiración por categoría",
+  "pinDrawer.recommended.refreshedForNewProduct": "Recomendaciones actualizadas para el nuevo producto",
   "pinDrawer.recommended.inspirationDisclaimer": "Esto es solo inspiración de estilo — la generación toma prestadas señales visuales como la composición y el ambiente, y nunca copia estas imágenes.",
   "pinDrawer.recommended.styleCuesUsed": "Señales de estilo usadas:",
   "pinDrawer.recommended.viewOnPinterest": "Ver en Pinterest",
@@ -1169,6 +1171,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "pinDrawer.directions.heading": "Direcciones recomendadas",
   "pinDrawer.settings.heading": "Ajustes del Pin",
   "pinDrawer.settings.numberOfPins": "Número de Pines",
+  "pinDrawer.settings.pinsPerReference": "Pines por imagen de referencia",
   "pinDrawer.settings.aspectRatio": "Proporción de aspecto",
   "pinDrawer.settings.resultVariety": "Variedad de resultados",
   "pinDrawer.settings.distinct": "Distintos",
@@ -1177,6 +1180,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "pinDrawer.settings.referencesCountPrefix": "Referencias: ",
   "pinDrawer.settings.promptWeightPrefix": "Peso del prompt: ",
   "pinDrawer.footer.generatingEllipsis": "Generando...",
+  "pinDrawer.footer.batchMath": "{refs} imágenes de referencia × {each} Pines cada una",
   "pinDrawer.footer.generateCountSingular": "Generar {n} Pin",
   "pinDrawer.footer.generateCountPlural": "Generar {n} Pines",
   "plan.day.mon": "LUN",
@@ -1307,8 +1311,6 @@ const es: Partial<Record<MessageKey, string>> = {
   "plan.restore.notCompletedSelectAgain": "La conexión con Pinterest no se completó. Vuelve a seleccionar el Pin.",
   "plan.error.pinNotFound": "No se pudo encontrar este Pin.",
   "plan.error.needsImage": "Este Pin necesita una imagen antes de poder programarse.",
-  "plan.error.needsTitle": "Este Pin necesita un título antes de poder programarse.",
-  "plan.error.needsDescription": "Este Pin necesita una descripción antes de poder programarse.",
   "plan.error.needsBoard": "Añade un tablero antes de publicar.",
   "plan.dropBlock.editSmartSchedule": "Editar Programación inteligente",
   "plan.dropBlock.allPastTitle": "No queda tiempo disponible el {date}.",
@@ -1319,7 +1321,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "plan.dropBlock.fullDesc": "Este día ya tiene {n} Pin{plural} programados llenando cada franja de Programación inteligente. Aumenta los Pines por día o elige otro día.",
   "plan.toast.timeLocked": "Hora bloqueada — se conserva durante el reequilibrio.",
   "plan.toast.timeUnlocked": "Hora desbloqueada.",
-  "plan.toast.blockedNeedsDetails": "{n} Pin{plural}: falta imagen, título o descripción antes de programar.",
+  "plan.toast.blockedNeedsDetails": "{n} Pin{plural}: falta una imagen, un tablero o un título/descripción más corto antes de programar.",
   "plan.toast.alreadyScheduled": "{n} Pin{plural} ya en el calendario",
   "plan.toast.couldNotSchedule": "No se pudieron programar los Pines seleccionados.",
   "plan.toast.scheduledCount": "Programados {n} Pin{plural}{alreadySuffix}",
@@ -1327,7 +1329,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "plan.toast.generatedMissingDetails": "Se generaron los detalles faltantes",
   "plan.toast.movedPins": "Se movió {n} Pin{plural} a {date}",
   "plan.toast.removedPins": "Se quitó {n} Pin{plural} del plan",
-  "plan.toast.selectedNeedDetails": "Los Pines seleccionados necesitan una imagen, título o descripción antes de programar.",
+  "plan.toast.selectedNeedDetails": "Los Pines seleccionados necesitan una imagen, un tablero o un título/descripción más corto antes de programar.",
   "plan.toast.noUnscheduledSelected": "No hay Pines sin programar seleccionados — se omiten los que ya están programados.",
 
   // ── planViews: PlanListView — status labels ──
@@ -2059,6 +2061,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.createdPinFromProduct": "Se creó un Pin a partir de tu producto.",
   "studioBoard.toast.generatingOne": "Generando 1 Pin…",
   "studioBoard.toast.generatingMany": "Generando {n} Pines…",
+  "studioBoard.toast.generatingReferenceProgress": "Generando referencia {current} de {total}…",
   "studioBoard.toast.generatedSomeFailedSome": "{okCount} Pin{okPlural} generado(s), {failCount} fallido(s).",
   "studioBoard.toast.createdAiPinsKeptOriginal": "Se crearon {n} Pin{plural} con IA. La imagen original se conservó como un Pin aparte.",
   "studioBoard.toast.createdAiPins": "Se crearon {n} Pin{plural} con IA.",
@@ -2091,14 +2094,17 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.removeKeywordAria": "Quitar palabra clave {keyword}",
   "studioBoard.card.moreActionsAria": "Más acciones",
   "studioBoard.card.pinImageAlt": "Imagen del Pin",
+  "studioBoard.card.pinImageUnavailable": "Imagen del Pin no disponible",
   "studioBoard.card.noImage": "Sin imagen",
   "studioBoard.card.generationFailedPlaceholder": "Error al generar",
+  "studioBoard.card.originalImageFallback": "Imagen original",
 
   // ── studioBoard: PinBoardCard — recommended fix copy ──
   "studioBoard.card.publishError.auth": "La conexión con Pinterest ha caducado. Vuelve a conectar e inténtalo de nuevo.",
   "studioBoard.card.publishError.content": "Hay un problema con el tablero, la imagen o el enlace de este Pin. Edita el Pin e inténtalo de nuevo.",
   "studioBoard.card.publishError.transient": "La publicación falló por un error temporal. Puedes volver a intentarlo.",
   "studioBoard.card.publishError.unknown": "La publicación falló, pero no se registró información detallada del error.",
+  "studioBoard.card.generationError.generic": "No pudimos generar esta imagen. Revisa las imágenes de origen e inténtalo de nuevo.",
   "studioBoard.card.fix.auth": "Tu conexión con Pinterest debe reconectarse antes de que este Pin pueda publicarse.",
   "studioBoard.card.fix.transient": "Pinterest o la conexión fallaron al publicar. Inténtalo de nuevo ahora, o mueve este Pin de vuelta a Sin programar.",
   "studioBoard.card.fix.default": "Algo en este Pin necesita atención antes de poder publicarse. Revisa los detalles y corrige el problema.",
@@ -2127,6 +2133,7 @@ const es: Partial<Record<MessageKey, string>> = {
   // ── studioBoard: PinBoardCard — expanded card ──
   "studioBoard.expanded.collapseAria": "Contraer",
   "studioBoard.expanded.generateAiImage": "Generar imagen con IA",
+  "studioBoard.expanded.regenerateImage": "Regenerar imagen",
   "studioBoard.expanded.moreDetails": "Más detalles",
   "studioBoard.expanded.productOptional": "Producto · Opcional",
   "studioBoard.expanded.noLinkedProduct": "Sin producto vinculado",
@@ -2598,6 +2605,8 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioModals.picker.noProductIdeasFound": "No se encontraron ideas de producto\nPrueba otra categoría o actualiza la fuente de ideas de producto.",
   "studioModals.picker.noProductIdeasFoundCategory": "No se encontraron ideas de producto para esta categoría.\nPrueba otra categoría o actualiza la fuente de ideas de producto.",
   "studioModals.picker.chooseProductImages": "Elegir imágenes de producto",
+  "studioModals.picker.chooseAProduct": "Elegir un producto",
+  "studioModals.picker.chooseProducts": "Elegir productos",
   "studioModals.picker.choosePinReferences": "Elegir referencias de Pin",
   "studioModals.picker.productsSelectedOne": "1 producto seleccionado",
   "studioModals.picker.productsSelectedMany": "{n} productos seleccionados",
@@ -2637,6 +2646,10 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioModals.picker.tryAnotherCategoryPinIdeas": "Prueba otra categoría o actualiza la fuente de ideas de Pin.",
   "studioModals.picker.selectedReferencesAlsoSaved": "Las referencias seleccionadas también se guardan en Mis referencias.",
   "studioModals.picker.addSelected": "Añadir seleccionados",
+  "studioModals.picker.addOneProduct": "Añadir 1 producto",
+  "studioModals.picker.addNProducts": "Añadir {n} productos",
+  "studioModals.picker.addOneReference": "Añadir 1 referencia",
+  "studioModals.picker.addNReferences": "Añadir {n} referencias",
 
   // ── studioModals: Shopify picker panel ──
   "studioModals.shopify.all": "Todos",
@@ -2875,6 +2888,9 @@ const es: Partial<Record<MessageKey, string>> = {
   "trends.toast.addedToPlan": "\"{keyword}\" añadido al plan semanal",
   "trends.toast.viewPlan": "Ver Plan",
   "trends.toast.signInToSave": "Inicia sesión para guardar esta palabra clave",
+
+  "studioBoard.toast.fieldTooLong": "Acorta el título o la descripción antes de programar o publicar.",
+
 };
 
 export default es;

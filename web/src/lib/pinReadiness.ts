@@ -118,3 +118,38 @@ export function getPinReadiness(d: ReadinessInput): {
 export function isMissingPrimaryProduct(d: ReadinessInput): boolean {
   return !clean(d.primaryProductId);
 }
+
+// ── Field-length validation (WP1 follow-up) ──────────────────────────────────────
+// Title/description are still non-required — an EMPTY value never blocks Schedule or
+// Publish (unchanged contract, see module docstring). An OVER-LENGTH value, however, is
+// a hard block: Pinterest's own limits (title ~100, description ~500 as this product
+// enforces it) mean an over-cap value would otherwise be silently truncated server-side
+// (see publishPin.ts) with no user-visible warning at edit time. This is intentionally a
+// SEPARATE function from pinMissingFields/isPinReady — those two stay scoped to the
+// image+board "required fields" contract that existing tests assert on (isPinReady must
+// keep returning true for empty title/description). Callers combine both checks at the
+// Schedule/Publish gate (see StudioBoard/BatchEditDrawer/DraftDetailsDrawer).
+export const TITLE_MAX_LENGTH = 100;
+export const DESCRIPTION_MAX_LENGTH = 500;
+
+export type PinFieldErrors = { title?: string; description?: string };
+
+/** Over-limit title/description errors, keyed by field. Empty values never error. */
+export function pinFieldErrors(d: Pick<ReadinessInput, "title" | "description">): PinFieldErrors {
+  const errors: PinFieldErrors = {};
+  const title = (d.title ?? "");
+  const description = (d.description ?? "");
+  if (title.length > TITLE_MAX_LENGTH) {
+    errors.title = `Title is ${title.length} characters — the limit is ${TITLE_MAX_LENGTH}.`;
+  }
+  if (description.length > DESCRIPTION_MAX_LENGTH) {
+    errors.description = `Description is ${description.length} characters — the limit is ${DESCRIPTION_MAX_LENGTH}.`;
+  }
+  return errors;
+}
+
+/** True when any field in `d` exceeds its length cap (Schedule/Publish must block). */
+export function hasPinFieldErrors(d: Pick<ReadinessInput, "title" | "description">): boolean {
+  const errors = pinFieldErrors(d);
+  return !!(errors.title || errors.description);
+}

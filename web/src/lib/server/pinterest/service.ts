@@ -680,6 +680,7 @@ function isTrialAccessResponse(status: number, json: unknown, message: string): 
   // since no approval was ever pending. Scope errors now fall through to
   // isMissingScopeResponse, which marks the connection for reconnect.
   return false;
+
 }
 
 function extractMissingScopes(json: unknown): string[] {

@@ -1,16 +1,17 @@
 import { test, expect, type Page } from "@playwright/test";
+import { resolveSupabaseTarget } from "./helpers/supabaseTarget";
 
 /**
  * Create Pins initial-state UI — compact composer + generation feed fallback.
  * Run: pnpm test:e2e studio-initial-state.spec.ts
  */
 
-const SUPABASE_URL = "https://jaxteelkecvlozdrdoog.supabase.co";
+const SUPABASE_URL = resolveSupabaseTarget({ allowMock: true }); // guarded: never production
 
 async function setupMocks(page: Page) {
   // Return empty arrays for all Supabase table reads so the picker can render cleanly.
   await page.route(`${SUPABASE_URL}/rest/v1/**`, async (route) => {
-    if (route.request().method() !== "GET") { await route.continue(); return; }
+    if (route.request().method() !== "GET") { await route.abort(); return; }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   await page.route(`${SUPABASE_URL}/auth/**`, async (route) => { await route.continue(); });
@@ -97,7 +98,8 @@ test.describe("Create Pins initial state", () => {
     await page.getByTestId("add-product-images").click();
     await expect(page.getByTestId("asset-picker-modal")).toHaveCount(0);
     await expect(page.getByTestId("product-picker")).toBeVisible({ timeout: 8000 });
-    await expect(page.getByText("Choose Product Images")).toBeVisible();
+    // Header is selection-mode aware (PRD Section C); nothing is selected yet.
+    await expect(page.getByText("Choose products")).toBeVisible();
     await expect(page.getByTestId("composer-panel")).toBeVisible();
     await expect(page.getByTestId("picker-tab-my_products")).toHaveText("My Products");
     await expect(page.getByTestId("picker-tab-product_ideas")).toHaveText("Product Ideas");

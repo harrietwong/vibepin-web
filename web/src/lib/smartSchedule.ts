@@ -5,7 +5,7 @@
 
 import type { PinDraft } from "./pinDraftStore";
 import * as pinDraftStore from "./pinDraftStore";
-import { isPublishableImage } from "./pinReadiness";
+import { isPublishableImage, pinFieldErrors } from "./pinReadiness";
 import { combineLocalPlannedAt, localDateISO, sanitizeHandoffField } from "./weeklyPlanHandoff";
 import {
   getSmartScheduleConfig,
@@ -300,6 +300,15 @@ export function ensureScheduledPlanTime(id: string, opts?: EnsureScheduleOpts): 
   }
   if (!sanitizeHandoffField(draft.boardId)) {
     return { ok: false, reason: "not_ready", toast: "Choose a Pinterest board before scheduling this Pin." };
+  }
+  // Title ≤100 / description ≤500 (WP1 follow-up) — over-limit blocks; empty is fine
+  // (unchanged). This is the canonical Schedule/Add-to-Plan entry point (see docstring
+  // above), so gating here covers every caller (StudioBoard's own handleSchedule already
+  // pre-checks the same thing for its immediate toast/field-error UX, but batch/Smart
+  // Schedule-add callers only route through here).
+  const lenErrors = pinFieldErrors({ title: draft.title, description: draft.description });
+  if (lenErrors.title || lenErrors.description) {
+    return { ok: false, reason: "not_ready", toast: lenErrors.title || lenErrors.description! };
   }
 
   const curDate = sanitizeHandoffField(draft.scheduledDate);

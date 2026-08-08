@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Smart Schedule refactor tests -?centered modal, timezone selector, pins-per-day
  * generator, canonical config sync, and schedule integration.
  */
@@ -276,7 +276,7 @@ test("Settings Smart Schedule route renders the shared canonical form", () => {
 // - Weekly Plan multi-select + Batch Edit entry -
 
 test("Weekly Plan selection toolbar: Batch edit primary, quiet count, Schedule/Publish now, Clear", () => {
-  const srcPlan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+  const srcPlan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
   assert(srcPlan.includes('data-testid="weekly-plan-selection-bar"'), "selection bar missing");
   assert(srcPlan.includes('data-testid="wp-batch-edit"'), "batch edit entry missing");
   assert(srcPlan.includes('data-testid="wp-selected-count"'), "quiet count missing");
@@ -285,13 +285,13 @@ test("Weekly Plan selection toolbar: Batch edit primary, quiet count, Schedule/P
 });
 
 test("Weekly Plan multi-select checkboxes + edit/selection mode exist", () => {
-  const srcPlan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+  const srcPlan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
   assert(srcPlan.includes('data-testid="weekly-plan-edit-toggle"'), "selection-mode toggle missing");
   assert(/select!?\.toggle/.test(srcPlan), "card selection toggle missing");
 });
 
 test("Weekly Plan Schedule uses canonical Smart Schedule + skips already-planned (no overwrite)", () => {
-  const srcPlan = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
+  const srcPlan = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
   assert(srcPlan.includes("handleBulkSmartSchedule"), "schedule handler missing");
   assert(srcPlan.includes("filterUnscheduledPinIds"), "does not skip already-scheduled (would overwrite)");
   assert(srcPlan.includes("autoSchedulePins"), "does not use canonical Smart Schedule");

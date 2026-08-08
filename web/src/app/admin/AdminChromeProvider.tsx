@@ -29,6 +29,7 @@ import {
   readLocalAdminLanguage,
   writeLocalAdminLanguage,
   adminT,
+  adminTFmt,
   type AdminLanguage,
   type AdminMessageKey,
 } from "@/lib/admin/adminMessages";
@@ -39,6 +40,7 @@ type AdminChromeContextValue = {
   lang: AdminLanguage;
   setLang: (lang: AdminLanguage) => void;
   t: (key: AdminMessageKey) => string;
+  tFmt: (key: AdminMessageKey, vars: Record<string, string | number>) => string;
 };
 
 const AdminChromeContext = createContext<AdminChromeContextValue | null>(null);
@@ -74,10 +76,14 @@ export function AdminChromeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const t = useCallback((key: AdminMessageKey) => adminT(lang, key), [lang]);
+  const tFmt = useCallback(
+    (key: AdminMessageKey, vars: Record<string, string | number>) => adminTFmt(lang, key, vars),
+    [lang],
+  );
 
   const value = useMemo<AdminChromeContextValue>(
-    () => ({ theme, setTheme, lang, setLang, t }),
-    [theme, setTheme, lang, setLang, t],
+    () => ({ theme, setTheme, lang, setLang, t, tFmt }),
+    [theme, setTheme, lang, setLang, t, tFmt],
   );
 
   return <AdminChromeContext.Provider value={value}>{children}</AdminChromeContext.Provider>;
