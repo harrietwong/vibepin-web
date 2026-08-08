@@ -1,7 +1,17 @@
 import type { Metadata } from "next";
 import { Toaster } from "sonner";
 import { PreviewBadge } from "@/components/dev/PreviewBadge";
+import { LEGAL_ENTITY_NAME, LEGAL_CONTACT_EMAIL, LEGAL_WEBSITE_URL } from "@/lib/legalEntity";
 import "./globals.css";
+
+const ORGANIZATION_JSON_LD = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: "VibePin",
+  legalName: LEGAL_ENTITY_NAME,
+  url: LEGAL_WEBSITE_URL,
+  email: LEGAL_CONTACT_EMAIL,
+};
 
 export const metadata: Metadata = {
   title: "VibePin — Pinterest Opportunity Intelligence & Content Planning",
@@ -54,6 +64,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(ORGANIZATION_JSON_LD) }}
+        />
       </head>
       <body>
         {children}

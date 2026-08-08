@@ -1,10 +1,11 @@
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
+import { LEGAL_ENTITY_NAME } from "@/lib/legalEntity";
 
 // TODO: replace with final support email after domain purchase
 const CONTACT = "support@vibepin.co";
-const UPDATED = "June 9, 2026";
+const UPDATED = "August 8, 2026";
 
 export const metadata = {
   title: "Terms of Service — VibePin",
@@ -44,9 +45,9 @@ export default function TermsPage() {
           <section>
             <h2 className="text-[16px] font-bold text-white mb-3">1. Acceptance of Terms</h2>
             <p>
+              These Terms of Service govern your use of VibePin, a service operated by {LEGAL_ENTITY_NAME} (&quot;we&quot;, &quot;us&quot;, &quot;our&quot;).
               By accessing or using VibePin (&quot;the Service&quot;), you agree to be bound by these Terms of Service.
               If you do not agree to these terms, do not use the Service.
-              VibePin is operated by the VibePin team (&quot;we&quot;, &quot;us&quot;, &quot;our&quot;).
             </p>
           </section>
 
@@ -246,6 +247,7 @@ export default function TermsPage() {
 
           <section>
             <h2 className="text-[16px] font-bold text-white mb-3">11. Contact</h2>
+            <p className="mb-1">Legal entity: {LEGAL_ENTITY_NAME}</p>
             <p>
               For questions about these Terms, contact us at:{" "}
               <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors"

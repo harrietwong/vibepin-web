@@ -196,3 +196,49 @@ export async function disconnectInstagramConnection(uid: string): Promise<void> 
     throw new Error("Instagram connection could not be disconnected");
   }
 }
+
+/**
+ * Decrypted Instagram access token for publishing — SERVER-ONLY.
+ *
+ * Returns null unless the connection is currently `connected`: an expired or
+ * disconnected row must never yield a usable credential. The plaintext token is
+ * returned to the caller and never logged, stored, or sent to the client.
+ */
+export async function getInstagramAccessToken(
+  uid: string,
+): Promise<{ accessToken: string; userId: string | null; username: string | null } | null> {
+  const { data, error } = await db()
+    .from(TABLE)
+    .select("connection_status, access_token_encrypted, provider_account_id, provider_account_name")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingTable(error.code)) return null;
+    console.error("[instagram] read token:", error.message);
+    return null;
+  }
+
+  const row = data as {
+    connection_status?: string | null;
+    access_token_encrypted?: string | null;
+    provider_account_id?: string | null;
+    provider_account_name?: string | null;
+  } | null;
+
+  if (!row || row.connection_status !== "connected" || !row.access_token_encrypted) return null;
+
+  try {
+    return {
+      accessToken: cipher.decrypt(row.access_token_encrypted),
+      userId: row.provider_account_id ?? null,
+      username: row.provider_account_name ?? null,
+    };
+  } catch {
+    // A token encrypted under a rotated key is unusable — treat as not connected
+    // rather than throwing a crypto error into the publish path.
+    console.error("[instagram] token decrypt failed");
+    return null;
+  }
+}
