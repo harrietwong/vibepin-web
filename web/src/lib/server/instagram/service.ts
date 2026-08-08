@@ -222,3 +222,146 @@ export async function fetchInstagramProfile(accessToken: string): Promise<Instag
 export function isProfessionalAccount(accountType: InstagramAccountType | null | undefined): boolean {
   return accountType === "BUSINESS" || accountType === "MEDIA_CREATOR";
 }
+
+// ── Publishing ──────────────────────────────────────────────────────────────
+
+/** Only a public http(s) image can be fetched by Instagram's servers. */
+function isPubliclyFetchableImage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    return host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+  } catch {
+    return false;
+  }
+}
+
+export type InstagramPublishInput = {
+  accessToken: string;
+  /** IG user id (the professional account's own id, from the profile call). */
+  igUserId: string;
+  imageUrl: string;
+  caption?: string;
+  /**
+   * Destination URL. Instagram captions render links as plain text — they are
+   * NOT clickable — but dropping the link entirely would silently lose the
+   * merchant's traffic path, so it is appended to the caption where a reader can
+   * still see and copy it.
+   */
+  destinationUrl?: string;
+};
+
+export type InstagramPublishResult = { mediaId: string; permalink: string | null };
+
+/** Compose the caption Instagram will show, with the destination URL appended. */
+export function buildInstagramCaption(caption?: string, destinationUrl?: string): string {
+  const body = (caption ?? "").trim();
+  const link = (destinationUrl ?? "").trim();
+  if (!link) return body;
+  return body ? `${body}\n\n${link}` : link;
+}
+
+/**
+ * Publish a single image to an Instagram professional account.
+ *
+ * Two-step by design on Instagram's side: create a media CONTAINER, then publish
+ * it. The container is processed asynchronously, so between the two we poll
+ * status_code until it reports FINISHED — publishing an IN_PROGRESS container
+ * fails. ERROR and EXPIRED are terminal and reported as such rather than retried.
+ */
+export async function publishToInstagram(input: InstagramPublishInput): Promise<InstagramPublishResult> {
+  if (!isPubliclyFetchableImage(input.imageUrl)) {
+    throw new InstagramApiError(
+      "Image URL must be publicly reachable for Instagram to fetch it",
+      400,
+      "invalid_image_url",
+    );
+  }
+
+  const caption = buildInstagramCaption(input.caption, input.destinationUrl);
+
+  // 1 — create the container.
+  const createBody = new URLSearchParams({
+    image_url: input.imageUrl,
+    access_token: input.accessToken,
+  });
+  if (caption) createBody.set("caption", caption);
+
+  const createRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${input.igUserId}/media`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: createBody.toString(),
+  });
+  const created = (await createRes.json().catch(() => ({}))) as {
+    id?: string;
+    error?: { message?: string; code?: number };
+  };
+  if (!createRes.ok || !created.id) {
+    throw new InstagramApiError(
+      created.error?.message ?? "Instagram rejected the media container",
+      createRes.status,
+      "container_failed",
+    );
+  }
+  const containerId = created.id;
+
+  // 2 — wait for Instagram to finish fetching/processing the image.
+  const DEADLINE_MS = 45_000;
+  const POLL_MS = 2_000;
+  const startedAt = Date.now();
+  for (;;) {
+    const statusRes = await fetch(
+      `${INSTAGRAM_GRAPH_URL}/${containerId}?fields=status_code&access_token=${encodeURIComponent(input.accessToken)}`,
+    );
+    const status = (await statusRes.json().catch(() => ({}))) as { status_code?: string };
+    if (status.status_code === "FINISHED") break;
+    if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
+      throw new InstagramApiError(
+        "Instagram could not process the image for this post",
+        502,
+        "container_processing_failed",
+      );
+    }
+    if (Date.now() - startedAt > DEADLINE_MS) {
+      throw new InstagramApiError(
+        "Instagram is still processing the image — please try again",
+        504,
+        "container_timeout",
+      );
+    }
+    await new Promise(r => setTimeout(r, POLL_MS));
+  }
+
+  // 3 — publish the finished container.
+  const publishRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${input.igUserId}/media_publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ creation_id: containerId, access_token: input.accessToken }).toString(),
+  });
+  const publishedJson = (await publishRes.json().catch(() => ({}))) as {
+    id?: string;
+    error?: { message?: string };
+  };
+  if (!publishRes.ok || !publishedJson.id) {
+    throw new InstagramApiError(
+      publishedJson.error?.message ?? "Instagram rejected the publish",
+      publishRes.status,
+      "publish_failed",
+    );
+  }
+
+  // 4 — best-effort permalink. A missing permalink never fails a live post.
+  let permalink: string | null = null;
+  try {
+    const permaRes = await fetch(
+      `${INSTAGRAM_GRAPH_URL}/${publishedJson.id}?fields=permalink&access_token=${encodeURIComponent(input.accessToken)}`,
+    );
+    const perma = (await permaRes.json().catch(() => ({}))) as { permalink?: string };
+    if (typeof perma.permalink === "string" && perma.permalink) permalink = perma.permalink;
+  } catch {
+    /* permalink is a nicety, not part of the publish contract */
+  }
+
+  return { mediaId: publishedJson.id, permalink };
+}

@@ -57,10 +57,16 @@ export const officialProvider: SocialPublishingProvider = {
    * published/failed/not_implemented, so the distinction rides `error`):
    *   - no publishable Page  → ok:false, status:"failed", "Connect a Facebook Page first."
    *   - Graph rejected it    → ok:false, status:"failed", classified FacebookApiError message
-   * Everything else stays "not_implemented" (Instagram is not wired here yet;
-   * Pinterest never reaches this provider — see the module comment).
+   * INSTAGRAM — publishes an image post to the connected professional account
+   * (see publishToInstagramAccount below for its two-step container flow).
+   *
+   * Everything else stays "not_implemented". Pinterest never reaches this
+   * provider — see the module comment.
    */
   async publishPost(input: PublishPostInput): Promise<PublishResult> {
+    if (input.provider === "instagram") {
+      return publishToInstagramAccount(input);
+    }
     if (input.provider !== "facebook") {
       return { ok: false, status: "not_implemented", error: "Publishing not yet wired for this platform." };
     }
@@ -122,3 +128,55 @@ export const officialProvider: SocialPublishingProvider = {
     // the API route still deletes the social_connections row afterward.
   },
 };
+
+/**
+ * Publish one image post to the connected Instagram professional account.
+ *
+ * Mirrors the Facebook branch's contract: a null credential covers every
+ * not-publishable state (no row, disconnected, expired, undecryptable token)
+ * with one clean message, and Instagram's own error text — which never carries
+ * a token — is surfaced as-is so the merchant learns what Instagram objected to.
+ *
+ * Instagram requires an image: unlike a Facebook Page it has no text-only post,
+ * so a Pin without one is rejected before any API call.
+ */
+async function publishToInstagramAccount(input: PublishPostInput): Promise<PublishResult> {
+  const userId = input.userId?.trim();
+  if (!userId) {
+    return { ok: false, status: "failed", error: "Connect an Instagram account first." };
+  }
+
+  const { getInstagramAccessToken } = await import("@/lib/server/instagram/connectionStore");
+  const connection = await getInstagramAccessToken(userId);
+  if (!connection?.userId) {
+    return { ok: false, status: "failed", error: "Connect an Instagram account first." };
+  }
+
+  const imageUrl = input.post.imageUrls?.[0];
+  if (!imageUrl) {
+    return { ok: false, status: "failed", error: "Instagram posts need an image." };
+  }
+
+  const { publishToInstagram, InstagramApiError } = await import("@/lib/server/instagram/service");
+  try {
+    const result = await publishToInstagram({
+      accessToken: connection.accessToken,
+      igUserId: connection.userId,
+      imageUrl,
+      // Instagram has no separate title field — title and caption are one body.
+      caption: [input.post.title?.trim(), input.post.caption?.trim()].filter(Boolean).join("\n\n"),
+      destinationUrl: input.post.destinationUrl ?? undefined,
+    });
+    return {
+      ok: true,
+      status: "published",
+      externalPostId: result.mediaId,
+      externalPostUrl: result.permalink,
+    };
+  } catch (err) {
+    const message = err instanceof InstagramApiError
+      ? err.message
+      : "Could not publish to Instagram. Please try again.";
+    return { ok: false, status: "failed", error: message };
+  }
+}
