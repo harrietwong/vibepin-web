@@ -1,9 +1,10 @@
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { BackButton } from "@/components/BackButton";
+import { LEGAL_ENTITY_NAME } from "@/lib/legalEntity";
 
 const CONTACT = "support@vibepin.co";
-const UPDATED = "July 14, 2026";
+const UPDATED = "August 8, 2026";
 
 export const metadata = {
   title: "Privacy Policy — VibePin",
@@ -45,8 +46,12 @@ export default function PrivacyPage() {
             <p className="mb-3">
               VibePin (&quot;VibePin,&quot; &quot;we,&quot; &quot;us,&quot; or &quot;our&quot;) is a merchant-facing ecommerce content creation, planning, and publishing workflow platform. VibePin helps ecommerce merchants create and manage social-ready product content from product information and content they control.
             </p>
-            <p>
+            <p className="mb-3">
               This Privacy Policy explains what information we collect, how we use and protect it, how we handle Pinterest-related information, and the choices and rights available to users. By using VibePin, you acknowledge the practices described in this Privacy Policy.
+            </p>
+            <p>
+              VibePin is operated by {LEGAL_ENTITY_NAME}. For privacy-related inquiries, contact{" "}
+              <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors" style={{ color: "#0891B2" }}>{CONTACT}</a>.
             </p>
           </section>
 
@@ -258,6 +263,7 @@ export default function PrivacyPage() {
             <h2 className="text-[16px] font-bold text-white mb-3">14. Contact</h2>
             <p className="mb-2">For privacy questions, requests, or concerns, contact:</p>
             <p className="mb-1 text-white font-semibold">VibePin</p>
+            <p className="mb-1">Legal entity: {LEGAL_ENTITY_NAME}</p>
             <p className="mb-1">
               Email:{" "}
               <a href={`mailto:${CONTACT}`} className="font-semibold hover:text-white transition-colors" style={{ color: "#0891B2" }}>{CONTACT}</a>
