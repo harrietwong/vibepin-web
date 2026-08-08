@@ -67,7 +67,11 @@ function makeFakeDb(opts?: { failInsert?: boolean; failSelect?: boolean }) {
             // ON CONFLICT (idempotency_key) DO NOTHING semantics.
             if (seenKeys.has(r.idempotency_key)) continue;
             seenKeys.add(r.idempotency_key);
-            store.push({ ...r, created_at: r.created_at ?? new Date().toISOString() });
+            // Stamp with the test's fixed NOW, not the real wall clock: getUsageSummary
+            // filters by [periodStart(NOW), periodEnd(NOW)), so a row timestamped with
+            // the actual current date falls outside that window once real time crosses
+            // into a different UTC month than NOW (it did, on 2026-08-01).
+            store.push({ ...r, created_at: r.created_at ?? NOW.toISOString() });
           }
           return { error: null };
         },
