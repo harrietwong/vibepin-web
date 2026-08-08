@@ -629,6 +629,14 @@ def _prepare_candidate(candidate: dict, source: dict, *, index: int, shop_detect
         "product_type": classification.get("product_type"),
         "digital_format": classification.get("digital_format"),
         "extraction_method": candidate.get("extraction_method") or "network_json",
+        # Carried through for REPORTING only (never written to pin_products).
+        # Without it, a candidate's provenance — structured product object vs.
+        # extract_network_candidates' regex `network_text_fallback` branch — is
+        # lost before any accounting happens, which is why the question "has the
+        # text fallback ever produced a real product?" cannot be answered from
+        # existing rows or existing reports. Keeping it makes the next run's
+        # report answer it.
+        "json_path": candidate.get("json_path"),
         "shop_module_detected": bool(shop_detected),
         "product_card_index": index,
         "shop_tab_clicked": bool(shop_tab_clicked),
@@ -1026,6 +1034,94 @@ def _preflight_existing(unique: list[dict]) -> dict:
     }
 
 
+#: Rejection reason emitted by _evidence_rejection_reason. Shared by the
+#: dry-run report path and the incremental write path so both agree.
+NO_PRODUCT_EVIDENCE = "no_product_evidence"
+
+
+def _evidence_rejection_reason(candidate: dict) -> str | None:
+    """Return a rejection reason when a candidate is not product EVIDENCE.
+
+    THE FAILURE THIS REMOVES (2026-08-08): a bare external link was being
+    written to pin_products as if it were a product. Measured on production:
+    of 2758 STL rows, 35 had no image_url, 0 of those had a price, and every
+    one of their product_name values was a bare domain/merchant token — quay,
+    ebay, etsy, shein, jluxlabel, bylabelle, revolutionboutique. One row's
+    name was the Pin's caption ("OMG OMG OMG CPL"). Those are not products;
+    they are URLs that were dressed up to look like products.
+
+    Two code paths produced them and BOTH are addressed:
+      1. extract_network_candidates' `network_text_fallback` branch regexes
+         every external URL out of the raw JSON blob and emits it with
+         product_title/image_url/price all hard-coded to None — a link, with
+         no evidence attached.
+      2. _apply_rows' old title chain
+             product_title or merchant or domain or "Pinterest product"
+         turned "we don't know what this is" into something that reads like a
+         product name.
+
+    THE RULE: a candidate must carry at least ONE piece of first-hand product
+    evidence — a real title, or an image. Either alone is sufficient:
+      * image but no title  -> ACCEPTED. The image IS the product evidence;
+        product_name stays NULL (v47 made the column nullable precisely so
+        "抓不到就 NULL，绝不猜测" is expressible).
+      * title but no image  -> ACCEPTED. The title is first-hand evidence.
+      * NEITHER             -> REJECTED. A URL on its own is a link, not a
+        product, no matter how product-shaped the path looks.
+
+    Deliberately NOT part of the rule: price, merchant, domain and URL shape.
+    merchant/domain are derived from the URL itself (see _prepare_candidate's
+    domain_fallback), so admitting them as "evidence" would re-admit exactly
+    the 35 bad rows. URL-shape allowlisting (/dp/, /listing/) would be
+    guessing, which is the red line this gate exists to hold.
+
+    Rejections are COUNTED AND REPORTED by both callers, never dropped quietly.
+    """
+    title = (candidate.get("product_title") or "").strip()
+    image = (candidate.get("image_url") or "").strip()
+    if not title and not image:
+        return NO_PRODUCT_EVIDENCE
+    return None
+
+
+def _rejected_candidates_report(rejected: list[dict]) -> dict:
+    """Explicit accounting for everything this run refused to write.
+
+    A discard that does not appear in the report is a silent data loss, so
+    every rejection is counted here by reason, with samples that keep the URL
+    intact so the decision can be audited (or reversed) from the report alone.
+    """
+    no_evidence = [r for r in rejected if r.get("rejection_reason") == NO_PRODUCT_EVIDENCE]
+    # If a gate-rejected candidate ever carries a price, that is real evidence
+    # we threw away and the rule needs revisiting. Measured 0/35 in production
+    # today; surfaced so it cannot change unnoticed.
+    priced = [r for r in no_evidence if r.get("price")]
+    return {
+        "total": len(rejected),
+        "byReason": dict(Counter(r.get("rejection_reason") for r in rejected)),
+        "noProductEvidence": {
+            "count": len(no_evidence),
+            "rule": (
+                "A candidate must carry a real product_title OR an image_url. "
+                "A bare external URL is a link, not a product. merchant/domain "
+                "are derived from the URL and never count as evidence."
+            ),
+            "withPriceAnyway": len(priced),
+            "samples": [
+                {
+                    "url": r.get("product_url"),
+                    "domain": r.get("domain"),
+                    "merchant": r.get("merchant"),
+                    "sourcePin": r.get("source_pin_id"),
+                    "extractionMethod": r.get("extraction_method"),
+                    "jsonPath": r.get("json_path"),
+                }
+                for r in no_evidence[:30]
+            ],
+        },
+    }
+
+
 def _build_report(
     per_pin: list[dict],
     selection: dict,
@@ -1047,6 +1143,13 @@ def _build_report(
         ok, reason = accept_link(url)
         if not ok:
             rejected.append({**candidate, "rejection_reason": reason})
+            continue
+        # Evidence gate. Runs BEFORE dedup on purpose: an evidence-less
+        # candidate must not claim the dedup key and shadow a later candidate
+        # for the same URL that DOES carry a title or image.
+        evidence_reason = _evidence_rejection_reason(candidate)
+        if evidence_reason:
+            rejected.append({**candidate, "rejection_reason": evidence_reason})
             continue
         accepted_raw.append(candidate)
 
@@ -1082,11 +1185,24 @@ def _build_report(
         "duplicatesSkipped": len(accepted_raw) - len(unique),
         "rejectedProducts": len(rejected),
         "rejectedByReason": dict(Counter(r["rejection_reason"] for r in rejected)),
+        "rejectedNoProductEvidence": sum(
+            1 for r in rejected if r["rejection_reason"] == NO_PRODUCT_EVIDENCE
+        ),
         "acceptedByCategory": dict(Counter(c.get("source_category") for c in unique)),
         "acceptedByPlatform": dict(Counter(c.get("platform") for c in unique)),
         "acceptedByDomain": dict(Counter(c.get("domain") for c in unique)),
         "acceptedBySourcePin": dict(Counter(c.get("source_pin_id") for c in unique)),
         "acceptedByExtractionMethod": dict(Counter(c.get("extraction_method") for c in unique)),
+        # Provenance split: did the regex text-fallback branch of
+        # extract_network_candidates ever yield a candidate that passed the
+        # evidence gate? By construction it emits title=None and image=None,
+        # so the expected answer is 0 — but it is now MEASURED, not assumed.
+        "acceptedFromNetworkTextFallback": sum(
+            1 for c in unique if c.get("json_path") == "network_text_fallback"
+        ),
+        "rejectedFromNetworkTextFallback": sum(
+            1 for r in rejected if r.get("json_path") == "network_text_fallback"
+        ),
         "runtimePer100Min": round(elapsed / max(1, len(per_pin)) * 100 / 60, 2),
         "elapsedSec": round(elapsed, 2),
         "issues": dict(issues),
@@ -1158,6 +1274,9 @@ def _build_report(
         "duplicateExamples": duplicate_examples,
         "acceptedSamples": unique[:30],
         "rejectedSamples": rejected[:30],
+        # Explicit, top-level rejection accounting. Nothing this run declined
+        # to write is allowed to be invisible.
+        "rejectedCandidates": _rejected_candidates_report(rejected),
         "acceptedProducts": unique,
         "rejectedProductDetails": rejected,
         "perPin": [{
@@ -1227,11 +1346,20 @@ def _apply_rows(rows: list[dict]) -> int:
 
     payload = []
     for c in rows:
-        title = (c.get("product_title") or c.get("merchant") or
-                 c.get("domain") or "Pinterest product")
+        # product_name is EVIDENCE, not a label we are obliged to fill.
+        # It used to fall back to merchant -> domain -> "Pinterest product",
+        # which is how 35 production rows ended up named "etsy" / "shein" /
+        # "quay" with no image and no price. merchant and domain already have
+        # their own columns; copying them into product_name only disguised a
+        # missing title as a product. v47 dropped the NOT NULL constraint on
+        # this column (verified live: 68 rows currently hold NULL) exactly so
+        # an unknown name can be recorded as unknown.
+        # The evidence gate guarantees every row here has a title or an image,
+        # so a NULL name always means "image-backed product, name unknown".
+        title = (c.get("product_title") or "").strip()
         payload.append({
             "parent_pin_id":            c.get("source_pin_id"),
-            "product_name":             title[:500],
+            "product_name":             title[:500] if title else None,
             "source_url":               c.get("product_url"),
             "canonical_product_url":    c.get("normalized_product_url"),
             "product_url_hash":         c.get("normalized_product_url_hash"),
@@ -1416,6 +1544,11 @@ class _IncrementalWriter:
         }
         self.failed_batches: list[dict] = []
         self.rejected_count = 0
+        # Candidates refused by the product-evidence gate (no title AND no
+        # image). Counted separately from accept_link rejections so an
+        # operator can tell "not a product page" from "not product evidence".
+        self.evidence_rejected_count = 0
+        self.evidence_rejected_with_price = 0
         self.dedup_skipped_count = 0
         self.preflight_skipped_count = 0
         # Monotonic label for the log line ONLY. It counts flushes, including
@@ -1450,13 +1583,22 @@ class _IncrementalWriter:
         self._flush_seq += 1
         batch_no = self._flush_seq
 
+        evidence_rejected_before = self.evidence_rejected_count
         rows = self._filter_batch(pending)
+        # Per-flush delta, so the operator sees what THIS batch discarded
+        # rather than a running total that looks like it repeats.
+        no_evidence = self.evidence_rejected_count - evidence_rejected_before
+        evidence_note = (
+            f" noProductEvidence={no_evidence} (bare links: no title, no image)"
+            if no_evidence else ""
+        )
         if not rows:
             self.empty_flushes += 1
             print(
                 f"[product-supply-expand] write batch {batch_no} "
                 f"({reason}): pins={pins_in_batch} candidates={len(pending)} "
-                f"newRows=0 written=0 cumulativeWritten={self.totals['inserted']}",
+                f"newRows=0 written=0 cumulativeWritten={self.totals['inserted']}"
+                f"{evidence_note}",
                 flush=True,
             )
             return
@@ -1502,7 +1644,8 @@ class _IncrementalWriter:
             f"written={int(outcome.get('inserted') or 0)} "
             f"duplicates={int(outcome.get('duplicates') or 0)} "
             f"failed={int(outcome.get('failed') or 0)} "
-            f"cumulativeWritten={self.totals['inserted']}",
+            f"cumulativeWritten={self.totals['inserted']}"
+            f"{evidence_note}",
             flush=True,
         )
 
@@ -1526,6 +1669,14 @@ class _IncrementalWriter:
             ok, _reason = accept_link(url)
             if not ok:
                 self.rejected_count += 1
+                continue
+            # Evidence gate — same predicate as _build_report, applied BEFORE
+            # dedup so an evidence-less candidate cannot burn the _seen_keys
+            # entry that a later, better candidate for the same URL needs.
+            if _evidence_rejection_reason(candidate):
+                self.evidence_rejected_count += 1
+                if candidate.get("price"):
+                    self.evidence_rejected_with_price += 1
                 continue
             accepted.append(candidate)
 
@@ -1574,6 +1725,11 @@ class _IncrementalWriter:
             "pinsFlushed": self.pins_flushed,
             "rowsInserted": self.totals["inserted"],
             "rowsRejectedByAcceptLink": self.rejected_count,
+            # Bare external links (no title AND no image). These are NOT
+            # products and are never written; the count is surfaced so the
+            # discard is visible in the report, not silent.
+            "rowsRejectedNoProductEvidence": self.evidence_rejected_count,
+            "rowsRejectedNoProductEvidenceWithPrice": self.evidence_rejected_with_price,
             "rowsSkippedCrossBatchDuplicate": self.dedup_skipped_count,
             "rowsSkippedAlreadyInDb": self.preflight_skipped_count,
             "failedBatches": list(self.failed_batches),

@@ -1859,5 +1859,301 @@ class TestWriteBatchSizeConfig(unittest.TestCase):
                 self.assertEqual(stl._stl_write_batch_size(), 10, f"value={bad!r}")
 
 
+class TestProductEvidenceGate(unittest.TestCase):
+    """A bare external link is a LINK, not a product.
+
+    Production evidence (2026-08-08, read-only): of 2758 STL rows, 35 had no
+    image_url; 0 of those had a price; every one was named after its own
+    domain — quay / ebay / etsy / shein / jluxlabel / bylabelle /
+    revolutionboutique. They came from a URL-regex fallback that emitted
+    title=None,image=None,price=None plus a title chain that substituted
+    merchant/domain for the missing name. Both are fixed; these tests hold it.
+    """
+
+    SOURCE = {"pin_id": "p1", "category": "home-decor", "save_count": 100}
+
+    def _prepared(self, *, title=None, image=None, price=None,
+                  url="https://www.etsy.com/listing/123/thing", json_path=None):
+        return _prepare_candidate(
+            {"product_url": url, "product_title": title, "merchant": None,
+             "image_url": image, "price": price, "currency": None,
+             "extraction_method": "network_json", "json_path": json_path},
+            self.SOURCE, index=0, shop_detected=True, shop_tab_clicked=False,
+        )
+
+    def _per_pin(self, candidates):
+        return [{
+            "source": self.SOURCE, "shopModuleDetected": True,
+            "shopTabClicked": False, "candidates": candidates, "issue": None,
+        }]
+
+    def _patch_preflight(self):
+        return patch.object(stl, "select_many", side_effect=lambda *a, **k: [])
+
+    # ── the gate itself ───────────────────────────────────────────────────
+    def test_url_only_candidate_is_rejected(self):
+        """No title, no image -> not product evidence."""
+        self.assertEqual(
+            stl._evidence_rejection_reason(self._prepared()),
+            stl.NO_PRODUCT_EVIDENCE,
+        )
+
+    def test_image_without_title_is_accepted(self):
+        """The image IS the evidence. Must not be collateral damage."""
+        self.assertIsNone(
+            stl._evidence_rejection_reason(self._prepared(image="https://i/x.jpg"))
+        )
+
+    def test_title_without_image_is_accepted(self):
+        self.assertIsNone(
+            stl._evidence_rejection_reason(self._prepared(title="Oak Shelf"))
+        )
+
+    def test_merchant_and_domain_are_not_evidence(self):
+        """_prepare_candidate always derives merchant/domain FROM the URL, so
+        treating them as evidence would re-admit all 35 bad production rows."""
+        candidate = self._prepared()
+        self.assertTrue(candidate["merchant"], "merchant is URL-derived here")
+        self.assertTrue(candidate["domain"], "domain is URL-derived here")
+        self.assertEqual(
+            stl._evidence_rejection_reason(candidate), stl.NO_PRODUCT_EVIDENCE
+        )
+
+    def test_whitespace_only_title_is_not_evidence(self):
+        self.assertEqual(
+            stl._evidence_rejection_reason(self._prepared(title="   ")),
+            stl.NO_PRODUCT_EVIDENCE,
+        )
+
+    def test_product_shaped_url_alone_still_rejected(self):
+        """/dp/ and /listing/ look like product pages but carry no evidence.
+        Allowlisting URL shapes would be guessing — the red line this holds."""
+        for url in ("https://www.amazon.com/dp/B0G19C9N11",
+                    "https://www.etsy.com/listing/4526184169/men-trousers"):
+            self.assertEqual(
+                stl._evidence_rejection_reason(self._prepared(url=url)),
+                stl.NO_PRODUCT_EVIDENCE, url,
+            )
+
+    # ── report path ───────────────────────────────────────────────────────
+    def test_report_rejects_url_only_and_counts_it(self):
+        per_pin = self._per_pin([self._prepared()])
+        with self._patch_preflight():
+            report, unique = _build_report(per_pin, {}, elapsed=1, apply=False)
+
+        self.assertEqual(unique, [], "a bare link must not be writable")
+        agg = report["aggregate"]
+        self.assertEqual(agg["uniqueAcceptedProducts"], 0)
+        self.assertEqual(agg["rejectedNoProductEvidence"], 1)
+        self.assertEqual(agg["rejectedByReason"][stl.NO_PRODUCT_EVIDENCE], 1)
+        # Explicitly reported, never silently dropped.
+        rc = report["rejectedCandidates"]
+        self.assertEqual(rc["noProductEvidence"]["count"], 1)
+        self.assertEqual(rc["byReason"][stl.NO_PRODUCT_EVIDENCE], 1)
+        self.assertEqual(
+            rc["noProductEvidence"]["samples"][0]["url"],
+            "https://www.etsy.com/listing/123/thing",
+            "the rejected URL must survive in the report for audit",
+        )
+
+    def test_report_keeps_image_only_and_title_only(self):
+        per_pin = self._per_pin([
+            self._prepared(image="https://i/a.jpg", url="https://www.etsy.com/listing/1/a"),
+            self._prepared(title="Oak Shelf", url="https://www.etsy.com/listing/2/b"),
+            self._prepared(url="https://www.etsy.com/listing/3/c"),
+        ])
+        with self._patch_preflight():
+            report, unique = _build_report(per_pin, {}, elapsed=1, apply=False)
+
+        self.assertEqual(len(unique), 2, "only the bare link should be dropped")
+        self.assertEqual(report["aggregate"]["rejectedNoProductEvidence"], 1)
+
+    def test_gate_runs_before_dedup_so_evidence_wins(self):
+        """Same URL twice: evidence-less first, then one carrying an image.
+        If the gate ran after dedup the bare link would claim the key and the
+        real product would be discarded as a duplicate."""
+        url = "https://www.etsy.com/listing/555/shared"
+        per_pin = self._per_pin([
+            self._prepared(url=url),
+            self._prepared(url=url, image="https://i/real.jpg"),
+        ])
+        with self._patch_preflight():
+            report, unique = _build_report(per_pin, {}, elapsed=1, apply=False)
+
+        self.assertEqual(len(unique), 1)
+        self.assertEqual(unique[0]["image_url"], "https://i/real.jpg",
+                         "the evidence-bearing candidate must be the survivor")
+        self.assertEqual(report["aggregate"]["rejectedNoProductEvidence"], 1)
+
+    def test_report_flags_discarded_price_evidence(self):
+        """Price on a gate-rejected row would mean the rule threw away real
+        evidence. 0/35 in production today; it must not change unnoticed."""
+        with self._patch_preflight():
+            report, _ = _build_report(
+                self._per_pin([self._prepared(price="19.99")]), {},
+                elapsed=1, apply=False,
+            )
+        self.assertEqual(
+            report["rejectedCandidates"]["noProductEvidence"]["withPriceAnyway"], 1
+        )
+
+    def test_text_fallback_provenance_survives_into_the_report(self):
+        """json_path used to be dropped by _prepare_candidate, which is why
+        'has the regex fallback ever produced a real product?' was unanswerable
+        from reports or from the DB. It now reaches the report."""
+        with self._patch_preflight():
+            report, _ = _build_report(
+                self._per_pin([self._prepared(json_path="network_text_fallback")]),
+                {}, elapsed=1, apply=False,
+            )
+        self.assertEqual(report["aggregate"]["acceptedFromNetworkTextFallback"], 0)
+        self.assertEqual(report["aggregate"]["rejectedFromNetworkTextFallback"], 1)
+
+    # ── write path: no invented names ─────────────────────────────────────
+    def test_apply_rows_writes_null_name_for_image_only_row(self):
+        """product_name must be NULL, NOT the merchant or the domain.
+        Verified live: pin_products.product_name is nullable (68 rows hold
+        NULL), per migrate_v47 which dropped the NOT NULL constraint."""
+        row = self._prepared(image="https://i/x.jpg")
+        self.assertTrue(row["merchant"], "merchant is populated but must not leak")
+
+        fake_db = types.ModuleType("db")
+        captured = {}
+        fake_db.insert_rows = lambda table, payload: captured.setdefault("p", payload)
+        with patch.dict(sys.modules, {"db": fake_db}):
+            _apply_rows([row])
+
+        written = captured["p"][0]
+        self.assertIsNone(written["product_name"],
+                          "unknown name must be NULL, never the domain/merchant")
+        self.assertEqual(written["merchant"], row["merchant"],
+                         "merchant keeps its own column")
+        self.assertEqual(written["image_url"], "https://i/x.jpg")
+
+    def test_apply_rows_keeps_a_real_title(self):
+        row = self._prepared(title="Solid Oak Floating Shelf")
+        fake_db = types.ModuleType("db")
+        captured = {}
+        fake_db.insert_rows = lambda table, payload: captured.setdefault("p", payload)
+        with patch.dict(sys.modules, {"db": fake_db}):
+            _apply_rows([row])
+        self.assertEqual(captured["p"][0]["product_name"], "Solid Oak Floating Shelf")
+
+    def test_pinterest_product_placeholder_is_gone_from_executable_code(self):
+        """The invented fallback name must not exist as a usable string.
+
+        Checked via the AST rather than by grepping lines: only real string
+        LITERALS can ever be assigned to product_name, while docstrings and
+        comments merely describe the removed behaviour and are harmless. An
+        AST walk proves the value is unreachable instead of guessing from
+        line prefixes.
+        """
+        import ast
+
+        source = pathlib.Path(stl.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        docstrings = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
+        offenders = [
+            (node.lineno, node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and "Pinterest product" in node.value
+            and id(node) not in docstrings
+        ]
+        self.assertEqual(offenders, [],
+                         f"live code can still fabricate a name: {offenders}")
+
+
+class TestIncrementalWriterEvidenceGate(unittest.TestCase):
+    """The apply path writes through _IncrementalWriter, not _build_report.
+    A gate that only guarded the report would guard nothing in production.
+    """
+
+    SOURCE = {"pin_id": "p1", "category": "home-decor", "save_count": 100}
+
+    def _prepared(self, *, title=None, image=None, price=None, url):
+        return _prepare_candidate(
+            {"product_url": url, "product_title": title, "merchant": None,
+             "image_url": image, "price": price, "currency": None,
+             "extraction_method": "network_json"},
+            self.SOURCE, index=0, shop_detected=True, shop_tab_clicked=False,
+        )
+
+    def _writer(self):
+        return stl._IncrementalWriter(batch_size=10, enabled=True)
+
+    def _passthrough_preflight(self):
+        return patch.object(
+            stl, "_preflight_existing",
+            side_effect=lambda unique: {"insertCandidates": list(unique)},
+        )
+
+    def test_bare_link_never_reaches_the_write(self):
+        writer = self._writer()
+        pending = [
+            self._prepared(url="https://www.etsy.com/listing/1/bare"),
+            self._prepared(url="https://www.etsy.com/listing/2/good",
+                           image="https://i/g.jpg"),
+        ]
+        with self._passthrough_preflight():
+            rows = writer._filter_batch(pending)
+
+        self.assertEqual([r["product_url"] for r in rows],
+                         ["https://www.etsy.com/listing/2/good"])
+        self.assertEqual(writer.evidence_rejected_count, 1)
+
+    def test_rejection_is_visible_in_the_batching_report(self):
+        writer = self._writer()
+        with self._passthrough_preflight():
+            writer._filter_batch([
+                self._prepared(url="https://www.etsy.com/listing/1/bare"),
+                self._prepared(url="https://www.etsy.com/listing/2/bare2",
+                               price="9.99"),
+            ])
+        rep = writer.batching_report()
+        self.assertEqual(rep["rowsRejectedNoProductEvidence"], 2)
+        self.assertEqual(rep["rowsRejectedNoProductEvidenceWithPrice"], 1)
+        self.assertNotEqual(rep["rowsRejectedByAcceptLink"], 2,
+                            "must not be conflated with accept_link rejections")
+
+    def test_rejected_candidate_does_not_burn_the_dedup_key(self):
+        """A bare link in batch 1 must not block the same URL arriving with an
+        image in batch 2 — the gate runs before _seen_keys is touched."""
+        url = "https://www.etsy.com/listing/777/late-evidence"
+        writer = self._writer()
+        with self._passthrough_preflight():
+            first = writer._filter_batch([self._prepared(url=url)])
+            second = writer._filter_batch(
+                [self._prepared(url=url, image="https://i/late.jpg")]
+            )
+        self.assertEqual(first, [])
+        self.assertEqual(len(second), 1, "the real product must still be writable")
+
+    def test_flush_logs_the_rejection_count(self):
+        """Operators read journalctl, not JSON. The discard must be loud."""
+        import io
+        from contextlib import redirect_stdout
+
+        writer = self._writer()
+        writer._pending = [self._prepared(url="https://www.etsy.com/listing/1/bare")]
+        writer._pins_since_flush = 1
+        buf = io.StringIO()
+        with self._passthrough_preflight(), redirect_stdout(buf):
+            writer.flush(reason="test")
+        out = buf.getvalue()
+        self.assertIn("noProductEvidence=1", out)
+        self.assertIn("no title, no image", out)
+
+
 if __name__ == "__main__":
     unittest.main()
