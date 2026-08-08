@@ -65,10 +65,15 @@ def _banner(msg: str) -> None:
     print(f"{B}{C}  {msg}{X}")
     print(f"{B}{C}{'鈹€'*w}{X}\n")
 
-def _ok(msg: str)   -> None: print(f"{G}  鉁? {msg}{X}")
-def _info(msg: str) -> None: print(f"{C}  路  {msg}{X}")
-def _warn(msg: str) -> None: print(f"{Y}  !  {msg}{X}")
-def _err(msg: str)  -> None: print(f"{R}  鉁? {msg}{X}")
+# flush=True on all four: under systemd stdout is a pipe, so Python
+# block-buffers it. A long step then reports nothing until it exits, and a
+# step killed by the run timeout (pin-crawl, 2026-08-08) never flushes at
+# all -- its whole log is lost precisely when it is needed. Interactive
+# runs are unaffected.
+def _ok(msg: str)   -> None: print(f"{G}  鉁? {msg}{X}", flush=True)
+def _info(msg: str) -> None: print(f"{C}  路  {msg}{X}", flush=True)
+def _warn(msg: str) -> None: print(f"{Y}  !  {msg}{X}", flush=True)
+def _err(msg: str)  -> None: print(f"{R}  鉁? {msg}{X}", flush=True)
 
 
 # 鈹€鈹€ DB helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
