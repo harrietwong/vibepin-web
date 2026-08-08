@@ -405,17 +405,6 @@ type CreemBillingStatus = {
   scheduledCancel?: boolean;
 };
 
-type UsageBucket = { used: number; limit: number | null };
-
-type BillingUsage = {
-  plan: "free" | "starter" | "pro" | "business";
-  periodStart: string;
-  periodEnd: string;
-  aiImages: UsageBucket;
-  aiTextGenerations: UsageBucket;
-  scheduledPosts: UsageBucket;
-};
-
 function BillingTab() {
   const { t } = useLocale();
   const [summary, setSummary] = useState<AccountBillingSummary>(() => deriveAccountBillingSummary(null));

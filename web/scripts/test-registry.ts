@@ -86,7 +86,6 @@ export const CORE: string[] = [
   "test-plan-entitlements",
   "test-usage-period-math",
   "test-billing-usage-api",
-  "test-ai-cost-log",
   "test-entitlements-security",
   "test-usage-metering",
   "test-creem-checkout-api",

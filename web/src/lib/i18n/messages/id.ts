@@ -110,8 +110,6 @@ const id: Partial<Record<MessageKey, string>> = {
   "billing.noUsage": "Belum ada data penggunaan. Penggunaan terperinci akan muncul di sini setelah pelacakan diaktifkan.",
   "billing.usageNotMetered": "Belum ada penggunaan yang tercatat pada periode ini.",
   "billing.usageIncluded": "{included} termasuk dalam paket Anda",
-  "billing.usageHistory": "Teks antarmuka",
-  "billing.noUsage": "Teks antarmuka",
   "pinterest.checkingConnection": "Teks antarmuka",
   "publishing.defaults": "Teks antarmuka",
   "publishing.defaultMode": "Teks antarmuka",

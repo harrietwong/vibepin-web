@@ -36,7 +36,6 @@ import {
   aiImageLimitResponseBody,
   type InlineReservation,
 } from "@/lib/server/usage/meterGeneration";
-import { recordAiCost, estimateCost, type AiCostRequestStatus } from "@/lib/server/aiCostLog";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
