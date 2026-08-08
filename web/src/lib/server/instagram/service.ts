@@ -252,7 +252,31 @@ export type InstagramPublishInput = {
   destinationUrl?: string;
 };
 
-export type InstagramPublishResult = { mediaId: string; permalink: string | null };
+export type InstagramPublishResult = {
+  mediaId: string;
+  permalink: string | null;
+  /** Correlates the UI, the logs, and this publish. Safe to display. */
+  traceId: string;
+};
+
+/**
+ * Non-production publish diagnostic. Records the shape of the attempt — status
+ * codes, ids, the image HOST (never the full signed URL) — so a failed publish
+ * can be traced end to end. Never logs the token, the secret, or the caption
+ * body.
+ */
+function igPublishDebug(record: Record<string, unknown>): void {
+  if (process.env.VERCEL_ENV === "production") return;
+  console.log("[instagram-publish]", JSON.stringify(record));
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "(unparseable)";
+  }
+}
 
 /** Compose the caption Instagram will show, with the destination URL appended. */
 export function buildInstagramCaption(caption?: string, destinationUrl?: string): string {
@@ -279,6 +303,7 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
     );
   }
 
+  const traceId = (globalThis.crypto?.randomUUID?.() ?? String(Date.now())).slice(0, 8);
   const caption = buildInstagramCaption(input.caption, input.destinationUrl);
 
   // 1 — create the container.
@@ -305,6 +330,13 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
     );
   }
   const containerId = created.id;
+  igPublishDebug({
+    traceId,
+    igUserId: input.igUserId,
+    imageHost: hostOf(input.imageUrl),
+    createContainerStatus: createRes.status,
+    containerId,
+  });
 
   // 2 — wait for Instagram to finish fetching/processing the image.
   const DEADLINE_MS = 45_000;
@@ -315,8 +347,12 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
       `${INSTAGRAM_GRAPH_URL}/${containerId}?fields=status_code&access_token=${encodeURIComponent(input.accessToken)}`,
     );
     const status = (await statusRes.json().catch(() => ({}))) as { status_code?: string };
-    if (status.status_code === "FINISHED") break;
+    if (status.status_code === "FINISHED") {
+      igPublishDebug({ traceId, containerId, finalContainerStatus: "FINISHED" });
+      break;
+    }
     if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
+      igPublishDebug({ traceId, containerId, finalContainerStatus: status.status_code });
       throw new InstagramApiError(
         "Instagram could not process the image for this post",
         502,
@@ -363,5 +399,12 @@ export async function publishToInstagram(input: InstagramPublishInput): Promise<
     /* permalink is a nicety, not part of the publish contract */
   }
 
-  return { mediaId: publishedJson.id, permalink };
+  igPublishDebug({
+    traceId,
+    igUserId: input.igUserId,
+    mediaId: publishedJson.id,
+    permalinkResolved: permalink !== null,
+  });
+
+  return { mediaId: publishedJson.id, permalink, traceId };
 }

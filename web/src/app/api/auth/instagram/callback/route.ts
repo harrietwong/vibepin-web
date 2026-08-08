@@ -43,6 +43,23 @@ export const dynamic = "force-dynamic";
 
 const SOCIAL_SETTINGS_PATH = "/app/settings/social";
 
+/**
+ * Non-production OAuth diagnostic (mirrors the Facebook [facebook-oauth-debug]
+ * contract). Prints identity and scope facts only: the access token is reported
+ * as a boolean, and no secret, raw profile object, or request URL is ever logged.
+ */
+function igDebug(record: {
+  igUserId: string | null;
+  username: string | null;
+  accountType: string | null;
+  scopes: string[];
+  tokenPresent: boolean;
+  tokenExpiresAt: string | null;
+}): void {
+  if (process.env.VERCEL_ENV === "production") return;
+  console.log("[instagram-oauth-debug]", JSON.stringify(record));
+}
+
 function redirectAfterOAuth(req: NextRequest, status: string, returnTo = SOCIAL_SETTINGS_PATH): NextResponse {
   const url = req.nextUrl.clone();
   const target = new URL(returnTo, req.nextUrl.origin);
@@ -113,6 +130,18 @@ export async function GET(req: NextRequest) {
     console.error("[Instagram OAuth Callback] profile fetch failed:", (err as Error).message);
     return redirectAfterOAuth(req, "profile_failed", verdict.returnTo);
   }
+
+  // Non-production diagnostic: enough to tell a rejected connection apart from a
+  // mis-scoped one without a round trip. Hand-picked fields only — the token is
+  // reported as a boolean, never printed, and never is the raw profile object.
+  igDebug({
+    igUserId: profile.userId || tokens.userId,
+    username: profile.username,
+    accountType: profile.accountType,
+    scopes: tokens.scopes.length > 0 ? tokens.scopes : [...INSTAGRAM_SCOPES],
+    tokenPresent: Boolean(tokens.accessToken),
+    tokenExpiresAt: tokens.accessTokenExpiresAt ?? null,
+  });
 
   // ── PERSONAL-account gate ─────────────────────────────────────────────────────
   // Content publishing requires a Business or Creator (MEDIA_CREATOR) account.
