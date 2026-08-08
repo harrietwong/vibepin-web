@@ -60,6 +60,7 @@ import {
 } from "@/lib/server/facebook/service";
 import { upsertFacebookConnection, getStoredFacebookSelection } from "@/lib/server/facebook/connectionStore";
 import { missingRequiredScopes } from "@/lib/server/facebook/config";
+import { ConnectionLimitError } from "@/lib/server/social/connectionLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -317,10 +318,12 @@ export async function GET(req: NextRequest) {
         selected: null,
       });
     } catch (persistErr) {
-      console.error(
-        "[Facebook OAuth Callback] persist (page-discovery-empty) failed:",
-        (persistErr as Error).message,
-      );
+      // A plan ceiling is a user-actionable outcome, not a failure to report as
+      // broken storage — surface it distinctly so the UI can offer disconnect/upgrade.
+      if (persistErr instanceof ConnectionLimitError) {
+        return redirectAfterOAuth(req, "account_limit", verdict.returnTo);
+      }
+      console.error("[Facebook OAuth Callback] persist (no-pages) failed:", (persistErr as Error).message);
       return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
     }
     return redirectAfterOAuth(req, "page_discovery_empty", verdict.returnTo);
@@ -367,6 +370,9 @@ export async function GET(req: NextRequest) {
       selected,
     });
   } catch (persistErr) {
+    if (persistErr instanceof ConnectionLimitError) {
+      return redirectAfterOAuth(req, "account_limit", verdict.returnTo);
+    }
     console.error("[Facebook OAuth Callback] persist failed:", (persistErr as Error).message);
     return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
   }

@@ -32,7 +32,7 @@ export type ChatReplyResult = {
 export type GenerateChatReplyInput = {
   messages: ChatMessageInput[];
   context: Record<string, unknown> | null;
-  /** Optional — enables best-effort cost logging to ai_cost_events. */
+  /** Optional — enables best-effort internal cost logging to ai_cost_events. */
   userId?: string | null;
   referenceId?: string | null;
 };
@@ -214,7 +214,8 @@ export async function generateChatReply(input: GenerateChatReplyInput): Promise<
 
 /**
  * Best-effort cost-log for a support-chat turn. Never throws — see
- * aiCostLog.recordAiCost. Fire-and-forget; this function never awaits.
+ * aiCostLog.recordAiCost. Fire-and-forget; this function never awaits, so it
+ * cannot add latency to or fail the chat reply.
  */
 function logSupportChatCost(
   input: GenerateChatReplyInput,

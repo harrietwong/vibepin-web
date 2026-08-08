@@ -312,39 +312,70 @@ function AccountTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => Pr
 
 // ── Billing Tab ───────────────────────────────────────────────────────────────
 
+/** One quota bucket as returned by GET /api/billing/usage. */
+type UsageBucket = {
+  /** Settled usage this period. `null` = never measured (no usage account yet). */
+  used: number | null;
+  /** The cap enforced on this account right now. `null` = unlimited OR unmetered. */
+  limit: number | null;
+  /** What the plan includes. `null` = unlimited. Always present. */
+  included: number | null;
+};
+
+type BillingUsage = {
+  plan: "free" | "starter" | "pro" | "business";
+  /** false = no usage_accounts row yet (metering is lazy/shadow) → show allowances only. */
+  metered: boolean;
+  periodStart: string | null;
+  periodEnd: string | null;
+  bonusImages: number | null;
+  aiImages: UsageBucket;
+  aiTextGenerations: UsageBucket;
+  scheduledPosts: UsageBucket;
+};
+
 /**
- * One usage row (used/limit + a simple progress bar). `limit === null` means no
- * monthly cap for that metric — shown as "used" with "No monthly limit" and no
- * bar, EXCEPT Scheduled posts on Business, which is a genuine advertised
- * "Unlimited" (per pricing page), not merely an unmetered/unlimited field.
+ * One usage row. Three honest display states, in priority order:
+ *
+ *  1. NOT MEASURED (`used === null`, i.e. the API said metered:false) — the user
+ *     has no usage account yet, so we state the plan's included allowance and say
+ *     nothing about consumption. We deliberately do NOT render "0 / 10" here: a
+ *     zero would assert we measured and found nothing, which is false.
+ *  2. UNLIMITED (`limit === null` with a real `used`) — show the count used and
+ *     "Unlimited"/"No monthly limit"; a progress bar has no meaning without a cap.
+ *  3. METERED WITH A CAP — used/limit, a bar, and the remainder.
  */
-function UsageRow({ icon: Icon, label, bucket, plan, t, isScheduledPosts }: {
+function UsageRow({ icon: Icon, label, bucket, t }: {
   icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   label: string;
-  bucket: { used: number; limit: number | null };
-  plan: "free" | "starter" | "pro" | "business";
+  bucket: UsageBucket;
   t: (key: MessageKey) => string;
-  isScheduledPosts?: boolean;
 }) {
-  const { used, limit } = bucket;
-  const isUnlimitedBusinessPosts = isScheduledPosts && plan === "business" && limit === null;
-  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  const remaining = limit !== null ? Math.max(0, limit - used) : null;
+  const { used, limit, included } = bucket;
+  const measured = used !== null;
+  const pct = measured && limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const remaining = measured && limit !== null ? Math.max(0, limit - used) : null;
+
+  // Right-hand summary text for each of the three states above.
+  let summary: string;
+  if (!measured) {
+    summary = included === null
+      ? t("billing.usageUnlimited")
+      : t("billing.usageIncluded").replace("{included}", String(included));
+  } else if (limit !== null) {
+    summary = t("billing.usageUsedOfLimit").replace("{used}", String(used)).replace("{limit}", String(limit));
+  } else {
+    summary = t("billing.usageUsedNoLimit").replace("{used}", String(used));
+  }
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <Icon size={13} style={{ color: UI.textSec }} />
         <span style={{ fontSize: 12.5, fontWeight: 700, color: UI.text, flex: 1 }}>{label}</span>
-        <span style={{ fontSize: 12, color: UI.textSec }}>
-          {isUnlimitedBusinessPosts
-            ? t("billing.usageUnlimited")
-            : limit !== null
-              ? t("billing.usageUsedOfLimit").replace("{used}", String(used)).replace("{limit}", String(limit))
-              : t("billing.usageUsedNoLimit").replace("{used}", String(used))}
-        </span>
+        <span style={{ fontSize: 12, color: UI.textSec }}>{summary}</span>
       </div>
-      {isUnlimitedBusinessPosts ? null : limit !== null ? (
+      {measured && limit !== null ? (
         <>
           <div style={{ height: 6, borderRadius: 999, background: UI.surface2, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${pct}%`, borderRadius: 999, background: UI.gradient }} />
@@ -353,9 +384,9 @@ function UsageRow({ icon: Icon, label, bucket, plan, t, isScheduledPosts }: {
             {t("billing.usageRemaining").replace("{remaining}", String(remaining))}
           </p>
         </>
-      ) : (
+      ) : measured ? (
         <p style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>{t("billing.usageNoLimit")}</p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -410,7 +441,7 @@ function BillingTab() {
   // Live billing status from the Creem mirror (source of truth for plan/renewal).
   // SYNC ERROR STATE: any non-ok response or thrown fetch sets billingSyncError
   // and leaves `billing` as-is — the UI below renders an explicit "Couldn't sync
-  // billing data" state and NEVER falls back to displaying Free (PRD requirement).
+  // billing data" state and NEVER falls back to displaying Free.
   useEffect(() => {
     let active = true;
     setBillingSyncError(false);
@@ -437,7 +468,8 @@ function BillingTab() {
   }, [retryTick]);
 
   // Usage this period (AI images / AI text / scheduled posts) — same sync-error
-  // discipline as billing status: a failed fetch never silently renders zeros.
+  // discipline as billing status: a failed fetch never silently renders zeros,
+  // and an unmetered account renders allowances rather than fabricated usage.
   useEffect(() => {
     let active = true;
     setUsageSyncError(false);
@@ -486,6 +518,10 @@ function BillingTab() {
   const previousPlanName = billing?.previousPlan
     ? normalizePlanName(billing.previousPlan)
     : null;
+  // NOTE: OURS's `lastActivity` (summary.lastCreditActivityAt) is deliberately
+  // dropped here — THEIRS removed the fabricated token-balance/credit card that
+  // was its only consumer (fake-34 removal), replacing it with the honest
+  // billing.noUsage state below.
 
   // Status badge: green ONLY when access is granted and the raw status is
   // active/trialing; scheduled_cancel → amber "Cancels on <date>"; any lapsed
@@ -630,10 +666,18 @@ function BillingTab() {
         )}
       </SectionCard>
 
+      {/*
+        Three independent quota meters, replacing the former fabricated
+        "token balance" card. Every number here comes from GET /api/billing/usage,
+        which reads the v55/v56 usage_accounts ledger. Nothing is invented: when
+        the user has no usage account yet the API says metered:false and each row
+        states only the plan's included allowance (see UsageRow), and when the
+        fetch fails we show an explicit sync error instead of zeros.
+      */}
       <SectionCard testId="billing-usage-period">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <SectionTitle>{t("billing.usageThisPeriod")}</SectionTitle>
-          {usage?.periodEnd && !usageSyncError && formatEnglishDateTime(usage.periodEnd) && (
+          {usage?.metered && usage.periodEnd && !usageSyncError && formatEnglishDateTime(usage.periodEnd) && (
             <span style={{ fontSize: 11, color: UI.textMuted }}>
               {t("billing.usagePeriod").replace("{date}", formatEnglishDateTime(usage.periodEnd) as string)}
             </span>
@@ -659,9 +703,14 @@ function BillingTab() {
           </p>
         ) : usage ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <UsageRow icon={Zap} label={t("billing.usageAiImages")} bucket={usage.aiImages} plan={usage.plan} t={t} />
-            <UsageRow icon={Zap} label={t("billing.usageAiText")} bucket={usage.aiTextGenerations} plan={usage.plan} t={t} />
-            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} bucket={usage.scheduledPosts} plan={usage.plan} t={t} isScheduledPosts />
+            <UsageRow icon={Zap} label={t("billing.usageAiImages")} bucket={usage.aiImages} t={t} />
+            <UsageRow icon={Zap} label={t("billing.usageAiText")} bucket={usage.aiTextGenerations} t={t} />
+            <UsageRow icon={Clock} label={t("billing.usageScheduledPosts")} bucket={usage.scheduledPosts} t={t} />
+            {!usage.metered && (
+              <p data-testid="billing-usage-not-metered" style={{ margin: 0, fontSize: 11, color: UI.textMuted, lineHeight: 1.5 }}>
+                {t("billing.usageNotMetered")}
+              </p>
+            )}
           </div>
         ) : null}
       </SectionCard>

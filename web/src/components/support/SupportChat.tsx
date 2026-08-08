@@ -266,7 +266,7 @@ export function SupportChat({ initialContext, seedText, compact }: SupportChatPr
 
       {!restoring && messages.length === 0 && (
         <p style={{ margin: 0, fontSize: 12.5, color: UI.textSec, lineHeight: 1.5 }}>
-          Ask about publishing, Pinterest connection, credits, billing…
+          Ask about publishing, Pinterest connection, usage, billing…
         </p>
       )}
 
@@ -347,7 +347,7 @@ export function SupportChat({ initialContext, seedText, compact }: SupportChatPr
           data-testid="support-chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about publishing, Pinterest connection, credits, billing…"
+          placeholder="Ask about publishing, Pinterest connection, usage, billing…"
           disabled={sending || restoring}
           onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
           style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: `1px solid ${UI.border}`, background: UI.surface2, color: UI.text, fontSize: 13 }}

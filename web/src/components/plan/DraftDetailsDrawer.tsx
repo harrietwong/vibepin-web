@@ -1881,7 +1881,7 @@ export function PinDetailsModal({
                   type="button"
                   data-testid="draft-cta-report-credits-issue"
                   onClick={() => setSupportRequest({
-                    seedText: "I think credits were charged but I didn't get a result",
+                    seedText: "My AI image allowance was used but I didn't get a result",
                     extra: {
                       source: "ai_generation",
                       draftId: activeDraft.id,

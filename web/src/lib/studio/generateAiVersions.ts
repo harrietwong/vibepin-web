@@ -39,22 +39,32 @@ export type AiVersionGenerateResult = {
   source?: string;
 };
 
+/**
+ * Build the POST /api/generate body shared by the inline and worker paths.
+ *
+ * `styleReference` carries the per-GROUP reference (create-pin grouped generation):
+ * /api/generate rebuilds image_inputs from `product_images` + ONE `style_ref`
+ * string, so a single request can only ever carry one reference image. Passing
+ * `styleReference === undefined` means the caller did not opt into grouped
+ * generation, so we fall back to the legacy first-reference behavior.
+ */
 function buildGenerateBody(opts: {
   source?: PinDraft | null;
   keyword?: string;
   setup: AiVersionOptions;
   generationRequestId: string;
-  /**
-   * Grouped generation: the ONE style reference this request carries. Omit (or
-   * pass undefined) to keep the legacy "all of setup.referenceImages" behavior.
-   */
-  referenceImages?: string[];
+  styleReference?: string | null;
 }): Record<string, unknown> {
   const { source, setup, generationRequestId } = opts;
   const productImages = setup.productImages.length
     ? setup.productImages
     : source?.imageUrl ? [source.imageUrl] : [];
-  const referenceImages = opts.referenceImages ?? setup.referenceImages;
+  // One reference per group. `styleReference === undefined` means the caller did not
+  // opt into grouped generation, so fall back to the legacy first-reference behavior.
+  const groupReference = opts.styleReference !== undefined
+    ? opts.styleReference
+    : setup.referenceImages[0] ?? null;
+  const referenceImages = groupReference ? [groupReference] : [];
 
   return {
     keyword: source?.keyword || opts.keyword || source?.title || setup.category || "pin",
@@ -140,20 +150,17 @@ export async function generateAiVersions(opts: {
   const generationRequestId = opts.batchRequestId
     ? `${opts.batchRequestId}_g${Math.random().toString(36).slice(2, 6)}`
     : `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  // One reference per group. `styleReference === undefined` means the caller did not
-  // opt into grouped generation, so fall back to the legacy first-reference behavior.
-  const groupReference = opts.styleReference !== undefined
-    ? opts.styleReference
-    : setup.referenceImages[0] ?? null;
-  const referenceImages = groupReference ? [groupReference] : [];
 
   const res = await fetch("/api/generate", {
     method: "POST",
     headers: await authHeaders(),
-    // Grouped generation passes THIS group's single reference; everything else is
-    // the shared body builder (also used by enqueueGeneration) so the two paths
-    // can never drift.
-    body: JSON.stringify(buildGenerateBody({ source, keyword: opts.keyword, setup, generationRequestId, referenceImages })),
+    body: JSON.stringify(buildGenerateBody({
+      source,
+      keyword: opts.keyword,
+      setup,
+      generationRequestId,
+      styleReference: opts.styleReference,
+    })),
   });
   if (!res.ok) throw new Error(`Generation failed (${res.status})`);
   const body = await res.json() as {

@@ -36,6 +36,7 @@ import {
   aiImageLimitResponseBody,
   type InlineReservation,
 } from "@/lib/server/usage/meterGeneration";
+import { recordAiCost, estimateCost, type AiCostRequestStatus } from "@/lib/server/aiCostLog";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -263,7 +264,7 @@ function buildImageInputs(productImages: string[], styleRef: string | null): Gen
 // generation path flows through (single, batch, retry, AiVersions, and the
 // Python chat fallback all sit behind this route), so a single gate here covers
 // all of them.
-export type ModeratedFields = {
+type ModeratedFields = {
   keyword: string;
   prompt: string;
   directionBrief: string;
@@ -272,7 +273,11 @@ export type ModeratedFields = {
   productMetadata?: Array<{ title?: string }> | null;
 };
 
-export function buildModeratedText(fields: ModeratedFields): string {
+// NOT exported: Next.js App Router forbids non-handler exports from route files
+// (the production build fails route type validation). No test imports this
+// helper — the moderation-gate suite drives it through buildModerationChecks /
+// POST — so un-exporting is a zero-behaviour change that keeps the build green.
+function buildModeratedText(fields: ModeratedFields): string {
   return [
     fields.keyword,
     fields.prompt,
@@ -540,11 +545,15 @@ function unavailableResponse(generationRequestId: string): NextResponse {
   );
 }
 
-/**
- * Pure decision helper — maps a ModerationResult to whether the request may
- * proceed and, if not, the exact HTTP response. Exported so the gate can be
- * unit-tested without a live Creem call. On {ok:true} the caller continues to
- * the dispatch branches; anything else STOPS before lock acquisition/dispatch.
+/*
+ * NOTE (lineage merge): the single-check helper `evaluateModerationForRequest`
+ * was removed here. The create-pin lineage un-exported it as a production build
+ * fix (Next.js App Router forbids non-handler exports from route files); the
+ * master lineage had already replaced its only call site with the per-field
+ * `evaluateModerationResults` below, leaving it dead code kept alive solely by
+ * the `export` keyword. It has no callers and no test importers, and
+ * evaluateModerationResults implements the identical fail-closed contract for
+ * the N-check batch, so deleting it is a zero-behaviour change.
  */
 function evaluateModerationForRequest(
   result: ModerationResult,
@@ -994,11 +1003,12 @@ export async function POST(req: NextRequest) {
   );
   const gate = evaluateModerationResults(moderationResults, generationRequestId);
   if (!gate.proceed) {
-    // Best-effort internal cost-log row (PRD §9) — the request never dispatched
-    // to the image provider, so this is a 0-cost audit entry (tokens/cost stay
-    // null). The moderation call itself is separately cost-logged inside
-    // moderatePrompt (operationType="moderation"). Never affects the response
-    // (recordAiCost never throws); fire-and-forget.
+    // Internal cost-log row only (ai_cost_events, PRD §9). The request never
+    // dispatched to the image provider, so this is a 0-cost audit entry
+    // (tokens/estimated cost stay null) recording that we paid for moderation
+    // and produced nothing. Purely a side effect: recordAiCost never throws and
+    // is not awaited, so it cannot alter or delay the moderation decision below
+    // — the gate's response is returned exactly as before.
     void recordAiCost({
       userId: authUserId,
       provider: "n/a",
@@ -1342,18 +1352,50 @@ export async function POST(req: NextRequest) {
       });
     });
 
+    // How many images actually came back. runGenerator ALWAYS resolves a
+    // NextResponse (never throws), so read the count off a clone. Computed once
+    // here and shared by the settle path below and the internal cost log — an
+    // unparseable body counts as zero success (all slots released).
+    let successCount = 0;
+    try {
+      const parsed = (await response.clone().json()) as { urls?: unknown };
+      successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
+    } catch {
+      successCount = 0;
+    }
+
+    // Internal cost-log row (ai_cost_events, PRD §9) for EVERY real generator
+    // run — success, partial or total failure — because the provider bills us
+    // for attempts. This is business cost analytics ONLY: it is deliberately
+    // independent of the quota ledger settled just below, is never awaited, and
+    // recordAiCost never throws, so it cannot affect the response, its latency,
+    // or any metering decision. estimateCost returns null while rates are
+    // unverified (aiCostRates.ts), leaving estimated_cost null rather than a
+    // fabricated number; the raw image counts are recorded either way.
+    const imageModel = process.env.LINAPI_IMAGE_MODEL || "gemini-3.1-flash-image-preview";
+    const requestStatus: AiCostRequestStatus =
+      successCount <= 0 ? "failed" : successCount < count ? "partial" : "success";
+    void recordAiCost({
+      userId: authUserId,
+      provider: "linapi",
+      model: imageModel,
+      operationType: "image_generation",
+      requestedImageCount: imageCountClamp.requested,
+      successfulImageCount: successCount,
+      estimatedCost: estimateCost({ model: imageModel, imageCount: successCount }),
+      // No pixel width/height is known at this route (the provider returns only
+      // image URLs) — record the requested aspect-ratio/format string as the
+      // closest available signal rather than fabricating a resolution.
+      resolution: pinFormat || null,
+      requestStatus,
+      referenceId: generationRequestId,
+      metadata: { requestedImageCount: imageCountClamp.requested, actualImageCount: count },
+    });
+
     // Settle per slot from the parsed result: N urls succeeded → s0..s{N-1}
-    // succeeded, the rest terminal failure. runGenerator ALWAYS resolves a
-    // NextResponse (never throws), so read the count off a clone. Every settle
-    // failure is swallowed inside settleInline (the expiry sweeper is the net).
+    // succeeded, the rest terminal failure. Every settle failure is swallowed
+    // inside settleInline (the expiry sweeper is the net).
     if (inlineReservation.kind === "reserved") {
-      let successCount = 0;
-      try {
-        const parsed = (await response.clone().json()) as { urls?: unknown };
-        successCount = Array.isArray(parsed.urls) ? parsed.urls.length : 0;
-      } catch {
-        successCount = 0; // unparseable body → treat as zero success (all released)
-      }
       await settleInline({ reservation: inlineReservation, successCount });
     }
     return response;

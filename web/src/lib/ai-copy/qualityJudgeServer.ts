@@ -48,6 +48,7 @@ export async function judgeImageQuality(args: {
   cfg: ProviderConfig;
   dataUrl: string;
   context?: JudgeContext;
+  /** Optional — best-effort internal cost logging (never affects the verdict). */
   costContext?: ChatCostContext;
 }): Promise<JudgeRawResult> {
   const ctx = args.context ?? {};

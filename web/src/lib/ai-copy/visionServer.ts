@@ -170,8 +170,9 @@ export type ProviderConfig = ReturnType<typeof providerConfig>;
 
 /**
  * Optional cost-logging context passed to chatJson by its callers. Purely
- * observability — never affects the request or its response. Best-effort:
- * see recordAiCost in aiCostLog.ts (never throws, fire-and-forget).
+ * observability — never affects the request, its response, or any quota
+ * decision. Best-effort: see recordAiCost in aiCostLog.ts (never throws,
+ * fire-and-forget). Omit it and no cost row is written.
  */
 export type ChatCostContext = {
   userId?: string | null;
@@ -241,7 +242,8 @@ export function thinkingExtras(provider: string, model: string): Record<string, 
 
 /**
  * Best-effort cost-log a chat/completions call from its parsed response envelope.
- * Never throws — see aiCostLog.recordAiCost. Fire-and-forget; callers do not await.
+ * Never throws — see aiCostLog.recordAiCost. Fire-and-forget; callers do not await,
+ * so cost logging adds no latency and cannot fail the AI call.
  */
 function logChatCost(
   provider: string,

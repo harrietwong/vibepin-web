@@ -24,10 +24,15 @@ test("Settings navigation exposes six real routes", () => {
   }
 });
 
-test("Billing has Current plan and real usage sections, no fake token balance", () => {
+test("Billing has Current plan and the three-quota usage section without fake subscription data", () => {
   assert.match(billing, /t\("billing\.currentPlan"\)/);
-  assert.match(billing, /t\("billing\.usageThisPeriod"\)/);
-  assert.match(billing, /t\("billing\.usageHistory"\)/);
+  // The old "Token balance" card was replaced by three independent quota meters
+  // (adapted from acb6810 onto the v55/v56 ledger). No aggregated token number
+  // may reappear — that was the fake-34 lesson.
+  assert.doesNotMatch(billing, /t\("billing\.tokenBalance"\)/);
+  assert.match(billing, /t\("billing\.usageAiImages"\)/);
+  assert.match(billing, /t\("billing\.usageAiText"\)/);
+  assert.match(billing, /t\("billing\.usageScheduledPosts"\)/);
   assert.match(billing, /t\("billing\.noUsage"\)/);
   assert.match(billing, /t\("billing\.manageBilling"\)/);
   // The old fabricated token-balance card/keys must be gone.
@@ -60,9 +65,9 @@ test("Billing IGNORES a forged user_metadata plan (only app_metadata is trusted)
   assert.equal(value.planName, null);
 });
 
-test("Billing surfaces no fabricated token balance when metadata is unavailable", () => {
-  // The old fake-34 constant is gone, and so is the whole tokenBalance field:
-  // real metering now comes from /api/billing/usage, never from metadata.
+test("Billing shows NO fabricated token balance when metadata is unavailable", () => {
+  // The old fake-34 constant is gone: with no real metered value, tokenBalance
+  // must be null (an honest "unavailable" state), never a placeholder number.
   const value = deriveAccountBillingSummary(null);
   assert.equal(value.planName, null);
   assert.equal("tokenBalance" in value, false, "tokenBalance must not be derived from metadata anymore");

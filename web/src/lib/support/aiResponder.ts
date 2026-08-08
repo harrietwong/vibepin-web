@@ -27,7 +27,7 @@ export type AiResponderInput = {
   subject: string | null;
   description: string;
   context: Record<string, unknown> | null;
-  /** Optional — enables best-effort cost logging to ai_cost_events. */
+  /** Optional — enables best-effort internal cost logging to ai_cost_events. */
   userId?: string | null;
   referenceId?: string | null;
 };
@@ -191,7 +191,8 @@ export async function generateAiFirstResponse(input: AiResponderInput): Promise<
 
 /**
  * Best-effort cost-log for a support-reply call. Never throws — see
- * aiCostLog.recordAiCost. Fire-and-forget; this function never awaits.
+ * aiCostLog.recordAiCost. Fire-and-forget; this function never awaits, so it
+ * cannot add latency to or fail the support reply.
  */
 function logSupportCost(
   input: AiResponderInput,

@@ -27,6 +27,7 @@
 
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
+import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { createServerClient } from "@/lib/supabase";
 import {
@@ -102,6 +103,24 @@ export async function POST(req: Request) {
   const publishStartedMs = Date.now();
   // Fire-and-forget: the attempted event never blocks the publish it precedes.
   void recordPublishEvent(analyticsDb, PUBLISH_EVENT_ATTEMPTED, eventBase);
+
+  // ── Phase 5B: meter the immediate publish ──────────────────────────────────
+  // The frozen contract charges "publish now" exactly like a scheduled post —
+  // otherwise switching to immediate would be a free bypass of the quota. Keyed on
+  // (draftId, UTC date bucket): a double-click or client retry the same day is free,
+  // while a deliberate republish tomorrow correctly counts again. draftId is required
+  // (all live callers send it); sourcePinId is the documented fallback. Metered before
+  // the provider call so a crash mid-publish still records the action the user took,
+  // and fail-open in shadow so a ledger outage can never block a publish.
+  const meterIdentity = draftId ?? (sourcePinId || null);
+  if (meterIdentity) {
+    await consumeScheduledPost({
+      userId: uid,
+      key: deriveScheduledPostKey(uid, meterIdentity),
+      referenceId: meterIdentity,
+      metadata: { source: "immediate" },
+    });
+  }
 
   try {
     const result = await publishPinForUser({

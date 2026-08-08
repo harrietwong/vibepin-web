@@ -1,12 +1,17 @@
 /**
- * aiCostLog.ts — internal AI provider-cost audit ledger (migrate_v57 ai_cost_events).
+ * aiCostLog.ts — internal AI provider-cost audit ledger (migrate_v58_ai_cost_events).
  *
- * PRD "定价方案 credit 方案 0723" §9: a SEPARATE, internal-only cost ledger from the
- * user-facing usage_events quota system (see web/src/lib/server/usage.ts). This
- * table has NO user-visible UI, no i18n, and drives no enforcement — it exists so
- * the business can see real provider spend per call.
+ * PRD "定价方案 credit 方案 0723" §9: a SEPARATE, internal-only cost ledger, entirely
+ * distinct from the user-facing QUOTA ledger. Quota lives in usage_accounts /
+ * usage_reservations (v55 + v56), driven by the reserve→settle helpers in
+ * web/src/lib/server/usage/ (meterGeneration.ts, meterTextGeneration.ts). That
+ * ledger answers "how much of the customer's monthly allowance is left". THIS
+ * module answers a different question for a different audience: "what did that
+ * call cost US in USD". Nothing here reads or writes usage_accounts, and no cost
+ * write can influence a quota decision. This table has NO user-visible UI, no
+ * i18n, and drives no enforcement.
  *
- * DESIGN INVARIANT (same posture as usage.ts / moderatePrompt.ts): cost logging is
+ * DESIGN INVARIANT (same posture as the metering helpers / moderatePrompt.ts): cost logging is
  * BEST-EFFORT and must NEVER break a business request. recordAiCost never throws —
  * every failure is caught and logged via console.error only. Callers should invoke
  * it fire-and-forget (`void recordAiCost(...)`) after the real work has already
@@ -55,7 +60,18 @@ export type RecordAiCostInput = {
   metadata?: Record<string, unknown> | null;
 };
 
+/** migrate_v58_ai_cost_events.sql. Service-role only (RLS on, zero policies). */
 const TABLE = "ai_cost_events";
+
+/**
+ * True only when SUPABASE_SERVICE_ROLE_KEY looks like a real credential rather
+ * than the placeholder the hermetic test gate injects. A JWT has three
+ * dot-separated segments; the test value ("test-service-key") has none.
+ */
+function isRealServiceCredential(): boolean {
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  return key.split(".").length === 3;
+}
 
 /**
  * Best-effort write to the ai_cost_events audit ledger. NEVER throws — any
@@ -67,6 +83,12 @@ export async function recordAiCost(
   input: RecordAiCostInput,
   db?: AiCostDbClient,
 ): Promise<{ recorded: boolean }> {
+  // A caller-supplied client is always honoured (that is the test seam). Without
+  // one, only attempt the write when a real service-role credential is present:
+  // the hermetic `npm test` gate sets placeholder Supabase env vars, and firing a
+  // doomed network insert there is both pointless and slow — it made the parallel
+  // runner flap on unrelated suites. No credential ⇒ silently not recorded.
+  if (!db && !isRealServiceCredential()) return { recorded: false };
   try {
     const client = db ?? (await import("../supabase")).createServerClient();
     const { error } = await client.from(TABLE).insert([

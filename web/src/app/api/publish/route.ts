@@ -20,6 +20,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +35,18 @@ let _supabase: ReturnType<typeof mkClient> | null = null;
 const supabase = () => (_supabase ??= mkClient());
 
 // ── POST — enqueue images for Pinterest publishing ────────────────────────────
+// SECURITY: this handler writes to publishing_queue with the SERVICE-ROLE key,
+// which bypasses RLS, and the table carries no owner column. Until this fix it
+// required no authentication at all, so any anonymous caller could enqueue rows
+// into another deployment's publish queue. Authentication is now mandatory and
+// matches the other publish routes (bearer or cookie session). GET/PATCH — which
+// the legacy /app/queue page still uses — are unchanged.
 export async function POST(req: NextRequest) {
+  const uid = await getUserIdFromBearerOrCookies(req);
+  if (!uid) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await req.json();

@@ -85,6 +85,8 @@ export const CORE: string[] = [
   // Billing (Creem)
   "test-plan-entitlements",
   "test-usage-period-math",
+  "test-billing-usage-api",
+  "test-ai-cost-log",
   "test-entitlements-security",
   "test-usage-metering",
   "test-creem-checkout-api",
@@ -95,6 +97,7 @@ export const CORE: string[] = [
   "test-generation-moderation-gate",
   "test-generation-metering",
   "test-text-metering",
+  "test-scheduled-post-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
   // Settings / support
@@ -116,6 +119,9 @@ export const CORE: string[] = [
   "test-user-store-media-adapters",
   "test-media-offload",
   // Shopify
+  "test-connection-limit",
+  "test-settle-generation-job",
+  "test-generation-job-route",
   "test-shopify-entitlements",
   "test-shopify-connection-store",
   "test-shopify-hmac",
@@ -233,6 +239,18 @@ export const EXCLUDED: Record<string, string> = {
     "once → release returns capacity → a replayed settle bills exactly once), which only " +
     "real Postgres can testify to. Fails loudly rather than skipping when credentials " +
     "are absent, like the other test-db-* channels.",
+  "test-db-post-metering":
+    "REAL-POSTGRES integration test for Phase 5B SCHEDULED-POST metering — writes and " +
+    "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. usage_consume_scheduled_post is the only " +
+    "single-call consume in the ledger (no reserve/settle), so its correctness rests " +
+    "entirely on the database: the (user_id, idempotency_key) unique is what makes a cron " +
+    "re-claim of the same draft+scheduled_at charge once instead of twice, and an " +
+    "unlimited (NULL limit) plan must still write an event. It also pins a known v55 " +
+    "defect — the mismatched-quantity guard is swallowed by the function's own " +
+    "unique_violation handler — so a future fix is a visible change, not an accident. " +
+    "Fails loudly rather than skipping when credentials are absent, like the other " +
+    "test-db-* channels.",
   "test-usage-ledger-db":
     "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
