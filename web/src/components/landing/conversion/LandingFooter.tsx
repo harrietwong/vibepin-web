@@ -1,5 +1,6 @@
 import BrandLogo from "@/components/BrandLogo";
 import Link from "next/link";
+import { LegalEntityNotice } from "@/components/LegalEntityNotice";
 import { CONTAINER } from "./shared";
 
 const FOOTER_COLUMNS = [
@@ -112,11 +113,14 @@ export function LandingFooter() {
         ))}
       </div>
       <div
-        className={`${CONTAINER} border-t pt-6 flex flex-col sm:flex-row justify-between gap-2 text-[11px]`}
+        className={`${CONTAINER} border-t pt-6 flex flex-col gap-2 text-[11px]`}
         style={{ borderColor: "rgba(255,255,255,0.06)", color: "#374151" }}
       >
-        <p>© 2026 VibePin. All rights reserved.</p>
-        <p>VibePin is not affiliated with or endorsed by Pinterest.</p>
+        <div className="flex flex-col sm:flex-row justify-between gap-2">
+          <p>© 2026 VibePin. All rights reserved.</p>
+          <p>VibePin is not affiliated with or endorsed by Pinterest.</p>
+        </div>
+        <LegalEntityNotice />
       </div>
     </footer>
   );
