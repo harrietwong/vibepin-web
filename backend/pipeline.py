@@ -419,6 +419,47 @@ def _resolve_crawl_proxy(explicit: Optional[str]) -> Optional[str]:
     return (os.environ.get(CRAWL_PROXY_ENV) or "").strip() or None
 
 
+# ── Crawl progress observability ──────────────────────────────────────────────
+# Pure observability: these emit lines, they never change what gets crawled.
+#
+# Why bare print(..., flush=True) and not _info(): _info() prints WITHOUT flushing.
+# Under systemd/journald stdout is a pipe, so Python block-buffers it (4-8 KB) and
+# a long crawl can produce ZERO visible lines for hours while the buffer fills —
+# which is exactly what the 2026-08-08 12:05 run looked like from journald (only
+# the wrapper's own flushed start/kill lines showed up). Every progress line below
+# must flush so a stuck run is diagnosable while it is still stuck.
+_CRAWL_HEARTBEAT_SECS = 60  # patched small in tests; do not tune for behaviour
+
+
+def _crawl_log(msg: str) -> None:
+    """Emit one crawl-progress line, unbuffered (journald-visible in real time)."""
+    print(msg, flush=True)
+
+
+async def _crawl_heartbeat(
+    started_at: float,
+    total: int,
+    done: list,           # single-element [int] counter, mutated by the workers
+    in_progress: dict,    # keyword -> monotonic start time (only sem-acquired ones)
+    interval: Optional[float] = None,
+) -> None:
+    """Print 'still alive' lines until cancelled.
+
+    Names the keywords currently in flight and how long each has been running, so a
+    hung run tells you WHICH keyword is hanging instead of just going silent.
+    """
+    tick = _CRAWL_HEARTBEAT_SECS if interval is None else interval
+    while True:
+        await asyncio.sleep(tick)
+        now = time.monotonic()
+        running = sorted(in_progress.items(), key=lambda kv: kv[1])
+        detail = ", ".join(f"{kw} ({now - t0:.0f}s)" for kw, t0 in running) or "none"
+        _crawl_log(
+            f"[crawl] heartbeat done={done[0]}/{total} "
+            f"elapsed={now - started_at:.0f}s in_flight={len(running)}: {detail}"
+        )
+
+
 async def step_crawl(
     concurrency:    int = 3,
     max_pins:       int = 75,
@@ -483,6 +524,13 @@ async def step_crawl(
     sem = asyncio.Semaphore(concurrency)
     stats = {"processed": 0, "pins": 0, "premium": 0, "errors": 0, "failed_keywords": 0}
 
+    # Observability state (no effect on crawl behaviour).
+    total = len(items)
+    done = [0]                       # completion counter, mutated by _process
+    in_progress: dict[str, float] = {}   # keyword -> monotonic start (in-flight only)
+    durations: list[tuple] = []      # (keyword, seconds, ok) for the closing summary
+    run_started = time.monotonic()
+
     async with PinterestSession(proxy=proxy, delay=1.2) as session:
         async def _process(item: dict) -> None:
             keyword  = item["keyword"]
@@ -492,6 +540,8 @@ async def step_crawl(
             out_dir  = ROOT / "vibe_library" / f"style_library_{safe_slug}"
 
             async with sem:
+                item_started = time.monotonic()
+                in_progress[keyword] = item_started
                 try:
                     await asyncio.sleep(random.uniform(0.3, 0.8))
                     pins_saved, premium = await process_queue_item(
@@ -507,13 +557,55 @@ async def step_crawl(
                     stats["processed"] += 1
                     stats["pins"]      += pins_saved
                     stats["premium"]   += len(premium)
+                    elapsed = time.monotonic() - item_started
+                    done[0] += 1
+                    durations.append((keyword, elapsed, True))
+                    _crawl_log(
+                        f"[crawl] {done[0]}/{total} {keyword} ok "
+                        f"pins={pins_saved} premium={len(premium)} took={elapsed:.1f}s"
+                    )
                 except Exception as exc:
                     stats["errors"] += 1
                     stats["failed_keywords"] += 1
+                    elapsed = time.monotonic() - item_started
+                    done[0] += 1
+                    durations.append((keyword, elapsed, False))
+                    # Failure must be explicit and named: type + message + timing, on
+                    # the same flushed channel as the successes, so a failing keyword
+                    # can never hide inside gather(return_exceptions=True).
+                    _crawl_log(
+                        f"[crawl] {done[0]}/{total} {keyword} FAILED "
+                        f"took={elapsed:.1f}s error={type(exc).__name__}: {exc}"
+                    )
                     _err(f"  {keyword}: {exc}")
+                finally:
+                    in_progress.pop(keyword, None)
 
         tasks = [_process(item) for item in items]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        heartbeat = asyncio.create_task(
+            _crawl_heartbeat(run_started, total, done, in_progress)
+        )
+        try:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # Never leave the heartbeat dangling — cancel and await it, even if the
+            # gather raised (e.g. the whole step was cancelled by the run timeout).
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+
+    total_elapsed = time.monotonic() - run_started
+    slowest = sorted(durations, key=lambda d: d[1], reverse=True)[:3]
+    slowest_txt = ", ".join(
+        f"{kw} {secs:.1f}s{'' if ok else ' (FAILED)'}" for kw, secs, ok in slowest
+    ) or "none"
+    _crawl_log(
+        f"[crawl] summary total={total} ok={stats['processed']} "
+        f"failed={stats['failed_keywords']} pins={stats['pins']} "
+        f"elapsed={total_elapsed:.1f}s slowest={slowest_txt}"
+    )
 
     _info(
         f"[crawl] completed keywords={stats['processed']} "
