@@ -187,6 +187,10 @@ export function PinDetailsModal({
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
   // Guards the one-shot fan-out to extra channels after a successful publish.
   const socialFannedOutRef = useRef(false);
+  // One publish = one toast. Pinterest and the social fan-out complete at
+  // different moments, but the merchant clicked once; sharing a toast id lets the
+  // later result replace the earlier line with a combined one.
+  const PUBLISH_TOAST_ID = `publish-${draft?.id ?? "draft"}`;
 
   // ── Scheduling ──────────────────────────────────────────────────────────────
   const [scheduledTime, setScheduledTime] = useState("");
@@ -840,7 +844,7 @@ export function PinDetailsModal({
     // Pinterest publish AND after a failed one — those channels stand on their
     // own, so a Pinterest refusal (Trial access, dead token, bad board) must not
     // silently swallow them. Guarded to run at most once per publish attempt.
-    async function fanOutToExtraChannels(): Promise<void> {
+    async function fanOutToExtraChannels(pinterestPublished = false): Promise<void> {
       const extras = socialDestinations.filter(p => p !== "pinterest");
       if (!extras.length || socialFannedOutRef.current) return;
       socialFannedOutRef.current = true;
@@ -875,17 +879,27 @@ export function PinDetailsModal({
         }
         if (published.length) {
           const withLink = published.find(d => d.externalPostUrl);
-          toast.success(
-            `${t("pinDetails.toast.alsoPublishedPrefix")}${published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"))}`,
-            withLink?.externalPostUrl
+          const names = published.map(d => platformName(d.provider)).join(t("pinDetails.listSeparator"));
+          // One publish, one toast. When Pinterest succeeded it already showed
+          // "Pin published successfully" under PUBLISH_TOAST_ID; reusing that id
+          // REPLACES it with a combined line naming every destination, instead of
+          // stacking a second "Also published to …" for what the merchant
+          // experienced as a single action. With Pinterest unchecked or failed
+          // there is no prior toast, so this is simply the first one.
+          const combined = pinterestPublished
+            ? `${t("pinDetails.toast.publishSuccess")} ${t("pinDetails.toast.alsoPublishedPrefix")}${names}`
+            : `${t("pinDetails.toast.alsoPublishedPrefix")}${names}`;
+          toast.success(combined, {
+            id: PUBLISH_TOAST_ID,
+            ...(withLink?.externalPostUrl
               ? {
                   action: {
                     label: viewOnLabel(withLink.provider),
                     onClick: () => window.open(withLink.externalPostUrl as string, "_blank", "noopener,noreferrer"),
                   },
                 }
-              : undefined,
-          );
+              : {}),
+          });
         }
         if (failed.length) {
           toast.info(
@@ -1096,6 +1110,9 @@ export function PinDetailsModal({
       });
       setResult({ pinUrl: res.pin.url, pinId: res.pin.id, boardName, environment: res.environment });
       toast.success(t("pinDetails.toast.publishSuccess"), {
+        // Shared id so a following social fan-out REPLACES this line with a
+        // combined one rather than stacking a second toast for one publish.
+        id: PUBLISH_TOAST_ID,
         action: {
           label: t("pinDetails.viewPin"),
           onClick: () => window.open(res.pin.url, "_blank", "noopener,noreferrer"),
@@ -1104,7 +1121,7 @@ export function PinDetailsModal({
       // Fan out to the other selected channels. Extracted so the same logic can
       // also run when Pinterest FAILS (see the catch block) — those channels are
       // independent and must not be withheld because Pinterest refused.
-      await fanOutToExtraChannels();
+      await fanOutToExtraChannels(true);
     } catch (e) {
       const err = e as PinterestClientError;
       if (process.env.NODE_ENV !== "production") {
