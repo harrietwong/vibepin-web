@@ -783,6 +783,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               {socialPostRefs.map(ref => (
                 <a key={ref.provider} data-testid={`card-view-on-${ref.provider}`}
                   href={ref.postUrl} target="_blank" rel="noopener noreferrer"
+                  // The handle rides the tooltip rather than the label: the button
+                  // row is tight, and the account matters when verifying a post,
+                  // not when scanning the card.
+                  title={ref.accountName ? `${viewOnLabel(ref.provider)} — ${ref.accountName}` : undefined}
                   style={{ ...secondaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}>
                   {viewOnLabel(ref.provider)} <ExternalLink style={{ width: 11, height: 11 }} />
                 </a>
