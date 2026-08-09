@@ -456,6 +456,51 @@ class PinterestSession:
         self._app_version: str = ""
         self._last_req: float = 0.0
         self._ssl_rebuilds: int = 0          # count rebuilds to avoid infinite loops
+        # Serialises _rebuild_session so two coroutines that hit an SSL error at the
+        # same time cannot each close the session out from under the other (the
+        # second close() would tear down the session the first one just handed to
+        # everyone else). Created lazily: __init__ may run outside a running loop.
+        self._rebuild_lock: Optional[asyncio.Lock] = None
+        # Bumped on every completed rebuild. A coroutine that saw generation N and
+        # then finds generation > N knows somebody already rebuilt for it, so it
+        # retries on the fresh session instead of triggering a redundant teardown.
+        self._generation: int = 0
+
+    def _lock(self) -> asyncio.Lock:
+        """Lazily create the rebuild lock, bound to the running loop."""
+        if self._rebuild_lock is None:
+            self._rebuild_lock = asyncio.Lock()
+        return self._rebuild_lock
+
+    async def _request(self, url: str, **kwargs):
+        """Single chokepoint for every curl_cffi GET issued by this session.
+
+        WHY THIS EXISTS (root cause of the 2026-08-09 permanent hang):
+        curl_cffi's AsyncSession keeps a bounded pool of libcurl handles
+        (max_clients=10). `AsyncSession.request()` starts with
+
+            curl = await self.pop_curl()        # -> await self.pool.get()
+
+        which is an UNTIMED await on an asyncio.LifoQueue, executed BEFORE the
+        per-request timeout is applied to the handle. So the documented 30s
+        timeout provably cannot protect this phase. When the pool is drained
+        (or when AsyncSession.close() empties the queue without ever waking the
+        coroutines parked in pool.get()), that await blocks FOREVER — no I/O, no
+        exception, no timeout, while still holding the caller's crawl semaphore.
+
+        Wrapping in asyncio.wait_for puts a hard ceiling on pop-curl-wait +
+        transfer, so a starved or torn-down pool surfaces as a TimeoutError the
+        caller can handle instead of an unkillable coroutine.
+        """
+        if self._session is None:
+            raise RuntimeError("PinterestSession used before __aenter__")
+        # Margin: let libcurl's own timeout fire first when the *transfer* is the
+        # slow part, so we keep its precise error; this ceiling only wins when the
+        # wait happens outside libcurl's view (i.e. parked in pop_curl).
+        # Proportional (not a flat +15s) so the ceiling still tracks the configured
+        # timeout at both ends of the clamp range.
+        budget = self._timeout * 1.5
+        return await asyncio.wait_for(self._session.get(url, **kwargs), timeout=budget)
 
     def _make_session(self) -> CurlSession:
         # Session-level default timeout is the GUARANTEED chokepoint: every request
@@ -475,24 +520,48 @@ class PinterestSession:
         if self._session:
             await self._session.close()
 
-    async def _rebuild_session(self) -> None:
-        """Close the broken CurlSession and open a fresh one with new cookies/csrf."""
-        self._ssl_rebuilds += 1
-        print(f"  [session] SSL error — rebuilding session (attempt #{self._ssl_rebuilds})")
-        try:
-            if self._session:
-                await self._session.close()
-        except Exception:
-            pass
-        await asyncio.sleep(2.0)
-        self._session = self._make_session()
-        await self._bootstrap()
+    async def _rebuild_session(self, seen_generation: Optional[int] = None) -> None:
+        """Close the broken CurlSession and open a fresh one with new cookies/csrf.
+
+        Concurrency-safe. The old code was called from _get_json with no mutual
+        exclusion, so with 5 crawl workers sharing one session two coroutines could
+        rebuild at once and the second close() would destroy the session the first
+        had just published. Worse, AsyncSession.close() drains its handle pool with
+        get_nowait() and never wakes coroutines parked in `await pool.get()` — those
+        awaits hang forever. Serialising rebuilds and skipping redundant ones keeps
+        the number of teardowns of a shared session to the minimum.
+        """
+        async with self._lock():
+            # Someone else already rebuilt while we waited for the lock: the session
+            # we found broken is gone and a fresh one is in place. Don't tear that
+            # one down — just let the caller retry against it.
+            if seen_generation is not None and self._generation > seen_generation:
+                return
+            self._ssl_rebuilds += 1
+            print(
+                f"  [session] SSL error — rebuilding session "
+                f"(attempt #{self._ssl_rebuilds})",
+                flush=True,
+            )
+            old = self._session
+            # Publish the new session BEFORE closing the old one. close() cannot wake
+            # coroutines parked in the old pool, but anyone who arrives from here on
+            # picks up the healthy session instead of queueing on a dying one.
+            self._session = self._make_session()
+            self._generation += 1
+            try:
+                if old:
+                    await old.close()
+            except Exception:
+                pass
+            await asyncio.sleep(2.0)
+            await self._bootstrap()
 
     async def _bootstrap(self) -> None:
         """Visit pinterest.com homepage to acquire session cookies, csrftoken, and app version."""
         import re
         try:
-            r = await self._session.get(
+            r = await self._request(
                 "https://www.pinterest.com/",
                 headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
                          "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"},
@@ -501,8 +570,12 @@ class PinterestSession:
         except Exception as exc:
             # Includes timeouts: a stalled proxy/Pinterest now RAISES within
             # self._timeout instead of hanging forever. No secrets logged.
+            # flush: journald block-buffers our stdout pipe, and this line is the
+            # main forensic marker for a stalled session — it must be visible while
+            # the run is still stuck, not after the buffer eventually fills.
             print(f"  [session] bootstrap GET failed (timeout={self._timeout}s, "
-                  f"proxy={'on' if self._proxy else 'off'}): {exc}")
+                  f"proxy={'on' if self._proxy else 'off'}): "
+                  f"{type(exc).__name__}: {exc}", flush=True)
             # Return with empty state; _get_json will handle SSL retry on next call
             return
         self._csrf = self._session.cookies.get("csrftoken", "")
@@ -563,10 +636,13 @@ class PinterestSession:
         if pws_handler:
             extra["X-Pinterest-Pws-Handler"] = pws_handler
         for attempt in range(2):
+            # Snapshot before the call so we can tell "I broke it" from "someone
+            # else already rebuilt it while my request was in flight".
+            seen_generation = self._generation
             try:
-                r = await self._session.get(url, headers=extra, timeout=self._timeout)
+                r = await self._request(url, headers=extra, timeout=self._timeout)
                 if r.status_code != 200:
-                    print(f"  [warn] HTTP {r.status_code} — {r.text[:120]}")
+                    print(f"  [warn] HTTP {r.status_code} — {r.text[:120]}", flush=True)
                     return {}
                 return r.json()
             except Exception as e:
@@ -574,12 +650,14 @@ class PinterestSession:
                 # SSL corruption: rebuild session and retry once
                 is_ssl = any(kw in err for kw in ("ssl", "tls", "certificate", "handshake", "curl: (35)", "curl: (60)"))
                 if is_ssl and attempt == 0 and self._ssl_rebuilds < 3:
-                    await self._rebuild_session()
+                    await self._rebuild_session(seen_generation=seen_generation)
                     # Rebuild extra headers with fresh csrf/app_version
                     if self._csrf:        extra["X-CSRFToken"]   = self._csrf
                     if self._app_version: extra["X-App-Version"] = self._app_version
                     continue
-                print(f"  [warn] GET failed: {e}")
+                # Named type: a bare str() on TimeoutError is empty, which used to
+                # make a pool stall look like a blank "GET failed:" line.
+                print(f"  [warn] GET failed: {type(e).__name__}: {e}", flush=True)
                 return {}
         return {}
 
@@ -606,21 +684,28 @@ class PinterestSession:
             await asyncio.sleep(self._delay - elapsed)
         self._last_req = time.monotonic()
 
-        r = await self._session.get(
-            search_url,
-            headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                     "Referer": "https://www.pinterest.com/"},
-            timeout=self._timeout,
-        )
-        print(f"  [html] search page status={r.status_code}")
-        if r.status_code == 200:
-            html_pins = self._extract_pins_from_html(r.text)
-            for p in html_pins:
-                pid = str(p.get("id") or p.get("pin_id") or "")
-                if pid and pid not in seen_ids:
-                    seen_ids.add(pid)
-                    pins.append(p)
-            print(f"  [html] extracted {len(pins)} pins from HTML")
+        # Bounded (see _request) and guarded: this call used to be both untimed at
+        # the pool-acquire phase AND uncaught, so a stalled/failed HTML fetch took
+        # down the whole keyword instead of falling through to the JSON API below.
+        try:
+            r = await self._request(
+                search_url,
+                headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                         "Referer": "https://www.pinterest.com/"},
+                timeout=self._timeout,
+            )
+        except Exception as exc:
+            print(f"  [html] search page failed: {type(exc).__name__}: {exc}", flush=True)
+        else:
+            print(f"  [html] search page status={r.status_code}", flush=True)
+            if r.status_code == 200:
+                html_pins = self._extract_pins_from_html(r.text)
+                for p in html_pins:
+                    pid = str(p.get("id") or p.get("pin_id") or "")
+                    if pid and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        pins.append(p)
+                print(f"  [html] extracted {len(pins)} pins from HTML", flush=True)
 
         # --- Step 2: Get pin IDs from BaseSearchResource, then fetch full details ---
         bookmarks: List[str] = []

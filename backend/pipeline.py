@@ -436,6 +436,26 @@ def _resolve_crawl_proxy(explicit: Optional[str]) -> Optional[str]:
 _CRAWL_HEARTBEAT_SECS = 60  # patched small in tests; do not tune for behaviour
 
 
+def _resolve_keyword_timeout() -> float:
+    """Hard per-keyword wall-clock ceiling (seconds) for the crawl watchdog.
+
+    Env: PINTEREST_KEYWORD_TIMEOUT_SECONDS (default 300 ≈ 3x the observed 108s
+    median). Clamped to [30, 3600] so a typo cannot restore an unbounded wait.
+
+    This is the LAST line of defence, not the fix: on 2026-08-09 five keywords sat
+    in flight for 33+ minutes with zero I/O and never returned, so all five
+    concurrency slots were held forever and the run completed 48/150 and then
+    nothing. Whatever stalls a keyword — a known one is fixed in scraper_v2 — it
+    must never again be able to hold a slot indefinitely.
+    """
+    raw = os.environ.get("PINTEREST_KEYWORD_TIMEOUT_SECONDS", "300")
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        val = 300.0
+    return max(30.0, min(val, 3600.0))
+
+
 def _crawl_log(msg: str) -> None:
     """Emit one crawl-progress line, unbuffered (journald-visible in real time)."""
     print(msg, flush=True)
@@ -498,7 +518,7 @@ async def step_crawl(
             return {"processed": 0, "pins": 0, "premium": 0, "skipped": True}
 
     from crawl_queue_ops import clamp_concurrency, count_pending_items, fetch_due_crawl_items  # type: ignore
-    from scraper_v2 import PinterestSession, process_queue_item  # type: ignore
+    from scraper_v2 import PinterestSession, mark_queue_item, process_queue_item  # type: ignore
     try:
         from interest_discovery import slug_to_category  # type: ignore
     except ImportError:
@@ -527,7 +547,10 @@ async def step_crawl(
     _info(f"{len(items)} due keywords to process (concurrency={concurrency})")
 
     sem = asyncio.Semaphore(concurrency)
-    stats = {"processed": 0, "pins": 0, "premium": 0, "errors": 0, "failed_keywords": 0}
+    stats = {"processed": 0, "pins": 0, "premium": 0, "errors": 0,
+             "failed_keywords": 0, "timed_out_keywords": 0}
+    keyword_timeout = _resolve_keyword_timeout()
+    _info(f"[crawl] per-keyword timeout={keyword_timeout:.0f}s")
 
     # Observability state (no effect on crawl behaviour).
     total = len(items)
@@ -549,15 +572,22 @@ async def step_crawl(
                 in_progress[keyword] = item_started
                 try:
                     await asyncio.sleep(random.uniform(0.3, 0.8))
-                    pins_saved, premium = await process_queue_item(
-                        keyword=keyword,
-                        source_interest=slug,
-                        category=cat,
-                        session=session,
-                        max_pins=max_pins,
-                        expand_related=True,
-                        write_db=not dry_run,
-                        out_dir=out_dir,
+                    # WATCHDOG: a keyword that stops making progress must lose its
+                    # slot. wait_for cancels the inner coroutine, so the semaphore is
+                    # released by the `async with sem` on the way out and the queued
+                    # keywords behind it keep flowing.
+                    pins_saved, premium = await asyncio.wait_for(
+                        process_queue_item(
+                            keyword=keyword,
+                            source_interest=slug,
+                            category=cat,
+                            session=session,
+                            max_pins=max_pins,
+                            expand_related=True,
+                            write_db=not dry_run,
+                            out_dir=out_dir,
+                        ),
+                        timeout=keyword_timeout,
                     )
                     stats["processed"] += 1
                     stats["pins"]      += pins_saved
@@ -569,6 +599,36 @@ async def step_crawl(
                         f"[crawl] {done[0]}/{total} {keyword} ok "
                         f"pins={pins_saved} premium={len(premium)} took={elapsed:.1f}s"
                     )
+                except (asyncio.TimeoutError, TimeoutError):
+                    # A timed-out keyword is a FAILED keyword — never a silent skip.
+                    # It counts in errors/failed_keywords exactly like a raised
+                    # exception, plus its own counter so the summary can say how
+                    # many were killed by the watchdog rather than by an error.
+                    stats["errors"] += 1
+                    stats["failed_keywords"] += 1
+                    stats["timed_out_keywords"] += 1
+                    elapsed = time.monotonic() - item_started
+                    done[0] += 1
+                    durations.append((keyword, elapsed, False))
+                    _crawl_log(
+                        f"[crawl] {done[0]}/{total} {keyword} TIMEOUT "
+                        f"took={elapsed:.1f}s limit={keyword_timeout:.0f}s "
+                        f"— cancelled, slot released"
+                    )
+                    _err(f"  {keyword}: timed out after {keyword_timeout:.0f}s")
+                    # process_queue_item marked this row 'processing' before it hung
+                    # and its own except-handler cannot run (cancellation raises
+                    # CancelledError, a BaseException). Without this the row would
+                    # rot in 'processing' and never be retried.
+                    if not dry_run:
+                        try:
+                            mark_queue_item(
+                                keyword,
+                                "failed",
+                                f"watchdog timeout after {keyword_timeout:.0f}s",
+                            )
+                        except Exception as mark_exc:  # bookkeeping never kills the run
+                            _err(f"  {keyword}: could not mark queue item failed: {mark_exc}")
                 except Exception as exc:
                     stats["errors"] += 1
                     stats["failed_keywords"] += 1
@@ -608,14 +668,16 @@ async def step_crawl(
     ) or "none"
     _crawl_log(
         f"[crawl] summary total={total} ok={stats['processed']} "
-        f"failed={stats['failed_keywords']} pins={stats['pins']} "
+        f"failed={stats['failed_keywords']} "
+        f"timed_out={stats['timed_out_keywords']} pins={stats['pins']} "
         f"elapsed={total_elapsed:.1f}s slowest={slowest_txt}"
     )
 
     _info(
         f"[crawl] completed keywords={stats['processed']} "
         f"inserted_total={stats['pins']} premium_total={stats['premium']} "
-        f"failed={stats['failed_keywords']}"
+        f"failed={stats['failed_keywords']} "
+        f"timed_out={stats['timed_out_keywords']}"
     )
     _ok(f"Crawl complete: {stats['processed']} keywords, "
         f"{stats['pins']} pins, {stats['premium']} premium")
