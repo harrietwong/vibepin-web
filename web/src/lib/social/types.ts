@@ -112,6 +112,12 @@ export interface PublishResult {
   status: PublishStatus;
   externalPostId?: string | null;
   externalPostUrl?: string | null;
+  /**
+   * Handle the post went out as (Facebook Page name, Instagram username), so the
+   * published view can say WHICH account received it — a permalink alone does
+   * not, and a merchant may have several accounts connected.
+   */
+  accountName?: string | null;
   error?: string | null;
 }
 
