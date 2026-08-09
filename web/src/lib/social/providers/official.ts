@@ -100,6 +100,7 @@ export const officialProvider: SocialPublishingProvider = {
         status: "published",
         externalPostId: result.externalPostId,
         externalPostUrl: result.permalink,
+        accountName: selected.pageName ?? null,
       };
     } catch (err) {
       // FacebookApiError messages are Meta's own text (already token-free — the
@@ -172,6 +173,7 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
       status: "published",
       externalPostId: result.mediaId,
       externalPostUrl: result.permalink,
+      accountName: connection.username ?? null,
     };
   } catch (err) {
     const message = err instanceof InstagramApiError

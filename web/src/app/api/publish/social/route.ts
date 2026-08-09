@@ -20,7 +20,7 @@
  *     ok: boolean,                       // true when every destination published
  *     jobId: string | null,              // null if the v32 tables aren't applied
  *     status: SocialPublishJobStatus,
- *     destinations: Array<{ provider, status, externalPostId?, externalPostUrl?, error? }>
+ *     destinations: Array<{ provider, status, externalPostId?, externalPostUrl?, accountName?, error? }>
  *   }
  *
  * A destination's externalPostId/externalPostUrl are persisted to
@@ -55,6 +55,8 @@ type DestOutcome = {
   socialConnectionId: string | null;
   externalPostId?: string | null;
   externalPostUrl?: string | null;
+  /** Handle the post went out as — display-only, public on the post itself. */
+  accountName?: string | null;
   error?: string | null;
 };
 
@@ -194,6 +196,7 @@ export async function POST(req: Request) {
         socialConnectionId: connection.id,
         externalPostId: result.externalPostId ?? null,
         externalPostUrl: result.externalPostUrl ?? null,
+        accountName: result.accountName ?? null,
         error: result.ok ? null : result.error ?? "Publishing is not available for this platform yet.",
       });
     } catch (err) {

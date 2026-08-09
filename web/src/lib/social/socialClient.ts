@@ -128,6 +128,11 @@ export type SocialPublishResult = {
     externalPostId: string | null;
     /** Direct link to the live post — powers "View on <platform>". */
     externalPostUrl: string | null;
+    /**
+     * Handle the post went out as (Page name / IG username) — so the published
+     * view can name the destination account, not just the platform.
+     */
+    accountName: string | null;
     error: string | null;
   }>;
 };

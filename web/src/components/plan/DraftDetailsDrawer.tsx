@@ -865,6 +865,9 @@ export function PinDetailsModal({
             postId: d.externalPostId as string,
             postUrl: d.externalPostUrl ?? "",
             publishedAt: new Date().toISOString(),
+            // Which account received it — a permalink alone doesn't say, and a
+            // merchant may have several accounts connected per platform.
+            accountName: d.accountName ?? undefined,
           }));
         if (refs.length) {
           // Merge by provider so republishing replaces that platform's entry
@@ -950,6 +953,9 @@ export function PinDetailsModal({
             postId: d.externalPostId as string,
             postUrl: d.externalPostUrl ?? "",
             publishedAt: new Date().toISOString(),
+            // Which account received it — a permalink alone doesn't say, and a
+            // merchant may have several accounts connected per platform.
+            accountName: d.accountName ?? undefined,
           }));
         if (refs.length) {
           // Same merge-by-provider persistence as the post-Pinterest fan-out, so
@@ -1473,6 +1479,17 @@ export function PinDetailsModal({
                         {t("pinDetails.accountLabel")} @{pinterestAccount.username}
                       </p>
                     )}
+                    {/* One line per other platform this went live on, naming the
+                        account that received it. Publishing to several at once
+                        otherwise leaves "which account?" unanswered — a permalink
+                        does not say, and a merchant may have several connected.
+                        Only refs that recorded a handle render (older ones omit it). */}
+                    {socialPostRefs.filter(r => r.accountName?.trim()).map(ref => (
+                      <p key={`acct-${ref.provider}`} data-testid={`draft-published-account-${ref.provider}`}
+                        style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>
+                        {platformName(ref.provider as SocialProvider)}: {ref.accountName}
+                      </p>
+                    ))}
                     <p style={{ margin: "2px 0 0", fontSize: 10.5, color: UI.textMuted }}>{t("pinDetails.publishedSuccess")}</p>
                   </div>
                 ) : isScheduled ? (

@@ -175,6 +175,15 @@ export interface SocialPostRef {
   postUrl:    string;
   /** ISO timestamp of when we recorded the successful publish. */
   publishedAt: string;
+  /**
+   * Handle this went out as — the Facebook Page name, the Instagram username.
+   * Publishing to several platforms at once says nothing about WHICH account
+   * received each post, and a merchant with more than one connected account
+   * cannot tell from a permalink alone. Display-only and public by nature (it is
+   * the visible name on the post itself). Optional: refs recorded before this
+   * field existed simply omit the line.
+   */
+  accountName?: string;
 }
 
 /**
