@@ -256,7 +256,7 @@ async def step_trends(
     if flags.get("L3"):
         providers.append("pinterest_trends_l3")
 
-    from trend_provider_health import run_provider_health  # noqa: E402
+    from trend_provider_health import run_provider_health, summarize_actual_run  # noqa: E402
 
     from official_v5_seed_quality import global_dedupe_job_seeds  # noqa: E402
 
@@ -279,7 +279,17 @@ async def step_trends(
     elif _tsp.SEED_RUN_ACCUMULATOR.get("queue_stats"):
         queue_totals.update(_tsp.SEED_RUN_ACCUMULATOR["queue_stats"])
 
-    provider_health = await run_provider_health(region=region)
+    # The health probe runs AFTER the fetch loop above, so by this point we already
+    # know exactly what every layer produced. Hand that evidence to the blocker so
+    # it judges the run on its actual output rather than on one trailing limit=5
+    # request — which, after 20+ interests of v5 calls, is the request most likely
+    # to be rate-limited. See trend_provider_health._compute_blocker.
+    actual_run = summarize_actual_run(
+        provider_run_summary=PROVIDER_RUN_SUMMARY,
+        authoritative_scored=authoritative_scored,
+        source_counts=source_counts,
+    )
+    provider_health = await run_provider_health(region=region, actual_run=actual_run)
 
     job_report = build_job_report(
         crawl_queue_entries_created=queue_totals.get("written", 0),
@@ -324,6 +334,13 @@ async def step_trends(
     job_report["blockerReason"] = provider_health.get("blockerReason")
     job_report["noUsableSeedsReason"] = no_usable_seeds_reason
     job_report["selectedPrimaryProvider"] = provider_health.get("selectedPrimaryProvider")
+    # Which evidence decided the blocker, and whether the probe's verdict was
+    # discarded because the run demonstrably got official data anyway.
+    job_report["blockerDecisionBasis"] = provider_health.get("blockerDecisionBasis")
+    job_report["probePrimaryProvider"] = provider_health.get("probePrimaryProvider")
+    job_report["probeTransientFailure"] = provider_health.get("probeTransientFailure")
+    job_report["probeOverride"] = provider_health.get("probeOverride")
+    job_report["authoritativeSeedsScored"] = authoritative_scored
     job_report["missingP0Categories"] = job_report.get("p0CategoriesMissing", [])
     job_report["queueVerification"] = None
     if dry_run:
@@ -342,6 +359,21 @@ async def step_trends(
     import json as _json
     _info("Seed job report:")
     print(_json.dumps(job_report, indent=2, ensure_ascii=False))
+
+    # Say out loud which path the blocker decision took, so a future failure can be
+    # read straight off the log instead of reconstructed from the JSON blob.
+    if provider_health.get("probeOverride"):
+        _info(f"PROVIDER PROBE OVERRIDDEN — {provider_health['probeOverride']}")
+    _info(
+        "Provider verdict: basis="
+        f"{provider_health.get('blockerDecisionBasis')} "
+        f"official_seeds_scored={authoritative_scored} "
+        f"l3_scored={source_counts.get('L3', 0)} "
+        f"probe_primary={provider_health.get('probePrimaryProvider')} "
+        f"probe_transient={provider_health.get('probeTransientFailure')} "
+        f"selected={provider_health.get('selectedPrimaryProvider')} "
+        f"blocker={bool(provider_health.get('blocker'))}"
+    )
 
     if provider_health.get("blocker") and not dry_run:
         reason = provider_health.get("blockerReason") or "Pinterest Trends provider unavailable"
