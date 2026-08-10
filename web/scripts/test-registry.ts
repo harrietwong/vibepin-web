@@ -114,6 +114,7 @@ export const CORE: string[] = [
   "test-pin-draft-promote",
   "test-schedule-timezone",
   "test-publish-due-claim",
+  "test-expire-reservations-cron",
   "test-publish-events",
   "test-user-store-sync",
   "test-user-store-route",
