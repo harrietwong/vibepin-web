@@ -3,10 +3,10 @@
 /**
  * Compact publishing account selector.
  *
- * The rows paint immediately from cache/fallback, then hydrate from the shared
- * /api/social/connections source. Pinterest can also be overridden by the host's
- * live /api/pinterest/status signal so account connection state is not coupled to
- * board loading.
+ * The rows paint immediately from cache/fallback, then hydrate from
+ * /api/social/connections — the single connection truth for every provider (PRD §7).
+ * Pinterest is not special-cased here: its dedicated API still owns boards, capability
+ * and metadata, but connection status comes from the same place Settings reads.
  */
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
@@ -16,12 +16,10 @@ import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/p
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
 import { getCachedConnections, setCachedConnections, SOCIAL_CONNECTIONS_CHANGED_EVENT } from "@/lib/social/connectionsCache";
-import { fetchPinterestStatusCached, PINTEREST_DISCONNECTED_EVENT } from "@/lib/pinterestClient";
-import { isRealPinterestConnection } from "@/lib/pinterest/connection";
+import { PINTEREST_DISCONNECTED_EVENT } from "@/lib/pinterestClient";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const CONNECTIONS_TIMEOUT_MS = 3000;
-const PINTEREST_STATUS_TIMEOUT_MS = 2500;
 
 function defaultSummaries(): PlatformConnectionSummary[] {
   return SOCIAL_PROVIDERS.map((provider): PlatformConnectionSummary => ({
@@ -222,33 +220,29 @@ export function PublishDestinations({
   );
   const [hasLoaded, setHasLoaded] = useState(() => !!cached);
   const [error, setError] = useState(false);
-  const [pinterestOverride, setPinterestOverride] = useState<{
-    loaded: boolean;
-    connected: boolean;
-    accountName: string | null;
-  }>({ loaded: false, connected: false, accountName: null });
   const didInitSelection = useRef(false);
   const loadSeqRef = useRef(0);
 
   const load = useCallback(async () => {
     const seq = ++loadSeqRef.current;
     const isCurrent = () => seq === loadSeqRef.current;
-    const timeoutAfter = async <T,>(promise: Promise<T>): Promise<T> => {
-      let timeout: ReturnType<typeof setTimeout> | null = null;
-      try {
-        return await Promise.race([
-          promise,
-          new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error("social_connections_timeout")), CONNECTIONS_TIMEOUT_MS);
-          }),
-        ]);
-      } finally {
-        if (timeout) clearTimeout(timeout);
-      }
-    };
+
+    // A slow answer is still the truth — the same rule the Pinterest status signal below
+    // already follows. This used to race the fetch against CONNECTIONS_TIMEOUT_MS and
+    // treat the timeout as failure, which set error state and painted every row (Instagram
+    // and Facebook included) as "Not connected" while the accounts were connected on the
+    // server. That is routine, not exotic: this endpoint reads several providers and
+    // measured 4.1s on a cold call against the 3s ceiling, and publishing adds load right
+    // when the drawer re-reads — which is exactly why the rows "went Not connected after
+    // publishing". Only a real failure (network error / non-OK response) may report
+    // not-connected; a slow fetch just leaves the rows on cache/placeholder until it lands.
+    const slowWarn = process.env.NODE_ENV !== "production"
+      ? setTimeout(() => console.warn(`[social connections] still pending after ${CONNECTIONS_TIMEOUT_MS}ms — waiting for the real answer`), CONNECTIONS_TIMEOUT_MS)
+      : null;
 
     try {
-      const { platforms } = await timeoutAfter(fetchSocialConnections());
+      const { platforms } = await fetchSocialConnections();
+      if (slowWarn) clearTimeout(slowWarn);
       if (!isCurrent()) return;
       setSummaries(platforms);
       setCachedConnections(platforms);
@@ -260,6 +254,8 @@ export function PublishDestinations({
         if (pinterest?.connected) onSelectedChange(["pinterest"]);
       }
     } catch {
+      // A genuine failure (network error / non-OK) — not merely a slow response.
+      if (slowWarn) clearTimeout(slowWarn);
       if (!isCurrent()) return;
       setError(true);
       setHasLoaded(true);
@@ -270,41 +266,6 @@ export function PublishDestinations({
     void load();
   }, [load]);
 
-  useEffect(() => {
-    // Apply the REAL status whenever it settles — a slow answer is still the truth.
-    // The old code raced the fetch against a 2.5s timeout and, when the timeout won
-    // (routine through a proxy: the status round trip alone is often >2.5s), flipped
-    // the row to a PERMANENT "Not connected" and discarded the late result — which is
-    // exactly the "connected on the server but the drawer says Not connected" bug
-    // right after an OAuth return. A slow fetch now just leaves the row in its
-    // "Checking connection…" / host-hint state until the answer lands; only a real
-    // failure (network error / non-OK) reports not-connected. The fetch is never
-    // aborted (an unawaited AbortError pops Next's dev overlay).
-    let cancelled = false;
-    const t0 = process.env.NODE_ENV !== "production" ? performance.now() : 0;
-    const slowWarn = process.env.NODE_ENV !== "production"
-      ? setTimeout(() => console.warn(`[Pinterest account status] still pending after ${PINTEREST_STATUS_TIMEOUT_MS}ms — waiting for the real answer`), PINTEREST_STATUS_TIMEOUT_MS)
-      : null;
-    fetchPinterestStatusCached()
-      .then(status => {
-        if (cancelled) return;
-        if (process.env.NODE_ENV !== "production") console.log(`[Pinterest account status] resolved in ${(performance.now() - t0).toFixed(0)}ms`);
-        setPinterestOverride({
-          loaded: true,
-          connected: isRealPinterestConnection(status),
-          accountName: status.account?.username ?? null,
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setPinterestOverride({ loaded: true, connected: false, accountName: null });
-      })
-      .finally(() => {
-        if (slowWarn) clearTimeout(slowWarn);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Disconnecting Pinterest in Settings while this drawer sits open behind it (e.g.
   // Settings opened as an overlay) doesn't unmount this component, so nothing would
@@ -313,7 +274,6 @@ export function PublishDestinations({
   // AND force a fresh connections load (also clears the now-stale selection).
   useEffect(() => {
     function onDisconnected() {
-      setPinterestOverride({ loaded: true, connected: false, accountName: null });
       if (selected.includes("pinterest")) onSelectedChange(selected.filter(p => p !== "pinterest"));
       void load();
     }
@@ -338,11 +298,11 @@ export function PublishDestinations({
   const didDefaultPinterest = useRef(false);
   useEffect(() => {
     if (didDefaultPinterest.current) return;
-    const connected = pinterestOverride.loaded ? pinterestOverride.connected : !!pinterestConnected;
+    const connected = summaries.find(s2 => s2.provider === "pinterest")?.connected ?? !!pinterestConnected;
     if (!connected || selected.includes("pinterest")) return;
     didDefaultPinterest.current = true;
     onSelectedChange(["pinterest", ...selected.filter(p => p !== "pinterest")]);
-  }, [onSelectedChange, pinterestConnected, pinterestOverride.connected, selected]);
+  }, [onSelectedChange, pinterestConnected, summaries, selected]);
 
   // Strip any non-live provider from the selection (e.g. stale persisted state).
   // Unimplemented platforms must never be scheduled/published against.
@@ -359,32 +319,16 @@ export function PublishDestinations({
     onSelectedChange(next);
   }
 
-  const effectivePinterestConnected = pinterestOverride.loaded ? pinterestOverride.connected : !!pinterestConnected;
-  const effectivePinterestAccountName = pinterestOverride.loaded ? pinterestOverride.accountName : pinterestAccountName;
-
-  const effectiveSummaries = summaries.map(summary => {
-    if (summary.provider !== "pinterest") return summary;
-    if (effectivePinterestConnected) {
-      return {
-        ...summary,
-        status: "connected" as const,
-        connected: true,
-        accountCount: Math.max(summary.accountCount, 1),
-        accountName: effectivePinterestAccountName ?? summary.accountName,
-      };
-    }
-    if (pinterestOverride.loaded) {
-      return {
-        ...summary,
-        status: "not_connected" as const,
-        connected: false,
-        accountCount: 0,
-        accountName: null,
-        accounts: [],
-      };
-    }
-    return summary;
-  });
+  // ONE connection truth (PRD §7). /api/social/connections is canonical for every
+  // provider, Pinterest included: it already reports status, account count, display name
+  // and the per-account rows. The Pinterest-specific status signal used to override it
+  // here, which meant Settings and this drawer could compute different answers for the
+  // same account — and the override's not-connected branch could overrule a canonical
+  // "connected", the dual-truth this section exists to remove. The Pinterest API keeps
+  // its jobs (boards, capability, metadata); it no longer decides connection status.
+  const effectiveSummaries = summaries;
+  const pinterestSummary = summaries.find(s => s.provider === "pinterest");
+  const effectivePinterestConnected = !!pinterestSummary?.connected;
 
   return (
     <div
@@ -423,7 +367,7 @@ export function PublishDestinations({
                   ? connectingPinterest
                   : connectingProvider === provider
               }
-              checkingConnection={provider === "pinterest" && !effectivePinterestConnected && !pinterestOverride.loaded}
+              checkingConnection={!hasLoaded && !summary.connected}
             />
           );
         })}
