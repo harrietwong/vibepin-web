@@ -59,7 +59,11 @@ test("published Pin URL prefers remotePinUrl; reconstructs from remotePinId only
 
 test("compact publish summary only renders when isPosted (draft/scheduled/needs-details untouched)", () => {
   const i = drawer.indexOf('data-testid="draft-planned-summary"');
-  const block = drawer.slice(i, i + 2200);
+  // Window sized to the whole three-branch ternary, not to how long it happened to be
+  // when this test was written: the published branch now also renders the target
+  // account badge (multi-account work), which pushed the scheduled/draft branches past
+  // the old 2200-char slice and failed the assertion while the markup was correct.
+  const block = drawer.slice(i, i + 3600);
   assert(/isPosted \? \(/.test(block), "isPosted branch missing from draft-planned-summary");
   assert(block.includes('data-testid="draft-published-summary"'), "compact published summary block missing");
   // The non-posted branches must still exist unmodified in the same ternary.

@@ -8,24 +8,32 @@
  *   2. Verifies `state` against the sealed cookie AND the current session user.
  *   3. Clears the state cookie (single use) regardless of outcome.
  *   4. Exchanges the code for tokens server-side (Basic auth) — required, not skippable.
- *   5. Encrypts + persists the tokens (placeholder null account fields).
- *   6. Redirects back to returnTo (or the dark Integrations page) with a status flag.
+ *   5. Reads WHICH Pinterest account authorized, and decides whether this is a new
+ *      account, a reconnect of an existing one, or an account mismatch to refuse.
+ *   6. Encrypts + persists the tokens onto the decided connection (never another).
+ *   7. Redirects back to returnTo (or the dark Integrations page) with a status flag.
  *
- * The Pinterest account profile (username/account type) is intentionally NOT
- * fetched here — that's a second Pinterest API round trip plus a second DB write
- * that isn't required to mark the connection connected, and it used to double the
- * callback's latency. It's synced in the background after redirect by the client
- * calling POST /api/pinterest/sync-account (see pinterestClient.syncPinterestAccount).
- * Likewise, board sync, publish-permission validation, and any other account
- * enrichment happen lazily on demand elsewhere (e.g. the publish drawer), never here.
+ * Step 5 is not optional (PRD §9.2 / §10). It used to be skipped for latency — the
+ * callback wrote tokens with NULL account fields and let a background sync-account
+ * call fill the identity in afterwards. That saved one API round trip and cost
+ * correctness: with a user-keyed upsert and no identity check, authorizing a SECOND
+ * Pinterest account silently overwrote the first one's tokens. The user's Pins kept
+ * publishing — to the wrong account, with no error anywhere. One extra round trip
+ * here is the price of never doing that again.
+ *
+ * Board sync, publish-permission validation, and other account enrichment still
+ * happen lazily on demand elsewhere (e.g. the publish drawer), never here.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
 import { getUserIdFromCookies } from "@/lib/server/authUser";
 import { PINTEREST_INTEGRATIONS_PATH } from "@/lib/pinterestPaths";
 import { OAUTH_STATE_COOKIE, OAUTH_RETURN_COOKIE, verifyState, readSealedReturnTo, safeReturnTo } from "@/lib/server/pinterest/oauthState";
-import { exchangeCodeForTokens } from "@/lib/server/pinterest/service";
-import { upsertConnection } from "@/lib/server/pinterest/connectionStore";
+import { exchangeCodeForTokens, fetchAccountIdentity } from "@/lib/server/pinterest/service";
+import { upsertConnection, listConnections } from "@/lib/server/pinterest/connectionStore";
+import { decideConnect, type AuthorizedAccount, type ExistingConnection } from "@/lib/server/pinterest/connectDecision";
+import { evaluateAccountQuota } from "@/lib/server/pinterest/accountQuota";
+import { resolvePlan } from "@/lib/server/entitlements";
 
 export const dynamic = "force-dynamic";
 
@@ -162,18 +170,120 @@ export async function GET(req: NextRequest) {
     const tokens = await exchangePromise;
     devLog("token exchange", { durationMs: marks.codeExchange.toFixed(1) });
 
+    // ── Who authorized, and which of this user's rows does that mean? ──────────
+    // Identity and the user's existing rows are independent reads — run them
+    // together so the added round trip costs max(a,b), not a+b.
+    const tIdentity = performance.now();
+    let account: AuthorizedAccount;
+    let existing: ExistingConnection[];
+    // Active = the same predicate listActiveConnections uses (not disconnected AND
+    // token-bearing). Derived from the rows we already read, so the quota re-check
+    // below costs no extra Pinterest/DB round trip.
+    let activeCount = 0;
+    try {
+      const [identity, rows] = await Promise.all([
+        fetchAccountIdentity(tokens.accessToken),
+        listConnections(uid),
+      ]);
+      // A null identity means Pinterest would not tell us who this token belongs to.
+      // We do NOT guess: with no id, decideConnect can only match an unidentified row
+      // (or create), and a reconnect aimed at an identified row is refused below.
+      account = identity ?? { id: null, username: null, accountType: null };
+      activeCount = rows.filter(r => !r.disconnected_at && !!r.access_token_encrypted).length;
+      existing = rows.map((r): ExistingConnection => ({
+        connectionId: r.id,
+        accountId: r.pinterest_user_id,
+        username: r.pinterest_username,
+        disconnected: !!r.disconnected_at,
+      }));
+    } catch (identityErr) {
+      // Reading the user's own rows failed (the identity call never throws). Writing
+      // blind is exactly the overwrite this route exists to prevent, so refuse.
+      console.error("[Pinterest OAuth Callback] identity/rows read failed:", (identityErr as Error).message);
+      return finish(redirectAfterOAuth(req, "persist_failed", verdict.returnTo));
+    }
+    marks.identity = performance.now() - tIdentity;
+
+    const decision = decideConnect({
+      account,
+      existing,
+      reconnectTargetId: verdict.reconnectConnectionId,
+    });
+    devLog("connect decision", {
+      action: decision.action,
+      identityKnown: !!account.id,
+      existingCount: existing.length,
+      reconnectTargeted: !!verdict.reconnectConnectionId,
+      durationMs: marks.identity.toFixed(1),
+    });
+
+    // ── Refusal: a reconnect that landed on a different Pinterest account ──────
+    // Nothing is written. The panel offers PRD §10's two options; usernames ride in
+    // the query so it can name both accounts without another round trip.
+    if (decision.action === "reject") {
+      const res = redirectAfterOAuth(req, "account_mismatch", verdict.returnTo);
+      const url = new URL(res.headers.get("location") ?? "/", req.nextUrl.origin);
+      if (decision.expectedUsername) url.searchParams.set("expected", decision.expectedUsername);
+      if (decision.gotUsername) url.searchParams.set("got", decision.gotUsername);
+      const out = NextResponse.redirect(url);
+      out.cookies.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 });
+      out.cookies.set(OAUTH_RETURN_COOKIE, "", { path: "/", maxAge: 0 });
+      return finish(out);
+    }
+
+    // ── Plan gate re-check (PRD §9.2 / §18) ───────────────────────────────────
+    // The connect start already checked, but a second flow can consume the last
+    // slot while this one is away at Pinterest, so the write side has to be the
+    // authority. `decideConnect` stays a pure decision — the quota lives here.
+    //
+    // Which decisions add an active account:
+    //   create                  → +1 active → blocked at the cap.
+    //   update && revived       → reviving a DISCONNECTED row. Disconnected rows are
+    //                             not counted as used, so bringing one back is also
+    //                             +1 active. Blocked, deliberately: allowing it would
+    //                             let a capped user hold unlimited accounts by
+    //                             disconnecting and re-authorizing in rotation.
+    //   update && !revived      → repairing an already-active row → count unchanged →
+    //                             always allowed (this is Reconnect).
+    // Fails OPEN on an unexpected error: a tokens-in-hand authorization must not be
+    // thrown away because an entitlement read hiccuped.
+    const addsAnAccount =
+      decision.action === "create" || (decision.action === "update" && decision.revived);
+    if (addsAnAccount) {
+      let overLimit = false;
+      try {
+        const quota = evaluateAccountQuota(await resolvePlan(uid), activeCount);
+        overLimit = !quota.canAddAccount;
+        if (overLimit) {
+          console.warn(
+            `[Pinterest OAuth Callback] account limit reached (plan=${quota.plan}, used=${quota.used}/${quota.limit}) — nothing written`,
+          );
+        }
+      } catch (quotaErr) {
+        console.error("[Pinterest OAuth Callback] quota check failed, allowing:", (quotaErr as Error).message);
+      }
+      // Nothing is written — same refusal shape as account_mismatch.
+      if (overLimit) return finish(redirectAfterOAuth(req, "limit_reached", verdict.returnTo));
+    }
+
     try {
       const tPersist = performance.now();
-      await upsertConnection(uid, {
-        pinterestUserId: null,
-        pinterestUsername: null,
-        pinterestAccountType: null,
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        accessTokenExpiresAt: tokens.accessTokenExpiresAt,
-        refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
-        scopes: tokens.scopes,
-      });
+      await upsertConnection(
+        uid,
+        {
+          pinterestUserId: account.id,
+          pinterestUsername: account.username,
+          pinterestAccountType: account.accountType,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+          refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+          scopes: tokens.scopes,
+        },
+        // "update" names the exact row to write; "create" passes none so the store
+        // matches by account id and inserts when there is no such row.
+        decision.action === "update" ? decision.connectionId : undefined,
+      );
       marks.tokenPersist = performance.now() - tPersist;
       devLog("token persist", { durationMs: marks.tokenPersist.toFixed(1) });
     } catch (persistErr) {

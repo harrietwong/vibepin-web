@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { deriveAccountBillingSummary } from "../src/lib/accountSummary";
 import * as accountSummaryModule from "../src/lib/accountSummary";
 import { formatEnglishDateTime } from "../src/lib/dateTimeFormat";
-import { derivePinterestSettingsState } from "../src/lib/pinterest/pinterestSettingsState";
+import { accountUiState } from "../src/lib/social/accountUiState";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -15,13 +15,15 @@ function test(name: string, fn: () => void) {
 const settingsPaths = readFileSync("src/lib/settingsPaths.ts", "utf8");
 const billing = readFileSync("src/components/settings/SettingsModal.tsx", "utf8");
 const language = readFileSync("src/components/settings/LanguageRegionModal.tsx", "utf8");
-const pinterest = readFileSync("src/components/pinterest/PinterestSettingsPanel.tsx", "utf8");
+const social = readFileSync("src/components/social/SocialAccountsPanel.tsx", "utf8");
 const layout = readFileSync("src/app/app/layout.tsx", "utf8");
 
 test("Settings navigation exposes six real routes", () => {
-  for (const path of ["profile", "billing", "pinterest", "language", "workspace", "support"]) {
+  // Pinterest is no longer a section — Social accounts owns it (PRD §2).
+  for (const path of ["profile", "billing", "social", "language", "workspace", "support"]) {
     assert.match(settingsPaths, new RegExp(`/app/settings/${path}`));
   }
+  assert.doesNotMatch(settingsPaths, /id: "pinterest"/);
 });
 
 test("Billing has Current plan and the three-quota usage section without fake subscription data", () => {
@@ -90,24 +92,31 @@ test("The app chrome no longer renders a fabricated token balance", () => {
 });
 
 
-test("Pinterest derives all three safe states", () => {
-  assert.equal(derivePinterestSettingsState(null), "not_connected");
-  assert.equal(derivePinterestSettingsState({ connected: true, account: null, scopes: [], needsReconnect: false }), "limited_access");
-  assert.equal(derivePinterestSettingsState({ connected: true, account: null, scopes: ["boards:read", "pins:write"], needsReconnect: false }), "connected");
+test("Pinterest account state comes from the unified 4-state map", () => {
+  // The old 3-state Pinterest-only vocabulary is gone (PRD §5): every provider,
+  // Pinterest included, resolves through accountUiState.
+  assert.equal(accountUiState({ connectionStatus: "connected" }), "connected");
+  assert.equal(
+    accountUiState({
+      connectionStatus: "connected",
+      enforcePinterestScopes: true,
+      scopes: ["boards:read"],
+    }),
+    "needs_reconnect",
+  );
+  assert.equal(accountUiState({ connectionStatus: "connected", statusFetchFailed: true }), "needs_attention");
+  assert.equal(accountUiState({ connectionStatus: "revoked" }), "disconnected");
 });
 
-test("Pinterest page has state-specific actions and amber limited copy", () => {
-  assert.match(pinterest, /pinterest-state-not-connected/);
-  assert.match(pinterest, /pinterest-state-connected/);
-  assert.match(pinterest, /pinterest-state-limited-access/);
-  assert.match(pinterest, /Connect Pinterest/);
-  // Board sync is no longer a user-facing action — boards load automatically
-  // wherever they're needed (e.g. the publish drawer), so there's no "Sync boards"
-  // button to assert on anymore.
-  assert.match(pinterest, /Board sync is not a user-facing action/);
-  assert.match(pinterest, /Reconnect/);
-  assert.match(pinterest, /Disconnect/);
-  assert.match(pinterest, /publishing may be limited until Standard Access is approved/);
+test("Social accounts panel drives Pinterest state + actions (no dedicated Pinterest section)", () => {
+  assert.match(social, /accountUiState/);
+  assert.match(social, /social-account-state-/);
+  assert.match(social, /social-connect-/);
+  assert.match(social, /social-reconnect-/);
+  assert.match(social, /social-disconnect-/);
+  // The retired panel's internal access-tier wording must not reappear customer-side.
+  assert.doesNotMatch(social, /Standard Access/);
+  assert.doesNotMatch(social, /limited_access/);
 });
 
 test("English date formatting is deterministic", () => {

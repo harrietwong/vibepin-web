@@ -151,4 +151,21 @@ export const studioBoardMessages = {
   "studioBoard.expanded.tryAgain": "Try again",
   "studioBoard.expanded.posted": "Posted",
   "studioBoard.expanded.schedule": "Schedule",
+
+  // ── Publish target: which connected Pinterest account this Pin publishes to ──
+  // Only ever rendered when the user has more than one connected account (a single
+  // account has nothing to choose, so the picker stays invisible).
+  "studioBoard.target.accountLabel": "Pinterest account",
+  "studioBoard.target.publishingTo": "Publishing to {account}",
+  // Shown the moment the account is switched: board ids belong to one account, so the
+  // previously chosen Board cannot carry over and is cleared.
+  "studioBoard.target.switchClearsBoard": "Changing the Pinterest account will clear the selected Board.",
+  // ── Retry guards (PRD §17) ──
+  // The Pin is pinned to an account that is no longer connected. It is NOT re-routed to
+  // another account — that would publish to the wrong Pinterest profile.
+  "studioBoard.target.reconnectToRetry": "Reconnect {account} to retry publishing.",
+  // The Pin's Board no longer exists on the target account (deleted / made secret).
+  "studioBoard.target.boardUnavailable": "This Board is no longer available. Choose another Board before retrying.",
+  // Fallback when the pinned account's username is unknown (identity never synced).
+  "studioBoard.target.thisAccount": "this account",
 } as const;

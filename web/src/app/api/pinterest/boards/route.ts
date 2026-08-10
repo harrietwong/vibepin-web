@@ -18,7 +18,13 @@ export async function GET(req: Request) {
   if (!uid) return unauthorized();
 
   try {
-    const bookmark = new URL(req.url).searchParams.get("bookmark") ?? undefined;
+    const params = new URL(req.url).searchParams;
+    const bookmark = params.get("bookmark") ?? undefined;
+    // Which connected account's boards to list. Board ids are per-account, so a Pin
+    // targeting one account must only ever be offered THAT account's boards. Omitted ⇒
+    // the user's default connection (unchanged for every single-account user).
+    // forConnection refuses ids that aren't this uid's.
+    const connectionId = (params.get("connectionId") ?? "").trim();
     // In sandbox mode (PINTEREST_API_ENV=sandbox + a sandbox token) we MUST call the
     // sandbox API with the SANDBOX token — the real OAuth connection holds a production
     // token, and a production token against api-sandbox.pinterest.com is rejected 401.
@@ -26,7 +32,9 @@ export async function GET(req: Request) {
     // and still uses the real user connection.
     const client = canAttemptSandboxPublish()
       ? await PinterestClient.forSandboxDemo(uid)
-      : await PinterestClient.forUser(uid);
+      : connectionId
+        ? await PinterestClient.forConnection(uid, connectionId)
+        : await PinterestClient.forUser(uid);
     const { items, bookmark: next } = await client.listBoards(bookmark);
     // The sandbox demo board is unpublishable from production: Pinterest rejects
     // the Pin with "Cannot add non-sandbox pins on sandbox boards" (code 15).

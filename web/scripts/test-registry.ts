@@ -51,6 +51,9 @@ export const CORE: string[] = [
   "test-activation-funnel",
   "test-ai-adoption",
   "test-admin-today-i18n",
+  "test-account-quota",
+  "test-account-identity",
+  "test-per-account-disconnect",
   // Facebook Page OAuth
   "test-facebook-pages",
   // AI copy / creative intelligence
@@ -140,6 +143,7 @@ export const STUDIO: string[] = [
   "test-asset-picker-ia",
   "test-create-pins-prefill",
   "test-batch-edit-planning",
+  "test-batch-board-target",
   "test-batch-edit-back-close",
   "test-batch-edit-product-mapping",
   "test-edit-pin-composer",
@@ -151,6 +155,12 @@ export const STUDIO: string[] = [
   "test-failure-banner",
   "test-publish-error-display",
   "test-publish-failure-consistency",
+  // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
+  // Phase C pinned publish targets).
+  "test-account-ui-state",
+  "test-pinterest-callback-identity",
+  "test-social-connection-store",
+  "test-publish-target",
   "test-pin-readiness",
   "test-pin-display-context",
   "test-pin-details-model",
@@ -184,6 +194,7 @@ export const PLAN: string[] = [
   "test-my-products-weekly-plan-ui",
   "test-plan-tile-interactions",
   "test-plan-pinterest-connect",
+  "test-plan-account-filter",
   "test-hover-preview-image",
   "test-smart-schedule",
   "test-smart-schedule-sync",

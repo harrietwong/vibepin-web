@@ -72,6 +72,7 @@ export const studioModalsMessages = {
   "studioModals.board.setBoardForOne": "Set board for 1 selected Pin",
   "studioModals.board.setBoardForMany": "Set board for {n} selected Pins",
   "studioModals.board.appliesToAll": "Choosing a board applies it to all selected Pins.",
+  "studioModals.board.mixedAccounts": "These Pins publish to different Pinterest accounts, and boards belong to one account. Select Pins from a single account to set their board.",
   "studioModals.board.appliedToOne": "Board applied to 1 Pin.",
   "studioModals.board.appliedToMany": "Board applied to {n} Pins.",
 

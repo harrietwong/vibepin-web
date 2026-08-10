@@ -47,6 +47,8 @@ export interface DuePublishInput {
   description?: string;
   link?: string;
   altText?: string;
+  /** The Pin's pinned publish target, when it has one (PRD §14). */
+  connectionId?: string;
 }
 
 /**
@@ -54,6 +56,12 @@ export interface DuePublishInput {
  * the studio store (imageUrl / boardId / title / description / destinationUrl / altText).
  * Returns null when a hard requirement (image or board) is missing — the caller records a
  * content failure rather than calling Pinterest with an unpublishable payload.
+ *
+ * `targetConnectionId` rides through verbatim: cron publishes a scheduled Pin to the
+ * account that Pin was pinned to, whatever the user's default account has since become.
+ * Absent (every pre-Phase-C draft) ⇒ publishPinForUser resolves the default connection,
+ * exactly the pre-v59 behaviour, and the adoption is written back by payloadAfterSuccess /
+ * payloadAfterFailure.
  */
 export function payloadToPublishInput(uid: string, payload: Record<string, unknown>): DuePublishInput | null {
   const imageUrl = firstString(payload.imageUrl, payload.sourceImageUrl);
@@ -68,7 +76,26 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
     // destination link is optional/recommended (never blocks publish).
     link: firstString(payload.destinationUrl) || undefined,
     altText: firstString(payload.altText) || undefined,
+    connectionId: firstString(payload.targetConnectionId) || undefined,
   };
+}
+
+/**
+ * Pin an adopted target onto a payload — the adopt-once write-back (PRD §14).
+ *
+ * Only ever writes when the payload has no target yet: a payload that already names an
+ * account is pinned, and nothing (least of all a publish attempt that resolved a default)
+ * may re-point it. Returns the SAME object when there's nothing to adopt, so callers can
+ * treat it as a no-op.
+ */
+export function withAdoptedTarget(
+  payload: Record<string, unknown>,
+  connectionId: string | null | undefined,
+): Record<string, unknown> {
+  const id = typeof connectionId === "string" ? connectionId.trim() : "";
+  if (!id) return payload;
+  if (firstString(payload.targetConnectionId)) return payload; // already pinned — never re-point
+  return { ...payload, targetConnectionId: id };
 }
 
 /**
@@ -80,8 +107,10 @@ export function payloadAfterSuccess(
   payload: Record<string, unknown>,
   pin: { id: string; url: string },
   nowIso: string,
+  /** The connection this publish ran through — pinned onto untargeted drafts (adopt-once). */
+  connectionId?: string | null,
 ): Record<string, unknown> {
-  const next = { ...payload };
+  const next = { ...withAdoptedTarget(payload, connectionId) };
   // Bump payload.updatedAt: the client's mergeServerDrafts LWW compares this field
   // (pinDraftStore.ts:815, local wins on tie) — without it the client never sees the
   // cron's result and a later local edit can push the stale scheduled payload back,
@@ -121,8 +150,16 @@ export function payloadAfterFailure(
   payload: Record<string, unknown>,
   fail: PublishFailureInfo,
   nowIso: string,
+  /**
+   * The connection this attempt ran through, when it got far enough to know. A failed
+   * publish still fixes the target: the retry must go to the same account the attempt
+   * chose, not to whatever the default has drifted to in the meantime. Omitted when the
+   * attempt never resolved a connection (not_connected / bad payload) — then the draft
+   * stays untargeted and adopts on the next try.
+   */
+  connectionId?: string | null,
 ): Record<string, unknown> {
-  const next = { ...payload };
+  const next = { ...withAdoptedTarget(payload, connectionId) };
   // Bump payload.updatedAt (same reason as payloadAfterSuccess — see comment there):
   // the client's LWW merge compares this field, so it must match the row's updated_at.
   next.updatedAt = nowIso;

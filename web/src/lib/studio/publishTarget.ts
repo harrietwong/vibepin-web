@@ -1,0 +1,254 @@
+/**
+ * publishTarget.ts — the publish TARGET of a Pin: which connected Pinterest account
+ * (and, through it, which Board) a draft publishes to.
+ *
+ * Pure logic, no React / no network / no DB, so the four invariants of PRD §13/§14/§17
+ * can be asserted directly (scripts/test-publish-target.ts):
+ *
+ *   1. PINNED — once a draft carries `targetConnectionId`, nothing re-routes it. Changing
+ *      the default account, changing the default board, or connecting another account
+ *      leaves already-targeted drafts pointing exactly where they pointed
+ *      (`resolvePublishTarget` returns the stored id, `adopted: false`).
+ *   2. ADOPT-ONCE — a draft with no target (every draft created before this feature)
+ *      falls back to `pickDefaultConnection`, which is precisely the pre-v59 behaviour,
+ *      and the resolution is WRITTEN BACK (`adopted: true` ⇒ caller persists
+ *      `targetPatch`). From that write on, rule 1 applies: the draft is pinned.
+ *   3. SWITCHING ACCOUNTS CLEARS THE BOARD — `switchTargetPatch` always blanks
+ *      boardId/boardName. Board ids are per-account; we never guess an equivalent board
+ *      on the new account by name.
+ *   4. SINGLE-CONNECTION USERS SEE NOTHING NEW — `shouldShowAccountPicker` is false for
+ *      0 or 1 active connections, and with one connection the adopt-once resolution
+ *      lands on the same row `forUser()` would have used, so behaviour is unchanged.
+ */
+
+/** The minimum a caller must know about a connection to target it. Structurally
+ *  satisfied by both the server row (PinterestConnectionRow) and the client-side
+ *  SocialConnection, so both sides share this logic. */
+export interface TargetableConnection {
+  id: string;
+  /** Display handle of the account. Optional: freshly connected rows sync it later. */
+  username?: string | null;
+}
+
+/** The two fields a resolved target writes onto the draft. */
+export interface PublishTargetPatch {
+  targetConnectionId: string;
+  targetAccountLabel: string;
+}
+
+/** What a draft needs to expose for its target to be resolved. */
+export interface TargetedDraftLike {
+  targetConnectionId?: string;
+  targetAccountLabel?: string;
+}
+
+export type PublishTargetResolution =
+  | {
+      /** The connection this Pin publishes to. */
+      connectionId: string;
+      /** True when the target was just decided (caller MUST persist `targetPatch`). */
+      adopted: boolean;
+      /** Present only when `adopted` — the fields to write back onto the draft. */
+      targetPatch?: PublishTargetPatch;
+    }
+  | {
+      /** No usable connection at all: the caller raises "not connected" as before. */
+      connectionId: null;
+      adopted: false;
+      targetPatch?: undefined;
+    };
+
+/** A stored target id counts only when it is a non-blank string. */
+export function readStoredTarget(draft: TargetedDraftLike | null | undefined): string {
+  const raw = draft?.targetConnectionId;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : "";
+}
+
+/**
+ * Which account this draft publishes to.
+ *
+ * `active` must be the user's usable connections in the SAME order the server's
+ * `listActiveConnections` returns them (created_at ascending), and `fallback` the row
+ * `pickDefaultConnection` chose from them — so an adoption reproduces the pre-v59 target
+ * exactly.
+ *
+ * A stored target that is no longer in `active` (the account was disconnected) is
+ * deliberately KEPT, not silently re-pointed: the Pin still belongs to that account and
+ * the retry guard asks the user to reconnect it (PRD §17). Re-routing it to another
+ * account would publish to the wrong Pinterest profile.
+ */
+export function resolvePublishTarget(
+  draft: TargetedDraftLike | null | undefined,
+  fallback: TargetableConnection | null | undefined,
+): PublishTargetResolution {
+  const stored = readStoredTarget(draft);
+  if (stored) return { connectionId: stored, adopted: false };
+  if (!fallback) return { connectionId: null, adopted: false };
+  return {
+    connectionId: fallback.id,
+    adopted: true,
+    targetPatch: targetPatchFor(fallback),
+  };
+}
+
+/** The draft patch that pins a Pin to `connection`. */
+export function targetPatchFor(connection: TargetableConnection): PublishTargetPatch {
+  return {
+    targetConnectionId: connection.id,
+    targetAccountLabel: (connection.username ?? "").trim(),
+  };
+}
+
+/**
+ * The draft patch for "the user picked a different account for this Pin".
+ *
+ * PRD §13: switching accounts ALWAYS clears the selected Board — board ids belong to one
+ * account and mean nothing on another, and we do not match by name (two accounts can both
+ * have a "Home decor" board that are entirely different boards). The user re-picks.
+ */
+export function switchTargetPatch(connection: TargetableConnection): PublishTargetPatch & {
+  boardId: string;
+  boardName: string;
+} {
+  return { ...targetPatchFor(connection), boardId: "", boardName: "" };
+}
+
+/**
+ * Whether the account selector is rendered at all.
+ *
+ * C0.4: a user with one Pinterest account (all of them today) must see the exact UI they
+ * saw before multi-account existed — no account row, no "publishing to @x" noise.
+ */
+export function shouldShowAccountPicker(active: readonly TargetableConnection[]): boolean {
+  return active.length > 1;
+}
+
+/**
+ * The connection a picker should show as selected: the pinned target when it is still
+ * usable, else the default (what an adopt-once would land on). Returns null when the
+ * pinned account is gone — the caller renders the reconnect guard rather than quietly
+ * showing a different account as if it were this Pin's target.
+ */
+export function selectedTargetConnection(
+  draft: TargetedDraftLike | null | undefined,
+  active: readonly TargetableConnection[],
+  fallback: TargetableConnection | null | undefined,
+): TargetableConnection | null {
+  const stored = readStoredTarget(draft);
+  if (stored) return active.find(c => c.id === stored) ?? null;
+  return fallback ?? null;
+}
+
+/** Reasons a targeted Pin cannot be retried as-is (PRD §17 retry guards). */
+export type RetryBlockReason = "target_disconnected" | "board_unavailable";
+
+export interface RetryGuardInput {
+  draft: (TargetedDraftLike & { boardId?: string; boardName?: string }) | null | undefined;
+  /** The user's usable connections right now. */
+  active: readonly TargetableConnection[];
+  /** Board ids currently readable on the TARGET account. `null` = not loaded yet
+   *  (unknown ⇒ never block: an unloaded board list is not evidence of a missing board). */
+  targetBoardIds: readonly string[] | null;
+}
+
+/**
+ * Why a failed Pin can't be retried yet, or null when retry may proceed.
+ *
+ * Order matters: a disconnected target explains a missing board list too, so the
+ * reconnect message wins — telling someone to "choose another Board" on an account they
+ * can't reach is a dead end.
+ */
+export function retryBlockReason(input: RetryGuardInput): RetryBlockReason | null {
+  const stored = readStoredTarget(input.draft);
+  // No pinned target: retry adopts the default connection just like a first publish.
+  if (!stored) return null;
+  if (!input.active.some(c => c.id === stored)) return "target_disconnected";
+
+  const boardId = typeof input.draft?.boardId === "string" ? input.draft.boardId.trim() : "";
+  if (!boardId) return null;               // no board chosen yet — the editor asks for one
+  if (input.targetBoardIds === null) return null; // unknown ⇒ don't block on a guess
+  return input.targetBoardIds.includes(boardId) ? null : "board_unavailable";
+}
+
+/** The @handle to render in the retry guard, from the draft's own snapshot. */
+export function targetAccountHandle(draft: TargetedDraftLike | null | undefined): string {
+  const raw = draft?.targetAccountLabel;
+  const label = typeof raw === "string" ? raw.trim() : "";
+  if (!label) return "";
+  return label.startsWith("@") ? label : `@${label}`;
+}
+
+// ── Filtering a list of Pins by which account they publish to (Plan, Phase D ②) ──
+
+/** "Every account" — the Plan account filter is off. */
+export const ALL_TARGET_ACCOUNTS = "__all__";
+/**
+ * "No target yet" — its own bucket, deliberately.
+ *
+ * Every draft made before adopt-once existed carries no `targetConnectionId`, and a
+ * draft only gains one at publish time. Folding those into the default account's bucket
+ * would be a guess rendered as fact, and folding them into nothing at all would make them
+ * vanish from a filtered board. They get a bucket the user can actually select.
+ */
+export const UNASSIGNED_TARGET_ACCOUNT = "__unassigned__";
+
+/**
+ * Does this draft belong in the currently-filtered view?
+ *
+ * `filter` is a connection id, `ALL_TARGET_ACCOUNTS`, or `UNASSIGNED_TARGET_ACCOUNT`.
+ * Blank/whitespace targets are decided by `readStoredTarget`, so "unassigned" means the
+ * same thing here as it does to the resolver — one definition, not two.
+ */
+export function matchesTargetFilter(
+  draft: TargetedDraftLike | null | undefined,
+  filter: string,
+): boolean {
+  if (!filter || filter === ALL_TARGET_ACCOUNTS) return true;
+  const stored = readStoredTarget(draft);
+  if (filter === UNASSIGNED_TARGET_ACCOUNT) return stored === "";
+  return stored === filter;
+}
+
+/**
+ * The filter that is actually in force.
+ *
+ * A filter set while two accounts were connected must NOT keep hiding Pins after one is
+ * removed: the select that would let the user clear it is gone (invariant 4 hides it at
+ * ≤1 connection), so the filter would be both invisible and undoable. Neutralising it
+ * here — rather than resetting state in an effect — means the view can never be filtered
+ * by a control that isn't on screen.
+ */
+export function effectiveTargetFilter(
+  filter: string,
+  active: readonly TargetableConnection[],
+): string {
+  return shouldShowAccountPicker(active) ? (filter || ALL_TARGET_ACCOUNTS) : ALL_TARGET_ACCOUNTS;
+}
+
+// ── Editing many Pins at once (Batch edit, Phase D ④) ────────────────────────
+
+/**
+ * The one connection a whole selection publishes through, or "mixed".
+ *
+ * Boards belong to an account, so a board picker is only meaningful when every
+ * selected Pin shares a target. Returns:
+ *   - a connection id → they all publish there;
+ *   - "" → none of them is pinned yet (they will all adopt the same default), so the
+ *     default connection's boards are the right list;
+ *   - null → MIXED. There is no board list that is correct for the whole selection,
+ *     and picking from either account's would write a board the other account cannot
+ *     publish to.
+ *
+ * Note that unpinned drafts mixed with pinned ones count as mixed: an unpinned draft
+ * adopts the DEFAULT connection at publish time, which need not be the pinned one.
+ */
+export function sharedTargetForSelection(
+  drafts: readonly (TargetedDraftLike | null | undefined)[],
+): string | null {
+  if (drafts.length === 0) return "";
+  const first = readStoredTarget(drafts[0]);
+  for (const d of drafts) {
+    if (readStoredTarget(d) !== first) return null;
+  }
+  return first;
+}

@@ -19,8 +19,9 @@
  *   - accountsPerPlatform:    Accounts per platform — 1 / 1 / 2 / 3
  *
  * A `null` limit means "no cap / undefined" — checkAllowance treats it as always
- * allowed. connectedPlatforms / accountsPerPlatform are DATA ONLY this round (not
- * enforced anywhere yet).
+ * allowed. `accountsPerPlatform` IS enforced (Phase D): the Pinterest connect start
+ * and OAuth callback both refuse to add an account past it — see
+ * lib/server/pinterest/accountQuota.ts. `connectedPlatforms` remains data only.
  */
 
 import type { PlanKey } from "./pricingPlans";
@@ -34,7 +35,10 @@ export type PlanEntitlements = {
   monthlyAiTextGenerations: number | null;
   /** How many platforms may be connected (data only — not enforced this round). */
   connectedPlatforms: number | null;
-  /** Accounts/Pages per platform (data only — not enforced this round). */
+  /**
+   * Accounts/Pages per platform. ENFORCED for Pinterest (Phase D) via
+   * lib/server/pinterest/accountQuota.ts; null = uncapped.
+   */
   accountsPerPlatform: number | null;
 };
 

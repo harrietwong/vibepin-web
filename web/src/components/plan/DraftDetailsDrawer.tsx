@@ -57,6 +57,15 @@ import {
   type PinterestStatus,
 } from "@/lib/pinterestClient";
 import { getCachedBoardsResult, isCacheFresh, setCachedBoardsResult } from "@/lib/pinterest/boardsCache";
+import { PublishDestinationPicker } from "@/components/studio/PublishDestinationPicker";
+import { usePinterestConnections } from "@/hooks/usePinterestConnections";
+import {
+  resolvePublishTarget,
+  retryBlockReason,
+  selectedTargetConnection,
+  targetAccountHandle,
+  targetPatchFor,
+} from "@/lib/studio/publishTarget";
 import { isRealPinterestConnection, canPublishWithPinterest } from "@/lib/pinterest/connection";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
@@ -147,6 +156,31 @@ export function PinDetailsModal({
   // Sandbox demo mode: lets the user seed a demo board when the sandbox account is empty.
   const [sandboxMode, setSandboxMode] = useState(false);
   const [creatingBoard, setCreatingBoard] = useState(false);
+
+  // ── Publish target (PRD §13/§14) ────────────────────────────────────────────
+  // Which connected Pinterest account THIS Pin publishes to. The stored target wins;
+  // only a draft that has never had one falls back to the default connection, and that
+  // resolution is written back (adopt-once) so it can never drift afterwards.
+  const { connections: pinterestConnections, fallback: fallbackConnection } = usePinterestConnections();
+  // Local echo of the draft's target so a just-switched account takes effect within this
+  // render pass (the store write is async through the draft-store event).
+  const [targetConnectionId, setTargetConnectionId] = useState("");
+  const [targetAccountLabel, setTargetAccountLabel] = useState("");
+  const targetedDraft = useMemo(
+    () => ({ targetConnectionId, targetAccountLabel }),
+    [targetConnectionId, targetAccountLabel],
+  );
+  // The account the Board list and every publish/retry from this drawer must use.
+  // Null only when the pinned account is no longer connected — the Pin is NOT re-routed
+  // to another account (that would publish to the wrong Pinterest profile); the §17
+  // guard below asks the user to reconnect it.
+  const selectedConnection = selectedTargetConnection(targetedDraft, pinterestConnections, fallbackConnection);
+  const effectiveConnectionId = selectedConnection?.id ?? (targetConnectionId || "");
+  // Read by the default-board callbacks, which must scope their write to the account the
+  // board actually belongs to (a default board is per-account) without re-creating
+  // themselves — and therefore re-running the board load — on every target change.
+  const effectiveConnectionRef = useRef("");
+  useEffect(() => { effectiveConnectionRef.current = effectiveConnectionId; }, [effectiveConnectionId]);
 
   // ── Save / dirty state ──────────────────────────────────────────────────────
   const [dirty, setDirty] = useState(false);
@@ -267,7 +301,7 @@ export function PinDetailsModal({
         if (board) {
           const value = { boardId: board.id, boardName: board.name };
           setDefaultBoard(value);
-          void savePinterestDefaultBoard(value).catch(() => {});
+          void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
         }
       }
       return next;
@@ -275,14 +309,19 @@ export function PinDetailsModal({
     setBoardsStatus("ready");
   }, [chooseBoardId]);
 
-  const loadBoards = useCallback(async (preferBoardId?: string) => {
+  // `connectionId` names WHICH connected account's boards to load — this Pin's publish
+  // target. Passed explicitly by every caller rather than read from state, so a load
+  // started right after an account switch can never read the pre-switch value out of a
+  // stale closure and paint the old account's boards. Omitted ⇒ the default connection
+  // (byte-for-byte the single-account behaviour that came before).
+  const loadBoards = useCallback(async (preferBoardId?: string, connectionId?: string) => {
     const seq = ++boardsLoadSeqRef.current;
     const isCurrent = () => seq === boardsLoadSeqRef.current;
 
     // Cache-first instant paint: reopening a drawer within the session shouldn't
     // re-run the full status → boards round trip (incl. a live Pinterest API call)
     // from a blank "checking…" state every time.
-    const cached = getCachedBoardsResult();
+    const cached = getCachedBoardsResult(connectionId);
     // Publish-path capability (db OR sandbox_demo) — NOT the strict merchant-connection
     // check: the sandbox demo flow must keep boards/publish working on drawer reopen.
     const paintedFromCache = !!cached && canPublishWithPinterest(cached.status);
@@ -362,7 +401,7 @@ export function PinDetailsModal({
     };
     const statusPromise = timeoutAfter(fetchPinterestStatusCached()).then(s => { mark("status finished"); return s; });
     const boardsPromise = fireBoards
-      ? timeoutAfter(fetchPinterestBoards()).then(r => { mark(`boards finished (${r.items.length} boards)`); return r; })
+      ? timeoutAfter(fetchPinterestBoards(undefined, undefined, connectionId)).then(r => { mark(`boards finished (${r.items.length} boards)`); return r; })
       : null;
     // If we bail on status below (not connected), the in-flight boards call must not
     // surface as an unhandled rejection. This handler is independent of the await.
@@ -384,7 +423,7 @@ export function PinDetailsModal({
             // boards. Do not block the dropdown on a slower/failed account lookup.
             status = connectedFallbackStatus;
           }
-          setCachedBoardsResult(status, items);
+          setCachedBoardsResult(status, items, connectionId);
           applyBoardsResult(status, items, preferBoardId);
           mark(`ready - dropdown populated (${items.length} boards)`);
           return;
@@ -392,7 +431,7 @@ export function PinDetailsModal({
           const status = await statusPromise;
           if (!isCurrent()) return;
           if (!canPublishWithPinterest(status)) {
-            setCachedBoardsResult(status, []);
+            setCachedBoardsResult(status, [], connectionId);
             if (!paintedFromCache) {
               setBoards([]);
               setBoardId("");
@@ -411,7 +450,7 @@ export function PinDetailsModal({
       const status = await statusPromise;
       if (!isCurrent()) return; // superseded by a newer load
       if (!canPublishWithPinterest(status)) {
-        setCachedBoardsResult(status, []);
+        setCachedBoardsResult(status, [], connectionId);
         if (!paintedFromCache) {
           setBoards([]);
           setBoardId("");
@@ -428,10 +467,10 @@ export function PinDetailsModal({
       if (!paintedFromCache && cached) setBoardsStatus("loading");
       // Reuse the concurrent boards fetch when we prefetched it; otherwise (we thought
       // the user was disconnected but status says connected) fetch it now.
-      const { items } = await timeoutAfter(fetchPinterestBoards())
+      const { items } = await timeoutAfter(fetchPinterestBoards(undefined, undefined, connectionId))
         .then(r => { mark(`boards finished (${r.items.length} boards, late)`); return r; });
       if (!isCurrent()) return; // superseded by a newer load
-      setCachedBoardsResult(status, items); // real network data — safe to (re)stamp the cache
+      setCachedBoardsResult(status, items, connectionId); // real network data — safe to (re)stamp the cache
       applyBoardsResult(status, items, preferBoardId);
       mark(`ready — dropdown populated (${items.length} boards)`);
     } catch (e) {
@@ -610,10 +649,21 @@ export function PinDetailsModal({
     setLiveSocialPosts(null);
     socialFannedOutRef.current = false;
     setIsRedirectingToPinterest(false);
-    void fetchPinterestDefaultBoard()
+    // The Pin's pinned publish target, straight off the draft. A blank one is NOT
+    // adopted here: opening a drawer must not silently decide (and persist) where an
+    // untargeted Pin goes. Adoption happens at publish time, where the server reports
+    // the account it actually used.
+    const seededTarget = draft.targetConnectionId?.trim() ?? "";
+    setTargetConnectionId(seededTarget);
+    setTargetAccountLabel(draft.targetAccountLabel?.trim() ?? "");
+    effectiveConnectionRef.current = seededTarget;
+    void fetchPinterestDefaultBoard(undefined, seededTarget || undefined)
       .then(board => setDefaultBoard(board))
       .catch(() => {});
-    void loadBoards(draft.boardId);
+    // Boards come from the Pin's OWN target account, not from whichever account happens
+    // to be the default now — a Pin pinned to account B must never be offered account A's
+    // boards. Untargeted (seededTarget "") ⇒ default connection, unchanged behaviour.
+    void loadBoards(draft.boardId, seededTarget || undefined);
   }, [open, draft, loadBoards]);
 
   useEffect(() => {
@@ -633,7 +683,7 @@ export function PinDetailsModal({
     if (!defaultBoard && board) {
       const value = { boardId: board.id, boardName: board.name };
       setDefaultBoard(value);
-      void savePinterestDefaultBoard(value).catch(() => {});
+      void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
     }
   }, [open, boardsStatus, boards, boardId, draft, chooseBoardId, defaultBoard]);
 
@@ -652,7 +702,7 @@ export function PinDetailsModal({
       setBoardId("");
       setDefaultBoard(null);
       setBoardsStatus("not_connected");
-      void loadBoards();
+      void loadBoards(undefined, effectiveConnectionRef.current || undefined);
     }
     window.addEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
     return () => window.removeEventListener(PINTEREST_DISCONNECTED_EVENT, onDisconnected);
@@ -812,6 +862,33 @@ export function PinDetailsModal({
 
   // User clicked a "Publish now" affordance (footer / overflow / failed-retry). Publishing
   // is immediate and irreversible, so confirm first (the actual publish runs on confirm).
+  /**
+   * The user picked a different Pinterest account for THIS Pin.
+   *
+   * `patch` arrives from switchTargetPatch with boardId/boardName already blanked
+   * (PRD §13): board ids belong to one account, and we never guess an equivalent board
+   * on the new account by name. Written to the draft as ONE store update so a draft can
+   * never be observed pointing at account B while still holding account A's board.
+   */
+  function handleTargetChange(patch: { targetConnectionId: string; targetAccountLabel: string; boardId: string; boardName: string }) {
+    setTargetConnectionId(patch.targetConnectionId);
+    setTargetAccountLabel(patch.targetAccountLabel);
+    effectiveConnectionRef.current = patch.targetConnectionId;
+    setBoardId("");
+    setBoards([]);
+    setBoardError(false);
+    setDefaultBoard(null);
+    setBoardsStatus("loading");
+    if (activeDraft) pinDraftStore.updateDraft(activeDraft.id, patch);
+    // The new account's default board and boards list — the old account's are meaningless
+    // here, and the per-connection cache keeps them from being served to each other.
+    void fetchPinterestDefaultBoard(undefined, patch.targetConnectionId)
+      .then(board => setDefaultBoard(board))
+      .catch(() => {});
+    void loadBoards(undefined, patch.targetConnectionId);
+    markDirty();
+  }
+
   // Silent guards mirror handlePublish's own: never open the dialog while a publish or an
   // OAuth redirect is already in flight.
   function requestPublish() {
@@ -1032,7 +1109,7 @@ export function PinDetailsModal({
     // Connection/boards still resolving → tell the user and re-fetch fresh.
     if (boardsStatus === "checking" || boardsStatus === "loading") {
       setPublishError(t("pinDetails.error.boardsLoading"));
-      void loadBoards(boardId);
+      void loadBoards(boardId, effectiveConnectionRef.current || undefined);
       return;
     }
 
@@ -1100,6 +1177,10 @@ export function PinDetailsModal({
         attachedProducts: products.length ? products : undefined,
         primaryProductUrl: primaryProduct?.productUrl,
         productAttachmentMode: products.length ? "vibepin_metadata_v1" : undefined,
+        // Publish through THIS Pin's account, not "whatever is default now". Omitted for
+        // a Pin that has never had a target: the server resolves the default connection
+        // (pre-v59 behaviour) and reports it back, and we pin the draft to it below.
+        connectionId: targetConnectionId || undefined,
       });
       if (process.env.NODE_ENV !== "production") {
         console.log("[publish-result]", {
@@ -1120,7 +1201,22 @@ export function PinDetailsModal({
       // DRAFT_STORE_EVENT, which the Weekly Plan listens to and refreshes from — so we do
       // NOT call onSaved here (some callers close the modal in onSaved, which would hide
       // the success state from the user).
+      // Adopt-once: a Pin that had no target is pinned to the account it actually
+      // published through, as reported by the server. From here on rule 1 applies —
+      // changing the default account never re-routes this Pin again.
+      const adopted = !targetConnectionId && res.connectionId
+        ? targetPatchFor({
+            id: res.connectionId,
+            username: pinterestConnections.find(c => c.id === res.connectionId)?.username ?? pinterestAccount?.username ?? "",
+          })
+        : null;
+      if (adopted) {
+        setTargetConnectionId(adopted.targetConnectionId);
+        setTargetAccountLabel(adopted.targetAccountLabel);
+        effectiveConnectionRef.current = adopted.targetConnectionId;
+      }
       pinDraftStore.updateDraft(activeDraft.id, {
+        ...(adopted ?? {}),
         postedAt: new Date().toISOString(),
         remotePinId: res.pin.id,
         remotePinUrl: res.pin.url,
@@ -1787,8 +1883,26 @@ export function PinDetailsModal({
             )}
           </div>
 
-          {/* Boards */}
+          {/* Boards — preceded by the account this Pin publishes to, because a Board
+              list only means anything inside one account. The picker renders nothing at
+              all for users with 0 or 1 connected accounts (everyone today). */}
           <div style={fieldBlock}>
+            <PublishDestinationPicker
+              connections={pinterestConnections}
+              selectedConnectionId={selectedConnection?.id ?? null}
+              disabled={publishing}
+              onChange={handleTargetChange}
+            />
+            {/* PRD §17: the Pin is pinned to an account that is no longer connected. It
+                keeps pointing there — reconnect, don't re-route. */}
+            {!!targetConnectionId && !selectedConnection && (
+              <p data-testid="draft-target-disconnected" style={{ margin: "0 0 8px", fontSize: 11, color: UI.warning }}>
+                {t("studioBoard.target.reconnectToRetry").replace(
+                  "{account}",
+                  targetAccountHandle(targetedDraft) || t("studioBoard.target.thisAccount"),
+                )}
+              </p>
+            )}
             <div style={{ marginBottom: 6 }}><span style={lbl}>{t("pinDetails.boards")}</span></div>
             <PinBoardSection
               boardId={boardId}
@@ -1803,7 +1917,7 @@ export function PinDetailsModal({
                 if (board) {
                   const value = { boardId: board.id, boardName: board.name };
                   setDefaultBoard(value);
-                  void savePinterestDefaultBoard(value).catch(() => {});
+                  void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
                 }
                 // Board interplay: a custom time chosen but not yet confirmed via
                 // [Schedule]/[Update schedule] is cleared on board change — the user
@@ -1817,7 +1931,7 @@ export function PinDetailsModal({
                 markDirty();
               }}
               onClearBoardError={() => setBoardError(false)}
-              onRetryLoad={() => void loadBoards(boardId)}
+              onRetryLoad={() => void loadBoards(boardId, effectiveConnectionRef.current || undefined)}
               onNeedsConnect={goToPinterestOAuth}
               sandboxMode={sandboxMode}
               creatingDemoBoard={creatingBoard}
@@ -1878,17 +1992,14 @@ export function PinDetailsModal({
             <div data-testid="draft-publish-success" style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.30)" }}>
               <CheckCircle2 size={16} style={{ color: UI.success, flexShrink: 0, marginTop: 1 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Which API environment the server published through is OUR
+                    configuration, not the customer's business (PRD §7). The SANDBOX
+                    badge and the "Environment: …" line that used to sit here leaked
+                    internal wiring into a success message; operators read it from
+                    Internal Admin instead. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: UI.text }}>{t("pinDetails.publishedSuccess")}</p>
-                  {result.environment === "sandbox" && (
-                    <span data-testid="draft-publish-env" style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 0.3, color: UI.info, background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.35)", borderRadius: 999, padding: "1px 7px", textTransform: "uppercase" }}>
-                      {t("pinDetails.sandboxMode")}
-                    </span>
-                  )}
                 </div>
-                <p style={{ margin: "2px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {t("pinDetails.environment")} {result.environment === "sandbox" ? t("pinDetails.envSandbox") : t("pinDetails.envProduction")}
-                </p>
                 <p data-testid="draft-publish-pin-id" style={{ margin: "1px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t("pinDetails.pinIdLabel")} {result.pinId}</p>
                 <p style={{ margin: "1px 0 0", fontSize: 10.5, color: UI.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t("pinDetails.boardLabel")} {result.boardName}</p>
               </div>

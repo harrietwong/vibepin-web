@@ -1,8 +1,14 @@
 /**
- * GET /api/pinterest/debug-status
+ * GET /api/pinterest/debug-status — SUPER-ADMIN ONLY.
  *
- * Safe, non-secret diagnostics for the Pinterest environment. Confirms production
- * (or sandbox) wiring without ever exposing a secret.
+ * Operator diagnostics for the Pinterest environment. Confirms production (or
+ * sandbox) wiring without ever exposing a secret.
+ *
+ * Access: this used to answer any signed-in user, which made server configuration
+ * (API environment, sandbox-token presence, access tier) readable by every customer
+ * — exactly the class of internal detail PRD §7 moves to Internal Admin. It is now
+ * gated on the same super-admin check the /admin routes use, and answers 404 (not
+ * 403) to everyone else so the endpoint's existence isn't advertised.
  *
  * Returns ONLY booleans, an enum, and the non-secret API host string — NEVER an
  * access/refresh token, the app secret, the encryption key, or an Authorization
@@ -37,10 +43,32 @@ import {
 import { isEncryptionConfigured } from "@/lib/server/crypto";
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { getActiveConnection, toSafeStatus } from "@/lib/server/pinterest/connectionStore";
+import { requireSuperAdminFromRequest } from "@/lib/server/superAdmin";
 
 export const dynamic = "force-dynamic";
 
+/** Same shape Next.js serves for an unmatched route: existence stays private. */
+function notFound() {
+  return Response.json({ error: "Not found" }, { status: 404 });
+}
+
 export async function GET(req: Request) {
+  // Gate FIRST — no configuration detail is computed, let alone returned, for
+  // anyone who is not a super admin. 404 (not 403) so a signed-in customer
+  // cannot distinguish "exists but forbidden" from "no such endpoint".
+  //
+  // FAIL CLOSED: if the identity lookup itself throws (no request scope, Supabase
+  // hiccup, malformed cookie), that is not permission — it is the absence of proof,
+  // and it must deny. An exception here used to become a 500 whose body/stack could
+  // say more about the deployment than the endpoint ever would.
+  let admin = null;
+  try {
+    admin = await requireSuperAdminFromRequest(req);
+  } catch {
+    return notFound();
+  }
+  if (!admin) return notFound();
+
   const apiEnv = getPinterestApiEnv();
   const baseUrl = getPinterestApiBase();
   const canSandbox = canAttemptSandboxPublish();

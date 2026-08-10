@@ -132,6 +132,16 @@ export interface PinDraft {
   /** Stable per-asset key for this generated card (the card's idempotencyKey), so a draft
    *  keeps a durable handle to which generated asset it is even if its imageUrl changes. */
   sourceAssetKey?:     string;
+
+  // ── Publish target (PRD §13/§14 — Phase C) ─────────────────────────────────
+  // The account this Pin publishes to, pinned onto the draft the moment a target is
+  // decided. Changing the default account/board, or connecting another account, must
+  // never re-route an already-targeted Pin. Both ride the pin_drafts payload sync
+  // (whole draft is serialized) — no migration.
+  /** social_connections row id of the target Pinterest account. */
+  targetConnectionId?:  string;
+  /** Username snapshot of that account at selection time (display only, never a key). */
+  targetAccountLabel?:  string;
   /** Remote Pinterest Pin id captured after a successful publish. */
   remotePinId?:        string;
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published

@@ -18,11 +18,11 @@ import {
 
 const MAX_PAGES = 6; // ~600 boards
 
-async function fetchAllBoards(): Promise<PinterestBoard[]> {
+async function fetchAllBoards(connectionId?: string): Promise<PinterestBoard[]> {
   const all: PinterestBoard[] = [];
   let bookmark: string | undefined;
   for (let i = 0; i < MAX_PAGES; i++) {
-    const page = await fetchPinterestBoards(bookmark);
+    const page = await fetchPinterestBoards(bookmark, undefined, connectionId);
     all.push(...page.items);
     if (!page.bookmark) break;
     bookmark = page.bookmark;
@@ -57,10 +57,20 @@ export type UsePinterestBoards = {
   refresh: () => void;
 };
 
-export function usePinterestBoards(): UsePinterestBoards {
+/**
+ * `connectionId` scopes the fetch to ONE connected account. Boards belong to an
+ * account, so a multi-account user editing a Pin pinned to account B must not be
+ * offered account A's boards — picking one would produce a board the publish call
+ * cannot use. The SWR key includes it, so each account's boards cache separately
+ * instead of the last fetch overwriting the previous account's list.
+ *
+ * Omitting it keeps the original behaviour (the default connection's boards), which
+ * is what every single-account caller still wants.
+ */
+export function usePinterestBoards(connectionId?: string): UsePinterestBoards {
   const { data, error, isLoading, mutate } = useSWR<PinterestBoard[], PinterestClientError>(
-    "pinterest:boards",
-    fetchAllBoards,
+    connectionId ? ["pinterest:boards", connectionId] : "pinterest:boards",
+    () => fetchAllBoards(connectionId),
     { revalidateOnFocus: false, shouldRetryOnError: false, dedupingInterval: 60_000 },
   );
 
