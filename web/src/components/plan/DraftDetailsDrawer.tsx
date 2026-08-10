@@ -1586,36 +1586,26 @@ export function PinDetailsModal({
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
               <div data-testid="draft-planned-summary">
                 {isPosted ? (
-                  <div data-testid="draft-published-summary" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                    <p style={{ margin: 0, fontSize: 13, fontWeight: 800, color: UI.success, display: "flex", alignItems: "center", gap: 5 }}>
-                      <CheckCircle2 size={14} /> {t("pinDetails.published")}
-                    </p>
+                  <div data-testid="draft-published-summary" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     <p style={{ margin: 0, fontSize: 11.5, color: UI.textSec }}>
-                      {platformName("pinterest")}
-                      {activeDraft.postedAt && formatEnglishDateTime(activeDraft.postedAt) && ` · ${formatEnglishDateTime(activeDraft.postedAt)}`}
+                      {activeDraft.postedAt && formatEnglishDateTime(activeDraft.postedAt)}
                     </p>
-                    {activeDraft.boardName?.trim() && (
-                      <p data-testid="draft-published-board" style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>
-                        {t("pinDetails.boardLabel")} {activeDraft.boardName}
-                      </p>
-                    )}
-                    {pinterestAccount?.username && (
-                      <p data-testid="draft-published-account" style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>
-                        {t("pinDetails.accountLabel")} @{pinterestAccount.username}
-                      </p>
-                    )}
-                    {/* One line per other platform this went live on, naming the
-                        account that received it. Publishing to several at once
-                        otherwise leaves "which account?" unanswered — a permalink
-                        does not say, and a merchant may have several connected.
-                        Only refs that recorded a handle render (older ones omit it). */}
-                    {socialPostRefs.filter(r => r.accountName?.trim()).map(ref => (
-                      <p key={`acct-${ref.provider}`} data-testid={`draft-published-account-${ref.provider}`}
-                        style={{ margin: 0, fontSize: 11, color: UI.textMuted }}>
-                        {platformName(ref.provider as SocialProvider)}: {ref.accountName}
-                      </p>
-                    ))}
-                    <p style={{ margin: "2px 0 0", fontSize: 10.5, color: UI.textMuted }}>{t("pinDetails.publishedSuccess")}</p>
+                    {/* Same per-destination presentation as the publish result (PRD 0809
+                        §6) — no platform is the "main" one with the others appended as
+                        extra lines. The account shown is the one that RECEIVED the post
+                        (from the stored target/refs), not whichever account happens to be
+                        connected now, and a platform with no recorded handle still gets a
+                        row instead of being dropped. */}
+                    <PublishResults
+                      rows={publishResultRows({
+                        postedAt: activeDraft.postedAt,
+                        remotePinId: activeDraft.remotePinId,
+                        remotePinUrl: activeDraft.remotePinUrl,
+                        boardName: activeDraft.boardName,
+                        targetAccountLabel: activeDraft.targetAccountLabel,
+                        socialPosts: activeDraft.socialPosts,
+                      })}
+                    />
                   </div>
                 ) : isScheduled ? (
                   <>
@@ -1634,29 +1624,10 @@ export function PinDetailsModal({
                     {isScheduled ? t("pinDetails.editDateTime") : t("pinDetails.addDateTime")}
                   </button>
                 )}
-                {/* Only rendered when a real published Pin URL exists — no URL means no
-                    button and no broken link, never an error. Primary-styled: it is
-                    the ONE action of the read-only published view (footer is hidden). */}
-                {isPosted && publishedPinUrl && (
-                  <a data-testid="draft-view-on-pinterest" href={publishedPinUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
-                    {t("pinDetails.viewOnPinterest")} <ExternalLink size={12} />
-                  </a>
-                )}
-                {isPosted && !publishedPinUrl && (
-                  <span data-testid="draft-pin-url-unavailable" style={{ fontSize: 11, color: UI.textMuted }}>
-                    {t("pinDetails.publishedUrlUnavailable")}
-                  </span>
-                )}
-                {/* One link per non-Pinterest platform this Pin also went live on
-                    (e.g. "View on Facebook"). Secondary-styled — the Pinterest Pin
-                    stays the primary action. Rendered only when a real permalink
-                    was captured, so there is never a broken link. */}
-                {isPosted && socialPostRefs.map(ref => (
-                  <a key={ref.provider} data-testid={`draft-view-on-${ref.provider}`}
-                    href={ref.postUrl} target="_blank" rel="noopener noreferrer" style={lightBtn}>
-                    {viewOnLabel(ref.provider as SocialProvider)} <ExternalLink size={12} />
-                  </a>
-                ))}
+                {/* View actions live in the per-destination result rows above, one per
+                    platform. They used to sit here as a primary "View on Pinterest" plus
+                    secondary links for the others, which re-asserted Pinterest as the main
+                    destination (PRD 0809 §6) and duplicated what the rows now render. */}
               </div>
             </div>
           </div>
