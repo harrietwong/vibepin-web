@@ -198,7 +198,10 @@ export async function GET(req: Request): Promise<Response> {
 
       const result = await publishPinForUser(input);
       if (result.ok) {
-        await persistSuccess(db, row, result.pin, nowIso);
+        // result.connectionId is the row that actually published — pinned onto the draft
+        // when it had no target yet (adopt-once, PRD §14). Already-targeted drafts are
+        // left untouched by withAdoptedTarget.
+        await persistSuccess(db, row, result.pin, nowIso, result.connectionId);
         void recordPublishEvent(db, PUBLISH_EVENT_SUCCEEDED, {
           ...eventBase,
           durationMs: Date.now() - rowStartedMs,
@@ -208,7 +211,7 @@ export async function GET(req: Request): Promise<Response> {
         published++;
       } else {
         // Typed validation failure (bad board / image / link) — NOT thrown.
-        await persistFailure(db, row, { message: result.error, code: result.code }, nowIso);
+        await persistFailure(db, row, { message: result.error, code: result.code }, nowIso, result.connectionId);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: result.code,
           message: result.error,
@@ -253,8 +256,9 @@ async function persistSuccess(
   row: DueRow,
   pin: { id: string; url: string },
   nowIso: string,
+  connectionId?: string | null,
 ): Promise<void> {
-  const payload = payloadAfterSuccess(row.payload, pin, nowIso);
+  const payload = payloadAfterSuccess(row.payload, pin, nowIso, connectionId);
   const { error } = await db
     .from(TABLE)
     .update({
@@ -275,8 +279,9 @@ async function persistFailure(
   row: DueRow,
   fail: { message: string; code?: string },
   nowIso: string,
+  connectionId?: string | null,
 ): Promise<void> {
-  const payload = payloadAfterFailure(row.payload, fail, nowIso);
+  const payload = payloadAfterFailure(row.payload, fail, nowIso, connectionId);
   const { error } = await db
     .from(TABLE)
     .update({

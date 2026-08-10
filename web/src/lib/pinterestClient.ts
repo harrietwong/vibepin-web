@@ -58,6 +58,9 @@ export type PublishResult = {
   board: { id: string; name: string };
   /** Which Pinterest environment the Pin was created in. Absent = production. */
   environment?: "sandbox" | "production";
+  /** The connection this Pin published through — pinned onto the draft as its target
+   *  when it had none yet (adopt-once, PRD §14). Absent in sandbox mode. */
+  connectionId?: string;
 };
 
 function currentReturnTo(): string {
@@ -95,13 +98,24 @@ function warnOnSlowServerSteps(res: Response): void {
  * `resolveUserId` falls back to that cookie whenever no Bearer header is present.
  * That lets us skip `authHeaders()` (which awaits `auth.getSession()`) entirely on
  * this hot path and go straight to the network call.
+ *
+ * `reconnectConnectionId` declares "repair THIS connection" rather than "connect an
+ * account". The callback needs it to tell a reconnect that landed on the wrong
+ * Pinterest account (refuse — PRD §10) apart from an intentional second account
+ * (accept). Omit it for Connect and for "Add another account".
  */
-export async function startPinterestConnect(returnTo?: string): Promise<PinterestConnectResult> {
+export async function startPinterestConnect(
+  returnTo?: string,
+  reconnectConnectionId?: string | null,
+): Promise<PinterestConnectResult> {
   const next = returnTo ?? currentReturnTo();
   const tDirect = DEV ? performance.now() : 0;
   try {
     if (DEV) console.log(`[Pinterest OAuth Start] direct navigation assigned: ${(performance.now() - tDirect).toFixed(1)}ms`);
-    window.location.assign(`/api/auth/pinterest/connect?next=${encodeURIComponent(next)}`);
+    const reconnectParam = reconnectConnectionId
+      ? `&reconnect=${encodeURIComponent(reconnectConnectionId)}`
+      : "";
+    window.location.assign(`/api/auth/pinterest/connect?next=${encodeURIComponent(next)}${reconnectParam}`);
     return { ok: true, redirected: true };
   } catch {
     return { ok: false, message: "Could not open Pinterest authorization." };
@@ -343,20 +357,10 @@ export function seedPinterestStatusConnected(): void {
   statusInflight.catch(() => {}); // background revalidation must never surface as unhandled
 }
 
-/** Safe, non-secret Pinterest provider diagnostics (Developer tools only). Never tokens. */
-export type PinterestDebugStatus = {
-  apiEnv: "sandbox" | "production";
-  baseUrl: string;
-  sandboxTokenPresent: boolean;
-  canAttemptSandboxPublish: boolean;
-  standardAccessRequired: boolean;
-};
-
-export async function fetchPinterestDebugStatus(): Promise<PinterestDebugStatus> {
-  const res = await fetchPinterestApi("/api/pinterest/debug-status", { headers: await authHeaders(), cache: "no-store" });
-  if (!res.ok) throw toClientError(await parseErrorResponse(res));
-  return res.json();
-}
+// `fetchPinterestDebugStatus` / `PinterestDebugStatus` were removed with the
+// Developer tools section (PRD §7). /api/pinterest/debug-status still exists but is
+// super-admin gated now — it is an operator tool, and no customer-facing client
+// code may call it.
 
 /**
  * Fire-and-forget profile enrichment. Call once after landing back from a
@@ -382,32 +386,43 @@ export async function syncPinterestAccount(): Promise<boolean> {
 // request instead of hitting Pinterest twice. Only signal-less calls join the
 // shared flight (a caller-supplied AbortSignal must never cancel someone else's
 // request); bookmarked pages are unique and always fetch directly.
-let boardsFirstPageInflight: Promise<{ items: PinterestBoard[]; bookmark: string | null }> | null = null;
+/** First-page coalescing is per TARGET account: two accounts have different boards, so
+ *  they must never share one in-flight promise. Key "" = the default connection. */
+const boardsFirstPageInflight = new Map<string, Promise<{ items: PinterestBoard[]; bookmark: string | null }>>();
 
-export async function fetchPinterestBoards(bookmark?: string, signal?: AbortSignal): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
+/**
+ * The user's Pinterest boards. `connectionId` names WHICH connected account to read from
+ * (a Pin's publish target); omitted ⇒ the default connection, i.e. exactly what every
+ * single-account user got before multi-account existed.
+ */
+export async function fetchPinterestBoards(bookmark?: string, signal?: AbortSignal, connectionId?: string): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
   if (!bookmark && !signal) {
-    if (!boardsFirstPageInflight) {
-      boardsFirstPageInflight = fetchPinterestBoardsDirect().finally(() => {
-        boardsFirstPageInflight = null;
-      });
-    }
-    return boardsFirstPageInflight;
+    const key = connectionId ?? "";
+    const inflight = boardsFirstPageInflight.get(key);
+    if (inflight) return inflight;
+    const started = fetchPinterestBoardsDirect(undefined, undefined, connectionId).finally(() => {
+      boardsFirstPageInflight.delete(key);
+    });
+    boardsFirstPageInflight.set(key, started);
+    return started;
   }
-  return fetchPinterestBoardsDirect(bookmark, signal);
+  return fetchPinterestBoardsDirect(bookmark, signal, connectionId);
 }
 
-export async function fetchPinterestDefaultBoard(signal?: AbortSignal): Promise<PinterestDefaultBoard | null> {
-  const res = await authedPinterestGet("/api/pinterest/default-board", signal);
+export async function fetchPinterestDefaultBoard(signal?: AbortSignal, connectionId?: string): Promise<PinterestDefaultBoard | null> {
+  const qs = connectionId ? `?connectionId=${encodeURIComponent(connectionId)}` : "";
+  const res = await authedPinterestGet(`/api/pinterest/default-board${qs}`, signal);
   if (!res.ok) throw toClientError(await parseErrorResponse(res));
   const body = await res.json() as { board?: PinterestDefaultBoard | null };
   return body.board ?? null;
 }
 
-export async function savePinterestDefaultBoard(board: PinterestDefaultBoard): Promise<PinterestDefaultBoard | null> {
+export async function savePinterestDefaultBoard(board: PinterestDefaultBoard, connectionId?: string): Promise<PinterestDefaultBoard | null> {
+  const payload = JSON.stringify(connectionId ? { ...board, connectionId } : board);
   const res = await fetch("/api/pinterest/default-board", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(board),
+    body: payload,
   });
   if (res.status === 401) {
     const token = await refreshSessionOnce();
@@ -415,7 +430,7 @@ export async function savePinterestDefaultBoard(board: PinterestDefaultBoard): P
       const retry = await fetch("/api/pinterest/default-board", {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(board),
+        body: payload,
       });
       if (!retry.ok) throw toClientError(await parseErrorResponse(retry));
       const retryBody = await retry.json() as { board?: PinterestDefaultBoard | null };
@@ -427,8 +442,11 @@ export async function savePinterestDefaultBoard(board: PinterestDefaultBoard): P
   return body.board ?? null;
 }
 
-async function fetchPinterestBoardsDirect(bookmark?: string, signal?: AbortSignal): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
-  const qs = bookmark ? `?bookmark=${encodeURIComponent(bookmark)}` : "";
+async function fetchPinterestBoardsDirect(bookmark?: string, signal?: AbortSignal, connectionId?: string): Promise<{ items: PinterestBoard[]; bookmark: string | null }> {
+  const params = new URLSearchParams();
+  if (bookmark) params.set("bookmark", bookmark);
+  if (connectionId) params.set("connectionId", connectionId);
+  const qs = params.toString() ? `?${params.toString()}` : "";
   // no-store + 401-retry-once (authedPinterestGet): always load the freshly-connected
   // account's real boards, and self-heal a just-expired token so firing this
   // concurrently with fetchPinterestStatus right after OAuth return can't 401-stick.
@@ -460,6 +478,10 @@ export type PublishPinInput = {
   draftId?: string;
   /** Where the publish was initiated. Server defaults to "immediate" when omitted. */
   source?: "immediate" | "scheduled-cron";
+
+  /** The Pin's pinned publish target (social_connections row id). Omitted ⇒ the server
+   *  resolves the user's default connection and reports it back for adopt-once. */
+  connectionId?: string;
   // ── VibePin-side commerce metadata (stored/used internally; never sent to the
   //    Pinterest API as official product tags) ──────────────────────────────────
   attachedProducts?: AttachedProduct[];
@@ -513,13 +535,61 @@ export async function createSandboxDemoBoard(): Promise<{ id: string; name: stri
  */
 export const PINTEREST_DISCONNECTED_EVENT = "vp:pinterest_disconnected";
 
-export async function disconnectPinterest(): Promise<void> {
+/**
+ * Disconnect Pinterest.
+ *
+ * `connectionId` narrows this to ONE account (the per-account Remove). Omitting it
+ * keeps the original meaning — disconnect every live Pinterest connection — which is
+ * what the platform-level "Disconnect" button has always done and still does.
+ *
+ * `cancelScheduled` un-schedules the Pins pinned to that account before removing it
+ * (the "Cancel schedules" answer in the Remove dialog). Only meaningful together with
+ * a connectionId; the "Keep" answer passes nothing, because a kept Pin is already
+ * blocked at publish time by the `target_disconnected` retry reason.
+ *
+ * Both ride in the query string: DELETE request bodies are unreliable across proxies
+ * and fetch implementations.
+ */
+export async function disconnectPinterest(
+  connectionId?: string | null,
+  opts?: { cancelScheduled?: boolean },
+): Promise<void> {
+  const params = new URLSearchParams();
+  const id = typeof connectionId === "string" ? connectionId.trim() : "";
+  if (id) params.set("connectionId", id);
+  if (id && opts?.cancelScheduled) params.set("cancelScheduled", "1");
+  const qs = params.toString();
+
   // keepalive: callers are optimistic (UI flips before this settles) — the request
   // must survive the user immediately navigating away from Settings.
-  const res = await fetch("/api/pinterest/disconnect", { method: "DELETE", headers: await authHeaders(), keepalive: true });
+  const res = await fetch(`/api/pinterest/disconnect${qs ? `?${qs}` : ""}`, { method: "DELETE", headers: await authHeaders(), keepalive: true });
   if (!res.ok) throw toClientError(await parseErrorResponse(res));
   invalidateBoardsCache();
   invalidateConnectionsCache();
   invalidatePinterestStatusCache();
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PINTEREST_DISCONNECTED_EVENT));
+}
+
+/**
+ * How many Pins are still scheduled to publish through this connection — asked before
+ * a per-account Remove so the user is never silently stripped of pending work.
+ *
+ * Read-only and best-effort: a failure here answers 0 rather than blocking the Remove.
+ * The consequence of a wrong 0 is a missing prompt, not a lost Pin (Phase C still
+ * blocks publishing to a disconnected target).
+ */
+export async function getScheduledCountForConnection(connectionId: string): Promise<number> {
+  const id = connectionId.trim();
+  if (!id) return 0;
+  try {
+    const res = await fetch(
+      `/api/pinterest/disconnect?connectionId=${encodeURIComponent(id)}`,
+      { headers: await authHeaders() },
+    );
+    if (!res.ok) return 0;
+    const body = await res.json() as { scheduledCount?: number };
+    return typeof body.scheduledCount === "number" && body.scheduledCount > 0 ? body.scheduledCount : 0;
+  } catch {
+    return 0;
+  }
 }

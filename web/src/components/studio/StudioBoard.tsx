@@ -28,6 +28,7 @@ import { track } from "@/lib/analytics";
 import { beginPublish, endPublish, isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, mapPublishErrorToCategory, publishFailureSetIdentity, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
+import { readStoredTarget } from "@/lib/studio/publishTarget";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
@@ -383,7 +384,11 @@ export function StudioBoard() {
     // last time simply was never written onto this draft. Adopt it here before gating.
     if (!d.boardId?.trim() && !noBoardAccess) {
       try {
-        const fallback = await fetchPinterestDefaultBoard();
+        // Default board OF THE PIN'S TARGET connection (PRD §14): a draft already
+        // pinned to account B must never adopt account A's default board just because
+        // A is the workspace default. No stored target ⇒ server default connection,
+        // which is the pre-multi-account behaviour.
+        const fallback = await fetchPinterestDefaultBoard(undefined, readStoredTarget(d) || undefined);
         if (fallback?.boardId) {
           d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "" }) ?? d;
         }
@@ -400,8 +405,14 @@ export function StudioBoard() {
     if (!beginPublish(id)) return;
     pinDraftStore.updateDraft(id, { publishError: undefined });
     try {
-      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id, draftId: id, source: "immediate" });
-      pinDraftStore.updateDraft(id, { postedAt: new Date().toISOString(), remotePinId: res.pin.id, remotePinUrl: res.pin.url, publishError: undefined, failureType: undefined, errorCategory: undefined, publishErrorCode: undefined });
+      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id, draftId: id, source: "immediate", connectionId: readStoredTarget(d) || undefined });
+      pinDraftStore.updateDraft(id, {
+        postedAt: new Date().toISOString(), remotePinId: res.pin.id, remotePinUrl: res.pin.url,
+        publishError: undefined, failureType: undefined, errorCategory: undefined, publishErrorCode: undefined,
+        // Adopt-once (PRD §14): a draft that had no pinned target keeps the connection
+        // it actually published through, so every later retry/action stays on it.
+        ...(!readStoredTarget(d) && res.connectionId ? { targetConnectionId: res.connectionId } : {}),
+      });
       toast.success(tr("studioBoard.toast.publishSuccess"));
     } catch (e) {
       const err = e as { code?: string; message?: string };

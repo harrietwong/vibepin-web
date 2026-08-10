@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useState, useEffect, useMemo, useRef, useCallback } from "react";
-import type { DragEvent as RDragEvent } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from "react";
+import type { DragEvent as RDragEvent, CSSProperties } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -87,6 +87,15 @@ import { listActionablePublishFailuresInWeek, publishFailureSetIdentity } from "
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { usePinBoardDrafts } from "@/hooks/usePinBoardDrafts";
+import { usePinterestConnections } from "@/hooks/usePinterestConnections";
+import {
+  ALL_TARGET_ACCOUNTS,
+  UNASSIGNED_TARGET_ACCOUNT,
+  effectiveTargetFilter,
+  matchesTargetFilter,
+  shouldShowAccountPicker,
+  targetAccountHandle,
+} from "@/lib/studio/publishTarget";
 
 // ── Lazily loaded components ─────────────────────────────────────────────────
 // Heavy drawers/alternate views deferred out of the main route chunk so the
@@ -991,6 +1000,42 @@ function SelectCheckbox({ selected, visible, onToggle, testId }: {
   );
 }
 
+// ── Account identity on the card (Phase D ②) ─────────────────────────────────
+
+/**
+ * Whether Pin cards carry an @handle badge.
+ *
+ * A context rather than a prop because the answer is one page-level fact ("this user has
+ * more than one Pinterest account") that every card needs, and the cards sit five
+ * pass-through layers deep (calendar → day column → tile, rail → card). Threading a
+ * boolean through those layers would touch every intermediate signature without any of
+ * them having an opinion about it.
+ *
+ * Default `false` keeps invariant 4 (PRD §13.4) safe by construction: any card rendered
+ * outside a provider — including every existing test that mounts one directly — shows the
+ * pre-multi-account UI.
+ */
+const AccountBadgeContext = createContext(false);
+
+/** The @handle of the account this Pin publishes to. Renders nothing when the user has
+ *  one account (nothing to disambiguate) or the draft has no target yet. */
+function AccountBadge({ draft, style }: { draft: PinDraft; style?: CSSProperties }) {
+  const show = useContext(AccountBadgeContext);
+  const handle = targetAccountHandle(draft);
+  if (!show || !handle) return null;
+  return (
+    <span data-testid="plan-card-account-badge" title={handle} style={{
+      fontSize: 9, fontWeight: 700, letterSpacing: "0.01em",
+      color: "#fff", background: "rgba(15,23,42,0.78)",
+      borderRadius: 4, padding: "1px 5px", maxWidth: "100%",
+      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      ...style,
+    }}>
+      {handle}
+    </span>
+  );
+}
+
 function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }: {
   draft:   PinDraft;
   dnd:     PlanDnD;
@@ -1039,6 +1084,10 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
             {ev.plannedTime}
           </span>
         )}
+        {/* Which account this Pin publishes to — only with 2+ connected accounts.
+            Sits right of the selection checkbox (top-left) and clear of the remove
+            button (top-right); the other two corners are the time and the lock. */}
+        <AccountBadge draft={draft} style={{ position: "absolute", top: 4, left: 26, maxWidth: "calc(100% - 52px)" }} />
         {/* Subtle lock indicator — only shown when the Pin's time is locked. */}
         {draft.scheduleLocked && (
           <span data-testid="weekly-plan-pin-lock" title={trBase("plan.card.lockTitle")} aria-label={trBase("plan.card.lockAria")} style={{
@@ -1459,10 +1508,14 @@ function DayDetailDrawer({ dateISO, drafts, onClose, onEditDetails, onReschedule
                   <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: "var(--app-text)", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
                     {ev.title}
                   </p>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, fontWeight: 700, color: published ? "#7C3AED" : "#059669" }}>
-                    <span style={{ width: 5, height: 5, borderRadius: "50%", background: published ? "#7C3AED" : "#059669" }} />
-                    {published ? trBase("plan.dayDetail.published") : trBase("plan.dayDetail.scheduled")}
-                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, fontWeight: 700, color: published ? "#7C3AED" : "#059669" }}>
+                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: published ? "#7C3AED" : "#059669" }} />
+                      {published ? trBase("plan.dayDetail.published") : trBase("plan.dayDetail.scheduled")}
+                    </span>
+                    {/* Which account this Pin publishes to — only with 2+ accounts. */}
+                    <AccountBadge draft={d} style={{ background: "var(--app-inset-hi)", color: "var(--app-text-sec)" }} />
+                  </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 2 }}>
                     <button type="button" data-testid="day-detail-edit" onClick={() => onEditDetails(d)}
                       style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#FF4D8D,#7C3AED)", color: "#fff", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
@@ -1521,6 +1574,33 @@ export function WeeklyPlanWorkspace() {
   const isAllCategories = category === ALL_CATEGORIES;
   const catDef   = CATEGORIES.find(c => c.id === category);
   const catLabel = isAllCategories ? tr("plan.header.allCategories") : (catDef?.label ?? category);
+
+  // ── Account filter (Phase D ②) ──
+  // Which connected Pinterest account's Pins to show. Reads the SAME connections source
+  // as the drawer's account picker (usePinterestConnections) so the two can never
+  // disagree about which accounts exist.
+  const { connections: pinterestConnections } = usePinterestConnections();
+  const multiAccount = shouldShowAccountPicker(pinterestConnections);
+  const [accountFilter, setAccountFilter] = useState<string>(ALL_TARGET_ACCOUNTS);
+  // Never filter by a control the user cannot see: at ≤1 account the select is not
+  // rendered, so a filter left over from when a second account existed is neutralised
+  // rather than silently hiding Pins with no way to clear it.
+  const activeAccountFilter = effectiveTargetFilter(accountFilter, pinterestConnections);
+  const isAllAccounts = activeAccountFilter === ALL_TARGET_ACCOUNTS;
+  const accountFilterLabel = isAllAccounts
+    ? tr("plan.filters.allAccounts")
+    : activeAccountFilter === UNASSIGNED_TARGET_ACCOUNT
+      ? tr("plan.filters.unassignedAccount")
+      : (() => {
+          const c = pinterestConnections.find(x => x.id === activeAccountFilter);
+          const handle = (c?.username ?? "").trim();
+          return handle ? (handle.startsWith("@") ? handle : `@${handle}`) : tr("plan.filters.account");
+        })();
+  const activeFilterCount = (isAllCategories ? 0 : 1) + (isAllAccounts ? 0 : 1);
+  const byAccount = useCallback(
+    (list: PinDraft[]) => list.filter(d => matchesTargetFilter(d, activeAccountFilter)),
+    [activeAccountFilter],
+  );
 
   const deepLinkView = searchParams.get("planView");
   const deepLinkStatus = searchParams.get("status");
@@ -2184,8 +2264,8 @@ export function WeeklyPlanWorkspace() {
     })));
   }, [planDataLoading, planUserId, displayWeekStart, items.length]);
 
-  const scheduledDrafts = scheduledDraftsInWeek(category, displayWeekStart);
-  const monthDrafts     = scheduledDraftsInMonth(category, monthAnchorISO);
+  const scheduledDrafts = byAccount(scheduledDraftsInWeek(category, displayWeekStart));
+  const monthDrafts     = byAccount(scheduledDraftsInMonth(category, monthAnchorISO));
   const dayDetailDrafts  = dayDetailISO ? monthDrafts.filter(d => d.scheduledDate === dayDetailISO) : [];
   const hasItems     = items.length > 0 || scheduledDrafts.length > 0;
   const fileName     = `pin-brief-${displayWeekLabel.replace(/\s+/g, "-").toLowerCase()}.csv`;
@@ -2194,6 +2274,7 @@ export function WeeklyPlanWorkspace() {
   const canPublishSelected = selectedDrafts.length > 0;
 
   return (
+    <AccountBadgeContext.Provider value={multiAccount}>
     <div data-testid="weekly-plan-page" style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--app-bg)" }}>
 
       <div style={{ padding: "12px 20px 0", background: "var(--app-surface)", flexShrink: 0 }}>
@@ -2223,6 +2304,16 @@ export function WeeklyPlanWorkspace() {
                   title={tr("plan.header.filteringTitle")}
                   style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, border: "1px solid rgba(192,38,211,0.45)", background: "rgba(192,38,211,0.08)", color: "#C026D3", cursor: "pointer" }}>
                   {catDef?.emoji} {catLabel} ✕
+                </button>
+              )}
+              {/* A filtered board must say so where the user is looking, not only inside a
+                  panel they have to reopen — same dismissible chip the category filter uses. */}
+              {!isAllAccounts && (
+                <button type="button" data-testid="weekly-plan-active-account-filter"
+                  onClick={() => setAccountFilter(ALL_TARGET_ACCOUNTS)}
+                  title={tr("plan.filters.account")}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, border: "1px solid rgba(99,102,241,0.45)", background: "rgba(99,102,241,0.08)", color: "#6366F1", cursor: "pointer" }}>
+                  {accountFilterLabel} ✕
                 </button>
               )}
             </div>
@@ -2327,7 +2418,7 @@ export function WeeklyPlanWorkspace() {
                   border: `1px solid ${isAllCategories ? "var(--app-border)" : "rgba(192,38,211,0.45)"}`,
                   background: isAllCategories ? "transparent" : "rgba(192,38,211,0.08)",
                   color: isAllCategories ? "var(--app-text-sec)" : "#C026D3", cursor: "pointer" }}>
-                {tr("plan.filters.button")}{!isAllCategories ? " · 1" : ""}
+                {tr("plan.filters.button")}{activeFilterCount ? ` · ${activeFilterCount}` : ""}
               </button>
               {filtersOpen && (
                 <>
@@ -2335,8 +2426,9 @@ export function WeeklyPlanWorkspace() {
                   <div data-testid="weekly-plan-filters-panel" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 41, width: 230, background: "var(--app-surface)", border: "1px solid var(--app-border)", borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,0.4)", padding: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
                       <span style={{ fontSize: 11, fontWeight: 800, color: "var(--app-text)" }}>{tr("plan.filters.title")}</span>
-                      {!isAllCategories && (
-                        <button type="button" data-testid="weekly-plan-filters-clear" onClick={() => setCategory(ALL_CATEGORIES)}
+                      {activeFilterCount > 0 && (
+                        <button type="button" data-testid="weekly-plan-filters-clear"
+                          onClick={() => { setCategory(ALL_CATEGORIES); setAccountFilter(ALL_TARGET_ACCOUNTS); }}
                           style={{ background: "none", border: "none", padding: 0, fontSize: 10.5, fontWeight: 700, color: "#C026D3", cursor: "pointer" }}>
                           {tr("plan.filters.clear")}
                         </button>
@@ -2350,6 +2442,26 @@ export function WeeklyPlanWorkspace() {
                         <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>
                       ))}
                     </select>
+                    {/* Account filter — only with more than one Pinterest account connected.
+                        Below that there is nothing to choose between, and Phase C's
+                        invariant 4 says a single-account user should never see the
+                        multi-account machinery at all. */}
+                    {multiAccount && (
+                      <>
+                        <label style={{ display: "block", marginTop: 10, fontSize: 9.5, fontWeight: 700, color: "var(--app-text-sec)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{tr("plan.filters.account")}</label>
+                        <select data-testid="weekly-plan-filter-account" value={activeAccountFilter} onChange={e => setAccountFilter(e.target.value)}
+                          style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 8, fontSize: 12, border: "1px solid var(--app-border)", background: "var(--app-surface-2)", color: "var(--app-text)", cursor: "pointer", outline: "none" }}>
+                          <option value={ALL_TARGET_ACCOUNTS}>{tr("plan.filters.allAccounts")}</option>
+                          {pinterestConnections.map(c => (
+                            <option key={c.id} value={c.id}>@{c.username}</option>
+                          ))}
+                          {/* Drafts that predate adopt-once carry no target. They are not
+                              "on" any account, so they get their own bucket rather than
+                              being guessed into someone's or dropped from every view. */}
+                          <option value={UNASSIGNED_TARGET_ACCOUNT}>{tr("plan.filters.unassignedAccount")}</option>
+                        </select>
+                      </>
+                    )}
                     <p style={{ margin: "8px 0 0", fontSize: 9.5, color: "var(--app-text-muted)", lineHeight: 1.5 }}>
                       {tr("plan.filters.footer")}
                     </p>
@@ -2448,15 +2560,15 @@ export function WeeklyPlanWorkspace() {
               <p style={{ textAlign: "center", fontSize: "11px", color: "var(--app-text-muted)", marginTop: "20px", paddingBottom: "10px" }}>
                 {tr("plan.footer.timezoneNote")}
               </p>
-              <AddedNeedsDateSection category={category} weekStart={displayWeekStart} dnd={dnd} hoverActions={scheduledHoverActions} />
+              <AddedNeedsDateSection category={category} accountFilter={activeAccountFilter} weekStart={displayWeekStart} dnd={dnd} hoverActions={scheduledHoverActions} />
               {/* Narrow fallback — stacked Unscheduled section (rail not shown). */}
-              {!wideLayout && <UnscheduledDraftsSection category={category} dnd={dnd} hoverActions={unscheduledHoverActions} onAddToPlan={handleSmartScheduleAdd} />}
+              {!wideLayout && <UnscheduledDraftsSection category={category} accountFilter={activeAccountFilter} dnd={dnd} hoverActions={unscheduledHoverActions} onAddToPlan={handleSmartScheduleAdd} />}
             </div>
 
             {/* Week view keeps the inline rail. Month view hides it for calendar
                 readability — opened on demand via the "Unscheduled (N)" toggle. */}
             {wideLayout && calendarScope === "week" && (
-              <UnscheduledRail category={category} dnd={dnd} select={select} onEditDraft={setCalendarEditDraft} hoverActions={unscheduledHoverActions} onAddToPlan={handleSmartScheduleAdd} />
+              <UnscheduledRail category={category} accountFilter={activeAccountFilter} dnd={dnd} select={select} onEditDraft={setCalendarEditDraft} hoverActions={unscheduledHoverActions} onAddToPlan={handleSmartScheduleAdd} />
             )}
           </div>
         )}
@@ -2480,7 +2592,7 @@ export function WeeklyPlanWorkspace() {
           style={{ position: "fixed", inset: 0, zIndex: 71, background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "flex-end" }}>
           <div data-testid="month-unscheduled-drawer" onClick={e => e.stopPropagation()}
             style={{ height: "100%", padding: 14, overflowY: "auto", background: "var(--app-surface)", borderLeft: "1px solid var(--app-border)", boxShadow: "-12px 0 40px rgba(0,0,0,0.35)" }}>
-            <UnscheduledRail category={category} dnd={dnd} select={select} onEditDraft={setCalendarEditDraft} hoverActions={unscheduledHoverActions} onAddToPlan={handleSmartScheduleAdd} />
+            <UnscheduledRail category={category} accountFilter={activeAccountFilter} dnd={dnd} select={select} onEditDraft={setCalendarEditDraft} hoverActions={unscheduledHoverActions} onAddToPlan={handleSmartScheduleAdd} />
           </div>
         </div>
       )}
@@ -2579,15 +2691,19 @@ export function WeeklyPlanWorkspace() {
         onPublishComplete={handleWpPublishComplete}
       />
     </div>
+    </AccountBadgeContext.Provider>
   );
 }
 
 // ── Added to plan, needs date ─────────────────────────────────────────────────
 
-function AddedNeedsDateSection({ category, weekStart, dnd, hoverActions }: { category: string; weekStart: string; dnd: PlanDnD; hoverActions?: PinHoverPreviewActions }) {
+function AddedNeedsDateSection({ category, accountFilter, weekStart, dnd, hoverActions }: { category: string; accountFilter: string; weekStart: string; dnd: PlanDnD; hoverActions?: PinHoverPreviewActions }) {
   const { t: trBase } = useLocale();
   const tr = (key: MessageKey) => trBase(key);
-  const [drafts, setDrafts] = useState<PinDraft[]>([]);
+  const [allDrafts, setDrafts] = useState<PinDraft[]>([]);
+  // Filtered at render, not at load: every reload path (store events, onSaved) keeps
+  // writing the full list, so the account filter can change without a refetch.
+  const drafts = useMemo(() => allDrafts.filter(d => matchesTargetFilter(d, accountFilter)), [allDrafts, accountFilter]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDate, setEditDate] = useState("");
   const [editDraft, setEditDraft] = useState<PinDraft | null>(null);
@@ -2713,12 +2829,14 @@ function AddedNeedsDateSection({ category, weekStart, dnd, hoverActions }: { cat
 // Shows pin drafts added from Generated Pins that don't match any plan row keyword.
 // Masonry grid layout — each card is independently editable.
 
-function UnscheduledDraftsSection({ category, dnd, hoverActions, onAddToPlan }: {
-  category: string; dnd: PlanDnD; hoverActions?: PinHoverPreviewActions; onAddToPlan: (id: string) => void;
+function UnscheduledDraftsSection({ category, accountFilter, dnd, hoverActions, onAddToPlan }: {
+  category: string; accountFilter: string; dnd: PlanDnD; hoverActions?: PinHoverPreviewActions; onAddToPlan: (id: string) => void;
 }) {
   const { t: trBase } = useLocale();
   const tr = (key: MessageKey) => trBase(key);
-  const [drafts,    setDrafts]    = useState<PinDraft[]>([]);
+  const [allDrafts, setDrafts]    = useState<PinDraft[]>([]);
+  // Filtered at render — see AddedNeedsDateSection.
+  const drafts = useMemo(() => allDrafts.filter(d => matchesTargetFilter(d, accountFilter)), [allDrafts, accountFilter]);
   const [collapsed, setCollapsed] = useState(false);
   const [editDraft, setEditDraft] = useState<PinDraft | null>(null);
   const dropKey  = "unscheduled-zone";
@@ -2903,6 +3021,8 @@ function UnscheduledCard({ draft, dnd, select, onAddToPlan, onEdit, hoverActions
           <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 9, fontWeight: 700, color: st.color }}>
             <span style={{ width: 5, height: 5, borderRadius: "50%", background: st.color }} /> {st.label}
           </span>
+          {/* Which account this Pin publishes to — only with 2+ connected accounts. */}
+          <AccountBadge draft={draft} style={{ background: "var(--app-inset-hi)", color: "var(--app-text-sec)", maxWidth: 92 }} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 2 }}>
           <button type="button" data-testid="rail-add-to-plan" data-testid2="weekly-plan-unscheduled-schedule" onClick={e => { e.stopPropagation(); onAddToPlan(draft.id); }}
@@ -2920,13 +3040,15 @@ function UnscheduledCard({ draft, dnd, select, onAddToPlan, onEdit, hoverActions
   );
 }
 
-function UnscheduledRail({ category, dnd, select, onEditDraft, hoverActions, onAddToPlan }: {
-  category: string; dnd: PlanDnD; select: PlanSelect; onEditDraft: (d: PinDraft) => void;
+function UnscheduledRail({ category, accountFilter, dnd, select, onEditDraft, hoverActions, onAddToPlan }: {
+  category: string; accountFilter: string; dnd: PlanDnD; select: PlanSelect; onEditDraft: (d: PinDraft) => void;
   hoverActions?: PinHoverPreviewActions; onAddToPlan: (id: string) => void;
 }) {
   const { t: trBase } = useLocale();
   const tr = (key: MessageKey) => trBase(key);
-  const [drafts, setDrafts] = useState<PinDraft[]>([]);
+  const [allDrafts, setDrafts] = useState<PinDraft[]>([]);
+  // Filtered at render — see AddedNeedsDateSection.
+  const drafts = useMemo(() => allDrafts.filter(d => matchesTargetFilter(d, accountFilter)), [allDrafts, accountFilter]);
   const [showAll, setShowAll] = useState(false);
   const dropKey = "unscheduled-rail";
   const isOver = dnd.dragOverKey === dropKey;

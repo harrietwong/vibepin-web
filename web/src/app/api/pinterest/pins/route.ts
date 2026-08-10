@@ -131,6 +131,10 @@ export async function POST(req: Request) {
       description: body.description,
       link: body.link,
       altText: body.altText,
+      // This Pin's pinned publish target. Only ever resolved through
+      // PinterestClient.forConnection, which refuses rows that aren't this uid's — a
+      // caller cannot publish onto someone else's account by naming their id.
+      connectionId: body.connectionId,
     });
 
     if (!result.ok) {
@@ -155,6 +159,9 @@ export async function POST(req: Request) {
         pin: result.pin,
         board: result.board,
         environment: result.environment,
+        // Which account this published through, so the client can pin an adopted
+        // (previously untargeted) draft to it — adopt-once (PRD §14).
+        connectionId: result.connectionId,
       },
       { status: 201 },
     );

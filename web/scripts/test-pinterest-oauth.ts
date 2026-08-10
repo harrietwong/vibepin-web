@@ -66,18 +66,20 @@ await test("authorization URL has correct params, exact redirect URI, and scopes
   assertEq(url.searchParams.get("response_type"), "code", "response_type");
   assertEq(url.searchParams.get("redirect_uri"), "http://localhost:3000/api/auth/pinterest/callback", "exact redirect URI");
   assertEq(url.searchParams.get("state"), "STATE123", "state");
-  // Default env resolves to production → minimum scopes, NO boards:write.
-  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,pins:read,pins:write", "production scopes");
+  // Default env resolves to production. boards:write IS included: Pinterest v5
+  // POST /pins rejects a token without it (401 code 3 "Missing: ['boards:write']"),
+  // so it is part of the minimum publish set — see PRODUCTION_SCOPES in config.ts.
+  assertEq(url.searchParams.get("scope"), "user_accounts:read,boards:read,boards:write,pins:read,pins:write", "production scopes");
 });
 
-await test("production requests minimum scopes; no boards:write, no forbidden / secret scopes", () => {
+await test("production requests the minimum publish set; no forbidden / secret scopes", () => {
   const s = config.pinterestScopeString();
   for (const bad of ["ads:", "catalogs:", "_secret"]) {
     assert(!s.includes(bad), `scope string must not include ${bad}`);
   }
   assert(s.includes("pins:write"), "pins:write required for publishing");
-  assert(!s.includes("boards:write"), "production must NOT request boards:write");
-  assertEq(config.PRODUCTION_SCOPES.length, 4, "exactly 4 production scopes");
+  assert(s.includes("boards:write"), "boards:write required — POST /pins rejects tokens without it");
+  assertEq(config.PRODUCTION_SCOPES.length, 5, "exactly 5 production scopes");
 });
 
 await test("sandbox requests boards:write for the demo-board helper", () => {
@@ -101,7 +103,9 @@ await test("VERCEL_ENV=production forces production regardless of PINTEREST_API_
   try {
     assertEq(config.getPinterestApiEnv(), "production", "prod deploy forces production");
     assertEq(config.getPinterestApiBase(), "https://api.pinterest.com/v5", "prod uses production base, NOT api-sandbox");
-    assert(!config.pinterestScopeString().includes("boards:write"), "prod scopes even with sandbox flag");
+    // The point of this test is env forcing, not scope contents: prove the scope
+    // string is the PRODUCTION set (not sandbox's) even with a stray sandbox flag.
+    assertEq(config.pinterestScopeString(), config.PRODUCTION_SCOPES.join(","), "prod scopes even with sandbox flag");
   } finally {
     if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
     if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
@@ -425,12 +429,38 @@ await test("concurrent refreshes for one user coalesce into a single refresh + a
 });
 
 // 15. debug-status contract: only booleans / non-secret host; never a token or secret.
-await test("debug-status returns booleans + non-secret host only (never secrets)", async () => {
-  const oldV = process.env.VERCEL_ENV; const oldE = process.env.PINTEREST_API_ENV;
-  process.env.VERCEL_ENV = "production"; process.env.PINTEREST_API_ENV = "sandbox";
+await test("debug-status is super-admin only — a signed-in customer gets 404, not the diagnostics", async () => {
+  // PRD §7: server configuration is operator detail. The endpoint answers 404 rather
+  // than 403 so its existence isn't advertised to the customer probing for it.
+  const oldE2E = process.env.E2E_TEST_MODE;
+  delete process.env.E2E_TEST_MODE; // no bypass → the real gate decides
   try {
     const route = await import("../src/app/api/pinterest/debug-status/route");
     const res = await route.GET(new Request("https://vibepin.co/api/pinterest/debug-status"));
+    assertEq(res.status, 404, "a non-super-admin must get 404");
+    const body = await res.json() as Record<string, unknown>;
+    // The 404 body must carry NO configuration detail at all.
+    for (const leaked of ["apiEnv", "baseUrl", "sandboxTokenPresent", "standardAccessRequired"]) {
+      assert(!(leaked in body), `404 body must not include ${leaked}`);
+    }
+  } finally {
+    if (oldE2E === undefined) delete process.env.E2E_TEST_MODE; else process.env.E2E_TEST_MODE = oldE2E;
+  }
+});
+
+await test("debug-status returns booleans + non-secret host only (never secrets)", async () => {
+  const oldV = process.env.VERCEL_ENV; const oldE = process.env.PINTEREST_API_ENV;
+  const oldE2E = process.env.E2E_TEST_MODE;
+  process.env.VERCEL_ENV = "production"; process.env.PINTEREST_API_ENV = "sandbox";
+  // Authorize via the existing E2E super-admin header so this asserts the payload
+  // (its real subject) without standing up a cookie/session scope.
+  process.env.E2E_TEST_MODE = "true";
+  try {
+    const route = await import("../src/app/api/pinterest/debug-status/route");
+    const res = await route.GET(new Request("https://vibepin.co/api/pinterest/debug-status", {
+      headers: { "x-e2e-super-admin": "true" },
+    }));
+    assertEq(res.status, 200, "a super admin must get the diagnostics");
     const body = await res.json() as Record<string, unknown>;
     assertEq(body.apiEnv, "production", "prod deploy => production");
     assertEq(body.apiBaseIsProduction, true, "base is api.pinterest.com");
@@ -447,6 +477,7 @@ await test("debug-status returns booleans + non-secret host only (never secrets)
   } finally {
     if (oldV === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = oldV;
     if (oldE === undefined) delete process.env.PINTEREST_API_ENV; else process.env.PINTEREST_API_ENV = oldE;
+    if (oldE2E === undefined) delete process.env.E2E_TEST_MODE; else process.env.E2E_TEST_MODE = oldE2E;
   }
 });
 

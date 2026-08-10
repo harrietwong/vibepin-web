@@ -16,6 +16,7 @@ import { PINTEREST_INTEGRATIONS_PATH } from "@/lib/pinterestPaths";
 import { buildAuthorizeUrl, getPinterestEnv, isPinterestConfigured } from "@/lib/server/pinterest/config";
 import { ConfigurationError } from "@/lib/server/pinterest/errors";
 import { isEncryptionConfigured } from "@/lib/server/crypto";
+import { getPinterestAccountQuota } from "@/lib/server/pinterest/accountQuota";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_RETURN_COOKIE,
@@ -85,17 +86,61 @@ function buildConnectPayload(): ConnectPayload {
   return { authorizeUrl, state };
 }
 
+/**
+ * A `reconnect=<connectionId>` param means "repair THIS connection", not "add an
+ * account". It is sealed into the state cookie so the callback can require that the
+ * account which comes back is the one that connection belongs to (PRD §10). Only the
+ * shape is validated here — ownership is checked in the callback against the user's
+ * own rows, so a forged id can only ever fail to match.
+ */
+function sanitizeReconnectId(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!/^[0-9a-fA-F-]{16,64}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
+ * Plan gate for "add an account" (PRD §9.2 / §18): true when the flow must be
+ * refused because the user is already at their plan's `accountsPerPlatform` cap.
+ *
+ * A `reconnect=<id>` flow is ALWAYS allowed through. Reconnect repairs an existing
+ * row — it never adds one — and refusing it at the cap would leave a user who is at
+ * their limit permanently unable to fix a broken connection.
+ *
+ * Both handlers call this: GET is the navigation entry (what every Connect button
+ * actually reaches, since startPinterestConnect assigns location directly) and POST
+ * is the JSON entry. Gating only one would leave the other wide open.
+ *
+ * Fails OPEN on an unexpected error: an entitlement lookup that throws must not
+ * become a connect outage. The callback re-checks before anything is written, so an
+ * open failure here cannot actually create an over-cap connection.
+ */
+async function isOverAccountLimit(uid: string, reconnectId: string | null): Promise<boolean> {
+  if (reconnectId) return false;
+  try {
+    const quota = await getPinterestAccountQuota(uid);
+    if (quota.canAddAccount) return false;
+    console.warn(`[pinterest/connect] account limit reached (plan=${quota.plan}, used=${quota.used}/${quota.limit})`);
+    return true;
+  } catch (err) {
+    console.error("[pinterest/connect] quota check failed, allowing start:", (err as Error).message);
+    return false;
+  }
+}
+
 function attachOAuthStateCookie(
   res: NextResponse,
   req: NextRequest,
   state: string,
   uid: string,
   returnTo: string,
+  reconnectConnectionId: string | null,
 ): NextResponse {
   try {
     res.cookies.set(
       OAUTH_STATE_COOKIE,
-      sealState(state, uid, returnTo),
+      sealState(state, uid, returnTo, reconnectConnectionId),
       stateCookieOptions(req.nextUrl.protocol === "https:"),
     );
     return res;
@@ -157,6 +202,7 @@ export async function GET(req: NextRequest) {
   const timings: Partial<ConnectTimings> = {};
   const tReturnTo = performance.now();
   const returnTo = sanitizeReturnTo(req.nextUrl.searchParams.get("next"));
+  const reconnectId = sanitizeReconnectId(req.nextUrl.searchParams.get("reconnect"));
   timings.returnTo = performance.now() - tReturnTo;
 
   const tAuth = performance.now();
@@ -166,6 +212,11 @@ export async function GET(req: NextRequest) {
     timings.total = performance.now() - t0;
     warnOnSlowSteps(timings as Record<string, number>);
     return withServerTiming(loginRedirect(req, returnTo), timings as Record<string, number>);
+  }
+
+  if (await isOverAccountLimit(uid, reconnectId)) {
+    timings.total = performance.now() - t0;
+    return withServerTiming(integrationsRedirect(req, "limit_reached"), timings as Record<string, number>);
   }
 
   let payload: ConnectPayload;
@@ -191,7 +242,7 @@ export async function GET(req: NextRequest) {
   res.cookies.set(OAUTH_RETURN_COOKIE, returnTo, returnCookieOptions(req.nextUrl.protocol === "https:"));
   try {
     const tStateStore = performance.now();
-    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo);
+    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo, reconnectId);
     timings.state = (timings.state ?? 0) + (performance.now() - tStateStore);
     timings.total = performance.now() - t0;
     warnOnSlowSteps(timings as Record<string, number>);
@@ -212,9 +263,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const t0 = performance.now();
   let returnTo = PINTEREST_INTEGRATIONS_PATH;
+  let reconnectId: string | null = null;
   try {
-    const body = await req.json() as { next?: string };
+    const body = await req.json() as { next?: string; reconnect?: string };
     returnTo = sanitizeReturnTo(body.next ?? null);
+    reconnectId = sanitizeReconnectId(body.reconnect ?? null);
   } catch {
     /* empty body ok */
   }
@@ -226,6 +279,13 @@ export async function POST(req: NextRequest) {
     return withServerTiming(
       NextResponse.json({ error: "Unauthorized", code: "unauthorized" }, { status: 401 }),
       { auth: authDur, total: performance.now() - t0 },
+    );
+  }
+
+  if (await isOverAccountLimit(uid, reconnectId)) {
+    return NextResponse.json(
+      { error: "You've reached your plan's connected account limit.", code: "limit_reached" },
+      { status: 403 },
     );
   }
 
@@ -242,7 +302,7 @@ export async function POST(req: NextRequest) {
 
   const res = NextResponse.json({ url: payload.authorizeUrl });
   try {
-    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo);
+    const sealed = attachOAuthStateCookie(res, req, payload.state, uid, returnTo, reconnectId);
     const total = performance.now() - t0;
     warnOnSlowSteps({ auth: authDur, state: stateDur, total });
     return withServerTiming(sealed, { auth: authDur, state: stateDur, total });

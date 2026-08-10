@@ -19,6 +19,7 @@ import {
 import { startPinterestConnect, publishPin, type PinterestBoard } from "@/lib/pinterestClient";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+import { readStoredTarget, sharedTargetForSelection } from "@/lib/studio/publishTarget";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinterestClientError } from "@/lib/pinterestClient";
 import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
@@ -410,7 +411,7 @@ function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => 
 
 // ── Board picker ──────────────────────────────────────────────────────────────
 
-type BoardsState = { boards: PinterestBoard[]; status: "loading" | "ready" | "not_connected" | "reconnect" | "error" };
+type BoardsState = { boards: PinterestBoard[]; status: "loading" | "ready" | "not_connected" | "reconnect" | "error" | "mixed" };
 
 function BoardSelect({ value, boardsState, onChange, recommendFor, dense }: {
   value: { id: string; name: string };
@@ -430,6 +431,15 @@ function BoardSelect({ value, boardsState, onChange, recommendFor, dense }: {
     <button type="button" onClick={() => startPinterestConnect()} style={{ ...btnBase, fontSize: 10.5, padding: "4px 8px", color: "#FBBF24" }}>{tr("studioModals.board.reconnectPinterest")}</button>
   );
   if (status === "error") return <span style={{ fontSize: 11, color: UI.textMuted }}>{tr("studioModals.board.couldNotLoad")}</span>;
+  // Selection spans several accounts: no board list is correct for all of it, so there
+  // is nothing safe to offer. Say why rather than showing a disabled control with no
+  // explanation — the fix (select Pins from one account) is not guessable otherwise.
+  if (status === "mixed") return (
+    <span data-testid="board-mixed-accounts" title={tr("studioModals.board.mixedAccounts")}
+      style={{ fontSize: 10.5, color: UI.textMuted, lineHeight: 1.4, display: "inline-block", maxWidth: dense ? 180 : "100%" }}>
+      {tr("studioModals.board.mixedAccounts")}
+    </span>
+  );
   const known = !value.id || boards.some(b => b.id === value.id);
   const recName = !value.id && recommendFor ? recommendRealBoard(boards.map(b => b.name), recommendFor) : null;
   const recBoard = recName ? boards.find(b => b.name === recName) ?? null : null;
@@ -714,6 +724,16 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   const [quickAddPinId, setQuickAddPinId] = useState<string | null>(null);
   const [productPopoverPinId, setProductPopoverPinId] = useState<string | null>(null);
   const [colW,        setColW]        = useState<Record<ColId, number>>({ ...DEFAULT_W });
+  // Which account this selection publishes through (Phase D ④). Boards belong to one
+  // account, so the picker can only offer a correct list when every selected Pin shares
+  // a target — read from the SAME source publish uses (the draft's stored target), so
+  // the boards on offer are always the boards the publish call will accept.
+  const sharedTarget = useMemo(
+    () => sharedTargetForSelection(pins.map(p => pinDraftStore.getDraft(p.pinId))),
+    [pins],
+  );
+  const mixedTargets = sharedTarget === null;
+
   // ONE shared boards data layer (same hook as Create Pins) — no bespoke fetch loop.
   // The states stay distinct: not connected ≠ reconnect ≠ API failure ≠ loaded.
   const {
@@ -722,9 +742,12 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     disconnected: boardsDisconnected,
     needsReconnect: boardsNeedReconnect,
     error: boardsErr,
-  } = usePinterestBoards();
+  } = usePinterestBoards(sharedTarget || undefined);
   const boardsStatus: BoardsState["status"] =
-    boardsLoading ? "loading"
+    // Mixed wins over every other state: with no single correct board list, "loading"
+    // or "ready" would both invite a choice that is wrong for part of the selection.
+    mixedTargets ? "mixed"
+    : boardsLoading ? "loading"
     : boardsDisconnected ? "not_connected"
     : boardsNeedReconnect ? "reconnect"
     : boardsErr ? "error"
@@ -1254,11 +1277,16 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       // double-submitting it.
       if (!beginPublish(p.pinId)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") }); continue; }
       try {
+        // Publish through the Pin's PINNED connection (PRD §14/§17): the draft's stored
+        // target, never the current default. No stored target ⇒ server default (adopted
+        // below). In the Studio context p.pinId isn't a draft id, getDraft returns null
+        // and this degrades to the pre-multi-account behaviour.
+        const targetId = readStoredTarget(pinDraftStore.getDraft(p.pinId));
         const res = await publishPin({
           boardId: effBoard(p, rowEdits).id, imageUrl: p.imageUrl,
           title: input.title || undefined, description: input.description || undefined,
           link: input.destinationUrl || undefined, altText: input.altText || undefined,
-          sourcePinId: p.pinId,
+          sourcePinId: p.pinId, connectionId: targetId || undefined,
           // p.pinId is the pinDraftStore draft id in the Weekly-Plan context (joins to a
           // draft) but NOT in the Studio context — draftId is best-effort, so a non-draft
           // id simply won't join downstream. source is the immediate batch publish.
@@ -1266,6 +1294,10 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
         });
         results.push({ pinId: p.pinId, title, status: "published", url: res.pin.url });
         publishedIds.push(p.pinId);
+        // Adopt-once: pin the connection this draft actually published through.
+        if (!targetId && res.connectionId) {
+          pinDraftStore.updateDraft(p.pinId, { targetConnectionId: res.connectionId });
+        }
       } catch (e) {
         const err = e as PinterestClientError;
         results.push({ pinId: p.pinId, title, status: "failed", message: err?.message ?? tr("studioModals.publish.publishFailed") });
@@ -1652,7 +1684,12 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       {bulk === "board" && (
         <Modal title={checkedCount === 1 ? tr("studioModals.board.setBoardForOne") : tr("studioModals.board.setBoardForMany").replace("{n}", String(checkedCount))} onClose={() => setBulk(null)}>
           <BoardSelect value={{ id: "", name: "" }} boardsState={boardsState} onChange={b => { if (b) applyBulkBoard(b); }} />
-          <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textMuted }}>{tr("studioModals.board.appliesToAll")}</p>
+          {/* "Applies to all" is only true when there is something to apply — with mixed
+              targets BoardSelect offers no board, and promising a bulk apply would
+              contradict the explanation it just gave. */}
+          {!mixedTargets && (
+            <p style={{ margin: "12px 0 0", fontSize: 10.5, color: UI.textMuted }}>{tr("studioModals.board.appliesToAll")}</p>
+          )}
         </Modal>
       )}
       {quickAddPin && (

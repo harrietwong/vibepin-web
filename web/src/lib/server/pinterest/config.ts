@@ -13,16 +13,12 @@ import { ConfigurationError } from "./errors";
 // Requested scopes — read existing public boards + create public Pins only.
 // No ads:*, catalogs:*, or *_secret scopes.
 //
-// Production requests the MINIMUM needed to publish: read the profile + boards,
-// read + write Pins. It deliberately omits boards:write because the product does
-// not create or edit Pinterest boards for real users (only the sandbox demo-board
-// helper does, and only in the sandbox environment). Sandbox keeps boards:write so
-// the demo-board helper can run during the approval flow.
 // `boards:write` is REQUIRED to create a Pin, even though the Pin write itself looks
 // like a pins-only operation: Pinterest v5 POST /pins rejects a token without it with
 // 401 code 3 "Missing: ['boards:write']" (observed against api.pinterest.com on a
-// Standard-access app). It was dropped here on the assumption that publishing only
-// needed pins:write, which silently broke every production publish.
+// Standard-access app). An earlier revision dropped it here on the assumption that
+// publishing only needed pins:write — which silently broke every production publish,
+// so do NOT "minimize" it away again.
 export const PRODUCTION_SCOPES = [
   "user_accounts:read",
   "boards:read",
