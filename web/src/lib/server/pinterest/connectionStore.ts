@@ -125,6 +125,10 @@ export type ConnectionAccount = {
   id: string | null;
   username: string | null;
   accountType: string | null;
+  /** Human-readable account name (Pinterest `business_name`), preferred for display. */
+  businessName?: string | null;
+  /** Avatar URL (Pinterest `profile_image`). */
+  avatarUrl?: string | null;
 };
 
 export type SafeStatus = {
@@ -501,7 +505,17 @@ export async function updateAccountInfo(
   if (account.id) patch.provider_account_id = account.id;
   if (account.username) {
     patch.provider_account_username = account.username;
+  }
+  // provider_account_name is the DISPLAY name. Prefer Pinterest's business_name — a
+  // username is not always human-readable (a live account here is "5522278466b6972").
+  // Only fall back to @username so the column is never empty for an identified account.
+  if (account.businessName) {
+    patch.provider_account_name = account.businessName;
+  } else if (account.username) {
     patch.provider_account_name = `@${account.username}`;
+  }
+  if (account.avatarUrl) {
+    patch.provider_account_avatar_url = account.avatarUrl;
   }
   if (account.accountType) {
     patch.metadata = { ...(existing.metadata ?? {}), accountType: account.accountType };

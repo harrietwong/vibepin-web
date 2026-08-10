@@ -18,6 +18,9 @@ export const socialPanelMessages = {
 
   // ── Card subtitle ──
   "socialPanel.card.accountConnected": "Account connected",
+  "socialPanel.card.accountMasked": "Pinterest account ••••{last4}",
+  "socialPanel.card.accountUnidentified": "Account connected",
+  "socialPanel.card.eachAccountBelow": "Each account's status is shown below",
   "socialPanel.card.connectToPublish": "Connect to publish approved content here.",
   "socialPanel.card.setupPendingComingSoon": "Connection setup pending — coming soon.",
   "socialPanel.card.accountsCountSuffix": " accounts",

@@ -197,6 +197,8 @@ export async function fetchAccountIdentity(accessToken: string): Promise<Pintere
       id: typeof data.id === "string" ? data.id : null,
       username: typeof data.username === "string" ? data.username : null,
       accountType: typeof data.account_type === "string" ? data.account_type : null,
+      businessName: typeof data.business_name === "string" && data.business_name.trim() ? data.business_name : null,
+      avatarUrl: typeof data.profile_image === "string" && data.profile_image.trim() ? data.profile_image : null,
     };
   } catch {
     return null;
@@ -219,6 +221,17 @@ export type PinterestUser = {
   id: string | null;
   username: string | null;
   accountType: string | null;
+  /**
+   * The account's human-readable name. Pinterest's /user_account returns this as
+   * `business_name`; it is what a merchant recognises. Usernames are NOT always
+   * human-readable — a real connected account here is "5522278466b6972" — so the UI
+   * prefers this and falls back to the username. Verified against the live field list:
+   * account_type, board_count, monthly_views, following_count, website_url,
+   * business_name, follower_count, profile_image, id, pin_count, username, about.
+   */
+  businessName: string | null;
+  /** Avatar URL (`profile_image`), shown next to the account when present. */
+  avatarUrl: string | null;
 };
 
 export type PinterestBoard = {
@@ -612,6 +625,8 @@ export class PinterestClient {
       id: typeof data.id === "string" ? data.id : (this.row.pinterest_user_id ?? null),
       username: typeof data.username === "string" ? data.username : null,
       accountType: typeof data.account_type === "string" ? data.account_type : null,
+      businessName: typeof data.business_name === "string" && data.business_name.trim() ? data.business_name : null,
+      avatarUrl: typeof data.profile_image === "string" && data.profile_image.trim() ? data.profile_image : null,
     };
   }
 

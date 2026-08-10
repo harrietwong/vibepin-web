@@ -57,6 +57,7 @@ import {
   SOCIAL_CONNECTIONS_CHANGED_EVENT,
   notifyConnectionsChanged,
 } from "@/lib/social/connectionsCache";
+import { accountDisplayLabel } from "@/lib/social/accountIdentity";
 import { isMultiSocialAccountsEnabled } from "@/lib/socialFeatureFlags";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -333,6 +334,11 @@ function PlatformCard({
   const meta = PLATFORMS[summary.provider];
   const chip = statusChip(summary, tr);
   const connected = summary.connected;
+  // With several accounts on one platform there is no single platform-level status to
+  // show: each account row carries its own (PRD 0809 §2). A unified "Connected" chip up
+  // here would be a claim about all of them, and would read as healthy while one account
+  // silently needed a reconnect. The header then only counts them.
+  const hasSeveralAccounts = summary.accountCount > 1;
   // ONE customer-visible state per account (PRD §6) — null for an empty platform slot.
   const accountState = platformAccountState(summary);
   // A degraded connection is the ONLY case that shows Reconnect. Derived from the
@@ -355,14 +361,18 @@ function PlatformCard({
         <PlatformIcon provider={summary.provider} size={38} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: UI.text }}>{meta.name}</p>
-            <Chip chip={chip} />
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: UI.text }}>
+              {hasSeveralAccounts ? `${meta.name} · ${summary.accountCount}${tr("socialPanel.card.accountsCountSuffix")}` : meta.name}
+            </p>
+            {!hasSeveralAccounts && <Chip chip={chip} />}
           </div>
           <p style={{ margin: "3px 0 0", fontSize: 12, color: UI.textSec }}>
             {connected
-              ? summary.accountName
-                ? `${summary.accountName}${summary.accountCount > 1 ? ` · ${summary.accountCount}${tr("socialPanel.card.accountsCountSuffix")}` : ""}`
-                : tr("socialPanel.card.accountConnected")
+              ? hasSeveralAccounts
+                ? tr("socialPanel.card.eachAccountBelow")
+                : summary.accountName
+                  ? summary.accountName
+                  : tr("socialPanel.card.accountConnected")
               : meta.liveConnect
                 ? tr("socialPanel.card.connectToPublish")
                 : tr("socialPanel.card.setupPendingComingSoon")}
@@ -1040,10 +1050,20 @@ function AccountRows({
     >
       {summary.accounts.map(account => {
         const busy = busyAccountId === account.id;
-        const label =
-          account.providerAccountUsername
-          || account.providerAccountName
-          || tr("socialPanel.card.accountConnected");
+        // Display name first, then @username, then a masked id — never a fabricated
+        // name, and never a bare "Account connected" (identical for every row once a
+        // merchant holds two accounts). See lib/social/accountIdentity.
+        const label = accountDisplayLabel(
+          {
+            displayName: account.providerAccountName,
+            username: account.providerAccountUsername,
+            accountId: account.providerAccountId,
+          },
+          {
+            maskedTemplate: (last4) => tr("socialPanel.card.accountMasked").replace("{last4}", last4),
+            unidentifiedLabel: tr("socialPanel.card.accountUnidentified"),
+          },
+        );
         return (
           <div
             key={account.id}
@@ -1414,10 +1434,17 @@ export function SocialAccountsPanel() {
     }
     setBusyAccountId(account.id);
     try {
-      const label =
-        account.providerAccountUsername
-        || account.providerAccountName
-        || tr("socialPanel.card.accountConnected");
+      const label = accountDisplayLabel(
+        {
+          displayName: account.providerAccountName,
+          username: account.providerAccountUsername,
+          accountId: account.providerAccountId,
+        },
+        {
+          maskedTemplate: (last4) => tr("socialPanel.card.accountMasked").replace("{last4}", last4),
+          unidentifiedLabel: tr("socialPanel.card.accountUnidentified"),
+        },
+      );
       const scheduledCount = await getScheduledCountForConnection(account.id);
       if (scheduledCount > 0) {
         // The dialog owns the next step. Release the row so the card isn't frozen
