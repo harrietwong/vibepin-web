@@ -29,7 +29,7 @@ import { getPinDisplayContext } from "@/lib/studio/pinDisplayContext";
 import { PinTitleSection } from "@/components/pin-details/PinTitleSection";
 import { PinAltTextSection } from "@/components/pin-details/PinAltTextSection";
 import { toast } from "sonner";
-import type { PinDraft } from "@/lib/pinDraftStore";
+import type { PinDraft, SocialPostRef } from "@/lib/pinDraftStore";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
 import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
@@ -606,6 +606,8 @@ export function PinDetailsModal({
     setPinterestConnected(false);
     setPinterestAccount(null);
     setSocialDestinations([]);
+    // Scoped to one publish: never carry another Pin's live posts into this one.
+    setLiveSocialPosts(null);
     socialFannedOutRef.current = false;
     setIsRedirectingToPinterest(false);
     void fetchPinterestDefaultBoard()
@@ -878,7 +880,12 @@ export function PinDetailsModal({
           // rather than appending a stale duplicate.
           const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
             .filter(p => !refs.some(r2 => r2.provider === p.provider));
-          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: [...existing, ...refs] });
+          const merged = [...existing, ...refs];
+          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: merged });
+          // Mirror into local state: the `draft` prop will not re-render for a
+          // store write, and this drawer is usually still open when the fan-out
+          // lands.
+          setLiveSocialPosts(merged);
         }
         if (published.length) {
           const withLink = published.find(d => d.externalPostUrl);
@@ -905,12 +912,20 @@ export function PinDetailsModal({
           });
         }
         if (failed.length) {
+          // Reuse the publish toast id: with nothing published this REPLACES the
+          // pending spinner, which would otherwise sit there forever. When some
+          // destinations did succeed the success branch above already claimed the
+          // id, so this rides its own toast rather than overwriting the outcome.
           toast.info(
             failed[0].error ||
               `${t("pinDetails.toast.couldNotPublishPrefix")}${platformName(failed[0].provider)}${t("pinDetails.toast.couldNotPublishSuffix")}`,
+            published.length ? undefined : { id: PUBLISH_TOAST_ID },
           );
         }
       } catch {
+        // A thrown fan-out must also clear the pending spinner — Pinterest itself
+        // succeeded, so this reports the fan-out, not the publish, as the failure.
+        toast.error(t("pinDetails.error.publishFailed"), { id: PUBLISH_TOAST_ID });
         /* non-blocking — never let a fan-out error mask the Pinterest outcome */
       }
     }
@@ -966,7 +981,12 @@ export function PinDetailsModal({
           // the published view (View on Facebook) survives a reload.
           const existing = (pinDraftStore.getDraft(activeDraft.id)?.socialPosts ?? [])
             .filter(p => !refs.some(r2 => r2.provider === p.provider));
-          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: [...existing, ...refs] });
+          const merged = [...existing, ...refs];
+          pinDraftStore.updateDraft(activeDraft.id, { socialPosts: merged });
+          // Mirror into local state: the `draft` prop will not re-render for a
+          // store write, and this drawer is usually still open when the fan-out
+          // lands.
+          setLiveSocialPosts(merged);
         }
         if (published.length) {
           const withLink = published.find(d => d.externalPostUrl);
@@ -1115,15 +1135,26 @@ export function PinDetailsModal({
         publishErrorCode: undefined,
       });
       setResult({ pinUrl: res.pin.url, pinId: res.pin.id, boardName, environment: res.environment });
-      toast.success(t("pinDetails.toast.publishSuccess"), {
-        // Shared id so a following social fan-out REPLACES this line with a
-        // combined one rather than stacking a second toast for one publish.
-        id: PUBLISH_TOAST_ID,
-        action: {
-          label: t("pinDetails.viewPin"),
-          onClick: () => window.open(res.pin.url, "_blank", "noopener,noreferrer"),
-        },
-      });
+      // Shared id so a following social fan-out REPLACES this line with a
+      // combined one rather than stacking a second toast for one publish.
+      //
+      // With other channels still to go, this stays a LOADING toast rather than a
+      // success one. Instagram's publish is two-step and polls a container to
+      // FINISHED, so it lands seconds after Pinterest — announcing "published"
+      // and then silently rewriting the same toast read as two separate results
+      // for one click. A spinner that resolves is honest about the wait.
+      const hasPendingFanOut = socialDestinations.some(p => p !== "pinterest");
+      if (hasPendingFanOut) {
+        toast.loading(t("pinDetails.toast.publishSuccess"), { id: PUBLISH_TOAST_ID });
+      } else {
+        toast.success(t("pinDetails.toast.publishSuccess"), {
+          id: PUBLISH_TOAST_ID,
+          action: {
+            label: t("pinDetails.viewPin"),
+            onClick: () => window.open(res.pin.url, "_blank", "noopener,noreferrer"),
+          },
+        });
+      }
       // Fan out to the other selected channels. Extracted so the same logic can
       // also run when Pinterest FAILS (see the catch block) — those channels are
       // independent and must not be withheld because Pinterest refused.
@@ -1283,7 +1314,14 @@ export function PinDetailsModal({
   // Recorded on the draft at publish time from /api/publish/social's response, so the
   // links survive a reload. Only entries with a real permalink get a button — a
   // missing URL renders nothing rather than a dead link.
-  const socialPostRefs = (activeDraft.socialPosts ?? []).filter(p => p.postUrl?.trim());
+  // `draft` is a prop — a snapshot taken when the drawer opened. The social
+  // fan-out finishes AFTER that (Instagram especially: its publish is two-step
+  // and polls a container to FINISHED), and writes its results to the store, not
+  // to this prop. Reading only the prop meant a Facebook/Instagram post that had
+  // genuinely gone live never appeared here. `liveSocialPosts` holds whatever the
+  // fan-out recorded during this session and wins over the stale snapshot.
+  const [liveSocialPosts, setLiveSocialPosts] = useState<SocialPostRef[] | null>(null);
+  const socialPostRefs = (liveSocialPosts ?? activeDraft.socialPosts ?? []).filter(p => p.postUrl?.trim());
 
   function openScheduleEditor() {
     if (!isScheduled) {
