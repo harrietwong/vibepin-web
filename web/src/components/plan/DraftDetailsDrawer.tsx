@@ -183,6 +183,15 @@ export function PinDetailsModal({
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
   // Guards the one-shot fan-out to extra channels after a successful publish.
   const socialFannedOutRef = useRef(false);
+  // `draft` is a prop — a snapshot taken when the drawer opened. The social
+  // fan-out finishes AFTER that (Instagram especially: its publish is two-step
+  // and polls a container to FINISHED) and writes to the store, which never
+  // re-renders that prop, so results landing later were invisible here. This
+  // holds whatever the fan-out recorded during this session and wins over the
+  // stale snapshot. MUST live with the other hooks, above the `!open || !draft`
+  // early return: declared below it, the hook count changes between renders and
+  // React tears the tree down (error #310).
+  const [liveSocialPosts, setLiveSocialPosts] = useState<SocialPostRef[] | null>(null);
   // One publish = one toast. Pinterest and the social fan-out complete at
   // different moments, but the merchant clicked once; sharing a toast id lets the
   // later result replace the earlier line with a combined one.
@@ -1298,13 +1307,6 @@ export function PinDetailsModal({
   // Recorded on the draft at publish time from /api/publish/social's response, so the
   // links survive a reload. Only entries with a real permalink get a button — a
   // missing URL renders nothing rather than a dead link.
-  // `draft` is a prop — a snapshot taken when the drawer opened. The social
-  // fan-out finishes AFTER that (Instagram especially: its publish is two-step
-  // and polls a container to FINISHED), and writes its results to the store, not
-  // to this prop. Reading only the prop meant a Facebook/Instagram post that had
-  // genuinely gone live never appeared here. `liveSocialPosts` holds whatever the
-  // fan-out recorded during this session and wins over the stale snapshot.
-  const [liveSocialPosts, setLiveSocialPosts] = useState<SocialPostRef[] | null>(null);
   const socialPostRefs = (liveSocialPosts ?? activeDraft.socialPosts ?? []).filter(p => p.postUrl?.trim());
 
   function openScheduleEditor() {
