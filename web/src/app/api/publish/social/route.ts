@@ -34,7 +34,7 @@
 
 import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
-import { isSocialProvider, platformName, type SocialProvider } from "@/lib/social/platforms";
+import { isSocialProvider, platformName, PLATFORMS, type SocialProvider } from "@/lib/social/platforms";
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
@@ -160,6 +160,21 @@ export async function POST(req: Request) {
       continue;
     }
 
+    // Publishing capability is not the same thing as being connected (PRD 0809 §4).
+    // A platform we cannot publish to is refused HERE, before any provider call, so the
+    // provider's internal "not yet wired for this platform" string can never reach a
+    // customer as a publish result. The client already hides these rows; this is the
+    // server-side half, for stale selections and direct API calls.
+    if (!PLATFORMS[provider].liveConnect) {
+      outcomes.push({
+        provider,
+        status: "skipped",
+        socialConnectionId: null,
+        error: `Publishing to ${platformName(provider)} is coming soon.`,
+      });
+      continue;
+    }
+
     const requestedId =
       typeof (raw as { socialConnectionId?: unknown }).socialConnectionId === "string"
         ? ((raw as { socialConnectionId: string }).socialConnectionId)
@@ -197,7 +212,13 @@ export async function POST(req: Request) {
         externalPostId: result.externalPostId ?? null,
         externalPostUrl: result.externalPostUrl ?? null,
         accountName: result.accountName ?? null,
-        error: result.ok ? null : result.error ?? "Publishing is not available for this platform yet.",
+        // Never surface a provider's internal wording. `not_implemented` means we have
+        // no publish path for this platform — say that in the customer's terms.
+        error: result.ok
+          ? null
+          : result.status === "not_implemented"
+            ? `Publishing to ${platformName(provider)} is coming soon.`
+            : result.error ?? "Publishing is not available for this platform yet.",
       });
     } catch (err) {
       outcomes.push({
