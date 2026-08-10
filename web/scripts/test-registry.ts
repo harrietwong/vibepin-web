@@ -54,6 +54,7 @@ export const CORE: string[] = [
   "test-account-quota",
   "test-account-identity",
   "test-publish-capability",
+  "test-publish-results",
   "test-per-account-disconnect",
   // Facebook Page OAuth
   "test-facebook-pages",
@@ -194,6 +195,7 @@ export const PLAN: string[] = [
   "test-weekly-plan-multiselect",
   "test-weekly-plan-hover-images",
   "test-my-products-weekly-plan-ui",
+  "test-plan-card-status",
   "test-plan-tile-interactions",
   "test-plan-pinterest-connect",
   "test-plan-account-filter",

@@ -54,6 +54,7 @@ import * as pinDraftStore   from "@/lib/pinDraftStore";
 import type { PinDraft }    from "@/lib/pinDraftStore";
 import { PinHoverTarget, type PinHoverPreviewActions, setPinPreviewSuspended } from "@/components/plan/PinHoverPreview";
 import { PinThumbnail } from "@/components/plan/PinThumbnail";
+import { PlanCardStatusBadge } from "@/components/plan/PlanCardStatusBadge";
 import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, buildDaySlotRows, dayHasFreeFutureSlot, classifyDayDropBlock, formatScheduleDateLabel } from "@/lib/smartSchedule";
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "@/lib/planCalendar";
 import { filterUnscheduledPinIds } from "@/lib/smartScheduleActions";
@@ -1084,6 +1085,11 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
             {ev.plannedTime}
           </span>
         )}
+        {/* Lifecycle status — Scheduled / Published / Failed were indistinguishable on
+            the calendar (image + time only). Bottom-right, opposite the time, so it
+            never collides with the account badge or the selection checkbox. Icon and
+            text ride along with the colour (PRD 0809 §8). */}
+        <PlanCardStatusBadge draft={draft} style={{ position: "absolute", bottom: 4, right: 4 }} />
         {/* Which account this Pin publishes to — only with 2+ connected accounts.
             Sits right of the selection checkbox (top-left) and clear of the remove
             button (top-right); the other two corners are the time and the lock. */}
@@ -1382,6 +1388,9 @@ function MonthDayCell({ date, inMonth, isToday, drafts, dnd, onOpenDay, select, 
                 }}
               >
                 <PinThumbnail src={toProxyUrl(ev.imageUrl)} loading="lazy" />
+                {/* 34x48 leaves no room for a label — icon only, with the status name on
+                    title/aria-label so it is still announced and hoverable. */}
+                <PlanCardStatusBadge draft={d} compact style={{ position: "absolute", bottom: 2, right: 2 }} />
                 {select && <SelectCheckbox testId="month-select-box" selected={selected} visible={checkVisible} onToggle={() => select.toggle(ev.draftId)} />}
               </PinHoverTarget>
             </div>
