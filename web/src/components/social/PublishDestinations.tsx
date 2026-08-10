@@ -193,6 +193,7 @@ export function PublishDestinations({
   connectingPinterest,
   pinterestConnected,
   pinterestAccountName,
+  renderDetails,
 }: {
   selected: SocialProvider[];
   onSelectedChange: (next: SocialProvider[]) => void;
@@ -200,6 +201,12 @@ export function PublishDestinations({
   connectingPinterest?: boolean;
   pinterestConnected?: boolean;
   pinterestAccountName?: string | null;
+  /**
+   * Extra controls that belong to ONE destination (PRD 0809 §3) — Pinterest's account
+   * and board. Rendered directly under that platform's row so a Board list is never
+   * separated from the account it belongs to, and only while the row is selected.
+   */
+  renderDetails?: (provider: SocialProvider, selected: boolean) => React.ReactNode;
 }) {
   // Non-Pinterest platforms start their own OAuth from the row. returnTo carries
   // the CURRENT url (path + query), so the callback lands the merchant back on
@@ -370,6 +377,17 @@ export function PublishDestinations({
               checkingConnection={!hasLoaded && !summary.connected}
             />
           );
+        }).map((node, i) => {
+          const provider = SOCIAL_PROVIDERS[i];
+          const summary = effectiveSummaries.find(s2 => s2.provider === provider);
+          const isSelected = selected.includes(provider);
+          const details = node && summary?.connected && isSelected ? renderDetails?.(provider, isSelected) : null;
+          return details ? (
+            <div key={`${provider}-group`}>
+              {node}
+              <div style={{ padding: "0 10px 10px 46px", borderTop: "none" }}>{details}</div>
+            </div>
+          ) : node;
         })}
       </div>
 

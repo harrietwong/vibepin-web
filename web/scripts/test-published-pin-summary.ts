@@ -131,9 +131,18 @@ test("published: entire editable form is hidden (AI copy, inputs, boards, produc
   const gate = drawer.indexOf("{!isPosted && (<>");
   assert(gate >= 0, "editable form must be gated on !isPosted");
   const block = drawer.slice(gate, drawer.indexOf("</>)}", gate));
-  for (const marker of ["PinAICopyPanel", 'data-testid="draft-edit-description"', 'data-testid="draft-edit-destination-url"', "PinBoardSection", "PinProductLinksSection", "PinAltTextSection"]) {
+  for (const marker of ["PinAICopyPanel", 'data-testid="draft-edit-description"', 'data-testid="draft-edit-destination-url"', "PinProductLinksSection", "PinAltTextSection"]) {
     assert(block.includes(marker), `${marker} must live inside the !isPosted editable-form gate`);
   }
+  // The board moved into the Publish destinations block (PRD 0809 §3 — a Board list only
+  // means something inside the account it belongs to). What matters for THIS test is the
+  // guarantee, not the location: it must still be hidden once the Pin is published. Its
+  // new home is gated on `!isPosted && !result`, which is stricter than the gate above,
+  // so assert that rather than a position the layout is allowed to change.
+  const destGate = drawer.indexOf("{!isPosted && !result && (");
+  assert(destGate >= 0, "publish destinations must stay gated on !isPosted && !result");
+  const boardAt = drawer.indexOf("PinBoardSection", drawer.indexOf('data-testid="pinterest-destination-details"'));
+  assert(boardAt > destGate, "PinBoardSection must sit inside the !isPosted && !result destinations block");
 });
 
 test("published: read-only content preview uses plain text, never inputs", () => {
