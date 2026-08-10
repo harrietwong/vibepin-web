@@ -311,9 +311,14 @@ async function readPinterestConnections(uid: string): Promise<SocialConnection[]
       provider: "pinterest",
       workspaceId: null,
       providerAccountId: safe.account?.id ?? null,
-      providerAccountName: safe.account?.username ? `@${safe.account.username}` : null,
+      // Use the STORED display name (Pinterest business_name) — synthesising "@username"
+      // here discarded it, so a merchant saw "@5522278466b6972" for an account actually
+      // called "harrietstudio". Fall back to @username only when there is no display name.
+      providerAccountName:
+        safe.account?.businessName
+        || (safe.account?.username ? `@${safe.account.username}` : null),
       providerAccountUsername: safe.account?.username ?? null,
-      providerAccountAvatarUrl: null,
+      providerAccountAvatarUrl: safe.account?.avatarUrl ?? null,
       connectionStatus: status,
       authProvider: "official",
       externalConnectionId: null,

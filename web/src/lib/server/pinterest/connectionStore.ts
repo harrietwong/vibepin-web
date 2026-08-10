@@ -44,6 +44,9 @@ export type PinterestConnectionRow = {
   provider: string;
   pinterest_user_id: string | null;
   pinterest_username: string | null;
+  /** Display name + avatar, carried so client projections need not re-derive them. */
+  pinterest_display_name?: string | null;
+  pinterest_avatar_url?: string | null;
   pinterest_account_type: string | null;
   access_token_encrypted: string | null;
   refresh_token_encrypted: string | null;
@@ -67,6 +70,9 @@ type StorageRow = {
   provider: string;
   provider_account_id: string | null;
   provider_account_username: string | null;
+  /** Display name — read so the token path can tell "blank" from "already set". */
+  provider_account_name: string | null;
+  provider_account_avatar_url: string | null;
   connection_status: string | null;
   scopes: string[] | null;
   access_token_encrypted: string | null;
@@ -82,7 +88,8 @@ type StorageRow = {
 };
 
 const STORAGE_COLUMNS =
-  "id, user_id, provider, provider_account_id, provider_account_username, connection_status, " +
+  "id, user_id, provider, provider_account_id, provider_account_username, provider_account_name, " +
+  "provider_account_avatar_url, connection_status, " +
   "scopes, access_token_encrypted, refresh_token_encrypted, token_expires_at, " +
   "refresh_token_expires_at, needs_reconnect, token_version, disconnected_at, metadata, " +
   "created_at, updated_at";
@@ -100,6 +107,8 @@ function rowFromStorage(row: StorageRow): PinterestConnectionRow {
     provider: row.provider,
     pinterest_user_id: row.provider_account_id,
     pinterest_username: row.provider_account_username,
+    pinterest_display_name: row.provider_account_name,
+    pinterest_avatar_url: row.provider_account_avatar_url,
     pinterest_account_type: readAccountType(row.metadata),
     access_token_encrypted: row.access_token_encrypted,
     refresh_token_encrypted: row.refresh_token_encrypted,
@@ -242,7 +251,14 @@ export async function upsertConnection(
     if (input.pinterestUserId) patch.provider_account_id = input.pinterestUserId;
     if (input.pinterestUsername) {
       patch.provider_account_username = input.pinterestUsername;
-      patch.provider_account_name = `@${input.pinterestUsername}`;
+      // Only seed the display name from the username when we have nothing better.
+      // The token path has no business_name to offer, so overwriting unconditionally
+      // would downgrade a real display name ("harrietstudio") back to "@5522278466b6972"
+      // on every token refresh — the same erase-on-write mistake described above, one
+      // field over. updateAccountInfo owns the display name; this only fills a blank.
+      if (!target.provider_account_name) {
+        patch.provider_account_name = `@${input.pinterestUsername}`;
+      }
     }
     if (input.pinterestAccountType) {
       patch.metadata = { ...(target.metadata ?? {}), accountType: input.pinterestAccountType };
@@ -596,6 +612,8 @@ export function toSafeStatus(row: PinterestConnectionRow | null): SafeStatus {
       id: row.pinterest_user_id,
       username: row.pinterest_username,
       accountType: row.pinterest_account_type,
+      businessName: row.pinterest_display_name ?? null,
+      avatarUrl: row.pinterest_avatar_url ?? null,
     },
     scopes: row.scopes ?? [],
     needsReconnect: row.needs_reconnect || !hasRequiredPinterestScopes(row.scopes),
