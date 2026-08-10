@@ -89,4 +89,19 @@ test("the drawer no longer renders a single Pinterest-only view link", () => {
   assert(drawer.includes("PublishResults"), "the drawer must render per-destination results");
 });
 
+console.log("\n=== rendered once, never twice ===");
+test("a published Pin shows Publish results ONCE, not once per render site", () => {
+  // Two blocks render the same component: the published summary (for an already-posted
+  // Pin) and the just-published block (for a publish completing in this drawer). Both
+  // were live for a posted Pin, so the whole block appeared twice. Each was correct on
+  // its own, which is exactly why the unit tests did not catch it.
+  const drawer = readFileSync("src/components/plan/DraftDetailsDrawer.tsx", "utf8");
+  const sites = [...drawer.matchAll(/<PublishResults/g)];
+  assert.equal(sites.length, 2, "expected exactly the summary + just-published render sites");
+  const i = drawer.indexOf("const rows = publishResultRows({");
+  const before = drawer.slice(Math.max(0, i - 400), i);
+  assert(before.includes("{!isPosted && (() => {"),
+    "the just-published block must be gated on !isPosted so a posted Pin renders it once");
+});
+
 console.log(`\nPublish results: ${passed} passed, 0 failed\n`);
