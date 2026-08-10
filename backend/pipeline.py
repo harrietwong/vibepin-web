@@ -396,15 +396,39 @@ async def replenish_crawl_queue_if_needed(
     dry_run:         bool = False,
     limit_interests: int = 0,
     min_pending:     int = 20,
+    limit_keywords:  int = 0,
 ) -> int:
     """
-    When pending crawl_queue count is below min_pending, run trends replenish.
-    Returns pending count after replenish attempt.
-    """
-    from crawl_queue_ops import count_pending_items, MIN_PENDING_FOR_CRAWL, fetch_due_crawl_items  # type: ignore
+    Top the crawl queue up to what THIS run will consume.
 
-    threshold = min_pending or MIN_PENDING_FOR_CRAWL
+    The threshold is max(min_pending, limit_keywords) — not a fixed 20. A run
+    that eats limit_keywords per pass must find at least that many due keywords,
+    otherwise the queue drains a little every day while every run still reports
+    success. That is exactly what happened 2026-08-08..10 (due pending
+    147 -> 150 -> 53 -> 0 against a 150/run consumption, replenish never fired
+    because 53 >= 20).
+
+    Returns due-pending count after the replenish attempt.
+    """
+    from crawl_queue_ops import (  # type: ignore
+        count_pending_items,
+        MIN_PENDING_FOR_CRAWL,
+        resolve_replenish_target,
+    )
+
+    threshold = resolve_replenish_target(
+        limit_keywords=limit_keywords,
+        min_pending=min_pending or MIN_PENDING_FOR_CRAWL,
+    )
     pending = count_pending_items(_db_select, due_only=True)
+    # Always log the decision. The 2026-08-10 run produced no replenish line at
+    # all, which read as "replenish never ran" when in fact it ran and silently
+    # returned at the gate. A skipped replenish must be as visible as a taken one.
+    _info(
+        f"[crawl] replenish check: pending_due={pending} target={threshold} "
+        f"(limit_keywords={limit_keywords or 'unbounded'}) -> "
+        f"{'skip (sufficient)' if pending >= threshold else 'replenish'}"
+    )
     if pending >= threshold:
         return pending
 
@@ -412,11 +436,16 @@ async def replenish_crawl_queue_if_needed(
     try:
         from db import update_where  # type: ignore
         from crawl_queue_ops import requeue_stale_completed_items  # type: ignore
-        requeued = requeue_stale_completed_items(_db_select, update_where)
+        # min_due_pending tracks the run's own appetite so the cheap stale-requeue
+        # path can satisfy a full run and the expensive trends run stays unused.
+        requeued = requeue_stale_completed_items(
+            _db_select, update_where, min_due_pending=threshold,
+        )
         if requeued:
             _info(f"Requeued {requeued} stale completed crawl_queue keywords")
         pending = count_pending_items(_db_select, due_only=True)
         if pending >= threshold:
+            _info(f"[crawl] replenish satisfied by stale requeue: pending_due={pending} target={threshold}")
             return pending
     except Exception as exc:
         _warn(f"Stale requeue failed: {exc}")
@@ -544,6 +573,9 @@ async def step_crawl(
             proxy=proxy,
             dry_run=dry_run,
             limit_interests=limit_interests,
+            # Replenish must know what this run will eat, or it tops the queue
+            # up to a floor far below one run's consumption and the queue drains.
+            limit_keywords=limit_keywords,
         )
         if pending == 0:
             _warn("No pending crawl items after trends replenish. Exiting cleanly.")
@@ -576,6 +608,15 @@ async def step_crawl(
 
     concurrency = clamp_concurrency(concurrency)
     _info(f"[crawl] selected_keywords={len(items)} pending_due_before={pending_due_before}")
+    # A run that silently processes 53 of a requested 150 looks identical in the
+    # summary to a healthy run (ok=53 failed=0 exit 0). Say it out loud instead:
+    # under-filling the batch is the queue-starvation symptom, not a success.
+    if limit_keywords and len(items) < limit_keywords:
+        _warn(
+            f"[crawl] queue short: running {len(items)} of {limit_keywords} requested keywords "
+            f"(due pending exhausted). Queue cannot sustain this run size — "
+            f"replenish could not close the gap."
+        )
     _info(f"{len(items)} due keywords to process (concurrency={concurrency})")
 
     sem = asyncio.Semaphore(concurrency)
