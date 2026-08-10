@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   useState,
@@ -23,12 +23,12 @@ const VIEWPORT_MARGIN = 10;
 const GAP = 10;
 const Z_INDEX = 85;
 
-// 鈹€鈹€ Modal-suspend signal 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// ── Modal-suspend signal ─────────────────────────────────────────────────────
 // Every PinHoverTarget on the page manages its OWN open/close state locally (there
 // is no shared "hoveredPin" state to clear) and renders its card into a portal at
-// Z_INDEX 85 鈥?ABOVE the Edit-Pin modal's dialog (z81)/backdrop (z80). Clicking
+// Z_INDEX 85 —ABOVE the Edit-Pin modal's dialog (z81)/backdrop (z80). Clicking
 // "Edit details" *inside* an already-open hover card opens that modal, but the click
-// doesn't move the pointer, so no mouseleave ever fires to close the card 鈥?it stays
+// doesn't move the pointer, so no mouseleave ever fires to close the card —it stays
 // open, now stuck floating on top of the modal that just opened.
 //
 // Rather than thread an "isModalOpen" prop through every intermediate component
@@ -130,7 +130,7 @@ function formatScheduledHeader(draft: PinDraft): string {
   if (!time) return datePart;
   const tzParts = new Date().toLocaleTimeString("en-US", { timeZoneName: "short" }).split(" ");
   const tz = tzParts.length > 1 ? tzParts[tzParts.length - 1] : "";
-  return `${datePart} 路 ${time}${tz ? ` ${tz}` : ""}`;
+  return `${datePart} · ${time}${tz ? ` ${tz}` : ""}`;
 }
 
 function boardLabel(draft: PinDraft): string {
@@ -149,7 +149,7 @@ function useFinePointer(): boolean {
   useEffect(() => {
     // Use the `any-*` variants, not `(hover: hover) and (pointer: fine)`.
     // The non-`any` queries test only the PRIMARY pointer, so a touch-capable
-    // Windows laptop reports `false` even with a mouse/trackpad attached 鈥?
+    // Windows laptop reports `false` even with a mouse/trackpad attached —
     // which silently disabled hover and forced click-to-open. `any-hover` /
     // `any-pointer` are true when ANY attached device can hover with a fine
     // pointer, which is exactly when we want the hover preview.
@@ -230,7 +230,7 @@ function PinHoverPreviewCard({
           {scheduled ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, fontWeight: 600, color: "#A78BFA" }}>
-                <span aria-hidden="true">馃搮</span>
+                <span aria-hidden="true">📆</span>
                 <span style={{ lineHeight: 1.35, flex: 1 }}>{formatScheduledHeader(draft)}</span>
                 {actions.onToggleLock && (
                   <button
@@ -245,7 +245,7 @@ function PinHoverPreviewCard({
                       fontSize: 12, color: draft.scheduleLocked ? "#A78BFA" : "#64748B",
                     }}
                   >
-                    {draft.scheduleLocked ? "馃敀" : "馃敁"}
+                    {draft.scheduleLocked ? "🔒" : "🔓"}
                   </button>
                 )}
               </div>
@@ -306,13 +306,13 @@ function PinHoverPreviewCard({
               }}
               title={url}
             >
-              馃敆 {domain}
+              🔗 {domain}
             </p>
           )}
 
           {hasBoard && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, color: "#CBD5E1" }}>
-              <span aria-hidden="true">馃搶</span>
+              <span aria-hidden="true">📌</span>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {boardLabel(draft)}
               </span>
@@ -504,7 +504,7 @@ export function PinHoverTarget({
   }, []);
 
   // A Pin edit modal just opened (very likely via THIS card's own "Edit details" /
-  // "Reschedule" / "Publish now" button 鈥?a click that never moves the pointer, so no
+  // "Reschedule" / "Publish now" button —a click that never moves the pointer, so no
   // mouseleave would otherwise fire): force-close immediately rather than leaving a
   // stale preview floating above the modal.
   useEffect(() => {
@@ -512,7 +512,7 @@ export function PinHoverTarget({
     clearTimers();
     hoveringTrigger.current = false;
     hoveringCard.current = false;
-    // Synchronizing local open state to the external modal-open signal 鈥?the
+    // Synchronizing local open state to the external modal-open signal —the
     // deliberate, established pattern used elsewhere in this codebase for exactly
     // this kind of external-state reconciliation.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -608,7 +608,7 @@ export function PinHoverTarget({
   // (preview only opened on click). A genuine hover event is sufficient. Touch is
   // excluded so a tap doesn't pop the preview (touch users tap to open details).
   // Warm the cache for the large preview image the instant the pointer enters the tile,
-  // so by the time the card opens (~200ms later) the image is decoded 鈥?no white flash.
+  // so by the time the card opens (~200ms later) the image is decoded —no white flash.
   const warmPreview = useCallback(() => {
     if (disabled) return;
     preloadImage(toThumbUrl(draft.imageUrl));
