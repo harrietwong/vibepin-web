@@ -1845,62 +1845,6 @@ export function PinDetailsModal({
             )}
           </div>
 
-          {/* Boards — preceded by the account this Pin publishes to, because a Board
-              list only means anything inside one account. The picker renders nothing at
-              all for users with 0 or 1 connected accounts (everyone today). */}
-          <div style={fieldBlock}>
-            <PublishDestinationPicker
-              connections={pinterestConnections}
-              selectedConnectionId={selectedConnection?.id ?? null}
-              disabled={publishing}
-              onChange={handleTargetChange}
-            />
-            {/* PRD §17: the Pin is pinned to an account that is no longer connected. It
-                keeps pointing there — reconnect, don't re-route. */}
-            {!!targetConnectionId && !selectedConnection && (
-              <p data-testid="draft-target-disconnected" style={{ margin: "0 0 8px", fontSize: 11, color: UI.warning }}>
-                {t("studioBoard.target.reconnectToRetry").replace(
-                  "{account}",
-                  targetAccountHandle(targetedDraft) || t("studioBoard.target.thisAccount"),
-                )}
-              </p>
-            )}
-            <div style={{ marginBottom: 6 }}><span style={lbl}>{t("pinDetails.boards")}</span></div>
-            <PinBoardSection
-              boardId={boardId}
-              boards={boards}
-              boardsStatus={boardsStatus}
-              boardError={boardError}
-              disabled={publishing}
-              selectRef={boardSelectRef}
-              onChange={(id) => {
-                setBoardId(id);
-                const board = boards.find(b => b.id === id);
-                if (board) {
-                  const value = { boardId: board.id, boardName: board.name };
-                  setDefaultBoard(value);
-                  void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
-                }
-                // Board interplay: a custom time chosen but not yet confirmed via
-                // [Schedule]/[Update schedule] is cleared on board change — the user
-                // must re-pick a time for the newly selected board.
-                if (customTimeChosen && !customTimeConfirmed) {
-                  setPlannedDate("");
-                  setScheduledTime("");
-                  setCustomTimeChosen(false);
-                  setCustomTimeBoardChangedNotice(true);
-                }
-                markDirty();
-              }}
-              onClearBoardError={() => setBoardError(false)}
-              onRetryLoad={() => void loadBoards(boardId, effectiveConnectionRef.current || undefined)}
-              onNeedsConnect={goToPinterestOAuth}
-              sandboxMode={sandboxMode}
-              creatingDemoBoard={creatingBoard}
-              onCreateDemoBoard={handleCreateDemoBoard}
-            />
-          </div>
-
           {/* Product (optional) — single lightweight row */}
           <div style={fieldBlock} data-testid="draft-products-section">
             <PinProductLinksSection
@@ -1936,6 +1880,62 @@ export function PinDetailsModal({
                 connectingPinterest={isRedirectingToPinterest}
                 pinterestConnected={pinterestConnected}
                 pinterestAccountName={pinterestAccount?.username ?? null}
+                renderDetails={(provider) =>
+                  provider === "pinterest" ? (
+                    <div data-testid="pinterest-destination-details">
+      <PublishDestinationPicker
+                    connections={pinterestConnections}
+                    selectedConnectionId={selectedConnection?.id ?? null}
+                    disabled={publishing}
+                    onChange={handleTargetChange}
+                  />
+                  {/* PRD §17: the Pin is pinned to an account that is no longer connected. It
+                      keeps pointing there — reconnect, don't re-route. */}
+                  {!!targetConnectionId && !selectedConnection && (
+                    <p data-testid="draft-target-disconnected" style={{ margin: "0 0 8px", fontSize: 11, color: UI.warning }}>
+                      {t("studioBoard.target.reconnectToRetry").replace(
+                        "{account}",
+                        targetAccountHandle(targetedDraft) || t("studioBoard.target.thisAccount"),
+                      )}
+                    </p>
+                  )}
+                  <div style={{ marginBottom: 6 }}><span style={lbl}>{t("pinDetails.boards")}</span></div>
+                  <PinBoardSection
+                    boardId={boardId}
+                    boards={boards}
+                    boardsStatus={boardsStatus}
+                    boardError={boardError}
+                    disabled={publishing}
+                    selectRef={boardSelectRef}
+                    onChange={(id) => {
+                      setBoardId(id);
+                      const board = boards.find(b => b.id === id);
+                      if (board) {
+                        const value = { boardId: board.id, boardName: board.name };
+                        setDefaultBoard(value);
+                        void savePinterestDefaultBoard(value, effectiveConnectionRef.current || undefined).catch(() => {});
+                      }
+                      // Board interplay: a custom time chosen but not yet confirmed via
+                      // [Schedule]/[Update schedule] is cleared on board change — the user
+                      // must re-pick a time for the newly selected board.
+                      if (customTimeChosen && !customTimeConfirmed) {
+                        setPlannedDate("");
+                        setScheduledTime("");
+                        setCustomTimeChosen(false);
+                        setCustomTimeBoardChangedNotice(true);
+                      }
+                      markDirty();
+                    }}
+                    onClearBoardError={() => setBoardError(false)}
+                    onRetryLoad={() => void loadBoards(boardId, effectiveConnectionRef.current || undefined)}
+                    onNeedsConnect={goToPinterestOAuth}
+                    sandboxMode={sandboxMode}
+                    creatingDemoBoard={creatingBoard}
+                    onCreateDemoBoard={handleCreateDemoBoard}
+                  />
+                    </div>
+                  ) : null
+                }
               />
             </div>
           )}
