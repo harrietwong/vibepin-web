@@ -53,6 +53,7 @@ export const CORE: string[] = [
   "test-admin-today-i18n",
   "test-account-quota",
   "test-account-identity",
+  "test-publish-capability",
   "test-per-account-disconnect",
   // Facebook Page OAuth
   "test-facebook-pages",
