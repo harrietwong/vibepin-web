@@ -1968,7 +1968,10 @@ export function PinDetailsModal({
               which platforms actually received the post. Assembled from what is already
               persisted (draft fields + socialPosts), so it survives a refresh — a toast is
               immediate feedback, never the record. */}
-          {(() => {
+          {/* Only for a publish that JUST completed in this drawer. An already-posted Pin
+              is served by the published summary above, which renders the same component —
+              without this guard both fired and the merchant saw Publish results twice. */}
+          {!isPosted && (() => {
             const rows = publishResultRows({
               postedAt: result ? new Date().toISOString() : activeDraft.postedAt,
               remotePinId: result?.pinId ?? activeDraft.remotePinId,

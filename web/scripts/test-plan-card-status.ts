@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { planCardStatus, planCardStatusStyle } from "../src/lib/plan/cardStatus";
+import { isActionablePublishFailure } from "../src/lib/studio/pinLifecycle";
 
 let passed = 0;
 function test(name: string, fn: () => void) { fn(); passed++; console.log(`  OK  ${name}`); }
@@ -18,10 +19,8 @@ test("a scheduled Pin is scheduled", () => {
 test("a posted Pin is published", () => {
   assert.equal(planCardStatus({ postedAt: "2026-08-10T02:00:00Z" }), "published");
 });
-test("an explicit publish error is failed", () => {
-  assert.equal(planCardStatus({ publishError: "board unavailable" }), "failed");
-  assert.equal(planCardStatus({ failureType: "publish" }), "failed");
-  assert.equal(planCardStatus({ generationStatus: "failed" }), "failed");
+test("a real publish failure is failed", () => {
+  assert.equal(planCardStatus({ failureType: "publish", publishError: "board unavailable" }), "failed");
 });
 
 console.log("\n=== the two orderings that would misreport ===");
@@ -32,12 +31,38 @@ test("not-yet-published is never inferred as failed", () => {
   // The normal scheduled state has no postedAt. Treating that as failure would paint
   // every upcoming Pin as broken.
   assert.equal(planCardStatus({ postedAt: null, publishError: null }), "scheduled");
-  assert.equal(planCardStatus({ generationStatus: "ready" }), "scheduled");
+});
+
+console.log("\n=== the badge and the banner must agree ===");
+test("the card uses the SAME failure rule as the 'N Pins failed' banner", () => {
+  // A first version defined failure here independently (any of publishError /
+  // failureType / a "fail" generation status). The calendar then showed far more Failed
+  // badges than the banner counted, because the banner requires all three conditions.
+  const cases = [
+    { failureType: "publish", publishError: "boom" },                       // actionable
+    { failureType: "publish", publishError: "boom", archivedAt: "2026-01-01" }, // archived ⇒ off the board
+    { failureType: "generation", publishError: "boom" },                    // not a PUBLISH failure
+    { failureType: "publish" },                                             // no error text
+    {},
+  ];
+  for (const c of cases) {
+    const banner = isActionablePublishFailure(c as never);
+    const badge = planCardStatus(c as never) === "failed";
+    assert.equal(badge, banner, `badge and banner disagree for ${JSON.stringify(c)}`);
+  }
+});
+
+test("an archived failure is not badged — it is off the board", () => {
+  assert.equal(planCardStatus({ failureType: "publish", publishError: "boom", archivedAt: "2026-01-01" }), "scheduled");
+});
+
+test("a GENERATION failure is not a publish failure", () => {
+  assert.equal(planCardStatus({ failureType: "generation", publishError: "boom" }), "scheduled");
 });
 
 console.log("\n=== colour is never the only signal ===");
 test("every status carries an icon AND a text label, not just an accent", () => {
-  for (const draft of [{}, { postedAt: "x" }, { publishError: "e" }]) {
+  for (const draft of [{}, { postedAt: "x" }, { failureType: "publish", publishError: "e" }]) {
     const s = planCardStatusStyle(draft);
     assert(s.icon, `${s.status} must have an icon`);
     assert(s.labelKey, `${s.status} must have a text label`);
@@ -45,10 +70,10 @@ test("every status carries an icon AND a text label, not just an accent", () => 
   }
 });
 test("the three statuses are visually distinct from each other", () => {
-  const accents = new Set(["scheduled", "published", "failed"].map((_, i) =>
-    planCardStatusStyle([{}, { postedAt: "x" }, { publishError: "e" }][i]).accent));
+  const trio = [{}, { postedAt: "x" }, { failureType: "publish", publishError: "e" }];
+  const accents = new Set(trio.map(d => planCardStatusStyle(d as never).accent));
   assert.equal(accents.size, 3, "each status needs its own accent");
-  const icons = new Set([{}, { postedAt: "x" }, { publishError: "e" }].map(d => planCardStatusStyle(d).icon));
+  const icons = new Set(trio.map(d => planCardStatusStyle(d as never).icon));
   assert.equal(icons.size, 3, "each status needs its own icon — colour alone is not enough");
 });
 
