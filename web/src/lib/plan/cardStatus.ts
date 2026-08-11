@@ -1,3 +1,6 @@
+import { isActionablePublishFailure } from "@/lib/studio/pinLifecycle";
+import type { PinDraft } from "@/lib/pinDraftStore";
+
 /**
  * One lifecycle status per Plan card (PRD 0809 §8).
  *
@@ -29,25 +32,32 @@ type StatusInput = {
   postedAt?: string | null;
   publishError?: string | null;
   failureType?: string | null;
-  generationStatus?: string | null;
+  archivedAt?: string | null;
 };
 
 /**
  * Resolve a draft to exactly one status.
  *
- * Order matters: published wins over a stale error (a Pin that failed, was retried and
- * then succeeded is Published, not Failed), and failure is only claimed on an explicit
- * signal — never inferred from "not published yet", which is the normal scheduled state.
+ * Failure is delegated to `isActionablePublishFailure` — the SAME predicate behind the
+ * "N Pins failed to publish" banner and the Failed tab. Defining it again here produced a
+ * looser rule (any one of publishError / failureType / a "fail" generation status), so the
+ * calendar painted Failed badges on Pins the banner did not count: generation failures and
+ * archived drafts. A card and the banner above it disagreeing about the same week is worse
+ * than either being wrong alone, so there is one definition, not two.
+ *
+ * Published still wins over a stale error: a Pin that failed, was retried and then
+ * succeeded is Published, not Failed.
  */
 export function planCardStatus(draft: StatusInput | null | undefined): PlanCardStatus {
   if (!draft) return "scheduled";
   if (draft.postedAt) return "published";
-  const failed =
-    !!draft.publishError
-    || draft.failureType === "publish"
-    || draft.failureType === "generation"
-    || /fail/i.test(draft.generationStatus ?? "");
-  return failed ? "failed" : "scheduled";
+  return isActionablePublishFailure({
+    failureType: draft.failureType as PinDraft["failureType"],
+    publishError: draft.publishError ?? undefined,
+    archivedAt: draft.archivedAt ?? undefined,
+  })
+    ? "failed"
+    : "scheduled";
 }
 
 const STYLES: Record<PlanCardStatus, Omit<PlanCardStatusStyle, "status">> = {
