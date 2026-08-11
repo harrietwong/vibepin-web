@@ -45,8 +45,27 @@
 */15 * * * * curl -fsS -m 60 -H "Authorization: Bearer $CRON_SECRET" https://<prod-domain>/api/cron/expire-reservations >> /var/log/vibepin-expire.log 2>&1
 ```
 
-**频率怎么定**：取决于预留 TTL。扫描间隔应当**明显小于 TTL**，否则用户会看到额度
-"卡住不还"。15 分钟是个安全默认；enforce 上线前若把 TTL 调短，这里要同步调。
+**频率怎么定 —— 预留 TTL 实测是 30 分钟。**
+
+TTL 不在任何 TypeScript 里，而是 SQL 的兜底默认：`usage_reserve` 第 149 行
+`v_expires := coalesce(p_expires_at, now() + interval '30 minutes')`。
+`meterGeneration` / `meterTextGeneration` / `usage_reserve_generation_job`
+**都没有传 `p_expires_at`**，所以图片、文案、job 三条路径**一律走这 30 分钟**。
+
+由此定频率：
+
+| 扫描间隔 | 用户实际等待（TTL + 最坏等待） | 评价 |
+|---|---|---|
+| `*/15` | 30–45 分钟 | **推荐**，最坏多等半个周期 |
+| `*/5` | 30–35 分钟 | 更快，但 6 倍调用换 10 分钟，收益递减 |
+| `0 * * * *`（每小时） | 30–90 分钟 | 太慢，enforce 后用户会明显感到额度卡住 |
+
+**注意扫描间隔并不能让额度更早回来**——预留在 `expires_at` 之前本来就不该被清（活儿可能还在跑）。
+间隔只决定**过期之后还要多久才被扫到**。所以真正的下限是 TTL 本身，`*/15`
+把附加延迟控制在半个周期以内，已经足够。
+
+⚠️ **如果以后有调用方开始显式传 `p_expires_at`（比如给长任务更长的 TTL），
+这里要重新算**；反过来若把 TTL 调短到 15 分钟以下，扫描间隔必须同步调小。
 
 单次最多扫 `SWEEP_LIMIT = 100` 条，`maxDuration = 60`，稳定跑在超时内；
 吞吐靠**调用频率**而不是加大批量。
