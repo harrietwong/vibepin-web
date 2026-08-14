@@ -116,6 +116,90 @@ class TestAcceptance(unittest.TestCase):
             self.assertFalse(ok, f"{url} should be rejected")
 
 
+class TestAmazonFamilyDomains(unittest.TestCase):
+    """Regression: Amazon's non-US marketplaces were rejected as `non_commerce_domain`.
+
+    Measured 2026-08-14 on the live code: amazon.in/dp/<ASIN> returned
+    accept_link -> (False, 'non_commerce_domain') while is_product_detail_url on the
+    SAME url returned (True, 'pdp_path'). The whitelist (built from DOMAIN_RULES,
+    which carries only the exact string "amazon.com") ran before the PDP gate and
+    killed genuine ASIN pages. The fix widens the whitelist to the TLD family only —
+    the PDP gate is unchanged and still decides what actually gets in.
+    """
+
+    def test_non_us_amazon_product_pages_accepted(self):
+        for url in (
+            "https://www.amazon.in/dp/B0H6Q163VC",
+            "https://www.amazon.co.uk/dp/B0CPSBDQBR",
+            "https://www.amazon.de/dp/B09QFWX7RL",
+            "https://www.amazon.com.br/dp/B09QFWX7RL",
+            "https://www.amazon.co.jp/gp/product/B09QFWX7RL",
+            "https://www.amazon.in/Cotton-Kurta-Set/dp/B0H6Q163VC?keywords=kurta",
+        ):
+            ok, reason = accept_link(url)
+            self.assertTrue(ok, f"{url} is a real ASIN page and must be accepted ({reason})")
+
+    def test_amazon_com_behaviour_unchanged(self):
+        # The US domain keeps its original reason string: it is still matched by the
+        # DOMAIN_RULES-derived set, not by the new family branch.
+        ok, reason = accept_link("https://www.amazon.com/dp/B0CPSBDQBR")
+        self.assertTrue(ok)
+        self.assertEqual(reason, "known_commerce_domain")
+
+    def test_non_us_amazon_non_product_pages_still_rejected(self):
+        # Widening the whitelist must NOT widen what counts as a product. Each of
+        # these is on an accepted domain and is still refused — by the PDP gate or by
+        # the path rules; the test asserts rejection, not which layer catches it.
+        for url in (
+            "https://www.amazon.in/",
+            "https://www.amazon.in/gp/help/customer/display.html",
+            "https://www.amazon.in/shop/someinfluencer/list/ABC123",
+            "https://www.amazon.co.uk/shop/aninfluencer/list/XYZ789",
+            "https://www.amazon.in/s?k=cotton+kurta",
+            "https://www.amazon.de/b?node=12345",
+            "https://www.amazon.in/dp/short",  # not a 10-char ASIN
+        ):
+            ok, reason = accept_link(url)
+            self.assertFalse(ok, f"{url} is not a product detail page (got accept, reason={reason})")
+
+    def test_amazon_lookalike_and_shortener_still_rejected(self):
+        # The family pattern anchors the TLD on purpose: a hostname that merely
+        # CONTAINS "amazon." is not an Amazon marketplace, and amzn.to carries no
+        # product evidence at all.
+        for url in (
+            "https://amazon.fakeshop.com/dp/B0H6Q163VC",
+            "https://notamazon.com/dp/B0H6Q163VC",
+            "https://amzn.to/3xyzabc",
+        ):
+            ok, reason = accept_link(url)
+            self.assertFalse(ok, f"{url} must not be whitelisted as Amazon (reason={reason})")
+
+    def test_family_helper_matches_only_marketplaces(self):
+        for domain in ("amazon.in", "amazon.de", "amazon.co.uk", "amazon.com.br",
+                       "www.amazon.fr", "amazon.com"):
+            self.assertTrue(ph.is_amazon_family_domain(domain), domain)
+        for domain in ("amazon.fakeshop.com", "amzn.to", "notamazon.com", "etsy.com", ""):
+            self.assertFalse(ph.is_amazon_family_domain(domain), domain)
+
+    def test_domain_rules_untouched(self):
+        # DOMAIN_RULES also drives platform classification, so the fix must not have
+        # added marketplace rows to it. Exactly one amazon entry, the original.
+        from classify_product_signals import DOMAIN_RULES  # type: ignore
+        amazon_rules = [r for r in DOMAIN_RULES if "amazon" in r[0]]
+        self.assertEqual([r[0] for r in amazon_rules], ["amazon.com"])
+
+    def test_other_non_commerce_domains_still_rejected(self):
+        # The bulk of `non_commerce_domain` is correct and must stay rejected.
+        for url in (
+            "https://glamideashub.com/13-cute-march-nail-ideas/",
+            "https://maytheray.com/yellow-nail-designs/",
+            "https://www.pinterest.com/shuffles/abc123",
+            "https://linktr.ee/someinfluencer",
+        ):
+            ok, reason = accept_link(url)
+            self.assertFalse(ok, f"{url} must stay rejected (reason={reason})")
+
+
 class TestPdpGateGuard(unittest.TestCase):
     """CI door: fail loudly if the domain-aware PDP gate is missing or if accept_link
     is silently swapped back to the OLD gateless version (the stash-incident casualty

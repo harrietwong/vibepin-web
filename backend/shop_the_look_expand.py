@@ -1122,6 +1122,73 @@ def _rejected_candidates_report(rejected: list[dict]) -> dict:
     }
 
 
+def _build_funnel(report: dict) -> dict:
+    """One block that shows the whole raw → written chain, without re-deriving it.
+
+    Why this exists: the numbers were already all in the report, but split across
+    `aggregate` (an end-of-run recount over every candidate) and `incrementalWrite`
+    (per-batch accumulation by the writer). Reading the run therefore meant hand-
+    stitching five fields from two places, and on 2026-08-14 that stitching produced
+    a wrong conclusion about where supply was being lost. Every value here is COPIED
+    from an existing field — nothing is recomputed — and each step names its source
+    field so this block can never become a second, disagreeing source of truth.
+
+    The two halves are genuinely two accounting systems (see `stepsNote`): the
+    writer's own dedup/preflight counters are cumulative across batches, while the
+    aggregate is a single pass at the end. They are presented in sequence, not
+    reconciled arithmetically.
+    """
+    aggregate = report.get("aggregate") or {}
+    incremental = report.get("incrementalWrite")
+    preflight = report.get("preflight") or {}
+    has_writer = isinstance(incremental, dict) and incremental.get("enabled")
+
+    def step(label: str, value: Any, source: str, **extra: Any) -> dict:
+        return {"step": label, "count": value, "source": source, **extra}
+
+    rejected_by_reason = dict(aggregate.get("rejectedByReason") or {})
+    steps = [
+        step("rawCandidates", aggregate.get("rawProductCandidates"),
+             "aggregate.rawProductCandidates"),
+        step("rejected", aggregate.get("rejectedProducts"),
+             "aggregate.rejectedProducts", byReason=rejected_by_reason),
+        step("acceptedBeforeDedup", aggregate.get("acceptedBeforeDedup"),
+             "aggregate.acceptedBeforeDedup"),
+        step("duplicatesSkippedWithinRun", aggregate.get("duplicatesSkipped"),
+             "aggregate.duplicatesSkipped"),
+        step("uniqueAccepted", aggregate.get("uniqueAcceptedProducts"),
+             "aggregate.uniqueAcceptedProducts"),
+    ]
+    if has_writer:
+        steps.extend([
+            step("alreadyInDb", incremental.get("rowsSkippedAlreadyInDb"),
+                 "incrementalWrite.rowsSkippedAlreadyInDb"),
+            step("crossBatchDuplicates", incremental.get("rowsSkippedCrossBatchDuplicate"),
+                 "incrementalWrite.rowsSkippedCrossBatchDuplicate"),
+            step("written", incremental.get("rowsInserted"),
+                 "incrementalWrite.rowsInserted"),
+        ])
+    else:
+        steps.extend([
+            step("alreadyInDb", preflight.get("projectedSkipExistingCount"),
+                 "preflight.projectedSkipExistingCount", projection=True),
+            step("written", preflight.get("projectedInsertCount"),
+                 "preflight.projectedInsertCount", projection=True),
+        ])
+    return {
+        "mode": report.get("mode"),
+        "steps": steps,
+        "stepsNote": (
+            "Every count is copied verbatim from the field named in `source`; "
+            "nothing here is recomputed. Steps 1-5 come from the end-of-run "
+            "aggregate pass, the write steps from the incremental writer's "
+            "per-batch counters (dry-run substitutes preflight PROJECTIONS, "
+            "marked projection:true). The two halves are separate accounting "
+            "systems and are not expected to reconcile by subtraction."
+        ),
+    }
+
+
 def _build_report(
     per_pin: list[dict],
     selection: dict,
@@ -1570,7 +1637,17 @@ class _IncrementalWriter:
             self.flush(reason="batch_full")
 
     def flush(self, *, reason: str) -> None:
-        """Write whatever is queued. Safe to call with an empty queue."""
+        """Write whatever is queued. Safe to call with an empty queue.
+
+        Log-field naming: the two lines below report `batchCandidates=`, NOT
+        `candidates=`. The per-pin progress line ("12/100 pin=… candidates=15")
+        already owns `candidates=`, and a batch line covers batchSizePins pins —
+        so the batch number is a SUM of the per-pin numbers it follows. When both
+        lines used the same field name, a grep-and-sum over the log counted every
+        candidate exactly twice (a real 2026-08-14 misdiagnosis: 1077 + 1077 =
+        2154). Distinct names make that addition impossible to perform by
+        accident.
+        """
         if not self.enabled:
             return
         pins_in_batch = self._pins_since_flush
@@ -1596,7 +1673,7 @@ class _IncrementalWriter:
             self.empty_flushes += 1
             print(
                 f"[product-supply-expand] write batch {batch_no} "
-                f"({reason}): pins={pins_in_batch} candidates={len(pending)} "
+                f"({reason}): pins={pins_in_batch} batchCandidates={len(pending)} "
                 f"newRows=0 written=0 cumulativeWritten={self.totals['inserted']}"
                 f"{evidence_note}",
                 flush=True,
@@ -1640,7 +1717,7 @@ class _IncrementalWriter:
 
         print(
             f"[product-supply-expand] write batch {batch_no} ({reason}): "
-            f"pins={pins_in_batch} candidates={len(pending)} newRows={len(rows)} "
+            f"pins={pins_in_batch} batchCandidates={len(pending)} newRows={len(rows)} "
             f"written={int(outcome.get('inserted') or 0)} "
             f"duplicates={int(outcome.get('duplicates') or 0)} "
             f"failed={int(outcome.get('failed') or 0)} "
@@ -2213,6 +2290,10 @@ async def run_shop_the_look_expand(
                 "Use writeOutcome/incrementalWrite for what this run actually "
                 "wrote; these projections are not a pre-write plan in apply mode."
             )
+
+    # Built LAST, after incrementalWrite is attached: the write half of the funnel
+    # does not exist until the apply block above has run.
+    report["funnel"] = _build_funnel(report)
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")

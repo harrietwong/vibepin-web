@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import re
 import ssl
 import sys
 import tempfile
@@ -1840,6 +1841,158 @@ class TestIncrementalBatchWrite(unittest.TestCase):
         self.assertEqual(report["writes"]["pin_products"], 0)
         self.assertNotIn("incrementalWrite", report)
         self.assertNotIn("_insertCandidates", report)
+
+
+class TestFunnelBlockAndLogFieldNames(unittest.TestCase):
+    """Two observability defects fixed together on 2026-08-14, both of which had
+    already caused a wrong read of a real run:
+
+    a) the per-pin progress line and the per-BATCH write line both printed
+       `candidates=`, so summing the field over a log double-counted every
+       candidate (1077 + 1077 = 2154 was read as the run's raw total);
+    b) the raw -> written chain was split between report['aggregate'] and
+       report['incrementalWrite'], so it had to be hand-stitched to be read at all.
+
+    report['funnel'] is a VIEW: every count is copied from an existing field, so a
+    disagreement between funnel and source is a bug by construction.
+    """
+
+    def _real_report(self, *, pin_results, batch_size):
+        """Produce a genuine report via the same harness the batching tests use,
+        capturing stdout so the log lines can be asserted on."""
+        from contextlib import ExitStack, redirect_stdout
+        import io
+
+        buffer = io.StringIO()
+        with ExitStack() as stack:
+            with redirect_stdout(buffer):
+                report, apply_mock = TestIncrementalBatchWrite._run(
+                    TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice"),
+                    stack, pin_results=pin_results, batch_size=batch_size,
+                )
+        return report, buffer.getvalue()
+
+    def _pins(self, n, prefix):
+        helper = TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice")
+        return [helper._pin_result(f"{prefix}{i}", [f"https://www.etsy.com/listing/{7000 + i}/x"])
+                for i in range(n)]
+
+    def test_funnel_counts_match_their_named_sources(self):
+        report, _out = self._real_report(pin_results=self._pins(6, "fn"), batch_size=3)
+        funnel = report["funnel"]
+        self.assertEqual(funnel["mode"], "apply")
+        by_step = {s["step"]: s for s in funnel["steps"]}
+        # The chain is present end to end, in order.
+        self.assertEqual(
+            [s["step"] for s in funnel["steps"]],
+            ["rawCandidates", "rejected", "acceptedBeforeDedup",
+             "duplicatesSkippedWithinRun", "uniqueAccepted", "alreadyInDb",
+             "crossBatchDuplicates", "written"],
+        )
+        # Every count equals the field it names — resolved by walking the report.
+        for entry in funnel["steps"]:
+            block, key = entry["source"].split(".", 1)
+            self.assertEqual(
+                entry["count"], report[block][key],
+                f"funnel step {entry['step']} disagrees with {entry['source']}",
+            )
+        # Sanity on the run itself: 6 clean candidates, all written.
+        self.assertEqual(by_step["rawCandidates"]["count"], 6)
+        self.assertEqual(by_step["uniqueAccepted"]["count"], 6)
+        self.assertEqual(by_step["written"]["count"], 6)
+        self.assertEqual(by_step["rejected"]["count"], 0)
+        self.assertIn("byReason", by_step["rejected"])
+
+    def test_funnel_rejection_detail_matches_aggregate(self):
+        """A rejected candidate must show up in the funnel's rejection detail with
+        the same breakdown the aggregate carries — no second count."""
+        helper = TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice")
+        pins = [
+            helper._pin_result("rj0", ["https://www.etsy.com/listing/8001/x"]),
+            helper._pin_result("rj1", ["https://someblog.example/best-nail-ideas/"]),
+        ]
+        report, _out = self._real_report(pin_results=pins, batch_size=2)
+        by_step = {s["step"]: s for s in report["funnel"]["steps"]}
+        self.assertEqual(by_step["rejected"]["count"], report["aggregate"]["rejectedProducts"])
+        self.assertEqual(by_step["rejected"]["byReason"],
+                         report["aggregate"]["rejectedByReason"])
+        self.assertEqual(by_step["rejected"]["byReason"].get("non_commerce_domain"), 1)
+        self.assertEqual(by_step["written"]["count"], 1)
+
+    def test_funnel_in_dry_run_uses_labelled_projections(self):
+        """Dry-run has no incrementalWrite block; the write steps fall back to the
+        preflight PROJECTIONS and say so, rather than silently reporting 0 written."""
+        import asyncio
+        from contextlib import ExitStack
+
+        pins = self._pins(4, "dr")
+        sources = [{"pin_id": r["source"]["pin_id"], "category": "home-decor",
+                    "save_count": 100} for r in pins]
+        queue = list(pins)
+
+        async def fake_extract(page, source, state):
+            return queue.pop(0)
+
+        with ExitStack() as stack:
+            helper = TestV28PreflightRunsBeforeCrawl()
+            helper._patch_common(stack, sources=sources)
+            helper._install_fake_playwright(stack)
+            stack.enter_context(patch.object(stl, "_check_v28_schema", return_value=(True, [])))
+            stack.enter_context(patch.object(stl, "_extract_source_pin", fake_extract))
+            stack.enter_context(patch.object(stl, "select_many", return_value=[]))
+            stack.enter_context(patch.object(stl, "_apply_rows", return_value=0))
+            report = asyncio.run(stl.run_shop_the_look_expand(
+                limit=4, category_mix={"home-decor": 4}, apply=False,
+            ))
+
+        funnel = report["funnel"]
+        self.assertEqual(funnel["mode"], "dry-run")
+        by_step = {s["step"]: s for s in funnel["steps"]}
+        self.assertNotIn("crossBatchDuplicates", by_step)
+        for name in ("alreadyInDb", "written"):
+            self.assertTrue(by_step[name].get("projection"),
+                            f"{name} must be labelled as a projection in dry-run")
+            block, key = by_step[name]["source"].split(".", 1)
+            self.assertEqual(by_step[name]["count"], report[block][key])
+
+    def test_batch_log_field_cannot_be_summed_with_the_per_pin_field(self):
+        """The two line kinds must not share a field name. Historically both said
+        `candidates=`; grep-and-sum then counted every candidate twice."""
+        report, out = self._real_report(pin_results=self._pins(4, "lg"), batch_size=2)
+        per_pin_lines = [ln for ln in out.splitlines() if " pin=" in ln]
+        batch_lines = [ln for ln in out.splitlines() if "write batch" in ln]
+        self.assertTrue(per_pin_lines, "expected per-pin progress lines")
+        self.assertTrue(batch_lines, "expected write batch lines")
+        # Per-pin lines keep the original field, unchanged.
+        for line in per_pin_lines:
+            self.assertRegex(line, r"(?<![A-Za-z])candidates=\d+")
+        # Batch lines use the distinct name and never the bare one.
+        for line in batch_lines:
+            self.assertIn("batchCandidates=", line)
+            self.assertNotRegex(line, r"(?<![A-Za-z])candidates=")
+        # And the totals really do differ in the way that caused the misread:
+        # 4 per-pin lines of 1 candidate each vs 2 batch lines of 2 each.
+        per_pin_total = sum(int(m) for line in per_pin_lines
+                            for m in re.findall(r"(?<![A-Za-z])candidates=(\d+)", line))
+        batch_total = sum(int(m) for line in batch_lines
+                          for m in re.findall(r"batchCandidates=(\d+)", line))
+        self.assertEqual(per_pin_total, 4)
+        self.assertEqual(batch_total, 4)
+        self.assertEqual(report["aggregate"]["rawProductCandidates"], 4)
+
+    def test_empty_batch_log_line_also_renamed(self):
+        """The nothing-to-write branch prints its own line; it must not reintroduce
+        the ambiguous field name."""
+        helper = TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice")
+        pins = [helper._pin_result(f"eb{i}", ["https://someblog.example/nail-ideas/"])
+                for i in range(2)]
+        _report, out = self._real_report(pin_results=pins, batch_size=2)
+        batch_lines = [ln for ln in out.splitlines() if "write batch" in ln]
+        self.assertTrue(any("newRows=0" in ln for ln in batch_lines),
+                        f"expected an empty-batch line, got {batch_lines}")
+        for line in batch_lines:
+            self.assertIn("batchCandidates=", line)
+            self.assertNotRegex(line, r"(?<![A-Za-z])candidates=")
 
 
 class TestWriteBatchSizeConfig(unittest.TestCase):
