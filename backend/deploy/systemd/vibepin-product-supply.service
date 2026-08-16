@@ -30,7 +30,14 @@ EnvironmentFile=-/opt/vibepin/backend/.env
 # Non-secret runtime config. Default mode is the SAFE no-op preflight.
 Environment=VIBEPIN_CLOUD_MODE=preflight
 Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
-Environment=VIBEPIN_TIMEOUT_SECONDS=2400
+# 3600 (was 2400). Measured pace on the authenticated VPS run is ~53 s/pin, so a
+# 50-pin run needs ~44 min — at 2400 s the runner tree-killed the 2026-08-06
+# 23:02 run at pin 45/50. The writer is now incremental (flushes every
+# STL_WRITE_BATCH_SIZE pins), so a kill no longer loses everything; this raise
+# is the second half of the fix: let a normal 50-pin run actually finish.
+Environment=VIBEPIN_TIMEOUT_SECONDS=3600
+# Flush scraped products to pin_products every N source pins (default 10).
+Environment=STL_WRITE_BATCH_SIZE=10
 
 ExecStart=/opt/vibepin/backend/scripts/cloud_run_product_supply.sh
 
@@ -39,7 +46,12 @@ ExecStart=/opt/vibepin/backend/scripts/cloud_run_product_supply.sh
 # SIGKILLs the whole service cgroup — every child (runner, run_worker, Playwright/
 # chromium) dies; defence-in-depth against orphans. Type=oneshot ignores RuntimeMaxSec,
 # so TimeoutStartSec is the correct bound here.
-TimeoutStartSec=3000
+#
+# MUST stay > VIBEPIN_TIMEOUT_SECONDS. Raised 3000 -> 4200 alongside the 2400 ->
+# 3600 runner timeout: at 3000 systemd would kill first, which inverts the
+# intended order (the runner's own tree-kill writes a report and exits cleanly;
+# a systemd SIGKILL does not). 4200 keeps the same ~600 s headroom as before.
+TimeoutStartSec=4200
 TimeoutStopSec=60
 KillMode=control-group
 

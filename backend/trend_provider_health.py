@@ -96,6 +96,13 @@ async def probe_official_v5(region: str = "US") -> dict[str, Any]:
         url=res.url,
     )
     entry["usableSeedCount"] = usable
+    # Label-only, deliberately no retry: this probe fires immediately after the
+    # run has spent the v5 rate-limit window, so retrying would add calls to an
+    # already-throttled window for no decision value — _compute_blocker no longer
+    # treats a throttled probe as proof of unavailability.
+    entry["transient"] = _probe_transient(entry)
+    if entry["transient"] and res.http_status == 429:
+        entry["transientKind"] = "rate_limited"
     return entry
 
 
@@ -166,10 +173,112 @@ def _select_primary(health: dict[str, Any]) -> str:
     return "none"
 
 
-def _compute_blocker(health: dict[str, Any]) -> tuple[bool, str | None]:
+# ── Probe vs. actual run ──────────────────────────────────────────────────────
+# The health probe is a *separate* HTTP call (limit=5) fired AFTER the real fetch
+# loop has already run. It therefore says nothing about what the job actually got
+# — and worse, it is systematically self-defeating: the more interests the run
+# successfully pulled from v5, the more of the rate-limit window it consumed, so
+# the more likely the trailing probe eats an HTTP 429.
+#
+# That is exactly the 2026-08-10 01:04Z failure: the run pulled 1932 official_v5
+# keywords across 23 interests (Layer results: v5=1932 L1=0 L2=0 L3=0, ZERO L3),
+# 53 of which survived filters — and then the probe got 429, so _select_primary
+# fell through to "l3_typeahead" and the job died claiming "only L3 typeahead
+# available — estimated data". No L3 seed ever existed in that run.
+#
+# The red line (RL1/RL2: never pass estimated L3 data off as authoritative
+# Pinterest trends) is preserved by inverting what the decision is grounded in:
+# blocker is now decided by what the run ACTUALLY produced when that is known,
+# and only falls back to the probe when actual results are unavailable
+# (e.g. the standalone `--job trend-provider-health` invocation).
+
+
+def summarize_actual_run(
+    *,
+    provider_run_summary: dict[str, Any] | None = None,
+    authoritative_scored: int = 0,
+    source_counts: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Condense what a trends run actually fetched into the shape _compute_blocker reads.
+
+    `authoritative_scored` is the POST-FILTER count of official-layer keywords
+    (official_v5/L1/L2) — deliberately preferred over the raw fetch count, because
+    the red line is about what gets persisted, not about what was downloaded and
+    then discarded.
+    """
+    prs = provider_run_summary or {}
+    counts = source_counts or {}
+    official_fetched = (
+        int(prs.get("official_v5_count", 0) or 0)
+        + int(prs.get("l1_count", 0) or 0)
+        + int(prs.get("l2_count", 0) or 0)
+    )
+    return {
+        "officialSeedsScored": int(authoritative_scored or 0),
+        "officialSeedsFetched": official_fetched,
+        "l3SeedsScored": int(counts.get("L3", 0) or 0),
+        "l3SeedsFetched": int(prs.get("l3_count", 0) or 0),
+        "primaryProvider": prs.get("primary_provider"),
+        "accessDenied": bool(prs.get("blocker")),
+        "accessDeniedReason": prs.get("blocker_reason"),
+        "v5Status": prs.get("v5_status") or {},
+    }
+
+
+def _probe_transient(v5: dict[str, Any]) -> bool:
+    """True when the probe failed for a reason that does NOT prove loss of access.
+
+    Aligns with pinterest_trends_v5_provider's existing taxonomy rather than
+    inventing a parallel one: that module maps 401/403 to
+    `unavailable_auth_or_access` (permanent) and everything else — 429, 5xx,
+    timeouts — to `http_error`. A 404 on the v5 endpoint is treated as permanent
+    here because a missing endpoint is not something that retries fix.
+    """
+    if not v5.get("enabled"):
+        return False
+    if v5.get("status") == "unavailable_auth_or_access":
+        return False
+    if v5.get("httpStatus") == 404:
+        return False
+    return v5.get("status") == "http_error"
+
+
+def _compute_blocker(
+    health: dict[str, Any],
+    actual_run: dict[str, Any] | None = None,
+) -> tuple[bool, str | None]:
     v5 = health.get("official_v5") or {}
     l1 = health.get("internal_l1") or {}
     l2 = health.get("internal_l2") or {}
+
+    if actual_run:
+        # 1. The run itself was told "access denied" mid-flight (401/403 from the
+        #    real fetch, not the probe). Permanent, and authoritative — block.
+        if actual_run.get("accessDenied"):
+            reason = actual_run.get("accessDeniedReason") or "official_v5 Trends API access denied"
+            return True, f"official_v5 access denied during the run: {reason}"
+
+        official_scored = int(actual_run.get("officialSeedsScored", 0) or 0)
+        l3_scored = int(actual_run.get("l3SeedsScored", 0) or 0)
+        l3_fetched = int(actual_run.get("l3SeedsFetched", 0) or 0)
+
+        # 2. The run really did land official seeds. Whatever the trailing probe
+        #    says, this job is NOT serving estimated data — do not fail it.
+        if official_scored > 0:
+            return False, None
+
+        # 3. No official seeds survived, but L3 did. This is the case the red line
+        #    exists for — block, and say precisely that.
+        if l3_scored > 0 or l3_fetched > 0:
+            return True, (
+                f"run produced 0 official seeds and {l3_scored or l3_fetched} L3 typeahead seeds "
+                "— estimated data, not authoritative production trends"
+            )
+
+        # 4. The run produced nothing at all from any layer. That is not a
+        #    "we served estimates" problem; fall through to the probe verdict so
+        #    a genuinely dead/unauthorized provider is still caught, while a
+        #    merely rate-limited probe is not treated as proof of anything.
 
     v5_ok = v5.get("enabled") and v5.get("sampleCount", 0) > 0
     if v5_ok:
@@ -199,12 +308,34 @@ def _compute_blocker(health: dict[str, Any]) -> tuple[bool, str | None]:
         return True, "official_v5: no OAuth Bearer token configured for Trends API"
 
     if health.get("selectedPrimaryProvider") == "l3_typeahead":
+        if _probe_transient(v5):
+            # No actual-run evidence, and the probe failed for a reason that does
+            # not prove loss of access (429/5xx/timeout). Still a blocker — with
+            # no evidence of official data, serving L3 would breach the red line
+            # — but the reason must not claim official_v5 is unavailable, because
+            # a throttled limit=5 request does not establish that.
+            return True, (
+                f"probe could not reach official_v5 (transient HTTP {v5.get('httpStatus')}: "
+                f"{v5.get('error')}) and no official seeds were observed — only L3 typeahead "
+                "available, estimated data, not authoritative production trends"
+            )
         return True, "only L3 typeahead available — estimated data, not authoritative production trends"
 
     return False, None
 
 
-async def run_provider_health(*, region: str = "US") -> dict[str, Any]:
+async def run_provider_health(
+    *,
+    region: str = "US",
+    actual_run: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Probe provider availability, and — when `actual_run` is supplied — decide the
+    blocker from what the run actually produced instead of from the probe alone.
+
+    `actual_run` is the dict returned by summarize_actual_run(). Callers with no
+    run to describe (the standalone `--job trend-provider-health` diagnostic) pass
+    nothing and get the unchanged probe-only verdict.
+    """
     official_v5, internal_l1, internal_l2, l3_typeahead = await asyncio.gather(
         probe_official_v5(region),
         probe_internal_l1(region),
@@ -220,8 +351,42 @@ async def run_provider_health(*, region: str = "US") -> dict[str, Any]:
         "v5Config": audit_config(),
         "tokenSource": resolve_v5_access_token()[1],
     }
-    health["selectedPrimaryProvider"] = _select_primary(health)
-    blocker, reason = _compute_blocker(health)
+    probe_primary = _select_primary(health)
+    health["probePrimaryProvider"] = probe_primary
+    health["probeTransientFailure"] = _probe_transient(official_v5)
+    # _compute_blocker's probe-only fallback reads selectedPrimaryProvider; seed it
+    # with the probe verdict before deciding, then overwrite below with the source
+    # that actually fed the run.
+    health["selectedPrimaryProvider"] = probe_primary
+
+    if actual_run:
+        health["actualRun"] = dict(actual_run)
+
+    blocker, reason = _compute_blocker(health, actual_run)
+
+    # selectedPrimaryProvider must name the source that actually fed the run, not
+    # the one the trailing probe happened to reach. Reporting "l3_typeahead" for a
+    # run whose every seed came from official_v5 (2026-08-10) is affirmatively
+    # misleading about data provenance.
+    selected = probe_primary
+    decision_basis = "probe"
+    if actual_run:
+        if actual_run.get("primaryProvider"):
+            selected = actual_run["primaryProvider"]
+        decision_basis = "actual_run"
+        if (
+            int(actual_run.get("officialSeedsScored", 0) or 0) > 0
+            and probe_primary != selected
+        ):
+            health["probeOverride"] = (
+                f"probe selected {probe_primary!r} (official_v5 status="
+                f"{official_v5.get('status')} HTTP {official_v5.get('httpStatus')}), but the run "
+                f"produced {actual_run['officialSeedsScored']} official seeds via "
+                f"{selected!r} — probe verdict discarded"
+            )
+
+    health["selectedPrimaryProvider"] = selected
+    health["blockerDecisionBasis"] = decision_basis
     health["blocker"] = blocker
     health["blockerReason"] = reason
     return health

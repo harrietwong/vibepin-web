@@ -1,5 +1,6 @@
 """Unit tests for run_worker.py job routing."""
 
+import sys
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -147,6 +148,64 @@ class TestRunWorker(unittest.IsolatedAsyncioTestCase):
                 follow = joblock.pin_products_writer_lock(job="processB")
                 self.assertTrue(follow.acquire())
                 follow.release()
+
+
+class TestUnverifiedPreconditionExitCode(unittest.TestCase):
+    """"Could not verify" must be distinguishable from "verified broken".
+
+    A transient DB outage during the schema probe used to exit 1 with the same
+    text as a genuine missing column, so no wrapper or operator could tell a
+    retryable blip from a real schema defect.
+    """
+
+    @staticmethod
+    def _raise_after_closing(exc):
+        """Stand in for asyncio.run: close the coroutine, then raise.
+
+        Closing avoids a spurious "coroutine was never awaited" warning while
+        still simulating the failure surfacing out of asyncio.run().
+        """
+        def fake_run(coro, *_a, **_k):
+            coro.close()
+            raise exc
+        return fake_run
+
+    def _run_main_with(self, exc):
+        argv = ["run_worker.py", "--job", "product-supply-expand"]
+        with patch.object(sys, "argv", argv), \
+             patch.object(run_worker.asyncio, "run", self._raise_after_closing(exc)), \
+             patch.object(run_worker.pipeline, "_err"):
+            return run_worker.main()
+
+    def test_schema_check_unavailable_exits_75(self):
+        from shop_the_look_expand import SchemaCheckUnavailable
+        code = self._run_main_with(SchemaCheckUnavailable("db unreachable"))
+        self.assertEqual(code, run_worker.EXIT_PRECONDITION_UNVERIFIED)
+        self.assertEqual(code, 75)
+
+    def test_genuine_failure_still_exits_1(self):
+        code = self._run_main_with(RuntimeError(
+            "v28 migration has not been applied — missing columns: ['seed_keyword']."))
+        self.assertEqual(code, 1)
+
+    def test_the_two_outcomes_have_different_exit_codes(self):
+        from shop_the_look_expand import SchemaCheckUnavailable
+        unverified = self._run_main_with(SchemaCheckUnavailable("db unreachable"))
+        real_defect = self._run_main_with(RuntimeError("missing columns: ['x']"))
+        self.assertNotEqual(unverified, real_defect)
+
+    def test_unverified_message_does_not_blame_the_migration(self):
+        from shop_the_look_expand import SchemaCheckUnavailable
+        argv = ["run_worker.py", "--job", "product-supply-expand"]
+        with patch.object(sys, "argv", argv), \
+             patch.object(run_worker.asyncio, "run",
+                          self._raise_after_closing(SchemaCheckUnavailable(
+                              "unable to confirm schema (database connection failed)"))), \
+             patch.object(run_worker.pipeline, "_err") as err:
+            run_worker.main()
+        logged = " ".join(str(c) for c in err.call_args_list)
+        self.assertNotIn("has not been applied", logged)
+        self.assertNotIn("migrate_v28", logged)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,15 @@
 import json
+import os
 import pathlib
+import re
+import ssl
 import sys
 import tempfile
 import types
 import unittest
 from unittest.mock import MagicMock, call, patch
+
+import httpx
 
 import shop_the_look_expand as stl
 from shop_the_look_expand import (
@@ -339,10 +344,13 @@ class TestProductIdeasVisibility(unittest.TestCase):
 
 
 class TestInsertOnlyWriteSemantics(unittest.TestCase):
-    """Verify _apply_rows uses insert_rows (ignore-duplicates), never upsert (merge-duplicates).
+    """Verify _apply_rows uses insert_rows as a PLAIN INSERT, never upsert.
 
-    These tests cover Task 1 (write call audit), Task 2 (late-conflict regression),
-    and the insert-only proof required for apply readiness.
+    Updated 2026-08-06: the old contract here asserted
+    on_conflict='normalized_product_url_hash'. That contract was the bug — v47
+    made that unique index PARTIAL, which PostgREST/Postgres cannot use as an
+    ON CONFLICT arbiter, so every real batch died with 42P10 and every scraped
+    product was discarded. The contract is now: NO conflict target at all.
     """
 
     def _make_rows(self, hashes=("h1", "h2")):
@@ -395,12 +403,19 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
 
         self.assertEqual(len(insert_calls), 1, "insert_rows must be called exactly once")
         self.assertEqual(insert_calls[0]["table"], "pin_products")
-        self.assertEqual(insert_calls[0]["on_conflict"], "normalized_product_url_hash")
+        self.assertIsNone(insert_calls[0]["on_conflict"],
+                          "plain INSERT: no conflict target may be sent")
 
-    # ── T1-B: on_conflict key is hash, never parent_pin_id/source_url ───────
+    # ── T1-B: NO conflict target — every candidate target is a PARTIAL index ──
 
-    def test_apply_rows_conflict_key_is_hash(self):
-        """on_conflict must be 'normalized_product_url_hash', not 'parent_pin_id,source_url'."""
+    def test_apply_rows_sends_no_conflict_target(self):
+        """on_conflict must be None.
+
+        Both plausible targets are PARTIAL unique indexes in production:
+          idx_pin_products_active_normalized_url_hash (normalized_product_url_hash)
+          idx_pin_products_active_parent_source_url   (parent_pin_id, source_url)
+        Naming either one yields 42P10 and destroys the entire batch.
+        """
         captured = {}
         def fake_insert(table, payload, on_conflict=None):
             captured["on_conflict"] = on_conflict
@@ -416,9 +431,7 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
             else:
                 sys.modules["db"] = old_db
 
-        self.assertEqual(captured["on_conflict"], "normalized_product_url_hash")
-        self.assertNotIn("parent_pin_id", captured.get("on_conflict", ""))
-        self.assertNotIn("source_url", captured.get("on_conflict", ""))
+        self.assertIsNone(captured["on_conflict"])
 
     # ── T1-C: db.insert_rows sends ignore-duplicates, not merge-duplicates ──
 
@@ -561,6 +574,308 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
         self.assertEqual(write_calls, [], "No write must occur for empty row list")
 
 
+class TestPartialIndexWriteRegression(unittest.TestCase):
+    """Regression for the 2026-08-06 production data-loss bug.
+
+    A real VPS run scraped 28/50 pins successfully, then lost 100% of it:
+        insert pin_products failed [400]: {"code":"42P10","message":"there is no
+        unique or exclusion constraint matching the ON CONFLICT specification"}
+
+    These tests run _apply_rows against a mocked PostgREST that behaves like
+    production: it REJECTS any on_conflict naming a partial index with 42P10,
+    and raises 23505 on a genuine duplicate. No live DB is touched.
+    """
+
+    # Production catalog: both business-key unique indexes are PARTIAL.
+    PARTIAL_INDEX_TARGETS = {
+        "normalized_product_url_hash",
+        "parent_pin_id,source_url",
+        "product_url_hash",
+    }
+
+    def _rows(self, hashes):
+        return [
+            {
+                "source_pin_id": f"p{i}",
+                "product_url": f"https://etsy.com/listing/{i}/item",
+                "product_title": f"Item {i}",
+                "image_url": "https://img/item.jpg",
+                "price": None,
+                "currency": None,
+                "normalized_product_url": f"https://etsy.com/listing/{i}/item",
+                "normalized_product_url_hash": h,
+                "platform": "etsy",
+                "domain": "etsy.com",
+                "source_category": "home-decor",
+                "source_pin_save_count": 1000,
+                "discovery_path": f"p{i}->card[0]->url",
+            }
+            for i, h in enumerate(hashes)
+        ]
+
+    def _fake_postgrest(self, existing_hashes=(), broken_hashes=()):
+        """Mock of db.insert_rows with production's constraint behaviour."""
+        existing = set(existing_hashes)
+        broken = set(broken_hashes)
+        calls = []
+
+        def fake_insert(table, payload, on_conflict=None):
+            calls.append({"count": len(payload), "on_conflict": on_conflict})
+            # Production truth: naming a partial index is a hard 42P10 failure.
+            if on_conflict in self.PARTIAL_INDEX_TARGETS:
+                raise RuntimeError(
+                    f'insert {table} failed [400]: {{"code":"42P10","message":'
+                    f'"there is no unique or exclusion constraint matching the '
+                    f'ON CONFLICT specification"}}'
+                )
+            written = []
+            for row in payload:
+                h = row.get("normalized_product_url_hash")
+                if h in broken:
+                    raise RuntimeError(
+                        f'insert {table} failed [400]: {{"code":"23514",'
+                        f'"message":"violates check constraint"}}'
+                    )
+                if h in existing:
+                    raise RuntimeError(
+                        f'insert {table} failed [409]: {{"code":"23505","message":'
+                        f'"duplicate key value violates unique constraint"}}'
+                    )
+                written.append(row)
+            return written
+
+        return fake_insert, calls
+
+    def _run_apply(self, fake_insert, rows):
+        fake_db = types.ModuleType("db")
+        fake_db.insert_rows = fake_insert
+        old_db = sys.modules.get("db")
+        sys.modules["db"] = fake_db
+        try:
+            return _apply_rows(rows)
+        finally:
+            if old_db is None:
+                sys.modules.pop("db", None)
+            else:
+                sys.modules["db"] = old_db
+
+    # ── 1. The bug itself: the write now succeeds ────────────────────────────
+
+    def test_write_succeeds_against_partial_index_postgrest(self):
+        """The exact production scenario: 28 scraped rows must LAND, not be lost."""
+        fake_insert, calls = self._fake_postgrest()
+        rows = self._rows([f"h{i}" for i in range(28)])
+
+        written = self._run_apply(fake_insert, rows)
+
+        self.assertEqual(written, 28, "all 28 scraped rows must be written")
+        self.assertEqual(len(calls), 1, "a clean batch needs exactly one INSERT")
+        self.assertIsNone(calls[0]["on_conflict"],
+                          "no conflict target may be named — 42P10 otherwise")
+
+    def test_naming_a_partial_index_would_still_fail(self):
+        """Guard the mock's fidelity: the OLD code path really does die with 42P10."""
+        fake_insert, _ = self._fake_postgrest()
+        with self.assertRaises(RuntimeError) as ctx:
+            fake_insert("pin_products", [{"x": 1}],
+                        on_conflict="normalized_product_url_hash")
+        self.assertIn("42P10", str(ctx.exception))
+
+    # ── 2. Duplicates handled without data loss and without silent swallowing ─
+
+    def test_duplicate_does_not_discard_the_other_rows(self):
+        """One late duplicate must not take the whole batch down with it."""
+        fake_insert, calls = self._fake_postgrest(existing_hashes={"h2"})
+        rows = self._rows(["h0", "h1", "h2", "h3", "h4"])
+
+        written = self._run_apply(fake_insert, rows)
+
+        self.assertEqual(written, 4, "the 4 non-duplicate rows must survive")
+        outcome = stl._LAST_WRITE_OUTCOME
+        self.assertEqual(outcome["attempted"], 5)
+        self.assertEqual(outcome["inserted"], 4)
+        self.assertEqual(outcome["duplicates"], 1)
+        self.assertEqual(outcome["failed"], 0)
+        # Batch attempt + per-row retries = accounted for, not swallowed.
+        self.assertEqual(len(calls), 6, "1 batch attempt + 5 per-row retries")
+
+    def test_every_attempted_row_is_accounted_for(self):
+        """attempted == inserted + duplicates + failed. No silent shortfall."""
+        fake_insert, _ = self._fake_postgrest(existing_hashes={"h1"},
+                                              broken_hashes={"h3"})
+        rows = self._rows(["h0", "h1", "h2", "h3"])
+
+        self._run_apply(fake_insert, rows)
+        o = stl._LAST_WRITE_OUTCOME
+        self.assertEqual(o["attempted"], o["inserted"] + o["duplicates"] + o["failed"])
+        self.assertEqual(o["duplicates"], 1)
+        self.assertEqual(o["failed"], 1)
+        self.assertTrue(o["errors"], "a non-duplicate failure must be recorded")
+        self.assertIn("23514", o["errors"][0])
+
+    # ── 3. A genuine write failure is SURFACED, never swallowed ──────────────
+
+    def test_non_duplicate_batch_error_is_raised(self):
+        """42P10 / permission / network errors must propagate, not degrade."""
+        def exploding_insert(table, payload, on_conflict=None):
+            raise RuntimeError(
+                'insert pin_products failed [400]: {"code":"42P10","message":'
+                '"there is no unique or exclusion constraint matching the '
+                'ON CONFLICT specification"}'
+            )
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_apply(exploding_insert, self._rows(["h0", "h1"]))
+        self.assertIn("42P10", str(ctx.exception))
+
+    def test_total_failure_after_duplicate_fallback_is_raised(self):
+        """If nothing lands and it was not merely duplicates, raise loudly.
+
+        This is the anti-pattern the opportunity_* tables suffered for 7 weeks:
+        a broken write quietly reporting success/zero.
+        """
+        fake_insert, _ = self._fake_postgrest(existing_hashes={"h0"},
+                                              broken_hashes={"h1", "h2"})
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_apply(fake_insert, self._rows(["h0", "h1", "h2"]))
+        msg = str(ctx.exception)
+        self.assertIn("failed for all", msg)
+        self.assertIn("23514", msg)
+
+    def test_all_duplicates_returns_zero_without_raising(self):
+        """All-duplicates is a legitimate no-op, reported honestly — not an error."""
+        fake_insert, _ = self._fake_postgrest(existing_hashes={"h0", "h1"})
+        written = self._run_apply(fake_insert, self._rows(["h0", "h1"]))
+        self.assertEqual(written, 0)
+        o = stl._LAST_WRITE_OUTCOME
+        self.assertEqual(o["duplicates"], 2)
+        self.assertEqual(o["failed"], 0)
+
+    def test_only_23505_counts_as_duplicate(self):
+        """Narrow duplicate detection: nothing else may be mistaken for a dup."""
+        self.assertTrue(stl._is_duplicate_error(RuntimeError('{"code":"23505"}')))
+        for code in ("42P10", "23514", "42501", "PGRST204"):
+            self.assertFalse(stl._is_duplicate_error(RuntimeError(f'{{"code":"{code}"}}')),
+                             f"{code} must NOT be treated as a duplicate")
+
+
+class TestLifecycleCoexistence(unittest.TestCase):
+    """A retired row must never block re-collecting its URL as a new active row.
+
+    v47 made the unique indexes partial precisely so a retired row and a new
+    active row can share a URL. The dedup preflight must honour that, otherwise
+    soft retirement silently becomes a permanent blacklist.
+    """
+
+    def _candidates(self):
+        return [
+            {"normalized_product_url_hash": "hash_retired",
+             "product_url": "https://etsy.com/listing/1/retired-item"},
+            {"normalized_product_url_hash": "hash_active",
+             "product_url": "https://etsy.com/listing/2/active-item"},
+        ]
+
+    def test_preflight_query_is_scoped_to_non_retired(self):
+        """The existence query must carry the NULL-safe not-retired filter."""
+        captured = {}
+
+        def fake_select(table, filters=None, **_kw):
+            captured["filters"] = filters
+            return []
+
+        with patch.object(stl, "select_many", side_effect=fake_select):
+            _preflight_existing(self._candidates())
+
+        filters = captured["filters"]
+        self.assertIn("or", filters, "dedup read must be lifecycle-scoped")
+        # NULL-safe form: NULL lifecycle_status means ACTIVE. A bare
+        # neq.retired would drop the entire active corpus (the NULL trap).
+        self.assertIn("lifecycle_status.is.null", filters["or"])
+        self.assertIn("lifecycle_status.neq.retired", filters["or"])
+
+    def test_retired_hash_is_recollectable(self):
+        """DB returns only the ACTIVE row (retired filtered out server-side).
+
+        The retired URL must therefore appear as an INSERT candidate, and the
+        active one as a skip.
+        """
+        def fake_select(table, filters=None, **_kw):
+            # Faithful to PostgREST: the not-retired filter excludes the
+            # retired row, so it never comes back.
+            self.assertIn("or", filters or {})
+            return [{"normalized_product_url_hash": "hash_active",
+                     "lifecycle_status": None}]
+
+        with patch.object(stl, "select_many", side_effect=fake_select):
+            result = _preflight_existing(self._candidates())
+
+        insert_hashes = [c["normalized_product_url_hash"]
+                         for c in result["insertCandidates"]]
+        self.assertIn("hash_retired", insert_hashes,
+                      "a retired row must NOT blacklist its URL")
+        self.assertNotIn("hash_active", insert_hashes,
+                         "an active row must still dedup")
+        self.assertEqual(result["projectedInsertCount"], 1)
+        self.assertEqual(result["projectedSkipExistingCount"], 1)
+        self.assertEqual(result["projectedUpdateCount"], 0)
+
+    def test_recollected_retired_url_writes_without_conflict_target(self):
+        """End-to-end: the re-collected retired URL is written by a plain INSERT.
+
+        With a conflict target this row would have died with 42P10; with a
+        merge-upsert it would have overwritten the retired evidence row.
+        """
+        fake_insert_calls = []
+
+        def fake_insert(table, payload, on_conflict=None):
+            fake_insert_calls.append(on_conflict)
+            if on_conflict is not None:
+                raise RuntimeError('{"code":"42P10"}')
+            return payload
+
+        fake_db = types.ModuleType("db")
+        fake_db.insert_rows = fake_insert
+        # No upsert attribute → any merge-upsert attempt raises AttributeError.
+        old_db = sys.modules.get("db")
+        sys.modules["db"] = fake_db
+        try:
+            written = _apply_rows([{
+                "source_pin_id": "p9",
+                "product_url": "https://etsy.com/listing/1/retired-item",
+                "product_title": "Re-collected item",
+                "normalized_product_url": "https://etsy.com/listing/1/retired-item",
+                "normalized_product_url_hash": "hash_retired",
+                "platform": "etsy", "domain": "etsy.com",
+                "source_category": "home-decor", "source_pin_save_count": 1000,
+            }])
+        finally:
+            if old_db is None:
+                sys.modules.pop("db", None)
+            else:
+                sys.modules["db"] = old_db
+
+        self.assertEqual(written, 1)
+        self.assertEqual(fake_insert_calls, [None])
+
+
+class TestGotoTimeoutConfig(unittest.TestCase):
+    """STL_GOTO_TIMEOUT_MS is configurable; default preserves prior behaviour."""
+
+    def test_default_is_the_previous_hardcoded_value(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(stl.STL_GOTO_TIMEOUT_ENV, None)
+            self.assertEqual(stl._stl_goto_timeout_ms(), 15_000)
+
+    def test_env_override_is_honoured(self):
+        with patch.dict(os.environ, {stl.STL_GOTO_TIMEOUT_ENV: "45000"}):
+            self.assertEqual(stl._stl_goto_timeout_ms(), 45_000)
+
+    def test_invalid_or_nonpositive_falls_back_to_default(self):
+        for bad in ("abc", "0", "-1", "   "):
+            with patch.dict(os.environ, {stl.STL_GOTO_TIMEOUT_ENV: bad}):
+                self.assertEqual(stl._stl_goto_timeout_ms(), 15_000,
+                                 f"{bad!r} must fall back, never disable the timeout")
+
+
 class TestV28SchemaPreflight(unittest.TestCase):
     """Verify _check_v28_schema() and the apply-path fail-closed behaviour."""
 
@@ -630,6 +945,135 @@ class TestV28SchemaPreflight(unittest.TestCase):
         }
         self.assertIn("noteIndexNotChecked", v28_status)
         self.assertTrue(v28_status["noteIndexNotChecked"])
+
+
+class TestV28SchemaNetworkFailureNotMisreported(unittest.TestCase):
+    """A probe that never got an answer must NOT be reported as a missing column.
+
+    Regression guard for the real incident: after a 50-pin crawl, db._request
+    exhausted its retries and re-raised httpx.ReadTimeout / httpx.ConnectError.
+    Those are NOT RuntimeError, so they fell through to a bare `except Exception`
+    that appended the column to `missing`. The worker then told the operator
+    "v28 migration has not been applied — missing columns: [...]" and exited 1,
+    for four columns that verifiably exist in production.
+    """
+
+    # Every transport failure db._request can re-raise after exhausting retries.
+    TRANSPORT_ERRORS = (
+        httpx.ReadTimeout("timed out"),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
+        httpx.ReadError("peer reset"),
+        httpx.WriteError("broken pipe"),
+        httpx.PoolTimeout("pool exhausted"),
+        httpx.RemoteProtocolError("server disconnected"),
+        ssl.SSLError("handshake failure"),
+        OSError("network unreachable"),
+    )
+
+    def test_transport_error_raises_unavailable_not_missing(self):
+        for exc in self.TRANSPORT_ERRORS:
+            with self.subTest(exc=type(exc).__name__):
+                with patch.object(stl, "select_many", side_effect=exc):
+                    with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                        _check_v28_schema()
+                msg = str(ctx.exception)
+                # The core requirement: never assert a schema defect we did not observe.
+                self.assertNotIn("has not been applied", msg)
+                self.assertNotIn("missing columns", msg)
+                # And never send the operator to run a migration on a guess.
+                self.assertNotIn("migrate_v28", msg)
+                self.assertNotIn("before --apply", msg)
+                # It must say what actually happened.
+                self.assertIn("could not verify", msg.lower())
+                self.assertIn("NOT evidence", msg)
+
+    def test_transport_error_is_classified_unavailable(self):
+        for exc in self.TRANSPORT_ERRORS:
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_genuine_missing_column_still_classified_missing(self):
+        exc = RuntimeError(
+            "select pin_products 失败 [400]: {\"code\":\"PGRST204\","
+            "\"message\":\"Column 'seed_keyword' of relation 'pin_products' does not exist.\"}"
+        )
+        self.assertEqual(stl._classify_probe_failure(exc), "missing")
+
+    def test_postgres_42703_classified_missing(self):
+        exc = RuntimeError(
+            "select pin_products 失败 [400]: {\"code\":\"42703\","
+            "\"message\":\"column pin_products.seed_keyword does not exist\"}"
+        )
+        self.assertEqual(stl._classify_probe_failure(exc), "missing")
+
+    def test_5xx_is_unavailable_not_missing(self):
+        """A gateway/server error is the DB failing to answer, not a schema verdict."""
+        for status in ("[500]", "[502]", "[503]", "[504]"):
+            with self.subTest(status=status):
+                exc = RuntimeError(f"select pin_products 失败 {status}: upstream error")
+                self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_400_without_column_verdict_is_unavailable(self):
+        """A 400 we cannot tie to an undefined column is ambiguous, not proof."""
+        exc = RuntimeError("select pin_products 失败 [400]: <html>Bad Request</html>")
+        self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_401_403_not_reported_as_missing_columns(self):
+        """An auth rejection must never be rendered as a schema defect."""
+        for status in ("[401]", "[403]"):
+            with self.subTest(status=status):
+                exc = RuntimeError(f"select pin_products 失败 {status}: JWT expired")
+                self.assertEqual(stl._classify_probe_failure(exc), "unavailable")
+
+    def test_genuine_missing_column_still_raises_original_message(self):
+        """The real-defect path is unchanged: still names the migration."""
+        def fake(table, filters=None, **_kw):
+            col = list((filters or {}).keys())[0] if filters else ""
+            if col == "seed_keyword":
+                raise RuntimeError(
+                    f"select {table} 失败 [400]: {{\"code\":\"PGRST204\","
+                    f"\"message\":\"Column '{col}' of relation '{table}' does not exist.\"}}"
+                )
+            return []
+
+        with patch.object(stl, "select_many", side_effect=fake):
+            ok, missing = _check_v28_schema()
+        self.assertFalse(ok)
+        self.assertEqual(missing, ["seed_keyword"])
+
+    def test_partial_failure_still_unavailable(self):
+        """If ONE column times out, the whole verdict is unknown.
+
+        Three columns answering "present" plus one timeout does not license a
+        conclusion about the fourth column either way.
+        """
+        def fake(table, filters=None, **_kw):
+            col = list((filters or {}).keys())[0] if filters else ""
+            if col == "normalized_product_url_hash":
+                raise httpx.ReadTimeout("timed out")
+            return []
+
+        with patch.object(stl, "select_many", side_effect=fake):
+            with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                _check_v28_schema()
+        msg = str(ctx.exception)
+        self.assertIn("normalized_product_url_hash", msg)
+        self.assertNotIn("has not been applied", msg)
+
+    def test_unavailable_names_the_failing_column_and_cause(self):
+        """Operators need the cause to act; the message must carry it."""
+        with patch.object(stl, "select_many", side_effect=httpx.ConnectError("boom")):
+            with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                _check_v28_schema()
+        msg = str(ctx.exception)
+        self.assertIn("ConnectError", msg)
+        self.assertIn("discovery_method_detail", msg)
+
+    def test_schema_check_unavailable_is_not_confused_with_missing(self):
+        """SchemaCheckUnavailable must be catchable distinctly from the defect error."""
+        self.assertTrue(issubclass(stl.SchemaCheckUnavailable, RuntimeError))
+        self.assertIsNot(stl.SchemaCheckUnavailable, RuntimeError)
 
 
 class TestApplyRowsCurrencyHonesty(unittest.TestCase):
@@ -894,6 +1338,974 @@ class TestProductIdeasAPIContract(unittest.TestCase):
                 re.search(pattern, top_level_block),
                 f"Field {field!r} must NOT appear as a top-level key in enrichRow's return object",
             )
+
+
+class TestV28PreflightRunsBeforeCrawl(unittest.TestCase):
+    """The v28 schema preflight must run BEFORE any browser/crawl work in apply
+    mode, so a failed probe never discards a completed crawl (the real
+    incident: 50 pins scraped over ~25 minutes, then the schema check failed
+    on a DB timeout and the whole run was thrown away).
+
+    In dry-run mode nothing is written, so the check must keep running after
+    the crawl loop exactly as before (informational only, never blocks).
+    """
+
+    def _patch_common(self, stack, *, sources=None):
+        """Patch everything run_shop_the_look_expand needs besides the schema
+        probe and the browser, so these tests isolate ONLY the preflight
+        ordering question."""
+        import tempfile as _tempfile
+
+        stack.enter_context(patch.object(
+            stl, "select_source_pins",
+            return_value=(sources or [], {"sourceSetFrozen": False, "selectedTotal": 0}),
+        ))
+        stack.enter_context(patch.object(stl, "_load_previous_spike_ids", return_value=set()))
+        stack.enter_context(patch.object(stl, "_load_scraped_source_pin_ids", return_value=set()))
+        stack.enter_context(patch.object(
+            stl, "_load_session_state",
+            return_value={
+                "storageState": None, "authenticated": False,
+                "sessionPath": "unused", "issue": "session_file_missing",
+                "cookieCount": 0, "authCookiesPresent": [],
+            },
+        ))
+        tmp_log_dir = pathlib.Path(_tempfile.mkdtemp(prefix="stl_test_logs_"))
+        stack.enter_context(patch.object(stl, "LOG_DIR", tmp_log_dir))
+        return tmp_log_dir
+
+    def test_apply_mode_schema_failure_never_starts_browser(self):
+        """apply=True + schema probe reports missing columns -> the exact same
+        RuntimeError as before, and async_playwright() is never called."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack)
+            stack.enter_context(patch.object(
+                stl, "_check_v28_schema",
+                return_value=(False, ["normalized_product_url_hash"]),
+            ))
+            mock_async_playwright = MagicMock()
+            stack.enter_context(patch(
+                "playwright.async_api.async_playwright", mock_async_playwright
+            ))
+
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(stl.run_shop_the_look_expand(apply=True))
+
+        msg = str(ctx.exception)
+        self.assertIn("v28 migration has not been applied", msg)
+        self.assertIn("normalized_product_url_hash", msg)
+        self.assertNotIsInstance(ctx.exception, stl.SchemaCheckUnavailable)
+        mock_async_playwright.assert_not_called()
+
+    def test_apply_mode_schema_unavailable_never_starts_browser(self):
+        """apply=True + schema probe cannot reach the DB -> SchemaCheckUnavailable
+        (not a generic RuntimeError, not a claim the migration is missing), and
+        the browser is never launched."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack)
+            stack.enter_context(patch.object(
+                stl, "_check_v28_schema",
+                side_effect=stl.SchemaCheckUnavailable("connection reset"),
+            ))
+            mock_async_playwright = MagicMock()
+            stack.enter_context(patch(
+                "playwright.async_api.async_playwright", mock_async_playwright
+            ))
+
+            with self.assertRaises(stl.SchemaCheckUnavailable) as ctx:
+                asyncio.run(stl.run_shop_the_look_expand(apply=True))
+
+        msg = str(ctx.exception)
+        self.assertIn("unable to confirm schema", msg)
+        self.assertNotIn("migration has not been applied", msg)
+        mock_async_playwright.assert_not_called()
+
+    def _install_fake_playwright(self, stack):
+        """Install a minimal async-context-manager fake standing in for
+        playwright.async_api.async_playwright(), deep enough for
+        run_shop_the_look_expand's browser/context/page setup to complete
+        against zero source pins (the for-loop over sources is then a no-op)."""
+
+        fake_page = MagicMock()
+        fake_page.url = ""
+
+        async def fake_goto(*a, **kw):
+            return None
+
+        async def fake_content():
+            return "<html></html>"
+
+        fake_page.goto = fake_goto
+        fake_page.content = fake_content
+        fake_page.on = MagicMock()
+
+        async def fake_new_page():
+            return fake_page
+
+        fake_context = MagicMock()
+        fake_context.new_page = fake_new_page
+
+        async def fake_new_context(**kw):
+            return fake_context
+
+        fake_browser = MagicMock()
+        fake_browser.new_context = fake_new_context
+
+        async def fake_close():
+            return None
+
+        fake_browser.close = fake_close
+
+        async def fake_launch(**kw):
+            return fake_browser
+
+        fake_chromium = MagicMock()
+        fake_chromium.launch = fake_launch
+
+        fake_pw = MagicMock()
+        fake_pw.chromium = fake_chromium
+
+        class FakeAsyncPlaywrightCM:
+            async def __aenter__(self):
+                return fake_pw
+
+            async def __aexit__(self, *exc):
+                return False
+
+        mock_async_playwright = MagicMock(return_value=FakeAsyncPlaywrightCM())
+        stack.enter_context(patch(
+            "playwright.async_api.async_playwright", mock_async_playwright
+        ))
+        return mock_async_playwright
+
+    def test_apply_mode_schema_ok_crawls_and_checks_schema_exactly_once(self):
+        """apply=True + schema probe passes -> the crawl proceeds (browser is
+        launched) and _check_v28_schema is called exactly once, not twice
+        (the whole point: no redundant re-probe after the moved-up check)."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack, sources=[])
+            stack.enter_context(patch.object(stl, "_apply_rows", return_value=0))
+            check_mock = stack.enter_context(patch.object(
+                stl, "_check_v28_schema", return_value=(True, [])
+            ))
+            mock_async_playwright = self._install_fake_playwright(stack)
+
+            report = asyncio.run(stl.run_shop_the_look_expand(apply=True))
+
+        mock_async_playwright.assert_called_once()
+        self.assertEqual(check_mock.call_count, 1)
+        self.assertEqual(report["v28SchemaCheck"]["verdict"], "all_present")
+        self.assertTrue(report["v28SchemaCheck"]["allPresent"])
+
+    def test_dry_run_mode_unchanged_schema_check_after_crawl_never_blocks(self):
+        """apply=False -> the crawl always proceeds regardless of the schema
+        verdict (even a missing-columns verdict must not raise), and the
+        report still carries a fully-formed v28SchemaCheck block."""
+        import asyncio
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_common(stack, sources=[])
+            check_mock = stack.enter_context(patch.object(
+                stl, "_check_v28_schema", return_value=(False, ["seed_keyword"])
+            ))
+            mock_async_playwright = self._install_fake_playwright(stack)
+
+            report = asyncio.run(stl.run_shop_the_look_expand(apply=False))
+
+        mock_async_playwright.assert_called_once()
+        self.assertEqual(check_mock.call_count, 1)
+        v28 = report["v28SchemaCheck"]
+        self.assertEqual(v28["verdict"], "columns_missing")
+        self.assertFalse(v28["allPresent"])
+        self.assertEqual(v28["missingColumns"], ["seed_keyword"])
+        self.assertEqual(v28["columnsChecked"], list(stl.V28_REQUIRED_COLUMNS))
+        self.assertIsNone(v28["schemaCheckUnavailable"])
+        self.assertIn("noteIndexNotChecked", v28)
+        self.assertEqual(report["writes"]["pin_products"], 0)  # dry-run never writes rows
+
+
+class TestIncrementalBatchWrite(unittest.TestCase):
+    """Products must be written DURING the crawl, not after it.
+
+    THE INCIDENT (2026-08-06 23:02, VPS timer): the run crawled 45/50 pins and
+    found products on 31 of them, then the runner tree-killed it at
+    VIBEPIN_TIMEOUT_SECONDS=2400. The only write call sat below
+    `await browser.close()`, so all 31 pins' products were discarded — the DB
+    received exactly zero rows from a 40-minute authenticated run.
+
+    These tests pin the properties that make that impossible to repeat:
+      * writes happen every STL_WRITE_BATCH_SIZE source pins,
+      * a URL written in an early batch is not rewritten in a later one,
+      * per-batch counts ACCUMULATE (a later batch cannot overwrite an
+        earlier batch's numbers in the report),
+      * one failed batch neither stops the crawl nor disappears from the report.
+    """
+
+    # ── harness ───────────────────────────────────────────────────────────
+    def _candidate(self, url: str, *, pin_id: str = "p1") -> dict:
+        """A candidate shaped like _prepare_candidate's output."""
+        return _prepare_candidate(
+            {"product_url": url, "product_title": "Thing", "merchant": "Etsy",
+             "image_url": "https://img/x.jpg", "price": None, "currency": None,
+             "extraction_method": "network_json"},
+            {"pin_id": pin_id, "category": "home-decor", "save_count": 100},
+            index=0, shop_detected=True, shop_tab_clicked=False,
+        )
+
+    def _pin_result(self, pin_id: str, urls: list[str]) -> dict:
+        return {
+            "source": {"pin_id": pin_id, "category": "home-decor", "save_count": 100},
+            "issue": None,
+            "shopModuleDetected": True,
+            "shopTabClicked": False,
+            "chipLabels": [],
+            "visibleCardCount": len(urls),
+            "tabCount": 1,
+            "productJsonResponses": len(urls),
+            "networkCandidates": len(urls),
+            "domEvalError": None,
+            "pageSkeleton": False,
+            "renderFailure": False,
+            "candidates": [self._candidate(u, pin_id=pin_id) for u in urls],
+            "elapsedSec": 0.1,
+        }
+
+    def _run(self, stack, *, pin_results, batch_size, apply_rows_side_effect=None):
+        """Drive the real run_shop_the_look_expand over canned pins.
+
+        Everything except the batching logic is stubbed: the browser (fake
+        playwright), the source selection, the schema probe, and the DB
+        preflight (pass-through, so dedup decisions come from the writer's own
+        cross-batch set rather than from a mocked database).
+        """
+        import asyncio
+
+        sources = [{"pin_id": r["source"]["pin_id"], "category": "home-decor",
+                    "save_count": 100} for r in pin_results]
+
+        preflight_helper = TestV28PreflightRunsBeforeCrawl()
+        preflight_helper._patch_common(stack, sources=sources)
+        preflight_helper._install_fake_playwright(stack)
+        stack.enter_context(patch.object(stl, "_check_v28_schema", return_value=(True, [])))
+        stack.enter_context(patch.dict(
+            os.environ, {"STL_WRITE_BATCH_SIZE": str(batch_size)}, clear=False
+        ))
+
+        queue = list(pin_results)
+
+        async def fake_extract(page, source, state):
+            return queue.pop(0)
+
+        stack.enter_context(patch.object(stl, "_extract_source_pin", fake_extract))
+        # Pass-through preflight: no row is "already in the DB".
+        stack.enter_context(patch.object(
+            stl, "_preflight_existing",
+            side_effect=lambda unique: {
+                "projectedInsertCount": len(unique),
+                "projectedSkipExistingCount": 0,
+                "projectedUpdateCount": 0,
+                "legacyTouchedProjected": 0,
+                "conflictKeysChecked": ["normalized_product_url_hash"],
+                "skippedDuplicateExamples": [],
+                "insertCandidates": list(unique),
+                "checked": True,
+                "existingHashMatches": 0,
+            },
+        ))
+
+        apply_mock = stack.enter_context(patch.object(
+            stl, "_apply_rows",
+            side_effect=apply_rows_side_effect or (lambda rows: self._land(rows)),
+        ))
+        report = asyncio.run(stl.run_shop_the_look_expand(
+            limit=len(sources),
+            category_mix={"home-decor": len(sources)},
+            apply=True,
+        ))
+        return report, apply_mock
+
+    @staticmethod
+    def _land(rows):
+        """Stand-in for a fully successful _apply_rows, including the
+        _LAST_WRITE_OUTCOME side effect the real one performs."""
+        stl._LAST_WRITE_OUTCOME.clear()
+        stl._LAST_WRITE_OUTCOME.update({
+            "attempted": len(rows), "inserted": len(rows),
+            "duplicates": 0, "failed": 0, "errors": [],
+        })
+        return len(rows)
+
+    # ── T1: batching ──────────────────────────────────────────────────────
+    def test_twenty_pins_with_batch_ten_writes_twice(self):
+        """20 source pins x 1 candidate, batch=10 -> the writer is called twice,
+        with 10 rows each. Before this change it was called once, after the
+        whole crawl — the shape that lost 31 pins to a timeout kill."""
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"pin{i}", [f"https://www.etsy.com/listing/{i}/thing"])
+                for i in range(20)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=10)
+
+        self.assertEqual(apply_mock.call_count, 2)
+        self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [10, 10])
+        self.assertEqual(report["writes"]["pin_products"], 20)
+        self.assertEqual(report["incrementalWrite"]["batchesWritten"], 2)
+        self.assertEqual(report["incrementalWrite"]["batchSizePins"], 10)
+
+    def test_tail_batch_below_batch_size_is_still_written(self):
+        """25 pins at batch=10 -> 10 + 10 + a 5-row tail. A partial tail that
+        never lands is the same data loss in miniature."""
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"pin{i}", [f"https://www.etsy.com/listing/{i}/thing"])
+                for i in range(25)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=10)
+
+        self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [10, 10, 5])
+        self.assertEqual(report["writes"]["pin_products"], 25)
+
+    # ── T2: cross-batch dedup ─────────────────────────────────────────────
+    def test_url_written_in_batch_one_is_not_rewritten_in_batch_two(self):
+        """Batch 2 repeats a URL from batch 1 -> it is written exactly once.
+
+        The old single write deduped the whole run in one pass; batching must
+        not reintroduce duplicates just because the repeat crosses a flush.
+        """
+        from contextlib import ExitStack
+
+        repeat = "https://www.etsy.com/listing/999/repeat"
+        batch1 = [self._pin_result("a0", [repeat])] + [
+            self._pin_result(f"a{i}", [f"https://www.etsy.com/listing/{1000 + i}/x"])
+            for i in range(1, 5)
+        ]
+        batch2 = [self._pin_result("b0", [repeat])] + [
+            self._pin_result(f"b{i}", [f"https://www.etsy.com/listing/{2000 + i}/x"])
+            for i in range(1, 5)
+        ]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(
+                stack, pin_results=batch1 + batch2, batch_size=5
+            )
+
+        self.assertEqual(apply_mock.call_count, 2)
+        written_urls = [row["product_url"]
+                        for call_ in apply_mock.call_args_list
+                        for row in call_.args[0]]
+        self.assertEqual(written_urls.count(repeat), 1,
+                         f"repeat URL written {written_urls.count(repeat)} times")
+        # 10 candidates, one of them a cross-batch repeat -> 9 rows.
+        self.assertEqual(len(written_urls), 9)
+        self.assertEqual(report["writes"]["pin_products"], 9)
+        self.assertEqual(report["incrementalWrite"]["rowsSkippedCrossBatchDuplicate"], 1)
+
+    def test_duplicate_within_the_same_batch_written_once(self):
+        """In-batch dedup must survive too (two pins in one batch, same URL)."""
+        from contextlib import ExitStack
+
+        same = "https://www.etsy.com/listing/777/same"
+        pins = [self._pin_result("c1", [same]), self._pin_result("c2", [same])]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=2)
+
+        self.assertEqual(apply_mock.call_count, 1)
+        self.assertEqual(len(apply_mock.call_args_list[0].args[0]), 1)
+        self.assertEqual(report["writes"]["pin_products"], 1)
+
+    # ── T3: accumulation ──────────────────────────────────────────────────
+    def test_two_batches_of_three_report_six_not_three(self):
+        """The report must SUM batches. _LAST_WRITE_OUTCOME is cleared and
+        rewritten by every _apply_rows call, so reading it once at the end
+        would report only the LAST batch — a report that understates what
+        actually landed is a report that lies."""
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"d{i}", [f"https://www.etsy.com/listing/{3000 + i}/x"])
+                for i in range(6)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=3)
+
+        self.assertEqual(apply_mock.call_count, 2)
+        self.assertEqual(report["writes"]["pin_products"], 6)
+        self.assertEqual(report["writeOutcome"]["inserted"], 6)
+        self.assertEqual(report["writeOutcome"]["attempted"], 6)
+        # And the last batch's own number (3) must NOT be what the report shows.
+        self.assertNotEqual(report["writeOutcome"]["inserted"],
+                            stl._LAST_WRITE_OUTCOME.get("inserted"))
+
+    def test_duplicates_and_failures_accumulate_across_batches(self):
+        """duplicates/failed are summed too, not just inserted."""
+        from contextlib import ExitStack
+
+        def partial(rows):
+            stl._LAST_WRITE_OUTCOME.clear()
+            stl._LAST_WRITE_OUTCOME.update({
+                "attempted": len(rows), "inserted": len(rows) - 2,
+                "duplicates": 1, "failed": 1, "errors": ["boom"],
+            })
+            return len(rows) - 2
+
+        pins = [self._pin_result(f"e{i}", [f"https://www.etsy.com/listing/{4000 + i}/x"])
+                for i in range(6)]
+        with ExitStack() as stack:
+            report, _ = self._run(stack, pin_results=pins, batch_size=3,
+                                  apply_rows_side_effect=partial)
+
+        outcome = report["writeOutcome"]
+        self.assertEqual(outcome["attempted"], 6)
+        self.assertEqual(outcome["inserted"], 2)
+        self.assertEqual(outcome["duplicates"], 2)
+        self.assertEqual(outcome["failed"], 2)
+        self.assertEqual(report["writes"]["pin_products"], 2)
+
+    # ── T4: a failed batch does not end the run ───────────────────────────
+    def test_failed_first_batch_does_not_stop_later_batches(self):
+        """Batch 1 raises -> batch 2 still runs and lands, and the failure is
+        counted in the report. Two red lines meet here: a transient DB error
+        must not throw away the rest of a 40-minute crawl, AND the failure must
+        be visible rather than silently swallowed."""
+        from contextlib import ExitStack
+
+        calls = {"n": 0}
+
+        def flaky(rows):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("connection reset by peer")
+            return TestIncrementalBatchWrite._land(rows)
+
+        pins = [self._pin_result(f"f{i}", [f"https://www.etsy.com/listing/{5000 + i}/x"])
+                for i in range(6)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=3,
+                                           apply_rows_side_effect=flaky)
+
+        # The crawl continued: the second batch was attempted and succeeded.
+        self.assertEqual(apply_mock.call_count, 2)
+        self.assertEqual(report["writes"]["pin_products"], 3)
+
+        inc = report["incrementalWrite"]
+        self.assertEqual(inc["batchesAttempted"], 2)
+        self.assertEqual(inc["batchesWritten"], 1)
+        self.assertEqual(inc["batchesFailed"], 1)
+        # Explicit, not swallowed: the lost rows are counted and the error text kept.
+        self.assertEqual(report["writeOutcome"]["failed"], 3)
+        self.assertEqual(report["writeOutcome"]["attempted"], 6)
+        self.assertEqual(len(inc["failedBatches"]), 1)
+        self.assertEqual(inc["failedBatches"][0]["attemptedRows"], 3)
+        self.assertIn("connection reset by peer", inc["failedBatches"][0]["error"])
+        self.assertTrue(any("connection reset by peer" in e
+                            for e in report["writeOutcome"]["errors"]))
+
+    # ── dry-run must stay read-only ───────────────────────────────────────
+    def test_dry_run_never_writes_and_has_no_incremental_block(self):
+        """apply=False must not touch the DB at all — batching is apply-only."""
+        import asyncio
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"g{i}", [f"https://www.etsy.com/listing/{6000 + i}/x"])
+                for i in range(4)]
+        sources = [{"pin_id": r["source"]["pin_id"], "category": "home-decor",
+                    "save_count": 100} for r in pins]
+        queue = list(pins)
+
+        async def fake_extract(page, source, state):
+            return queue.pop(0)
+
+        with ExitStack() as stack:
+            helper = TestV28PreflightRunsBeforeCrawl()
+            helper._patch_common(stack, sources=sources)
+            helper._install_fake_playwright(stack)
+            stack.enter_context(patch.object(stl, "_check_v28_schema", return_value=(True, [])))
+            stack.enter_context(patch.dict(os.environ, {"STL_WRITE_BATCH_SIZE": "2"}, clear=False))
+            stack.enter_context(patch.object(stl, "_extract_source_pin", fake_extract))
+            stack.enter_context(patch.object(stl, "select_many", return_value=[]))
+            apply_mock = stack.enter_context(patch.object(stl, "_apply_rows", return_value=0))
+
+            report = asyncio.run(stl.run_shop_the_look_expand(
+                limit=4, category_mix={"home-decor": 4}, apply=False,
+            ))
+
+        apply_mock.assert_not_called()
+        self.assertEqual(report["writes"]["pin_products"], 0)
+        self.assertNotIn("incrementalWrite", report)
+        self.assertNotIn("_insertCandidates", report)
+
+
+class TestFunnelBlockAndLogFieldNames(unittest.TestCase):
+    """Two observability defects fixed together on 2026-08-14, both of which had
+    already caused a wrong read of a real run:
+
+    a) the per-pin progress line and the per-BATCH write line both printed
+       `candidates=`, so summing the field over a log double-counted every
+       candidate (1077 + 1077 = 2154 was read as the run's raw total);
+    b) the raw -> written chain was split between report['aggregate'] and
+       report['incrementalWrite'], so it had to be hand-stitched to be read at all.
+
+    report['funnel'] is a VIEW: every count is copied from an existing field, so a
+    disagreement between funnel and source is a bug by construction.
+    """
+
+    def _real_report(self, *, pin_results, batch_size):
+        """Produce a genuine report via the same harness the batching tests use,
+        capturing stdout so the log lines can be asserted on."""
+        from contextlib import ExitStack, redirect_stdout
+        import io
+
+        buffer = io.StringIO()
+        with ExitStack() as stack:
+            with redirect_stdout(buffer):
+                report, apply_mock = TestIncrementalBatchWrite._run(
+                    TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice"),
+                    stack, pin_results=pin_results, batch_size=batch_size,
+                )
+        return report, buffer.getvalue()
+
+    def _pins(self, n, prefix):
+        helper = TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice")
+        return [helper._pin_result(f"{prefix}{i}", [f"https://www.etsy.com/listing/{7000 + i}/x"])
+                for i in range(n)]
+
+    def test_funnel_counts_match_their_named_sources(self):
+        report, _out = self._real_report(pin_results=self._pins(6, "fn"), batch_size=3)
+        funnel = report["funnel"]
+        self.assertEqual(funnel["mode"], "apply")
+        by_step = {s["step"]: s for s in funnel["steps"]}
+        # The chain is present end to end, in order.
+        self.assertEqual(
+            [s["step"] for s in funnel["steps"]],
+            ["rawCandidates", "rejected", "acceptedBeforeDedup",
+             "duplicatesSkippedWithinRun", "uniqueAccepted", "alreadyInDb",
+             "crossBatchDuplicates", "written"],
+        )
+        # Every count equals the field it names — resolved by walking the report.
+        for entry in funnel["steps"]:
+            block, key = entry["source"].split(".", 1)
+            self.assertEqual(
+                entry["count"], report[block][key],
+                f"funnel step {entry['step']} disagrees with {entry['source']}",
+            )
+        # Sanity on the run itself: 6 clean candidates, all written.
+        self.assertEqual(by_step["rawCandidates"]["count"], 6)
+        self.assertEqual(by_step["uniqueAccepted"]["count"], 6)
+        self.assertEqual(by_step["written"]["count"], 6)
+        self.assertEqual(by_step["rejected"]["count"], 0)
+        self.assertIn("byReason", by_step["rejected"])
+
+    def test_funnel_rejection_detail_matches_aggregate(self):
+        """A rejected candidate must show up in the funnel's rejection detail with
+        the same breakdown the aggregate carries — no second count."""
+        helper = TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice")
+        pins = [
+            helper._pin_result("rj0", ["https://www.etsy.com/listing/8001/x"]),
+            helper._pin_result("rj1", ["https://someblog.example/best-nail-ideas/"]),
+        ]
+        report, _out = self._real_report(pin_results=pins, batch_size=2)
+        by_step = {s["step"]: s for s in report["funnel"]["steps"]}
+        self.assertEqual(by_step["rejected"]["count"], report["aggregate"]["rejectedProducts"])
+        self.assertEqual(by_step["rejected"]["byReason"],
+                         report["aggregate"]["rejectedByReason"])
+        self.assertEqual(by_step["rejected"]["byReason"].get("non_commerce_domain"), 1)
+        self.assertEqual(by_step["written"]["count"], 1)
+
+    def test_funnel_in_dry_run_uses_labelled_projections(self):
+        """Dry-run has no incrementalWrite block; the write steps fall back to the
+        preflight PROJECTIONS and say so, rather than silently reporting 0 written."""
+        import asyncio
+        from contextlib import ExitStack
+
+        pins = self._pins(4, "dr")
+        sources = [{"pin_id": r["source"]["pin_id"], "category": "home-decor",
+                    "save_count": 100} for r in pins]
+        queue = list(pins)
+
+        async def fake_extract(page, source, state):
+            return queue.pop(0)
+
+        with ExitStack() as stack:
+            helper = TestV28PreflightRunsBeforeCrawl()
+            helper._patch_common(stack, sources=sources)
+            helper._install_fake_playwright(stack)
+            stack.enter_context(patch.object(stl, "_check_v28_schema", return_value=(True, [])))
+            stack.enter_context(patch.object(stl, "_extract_source_pin", fake_extract))
+            stack.enter_context(patch.object(stl, "select_many", return_value=[]))
+            stack.enter_context(patch.object(stl, "_apply_rows", return_value=0))
+            report = asyncio.run(stl.run_shop_the_look_expand(
+                limit=4, category_mix={"home-decor": 4}, apply=False,
+            ))
+
+        funnel = report["funnel"]
+        self.assertEqual(funnel["mode"], "dry-run")
+        by_step = {s["step"]: s for s in funnel["steps"]}
+        self.assertNotIn("crossBatchDuplicates", by_step)
+        for name in ("alreadyInDb", "written"):
+            self.assertTrue(by_step[name].get("projection"),
+                            f"{name} must be labelled as a projection in dry-run")
+            block, key = by_step[name]["source"].split(".", 1)
+            self.assertEqual(by_step[name]["count"], report[block][key])
+
+    def test_batch_log_field_cannot_be_summed_with_the_per_pin_field(self):
+        """The two line kinds must not share a field name. Historically both said
+        `candidates=`; grep-and-sum then counted every candidate twice."""
+        report, out = self._real_report(pin_results=self._pins(4, "lg"), batch_size=2)
+        per_pin_lines = [ln for ln in out.splitlines() if " pin=" in ln]
+        batch_lines = [ln for ln in out.splitlines() if "write batch" in ln]
+        self.assertTrue(per_pin_lines, "expected per-pin progress lines")
+        self.assertTrue(batch_lines, "expected write batch lines")
+        # Per-pin lines keep the original field, unchanged.
+        for line in per_pin_lines:
+            self.assertRegex(line, r"(?<![A-Za-z])candidates=\d+")
+        # Batch lines use the distinct name and never the bare one.
+        for line in batch_lines:
+            self.assertIn("batchCandidates=", line)
+            self.assertNotRegex(line, r"(?<![A-Za-z])candidates=")
+        # And the totals really do differ in the way that caused the misread:
+        # 4 per-pin lines of 1 candidate each vs 2 batch lines of 2 each.
+        per_pin_total = sum(int(m) for line in per_pin_lines
+                            for m in re.findall(r"(?<![A-Za-z])candidates=(\d+)", line))
+        batch_total = sum(int(m) for line in batch_lines
+                          for m in re.findall(r"batchCandidates=(\d+)", line))
+        self.assertEqual(per_pin_total, 4)
+        self.assertEqual(batch_total, 4)
+        self.assertEqual(report["aggregate"]["rawProductCandidates"], 4)
+
+    def test_empty_batch_log_line_also_renamed(self):
+        """The nothing-to-write branch prints its own line; it must not reintroduce
+        the ambiguous field name."""
+        helper = TestIncrementalBatchWrite("test_twenty_pins_with_batch_ten_writes_twice")
+        pins = [helper._pin_result(f"eb{i}", ["https://someblog.example/nail-ideas/"])
+                for i in range(2)]
+        _report, out = self._real_report(pin_results=pins, batch_size=2)
+        batch_lines = [ln for ln in out.splitlines() if "write batch" in ln]
+        self.assertTrue(any("newRows=0" in ln for ln in batch_lines),
+                        f"expected an empty-batch line, got {batch_lines}")
+        for line in batch_lines:
+            self.assertIn("batchCandidates=", line)
+            self.assertNotRegex(line, r"(?<![A-Za-z])candidates=")
+
+
+class TestWriteBatchSizeConfig(unittest.TestCase):
+    def test_default_is_ten_pins(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(stl._stl_write_batch_size(), 10)
+
+    def test_env_override(self):
+        with patch.dict(os.environ, {"STL_WRITE_BATCH_SIZE": "5"}, clear=False):
+            self.assertEqual(stl._stl_write_batch_size(), 5)
+
+    def test_malformed_or_nonpositive_falls_back_to_default(self):
+        """0 would mean 'never flush' — the all-or-nothing behaviour this
+        setting exists to remove. It must not be reachable by misconfiguration."""
+        for bad in ("", "abc", "0", "-3"):
+            with patch.dict(os.environ, {"STL_WRITE_BATCH_SIZE": bad}, clear=False):
+                self.assertEqual(stl._stl_write_batch_size(), 10, f"value={bad!r}")
+
+
+class TestProductEvidenceGate(unittest.TestCase):
+    """A bare external link is a LINK, not a product.
+
+    Production evidence (2026-08-08, read-only): of 2758 STL rows, 35 had no
+    image_url; 0 of those had a price; every one was named after its own
+    domain — quay / ebay / etsy / shein / jluxlabel / bylabelle /
+    revolutionboutique. They came from a URL-regex fallback that emitted
+    title=None,image=None,price=None plus a title chain that substituted
+    merchant/domain for the missing name. Both are fixed; these tests hold it.
+    """
+
+    SOURCE = {"pin_id": "p1", "category": "home-decor", "save_count": 100}
+
+    def _prepared(self, *, title=None, image=None, price=None,
+                  url="https://www.etsy.com/listing/123/thing", json_path=None):
+        return _prepare_candidate(
+            {"product_url": url, "product_title": title, "merchant": None,
+             "image_url": image, "price": price, "currency": None,
+             "extraction_method": "network_json", "json_path": json_path},
+            self.SOURCE, index=0, shop_detected=True, shop_tab_clicked=False,
+        )
+
+    def _per_pin(self, candidates):
+        return [{
+            "source": self.SOURCE, "shopModuleDetected": True,
+            "shopTabClicked": False, "candidates": candidates, "issue": None,
+        }]
+
+    def _patch_preflight(self):
+        return patch.object(stl, "select_many", side_effect=lambda *a, **k: [])
+
+    # ── the gate itself ───────────────────────────────────────────────────
+    def test_url_only_candidate_is_rejected(self):
+        """No title, no image -> not product evidence."""
+        self.assertEqual(
+            stl._evidence_rejection_reason(self._prepared()),
+            stl.NO_PRODUCT_EVIDENCE,
+        )
+
+    def test_image_without_title_is_accepted(self):
+        """The image IS the evidence. Must not be collateral damage."""
+        self.assertIsNone(
+            stl._evidence_rejection_reason(self._prepared(image="https://i/x.jpg"))
+        )
+
+    def test_title_without_image_is_accepted(self):
+        self.assertIsNone(
+            stl._evidence_rejection_reason(self._prepared(title="Oak Shelf"))
+        )
+
+    def test_merchant_and_domain_are_not_evidence(self):
+        """_prepare_candidate always derives merchant/domain FROM the URL, so
+        treating them as evidence would re-admit all 35 bad production rows."""
+        candidate = self._prepared()
+        self.assertTrue(candidate["merchant"], "merchant is URL-derived here")
+        self.assertTrue(candidate["domain"], "domain is URL-derived here")
+        self.assertEqual(
+            stl._evidence_rejection_reason(candidate), stl.NO_PRODUCT_EVIDENCE
+        )
+
+    def test_whitespace_only_title_is_not_evidence(self):
+        self.assertEqual(
+            stl._evidence_rejection_reason(self._prepared(title="   ")),
+            stl.NO_PRODUCT_EVIDENCE,
+        )
+
+    def test_product_shaped_url_alone_still_rejected(self):
+        """/dp/ and /listing/ look like product pages but carry no evidence.
+        Allowlisting URL shapes would be guessing — the red line this holds."""
+        for url in ("https://www.amazon.com/dp/B0G19C9N11",
+                    "https://www.etsy.com/listing/4526184169/men-trousers"):
+            self.assertEqual(
+                stl._evidence_rejection_reason(self._prepared(url=url)),
+                stl.NO_PRODUCT_EVIDENCE, url,
+            )
+
+    # ── report path ───────────────────────────────────────────────────────
+    def test_report_rejects_url_only_and_counts_it(self):
+        per_pin = self._per_pin([self._prepared()])
+        with self._patch_preflight():
+            report, unique = _build_report(per_pin, {}, elapsed=1, apply=False)
+
+        self.assertEqual(unique, [], "a bare link must not be writable")
+        agg = report["aggregate"]
+        self.assertEqual(agg["uniqueAcceptedProducts"], 0)
+        self.assertEqual(agg["rejectedNoProductEvidence"], 1)
+        self.assertEqual(agg["rejectedByReason"][stl.NO_PRODUCT_EVIDENCE], 1)
+        # Explicitly reported, never silently dropped.
+        rc = report["rejectedCandidates"]
+        self.assertEqual(rc["noProductEvidence"]["count"], 1)
+        self.assertEqual(rc["byReason"][stl.NO_PRODUCT_EVIDENCE], 1)
+        self.assertEqual(
+            rc["noProductEvidence"]["samples"][0]["url"],
+            "https://www.etsy.com/listing/123/thing",
+            "the rejected URL must survive in the report for audit",
+        )
+
+    def test_report_keeps_image_only_and_title_only(self):
+        per_pin = self._per_pin([
+            self._prepared(image="https://i/a.jpg", url="https://www.etsy.com/listing/1/a"),
+            self._prepared(title="Oak Shelf", url="https://www.etsy.com/listing/2/b"),
+            self._prepared(url="https://www.etsy.com/listing/3/c"),
+        ])
+        with self._patch_preflight():
+            report, unique = _build_report(per_pin, {}, elapsed=1, apply=False)
+
+        self.assertEqual(len(unique), 2, "only the bare link should be dropped")
+        self.assertEqual(report["aggregate"]["rejectedNoProductEvidence"], 1)
+
+    def test_gate_runs_before_dedup_so_evidence_wins(self):
+        """Same URL twice: evidence-less first, then one carrying an image.
+        If the gate ran after dedup the bare link would claim the key and the
+        real product would be discarded as a duplicate."""
+        url = "https://www.etsy.com/listing/555/shared"
+        per_pin = self._per_pin([
+            self._prepared(url=url),
+            self._prepared(url=url, image="https://i/real.jpg"),
+        ])
+        with self._patch_preflight():
+            report, unique = _build_report(per_pin, {}, elapsed=1, apply=False)
+
+        self.assertEqual(len(unique), 1)
+        self.assertEqual(unique[0]["image_url"], "https://i/real.jpg",
+                         "the evidence-bearing candidate must be the survivor")
+        self.assertEqual(report["aggregate"]["rejectedNoProductEvidence"], 1)
+
+    def test_report_flags_discarded_price_evidence(self):
+        """Price on a gate-rejected row would mean the rule threw away real
+        evidence. 0/35 in production today; it must not change unnoticed."""
+        with self._patch_preflight():
+            report, _ = _build_report(
+                self._per_pin([self._prepared(price="19.99")]), {},
+                elapsed=1, apply=False,
+            )
+        self.assertEqual(
+            report["rejectedCandidates"]["noProductEvidence"]["withPriceAnyway"], 1
+        )
+
+    def test_text_fallback_provenance_survives_into_the_report(self):
+        """json_path used to be dropped by _prepare_candidate, which is why
+        'has the regex fallback ever produced a real product?' was unanswerable
+        from reports or from the DB. It now reaches the report."""
+        with self._patch_preflight():
+            report, _ = _build_report(
+                self._per_pin([self._prepared(json_path="network_text_fallback")]),
+                {}, elapsed=1, apply=False,
+            )
+        self.assertEqual(report["aggregate"]["acceptedFromNetworkTextFallback"], 0)
+        self.assertEqual(report["aggregate"]["rejectedFromNetworkTextFallback"], 1)
+
+    # ── write path: no invented names ─────────────────────────────────────
+    def test_apply_rows_writes_null_name_for_image_only_row(self):
+        """product_name must be NULL, NOT the merchant or the domain.
+        Verified live: pin_products.product_name is nullable (68 rows hold
+        NULL), per migrate_v47 which dropped the NOT NULL constraint."""
+        row = self._prepared(image="https://i/x.jpg")
+        self.assertTrue(row["merchant"], "merchant is populated but must not leak")
+
+        fake_db = types.ModuleType("db")
+        captured = {}
+        fake_db.insert_rows = lambda table, payload: captured.setdefault("p", payload)
+        with patch.dict(sys.modules, {"db": fake_db}):
+            _apply_rows([row])
+
+        written = captured["p"][0]
+        self.assertIsNone(written["product_name"],
+                          "unknown name must be NULL, never the domain/merchant")
+        self.assertEqual(written["merchant"], row["merchant"],
+                         "merchant keeps its own column")
+        self.assertEqual(written["image_url"], "https://i/x.jpg")
+
+    def test_apply_rows_keeps_a_real_title(self):
+        row = self._prepared(title="Solid Oak Floating Shelf")
+        fake_db = types.ModuleType("db")
+        captured = {}
+        fake_db.insert_rows = lambda table, payload: captured.setdefault("p", payload)
+        with patch.dict(sys.modules, {"db": fake_db}):
+            _apply_rows([row])
+        self.assertEqual(captured["p"][0]["product_name"], "Solid Oak Floating Shelf")
+
+    def test_pinterest_product_placeholder_is_gone_from_executable_code(self):
+        """The invented fallback name must not exist as a usable string.
+
+        Checked via the AST rather than by grepping lines: only real string
+        LITERALS can ever be assigned to product_name, while docstrings and
+        comments merely describe the removed behaviour and are harmless. An
+        AST walk proves the value is unreachable instead of guessing from
+        line prefixes.
+        """
+        import ast
+
+        source = pathlib.Path(stl.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        docstrings = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
+        offenders = [
+            (node.lineno, node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and "Pinterest product" in node.value
+            and id(node) not in docstrings
+        ]
+        self.assertEqual(offenders, [],
+                         f"live code can still fabricate a name: {offenders}")
+
+
+class TestIncrementalWriterEvidenceGate(unittest.TestCase):
+    """The apply path writes through _IncrementalWriter, not _build_report.
+    A gate that only guarded the report would guard nothing in production.
+    """
+
+    SOURCE = {"pin_id": "p1", "category": "home-decor", "save_count": 100}
+
+    def _prepared(self, *, title=None, image=None, price=None, url):
+        return _prepare_candidate(
+            {"product_url": url, "product_title": title, "merchant": None,
+             "image_url": image, "price": price, "currency": None,
+             "extraction_method": "network_json"},
+            self.SOURCE, index=0, shop_detected=True, shop_tab_clicked=False,
+        )
+
+    def _writer(self):
+        return stl._IncrementalWriter(batch_size=10, enabled=True)
+
+    def _passthrough_preflight(self):
+        return patch.object(
+            stl, "_preflight_existing",
+            side_effect=lambda unique: {"insertCandidates": list(unique)},
+        )
+
+    def test_bare_link_never_reaches_the_write(self):
+        writer = self._writer()
+        pending = [
+            self._prepared(url="https://www.etsy.com/listing/1/bare"),
+            self._prepared(url="https://www.etsy.com/listing/2/good",
+                           image="https://i/g.jpg"),
+        ]
+        with self._passthrough_preflight():
+            rows = writer._filter_batch(pending)
+
+        self.assertEqual([r["product_url"] for r in rows],
+                         ["https://www.etsy.com/listing/2/good"])
+        self.assertEqual(writer.evidence_rejected_count, 1)
+
+    def test_rejection_is_visible_in_the_batching_report(self):
+        writer = self._writer()
+        with self._passthrough_preflight():
+            writer._filter_batch([
+                self._prepared(url="https://www.etsy.com/listing/1/bare"),
+                self._prepared(url="https://www.etsy.com/listing/2/bare2",
+                               price="9.99"),
+            ])
+        rep = writer.batching_report()
+        self.assertEqual(rep["rowsRejectedNoProductEvidence"], 2)
+        self.assertEqual(rep["rowsRejectedNoProductEvidenceWithPrice"], 1)
+        self.assertNotEqual(rep["rowsRejectedByAcceptLink"], 2,
+                            "must not be conflated with accept_link rejections")
+
+    def test_rejected_candidate_does_not_burn_the_dedup_key(self):
+        """A bare link in batch 1 must not block the same URL arriving with an
+        image in batch 2 — the gate runs before _seen_keys is touched."""
+        url = "https://www.etsy.com/listing/777/late-evidence"
+        writer = self._writer()
+        with self._passthrough_preflight():
+            first = writer._filter_batch([self._prepared(url=url)])
+            second = writer._filter_batch(
+                [self._prepared(url=url, image="https://i/late.jpg")]
+            )
+        self.assertEqual(first, [])
+        self.assertEqual(len(second), 1, "the real product must still be writable")
+
+    def test_flush_logs_the_rejection_count(self):
+        """Operators read journalctl, not JSON. The discard must be loud."""
+        import io
+        from contextlib import redirect_stdout
+
+        writer = self._writer()
+        writer._pending = [self._prepared(url="https://www.etsy.com/listing/1/bare")]
+        writer._pins_since_flush = 1
+        buf = io.StringIO()
+        with self._passthrough_preflight(), redirect_stdout(buf):
+            writer.flush(reason="test")
+        out = buf.getvalue()
+        self.assertIn("noProductEvidence=1", out)
+        self.assertIn("no title, no image", out)
 
 
 if __name__ == "__main__":
