@@ -17,6 +17,7 @@ import {
   type SmartScheduleConfig,
 } from "./smartScheduleStore";
 import { findNextAvailableScheduleSlot } from "./smartSchedule";
+import { isActionablePublishFailure } from "./studio/pinLifecycle";
 
 export type RebalanceSnapshotEntry = {
   id: string;
@@ -41,8 +42,18 @@ function plannedMs(d: PinDraft): number | null {
   return new Date(y, mo - 1, da, h, mi, 0, 0).getTime();
 }
 
+/**
+ * A GENERATION failure (image/copy never finished) — read from generationStatus, the
+ * only place that state lives. A PUBLISH failure is a different fact (failureType +
+ * publishError) and does NOT show up here; checking generationStatus alone let rebalance
+ * treat a publish-failed Pin as eligible, sweep it into a future slot, and leave the
+ * stale failureType/publishError riding along. The Pin then read as "Failed" on a date
+ * it had not been attempted yet. Delegating to the SAME predicate the Failed banner and
+ * the Plan card badge use (isActionablePublishFailure) closes that gap — one definition
+ * of "failed", not a third one invented here.
+ */
 function isFailed(d: PinDraft): boolean {
-  return /fail/i.test(d.generationStatus ?? "");
+  return /fail/i.test(d.generationStatus ?? "") || isActionablePublishFailure(d);
 }
 
 function isPlanned(d: PinDraft): boolean {

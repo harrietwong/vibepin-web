@@ -259,6 +259,31 @@ test("17. Rebalance skips failed Pins", () => {
   assert(rebalancePlannedPins({ now }).changed === 0, "failed pin should not be rebalanced");
 });
 
+test("17b. Rebalance skips a PUBLISH failure too, not just a generation failure", () => {
+  // Reported from production QA: 13 Pins that failed to PUBLISH ("Board not found")
+  // still had generationStatus "completed" or unset — the image itself was fine, only
+  // publishing failed. isFailed() checked generationStatus alone, so these read as
+  // eligible, got swept into future slots, and kept their stale failureType/publishError
+  // — a Pin the merchant had never retried showed as "Failed" on a date it had not been
+  // attempted yet. The design contract (top-of-file comment) always said publish
+  // failures are FIXED; the implementation just did not honour it.
+  reset();
+  const now = new Date(2026, 5, 1, 0, 0, 0);
+  saveSmartScheduleConfig({ ...defaultSmartScheduleConfig(), weeklySlots: { [weekdayIdx(now)]: ["09:00"] } as Partial<Record<WeekdayIndex, string[]>> });
+  seed([{
+    id: "PF1",
+    scheduledDate: isoOf(addDays(now, 30)),
+    scheduledTime: "18:00",
+    // The generation itself succeeded — this is the exact shape a publish failure has.
+    generationStatus: "completed",
+    failureType: "publish",
+    publishError: "Board not found on the connected Pinterest account",
+  }]);
+  const before = pinDraftStore.getDraft("PF1")!.scheduledDate;
+  assert(rebalancePlannedPins({ now }).changed === 0, "a publish-failed pin must not be rebalanced");
+  assert(pinDraftStore.getDraft("PF1")!.scheduledDate === before, "its schedule must be untouched");
+});
+
 test("18. Rebalance skips manual / locked Pins", () => {
   reset();
   const now = new Date(2026, 5, 1, 0, 0, 0);
