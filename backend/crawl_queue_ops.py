@@ -254,6 +254,35 @@ def plan_crawl_queue_row(
     return None
 
 
+
+def group_rows_by_key_signature(rows: list[dict]) -> list[list[dict]]:
+    """Split rows into batches that each share an identical key set.
+
+    PostgREST requires every object in a bulk INSERT/UPSERT payload to have the
+    exact same keys; a mixed payload fails with
+        PGRST102 "All object keys must match" [400]
+    and the WHOLE batch is lost.
+
+    plan_crawl_queue_row() deliberately emits different key sets per branch:
+      - new keyword          → base + status + updated_at
+      - pending (has NCA)    → base MINUS next_crawl_at   (preserve schedule)
+      - stale done/completed → base + status + attempts + last_error + updated_at
+      - failed under limit   → base + status + updated_at
+
+    Those omissions are load-bearing: under `resolution=merge-duplicates` an
+    omitted column is left untouched, while a column present as None is
+    overwritten to NULL. So we must NOT pad missing keys with None — that would
+    wipe existing next_crawl_at / attempts. Grouping by key signature keeps each
+    branch's don't-touch semantics intact while satisfying PostgREST.
+
+    Group order is deterministic (first-appearance) for stable logs/tests.
+    """
+    groups: dict[tuple[str, ...], list[dict]] = {}
+    for row in rows:
+        sig = tuple(sorted(row.keys()))
+        groups.setdefault(sig, []).append(row)
+    return list(groups.values())
+
 def classify_queue_plan(existing: dict | None, planned: dict | None) -> str:
     """Return a compact action label for logging/tests."""
     if planned is None:
