@@ -1643,7 +1643,11 @@ export function PinDetailsModal({
                         remotePinUrl: activeDraft.remotePinUrl,
                         boardName: activeDraft.boardName,
                         targetAccountLabel: activeDraft.targetAccountLabel,
-                        socialPosts: activeDraft.socialPosts,
+                        // Prefer what the fan-out recorded this session: the
+                        // `draft` prop is a snapshot from when the drawer opened
+                        // and never re-renders for a store write, so a Facebook /
+                        // Instagram post that landed afterwards was missing here.
+                        socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
                       })}
                     />
                   </div>
@@ -1978,7 +1982,9 @@ export function PinDetailsModal({
               remotePinUrl: result?.pinUrl ?? activeDraft.remotePinUrl,
               boardName: result?.boardName ?? boards.find(b => b.id === activeDraft.boardId)?.name ?? activeDraft.boardName,
               targetAccountLabel: activeDraft.targetAccountLabel,
-              socialPosts: activeDraft.socialPosts,
+              // Same reason as above: the just-finished fan-out wins over the
+              // snapshot the drawer opened with.
+              socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
             });
             return rows.length ? (
               <div data-testid="draft-publish-success">
