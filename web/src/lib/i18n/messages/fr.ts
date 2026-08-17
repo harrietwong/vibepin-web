@@ -1934,7 +1934,7 @@ const fr: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Plus d'actions",
   "studioBoard.card.pinImageAlt": "Image du Pin",
   "studioBoard.card.pinImageUnavailable": "Image du Pin indisponible",
-  "studioBoard.card.noImage": "Aucune image",
+  "studioBoard.card.noImage": "Image indisponible",
   "studioBoard.card.generationFailedPlaceholder": "Échec de la génération",
   "studioBoard.card.originalImageFallback": "Image d'origine",
   "studioBoard.card.publishError.auth": "La connexion Pinterest a expiré. Reconnectez-vous puis réessayez.",

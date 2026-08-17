@@ -899,7 +899,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "更多操作",
   "studioBoard.card.pinImageAlt": "Pin 圖片",
   "studioBoard.card.pinImageUnavailable": "Pin 圖片無法使用",
-  "studioBoard.card.noImage": "無圖片",
+  "studioBoard.card.noImage": "圖片無法使用",
   "studioBoard.card.generationFailedPlaceholder": "生成失敗",
   "studioBoard.card.originalImageFallback": "原始圖片",
   "studioBoard.card.publishError.auth": "Pinterest 連接已過期。請重新連接後重試。",

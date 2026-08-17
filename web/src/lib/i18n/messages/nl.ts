@@ -754,7 +754,7 @@ const nl: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Meer acties",
   "studioBoard.card.pinImageAlt": "Pin-afbeelding",
   "studioBoard.card.pinImageUnavailable": "Pin-afbeelding niet beschikbaar",
-  "studioBoard.card.noImage": "Geen afbeelding",
+  "studioBoard.card.noImage": "Afbeelding niet beschikbaar",
   "studioBoard.card.generationFailedPlaceholder": "Genereren mislukt",
   "studioBoard.card.originalImageFallback": "Originele afbeelding",
   "studioBoard.card.publishError.auth": "De Pinterest-verbinding is verlopen. Maak opnieuw verbinding en probeer het nog eens.",

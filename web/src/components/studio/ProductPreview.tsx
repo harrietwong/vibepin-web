@@ -78,7 +78,7 @@ export function ProductPreviewModal({ product, onUse, onClose }: {
               onClick={() => setZoom(z => !z)}
               style={{ maxWidth: zoom ? "none" : "100%", width: zoom ? "180%" : "auto", maxHeight: zoom ? "none" : "56vh", objectFit: "contain", cursor: zoom ? "zoom-out" : "zoom-in", transition: "width 0.15s ease" }} />
           ) : (
-            <div style={{ width: 300, height: 300, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12 }}>No image</div>
+            <div style={{ width: 300, height: 300, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12 }}>Image unavailable</div>
           )}
         </div>
         <div style={{ padding: "12px 16px", borderTop: `1px solid ${C.border}` }}>
@@ -147,7 +147,7 @@ export function ProductHoverPreview({ product, onUse, children }: {
               <img data-testid="product-preview-image" src={product.imageUrl} alt={product.title}
                 style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             ) : (
-              <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12 }}>No image</div>
+              <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12 }}>Image unavailable</div>
             )}
             <button type="button" data-testid="product-preview-zoom" title="Open preview"
               onClick={e => { e.stopPropagation(); setModal(true); }}

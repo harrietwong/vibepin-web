@@ -1300,7 +1300,7 @@ const hi: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "और कार्रवाइयाँ",
   "studioBoard.card.pinImageAlt": "Pin इमेज",
   "studioBoard.card.pinImageUnavailable": "Pin इमेज उपलब्ध नहीं है",
-  "studioBoard.card.noImage": "कोई इमेज नहीं",
+  "studioBoard.card.noImage": "इमेज उपलब्ध नहीं",
   "studioBoard.card.generationFailedPlaceholder": "जनरेशन विफल",
   "studioBoard.card.originalImageFallback": "ओरिजिनल इमेज",
   "studioBoard.card.publishError.auth": "Pinterest कनेक्शन समाप्त हो गया है। फिर से कनेक्ट करें और दोबारा प्रयास करें।",

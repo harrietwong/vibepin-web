@@ -1000,7 +1000,7 @@ const ja: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "その他の操作",
   "studioBoard.card.pinImageAlt": "Pin画像",
   "studioBoard.card.pinImageUnavailable": "Pin画像を利用できません",
-  "studioBoard.card.noImage": "画像なし",
+  "studioBoard.card.noImage": "画像を表示できません",
   "studioBoard.card.generationFailedPlaceholder": "生成に失敗しました",
   "studioBoard.card.originalImageFallback": "元の画像",
   "studioBoard.card.publishError.auth": "Pinterestの接続の有効期限が切れました。再接続してから再試行してください。",

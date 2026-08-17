@@ -2145,7 +2145,7 @@ const es: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Más acciones",
   "studioBoard.card.pinImageAlt": "Imagen del Pin",
   "studioBoard.card.pinImageUnavailable": "Imagen del Pin no disponible",
-  "studioBoard.card.noImage": "Sin imagen",
+  "studioBoard.card.noImage": "Imagen no disponible",
   "studioBoard.card.generationFailedPlaceholder": "Error al generar",
   "studioBoard.card.originalImageFallback": "Imagen original",
 

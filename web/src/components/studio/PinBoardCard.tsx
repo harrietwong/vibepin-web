@@ -624,7 +624,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="noImage" />
           ) : (
-            <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: BUI.textMuted, fontSize: 10, fontWeight: 700 }}>{tr("studioBoard.card.noImage")}</div>
+            // Nothing resolvable anywhere in the chain. Render the SAME placeholder
+            // component as every other exhausted path rather than a bare text div,
+            // so this state also carries the icon, the gradient and the aria label
+            // (PRD 0816 §13: never a blank grey block).
+            <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
+              placeholderVariant="noImage" />
           )}
         </div>
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>

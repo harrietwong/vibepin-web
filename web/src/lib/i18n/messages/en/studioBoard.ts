@@ -87,7 +87,10 @@ export const studioBoardMessages = {
   "studioBoard.card.pinImageAlt": "Pin image",
   // Alt text for the neutral placeholder shown when no image candidate resolves.
   "studioBoard.card.pinImageUnavailable": "Pin image unavailable",
-  "studioBoard.card.noImage": "No image",
+  // Shown only when EVERY real source in the fallback chain is unrecoverable.
+  // Deliberately not "No image" (PRD 0816 §13): that reads as a bare technical
+  // absence, and a publish failure in particular means the image did exist.
+  "studioBoard.card.noImage": "Image unavailable",
   "studioBoard.card.generationFailedPlaceholder": "Generation failed",
   // Badge on a failed card that is showing an INPUT image (product / reference /
   // parent) instead of a generated result — it must not read as a success.
