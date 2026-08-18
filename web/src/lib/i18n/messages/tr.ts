@@ -426,6 +426,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "pinDetails.confirmReplaceUrlKeep": "Mevcut URL'yi koru",
   "pinDetails.confirmReplaceUrlUse": "Ürün bağlantısını kullan",
   "pinDetails.error.invalidUrl": "Geçerli bir http:// veya https:// URL'si girin.",
+  "pinDetails.error.destinationNotSchedulable": "{platforms} için zamanlama geçici olarak kullanılamıyor. Şimdi yayınlamayı hâlâ kullanabilirsiniz.",
   "pinDetails.error.missingBeforeSchedule": "Zamanlamadan önce eksik bilgileri ekleyin.",
 
   // ── Pin details: Title section ──
@@ -486,6 +487,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "publishDestinations.checkingConnection": "Bağlantı kontrol ediliyor…",
   "publishDestinations.notConnected": "Bağlı değil",
   "publishDestinations.comingSoon": "Çok yakında",
+  "publishDestinations.schedulingUnavailable": "Zamanlama geçici olarak kullanılamıyor",
   "publishDestinations.primary": "Birincil",
   "publishDestinations.connected": "Bağlı",
   "publishDestinations.redirecting": "Pinterest yetkilendirmesi açılıyor...",

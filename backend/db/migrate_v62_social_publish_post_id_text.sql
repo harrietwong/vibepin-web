@@ -21,6 +21,17 @@
 --
 -- Idempotent: the ALTER is guarded on the column still being uuid, so re-running
 -- is a no-op.
+--
+-- STATUS 2026-08-18: ALREADY APPLIED IN PRODUCTION (ref jaxteelkecvlozdrdoog).
+-- Read-only preflight found 20 social_publish_jobs rows whose post_id holds client
+-- draft ids ("pd_1780383217819_uq5c1r") — values a uuid column could not store.
+-- Confirmed independently by filtering post_id with a non-uuid literal: PostgREST
+-- accepted it instead of raising 22P02. The guard above makes re-running harmless,
+-- but there is nothing left to do: the column is already text and the two tables
+-- hold real published results (27 destination rows, 0 orphans).
+--
+-- This corrects the file's own "verified no rows" note, which was true when it was
+-- written (2026-08-02) and is no longer true.
 
 do $$
 begin
