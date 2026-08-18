@@ -1,4 +1,11 @@
--- Migration v58: social_publish_jobs.post_id → text
+-- Migration v62: social_publish_jobs.post_id → text
+--
+-- RENUMBERED from v58 (2026-08-18). v58 was double-booked: migrate_v58_ai_cost_events
+-- (committed 2026-07-31) got the number first, so this file — committed 2026-08-02 —
+-- yields. v59 is likewise double-booked (social_pinterest_unify /
+-- truncate_opportunity_relations), and v60/v61 are held by in-flight drafts in another
+-- worktree, so v62 is the first genuinely free number. Never applied under the old
+-- number, so renumbering is safe.
 --
 -- WHY
 -- v32 declared post_id as uuid, but the id it actually receives is a client draft
