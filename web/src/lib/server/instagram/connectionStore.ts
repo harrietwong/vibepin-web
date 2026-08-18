@@ -111,12 +111,24 @@ export async function upsertInstagramConnection(
     updatedAt: now,
   };
 
-  const { data: existing, error: readError } = await db()
+  // Identify the row by WHICH Instagram account this is, not just by platform.
+  // Keyed on provider alone, connecting a second account overwrote the first.
+  // Unlike Facebook — whose provider_account_id switches to the Page id once a
+  // Page is chosen — Instagram's stays the IG user id throughout, so it is the
+  // key directly.
+  const { data: rows, error: readError } = await db()
     .from(TABLE)
-    .select("id, metadata")
+    .select("id, metadata, provider_account_id")
     .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
+    .eq("provider", PROVIDER);
+
+  type IgRow = { id: string; metadata?: Record<string, unknown> | null; provider_account_id?: string | null };
+  const allRows = (rows as IgRow[] | null) ?? [];
+  const existing =
+    allRows.find(r => r.provider_account_id && r.provider_account_id === input.accountId) ??
+    // A row predating multi-account (no id recorded): adopt it rather than
+    // leaving it orphaned beside a new one.
+    (allRows.length === 1 && !allRows[0].provider_account_id ? allRows[0] : null);
 
   if (readError && !isMissingTable(readError.code)) {
     console.error("[instagram] read connection:", readError.message);
@@ -206,13 +218,21 @@ export async function disconnectInstagramConnection(uid: string): Promise<void> 
  */
 export async function getInstagramAccessToken(
   uid: string,
+  /**
+   * Which connected Instagram account to publish as. With several connected,
+   * omitting it would silently pick one, so we refuse instead — posting as the
+   * wrong brand is worse than not posting. Omitted with a single account (the
+   * pre-multi-account contract), that account is used.
+   */
+  connectionId?: string,
 ): Promise<{ accessToken: string; userId: string | null; username: string | null } | null> {
-  const { data, error } = await db()
+  const base = db()
     .from(TABLE)
-    .select("connection_status, access_token_encrypted, provider_account_id, provider_account_name")
+    .select("id, connection_status, access_token_encrypted, provider_account_id, provider_account_name")
     .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
+    .eq("provider", PROVIDER);
+
+  const { data, error } = connectionId ? await base.eq("id", connectionId) : await base;
 
   if (error) {
     if (isMissingTable(error.code)) return null;
@@ -220,14 +240,21 @@ export async function getInstagramAccessToken(
     return null;
   }
 
-  const row = data as {
+  const rows = (data as Array<{
+    id: string;
     connection_status?: string | null;
     access_token_encrypted?: string | null;
     provider_account_id?: string | null;
     provider_account_name?: string | null;
-  } | null;
+  }> | null) ?? [];
 
-  if (!row || row.connection_status !== "connected" || !row.access_token_encrypted) return null;
+  const publishable = rows.filter(r => r.connection_status === "connected" && r.access_token_encrypted);
+  if (publishable.length > 1 && !connectionId) {
+    console.error("[instagram] several connected accounts and no target given");
+    return null;
+  }
+  const row = publishable[0] ?? null;
+  if (!row?.access_token_encrypted) return null;
 
   try {
     return {

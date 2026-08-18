@@ -545,6 +545,21 @@ async function main() {
     );
   });
 
+  await test("Instagram stores one row per account and refuses to guess", async () => {
+    const igSrc = readFileSync(
+      new URL("../src/lib/server/instagram/connectionStore.ts", import.meta.url),
+      "utf8",
+    );
+    assert(
+      igSrc.includes("r.provider_account_id === input.accountId"),
+      "the row is matched on the IG user id, not on provider alone",
+    );
+    assert(
+      igSrc.includes("publishable.length > 1 && !connectionId"),
+      "with several connected accounts and no target, the store must return null",
+    );
+  });
+
   await test("publishing refuses to guess between several connected accounts", async () => {
     assert(
       storeSrc.includes("publishable.length > 1 && !connectionId"),

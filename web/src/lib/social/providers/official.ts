@@ -151,7 +151,10 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
   }
 
   const { getInstagramAccessToken } = await import("@/lib/server/instagram/connectionStore");
-  const connection = await getInstagramAccessToken(userId);
+  // Name the account to publish as — same contract as Facebook: with several
+  // connected the store refuses to guess, and the selected destination carries
+  // the connection id that identifies the target.
+  const connection = await getInstagramAccessToken(userId, input.connection?.id);
   if (!connection?.userId) {
     return { ok: false, status: "failed", error: "Connect an Instagram account first." };
   }
