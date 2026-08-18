@@ -80,7 +80,10 @@ export const officialProvider: SocialPublishingProvider = {
     }
 
     const { getSelectedPageToken } = await import("@/lib/server/facebook/connectionStore");
-    const selected = await getSelectedPageToken(userId);
+    // Name the account to publish as. With several Facebook accounts connected,
+    // the store refuses to guess — the destination the merchant selected carries
+    // the connection id, and that is the target.
+    const selected = await getSelectedPageToken(userId, input.connection?.id);
     // null covers every not-publishable state (no row, disconnected, reconnect
     // required, no Page selected, undecryptable token) — one clean message.
     if (!selected) {
