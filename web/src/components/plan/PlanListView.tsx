@@ -16,6 +16,7 @@ import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
 import { getPinLifecycle } from "@/lib/studio/pinLifecycle";
 import { toProxyUrl } from "@/lib/imageProxy";
+import { ImageOff } from "lucide-react";
 import { toast } from "sonner";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -97,6 +98,12 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
   const [statusFilter, setStatusFilter] = useState<"All" | ListStatus>(initialStatus ?? "All");
   const [cols, setCols] = useState({ board: true, url: true, product: true });
   const [colsOpen, setColsOpen] = useState(false);
+  // Ids whose thumbnail failed to decode. Tracked in state (not by mutating the
+  // <img> style) so the row re-renders into the labelled placeholder instead of
+  // leaving a faded broken image behind.
+  const [failedThumbs, setFailedThumbs] = useState<Set<string>>(new Set());
+  const markThumbFailed = (id: string) =>
+    setFailedThumbs(prev => (prev.has(id) ? prev : new Set(prev).add(id)));
 
   useEffect(() => {
     function load() { setDrafts(draftsForCategory(category)); }
@@ -253,6 +260,7 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
         const url = sanitizeHandoffField(d.destinationUrl);
         const scheduled = !!ev.plannedDate && !!ev.plannedTime;
         const posted = status === "Published";
+        const thumbFailed = failedThumbs.has(d.id);
         return (
           <div key={d.id} data-testid="plan-list-row"
             style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "10px 12px", minHeight: 84, alignItems: "center",
@@ -264,9 +272,22 @@ export function PlanListView({ category, handlers, initialStatus }: { category: 
             {/* 2. Pin */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, cursor: "pointer" }} onClick={() => handlers.onOpenDetails(d)}>
               <div data-testid="plan-list-thumb" style={{ flexShrink: 0, width: 48, height: 72, borderRadius: 7, overflow: "hidden", background: "var(--app-surface-3, #0f172a)", border: `1px solid ${C.border}` }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={toProxyUrl(d.imageUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  onError={e => { e.currentTarget.style.opacity = "0.3"; }} />
+                {/* A row whose image is missing or unreachable falls back to the same
+                    labelled placeholder the board cards use. Fading the broken <img>
+                    to 0.3 opacity (the previous behaviour) left a ghost of the browser's
+                    own broken-image glyph in a customer-visible row, and told the
+                    merchant nothing about why. */}
+                {thumbFailed || !sanitizeHandoffField(d.imageUrl) ? (
+                  <div data-testid="plan-list-thumb-placeholder" role="img"
+                    aria-label={tr("studioBoard.card.pinImageUnavailable")}
+                    style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--app-surface-3, #0f172a)", color: C.muted }}>
+                    <ImageOff style={{ width: 14, height: 14 }} />
+                  </div>
+                ) : (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img src={toProxyUrl(d.imageUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    onError={() => markThumbFailed(d.id)} />
+                )}
               </div>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
                 {ev.title}
