@@ -646,21 +646,33 @@ export async function getStoredFacebookSelection(
  * social_connections schema has no disconnected_at column, so connection_status is
  * the disconnected marker here.
  */
-export async function disconnectFacebookConnection(uid: string): Promise<void> {
+export async function disconnectFacebookConnection(
+  uid: string,
+  /**
+   * Which connection to disconnect. Omitted, every Facebook row for this user is
+   * cleared — the single-account contract. With several connected, removing one
+   * must not sign the others out, so callers pass the id.
+   */
+  connectionId?: string,
+): Promise<void> {
   // Read first: every CREDENTIAL is dropped below, but the Page the merchant
   // already identified (lastKnownPageId/Name — a public id, not a secret) is
   // carried over. Without it a reconnect would have to ask for the Page id by
   // hand again, even for a Page we had already resolved. Everything token-shaped
   // — selectedPageTokenEncrypted and every candidatePages[].pageAccessTokenEncrypted
   // — is deliberately NOT copied forward.
-  const { data: existing } = await db()
+  const readQuery = db()
     .from(TABLE)
-    .select("metadata")
+    .select("id, metadata")
     .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
+    .eq("provider", PROVIDER);
+  const { data: existingRows } = connectionId ? await readQuery.eq("id", connectionId) : await readQuery;
 
-  const prior = (existing?.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  // With several rows and no id, this clears them all, so remembering any one
+  // Page would be arbitrary — only a single, unambiguous row contributes one.
+  const rowsForRead = (existingRows as Array<{ id: string; metadata?: Record<string, unknown> | null }> | null) ?? [];
+  const soleRow = rowsForRead.length === 1 ? rowsForRead[0] : null;
+  const prior = (soleRow?.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
   const rememberedPageId = prior?.selectedPageId ?? prior?.lastKnownPageId ?? null;
   const rememberedPageName = prior?.selectedPageId
     ? prior.selectedPageName
@@ -684,7 +696,7 @@ export async function disconnectFacebookConnection(uid: string): Promise<void> {
       }
     : null;
 
-  const { error } = await db()
+  const updateQuery = db()
     .from(TABLE)
     .update({
       access_token_encrypted: null,
@@ -696,6 +708,7 @@ export async function disconnectFacebookConnection(uid: string): Promise<void> {
     })
     .eq("user_id", uid)
     .eq("provider", PROVIDER);
+  const { error } = connectionId ? await updateQuery.eq("id", connectionId) : await updateQuery;
 
   if (error && !isMissingTable(error.code)) {
     console.error("[facebook] disconnect:", error.message);

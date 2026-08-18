@@ -45,7 +45,7 @@ import {
   SOCIAL_CONNECTIONS_CHANGED_EVENT,
   notifyConnectionsChanged,
 } from "@/lib/social/connectionsCache";
-import { isMultiSocialAccountsEnabled } from "@/lib/socialFeatureFlags";
+import { isMultiAccountEnabledFor } from "@/lib/socialFeatureFlags";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 
@@ -256,6 +256,7 @@ function PlatformCard({
   onConnect,
   onDisconnect,
   onRefresh,
+  onRemoveAccount,
 }: {
   summary: PlatformConnectionSummary;
   busy: boolean;
@@ -266,6 +267,8 @@ function PlatformCard({
   onDisconnect: () => void;
   /** Re-fetch the connection list (used after a Facebook Page selection). */
   onRefresh: () => void;
+  /** Disconnect ONE account, leaving the platform's other accounts signed in. */
+  onRemoveAccount?: (connectionId: string) => void;
 }) {
   const { t: tr } = useLocale();
   const meta = PLATFORMS[summary.provider];
@@ -304,6 +307,49 @@ function PlatformCard({
           </p>
         </div>
       </div>
+
+      {/* Every connected account, one row each, once there is more than one. With
+          a single account the header line above already names it, so a list
+          repeating it would be noise. Each row can be removed on its own —
+          signing out of one brand must not sign out of the others. */}
+      {summary.accounts.filter(a => a.connectionStatus === "connected").length > 1 && (
+        <ul
+          data-testid={`social-accounts-list-${summary.provider}`}
+          style={{ margin: "12px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}
+        >
+          {summary.accounts
+            .filter(a => a.connectionStatus === "connected")
+            .map(acct => (
+              <li
+                key={acct.id}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                  padding: "7px 10px", borderRadius: 8,
+                  border: `1px solid ${UI.border}`, background: UI.surface2,
+                }}
+              >
+                <span style={{ fontSize: 12, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {acct.providerAccountName ?? acct.providerAccountUsername ?? acct.id.slice(0, 8)}
+                </span>
+                <button
+                  type="button"
+                  data-testid={`social-remove-account-${acct.id}`}
+                  onClick={() => onRemoveAccount?.(acct.id)}
+                  disabled={busy}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 4,
+                    padding: "4px 9px", borderRadius: 7, flexShrink: 0,
+                    border: `1px solid ${UI.border}`, background: "transparent",
+                    color: UI.textSec, fontSize: 11, fontWeight: 700,
+                    cursor: busy ? "wait" : "pointer", fontFamily: "inherit",
+                  }}
+                >
+                  <Trash2 size={11} /> {tr("socialPanel.action.disconnectPrefix").trim()}
+                </button>
+              </li>
+            ))}
+        </ul>
+      )}
 
       {/* Facebook Page connection detail (display only). Shown whenever there is a
           stored Facebook row, including degraded/error states, so the user sees
@@ -785,7 +831,7 @@ export function SocialAccountsPanel() {
   /** Only set while a connect click is redirecting the browser away — drives the button label. */
   const [connectingProvider, setConnectingProvider] = useState<SocialProvider | null>(null);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
-  const multiAccountEnabled = isMultiSocialAccountsEnabled();
+
 
   const load = useCallback(async () => {
     setLoadError(false);
@@ -869,6 +915,27 @@ export function SocialAccountsPanel() {
     } finally {
       setBusyProvider(null);
       setConnectingProvider(null);
+    }
+  }
+
+  /**
+   * Disconnect ONE account, leaving the platform's other accounts signed in.
+   * Distinct from handleDisconnect, which clears the platform: with several
+   * accounts connected, "Disconnect" on the card would sign out all of them, so
+   * the per-account rows get their own action that names the row.
+   */
+  async function handleRemoveAccount(summary: PlatformConnectionSummary, connectionId: string) {
+    setBusyProvider(summary.provider);
+    try {
+      const res = await disconnectSocial(connectionId);
+      if (res.usePinterestFlow) await disconnectPinterest();
+      toast.success(`${PLATFORMS[summary.provider].name}${tr("socialPanel.toast.disconnectedSuffix")}`);
+    } catch {
+      toast.error(tr("socialPanel.toast.couldNotDisconnect"));
+    } finally {
+      setBusyProvider(null);
+      notifyConnectionsChanged();
+      void load();
     }
   }
 
@@ -980,10 +1047,11 @@ export function SocialAccountsPanel() {
               summary={summary}
               busy={busyProvider === provider}
               connecting={connectingProvider === provider}
-              multiAccount={multiAccountEnabled}
+              multiAccount={isMultiAccountEnabledFor(provider)}
               onConnect={() => void handleConnect(provider)}
               onDisconnect={() => void handleDisconnect(summary)}
               onRefresh={() => void load()}
+              onRemoveAccount={(id) => void handleRemoveAccount(summary, id)}
             />
           );
         })}

@@ -119,12 +119,14 @@ export const officialProvider: SocialPublishingProvider = {
   async disconnect(input: DisconnectInput): Promise<void> {
     if (input.provider === "facebook") {
       const { disconnectFacebookConnection } = await import("@/lib/server/facebook/connectionStore");
-      await disconnectFacebookConnection(input.userId);
+      // Name the row: with several accounts connected, disconnecting one must
+      // leave the others signed in.
+      await disconnectFacebookConnection(input.userId, input.connectionId);
       return;
     }
     if (input.provider === "instagram") {
       const { disconnectInstagramConnection } = await import("@/lib/server/instagram/connectionStore");
-      await disconnectInstagramConnection(input.userId);
+      await disconnectInstagramConnection(input.userId, input.connectionId);
       return;
     }
     // Pinterest never reaches here (see module comment). Any other future
