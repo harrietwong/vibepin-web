@@ -221,6 +221,10 @@ export function PinDetailsModal({
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
+  // Which specific accounts to publish as, on platforms with more than one
+  // connected. Empty means "every connected account on the selected platforms" —
+  // connecting a second account must not silently narrow an existing habit.
+  const [socialAccountIds, setSocialAccountIds] = useState<Array<{ provider: string; id: string }>>([]);
   // Guards the one-shot fan-out to extra channels after a successful publish.
   const socialFannedOutRef = useRef(false);
   // `draft` is a prop — a snapshot taken when the drawer opened. The social
@@ -656,6 +660,8 @@ export function PinDetailsModal({
     setPinterestConnected(false);
     setPinterestAccount(null);
     setSocialDestinations([]);
+    setSocialAccountIds([]);
+    setSocialAccountIds([]);
     // Scoped to one publish: never carry another Pin's live posts into this one.
     setLiveSocialPosts(null);
     socialFannedOutRef.current = false;
@@ -934,6 +940,22 @@ export function PinDetailsModal({
     // Pinterest publish AND after a failed one — those channels stand on their
     // own, so a Pinterest refusal (Trial access, dead token, bad board) must not
     // silently swallow them. Guarded to run at most once per publish attempt.
+    // One destination per TARGET, not per platform: with several accounts picked
+    // on a platform, each needs its own row so the server publishes to each and
+    // reports them separately. Nothing narrowed → the platform is sent bare and
+    // the server resolves its single connected account, exactly as before.
+    function expandDestinations(providers: SocialProvider[]) {
+      return providers.flatMap(provider => {
+        // socialAccountIds is flat across platforms; an id belonging to another
+        // platform is simply not among that provider's connections server-side,
+        // so scoping happens there rather than duplicating the account list here.
+        const ids = socialAccountIds.filter(a => a.provider === provider).map(a => a.id);
+        return ids.length
+          ? ids.map(id => ({ provider, socialConnectionId: id }))
+          : [{ provider }];
+      });
+    }
+
     async function fanOutToExtraChannels(pinterestPublished = false): Promise<void> {
       const extras = socialDestinations.filter(p => p !== "pinterest");
       if (!extras.length || socialFannedOutRef.current) return;
@@ -948,7 +970,7 @@ export function PinDetailsModal({
             destinationUrl: destinationUrl.trim() || undefined,
             altText: altText.trim() || undefined,
           },
-          destinations: extras.map(provider => ({ provider })),
+          destinations: expandDestinations(extras),
         });
         const published = r.destinations.filter(d => d.status === "published");
         const failed = r.destinations.filter(d => d.status === "failed");
@@ -1049,7 +1071,7 @@ export function PinDetailsModal({
             destinationUrl: destinationUrl.trim() || undefined,
             altText: altText.trim() || undefined,
           },
-          destinations: extras.map(provider => ({ provider })),
+          destinations: expandDestinations(extras),
         });
         const published = r.destinations.filter(d => d.status === "published");
         const failed = r.destinations.filter(d => d.status === "failed");
@@ -1892,6 +1914,8 @@ export function PinDetailsModal({
             <div style={{ ...fieldBlock, marginBottom: 0, marginTop: 14 }}>
               <PublishDestinations
                 selected={socialDestinations}
+                selectedAccountIds={socialAccountIds}
+                onSelectedAccountIdsChange={setSocialAccountIds}
                 onSelectedChange={setSocialDestinations}
                 onConnectPinterest={goToPinterestOAuth}
                 connectingPinterest={isRedirectingToPinterest}

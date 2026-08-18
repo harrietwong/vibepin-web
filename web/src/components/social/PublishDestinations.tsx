@@ -9,7 +9,7 @@
  * and metadata, but connection status comes from the same place Settings reads.
  */
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Check, Link as LinkIcon, Loader2 } from "lucide-react";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
 import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
@@ -194,9 +194,19 @@ export function PublishDestinations({
   pinterestConnected,
   pinterestAccountName,
   renderDetails,
+  selectedAccountIds,
+  onSelectedAccountIdsChange,
 }: {
   selected: SocialProvider[];
   onSelectedChange: (next: SocialProvider[]) => void;
+  /**
+   * Which specific accounts are selected, for platforms where the merchant has
+   * connected more than one. Platform-level `selected` still decides whether a
+   * platform participates at all; this narrows it to particular accounts, so a
+   * caller that does not care about accounts keeps working unchanged.
+   */
+  selectedAccountIds?: Array<{ provider: string; id: string }>;
+  onSelectedAccountIdsChange?: (next: Array<{ provider: string; id: string }>) => void;
   onConnectPinterest?: () => void;
   connectingPinterest?: boolean;
   pinterestConnected?: boolean;
@@ -318,6 +328,30 @@ export function PublishDestinations({
     if (live.length !== selected.length) onSelectedChange(live);
   }, [selected, onSelectedChange]);
 
+  // An account counts as selected when it is explicitly listed, OR when nothing
+  // has been narrowed yet — connecting a second account should not silently stop
+  // publishing to the first. Explicit selection only starts once the merchant
+  // unticks something.
+  function accountChecked(id: string): boolean {
+    return !selectedAccountIds?.length || selectedAccountIds.some(a => a.id === id);
+  }
+
+  function toggleAccount(provider: SocialProvider, id: string) {
+    if (!onSelectedAccountIdsChange) return;
+    const current = selectedAccountIds?.length
+      ? selectedAccountIds
+      // First untick materialises the implicit "all" into a concrete list, so
+      // removing one account does not read as "select only this one".
+      : summaries.flatMap(s =>
+          s.accounts
+            .filter(a => a.connectionStatus === "connected")
+            .map(a => ({ provider: s.provider as string, id: a.id })));
+    const next = current.some(a => a.id === id)
+      ? current.filter(a => a.id !== id)
+      : [...current, { provider: provider as string, id }];
+    onSelectedAccountIdsChange(next);
+  }
+
   function toggle(provider: SocialProvider) {
     if (!PLATFORMS[provider].liveConnect) return;
     const next = selected.includes(provider)
@@ -358,9 +392,11 @@ export function PublishDestinations({
         {SOCIAL_PROVIDERS.map(provider => {
           const summary = effectiveSummaries.find(s => s.provider === provider);
           if (!summary) return null;
+          const multi = summary.accounts.filter(a => a.connectionStatus === "connected");
+          const showAccounts = multi.length > 1 && selected.includes(provider);
           return (
+            <Fragment key={provider}>
             <DestinationRow
-              key={provider}
               summary={summary}
               selected={selected.includes(provider)}
               onToggle={() => toggle(provider)}
@@ -376,6 +412,42 @@ export function PublishDestinations({
               }
               checkingConnection={!hasLoaded && !summary.connected}
             />
+            {showAccounts && multi.map(acct => {
+              const checked = accountChecked(acct.id);
+              return (
+                <button
+                  key={acct.id}
+                  type="button"
+                  role="checkbox"
+                  aria-checked={checked}
+                  data-testid={`publish-dest-${provider}-account-${acct.id}`}
+                  onClick={() => toggleAccount(provider, acct.id)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    padding: "6px 10px 6px 42px", border: "none",
+                    borderTop: `1px solid ${UI.border}`, width: "100%",
+                    background: checked ? "rgba(59,130,246,0.06)" : "transparent",
+                    cursor: "pointer", textAlign: "left", fontFamily: "inherit",
+                  }}
+                >
+                  <span aria-hidden style={{
+                    width: 14, height: 14, borderRadius: 4, flexShrink: 0,
+                    border: `1.5px solid ${checked ? "#3B82F6" : UI.border}`,
+                    background: checked ? "#3B82F6" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    {checked && <Check size={10} style={{ color: "#fff" }} strokeWidth={3} />}
+                  </span>
+                  <span style={{
+                    fontSize: 11.5, color: checked ? UI.text : UI.textSec,
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  }}>
+                    {acct.providerAccountName ?? acct.providerAccountUsername ?? acct.id.slice(0, 8)}
+                  </span>
+                </button>
+              );
+            })}
+            </Fragment>
           );
         }).map((node, i) => {
           const provider = SOCIAL_PROVIDERS[i];
@@ -389,6 +461,10 @@ export function PublishDestinations({
             </div>
           ) : node;
         })}
+        {/* Per-account rows appear only where the merchant connected more than
+            one account on a platform. With a single account the platform row is
+            already unambiguous, and an extra row naming the same thing twice
+            would be noise. */}
       </div>
 
       {error && !effectivePinterestConnected && (

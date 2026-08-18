@@ -15,6 +15,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 // Type-only: erased at compile time, so it cannot trigger the module's
 // import-time env reads (the runtime module is still loaded dynamically in main).
 import type { FacebookApiError } from "../src/lib/server/facebook/service";
@@ -518,6 +519,56 @@ async function main() {
     } finally {
       m.restore();
     }
+  });
+
+  // ── Multi-account storage (source assertions) ─────────────────────────────
+  // Guards behaviour with no unit-testable seam — every path needs a live
+  // Supabase client. A regression here means connecting a second Facebook account
+  // silently overwrites the first, which no runtime test catches until data is
+  // already lost.
+  const storeSrc = readFileSync(
+    new URL("../src/lib/server/facebook/connectionStore.ts", import.meta.url),
+    "utf8",
+  );
+
+  await test("upsert resolves the row by Facebook account id, not by provider alone", async () => {
+    assert(
+      storeSrc.includes("facebookUserIdOf(r) === input.accountId"),
+      "the existing row must be matched on metadata.facebook.facebookUserId",
+    );
+  });
+
+  await test("a legacy row with no recorded account id is adopted, not orphaned", async () => {
+    assert(
+      storeSrc.includes("allRows.length === 1 && !facebookUserIdOf(allRows[0])"),
+      "a single pre-multi-account row is reused rather than duplicated",
+    );
+  });
+
+  await test("Instagram stores one row per account and refuses to guess", async () => {
+    const igSrc = readFileSync(
+      new URL("../src/lib/server/instagram/connectionStore.ts", import.meta.url),
+      "utf8",
+    );
+    assert(
+      igSrc.includes("r.provider_account_id === input.accountId"),
+      "the row is matched on the IG user id, not on provider alone",
+    );
+    assert(
+      igSrc.includes("publishable.length > 1 && !connectionId"),
+      "with several connected accounts and no target, the store must return null",
+    );
+  });
+
+  await test("publishing refuses to guess between several connected accounts", async () => {
+    assert(
+      storeSrc.includes("publishable.length > 1 && !connectionId"),
+      "with several publishable accounts and no target, the store must return null",
+    );
+    assert(
+      storeSrc.includes("connectionId?: string"),
+      "getSelectedPageToken must accept the target connection id",
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

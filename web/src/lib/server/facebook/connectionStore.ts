@@ -225,12 +225,27 @@ export async function upsertFacebookConnection(
     updatedAt: now,
   };
 
-  const { data: existing, error: readError } = await db()
+  // Identify the row by WHICH Facebook account this is, not just by platform.
+  // Keyed on provider alone, connecting a second account overwrote the first —
+  // the table has no (user_id, provider) unique constraint, so that single-row
+  // assumption lived only here. metadata.facebook.facebookUserId is the stable
+  // identity: provider_account_id switches to the Page id once one is selected,
+  // so it cannot serve as the key.
+  const { data: rows, error: readError } = await db()
     .from(TABLE)
     .select("id, metadata")
     .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
+    .eq("provider", PROVIDER);
+
+  type FacebookRow = { id: string; metadata?: Record<string, unknown> | null };
+  const facebookUserIdOf = (r: FacebookRow): string | null =>
+    ((r.metadata as { facebook?: { facebookUserId?: string | null } } | null)?.facebook?.facebookUserId) ?? null;
+  const allRows = (rows as FacebookRow[] | null) ?? [];
+  const existing =
+    allRows.find(r => facebookUserIdOf(r) && facebookUserIdOf(r) === input.accountId) ??
+    // No account id recorded yet (a row written before multi-account, or one
+    // still mid-OAuth): adopt that single row rather than orphaning it.
+    (allRows.length === 1 && !facebookUserIdOf(allRows[0]) ? allRows[0] : null);
 
   if (readError && !isMissingTable(readError.code)) {
     console.error("[facebook] read connection:", readError.message);
@@ -443,13 +458,24 @@ export type SelectedPageToken = {
  * dbStatusFor() collapses two distinct pending states onto 'not_connected', so
  * trusting either one alone would let a half-configured connection publish.
  */
-export async function getSelectedPageToken(uid: string): Promise<SelectedPageToken | null> {
-  const { data, error } = await db()
+export async function getSelectedPageToken(
+  uid: string,
+  /**
+   * Which connected Facebook account to publish as. With several connected,
+   * omitting it would silently pick one — so the caller names the target and we
+   * fail closed if that row is gone. Omitted (single-account callers, and the
+   * pre-multi-account contract), the sole publishable row is used; with several
+   * and no id, we refuse rather than guess.
+   */
+  connectionId?: string,
+): Promise<SelectedPageToken | null> {
+  const query = db()
     .from(TABLE)
-    .select("connection_status, metadata")
+    .select("id, connection_status, metadata")
     .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
+    .eq("provider", PROVIDER);
+
+  const { data, error } = connectionId ? await query.eq("id", connectionId) : await query;
 
   if (error) {
     if (isMissingTable(error.code)) return null;
@@ -457,14 +483,25 @@ export async function getSelectedPageToken(uid: string): Promise<SelectedPageTok
     return null;
   }
 
-  const row = data as { connection_status?: string | null; metadata?: Record<string, unknown> | null } | null;
+  const rows = (data as Array<{ id: string; connection_status?: string | null; metadata?: Record<string, unknown> | null }> | null) ?? [];
+  // Only rows that can actually publish are candidates, so "which one?" is asked
+  // of real options rather than of half-configured leftovers.
+  const publishable = rows.filter(r => {
+    const fb = (r.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+    return r.connection_status === "connected" && fb?.connectionState === "connected"
+      && Boolean(fb?.selectedPageId) && Boolean(fb?.selectedPageTokenEncrypted);
+  });
+  if (publishable.length > 1 && !connectionId) {
+    console.error("[facebook] several publishable accounts and no target given");
+    return null;
+  }
+  const row = publishable[0] ?? null;
   if (!row) return null;
-  if (row.connection_status !== "connected") return null;
 
+  // Re-read through the same guards the filter applied: they hold by
+  // construction, and repeating them narrows the optional fields for TS.
   const fb = (row.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
-  if (!fb) return null;
-  if (fb.connectionState !== "connected") return null;
-  if (!fb.selectedPageId || !fb.selectedPageTokenEncrypted) return null;
+  if (!fb?.selectedPageId || !fb.selectedPageTokenEncrypted) return null;
 
   let pageAccessToken: string;
   try {
