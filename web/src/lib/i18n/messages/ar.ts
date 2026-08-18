@@ -2001,7 +2001,7 @@ const ar: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "المزيد من الإجراءات",
   "studioBoard.card.pinImageAlt": "صورة الـ Pin",
   "studioBoard.card.pinImageUnavailable": "صورة الـ Pin غير متوفرة",
-  "studioBoard.card.noImage": "لا توجد صورة",
+  "studioBoard.card.noImage": "الصورة غير متوفرة",
   "studioBoard.card.generationFailedPlaceholder": "فشل الإنشاء",
   "studioBoard.card.originalImageFallback": "الصورة الأصلية",
   "studioBoard.card.publishError.auth": "انتهت صلاحية اتصال Pinterest. أعد الربط ثم أعد المحاولة.",

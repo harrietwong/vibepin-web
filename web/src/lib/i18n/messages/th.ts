@@ -2002,7 +2002,7 @@ const th: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "การดำเนินการเพิ่มเติม",
   "studioBoard.card.pinImageAlt": "รูปภาพ Pin",
   "studioBoard.card.pinImageUnavailable": "ไม่มีรูปภาพ Pin ให้แสดง",
-  "studioBoard.card.noImage": "ไม่มีรูปภาพ",
+  "studioBoard.card.noImage": "ไม่มีรูปภาพที่ใช้ได้",
   "studioBoard.card.generationFailedPlaceholder": "สร้างไม่สำเร็จ",
   "studioBoard.card.originalImageFallback": "รูปภาพต้นฉบับ",
   "studioBoard.card.publishError.auth": "การเชื่อมต่อ Pinterest หมดอายุแล้ว เชื่อมต่อใหม่แล้วลองอีกครั้ง",

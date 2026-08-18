@@ -18,6 +18,9 @@ import {
   sanitizeHandoffField,
   type WeeklyPlanItemPayload,
 } from "./weeklyPlanHandoff";
+// Type-only edge in the other direction (pinLifecycle imports `type PinDraft` from
+// here), so this value import creates no runtime cycle.
+import { isActionablePublishFailure } from "./studio/pinLifecycle";
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
 import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
@@ -1018,14 +1021,46 @@ export function isDraftAddedToWeeklyPlan(draft: PinDraft): boolean {
  *  calendar, so it must not also appear here.
  *  Create Pins v2 board drafts (uploads / AI pins) live on the Studio board, not the
  *  Weekly Plan tray, until explicitly added — so board‑origin unadded drafts are
- *  excluded here (prevents fresh uploads from leaking into Weekly Plan). */
+ *  excluded here (prevents fresh uploads from leaking into Weekly Plan).
+ *
+ *  Lifecycle exclusions (PRD 0816 §7.1): "unscheduled" is a LIFECYCLE state, not
+ *  "happens to have no date right now". Both publish outcomes CLEAR the scheduling
+ *  fields — payloadAfterSuccess and payloadAfterFailure blank scheduledDate/
+ *  scheduledTime/plannedAt so the row drops out of the due scan. A posted or failed
+ *  Pin therefore has no date, no plan membership and no archive flag, and used to
+ *  satisfy every condition above and reappear in the tray. The date checks cannot
+ *  carry this: the state has to be read from the lifecycle fields themselves.
+ *
+ *  Fixed HERE, in the canonical selector, rather than at the render sites — a
+ *  `filter(status !== "posted")` in the sidebar would hide the symptom while every
+ *  other consumer of this predicate kept the wrong set. */
 export function isUnaddedGeneratedDraft(d: PinDraft, category?: string): boolean {
   if (category && d.category !== category) return false;
   if (d.archivedAt) return false;
   if (sanitizeHandoffField(d.scheduledDate)) return false;
   if (isDraftAddedToWeeklyPlan(d)) return false;
   if (isBoardSource(d)) return false;
+  if (isPublishedDraft(d)) return false;
+  if (isFailedDraft(d)) return false;
   return true;
+}
+
+/** Published: the publish succeeded and the remote post exists. `postedAt` is the
+ *  canonical marker (written by payloadAfterSuccess and by the client publish path);
+ *  `remotePinId` covers legacy rows that recorded the Pin without the timestamp. */
+export function isPublishedDraft(d: Pick<PinDraft, "postedAt" | "remotePinId">): boolean {
+  return !!sanitizeHandoffField(d.postedAt) || !!sanitizeHandoffField(d.remotePinId);
+}
+
+/** Failed: either publish attempt or generation left this Pin needing attention.
+ *  Publish failures delegate to isActionablePublishFailure so this agrees with the
+ *  Plan banner and the calendar badge — one rule, three surfaces. Generation
+ *  failures are flagged separately and never carry a publishError. */
+export function isFailedDraft(
+  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt" | "generationStatus">,
+): boolean {
+  if (isActionablePublishFailure(d)) return true;
+  return d.generationStatus === "failed" && !d.archivedAt;
 }
 
 export function getUnaddedGeneratedDrafts(category?: string): PinDraft[] {

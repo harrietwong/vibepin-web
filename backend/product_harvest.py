@@ -48,6 +48,32 @@ P0_CATEGORIES = ("fashion", "womens-fashion", "home-decor", "beauty", "digital-p
 KNOWN_COMMERCE_DOMAINS = {r[0] for r in DOMAIN_RULES} | {"etsy.com"}
 SHOPIFY_MARKERS = ("myshopify.com",)
 
+# Amazon runs one marketplace per country on its own ccTLD (amazon.in, amazon.de,
+# amazon.co.uk, amazon.com.br …). DOMAIN_RULES only carries the exact string
+# "amazon.com" because that table ALSO drives platform classification, and adding
+# entries there would change classification semantics for every consumer — so the
+# TLD family is matched HERE, at the acceptance whitelist, and DOMAIN_RULES is left
+# alone. Before this, a real product page such as
+#     amazon.in/dp/B0H6Q163VC
+# was rejected as `non_commerce_domain` even though the PDP gate (_PDP_RULES already
+# matches `amazon\.` on ANY TLD) recognised it as a genuine ASIN page: the whitelist
+# ran first and killed it before the gate could speak.
+#
+# The pattern anchors the TLD deliberately. The PDP rule's loose `(^|\.)amazon\.`
+# is fine for a path-SHAPE rule but would whitelist `amazon.fakeshop.com` here.
+# Matching this pattern is NOT a bypass of anything: the acceptance reason returned
+# is not PDP-gate-exempt, so the URL must still pass is_product_detail_url().
+_AMAZON_FAMILY_DOMAIN = re.compile(r"(?:^|\.)amazon\.[a-z]{2,3}(?:\.[a-z]{2})?$", re.I)
+
+
+def is_amazon_family_domain(domain: str) -> bool:
+    """True for Amazon's per-country marketplaces (amazon.in / .de / .co.uk / …).
+
+    Excludes look-alikes (amazon.fakeshop.com) and shorteners (amzn.to), which
+    carry no product-detail path evidence anyway.
+    """
+    return bool(_AMAZON_FAMILY_DOMAIN.search(domain or ""))
+
 # Never products
 SOCIAL_DOMAINS = {
     "instagram.com", "tiktok.com", "youtube.com", "youtu.be", "facebook.com",
@@ -270,6 +296,12 @@ def _matching_retail_rule(domain: str) -> tuple[re.Pattern[str], ...] | None:
 
 
 def _matches_domain_non_product_path(domain: str, path: str) -> bool:
+    # The amazon.com influencer-storefront rule applies to every Amazon marketplace
+    # (amazon.in/shop/<influencer>/list/... is the same surface on a different TLD).
+    # The PDP gate would reject those anyway; catching them here keeps the honest
+    # `non_product_path` reason instead of a generic PDP miss.
+    if is_amazon_family_domain(domain):
+        return any(pattern.search(path) for pattern in _DOMAIN_NON_PRODUCT_PATHS["amazon.com"])
     for base, rules in _DOMAIN_NON_PRODUCT_PATHS.items():
         if domain == base or domain.endswith("." + base):
             return any(pattern.search(path) for pattern in rules)
@@ -334,6 +366,14 @@ def _accept_link_domain_rules(url: str, domain: str, path: str) -> tuple[bool, s
         return False, "non_product_path"
     if domain in KNOWN_COMMERCE_DOMAINS or any(domain == d or domain.endswith("." + d) for d in KNOWN_COMMERCE_DOMAINS):
         return True, "known_commerce_domain"
+    # Amazon's non-US marketplaces. Checked AFTER the set so amazon.com keeps its
+    # existing `known_commerce_domain` reason unchanged. The distinct reason makes
+    # the recovered supply attributable in rejectedByReason/acceptedByDomain, and it
+    # is deliberately absent from _PDP_GATE_EXEMPT_REASONS: accept_link() still puts
+    # every one of these through is_product_detail_url(), so only /dp/<ASIN> and
+    # /gp/product/<ASIN> pages actually get in.
+    if is_amazon_family_domain(domain):
+        return True, "amazon_family_domain"
     return False, "non_commerce_domain"
 
 

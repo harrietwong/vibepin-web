@@ -1983,7 +1983,7 @@ const pl: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Więcej akcji",
   "studioBoard.card.pinImageAlt": "Obraz Pinu",
   "studioBoard.card.pinImageUnavailable": "Obraz Pinu niedostępny",
-  "studioBoard.card.noImage": "Brak obrazu",
+  "studioBoard.card.noImage": "Obraz niedostępny",
   "studioBoard.card.generationFailedPlaceholder": "Generowanie nie powiodło się",
   "studioBoard.card.originalImageFallback": "Obraz oryginalny",
   "studioBoard.card.publishError.auth": "Połączenie z Pinterest wygasło. Połącz ponownie i spróbuj jeszcze raz.",

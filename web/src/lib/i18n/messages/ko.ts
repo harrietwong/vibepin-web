@@ -2309,7 +2309,7 @@ const ko: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "추가 작업",
   "studioBoard.card.pinImageAlt": "핀 이미지",
   "studioBoard.card.pinImageUnavailable": "핀 이미지를 사용할 수 없음",
-  "studioBoard.card.noImage": "이미지 없음",
+  "studioBoard.card.noImage": "이미지를 사용할 수 없음",
   "studioBoard.card.generationFailedPlaceholder": "생성 실패",
   "studioBoard.card.originalImageFallback": "원본 이미지",
   "studioBoard.card.publishError.auth": "Pinterest 연결이 만료되었습니다. 다시 연결한 뒤 재시도하세요.",

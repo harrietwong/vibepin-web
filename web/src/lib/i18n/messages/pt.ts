@@ -1000,7 +1000,7 @@ const pt: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Mais ações",
   "studioBoard.card.pinImageAlt": "Imagem do Pin",
   "studioBoard.card.pinImageUnavailable": "Imagem do Pin indisponível",
-  "studioBoard.card.noImage": "Sem imagem",
+  "studioBoard.card.noImage": "Imagem indisponível",
   "studioBoard.card.generationFailedPlaceholder": "Falha na geração",
   "studioBoard.card.originalImageFallback": "Imagem original",
   "studioBoard.card.publishError.auth": "A conexão com o Pinterest expirou. Reconecte e tente novamente.",

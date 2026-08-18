@@ -2522,7 +2522,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Aksi lainnya",
   "studioBoard.card.pinImageAlt": "Gambar pin",
   "studioBoard.card.pinImageUnavailable": "Gambar Pin tidak tersedia",
-  "studioBoard.card.noImage": "Tidak ada gambar",
+  "studioBoard.card.noImage": "Gambar tidak tersedia",
   "studioBoard.card.generationFailedPlaceholder": "Pembuatan gagal",
   "studioBoard.card.originalImageFallback": "Gambar asli",
   "studioBoard.card.publishError.auth": "Koneksi Pinterest telah kedaluwarsa. Sambungkan ulang lalu coba lagi.",

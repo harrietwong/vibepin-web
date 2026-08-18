@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties } from "react";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 export type PinThumbnailProps = {
   /** Already-resolved image URL (caller applies toProxyUrl / toThumbUrl). */
@@ -42,6 +43,8 @@ export function PinThumbnail({
   imgTestId,
   dark = false,
 }: PinThumbnailProps) {
+  const { t: tr } = useLocale();
+  const fallbackLabel = tr("studioBoard.card.pinImageUnavailable");
   const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
 
   // Reset only when the actual source changes — not on selection/hover.
@@ -75,9 +78,14 @@ export function PinThumbnail({
           }}
         >
           {status === "error" && (
+            // Carries a real accessible name: this tile is the only thing a customer
+            // sees when the image cannot load, so a screen reader must be able to say
+            // what happened rather than skip an aria-hidden decoration.
             <span
               data-testid="pin-thumbnail-fallback"
-              aria-hidden="true"
+              role="img"
+              aria-label={fallbackLabel}
+              title={fallbackLabel}
               style={{ fontSize: 16, opacity: 0.45, color: dark ? "#94a3b8" : "var(--app-text-muted)" }}
             >
               🖼

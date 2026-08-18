@@ -2576,7 +2576,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Daha fazla işlem",
   "studioBoard.card.pinImageAlt": "Pin görseli",
   "studioBoard.card.pinImageUnavailable": "Pin görseli kullanılamıyor",
-  "studioBoard.card.noImage": "Görsel yok",
+  "studioBoard.card.noImage": "Görsel kullanılamıyor",
   "studioBoard.card.generationFailedPlaceholder": "Oluşturma başarısız oldu",
   "studioBoard.card.originalImageFallback": "Orijinal görsel",
   "studioBoard.card.publishError.auth": "Pinterest bağlantısının süresi doldu. Yeniden bağlanıp tekrar deneyin.",

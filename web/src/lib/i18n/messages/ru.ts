@@ -1310,7 +1310,7 @@ const ru: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Больше действий",
   "studioBoard.card.pinImageAlt": "Изображение пина",
   "studioBoard.card.pinImageUnavailable": "Изображение пина недоступно",
-  "studioBoard.card.noImage": "Нет изображения",
+  "studioBoard.card.noImage": "Изображение недоступно",
   "studioBoard.card.generationFailedPlaceholder": "Не удалось сгенерировать",
   "studioBoard.card.originalImageFallback": "Исходное изображение",
   "studioBoard.card.publishError.auth": "Срок действия подключения к Pinterest истёк. Подключитесь заново и повторите попытку.",

@@ -44,6 +44,12 @@ from pipeline_tracking import (  # noqa: E402
 )
 
 
+# Exit code for "a precondition could not be VERIFIED" (database unreachable),
+# as opposed to exit 1 = "a precondition was verified and is genuinely wrong".
+# 75 is EX_TEMPFAIL from sysexits.h: retryable, the caller should try later.
+EXIT_PRECONDITION_UNVERIFIED = 75
+
+
 def _log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -741,6 +747,13 @@ def main() -> int:
         _log("Interrupted.")
         return 130
     except Exception as exc:
+        # Exit 75 (EX_TEMPFAIL) = "we could not determine the state of the
+        # world", not "the world is broken". Operators and retry wrappers must
+        # be able to tell a transient DB outage from a real schema defect
+        # (exit 1) without parsing log text.
+        if type(exc).__name__ == "SchemaCheckUnavailable":
+            pipeline._err(f"Worker could not verify preconditions: {exc}")
+            return EXIT_PRECONDITION_UNVERIFIED
         pipeline._err(f"Worker failed: {exc}")
         return 1
 

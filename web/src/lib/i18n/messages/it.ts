@@ -2289,7 +2289,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Altre azioni",
   "studioBoard.card.pinImageAlt": "Immagine Pin",
   "studioBoard.card.pinImageUnavailable": "Immagine Pin non disponibile",
-  "studioBoard.card.noImage": "Nessuna immagine",
+  "studioBoard.card.noImage": "Immagine non disponibile",
   "studioBoard.card.generationFailedPlaceholder": "Generazione non riuscita",
   "studioBoard.card.originalImageFallback": "Immagine originale",
 

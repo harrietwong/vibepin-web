@@ -875,7 +875,7 @@ const vi: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "Thêm thao tác",
   "studioBoard.card.pinImageAlt": "Ảnh Pin",
   "studioBoard.card.pinImageUnavailable": "Không có ảnh Pin để hiển thị",
-  "studioBoard.card.noImage": "Không có ảnh",
+  "studioBoard.card.noImage": "Không có hình ảnh khả dụng",
   "studioBoard.card.generationFailedPlaceholder": "Tạo không thành công",
   "studioBoard.card.originalImageFallback": "Ảnh gốc",
   "studioBoard.card.publishError.auth": "Kết nối Pinterest đã hết hạn. Hãy kết nối lại rồi thử lại.",

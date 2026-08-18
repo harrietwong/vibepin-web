@@ -6,3 +6,9 @@ __pycache__/
 *.py[cod]
 logs/
 *.log
+
+# Saved Playwright storage_state for the authenticated Pinterest session.
+# Contains live session cookies (_auth, _pinterest_sess) — NEVER commit.
+pinterest_session.json
+pinterest_session*.json
+*session_state.json

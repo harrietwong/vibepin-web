@@ -1970,7 +1970,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.card.moreActionsAria": "更多操作",
   "studioBoard.card.pinImageAlt": "Pin 图片",
   "studioBoard.card.pinImageUnavailable": "Pin 图片不可用",
-  "studioBoard.card.noImage": "无图片",
+  "studioBoard.card.noImage": "图片不可用",
   "studioBoard.card.generationFailedPlaceholder": "生成失败",
   "studioBoard.card.originalImageFallback": "原始图片",
   "studioBoard.card.publishError.auth": "Pinterest 连接已过期。请重新连接后重试。",

@@ -7,6 +7,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
+# Floor for "the queue has work at all". This is a FLOOR, not the replenish
+# target: the real target is the run's own limit_keywords (see
+# resolve_replenish_target). Treating 20 as the target is what starved the queue
+# on 2026-08-08..10 — a run consumes limit_keywords (150 in production, see
+# scripts/cloud_run_pin_crawl.sh) but replenish only fired below 20, so due
+# pending fell 147 -> 150 -> 53 -> 0 while every run reported success.
 MIN_PENDING_FOR_CRAWL = 20
 MIN_PENDING_KEYWORDS = 50
 RECRAWL_AFTER_DAYS = 7
@@ -26,6 +32,27 @@ PRIORITY_MEDIUM_THRESHOLD = 20.0
 
 def clamp_concurrency(value: int) -> int:
     return max(1, min(int(value), MAX_CRAWL_CONCURRENCY))
+
+
+def resolve_replenish_target(
+    limit_keywords: int = 0,
+    min_pending: int = MIN_PENDING_FOR_CRAWL,
+) -> int:
+    """How many due-pending keywords a run wants available before it starts.
+
+    The replenish threshold must track what a run actually CONSUMES, otherwise
+    the queue drains monotonically: production runs 150 keywords/run while the
+    old fixed threshold of 20 meant "53 pending is plenty, do nothing". Anything
+    short of a full run is now a reason to top the queue up.
+
+    limit_keywords <= 0 means "no per-run cap" (crawl everything due), in which
+    case there is no consumption figure to track and we keep the floor.
+    """
+    floor = max(1, int(min_pending or MIN_PENDING_FOR_CRAWL))
+    limit = int(limit_keywords or 0)
+    if limit <= 0:
+        return floor
+    return max(floor, limit)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -227,6 +254,35 @@ def plan_crawl_queue_row(
     return None
 
 
+
+def group_rows_by_key_signature(rows: list[dict]) -> list[list[dict]]:
+    """Split rows into batches that each share an identical key set.
+
+    PostgREST requires every object in a bulk INSERT/UPSERT payload to have the
+    exact same keys; a mixed payload fails with
+        PGRST102 "All object keys must match" [400]
+    and the WHOLE batch is lost.
+
+    plan_crawl_queue_row() deliberately emits different key sets per branch:
+      - new keyword          → base + status + updated_at
+      - pending (has NCA)    → base MINUS next_crawl_at   (preserve schedule)
+      - stale done/completed → base + status + attempts + last_error + updated_at
+      - failed under limit   → base + status + updated_at
+
+    Those omissions are load-bearing: under `resolution=merge-duplicates` an
+    omitted column is left untouched, while a column present as None is
+    overwritten to NULL. So we must NOT pad missing keys with None — that would
+    wipe existing next_crawl_at / attempts. Grouping by key signature keeps each
+    branch's don't-touch semantics intact while satisfying PostgREST.
+
+    Group order is deterministic (first-appearance) for stable logs/tests.
+    """
+    groups: dict[tuple[str, ...], list[dict]] = {}
+    for row in rows:
+        sig = tuple(sorted(row.keys()))
+        groups.setdefault(sig, []).append(row)
+    return list(groups.values())
+
 def classify_queue_plan(existing: dict | None, planned: dict | None) -> str:
     """Return a compact action label for logging/tests."""
     if planned is None:
@@ -299,23 +355,38 @@ def requeue_stale_completed_items(
     """
     When due pending count is below min_due_pending, requeue stale completed/done
     keywords so crawl has work without waiting for a full trends run.
+
+    Only the shortfall (min_due_pending - due_pending) is requeued, capped at
+    max_requeue. Requeueing the full 200 every time would pull keywords forward
+    of their cooldown for no benefit — the run can only consume its own limit.
     """
     now = datetime.now(tz=timezone.utc)
     due_pending = count_pending_items(select_many_fn, due_only=True)
     if due_pending >= min_due_pending:
         return 0
 
+    shortfall = max(0, int(min_due_pending) - int(due_pending))
+    max_requeue = max(0, min(int(max_requeue), shortfall))
+    if max_requeue == 0:
+        return 0
+
+    # Candidate pool size is deliberately NOT tied to the (shortfall-bounded)
+    # write cap: oldest-first ordering means the head of the list is the most
+    # likely to be stale, but if it is not, a pool sized to the cap would
+    # silently under-requeue. Always scan a full MAX_REQUEUE_PER_RUN-sized
+    # window so a small shortfall can still be filled.
+    scan_limit = max(max_requeue, MAX_REQUEUE_PER_RUN)
     rows = select_many_fn(
         "crawl_queue",
         filters={"status": "completed"},
         order="last_crawled_at.asc",
-        limit=max_requeue * 2,
+        limit=scan_limit * 2,
     )
     done_rows = select_many_fn(
         "crawl_queue",
         filters={"status": "done"},
         order="updated_at.asc",
-        limit=max_requeue,
+        limit=scan_limit,
     )
     candidates = rows + done_rows
     requeued = 0
