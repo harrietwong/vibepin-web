@@ -76,7 +76,7 @@ import { PublishResults } from "@/components/social/PublishResults";
 import { publishResultRows } from "@/lib/studio/publishResults";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { publishToSocial } from "@/lib/social/socialClient";
-import { platformName, type SocialProvider } from "@/lib/social/platforms";
+import { platformName, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
 import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
@@ -1548,6 +1548,17 @@ export function PinDetailsModal({
       setTimeout(() => boardSelectRef.current?.focus(), 0);
       return;
     }
+    // Scheduling to a platform whose intent we cannot replay at due time would be
+    // silently dropped, so refuse instead. The rows stay visible and connected —
+    // only scheduling is withheld, and Publish now still reaches every platform.
+    const blockedForSchedule = unschedulableDestinations(socialDestinations);
+    if (blockedForSchedule.length) {
+      const names = blockedForSchedule.map(platformName).join(" and ");
+      const msg = t("pinDetails.error.destinationNotSchedulable").replace("{platforms}", names);
+      setPublishError(msg);
+      toast.error(msg);
+      return;
+    }
     if (!plannedDate.trim()) setPlannedDate(plannableDateISO(1));
     if (!scheduledTime.trim()) setScheduledTime("09:00");
     setScheduleEditorOpen(true);
@@ -1893,6 +1904,7 @@ export function PinDetailsModal({
               <PublishDestinations
                 selected={socialDestinations}
                 onSelectedChange={setSocialDestinations}
+                scheduleMode={isScheduled}
                 onConnectPinterest={goToPinterestOAuth}
                 connectingPinterest={isRedirectingToPinterest}
                 pinterestConnected={pinterestConnected}

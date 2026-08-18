@@ -447,6 +447,7 @@ const en = {
   "pinDetails.confirmReplaceUrlKeep": "Keep current URL",
   "pinDetails.confirmReplaceUrlUse": "Use product link",
   "pinDetails.error.invalidUrl": "Enter a valid http:// or https:// URL.",
+  "pinDetails.error.destinationNotSchedulable": "Scheduling to {platforms} is temporarily unavailable. You can still publish now.",
   "pinDetails.error.missingBeforeSchedule": "Add the missing details before scheduling.",
 
   // ── Pin details: Title section ──
@@ -522,6 +523,7 @@ const en = {
   "publishDestinations.checkingConnection": "Checking connection…",
   "publishDestinations.notConnected": "Not connected",
   "publishDestinations.comingSoon": "Coming soon",
+  "publishDestinations.schedulingUnavailable": "Scheduling temporarily unavailable",
   "publishDestinations.primary": "Primary",
   "publishDestinations.connected": "Connected",
   "publishDestinations.redirecting": "Opening Pinterest authorization...",

@@ -41,6 +41,24 @@ export interface PlatformMeta {
    * a provider adapter is wired.
    */
   liveConnect: boolean;
+  /**
+   * Whether this platform can be a destination for a FUTURE-DATED publish.
+   *
+   * Separate from `liveConnect` on purpose: publishing now and publishing later
+   * are different capabilities with different requirements. Publishing later
+   * additionally requires that the chosen destination be persisted with the Pin
+   * and re-read at due time — and today only Pinterest is (boardId +
+   * targetConnectionId ride the draft; the due-time worker reads them back).
+   *
+   * A merchant who ticks Instagram and schedules currently gets Pinterest only,
+   * silently, because the intent was never stored and the due worker is
+   * Pinterest-only. Until scheduled destination intent is persisted, scheduling
+   * is refused for those platforms rather than accepted and quietly dropped.
+   *
+   * Publish now is unaffected — it dispatches immediately from the live
+   * selection, so nothing has to survive until later.
+   */
+  liveSchedule: boolean;
 }
 
 export const SOCIAL_PROVIDERS: readonly SocialProvider[] = [
@@ -57,6 +75,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     brandColor: "#E60023",
     capabilities: ["Read your boards", "Publish Pins", "Sync board list", "Track publishing status"],
     liveConnect: true,
+    liveSchedule: true,
   },
   instagram: {
     provider: "instagram",
@@ -64,6 +83,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     brandColor: "#E1306C",
     capabilities: ["Publish photo posts", "Repurpose product posts", "Track publishing status"],
     liveConnect: true,
+    liveSchedule: false,
   },
   facebook: {
     provider: "facebook",
@@ -71,6 +91,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     brandColor: "#1877F2",
     capabilities: ["Publish to your Page", "Repurpose product posts", "Track publishing status"],
     liveConnect: true,
+    liveSchedule: false,
   },
   tiktok: {
     provider: "tiktok",
@@ -78,6 +99,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     brandColor: "#010101",
     capabilities: ["Publish video posts", "Repurpose product posts", "Track publishing status"],
     liveConnect: false,
+    liveSchedule: false,
   },
 };
 
@@ -87,4 +109,22 @@ export function isSocialProvider(value: unknown): value is SocialProvider {
 
 export function platformName(provider: SocialProvider): string {
   return PLATFORMS[provider].name;
+}
+
+/**
+ * THE scheduling-capability rule. Every surface that can create a future-dated
+ * publish — the drawer, batch edit, Smart Schedule, and the server route that
+ * persists scheduled_at — must consult this one function, so the client and the
+ * server can never disagree about what is schedulable.
+ */
+export function canSchedule(provider: SocialProvider): boolean {
+  return PLATFORMS[provider].liveSchedule;
+}
+
+/**
+ * The destinations from `selected` that cannot currently be scheduled.
+ * Empty array ⇒ the selection is safe to persist with a future date.
+ */
+export function unschedulableDestinations(selected: readonly SocialProvider[]): SocialProvider[] {
+  return selected.filter(p => !canSchedule(p));
 }

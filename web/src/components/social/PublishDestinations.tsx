@@ -50,6 +50,7 @@ function DestinationRow({
   onConnect,
   connecting,
   checkingConnection,
+  scheduleMode,
 }: {
   summary: PlatformConnectionSummary;
   selected: boolean;
@@ -58,6 +59,8 @@ function DestinationRow({
   onConnect?: () => void;
   connecting?: boolean;
   checkingConnection?: boolean;
+  /** True when the caller is choosing destinations for a FUTURE-DATED publish. */
+  scheduleMode?: boolean;
 }) {
   const { t } = useLocale();
   const meta = PLATFORMS[summary.provider];
@@ -66,12 +69,19 @@ function DestinationRow({
   // (mock returns coming_soon / not_implemented), but even a stray "connected" DB
   // row must not make an unimplemented platform selectable for publishing.
   const publishable = summary.connected && meta.liveConnect;
+  // In schedule mode a platform we cannot replay at due time is not selectable —
+  // but it stays visible and keeps its account identity, because the account IS
+  // connected. Hiding the row, or showing "Not connected", would both be lies.
+  const blockedForSchedule = !!scheduleMode && publishable && !meta.liveSchedule;
+  const actionable = publishable && !blockedForSchedule;
   // Any live platform can be connected from right here. Previously only Pinterest
   // offered this, so an unconnected Facebook Page was a dead row: the merchant
   // was told "Not connected" with no way forward, and had to find Settings on
   // their own and then navigate back to the Pin they were publishing.
   const canConnectHere = !publishable && meta.liveConnect && !!onConnect && !checkingConnection;
-  const statusText = !meta.liveConnect
+  const statusText = blockedForSchedule
+    ? t("publishDestinations.schedulingUnavailable")
+    : !meta.liveConnect
     ? t("publishDestinations.comingSoon")
     : publishable
       ? t("publishDestinations.connected")
@@ -80,7 +90,7 @@ function DestinationRow({
         : t("publishDestinations.notConnected");
 
   function handleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (!publishable) return;
+    if (!actionable) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onToggle();
@@ -89,12 +99,13 @@ function DestinationRow({
 
   return (
     <div
-      role={publishable ? "checkbox" : "group"}
-      aria-checked={publishable ? selected : undefined}
-      aria-disabled={!publishable}
-      tabIndex={publishable ? 0 : -1}
+      role={actionable ? "checkbox" : "group"}
+      aria-checked={actionable ? selected : undefined}
+      aria-disabled={!actionable}
+      data-schedule-blocked={blockedForSchedule ? "true" : undefined}
+      tabIndex={actionable ? 0 : -1}
       data-testid={`publish-dest-${summary.provider}`}
-      onClick={publishable ? onToggle : undefined}
+      onClick={actionable ? onToggle : undefined}
       onKeyDown={handleKeyDown}
       style={{
         display: "flex",
@@ -104,8 +115,8 @@ function DestinationRow({
         padding: "8px 10px",
         borderTop: `1px solid ${UI.border}`,
         background: selected ? "rgba(59,130,246,0.08)" : "transparent",
-        cursor: publishable ? "pointer" : "default",
-        opacity: publishable || canConnectHere ? 1 : 0.62,
+        cursor: actionable ? "pointer" : "default",
+        opacity: actionable || canConnectHere ? 1 : 0.62,
       }}
     >
       <span
@@ -193,6 +204,7 @@ export function PublishDestinations({
   connectingPinterest,
   pinterestConnected,
   pinterestAccountName,
+  scheduleMode,
   renderDetails,
 }: {
   selected: SocialProvider[];
@@ -201,6 +213,13 @@ export function PublishDestinations({
   connectingPinterest?: boolean;
   pinterestConnected?: boolean;
   pinterestAccountName?: string | null;
+  /**
+   * True when the chosen destinations are for a FUTURE-DATED publish. Platforms
+   * whose scheduled intent we cannot yet persist and replay are shown, keep their
+   * account identity, but cannot be ticked. Publish now leaves this false and is
+   * completely unaffected.
+   */
+  scheduleMode?: boolean;
   /**
    * Extra controls that belong to ONE destination (PRD 0809 §3) — Pinterest's account
    * and board. Rendered directly under that platform's row so a Board list is never
@@ -364,6 +383,7 @@ export function PublishDestinations({
               summary={summary}
               selected={selected.includes(provider)}
               onToggle={() => toggle(provider)}
+              scheduleMode={scheduleMode}
               onConnect={
                 provider === "pinterest"
                   ? onConnectPinterest
