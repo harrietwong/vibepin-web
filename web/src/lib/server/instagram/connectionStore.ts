@@ -196,8 +196,17 @@ export async function upsertInstagramConnection(
  * the social_connections schema has no disconnected_at column, so connection_status
  * is the disconnected marker here. Only ever touches the provider='instagram' row.
  */
-export async function disconnectInstagramConnection(uid: string): Promise<void> {
-  const { error } = await db()
+export async function disconnectInstagramConnection(
+  uid: string,
+  /**
+   * Which connection to disconnect. Omitted, EVERY Instagram row for this user is
+   * cleared — correct while one account exists, and how the single-account
+   * contract behaved. With several connected, removing one must not silently
+   * sign the others out, so callers pass the id.
+   */
+  connectionId?: string,
+): Promise<void> {
+  const base = db()
     .from(TABLE)
     .update({
       access_token_encrypted: null,
@@ -210,6 +219,8 @@ export async function disconnectInstagramConnection(uid: string): Promise<void> 
     })
     .eq("user_id", uid)
     .eq("provider", PROVIDER);
+
+  const { error } = connectionId ? await base.eq("id", connectionId) : await base;
 
   if (error && !isMissingTable(error.code)) {
     console.error("[instagram] disconnect:", error.message);

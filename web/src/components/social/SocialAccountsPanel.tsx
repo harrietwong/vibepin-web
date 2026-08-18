@@ -169,7 +169,12 @@ const PINTEREST_CALLBACK_MESSAGES: Record<string, { type: OAuthNoticeType; msg: 
  * the merchant already has.
  */
 function isMultiAccountAllowed(provider: SocialProvider, flagEnabled: boolean): boolean {
-  return provider === "pinterest" ? true : flagEnabled;
+  // Facebook and Instagram joined Pinterest: each stores one row per connected
+  // account, publishes to a named account, and can drop one without signing the
+  // others out. Platforms still on one-row-per-user stay behind the flag, where
+  // the entry would quietly overwrite the connection the merchant already has.
+  if (provider === "pinterest" || provider === "facebook" || provider === "instagram") return true;
+  return flagEnabled;
 }
 
 /** Human-readable labels for the required Facebook permissions (for the missing-scope hint). */
@@ -391,6 +396,7 @@ function PlatformCard({
           )}
         </div>
       </div>
+
 
       {/* Facebook Page connection detail (display only). Shown whenever there is a
           stored Facebook row, including degraded/error states, so the user sees
@@ -1232,9 +1238,10 @@ export function SocialAccountsPanel() {
     { account: SocialConnection; label: string; scheduledCount: number } | null
   >(null);
   /** The account row currently mid-Remove — disables just that row, not the card. */
+  const multiAccountEnabled = isMultiSocialAccountsEnabled();
   const [busyAccountId, setBusyAccountId] = useState<string | null>(null);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
-  const multiAccountEnabled = isMultiSocialAccountsEnabled();
+
 
   const load = useCallback(async () => {
     setLoadError(false);
@@ -1376,6 +1383,7 @@ export function SocialAccountsPanel() {
       setConnectingProvider(null);
     }
   }
+
 
   async function handleDisconnect(summary: PlatformConnectionSummary) {
     const provider = summary.provider;
