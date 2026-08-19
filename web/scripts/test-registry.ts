@@ -205,6 +205,7 @@ export const PLAN: string[] = [
   "test-smart-schedule-sync",
   "test-scheduling-consistency",
   "test-schedule-social-guard",
+  "test-scheduled-destinations",
   "test-weekly-plan-slots",
   "test-plan-list-view",
   "test-smart-schedule-config",
