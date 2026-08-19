@@ -145,6 +145,27 @@ export interface PinDraft {
   targetConnectionId?:  string;
   /** Username snapshot of that account at selection time (display only, never a key). */
   targetAccountLabel?:  string;
+  /**
+   * Where this Pin is meant to publish when its scheduled time arrives — the
+   * merchant's INTENT, captured at schedule time and frozen there.
+   *
+   * Distinct from `socialPosts`, which records what a publish attempt actually
+   * achieved. Intent is written before anything happens and never rewritten by an
+   * outcome; results are written after. Conflating the two is what let a
+   * three-platform schedule silently become a Pinterest-only publish.
+   *
+   * A snapshot on purpose: changing the workspace default account, connecting a
+   * new one, or editing Settings must never re-point a Pin that is already
+   * scheduled. Only the merchant editing THIS Pin changes it.
+   *
+   * Rides the v38 payload sync (whole draft is serialized, no field whitelist at
+   * any layer) and the due-time worker already selects the full payload — so this
+   * needs no migration and no query change.
+   *
+   * Absent on drafts scheduled before this existed; `resolveScheduledDestinations`
+   * derives the equivalent Pinterest-only intent for those rather than backfilling.
+   */
+  scheduledDestinations?: ScheduledDestination[];
   /** Remote Pinterest Pin id captured after a successful publish. */
   remotePinId?:        string;
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published
@@ -242,6 +263,30 @@ export interface SocialPostRef {
    */
   accountName?: string;
 }
+
+/**
+ * One destination a scheduled Pin is meant to publish to.
+ *
+ * Identity is `socialConnectionId` — the account row. Labels and board names are
+ * display snapshots taken at capture time and are NEVER used as keys: an account
+ * can be renamed, and a stale label must not silently re-target a publish.
+ */
+export type ScheduledDestination = {
+  /** "pinterest" | "instagram" | "facebook". Typed as string for the same reason
+   *  SocialPostRef does: this module is imported by server code and stays free of
+   *  the social platform catalog. Callers narrow via isSocialProvider. */
+  provider: string;
+  /** social_connections row id. The only field that identifies the account. */
+  socialConnectionId: string;
+  /** Handle/page name as it read when the merchant chose it. Display only. */
+  accountLabel?: string;
+  /** Pinterest board id. Absent for platforms that have no board concept. */
+  boardId?: string;
+  /** Board name as it read at capture time. Display only. */
+  boardName?: string;
+  /** When this intent was captured — lets us tell a fresh choice from a stale one. */
+  capturedAt: string;
+};
 
 /**
  * Quality Judge result cached on a generated draft. `status` mirrors the async

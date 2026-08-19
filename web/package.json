@@ -39,6 +39,7 @@
     "test:smart-schedule-rebalance": "npx tsx scripts/test-smart-schedule-rebalance.ts",
     "test:scheduling-consistency": "npx tsx scripts/test-scheduling-consistency.ts",
     "test:schedule-social-guard": "npx tsx scripts/test-schedule-social-guard.ts",
+    "test:scheduled-destinations": "npx tsx scripts/test-scheduled-destinations.ts",
     "test:plan-list-view": "npx tsx scripts/test-plan-list-view.ts",
     "test:plan-tile-interactions": "npx tsx scripts/test-plan-tile-interactions.ts",
     "test:hover-preview-image": "npx tsx scripts/test-hover-preview-image.ts",
