@@ -38,79 +38,17 @@ import { isSocialProvider, platformName, PLATFORMS, type SocialProvider } from "
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
+import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
+import { rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRules";
 
 export const dynamic = "force-dynamic";
 
-type DestStatus = "pending" | "skipped" | "publishing" | "published" | "failed";
-type JobStatus =
-  | "draft"
-  | "publishing"
-  | "published"
-  | "partially_published"
-  | "failed";
-
-type DestOutcome = {
-  provider: SocialProvider;
-  status: DestStatus;
-  socialConnectionId: string | null;
-  externalPostId?: string | null;
-  externalPostUrl?: string | null;
-  /** Handle the post went out as — display-only, public on the post itself. */
-  accountName?: string | null;
-  error?: string | null;
-};
-
-function isMissingTable(code: string | undefined): boolean {
-  return code === "42P01";
-}
-
-/** Persist the job + destination rows. Returns null if the v32 tables are absent. */
-async function persistJob(
-  uid: string,
-  postId: string | null,
-  productId: string | null,
-  outcomes: DestOutcome[],
-  jobStatus: JobStatus,
-): Promise<string | null> {
-  const db = createServerClient();
-  const { data: job, error: jobErr } = await db
-    .from("social_publish_jobs")
-    .insert({ user_id: uid, post_id: postId, product_id: productId, status: jobStatus })
-    .select("id")
-    .single();
-
-  if (jobErr) {
-    if (isMissingTable(jobErr.code)) return null; // migration not applied — skip persistence
-    console.error("[publish/social] persist job:", jobErr.message);
-    return null;
-  }
-
-  const jobId = (job as { id: string }).id;
-  const rows = outcomes.map(o => ({
-    publish_job_id: jobId,
-    provider: o.provider,
-    social_connection_id: o.socialConnectionId,
-    status: o.status,
-    external_post_id: o.externalPostId ?? null,
-    external_post_url: o.externalPostUrl ?? null,
-    error_message: o.error ?? null,
-    published_at: o.status === "published" ? new Date().toISOString() : null,
-  }));
-  const { error: destErr } = await db.from("social_publish_job_destinations").insert(rows);
-  if (destErr && !isMissingTable(destErr.code)) {
-    console.error("[publish/social] persist destinations:", destErr.message);
-  }
-  return jobId;
-}
-
-function rollUpStatus(outcomes: DestOutcome[]): JobStatus {
-  const active = outcomes.filter(o => o.status !== "skipped");
-  if (!active.length) return "failed";
-  const published = active.filter(o => o.status === "published").length;
-  if (published === active.length) return "published";
-  if (published > 0) return "partially_published";
-  return "failed";
-}
+/**
+ * Publish now and the due-time scheduler now share ONE execution layer
+ * (`publishFanout`), so the two paths can no longer drift apart on how an
+ * attempt is recorded. `DestinationOutcome` is that layer's row shape.
+ */
+type DestOutcome = DestinationOutcome;
 
 export async function POST(req: Request) {
   const uid = await getUserIdFromBearer(req);
@@ -143,6 +81,15 @@ export async function POST(req: Request) {
 
   const summaries = await summarizeConnections(uid);
   const byProvider = new Map(summaries.map(s => [s.provider, s]));
+
+  // Create the attempt BEFORE dispatching anything. Previously the job row was
+  // written only after every provider call returned, so a crash mid-publish left
+  // a post live on the platform with no record of it, and a client that
+  // refreshed during publishing had no in-flight state to recover — it simply
+  // saw nothing. The row starts as `publishing` and is finalized once the
+  // outcomes are known.
+  const db = createServerClient();
+  const jobId = await createPublishJob(db, uid, postId, productId);
 
   const outcomes: DestOutcome[] = [];
   for (const raw of requested) {
@@ -230,8 +177,11 @@ export async function POST(req: Request) {
     }
   }
 
-  const jobStatus = rollUpStatus(outcomes);
-  const jobId = await persistJob(uid, postId, productId, outcomes, jobStatus);
+  const jobStatus = rollUpJobStatus(outcomes);
+  // Write the per-destination results and move the job off `publishing`. Skipped
+  // when the v32 tables are absent (createPublishJob returned null) — publishing
+  // itself must not fail just because the record could not be kept.
+  if (jobId) await recordOutcomes(db, jobId, outcomes);
 
   return Response.json({
     ok: jobStatus === "published",

@@ -207,6 +207,7 @@ export const PLAN: string[] = [
   "test-schedule-social-guard",
   "test-scheduled-destinations",
   "test-publish-fanout",
+  "test-publish-attempt-ordering",
   "test-weekly-plan-slots",
   "test-plan-list-view",
   "test-smart-schedule-config",

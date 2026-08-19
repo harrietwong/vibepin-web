@@ -41,6 +41,7 @@
     "test:schedule-social-guard": "npx tsx scripts/test-schedule-social-guard.ts",
     "test:scheduled-destinations": "npx tsx scripts/test-scheduled-destinations.ts",
     "test:publish-fanout": "npx tsx scripts/test-publish-fanout.ts",
+    "test:publish-attempt-ordering": "npx tsx scripts/test-publish-attempt-ordering.ts",
     "test:plan-list-view": "npx tsx scripts/test-plan-list-view.ts",
     "test:plan-tile-interactions": "npx tsx scripts/test-plan-tile-interactions.ts",
     "test:hover-preview-image": "npx tsx scripts/test-hover-preview-image.ts",
