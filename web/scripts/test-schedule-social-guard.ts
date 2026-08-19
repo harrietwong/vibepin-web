@@ -7,10 +7,14 @@
  * React state) and the due-time worker is Pinterest-only, so at due time only
  * Pinterest publishes — with no error and no trace of the original intent.
  *
- * Until scheduled destination intent is actually stored, scheduling to those
- * platforms is REFUSED rather than accepted and dropped. Publish now is
- * deliberately untouched: it dispatches immediately, so nothing needs to
- * survive until later.
+ * Intent is now stored on the draft and fanned out at due time, so the gate is
+ * open for every platform we can publish to.
+ *
+ * The gate itself still matters and is still tested here: it is the single
+ * capability switch (`liveSchedule`) and the single validation both the UI and
+ * the API route consult. Flipping one entry to false is the entire rollback for
+ * that platform's scheduling - no data migration - so the machinery must keep
+ * working even while nothing is currently blocked.
  *
  * Run: npx tsx scripts/test-schedule-social-guard.ts
  */
@@ -37,8 +41,8 @@ function section(t: string) { console.log(`\n=== ${t} ===`); }
 section("scheduling capability is separate from publishing capability");
 
 check("Pinterest can be scheduled", canSchedule("pinterest"));
-check("Instagram cannot be scheduled (intent is not persisted yet)", !canSchedule("instagram"));
-check("Facebook cannot be scheduled (intent is not persisted yet)", !canSchedule("facebook"));
+check("Instagram can be scheduled (intent is persisted and fanned out)", canSchedule("instagram"));
+check("Facebook can be scheduled (intent is persisted and fanned out)", canSchedule("facebook"));
 check("TikTok cannot be scheduled (no publish path at all)", !canSchedule("tiktok"));
 
 // The whole point of the stopgap: publish-now capability must NOT be reduced.
@@ -62,38 +66,32 @@ section("unschedulableDestinations reports exactly what must be refused");
 
 check("Pinterest-only selection is allowed",
   unschedulableDestinations(["pinterest"]).length === 0);
-check("Pinterest + Instagram is refused, naming Instagram",
-  JSON.stringify(unschedulableDestinations(["pinterest", "instagram"])) === JSON.stringify(["instagram"]));
-check("Pinterest + Facebook is refused, naming Facebook",
-  JSON.stringify(unschedulableDestinations(["pinterest", "facebook"])) === JSON.stringify(["facebook"]));
-check("all three refused, naming both non-Pinterest platforms",
-  JSON.stringify(unschedulableDestinations(["pinterest", "instagram", "facebook"]))
-    === JSON.stringify(["instagram", "facebook"]));
+check("the three publishable platforms are ALL schedulable now",
+  unschedulableDestinations(["pinterest", "instagram", "facebook"]).length === 0);
+check("a platform with no publish path is still refused",
+  JSON.stringify(unschedulableDestinations(["pinterest", "tiktok"])) === JSON.stringify(["tiktok"]));
 check("an empty selection is allowed (nothing to drop)",
   unschedulableDestinations([]).length === 0);
 
 // The refusal must never quietly become a filter — the caller has to see the
 // blocked entries, not a silently shortened list.
 section("the helper reports, it does not silently filter");
-const requested: SocialProvider[] = ["pinterest", "instagram", "facebook"];
+const requested: SocialProvider[] = ["pinterest", "tiktok", "instagram"];
 const blocked = unschedulableDestinations(requested);
 check("the input selection is left untouched",
-  JSON.stringify(requested) === JSON.stringify(["pinterest", "instagram", "facebook"]),
+  JSON.stringify(requested) === JSON.stringify(["pinterest", "tiktok", "instagram"]),
   "unschedulableDestinations must not mutate its argument");
 check("blocked entries are returned rather than removed from the selection",
-  blocked.length === 2 && requested.length === 3);
+  blocked.length === 1 && requested.length === 3);
 
-// ── regression guard on the silent-drop shape itself ─────────────────────────
-section("the exact silent-drop scenario is now detectable");
-// Before the stopgap this selection was accepted and reduced to Pinterest with
-// no signal at all. The test asserts we can now DETECT it; the drawer and the
-// API route both turn this into a visible refusal.
+// -- the defect this whole line of work existed to kill -----------------------
+section("a multi-platform schedule no longer collapses to Pinterest");
 const merchantPicked: SocialProvider[] = ["pinterest", "instagram", "facebook"];
-const wouldSilentlyPublish = merchantPicked.filter(canSchedule);
-check("a 3-platform schedule would really have collapsed to Pinterest",
-  JSON.stringify(wouldSilentlyPublish) === JSON.stringify(["pinterest"]));
-check("and that collapse is now flagged instead of accepted",
-  unschedulableDestinations(merchantPicked).length > 0);
+check("nothing in a 3-platform schedule is refused any more",
+  unschedulableDestinations(merchantPicked).length === 0);
+check("all three survive as schedulable destinations",
+  merchantPicked.filter(canSchedule).length === 3,
+  "if this drops below 3, a scheduled Pin silently loses platforms again");
 
 // -- the SERVER rule, on the payload shapes the route really receives --------
 // The PUT route requires a real bearer token and has no test bypass (adding one
@@ -102,11 +100,16 @@ check("and that collapse is now flagged instead of accepted",
 // not a re-test of the UI helper.
 section("server rule: only a SCHEDULED payload is restricted");
 
-check("a scheduled 3-platform payload is blocked, naming IG+FB",
-  JSON.stringify(blockedScheduleDestinations({
+check("a scheduled 3-platform payload is accepted",
+  blockedScheduleDestinations({
     scheduledDate: "2099-01-01", scheduledTime: "10:00",
     socialDestinations: ["pinterest", "instagram", "facebook"],
-  })) === JSON.stringify(["instagram", "facebook"]));
+  }).length === 0);
+check("a scheduled payload naming a non-publishable platform is still refused",
+  JSON.stringify(blockedScheduleDestinations({
+    scheduledDate: "2099-01-01", scheduledTime: "10:00",
+    socialDestinations: ["pinterest", "tiktok"],
+  })) === JSON.stringify(["tiktok"]));
 
 check("a scheduled Pinterest-only payload passes",
   blockedScheduleDestinations({
@@ -114,9 +117,9 @@ check("a scheduled Pinterest-only payload passes",
   }).length === 0);
 
 // This is the Publish-now shape: no date at all. It must be left completely alone.
-check("an UNSCHEDULED payload with IG+FB is NOT blocked (publish now untouched)",
+check("an UNSCHEDULED payload is never restricted (publish now untouched)",
   blockedScheduleDestinations({
-    socialDestinations: ["pinterest", "instagram", "facebook"],
+    socialDestinations: ["pinterest", "instagram", "facebook", "tiktok"],
   }).length === 0);
 
 check("a scheduled payload naming no destinations passes",
@@ -126,9 +129,9 @@ check("a scheduled payload naming no destinations passes",
 // fallback. Both must trigger the rule, or one entry point silently escapes it.
 check("plannedAt (not just scheduledDate) also counts as scheduled",
   blockedScheduleDestinations({
-    plannedAt: "2099-01-01T10:00", socialDestinations: ["instagram"],
+    plannedAt: "2099-01-01T10:00", socialDestinations: ["tiktok"],
   }).length === 1,
-  "a payload scheduled via plannedAt must be restricted too");
+  "a payload scheduled via plannedAt must go through the same gate");
 
 section("server rule: malformed input cannot slip through");
 check("non-array socialDestinations is treated as empty",
@@ -163,12 +166,12 @@ function rowState(provider: SocialProvider, connected: boolean, scheduleMode: bo
 
 const igSched = rowState("instagram", true, true);
 check("Instagram row is still rendered while scheduling", igSched.rendered);
-check("Instagram is NOT selectable while scheduling", !igSched.actionable);
+check("Instagram IS selectable while scheduling now", igSched.actionable);
 check("Instagram still reads as connected (not 'Not connected')", igSched.readsAsConnected);
-check("Instagram is flagged specifically as schedule-blocked", igSched.blockedForSchedule);
+check("Instagram is no longer flagged as schedule-blocked", !igSched.blockedForSchedule);
 
 const fbSched = rowState("facebook", true, true);
-check("Facebook is not selectable while scheduling", !fbSched.actionable);
+check("Facebook IS selectable while scheduling now", fbSched.actionable);
 check("Facebook still reads as connected", fbSched.readsAsConnected);
 
 const pinSched = rowState("pinterest", true, true);

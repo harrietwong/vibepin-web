@@ -37,7 +37,7 @@ function str(v: unknown): string {
  * and a freshly scheduled one behave identically at due time.
  */
 export function pinterestDestinationFrom(
-  draft: Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">,
+  draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
   capturedAt: string,
 ): ScheduledDestination | null {
   const connectionId = str(draft.targetConnectionId);
@@ -84,9 +84,11 @@ export function isUsableDestination(d: unknown): d is ScheduledDestination {
  * merchant decision that was never made.
  */
 export function resolveScheduledDestinations(
-  draft: Pick<
-    PinDraft,
-    "scheduledDestinations" | "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName"
+  draft: Partial<
+    Pick<
+      PinDraft,
+      "scheduledDestinations" | "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName"
+    >
   >,
 ): ScheduledDestination[] {
   const stored = Array.isArray(draft.scheduledDestinations) ? draft.scheduledDestinations : [];
@@ -105,7 +107,7 @@ export function resolveScheduledDestinations(
  * must not treat a derivation as a merchant decision (e.g. anything offering to
  * "keep your previous destinations") use this.
  */
-export function hasExplicitIntent(draft: Pick<PinDraft, "scheduledDestinations">): boolean {
+export function hasExplicitIntent(draft: Partial<Pick<PinDraft, "scheduledDestinations">>): boolean {
   return Array.isArray(draft.scheduledDestinations)
     && draft.scheduledDestinations.filter(isUsableDestination).length > 0;
 }
@@ -123,9 +125,65 @@ export function hasExplicitIntent(draft: Pick<PinDraft, "scheduledDestinations">
  * stored as a half-record that would fail at due time with nothing to point at.
  * Callers are expected to have refused that selection upstream.
  */
+/** A connected account as the destination picker reports it. */
+export type ConnectableAccount = {
+  id: string;
+  connectionStatus: string;
+  providerAccountUsername?: string | null;
+  providerAccountName?: string | null;
+};
+
+/** Raised when a platform has several connected accounts and none was chosen. */
+export class AmbiguousScheduleAccountError extends Error {
+  constructor(public readonly provider: SocialProvider, public readonly count: number) {
+    super(`Choose which ${provider} account to publish as — ${count} are connected.`);
+    this.name = "AmbiguousScheduleAccountError";
+  }
+}
+
+/**
+ * Which account a scheduled publish should go out as.
+ *
+ * The order matters and is the whole point:
+ *
+ *   1. An account the merchant EXPLICITLY picked always wins. Once several
+ *      accounts can be connected per platform, "the first connected one" stops
+ *      being a synonym for "the one they meant".
+ *   2. Exactly one connected account ⇒ use it. Unambiguous, and it keeps the
+ *      single-account experience free of a choice nobody needs to make.
+ *   3. Several connected and no explicit pick ⇒ THROW. Picking the first would
+ *      quietly schedule months of posts to the wrong account, and the merchant
+ *      would only find out by seeing them appear there.
+ *
+ * Returns null only when the platform has no connected account at all, which the
+ * caller reports as "not connected" rather than an ambiguity.
+ */
+export function resolveScheduledAccount(
+  provider: SocialProvider,
+  accounts: readonly ConnectableAccount[],
+  explicitId?: string | null,
+): { id: string; label?: string } | null {
+  const connected = accounts.filter(a => a.connectionStatus === "connected");
+  const labelOf = (a: ConnectableAccount) =>
+    str(a.providerAccountUsername) || str(a.providerAccountName) || undefined;
+
+  const chosen = str(explicitId);
+  if (chosen) {
+    const hit = connected.find(a => a.id === chosen);
+    if (hit) return { id: hit.id, label: labelOf(hit) };
+    // An explicit pick that is no longer connected must not silently fall back to
+    // a different account — that is the same wrong-account failure by another route.
+    return null;
+  }
+
+  if (connected.length === 0) return null;
+  if (connected.length === 1) return { id: connected[0].id, label: labelOf(connected[0]) };
+  throw new AmbiguousScheduleAccountError(provider, connected.length);
+}
+
 export function buildScheduledDestinations(
   selected: readonly SocialProvider[],
-  draft: Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">,
+  draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
   resolveConnection: (provider: SocialProvider) => { id: string; label?: string } | null,
   now: Date = new Date(),
 ): ScheduledDestination[] {

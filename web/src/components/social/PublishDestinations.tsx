@@ -205,6 +205,7 @@ export function PublishDestinations({
   pinterestConnected,
   pinterestAccountName,
   scheduleMode,
+  onSummariesChange,
   renderDetails,
   selectedAccountIds,
   onSelectedAccountIdsChange,
@@ -230,6 +231,13 @@ export function PublishDestinations({
    * completely unaffected.
    */
   scheduleMode?: boolean;
+  /**
+   * Reports the loaded per-platform connection summaries upward. The parent needs
+   * them to record WHICH account a scheduled destination refers to — the drawer
+   * itself only tracks Pinterest connections, while Instagram/Facebook accounts
+   * are known here.
+   */
+  onSummariesChange?: (summaries: PlatformConnectionSummary[]) => void;
   /**
    * Extra controls that belong to ONE destination (PRD 0809 §3) — Pinterest's account
    * and board. Rendered directly under that platform's row so a Board list is never
@@ -301,6 +309,12 @@ export function PublishDestinations({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Hand the loaded accounts to the parent so a scheduled destination can be
+  // recorded against a real connection id rather than a platform name.
+  useEffect(() => {
+    if (onSummariesChange) onSummariesChange(summaries);
+  }, [summaries, onSummariesChange]);
 
 
   // Disconnecting Pinterest in Settings while this drawer sits open behind it (e.g.

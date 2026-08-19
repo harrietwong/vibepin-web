@@ -27,6 +27,13 @@ import { createServerClient } from "@/lib/supabase";
 import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
+import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
+import {
+  createPublishJob,
+  fanOutDestinations,
+  pinterestOutcomeRow,
+  recordOutcomes,
+} from "@/lib/social/publishFanout";
 import {
   recordPublishEvent,
   recordFailedPublishEvent,
@@ -198,6 +205,51 @@ export async function GET(req: Request): Promise<Response> {
 
       const result = await publishPinForUser(input);
       if (result.ok) {
+        // ── Fan out to the other destinations this Pin was scheduled to ────────
+        // Runs BEFORE persistSuccess so a fan-out crash cannot leave the Pin marked
+        // posted with no record of the platforms that were still owed. Pinterest has
+        // already published at this point, so the fan-out never re-sends it — it is
+        // folded in as a result row so the merchant sees one coherent set.
+        //
+        // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
+        // here, so it behaves exactly as it did before: no extra platforms are ever
+        // invented for it.
+        const destinations = resolveScheduledDestinations(row.payload as Parameters<typeof resolveScheduledDestinations>[0]);
+        const extras = destinations.filter(d => d.provider !== "pinterest");
+        if (extras.length) {
+          try {
+            const jobId = await createPublishJob(
+              db,
+              row.vibepin_user_id,
+              typeof row.draft_id === "string" ? row.draft_id : null,
+              null,
+            );
+            const fanned = await fanOutDestinations(row.vibepin_user_id, extras, {
+              imageUrls: [input.imageUrl],
+              title: input.title,
+              caption: input.description,
+              destinationUrl: input.link,
+              altText: input.altText,
+            });
+            if (jobId) {
+              const pinterestIntent = destinations.find(d => d.provider === "pinterest");
+              await recordOutcomes(db, jobId, [
+                ...(pinterestIntent
+                  ? [pinterestOutcomeRow(pinterestIntent, {
+                      ok: true, connectionId: result.connectionId,
+                      pinId: result.pin.id, pinUrl: result.pin.url,
+                    })]
+                  : []),
+                ...fanned,
+              ]);
+            }
+          } catch (fanErr) {
+            // A fan-out failure must never undo a Pinterest publish that already
+            // succeeded, so it is logged and the Pin still completes as posted.
+            console.error("[cron/publish-due] fan-out:", (fanErr as Error).message);
+          }
+        }
+
         // result.connectionId is the row that actually published — pinned onto the draft
         // when it had no target yet (adopt-once, PRD §14). Already-targeted drafts are
         // left untouched by withAdoptedTarget.
