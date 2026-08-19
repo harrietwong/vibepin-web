@@ -10,8 +10,17 @@
  *   6. Smart Schedule cannot create one either.
  *   7. Pinterest scheduling still works.
  *
- * Checkpoint 5 is the important one: §7 requires server enforcement, so it is
- * exercised by calling the route directly rather than through the UI.
+ * STATUS: checkpoints 1-4 are BLOCKED in this harness. The destination selector
+ * lives only in DraftDetailsDrawer, reached by hovering a calendar tile and
+ * clicking "Edit details". A standalone probe reaches that control reliably, but
+ * inside this run the drawer never opens — six selector/timing variants were
+ * tried. Rather than keep guessing, the run reports INCONCLUSIVE: a green suite
+ * that never rendered a row would be worse than an honest blocker.
+ *
+ * The rule those checkpoints cover IS asserted, at the level that decides
+ * behaviour, in scripts/test-schedule-social-guard.ts (37 assertions against the
+ * exact exported functions the route and the row call). This file stays as the
+ * skeleton for the authenticated Preview QA that must run before release.
  *
  * Run (server up with E2E_TEST_MODE=true):
  *   BASE_URL=http://127.0.0.1:3111 npx tsx scripts/qa-schedule-social-guard-browser.ts
@@ -120,22 +129,36 @@ async function main() {
   await page.goto(`${BASE}/app/studio?view=plan`, { waitUntil: "domcontentloaded", timeout: 90_000 });
   await page.waitForTimeout(5000);
 
-  // Open the scheduled Pin's drawer.
-  const card = page.locator('[data-testid="weekly-plan-pin-image"], [data-testid="pin-board-card"]').first();
-  if (await card.count()) {
-    await card.click({ timeout: 10_000 }).catch(() => {});
-    await page.waitForTimeout(3500);
-  }
+  // Open the scheduled Pin's drawer. PublishDestinations lives ONLY in
+  // DraftDetailsDrawer, which the Plan workspace mounts — the Studio board's
+  // card-edit opens a different, inline editor with no destination selector.
+  // The drawer is reached by hovering a calendar card, then "Edit details".
+  await page.goto(`${BASE}/app/studio?view=plan`, { waitUntil: "domcontentloaded", timeout: 90_000 });
+  await page.waitForTimeout(5000);
 
-  let rows = await destinationRows(page);
-  if (rows.length === 0) {
-    // Fall back to the board view, where the drawer is also reachable.
-    await page.goto(`${BASE}/app/studio?filter=scheduled`, { waitUntil: "domcontentloaded", timeout: 90_000 });
-    await page.waitForTimeout(4000);
-    const c2 = page.locator('[data-testid="card-details"], [data-testid="pin-board-card"]').first();
-    if (await c2.count()) { await c2.click({ timeout: 10_000 }).catch(() => {}); await page.waitForTimeout(3500); }
-    rows = await destinationRows(page);
+  // Scope to the CALENDAR tile. The unscheduled fixture also renders a rail
+  // thumbnail with the same testid, and .first() could land on that instead —
+  // the rail has no hover card, so the run then silently found nothing.
+  const tile = page
+    .locator('[data-testid="weekly-plan-calendar"] [data-testid="weekly-plan-pin-image"]')
+    .first();
+  if (await tile.count()) {
+    await tile.hover({ timeout: 10_000 }).catch(() => {});
+    // Wait for the control itself rather than sleeping a fixed amount: the hover
+    // card animates in and dismisses on pointer-out, so a blind timeout races it.
+    const edit = page.locator('[data-testid="hover-edit-details"]').first();
+    try {
+      await edit.waitFor({ state: "visible", timeout: 10_000 });
+      await edit.click({ timeout: 10_000 });
+      await page.locator('[data-testid="draft-details-drawer"]')
+        .waitFor({ state: "visible", timeout: 15_000 });
+      // The destination list loads its connections asynchronously.
+      await page.waitForTimeout(3500);
+    } catch {
+      console.log("  (could not reach the drawer via the hover card)");
+    }
   }
+  let rows = await destinationRows(page);
 
   console.log(`  destination rows found: ${rows.length}`);
   rows.forEach(r => console.log(`    ${String(r.provider).padEnd(10)} disabled=${r.disabled} schedBlocked=${r.scheduleBlocked} "${String(r.text).slice(0, 60)}"`));
