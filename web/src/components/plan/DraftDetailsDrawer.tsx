@@ -76,7 +76,9 @@ import { PublishResults } from "@/components/social/PublishResults";
 import { publishResultRows } from "@/lib/studio/publishResults";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { publishToSocial } from "@/lib/social/socialClient";
-import { platformName, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
+import { isSocialProvider, platformName, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
+import { buildScheduledDestinations, hasExplicitIntent } from "@/lib/social/scheduledDestinations";
+import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
@@ -221,6 +223,9 @@ export function PinDetailsModal({
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
   const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
+  // Connection summaries reported by PublishDestinations. Needed to turn a chosen
+  // PLATFORM into the specific ACCOUNT the schedule should publish through.
+  const [destinationSummaries, setDestinationSummaries] = useState<PlatformConnectionSummary[]>([]);
   // Guards the one-shot fan-out to extra channels after a successful publish.
   const socialFannedOutRef = useRef(false);
   // `draft` is a prop — a snapshot taken when the drawer opened. The social
@@ -655,7 +660,17 @@ export function PinDetailsModal({
     setConfirmReplaceUrlOpen(false);
     setPinterestConnected(false);
     setPinterestAccount(null);
-    setSocialDestinations([]);
+    // Re-open a scheduled Pin showing the destinations it was actually scheduled to.
+    // Only EXPLICIT intent seeds the selection: a legacy Pin's derived Pinterest
+    // destination is our inference, not the merchant's choice, so it must not appear
+    // as though they had ticked it.
+    setSocialDestinations(
+      hasExplicitIntent(draft)
+        ? (draft.scheduledDestinations ?? [])
+            .map(d => d.provider)
+            .filter(isSocialProvider)
+        : [],
+    );
     // Scoped to one publish: never carry another Pin's live posts into this one.
     setLiveSocialPosts(null);
     socialFannedOutRef.current = false;
@@ -798,6 +813,21 @@ export function PinDetailsModal({
     };
     patch.boardId = selectedBoard?.id ?? "";
     patch.boardName = selectedBoard?.name ?? "";
+    // Freeze WHERE this Pin publishes, but only while it actually has a date.
+    // Publish now needs no stored intent (it dispatches immediately), and writing
+    // one for an undated Pin would leave a stale destination behind if it is later
+    // scheduled from somewhere else.
+    if (trimmedDate) {
+      patch.scheduledDestinations = buildScheduledDestinations(
+        socialDestinations,
+        { ...activeDraft, boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" },
+        (provider) => {
+          const summary = destinationSummaries.find(s => s.provider === provider);
+          const account = summary?.accounts.find(a => a.connectionStatus === "connected");
+          return account ? { id: account.id, label: account.providerAccountUsername ?? account.providerAccountName ?? undefined } : null;
+        },
+      );
+    }
     // Setting a date implies the pin is on the plan — keep the flags in sync so
     // it lands on the calendar and leaves the "not added" / "needs date" trays.
     if (trimmedDate && !sanitizeHandoffField(activeDraft.addedToPlanAt)) {
@@ -1905,6 +1935,7 @@ export function PinDetailsModal({
                 selected={socialDestinations}
                 onSelectedChange={setSocialDestinations}
                 scheduleMode={isScheduled}
+                onSummariesChange={setDestinationSummaries}
                 onConnectPinterest={goToPinterestOAuth}
                 connectingPinterest={isRedirectingToPinterest}
                 pinterestConnected={pinterestConnected}

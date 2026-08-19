@@ -45,18 +45,14 @@ export interface PlatformMeta {
    * Whether this platform can be a destination for a FUTURE-DATED publish.
    *
    * Separate from `liveConnect` on purpose: publishing now and publishing later
-   * are different capabilities with different requirements. Publishing later
-   * additionally requires that the chosen destination be persisted with the Pin
-   * and re-read at due time — and today only Pinterest is (boardId +
-   * targetConnectionId ride the draft; the due-time worker reads them back).
+   * are different capabilities. Publishing later additionally requires that the
+   * chosen destination be persisted with the Pin and replayed at due time.
    *
-   * A merchant who ticks Instagram and schedules currently gets Pinterest only,
-   * silently, because the intent was never stored and the due worker is
-   * Pinterest-only. Until scheduled destination intent is persisted, scheduling
-   * is refused for those platforms rather than accepted and quietly dropped.
-   *
-   * Publish now is unaffected — it dispatches immediately from the live
-   * selection, so nothing has to survive until later.
+   * That requirement is now met for every platform we can publish to:
+   * `scheduledDestinations` freezes the account (and board) on the draft, and the
+   * due-time worker resolves it and fans out. This flag stays as the single
+   * capability switch — flipping one entry to false is the whole rollback for
+   * that platform's scheduling, with no data migration.
    */
   liveSchedule: boolean;
 }
@@ -83,7 +79,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     brandColor: "#E1306C",
     capabilities: ["Publish photo posts", "Repurpose product posts", "Track publishing status"],
     liveConnect: true,
-    liveSchedule: false,
+    liveSchedule: true,
   },
   facebook: {
     provider: "facebook",
@@ -91,7 +87,7 @@ export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
     brandColor: "#1877F2",
     capabilities: ["Publish to your Page", "Repurpose product posts", "Track publishing status"],
     liveConnect: true,
-    liveSchedule: false,
+    liveSchedule: true,
   },
   tiktok: {
     provider: "tiktok",

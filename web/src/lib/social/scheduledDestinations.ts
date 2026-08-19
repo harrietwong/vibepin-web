@@ -37,7 +37,7 @@ function str(v: unknown): string {
  * and a freshly scheduled one behave identically at due time.
  */
 export function pinterestDestinationFrom(
-  draft: Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">,
+  draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
   capturedAt: string,
 ): ScheduledDestination | null {
   const connectionId = str(draft.targetConnectionId);
@@ -84,9 +84,11 @@ export function isUsableDestination(d: unknown): d is ScheduledDestination {
  * merchant decision that was never made.
  */
 export function resolveScheduledDestinations(
-  draft: Pick<
-    PinDraft,
-    "scheduledDestinations" | "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName"
+  draft: Partial<
+    Pick<
+      PinDraft,
+      "scheduledDestinations" | "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName"
+    >
   >,
 ): ScheduledDestination[] {
   const stored = Array.isArray(draft.scheduledDestinations) ? draft.scheduledDestinations : [];
@@ -105,7 +107,7 @@ export function resolveScheduledDestinations(
  * must not treat a derivation as a merchant decision (e.g. anything offering to
  * "keep your previous destinations") use this.
  */
-export function hasExplicitIntent(draft: Pick<PinDraft, "scheduledDestinations">): boolean {
+export function hasExplicitIntent(draft: Partial<Pick<PinDraft, "scheduledDestinations">>): boolean {
   return Array.isArray(draft.scheduledDestinations)
     && draft.scheduledDestinations.filter(isUsableDestination).length > 0;
 }
@@ -125,7 +127,7 @@ export function hasExplicitIntent(draft: Pick<PinDraft, "scheduledDestinations">
  */
 export function buildScheduledDestinations(
   selected: readonly SocialProvider[],
-  draft: Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">,
+  draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
   resolveConnection: (provider: SocialProvider) => { id: string; label?: string } | null,
   now: Date = new Date(),
 ): ScheduledDestination[] {
