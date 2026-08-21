@@ -15,6 +15,11 @@
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://stub.supabase.co";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "stub-anon-key";
 
+// Marks this file as a module. Env has to be set before the imports below, which
+// forces them to be dynamic — leaving the file in the global script scope, where
+// its `main` collided with another test's. The real imports stay dynamic.
+export {};
+
 let passed = 0, failed = 0;
 async function test(name: string, fn: () => Promise<void> | void) {
   try { await fn(); console.log(`  OK ${name}`); passed++; }

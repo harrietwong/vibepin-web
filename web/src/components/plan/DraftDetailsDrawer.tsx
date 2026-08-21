@@ -75,7 +75,7 @@ import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { PublishResults } from "@/components/social/PublishResults";
 import { publishResultRows } from "@/lib/studio/publishResults";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
-import { publishToSocial } from "@/lib/social/socialClient";
+import { publishToSocial, fetchInFlightPublish } from "@/lib/social/socialClient";
 import { isSocialProvider, platformName, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
 import { buildScheduledDestinations, hasExplicitIntent, resolveScheduledAccount, AmbiguousScheduleAccountError } from "@/lib/social/scheduledDestinations";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
@@ -699,6 +699,30 @@ export function PinDetailsModal({
     // boards. Untargeted (seededTarget "") ⇒ default connection, unchanged behaviour.
     void loadBoards(draft.boardId, seededTarget || undefined);
   }, [open, draft, loadBoards]);
+
+  // Restore a publish that was already running when the page reloaded (TC-094).
+  //
+  // `publishing` is component state, so a refresh mid-publish used to leave the
+  // drawer looking idle even though the request was still in flight — the merchant
+  // could not tell whether anything had been sent, and pressing Publish again was
+  // the natural next move. Since the attempt row is now written BEFORE dispatch, a
+  // `publishing` job is a truthful record of that window.
+  //
+  // Runs only on open, and only for a Pin that is not already posted. Deliberately
+  // one-shot rather than a poll: this restores the state a refresh destroyed, while
+  // the publish call itself still owns the outcome. Fail-soft by construction —
+  // fetchInFlightPublish never throws, so a probe that cannot answer leaves the
+  // drawer exactly as it was rather than inventing a spinner.
+  useEffect(() => {
+    if (!open || !draft) return;
+    if (sanitizeHandoffField(draft.postedAt)) return; // already finished
+    let cancelled = false;
+    void fetchInFlightPublish(draft.id).then(res => {
+      if (cancelled || !res.inFlight) return;
+      setPublishing(true);
+    });
+    return () => { cancelled = true; };
+  }, [open, draft]);
 
   useEffect(() => {
     if (!open || boardsStatus !== "ready" || boardId || boards.length === 0) return;
