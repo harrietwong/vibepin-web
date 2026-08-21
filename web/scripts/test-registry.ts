@@ -208,6 +208,7 @@ export const PLAN: string[] = [
   "test-scheduled-destinations",
   "test-publish-fanout",
   "test-publish-attempt-ordering",
+  "test-publish-in-flight",
   "test-weekly-plan-slots",
   "test-plan-list-view",
   "test-smart-schedule-config",
