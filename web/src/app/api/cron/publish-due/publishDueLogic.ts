@@ -10,6 +10,8 @@
  */
 
 import { mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+// Pure URL resolution — no browser globals, safe on the server.
+import { toProxyUrl } from "@/lib/imageProxy";
 
 /** A claim is reclaimable if it was never taken, or the worker that took it is
  *  presumed dead (claim older than this window). Matches the SQL the route runs. */
@@ -64,9 +66,20 @@ export interface DuePublishInput {
  * payloadAfterFailure.
  */
 export function payloadToPublishInput(uid: string, payload: Record<string, unknown>): DuePublishInput | null {
-  const imageUrl = firstString(payload.imageUrl, payload.sourceImageUrl);
+  const storedImage = firstString(payload.imageUrl, payload.sourceImageUrl);
   const boardId = firstString(payload.boardId);
-  if (!imageUrl || !boardId) return null;
+  if (!storedImage || !boardId) return null;
+  // Resolve to the absolute public URL, exactly as the Publish-now path does
+  // (DraftDetailsDrawer passes the image through toProxyUrl before publishing).
+  //
+  // Some drafts store the relative proxy path `/api/storage-image?path=studio/…`
+  // — written when NEXT_PUBLIC_SUPABASE_URL was unset at generation time, so
+  // publicStorageUrl fell back to it. Pinterest fetches the image itself and
+  // cannot resolve a relative path: server validation rejects it up front with
+  // "imageUrl is not a valid URL". Publish now never hit this because it already
+  // resolved; only the scheduled path passed the raw value through, which is why
+  // the same draft could publish by hand and fail on a schedule.
+  const imageUrl = toProxyUrl(storedImage);
   return {
     uid,
     boardId,
