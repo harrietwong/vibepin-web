@@ -87,6 +87,56 @@ async function main() {
     assertEq(check({}).length, 0, "clean");
   });
 
+  // ── AI-copy text model pinning ───────────────────────────────────────────────
+  // Without an explicit AI_COPY_TEXT_MODEL, providerConfig() falls back to a
+  // provider-DEPENDENT default — so swapping a credential silently swaps the model
+  // that writes user-facing copy. Deploy-time guard only; the runtime fallback stays.
+  const checkModel = (guard as unknown as {
+    checkAiCopyTextModelForProd: (env: Record<string, string | undefined>) => string[];
+  }).checkAiCopyTextModelForProd;
+
+  await test("exports the pure AI-copy text-model check", () => {
+    assert(typeof checkModel === "function", "checkAiCopyTextModelForProd exported");
+  });
+
+  await test("no provider credential → not policed (nothing can run)", () => {
+    assertEq(checkModel({}).length, 0, "empty env is clean");
+    assertEq(checkModel({ AI_COPY_TEXT_MODEL: "" }).length, 0, "blank model without a credential is clean");
+    assertEq(checkModel({ LINAPI_KEY: "   " }).length, 0, "whitespace-only credential does not count as configured");
+  });
+
+  await test("LINAPI_KEY set + AI_COPY_TEXT_MODEL unset → refused", () => {
+    const problems = checkModel({ LINAPI_KEY: "lin-abc" });
+    assertEq(problems.length, 1, "one problem");
+    assert(/AI_COPY_TEXT_MODEL/.test(problems[0]), "message names the variable");
+  });
+
+  await test("OPENAI_API_KEY set + AI_COPY_TEXT_MODEL unset → refused", () => {
+    assertEq(checkModel({ OPENAI_API_KEY: "sk-abc" }).length, 1, "openai credential is policed too");
+  });
+
+  await test("credential + blank/whitespace AI_COPY_TEXT_MODEL → refused", () => {
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "" }).length, 1, "empty string");
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "   " }).length, 1, "whitespace only");
+  });
+
+  await test("credential + explicit AI_COPY_TEXT_MODEL → no problem", () => {
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "gemini-2.5-flash" }).length, 0, "linapi pinned");
+    assertEq(checkModel({ OPENAI_API_KEY: "sk-abc", AI_COPY_TEXT_MODEL: "gpt-4o-mini" }).length, 0, "openai pinned");
+  });
+
+  await test("AI_COPY_VISION_MODEL is NOT required by this check", () => {
+    // Only the text model is pinned at deploy time; the vision fallback chain is
+    // deliberately left intact and unpoliced.
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "m" }).length, 0, "vision model absent is fine");
+  });
+
+  await test("billing check and AI-copy check are independent", () => {
+    // The billing guard must not react to AI-copy env, and vice versa.
+    assertEq(check({ LINAPI_KEY: "lin-abc" }).length, 0, "billing check ignores provider credentials");
+    assertEq(checkModel({ CREEM_MODE: "test" }).length, 0, "AI-copy check ignores billing mode");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

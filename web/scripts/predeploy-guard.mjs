@@ -13,6 +13,7 @@
  *   2. HEAD is not detached.
  *   3. web/.vercel/project.json points at the expected Vercel project.
  *   4. E2E_TEST_MODE is not truthy.
+ *   4b. ENABLE_LOCAL_ADMIN_BYPASS is not truthy (it grants no-auth super-admin).
  *   5. PINTEREST_API_ENV is not "sandbox".
  *   6. Billing is not in test mode for production. CREEM_MODE is never "test".
  *      The billing CREEM_API_KEY is policed ONLY when CREEM_MODE is "live" (then
@@ -22,6 +23,9 @@
  *      MODERATION key (a separate CREEM_MODERATION_API_KEY) can power Create Pins
  *      generation without tripping the deploy guard. This is the deploy-time half
  *      of the billingMode guard.
+ *   7. AI_COPY_TEXT_MODEL is set (non-blank) whenever an AI-copy provider
+ *      credential (LINAPI_KEY or OPENAI_API_KEY) is configured — production must
+ *      not run copy generation on an implicit, credential-dependent default.
  *
  * --override requires OVERRIDE_REASON to be set to a non-empty string. When
  * present, an override bypasses failed checks, appends an audit line to
@@ -66,6 +70,67 @@ export function checkBillingModeForProd(env) {
   // requires a real billing key.
   if (mode === "live" && apiKey.startsWith("creem_test_")) {
     problems.push("CREEM_MODE=live but CREEM_API_KEY is a test key (creem_test_…) — refusing a production deploy with a sandbox billing key.");
+  }
+  return problems;
+}
+
+/**
+ * The AI-copy fast text path falls back to a provider-dependent default model when
+ * AI_COPY_TEXT_MODEL is unset (see providerConfig in src/lib/ai-copy/visionServer.ts).
+ * That fallback is fine locally, but in production it means rotating or switching a
+ * provider credential SILENTLY changes which model writes user-facing copy. So once an
+ * AI-copy provider credential is configured at all, the model must be pinned explicitly.
+ *
+ * Deploy-time only — the runtime fallback in providerConfig() is deliberately kept for
+ * local/test. Pure (env in → problems out) and exported at the top BEFORE any side
+ * effects, so a unit test can drive it with fake env.
+ */
+export function checkAiCopyTextModelForProd(env) {
+  const problems = [];
+  const hasProviderCredential =
+    String(env.LINAPI_KEY ?? "").trim() !== "" || String(env.OPENAI_API_KEY ?? "").trim() !== "";
+  if (!hasProviderCredential) return problems;
+  if (String(env.AI_COPY_TEXT_MODEL ?? "").trim() === "") {
+    problems.push(
+      "an AI-copy provider credential is configured (LINAPI_KEY or OPENAI_API_KEY) but AI_COPY_TEXT_MODEL is unset/blank — " +
+        "refusing a production deploy on an implicit default model (a credential change would silently change which model writes user copy). " +
+        "Set AI_COPY_TEXT_MODEL explicitly.",
+    );
+  }
+  return problems;
+}
+
+/** Truthy = present and not "", "0" or "false" (case-insensitive). */
+export function isTruthyEnv(value) {
+  if (value === undefined || value === null) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false";
+}
+
+/**
+ * Auth bypasses must never reach a production deploy.
+ *
+ * Both flags hand out privileged access without authentication:
+ *   • E2E_TEST_MODE — a request header (x-e2e-super-admin) becomes super_admin,
+ *     and src/proxy.ts stops guarding /app/** entirely.
+ *   • ENABLE_LOCAL_ADMIN_BYPASS — every /admin/** request is treated as super_admin.
+ *
+ * Both are ALSO hard-gated at runtime on NODE_ENV !== "production" (see
+ * e2eTestModeEnabled / localAdminBypassEnabled in src/lib/server/superAdmin.ts).
+ * This is the deploy-time half: defence in depth, so the flag never even ships.
+ *
+ * Pure (env in → problems out) and exported BEFORE any side effects so a unit
+ * test can drive it with fake env.
+ */
+export function checkAuthBypassesForProd(env) {
+  const problems = [];
+  if (isTruthyEnv(env.E2E_TEST_MODE)) {
+    problems.push(`E2E_TEST_MODE is set (${env.E2E_TEST_MODE}) — refusing a production deploy in test mode`);
+  }
+  if (isTruthyEnv(env.ENABLE_LOCAL_ADMIN_BYPASS)) {
+    problems.push(
+      `ENABLE_LOCAL_ADMIN_BYPASS is set (${env.ENABLE_LOCAL_ADMIN_BYPASS}) — refusing a production deploy with the no-auth local super-admin bypass enabled`,
+    );
   }
   return problems;
 }
@@ -181,15 +246,10 @@ try {
   failures.push(`could not read/parse web/.vercel/project.json: ${err.message}`);
 }
 
-// --- Check 4: E2E_TEST_MODE must not be truthy ---
-function isTruthyEnv(value) {
-  if (value === undefined) return false;
-  const normalized = String(value).trim().toLowerCase();
-  return normalized !== "" && normalized !== "0" && normalized !== "false";
-}
-
-if (isTruthyEnv(process.env.E2E_TEST_MODE)) {
-  failures.push(`E2E_TEST_MODE is set (${process.env.E2E_TEST_MODE}) — refusing a production deploy in test mode`);
+// --- Check 4 (+4b): auth bypasses (E2E_TEST_MODE, ENABLE_LOCAL_ADMIN_BYPASS) ---
+// See checkAuthBypassesForProd (top of file) — neither no-auth bypass may ship.
+for (const problem of checkAuthBypassesForProd(process.env)) {
+  failures.push(problem);
 }
 
 // --- Check 5: PINTEREST_API_ENV must not be "sandbox" ---
@@ -201,6 +261,13 @@ if (process.env.PINTEREST_API_ENV === "sandbox") {
 // See checkBillingModeForProd (top of file) — a test-mode Creem key must never
 // open real checkout on production.
 for (const problem of checkBillingModeForProd(process.env)) {
+  failures.push(problem);
+}
+
+// --- Check 7: AI-copy text model must be pinned when a provider credential exists ---
+// See checkAiCopyTextModelForProd (top of file) — production must never run copy
+// generation on an implicit, credential-dependent default model.
+for (const problem of checkAiCopyTextModelForProd(process.env)) {
   failures.push(problem);
 }
 

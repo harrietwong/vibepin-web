@@ -12,7 +12,6 @@ import { LocaleProvider, useLocale } from "@/lib/i18n/LocaleProvider";
 import { LanguageRegionModal } from "@/components/settings/LanguageRegionModal";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import BrandLogo from "@/components/BrandLogo";
-import { EXISTING_APP_TOKEN_BALANCE } from "@/lib/accountSummary";
 import {
   SETTINGS_DEFAULT_PATH,
 } from "@/lib/settingsPaths";
@@ -237,11 +236,6 @@ function UserDropdown({ email, onLogout, onClose, onOpenSettings }: {
             icon={CreditCard}
             label={t("account.billing")}
             testId="account-menu-billing"
-            right={
-              <span style={{ fontSize: "11px", fontWeight: 700, color: "#3B82F6", background: "rgba(59,130,246,0.15)", padding: "1px 8px", borderRadius: 20 }}>
-                {EXISTING_APP_TOKEN_BALANCE}
-              </span>
-            }
             onClick={() => openSettings("billing")}
           />
 
@@ -480,9 +474,6 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
             <span data-sidebar-label="" style={{ display: "block", fontSize: 13, fontWeight: 700, lineHeight: 1.15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               Zoe
             </span>
-            <span data-sidebar-label="" style={{ display: "block", marginTop: 3, fontSize: 11, fontWeight: 650, color: "var(--app-brand)" }}>
-              {EXISTING_APP_TOKEN_BALANCE} Tokens
-            </span>
           </span>
         </button>
       </aside>
@@ -503,26 +494,6 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 
           {/* Top-right quick controls: App language + Theme (sync with Settings) */}
           <TopbarLanguageTheme />
-
-          {/* Token badge */}
-          <button
-            type="button"
-            onClick={() => openSettings("billing")}
-            aria-label="Open Billing & Credits"
-            style={{
-              display: "flex", alignItems: "center", gap: 5,
-              padding: "4px 10px", borderRadius: 20,
-              background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.22)",
-              cursor: "pointer",
-            }}
-          >
-            <svg width="10" height="10" viewBox="0 0 20 20" fill="none">
-              <circle cx="10" cy="10" r="8.5" stroke="#3B82F6" strokeWidth="2" />
-              <path d="M7 10l2 2 4-4" stroke="#3B82F6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span style={{ fontSize: "11px", fontWeight: 700, color: "#3B82F6" }}>{EXISTING_APP_TOKEN_BALANCE}</span>
-            <span style={{ fontSize: "10px", color: "#6B7A96" }}>{t("common.token")}</span>
-          </button>
 
           {/* Avatar */}
           <div ref={avatarRef} style={{ position: "relative" }}>

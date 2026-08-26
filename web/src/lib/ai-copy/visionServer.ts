@@ -137,14 +137,25 @@ export function safeUrl(raw: string | undefined): URL | null {
 
 // ── Provider config ─────────────────────────────────────────────────────────────
 
+/** Default endpoints per provider. A LinAPI key must NEVER be sent to OpenAI's host. */
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+const LINAPI_BASE_URL = "https://api.linapi.net/v1";
+
 export function providerConfig() {
   const linapiKey = process.env.LINAPI_KEY || "";
   const openaiKey = process.env.OPENAI_API_KEY || "";
   const useLinapi = !!linapiKey;
+  // When LinAPI is the selected provider, a missing/blank LINAPI_BASE_URL must fall
+  // back to the LinAPI host — never to OpenAI's. Previously a blank value fell through
+  // to the OpenAI default, sending LinAPI credentials to api.openai.com (guaranteed
+  // 401, and a credential leak to the wrong vendor). Matches the default used by
+  // lib/support/* and backend/generator.py.
+  const providerDefaultBaseUrl = useLinapi ? LINAPI_BASE_URL : OPENAI_BASE_URL;
+  const configuredBaseUrl = useLinapi ? (process.env.LINAPI_BASE_URL || "").trim() : "";
   return {
     provider: useLinapi ? "linapi" : openaiKey ? "openai" : "none",
     key: linapiKey || openaiKey,
-    baseUrl: (useLinapi ? process.env.LINAPI_BASE_URL : "https://api.openai.com/v1")?.replace(/\/$/, "") || "https://api.openai.com/v1",
+    baseUrl: (configuredBaseUrl || providerDefaultBaseUrl).replace(/\/$/, "") || providerDefaultBaseUrl,
     // Vision-capable model used for image analysis and the vision fallback.
     visionModel: process.env.AI_COPY_VISION_MODEL || process.env.LINAPI_ANALYSIS_MODEL || process.env.OPENAI_AI_COPY_VISION_MODEL || (useLinapi ? "gemini-2.5-flash" : "gpt-4o-mini"),
     // Fast text-only model used when a cached analysis exists (no image tokens).
@@ -156,15 +167,43 @@ export type ProviderConfig = ReturnType<typeof providerConfig>;
 
 // ── Chat / JSON ─────────────────────────────────────────────────────────────────
 
-/** Tolerant JSON parse — strips markdown fences and extracts the JSON object. */
-export function parseJsonLoose(content: string): unknown {
+/**
+ * Tolerant JSON parse — strips markdown fences and extracts the JSON object.
+ *
+ * ONLY a non-null, non-array JSON OBJECT is a valid structured response. An array or
+ * scalar parses fine but is not the agreed shape: it used to flow into normalizeVision,
+ * which silently produced all-empty fields, which then failed the quality gate as
+ * `generic_title` — so the user saw a misleading 422 "we couldn't generate good copy
+ * for this image" for what is really an upstream/provider fault. Rejecting here keeps
+ * every wrong-shape response on the provider-facing 502 path.
+ *
+ * Same idiom as qualityJudgeServer's `typeof raw !== "object"` guard. The check lives
+ * in the parser (not the call sites) because the object contract is the parser's whole
+ * postcondition and chatJson — its only caller — funnels every provider path through it.
+ */
+export function parseJsonLoose(content: string): Record<string, unknown> {
   const trimmed = content.trim();
-  try { return JSON.parse(trimmed); } catch { /* fall through */ }
+  const attempt = (text: string): Record<string, unknown> | undefined => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { return undefined; }
+    // null / arrays / scalars are parseable but are not a structured object response.
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new CopyError("provider_unparseable_response", 502, PROVIDER_MESSAGE);
+    }
+    return parsed as Record<string, unknown>;
+  };
+
+  const direct = attempt(trimmed);
+  if (direct) return direct;
   const unfenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  try { return JSON.parse(unfenced); } catch { /* fall through */ }
+  const fenced = attempt(unfenced);
+  if (fenced) return fenced;
   const first = unfenced.indexOf("{");
   const last = unfenced.lastIndexOf("}");
-  if (first >= 0 && last > first) return JSON.parse(unfenced.slice(first, last + 1));
+  if (first >= 0 && last > first) {
+    const salvaged = attempt(unfenced.slice(first, last + 1));
+    if (salvaged) return salvaged;
+  }
   throw new CopyError("provider_unparseable_response", 502, PROVIDER_MESSAGE);
 }
 
@@ -198,7 +237,7 @@ export async function chatJson(opts: {
   timeoutMs: number;
   maxTokens?: number;
   extraBody?: Record<string, unknown>;
-}): Promise<unknown> {
+}): Promise<Record<string, unknown>> {
   let res: Response;
   try {
     res = await fetch(`${opts.baseUrl}/chat/completions`, {

@@ -33,8 +33,11 @@
 -- plain INSERT; a lost creation race surfaces as Postgres 23505 on the primary key
 -- (the same idiom as creem_webhook_events) and falls back to the CAS path.
 --
---   vibepin_user_id  the authenticated caller (already resolved by the route's auth check)
---   route            logical route key ('ai_copy' | 'ai_copy_analyze' | 'quality_judge').
+--   vibepin_user_id  the rate-limit subject. NOTE: v54 widens this to text — it is
+--                    NOT always a user uuid. /api/generate serves anonymous inline
+--                    callers, whose identity is "session:<id>" / "anon:<hash>".
+--   route            logical route key ('ai_copy' | 'ai_copy_analyze' | 'quality_judge'
+--                    | 'image_generation').
 --                    Limits are PER ROUTE: exhausting copy generation must not disable
 --                    the background quality judge, and vice versa.
 --   window_start     floor(now / window_seconds) as a timestamptz — the fixed-window bucket

@@ -119,6 +119,77 @@ def sanitize_error(exc: BaseException) -> str:
     return msg[:280] or "unknown_error"
 
 
+# ── Phase 4I: usage metering (settle per slot; release on terminal pre-slot fail) ─
+# The route reserves image-slot capacity via usage_reserve_generation_job, which
+# writes generation_jobs.usage_reservation_id. This worker settles that reservation
+# per slot as each image succeeds or terminally fails.
+#
+# SLOT-KEY CONTRACT (load-bearing — mirrored in
+# web/src/lib/server/usage/meterGeneration.ts): the reservation was created with slot
+# keys ["s0","s1",...,"s{count-1}"]. The worker's per-slot loop uses INTEGER slot
+# indices, so the settle key is reconstructed as "s" + str(slot). If either side
+# changes the shape, settlement silently stops matching — keep the two in lockstep.
+#
+# SAFETY RULES:
+#   * A settle/release failure must NEVER fail the job — it is logged and swallowed.
+#     The v55 expiry sweeper is the safety net for anything left unsettled.
+#   * v55's settle RPC is idempotent per (reservation_id, slot_key): a reclaimed job
+#     re-runs ONLY its non-done slots, and any slot already settled by the prior
+#     attempt is a no-op replay. So double-settle on reclaim cannot occur.
+#   * A job with no usage_reservation_id (predates metering, or was enqueued via the
+#     plain off-mode insert) is simply not metered — every helper below no-ops on a
+#     falsy reservation id, logging once.
+
+def _slot_key(slot: int) -> str:
+    """The reservation slot key for an integer slot index. MUST match the TS side's
+    ["s0","s1",...] convention (see meterGeneration.slotKeysForCount)."""
+    return f"s{slot}"
+
+
+def settle_slot(reservation_id, slot: int, succeeded: bool, client=None) -> None:
+    """Settle ONE slot of a reservation. No-op when there is no reservation id.
+
+    Idempotent by v55's per-(reservation, slot) guard, so a reclaim that re-runs a
+    slot already settled by a prior attempt is a harmless replay. Never raises: a
+    settle hiccup must not fail the job (the expiry sweeper reclaims anything unsettled).
+    """
+    if not reservation_id:
+        return
+    outcome = "succeeded" if succeeded else "terminal_failed"
+    try:
+        (client or get_client()).rpc(
+            "usage_settle_reservation_item",
+            {
+                "p_reservation_id": reservation_id,
+                "p_slot_key": _slot_key(slot),
+                "p_outcome": outcome,
+            },
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 — log, never propagate
+        print(
+            f"[gen-worker] settle failed reservation={reservation_id} slot={slot} "
+            f"outcome={outcome}: {sanitize_error(exc)}",
+            file=sys.stderr,
+        )
+
+
+def release_reservation(reservation_id, reason: str = "generation_failed", client=None) -> None:
+    """Release every still-pending slot of a reservation (terminal failure before any
+    slot ran). No-op without a reservation id; idempotent; never raises."""
+    if not reservation_id:
+        return
+    try:
+        (client or get_client()).rpc(
+            "usage_release_reservation",
+            {"p_reservation_id": reservation_id, "p_reason": reason},
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 — log, never propagate
+        print(
+            f"[gen-worker] release failed reservation={reservation_id}: {sanitize_error(exc)}",
+            file=sys.stderr,
+        )
+
+
 # ── Results helpers ─────────────────────────────────────────────────────────────
 
 def init_results(existing, count: int) -> list[dict]:
@@ -279,6 +350,12 @@ async def process_job(job: dict, client=None) -> str:
     params = job.get("params") or {}
     count = max(1, int(params.get("count") or params.get("outputCount") or 1))
 
+    # Phase 4I: the usage reservation this job settles against (None when the job
+    # predates metering or was enqueued via the plain off-mode insert → not metered).
+    reservation_id = job.get("usage_reservation_id")
+    if not reservation_id:
+        print(f"[gen-worker] job={job_id} has no usage_reservation_id — not metered", file=sys.stderr)
+
     # Normalize / seed the results array, preserving prior 'done' slots.
     results = init_results(job.get("results"), count)
     _write_results(job_id, results, client=client)
@@ -287,13 +364,17 @@ async def process_job(job: dict, client=None) -> str:
     prep = await generator.prepare_generation(params)
     if not prep.get("ok"):
         # Prepare-level failure (bad keyword, unconfigured model, image load, …):
-        # every not-done slot fails with the sanitized prepare error; terminal.
+        # every not-done slot fails with the sanitized prepare error; terminal. No
+        # slot ran, so RELEASE the whole reservation (capacity returns to the user)
+        # rather than settling each slot as a failure — release is the primitive for
+        # "nothing ran". Idempotent + swallow-on-failure.
         emit = prep.get("emit") or {}
         err = sanitize_error(RuntimeError(str(emit.get("error") or "generation setup failed")))
         for r in results:
             if r.get("status") != "done":
                 r.update({"status": "failed", "imageUrl": None, "error": err})
         status = terminal_status(results)
+        release_reservation(reservation_id, reason="prepare_failed", client=client)
         _finalize(job_id, results, status, client=client)
         return status
 
@@ -330,9 +411,11 @@ async def process_job(job: dict, client=None) -> str:
             try:
                 url = await generator.generate_slot(plan, slot)
                 new = {"slot": slot, "status": "done", "imageUrl": url, "error": None}
+                succeeded = True
             except Exception as exc:  # noqa: BLE001 — classify+sanitize, never propagate
                 new = {"slot": slot, "status": "failed", "imageUrl": None,
                        "error": sanitize_error(exc)}
+                succeeded = False
             async with lock:
                 for i, r in enumerate(results):
                     if r.get("slot") == slot:
@@ -340,6 +423,14 @@ async def process_job(job: dict, client=None) -> str:
                         break
                 # Incremental persist so a crash mid-batch keeps finished slots.
                 _write_results(job_id, results, client=client)
+            # Phase 4I: settle THIS slot at its terminal outcome. Outside the results
+            # lock (the RPC does its own account locking) and swallow-on-failure, so a
+            # metering hiccup never blocks another slot or fails the job. Idempotent per
+            # (reservation, slot_key), so a reclaim that re-ran this slot is a no-op
+            # replay for any slot already settled — no double-settle. Only 'pending'/
+            # 'failed' slots are ever (re)run (init_results skips 'done'), so a slot the
+            # prior attempt settled 'succeeded' is not re-run at all.
+            settle_slot(reservation_id, slot, succeeded, client=client)
 
     try:
         await asyncio.gather(*[_run_slot(s) for s in pending_slots])
