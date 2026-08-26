@@ -80,6 +80,7 @@ export const CORE: string[] = [
   "test-amazon-affiliate-wiring",
   // Billing (Creem)
   "test-plan-entitlements",
+  "test-usage-period-math",
   "test-entitlements-security",
   "test-creem-checkout-api",
   "test-creem-webhook-ordering",
@@ -87,6 +88,8 @@ export const CORE: string[] = [
   "test-predeploy-guard",
   "test-moderate-prompt",
   "test-generation-moderation-gate",
+  "test-generation-metering",
+  "test-text-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
   // Settings / support
@@ -185,6 +188,33 @@ export const EXCLUDED: Record<string, string> = {
     "explanation, because a green run that connected to nothing is the exact failure " +
     "mode this channel exists to prevent. See scripts/lib/test-db-config.ts for how the " +
     "target is pinned to the test project and can never resolve to production.",
+  "test-db-usage-lifecycle":
+    "REAL-POSTGRES integration test for the v56 usage-account LIFECYCLE RPC " +
+    "(usage_ensure_account: init / period rollover / plan change). Writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` rather " +
+    "than the hermetic `npm test` gate, for the same reasons as the rate-limit and " +
+    "usage-ledger DB tests. It fails loudly rather than skipping when credentials are " +
+    "absent. It proves the exactly-once guarantees the lifecycle lives on — a concurrent " +
+    "double-ensure yields ONE account + ONE init event, and a replayed rollover does not " +
+    "double-reset — which only real Postgres row locks + unique constraints can testify to.",
+  "test-db-usage-metering":
+    "REAL-POSTGRES integration test for Phase 4I image metering — writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. It drives the exact RPC cycle the route " +
+    "and worker now depend on (usage_reserve_generation_job → the generation_jobs row " +
+    "carries usage_reservation_id → per-slot settle with the ['s0','s1',...] keys the " +
+    "TS module and worker both produce → reservation ends PARTIAL with counters exact), " +
+    "which only real Postgres can testify to. Fails loudly rather than skipping when " +
+    "credentials are absent, like the other test-db-* channels.",
+  "test-db-text-metering":
+    "REAL-POSTGRES integration test for Phase 4T TEXT metering — writes and deletes " +
+    "rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. It drives the exact RPC cycle /api/ai-copy " +
+    "now depends on (usage_reserve with usage_type ai_text_generation + the single " +
+    "['s0'] slot the TS module produces → settle s0 succeeded bills the account exactly " +
+    "once → release returns capacity → a replayed settle bills exactly once), which only " +
+    "real Postgres can testify to. Fails loudly rather than skipping when credentials " +
+    "are absent, like the other test-db-* channels.",
   "test-usage-ledger-db":
     "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +

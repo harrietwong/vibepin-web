@@ -123,6 +123,23 @@ class _Result:
         self.data = data
 
 
+class _RpcCall:
+    """A recorded RPC invocation. `.execute()` returns a canned result so the worker's
+    `.rpc(fn, params).execute()` shape works without a real DB."""
+
+    def __init__(self, recorder: list, fn: str, params: dict, result):
+        self._recorder = recorder
+        self._fn = fn
+        self._params = params
+        self._result = result
+
+    def execute(self):
+        self._recorder.append({"fn": self._fn, "params": self._params})
+        if isinstance(self._result, Exception):
+            raise self._result
+        return _Result(self._result if self._result is not None else [])
+
+
 class FakeSupabase:
     def __init__(self, seed: dict | None = None):
         # store: table_name -> list[row dict]
@@ -130,9 +147,17 @@ class FakeSupabase:
         if seed:
             for k, v in seed.items():
                 self._store[k] = [dict(r) for r in v]
+        # Phase 4I: record every .rpc(fn, params) so settle/release wiring is testable
+        # without a real ledger. `rpc_error_for` maps a fn name to an Exception to raise
+        # on .execute(), to prove a settle failure never fails the job.
+        self.rpc_calls: list = []
+        self.rpc_error_for: dict = {}
 
     def table(self, name: str) -> _Query:
         return _Query(self._store, name)
+
+    def rpc(self, fn: str, params: dict) -> _RpcCall:
+        return _RpcCall(self.rpc_calls, fn, params, self.rpc_error_for.get(fn))
 
     # convenience for assertions
     def job(self, job_id):
@@ -141,9 +166,15 @@ class FakeSupabase:
     def worker_rows(self):
         return self._store["generation_worker_status"]
 
+    def settle_calls(self):
+        return [c for c in self.rpc_calls if c["fn"] == "usage_settle_reservation_item"]
+
+    def release_calls(self):
+        return [c for c in self.rpc_calls if c["fn"] == "usage_release_reservation"]
+
 
 def _seed_job(job_id="j1", status="queued", count=2, results=None, created_at=None,
-              heartbeat=None):
+              heartbeat=None, usage_reservation_id=None):
     return {
         "id": job_id,
         "vibepin_user_id": "u1",
@@ -155,6 +186,7 @@ def _seed_job(job_id="j1", status="queued", count=2, results=None, created_at=No
         "created_at": created_at or _iso(datetime.now(timezone.utc)),
         "updated_at": None,
         "finished_at": None,
+        "usage_reservation_id": usage_reservation_id,
     }
 
 
@@ -344,6 +376,157 @@ class GenerationWorkerTest(unittest.IsolatedAsyncioTestCase):
             [{"status": "done"}, {"status": "failed"}]), "partial")
         self.assertEqual(worker.terminal_status(
             [{"status": "failed"}, {"status": "failed"}]), "failed")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # Phase 4I: usage metering — settle per slot, release on pre-slot terminal fail
+    # ══════════════════════════════════════════════════════════════════════════════
+
+    def test_slot_key_convention_matches_ts(self):
+        # The TS side reserves ["s0","s1",...]; the worker must rebuild the SAME key.
+        self.assertEqual(worker._slot_key(0), "s0")
+        self.assertEqual(worker._slot_key(3), "s3")
+
+    async def test_settle_called_once_per_successful_slot_with_s_keys(self):
+        db = FakeSupabase(seed={"generation_jobs": [
+            _seed_job("j1", "running", count=3, usage_reservation_id="res-1"),
+        ]})
+
+        async def _slot(_plan, slot):
+            return f"https://y/{slot}.png"
+
+        with patch.object(worker.generator, "prepare_generation", _fake_prepare_ok(3)), \
+             patch.object(worker.generator, "generate_slot", _slot):
+            status = await worker.process_job(db.job("j1"), client=db)
+
+        self.assertEqual(status, "done")
+        settles = db.settle_calls()
+        self.assertEqual(len(settles), 3, "one settle per slot")
+        by_slot = {c["params"]["p_slot_key"]: c["params"]["p_outcome"] for c in settles}
+        self.assertEqual(by_slot, {"s0": "succeeded", "s1": "succeeded", "s2": "succeeded"},
+                         "s{i} keys, all succeeded")
+        # Every settle names the job's reservation.
+        self.assertTrue(all(c["params"]["p_reservation_id"] == "res-1" for c in settles))
+        # No release when at least one slot ran.
+        self.assertEqual(len(db.release_calls()), 0)
+
+    async def test_settle_marks_failed_slots_terminal_failed(self):
+        db = FakeSupabase(seed={"generation_jobs": [
+            _seed_job("j1", "running", count=2, usage_reservation_id="res-2"),
+        ]})
+
+        async def _slot(_plan, slot):
+            if slot == 1:
+                raise ValueError("api_server_error::boom")
+            return f"https://y/{slot}.png"
+
+        with patch.object(worker.generator, "prepare_generation", _fake_prepare_ok(2)), \
+             patch.object(worker.generator, "generate_slot", _slot):
+            status = await worker.process_job(db.job("j1"), client=db)
+
+        self.assertEqual(status, "partial")
+        by_slot = {c["params"]["p_slot_key"]: c["params"]["p_outcome"] for c in db.settle_calls()}
+        self.assertEqual(by_slot, {"s0": "succeeded", "s1": "terminal_failed"})
+
+    async def test_missing_reservation_id_makes_zero_rpc_calls(self):
+        # A job that predates metering (no usage_reservation_id) must never touch the
+        # ledger — settle no-ops on a falsy reservation id.
+        db = FakeSupabase(seed={"generation_jobs": [
+            _seed_job("j1", "running", count=2, usage_reservation_id=None),
+        ]})
+
+        async def _slot(_plan, slot):
+            return f"https://y/{slot}.png"
+
+        with patch.object(worker.generator, "prepare_generation", _fake_prepare_ok(2)), \
+             patch.object(worker.generator, "generate_slot", _slot):
+            status = await worker.process_job(db.job("j1"), client=db)
+
+        self.assertEqual(status, "done")
+        self.assertEqual(len(db.rpc_calls), 0, "no ledger RPC for an unmetered job")
+
+    async def test_reclaim_does_not_re_settle_done_slots(self):
+        # Slot 0 already 'done' from a prior attempt; only slot 1 re-runs, so only slot
+        # 1 is settled. The already-done slot is neither regenerated nor re-settled.
+        prior = [
+            {"slot": 0, "status": "done", "imageUrl": "https://x/0.png", "error": None},
+            {"slot": 1, "status": "failed", "imageUrl": None, "error": "boom"},
+        ]
+        db = FakeSupabase(seed={"generation_jobs": [
+            _seed_job("j1", "running", count=2, results=prior, usage_reservation_id="res-3"),
+        ]})
+
+        async def _slot(_plan, slot):
+            return f"https://y/{slot}.png"
+
+        with patch.object(worker.generator, "prepare_generation", _fake_prepare_ok(2)), \
+             patch.object(worker.generator, "generate_slot", _slot):
+            status = await worker.process_job(db.job("j1"), client=db)
+
+        self.assertEqual(status, "done")
+        settles = db.settle_calls()
+        self.assertEqual(len(settles), 1, "only the re-run slot is settled")
+        self.assertEqual(settles[0]["params"]["p_slot_key"], "s1")
+        self.assertEqual(settles[0]["params"]["p_outcome"], "succeeded")
+
+    async def test_settle_error_does_not_fail_the_job(self):
+        db = FakeSupabase(seed={"generation_jobs": [
+            _seed_job("j1", "running", count=2, usage_reservation_id="res-4"),
+        ]})
+        # Every settle RPC raises — the job must still finish 'done'.
+        db.rpc_error_for["usage_settle_reservation_item"] = RuntimeError("ledger down")
+
+        async def _slot(_plan, slot):
+            return f"https://y/{slot}.png"
+
+        with patch.object(worker.generator, "prepare_generation", _fake_prepare_ok(2)), \
+             patch.object(worker.generator, "generate_slot", _slot):
+            status = await worker.process_job(db.job("j1"), client=db)
+
+        self.assertEqual(status, "done", "a settle failure must never fail the job")
+        row = db.job("j1")
+        self.assertEqual(row["status"], "done")
+        self.assertTrue(all(r["status"] == "done" for r in row["results"]))
+
+    async def test_prepare_failure_releases_reservation(self):
+        # No slot ran → release the whole reservation, not per-slot settle.
+        db = FakeSupabase(seed={"generation_jobs": [
+            _seed_job("j1", "running", count=2, usage_reservation_id="res-5"),
+        ]})
+
+        async def _prep(_params):
+            return {"ok": False, "phase": "prepare",
+                    "emit": {"ok": False, "error": "keyword is required", "urls": []}}
+
+        with patch.object(worker.generator, "prepare_generation", _prep):
+            status = await worker.process_job(db.job("j1"), client=db)
+
+        self.assertEqual(status, "failed")
+        releases = db.release_calls()
+        self.assertEqual(len(releases), 1, "one release on a prepare-level terminal failure")
+        self.assertEqual(releases[0]["params"]["p_reservation_id"], "res-5")
+        self.assertEqual(len(db.settle_calls()), 0, "no per-slot settle when nothing ran")
+
+    async def test_prepare_failure_without_reservation_makes_no_rpc(self):
+        db = FakeSupabase(seed={"generation_jobs": [
+            _seed_job("j1", "running", count=2, usage_reservation_id=None),
+        ]})
+
+        async def _prep(_params):
+            return {"ok": False, "phase": "prepare",
+                    "emit": {"ok": False, "error": "keyword is required", "urls": []}}
+
+        with patch.object(worker.generator, "prepare_generation", _prep):
+            status = await worker.process_job(db.job("j1"), client=db)
+
+        self.assertEqual(status, "failed")
+        self.assertEqual(len(db.rpc_calls), 0, "no ledger RPC for an unmetered prepare failure")
+
+    def test_release_error_does_not_raise(self):
+        db = FakeSupabase()
+        db.rpc_error_for["usage_release_reservation"] = RuntimeError("ledger down")
+        # Must swallow — a release hiccup cannot propagate.
+        worker.release_reservation("res-x", client=db)
+        self.assertEqual(len(db.release_calls()), 1)
 
 
 if __name__ == "__main__":
