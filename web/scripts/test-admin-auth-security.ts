@@ -36,6 +36,8 @@ process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
 export {};
 
 import { Module } from "node:module";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // process.env.NODE_ENV is typed read-only; these helpers let the security tests
 // simulate a production build without weakening the type elsewhere.
@@ -414,6 +416,15 @@ async function main() {
       0,
       '"0" and "" are not truthy',
     );
+  });
+
+  await test("/app?admin=forbidden is a terminal, visible denial state", () => {
+    const appRoot = readFileSync(join(process.cwd(), "src/app/app/page.tsx"), "utf8");
+    const notice = readFileSync(join(process.cwd(), "src/components/app/AdminForbiddenNotice.tsx"), "utf8");
+    assert(/admin\s*===\s*["']forbidden["']/.test(appRoot), "app root must recognize the admin denial flag");
+    assert(/<AdminForbiddenNotice\s*\/>/.test(appRoot), "denied users must see a terminal notice, not a second redirect");
+    assert(/role=["']alert["']/.test(notice), "denial feedback must be exposed as an accessible alert");
+    assert(/href=["']\/app\/studio["']/.test(notice), "notice must offer a safe return to the app");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

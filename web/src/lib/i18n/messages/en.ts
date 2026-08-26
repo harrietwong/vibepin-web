@@ -33,6 +33,9 @@ const en = {
   "nav.productIdeas": "Product Opportunities",
   "nav.settings": "Settings",
   "nav.helpSupport": "Help & Support",
+  "adminForbidden.title": "Admin access required",
+  "adminForbidden.description": "This account does not have permission to open the admin console.",
+  "adminForbidden.back": "Back to Create Pins",
 
   // ── Account dropdown ──
   "account.myAccount": "My Account",
