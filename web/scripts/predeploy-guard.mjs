@@ -13,6 +13,7 @@
  *   2. HEAD is not detached.
  *   3. web/.vercel/project.json points at the expected Vercel project.
  *   4. E2E_TEST_MODE is not truthy.
+ *   4b. ENABLE_LOCAL_ADMIN_BYPASS is not truthy (it grants no-auth super-admin).
  *   5. PINTEREST_API_ENV is not "sandbox".
  *   6. Billing is not in test mode for production. CREEM_MODE is never "test".
  *      The billing CREEM_API_KEY is policed ONLY when CREEM_MODE is "live" (then
@@ -155,6 +156,41 @@ export function checkAiCopyTextModelForProd(env) {
   return problems;
 }
 
+/** Truthy = present and not "", "0" or "false" (case-insensitive). */
+export function isTruthyEnv(value) {
+  if (value === undefined || value === null) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false";
+}
+
+/**
+ * Auth bypasses must never reach a production deploy.
+ *
+ * Both flags hand out privileged access without authentication:
+ *   • E2E_TEST_MODE — a request header (x-e2e-super-admin) becomes super_admin,
+ *     and src/proxy.ts stops guarding /app/** entirely.
+ *   • ENABLE_LOCAL_ADMIN_BYPASS — every /admin/** request is treated as super_admin.
+ *
+ * Both are ALSO hard-gated at runtime on NODE_ENV !== "production" (see
+ * e2eTestModeEnabled / localAdminBypassEnabled in src/lib/server/superAdmin.ts).
+ * This is the deploy-time half: defence in depth, so the flag never even ships.
+ *
+ * Pure (env in → problems out) and exported BEFORE any side effects so a unit
+ * test can drive it with fake env.
+ */
+export function checkAuthBypassesForProd(env) {
+  const problems = [];
+  if (isTruthyEnv(env.E2E_TEST_MODE)) {
+    problems.push(`E2E_TEST_MODE is set (${env.E2E_TEST_MODE}) — refusing a production deploy in test mode`);
+  }
+  if (isTruthyEnv(env.ENABLE_LOCAL_ADMIN_BYPASS)) {
+    problems.push(
+      `ENABLE_LOCAL_ADMIN_BYPASS is set (${env.ENABLE_LOCAL_ADMIN_BYPASS}) — refusing a production deploy with the no-auth local super-admin bypass enabled`,
+    );
+  }
+  return problems;
+}
+
 // Only run the full guard (git + filesystem + process.exit) when invoked directly
 // as the entrypoint — importing this module for its pure export must be side-effect
 // free.
@@ -266,15 +302,10 @@ try {
   failures.push(`could not read/parse web/.vercel/project.json: ${err.message}`);
 }
 
-// --- Check 4: E2E_TEST_MODE must not be truthy ---
-function isTruthyEnv(value) {
-  if (value === undefined) return false;
-  const normalized = String(value).trim().toLowerCase();
-  return normalized !== "" && normalized !== "0" && normalized !== "false";
-}
-
-if (isTruthyEnv(process.env.E2E_TEST_MODE)) {
-  failures.push(`E2E_TEST_MODE is set (${process.env.E2E_TEST_MODE}) — refusing a production deploy in test mode`);
+// --- Check 4 (+4b): auth bypasses (E2E_TEST_MODE, ENABLE_LOCAL_ADMIN_BYPASS) ---
+// See checkAuthBypassesForProd (top of file) — neither no-auth bypass may ship.
+for (const problem of checkAuthBypassesForProd(process.env)) {
+  failures.push(problem);
 }
 
 // --- Check 5: PINTEREST_API_ENV must not be "sandbox" ---

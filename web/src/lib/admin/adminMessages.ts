@@ -95,6 +95,7 @@ const en = {
   "today.funnel.reached": "reached",
   "today.funnel.stuck": "stuck",
   "today.funnel.splitNote": "{exact} exact · {inferred} inferred",
+  "today.funnel.splitNote.empty": "No publishes yet — nothing to attribute.",
 
   "today.topCreators.title": "This Week's Top Creators",
   "today.topCreators.note": "Ships in P1 — not yet built.",
@@ -110,6 +111,11 @@ const en = {
 
   "today.dataQuality.inferred": "Inferred",
   "today.dataQuality.exact": "Exact",
+
+  "time.relative.justNow": "just now",
+  "time.relative.minutesAgo": "{n}m ago",
+  "time.relative.hoursAgo": "{n}h ago",
+  "time.relative.daysAgo": "{n}d ago",
 
   "blocker.publish_failure.label": "Publish failure",
   "blocker.pinterest_disconnected.label": "Pinterest disconnected",
@@ -205,6 +211,7 @@ const zh: Record<keyof typeof en, string> = {
   "today.funnel.reached": "已到达",
   "today.funnel.stuck": "卡在此",
   "today.funnel.splitNote": "{exact} 精确 · {inferred} 推断",
+  "today.funnel.splitNote.empty": "尚无发布数据可归因。",
 
   "today.topCreators.title": "本周 Top 创作者",
   "today.topCreators.note": "将在 P1 上线 —— 尚未构建。",
@@ -220,6 +227,11 @@ const zh: Record<keyof typeof en, string> = {
 
   "today.dataQuality.inferred": "推断",
   "today.dataQuality.exact": "精确",
+
+  "time.relative.justNow": "刚刚",
+  "time.relative.minutesAgo": "{n} 分钟前",
+  "time.relative.hoursAgo": "{n} 小时前",
+  "time.relative.daysAgo": "{n} 天前",
 
   "blocker.publish_failure.label": "发布失败",
   "blocker.pinterest_disconnected.label": "Pinterest 已断开",

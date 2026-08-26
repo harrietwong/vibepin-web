@@ -20,9 +20,12 @@
 //
 // Efficiency: bounded, aggregate scans (a handful of round-trips), NOT per-user
 // query loops. auth listUsers is paginated (loop pages). Row scans that could
-// exceed supabase-js's silent 1000-row cap use paginated .range() loops.
+// exceed supabase-js's silent 1000-row cap use paginated .range() loops. Each of
+// pin_drafts / pin_generations also gets one extra all-time id-only existence scan
+// (no date filter) so connected_not_creating's "never created" check is not
+// truncated to the 30d window — still aggregate, never per-user.
 
-import type { SupabaseLikeDb, PgError } from "./adminQueryUtils";
+import type { SupabaseLikeDb, PgError, SelectBuilder } from "./adminQueryUtils";
 import {
   createAdminDb,
   isMissingSchema,
@@ -31,6 +34,7 @@ import {
   paginateRows,
   type AuthUserLite,
 } from "./adminQueryUtils";
+import type { PlanKey } from "./entitlements";
 
 // ── enums / contract types ───────────────────────────────────────────────────
 
@@ -129,8 +133,14 @@ interface DraftFacts {
   firstPostedAt: string | null;
   /** most recent postedAt (inferred recent publish activity). */
   lastPostedAt: string | null;
-  /** any live (non-deleted) draft exists at all. */
+  /** any live (non-deleted) draft touched in the recent scan window. */
   hasAnyDraft: boolean;
+  /**
+   * any live (non-deleted) draft exists AT ALL TIME (not window-bound). Drives
+   * the connected_not_creating "never created anything" existence check — a user
+   * who last touched a draft 45d ago has NOT "never created."
+   */
+  hasAnyDraftEver: boolean;
   /** most recent draft updated_at (activity signal). */
   lastDraftUpdatedAt: string | null;
 }
@@ -147,7 +157,13 @@ interface GenFacts {
   lastSucceededAt: string | null;
   failedCountInWindow: number;
   lastCreatedAt: string | null;
+  /** generations created within the recent scan window. */
   totalCount: number;
+  /**
+   * any generation exists AT ALL TIME (not window-bound). Drives the
+   * connected_not_creating existence check alongside hasAnyDraftEver.
+   */
+  hasAnyGenEver: boolean;
 }
 
 interface UserFacts {
@@ -189,10 +205,27 @@ function hoursSince(iso: string | null): number | undefined {
 }
 
 /**
- * publish_failure. EXACT wins: a pinterest_publish_failed inside the window with
- * no LATER pinterest_publish_succeeded. INFERRED fallback (only when no exact
- * signal): a live draft with payload.publishError, or a scheduled time passed
- * with no postedAt.
+ * publish_failure. PRD §3 支柱1 predicate: "24h 内有失败的发布且此后无成功发布"
+ * — the failure evidence must fall inside the 24h window AND no success may have
+ * happened after it. EXACT wins: a pinterest_publish_failed inside the window
+ * with no LATER pinterest_publish_succeeded. INFERRED fallback (only when no
+ * exact signal) must honor the SAME window-and-later-success-clears-it shape:
+ *
+ *   - a live draft carrying payload.publishError. There is no dedicated
+ *     "when did the error happen" timestamp in payload — but payloadAfterFailure
+ *     (publishDueLogic.ts) always bumps payload.updatedAt = nowIso in the SAME
+ *     write that sets publishError, and that is mirrored onto the row's
+ *     updated_at column. So `lastDraftUpdatedAt` is an honest upper bound on the
+ *     failure's recency for that draft (it can only be later than the failure —
+ *     a subsequent unrelated edit to the same draft would also bump it — never
+ *     earlier). Approximation, documented per this codebase's inferred-data rule.
+ *   - a scheduled time (`overdueScheduledAt`) that passed with no postedAt on
+ *     that same draft — the scheduled instant IS the anchor, no approximation
+ *     needed there.
+ *
+ * Both inferred branches also clear if `lastPostedAt` (the user's most recent
+ * inferred publish success, across all their drafts) is later than the failure
+ * evidence — the same "later success clears it" rule the exact branch applies.
  */
 function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | null {
   const p = f.publish;
@@ -216,7 +249,12 @@ function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | nu
   }
 
   const d = f.draft;
-  if (d.publishErrorDraftId) {
+  if (
+    d.publishErrorDraftId &&
+    d.lastDraftUpdatedAt &&
+    d.lastDraftUpdatedAt >= windowStart &&
+    (!d.lastPostedAt || d.lastPostedAt < d.lastDraftUpdatedAt)
+  ) {
     return {
       userId: f.user.id,
       email: f.user.email,
@@ -226,7 +264,12 @@ function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | nu
       evidence: { failedPublishCount: 1, publishErrorCode: d.publishErrorCode, draftId: d.publishErrorDraftId },
     };
   }
-  if (d.overdueDraftId) {
+  if (
+    d.overdueDraftId &&
+    d.overdueScheduledAt &&
+    d.overdueScheduledAt >= windowStart &&
+    (!d.lastPostedAt || d.lastPostedAt < d.overdueScheduledAt)
+  ) {
     return {
       userId: f.user.id,
       email: f.user.email,
@@ -305,8 +348,10 @@ function evalConnectedNotCreating(f: UserFacts): BlockerItem | null {
   if (!c.hasRow || c.disconnectedAt || !c.createdAt) return null;
   const ageH = hoursSince(c.createdAt);
   if (ageH === undefined || ageH < CONNECTED_NOT_CREATING_HOURS) return null;
-  if (f.gen.totalCount > 0) return null;
-  if (f.draft.hasAnyDraft) return null;
+  // Existence must be ALL-TIME, not window-bound: a user who created content 45d
+  // ago (and nothing since) has NOT "never created" and must not be flagged.
+  if (f.gen.hasAnyGenEver) return null;
+  if (f.draft.hasAnyDraftEver) return null;
   return {
     userId: f.user.id,
     email: f.user.email,
@@ -456,6 +501,7 @@ async function loadDraftFacts(
     firstPostedAt: null,
     lastPostedAt: null,
     hasAnyDraft: false,
+    hasAnyDraftEver: false,
     lastDraftUpdatedAt: null,
   });
   const nowIso = new Date().toISOString();
@@ -510,7 +556,49 @@ async function loadDraftFacts(
     }
     byUser.set(uid, f);
   }
+
+  // All-time existence pass (no date filter) — feeds connected_not_creating's
+  // "never created anything" check, which must NOT be limited to the 30d window.
+  // Cheap: id column only, mirrors loadConnFacts' unfiltered full scan.
+  await markEverExists(db, "pin_drafts", "vibepin_user_id", qb => qb.is("deleted_at", null), warnings, uid => {
+    const f = byUser.get(uid) ?? empty();
+    f.hasAnyDraftEver = true;
+    byUser.set(uid, f);
+  });
+
   return byUser;
+}
+
+/**
+ * Lightweight all-time existence scan: pages the id column only (no date filter)
+ * and calls `mark(uid)` for each distinct owner. Used to answer "has this user
+ * ever created a row of this kind?" without the per-user round-trips the header
+ * comment forbids. On missing table/error it warns and no-ops (existence stays
+ * false, which can only make connected_not_creating MORE eager — acceptable, and
+ * the same table would already have warned in the primary window scan).
+ */
+async function markEverExists(
+  db: SupabaseLikeDb,
+  table: string,
+  userColumn: string,
+  filters: (qb: SelectBuilder<Record<string, unknown>>) => SelectBuilder<Record<string, unknown>>,
+  warnings: string[],
+  mark: (uid: string) => void,
+): Promise<void> {
+  const { rows, error, missing } = await paginateRows<Record<string, unknown>>(db, table, {
+    columns: userColumn,
+    filters,
+    orderColumn: userColumn,
+    ascending: true,
+  });
+  if (missing || error) {
+    warnings.push(`${table} all-time existence scan unavailable — connected_not_creating may over-flag.`);
+    return;
+  }
+  for (const r of rows) {
+    const uid = r[userColumn];
+    if (typeof uid === "string" && uid) mark(uid);
+  }
 }
 
 interface ConnRow {
@@ -569,6 +657,7 @@ async function loadGenFacts(
     failedCountInWindow: 0,
     lastCreatedAt: null,
     totalCount: 0,
+    hasAnyGenEver: false,
   });
 
   // Try with status; fall back to a status-less scan (older DBs) so totalCount /
@@ -614,6 +703,15 @@ async function loadGenFacts(
     }
     byUser.set(uid, f);
   }
+
+  // All-time existence pass (no date filter) — feeds connected_not_creating's
+  // "never created anything" check, which must NOT be limited to the 30d window.
+  await markEverExists(db, "pin_generations", "user_id", qb => qb, warnings, uid => {
+    const f = byUser.get(uid) ?? empty();
+    f.hasAnyGenEver = true;
+    byUser.set(uid, f);
+  });
+
   if (!statusAvailable) {
     warnings.push("pin_generations.status column not present — generation_failures blocker cannot fire.");
   }
@@ -629,10 +727,10 @@ const EMPTY_PUBLISH: PublishFacts = {
 const EMPTY_DRAFT: DraftFacts = {
   publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null,
   overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null,
-  hasAnyDraft: false, lastDraftUpdatedAt: null,
+  hasAnyDraft: false, hasAnyDraftEver: false, lastDraftUpdatedAt: null,
 };
 const EMPTY_CONN: ConnFacts = { createdAt: null, needsReconnect: false, disconnectedAt: null, hasRow: false };
-const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0 };
+const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false };
 
 function assembleFacts(
   user: AuthUserLite,
@@ -650,12 +748,38 @@ function assembleFacts(
   };
 }
 
-/** paid = plan metadata present and not "free" (Creem tables absent — degrade silently). */
+/**
+ * Recognized plan vocabulary — mirrors entitlements.ts `normalizePlanKey`. Kept
+ * inline (not imported) so this file stays free of entitlements.ts's supabase
+ * import-time side effect; the `PlanKey` type import keeps the two in lockstep.
+ */
+function normalizePlanKey(value: unknown): PlanKey | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (v === "free" || v === "starter" || v === "pro" || v === "business") return v;
+  return null;
+}
+
+/**
+ * paid = the trusted `app_metadata.plan` cache names a real (non-free) plan.
+ *
+ * SECURITY (mirrors entitlements.ts `resolvePlan`): `user_metadata` is USER-
+ * EDITABLE and is NEVER read here — trusting it would let a user self-grant a
+ * paid plan (the hole closed by `security(billing): remove user_metadata plan
+ * authorization`). We read ONLY `app_metadata.plan`, the service-role-writable
+ * cache the Creem webhook refreshes — the exact same cache `resolvePlan` falls
+ * back to — and validate it against the canonical plan vocabulary.
+ *
+ * TRADEOFF: this is a SORT-ORDER hint ("paid users first" in the blocker list),
+ * not an access-control gate, so it deliberately reads the cached plan rather
+ * than doing a live `creem_subscriptions` lookup per user (that would be an N+1
+ * this file's efficiency budget forbids). Slightly less live-authoritative than
+ * `resolvePlan`, but on the correct side of the trust boundary. Creem tables /
+ * cache absent → normalizePlanKey returns null → not paid (degrade silently).
+ */
 function isPaid(user: AuthUserLite): boolean {
-  const fromApp = user.app_metadata?.["plan"];
-  const fromUser = user.user_metadata?.["plan"];
-  const plan = typeof fromApp === "string" ? fromApp : typeof fromUser === "string" ? fromUser : null;
-  return !!plan && plan.trim().toLowerCase() !== "free";
+  const plan = normalizePlanKey(user.app_metadata?.["plan"]);
+  return plan !== null && plan !== "free";
 }
 
 // ── public entry points ────────────────────────────────────────────────────────

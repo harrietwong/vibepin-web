@@ -41,9 +41,9 @@ function facts(partial: {
   return {
     user: { id: partial.id ?? "u1", email: "e@x.com", created_at: partial.createdAt ?? hoursAgo(1), last_sign_in_at: partial.lastSignIn ?? null },
     publish: { lastFailedAt: null, lastFailedCode: null, lastFailedDraftId: null, failedCountInWindow: 0, lastSucceededAt: null, firstSucceededAt: null, ...partial.publish },
-    draft: { publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null, overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null, hasAnyDraft: false, lastDraftUpdatedAt: null, ...partial.draft },
+    draft: { publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null, overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null, hasAnyDraft: false, hasAnyDraftEver: false, lastDraftUpdatedAt: null, ...partial.draft },
     conn: { createdAt: null, needsReconnect: false, disconnectedAt: null, hasRow: false, ...partial.conn },
-    gen: { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, ...partial.gen },
+    gen: { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false, ...partial.gen },
   } as AnyFacts;
 }
 
@@ -92,6 +92,50 @@ test("publish_failure INFERRED: overdue scheduled draft with no postedAt", () =>
   assert.equal(items[0].dataQuality, "inferred");
 });
 
+// ── REGRESSION: inferred publish_failure must honor the SAME 24h-window +
+// later-success-clears-it predicate as the exact branch (PRD §3 支柱1:
+// "24h 内有失败的发布且此后无成功发布"). Before the fix, the two inferred
+// branches (publishError draft / overdue draft) had no window bound at all and
+// ignored later successes — a failure from weeks ago stayed in the blocker
+// list forever, and a later successful publish never cleared it.
+test("publish_failure INFERRED-REGRESSION: publishError draft OLDER than 24h → NOT a blocker", () => {
+  const t = typesOf(facts({
+    draft: { publishErrorDraftId: "dOld", publishErrorCode: "content_error", lastDraftUpdatedAt: hoursAgo(30) },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a publishError from 30h ago must fall outside the 24h window");
+});
+test("publish_failure INFERRED: publishError draft INSIDE 24h → IS a blocker", () => {
+  const t = typesOf(facts({
+    draft: { publishErrorDraftId: "dNew", publishErrorCode: "content_error", lastDraftUpdatedAt: hoursAgo(2) },
+  }));
+  assert.ok(has(t, "publish_failure"), "a publishError from 2h ago must be inside the 24h window");
+});
+test("publish_failure INFERRED-REGRESSION: publishError inside 24h but LATER success clears it", () => {
+  const t = typesOf(facts({
+    draft: {
+      publishErrorDraftId: "dCleared",
+      publishErrorCode: "content_error",
+      lastDraftUpdatedAt: hoursAgo(5),
+      lastPostedAt: hoursAgo(2), // a later successful publish (inferred) after the failure evidence
+    },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a later inferred success must clear the inferred publishError blocker");
+});
+test("publish_failure INFERRED-REGRESSION: overdue draft OLDER than 24h → NOT a blocker", () => {
+  const t = typesOf(facts({ draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(30) } }));
+  assert.ok(!has(t, "publish_failure"), "an overdue scheduled time from 30h ago must fall outside the 24h window");
+});
+test("publish_failure INFERRED: overdue draft INSIDE 24h → IS a blocker", () => {
+  const t = typesOf(facts({ draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(3) } }));
+  assert.ok(has(t, "publish_failure"), "an overdue scheduled time from 3h ago must be inside the 24h window");
+});
+test("publish_failure INFERRED-REGRESSION: overdue inside 24h but LATER success clears it", () => {
+  const t = typesOf(facts({
+    draft: { overdueDraftId: "dO", overdueScheduledAt: hoursAgo(5), lastPostedAt: hoursAgo(2) },
+  }));
+  assert.ok(!has(t, "publish_failure"), "a later inferred success must clear the inferred overdue blocker");
+});
+
 // ── 2. pinterest_disconnected ─────────────────────────────────────────────────
 test("pinterest_disconnected POSITIVE: disconnected_at set → reason 'disconnected'", () => {
   const items = evaluateBlockers(facts({ conn: { hasRow: true, disconnectedAt: hoursAgo(1), createdAt: hoursAgo(200) } }), windowStart)
@@ -137,17 +181,57 @@ test("signup_not_connected NEGATIVE: has a connection row", () => {
 });
 
 // ── 5. connected_not_creating ─────────────────────────────────────────────────
-test("connected_not_creating POSITIVE: connected >72h, zero gen + zero drafts", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { totalCount: 0 }, draft: { hasAnyDraft: false } }));
+test("connected_not_creating POSITIVE: connected >72h, never created gen or draft", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { hasAnyGenEver: false }, draft: { hasAnyDraftEver: false } }));
   assert.ok(has(t, "connected_not_creating"));
 });
-test("connected_not_creating NEGATIVE: has generations", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { totalCount: 4 } }));
+test("connected_not_creating NEGATIVE: has generations (ever)", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, gen: { hasAnyGenEver: true } }));
   assert.ok(!has(t, "connected_not_creating"));
 });
-test("connected_not_creating NEGATIVE: has a draft", () => {
-  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, draft: { hasAnyDraft: true } }));
+test("connected_not_creating NEGATIVE: has a draft (ever)", () => {
+  const t = typesOf(facts({ conn: { hasRow: true, createdAt: hoursAgo(80) }, draft: { hasAnyDraftEver: true } }));
   assert.ok(!has(t, "connected_not_creating"));
+});
+// ── REGRESSION (Fix 3): existence is ALL-TIME, not the 30d scan window ─────────
+// A user who created content 45+ days ago and NOTHING in the last 30d has
+// totalCount === 0 / hasAnyDraft === false (both window-bound), but hasAnyGenEver /
+// hasAnyDraftEver are true. The old code read the window fields and WRONGLY flagged
+// them as "never created". This proves the predicate now consults the all-time
+// existence signal instead.
+test("connected_not_creating REGRESSION: 45d-old draft, nothing in 30d window → NOT flagged", () => {
+  const t = typesOf(facts({
+    conn: { hasRow: true, createdAt: hoursAgo(24 * 60) },
+    gen: { totalCount: 0, hasAnyGenEver: false },          // no generations in window, none ever
+    draft: { hasAnyDraft: false, hasAnyDraftEver: true },  // no draft touched in 30d, but one exists all-time
+  }));
+  assert.ok(!has(t, "connected_not_creating"), "a user who created 45d ago must NOT be flagged 'never created'");
+});
+test("connected_not_creating REGRESSION: 45d-old generation, nothing in 30d window → NOT flagged", () => {
+  const t = typesOf(facts({
+    conn: { hasRow: true, createdAt: hoursAgo(24 * 60) },
+    gen: { totalCount: 0, hasAnyGenEver: true },           // no generations in the 30d window, but one exists all-time
+    draft: { hasAnyDraft: false, hasAnyDraftEver: false },
+  }));
+  assert.ok(!has(t, "connected_not_creating"), "a user who generated 45d ago must NOT be flagged 'never created'");
+});
+// End-to-end proof through the DB layer: an all-time-only row (outside the 30d
+// scan window) must set hasAnyDraftEver and suppress the blocker. The window scans
+// (updated_at/created_at gte since) return nothing; the existence scan finds it.
+test("getActionCenter REGRESSION: draft older than 30d window suppresses connected_not_creating", async () => {
+  const authUsers = [{ id: "u1", email: "e@x.com", created_at: hoursAgo(24 * 60), last_sign_in_at: null, app_metadata: {}, user_metadata: {} }];
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [] },
+      // draft updated 45d ago → excluded from the 30d window scan, included in the all-time existence scan.
+      pin_drafts: { rows: [{ vibepin_user_id: "u1", draft_id: "old1", payload: {}, updated_at: hoursAgo(24 * 45), scheduled_at: null, deleted_at: null }] },
+      pinterest_connections: { rows: [{ vibepin_user_id: "u1", needs_reconnect: false, disconnected_at: null, created_at: hoursAgo(24 * 60) }] },
+      pin_generations: { rows: [] },
+    },
+    authUsers,
+  );
+  const res = await getActionCenter(db);
+  assert.ok(!res.items.some(i => i.blockerType === "connected_not_creating"), "old-but-existing draft must suppress the 'never created' blocker");
 });
 
 // ── health banding ────────────────────────────────────────────────────────────
@@ -197,6 +281,40 @@ test("getActionCenter: paid users sort before free; both have signup_not_connect
   assert.equal(res.items.length, 2);
   assert.equal(res.items[0].userId, "paid1", "paid user must lead");
   assert.ok(res.items.every(i => i.blockerType === "signup_not_connected"));
+});
+
+// ── SECURITY REGRESSION: user_metadata.plan is NEVER trusted for "paid" ────────
+// user_metadata is USER-EDITABLE. isPaid must read ONLY app_metadata.plan (the
+// service-role cache), mirroring entitlements.ts resolvePlan. A user who set
+// user_metadata.plan="pro" themselves must NOT be treated as paid — otherwise
+// they could self-sort to the top of the founder's action list (the same
+// forbidden trust boundary security(billing) closed).
+//
+// Setup: both users are stuck (signup_not_connected) with the SAME createdAt →
+// identical firstSeenAt, so paid-status is the ONLY tiebreaker in the sort. The
+// app_metadata=pro user must lead; the user_metadata=pro user must be ranked as
+// free. (Against the OLD isPaid, which fell back to user_metadata.plan, BOTH
+// would be "paid" and the order would collapse to the id tiebreak — this test
+// would fail: usermeta1 would not be guaranteed last.)
+test("getActionCenter SECURITY: user_metadata.plan does NOT count as paid; app_metadata.plan does", async () => {
+  const createdAt = hoursAgo(100);
+  const authUsers = [
+    // Self-set user_metadata plan — must be treated as FREE (not paid).
+    { id: "usermeta1", email: "um@x.com", created_at: createdAt, last_sign_in_at: null, app_metadata: {}, user_metadata: { plan: "pro" } },
+    // Trusted service-role app_metadata plan — genuinely paid.
+    { id: "appmeta1", email: "am@x.com", created_at: createdAt, last_sign_in_at: null, app_metadata: { plan: "pro" }, user_metadata: {} },
+  ];
+  const { db } = makeMockDb(
+    { analytics_events: { rows: [] }, pin_drafts: { rows: [] }, pinterest_connections: { rows: [] }, pin_generations: { rows: [] } },
+    authUsers,
+  );
+  const res = await getActionCenter(db);
+  assert.ok(res.available);
+  assert.equal(res.items.length, 2);
+  // The app_metadata=pro user is the only paid one → must lead unconditionally,
+  // regardless of the id-order tiebreak (proves user_metadata=pro is NOT paid).
+  assert.equal(res.items[0].userId, "appmeta1", "app_metadata.plan=pro must sort paid-first");
+  assert.equal(res.items[1].userId, "usermeta1", "user_metadata.plan=pro must NOT be treated as paid");
 });
 
 test("getActionCenter: EXACT publish_failure end-to-end (event beats postedAt)", async () => {

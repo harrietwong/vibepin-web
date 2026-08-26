@@ -6,7 +6,11 @@
 //                    draft) / (all completed generations)
 //
 // LINKAGE (generation → draft), precedence:
-//   (1) EXACT   — draft payload.sourceGenerationId === generation id.
+//   (1) EXACT   — draft payload.sourceGenerationId === generation.generation_request_id
+//                 (the client-sent id it echoed onto the draft; v52+ column). The
+//                 DB-generated `id` is a fallback match only — a draft never stores it,
+//                 so pre-v52 rows (no request id) still resolve via id, and both keys
+//                 share one Set so a hit on either counts once.
 //   (2) INFERRED— a generation output URL (pin_generations.pin_urls[] or
 //                 groups_json[].images[]) appears in the draft payload
 //                 (imageUrl / sourceImageUrl). Only used for drafts with NO
@@ -59,6 +63,13 @@ export interface GenerationLite {
   id: string;
   createdAt: string | null;
   status: string | null;
+  /**
+   * The request id the Studio client sent to /api/generate and persisted on the
+   * row (generation_request_id, v52+). This — not the DB-generated `id` — is what
+   * drafts store as payload.sourceGenerationId, so it is the true EXACT join key.
+   * null on pre-v52 rows (column absent) → exact linkage falls back to `id`.
+   */
+  generationRequestId: string | null;
   /** every output image URL this generation produced (pin_urls ∪ groups_json images). */
   outputUrls: string[];
 }
@@ -116,8 +127,11 @@ export function computeAdoption(generations: GenerationLite[], drafts: DraftLite
   for (const g of generations) {
     if (g.status !== "completed") continue;
     completed += 1;
-    // (1) exact: a published draft points at this generation id.
-    if (publishedByGenId.has(g.id)) {
+    // (1) exact: a published draft's sourceGenerationId matches this generation.
+    //     Primary key is the row's generation_request_id (what the client actually
+    //     wrote onto the draft); `id` is a belt-and-suspenders fallback (pre-v52
+    //     rows have no request id, and both live in one Set so a match on either wins).
+    if ((g.generationRequestId && publishedByGenId.has(g.generationRequestId)) || publishedByGenId.has(g.id)) {
       adopted += 1;
       exactLinks += 1;
       continue;
@@ -148,19 +162,27 @@ async function loadGenerations(
   warnings: string[],
 ): Promise<{ rows: GenerationLite[]; statusAvailable: boolean; available: boolean }> {
   let statusAvailable = true;
-  let res = await paginateRows<{ id: string; created_at: string | null; status: string | null; pin_urls: unknown; groups_json: unknown }>(
+  type GenScanRow = { id: string; created_at: string | null; status: string | null; generation_request_id?: string | null; pin_urls: unknown; groups_json: unknown };
+  const scan = (columns: string) => paginateRows<GenScanRow>(
     db,
     "pin_generations",
     {
-      columns: "id,created_at,status,pin_urls,groups_json",
+      columns,
       filters: qb => qb.gte("created_at", since),
       orderColumn: "created_at",
       ascending: false,
     },
   );
+  // Prefer the row's own generation_request_id (v52+) as the EXACT join key.
+  // Pre-v52 DBs lack the column → PostgREST errors; retry without it so those
+  // databases still compute adoption via the id-only exact match (unchanged behavior).
+  let res = await scan("id,created_at,status,generation_request_id,pin_urls,groups_json");
   if (res.error && isMissingSchema(res.error)) {
-    // status column absent — without it we cannot identify "completed" generations.
-    statusAvailable = false;
+    res = await scan("id,created_at,status,pin_urls,groups_json");
+    if (res.error && isMissingSchema(res.error)) {
+      // status column absent — without it we cannot identify "completed" generations.
+      statusAvailable = false;
+    }
   }
   if (res.missing) {
     warnings.push("pin_generations unavailable — AI adoption cannot be computed.");
@@ -178,6 +200,7 @@ async function loadGenerations(
     id: r.id,
     createdAt: r.created_at,
     status: r.status,
+    generationRequestId: (typeof r.generation_request_id === "string" && r.generation_request_id.trim()) ? r.generation_request_id : null,
     outputUrls: extractOutputUrls(r),
   }));
   return { rows, statusAvailable, available: true };
