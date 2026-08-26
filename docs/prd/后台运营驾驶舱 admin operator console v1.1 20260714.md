@@ -1,6 +1,6 @@
-# 后台运营驾驶舱 PRD v1.7
+# 后台运营驾驶舱 PRD v1.8
 
-**状态：** P0 功能已实施，§7.4 逐项浏览器验收通过（见 §9.2）；**但整体尚未签收**——阻塞于两件事：(1) 越权漏洞（`user_metadata.role` 自授超管，§9.3）的修复须先入 master，(2) hydration 项须在 production build 下定向复验后结案。核心 5 提交已随生产化统一并入 `master`；`feat/admin-cockpit` 为 `master` 超集，**非 merge 净增量待回流**（准确清单以 `git log --no-merges master..feat/admin-cockpit` 为准，§8 提交表列主要项）。**v33/v34/v51/v52 四迁移均已应用生产并逐列复核**。付费置顶只信 `app_metadata.plan`（`isPaid`/`planOf` 均已收窄，各带回归测试）。回流顺序见 §9.4。
+**状态：** **P0 已终审通过，待合并 master + 部署。** §7.4 已在隔离测试库与 production build 下逐项复验（见 §9.2/§9.5）；`user_metadata.role` 越权修复已合入 `feat/admin-cockpit`，hydration 定向复验无报错，非超管最终停在 `/app?admin=forbidden` 并看到明确提示。`feat/admin-cockpit` 当前为 `master` 超集，**非 merge 净增量待回流**（准确清单以 `git log --no-merges master..feat/admin-cockpit` 为准）。**v33/v34/v51/v52 四迁移均已应用生产并逐列复核**。付费置顶只信 `app_metadata.plan`（`isPaid`/`planOf` 均已收窄，各带回归测试）。
 **日期：** 2026-07-16（初稿 2026-07-14；§8 topology 于 2026-07-17 复核订正）
 **作者：** Fable 5（基于创始人确认的产品方向）
 **取代：** `【后台系统未实施 优先级不高】.txt`（定位文档，其"不做清单"与最终定位在本文档中继承并展开）
@@ -137,7 +137,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 - 所有用户可见字符串走 admin i18n（adminMessages 体系，EN/中文两套，与现有 admin 一致）。
 - 颜色只用 `--admin-*` token；缺表/缺列一律优雅降级为 n/a + 警告行（沿用 adminOverview 模式）。
 - 全部只读，无 mutation；super admin gating 沿用 `getCurrentSuperAdmin()`。
-- 前置清债：核实 v33（`backend/db/migrate_v33_admin_support_notes.sql`，建表 `admin_support_notes`）、v34（`backend/db/migrate_v34_admin_audit_events.sql`，建表 `admin_audit_events`）两个迁移在生产是否已应用（走 `backend/scripts/run_migration.py --apply`），为将来任何写操作（送 token 等 safe actions）备好审计底座。本次核实为纯代码审查，未连接生产库确认应用状态。
+- 前置清债已完成：v33（`admin_support_notes`）与 v34（`admin_audit_events`）均已应用生产，并通过 PostgREST 逐表复核；为将来写操作（送 token 等 safe actions）备好审计底座。
 
 ### 7.4 验收清单
 - [ ] 阻塞名单五类判定各构造一个真实/模拟用户，逐类验证出现与消失（阻塞解决后离开名单）
@@ -150,7 +150,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 
 ### 7.5 数据源核实结果（2026-07-14）
 
-纯代码 + 迁移文件审查，未连接生产库查询（活跃数据量/迁移实际应用状态需实施时用 `run_migration.py`/Supabase 确认）。
+代码、隔离测试库与生产迁移状态均已复核；生产业务数据未用于造数或破坏性测试。
 
 | 数据需求 | 来源（table.column / 代码路径） | 状态 | P0 处理 |
 |---|---|---|---|
@@ -162,7 +162,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 | 5. 注册与活跃信号 | ✅ `auth.users`（service role listUsers，`adminOverview.ts`/`customer360.ts` 先例）；7 天活跃 = `last_sign_in_at` + `pin_generations.created_at` 等合成 activity（`customer360.ts` 已有"synthesized activity"模式） | ✅ VERIFIED | 直接复用 `customer360.ts` 现有合成逻辑 |
 | 6. Plan / 付费状态 | ✅ `auth.users.app_metadata.plan`（Creem webhook 写的服务端缓存，`customer360.ts` `planOf()` / `adminActionCenter.ts` `isPaid()` 读）；计费已切 Creem（`creem_*` 表 v45） | ⚠️ PARTIAL（信任边界已收窄） | **只用 `app_metadata.plan`** 做置顶排序（过 `normalizePlanKey`）；绝不读用户可自改的 `user_metadata.plan`（`e2543f6` 信任边界）。排序提示非授权门禁 |
 | 7. Support 工单 | ✅ `support_tickets.status`（'Open'/'In progress'/...）+ `user_id`，`backend/db/migrate_v35_support_tickets.sql`，`web/src/app/api/admin/support/tickets/route.ts` | ✅ VERIFIED | 直接用，按 user_id 聚合未关闭工单数 |
-| 8. v33/v34 迁移 | `backend/db/migrate_v33_admin_support_notes.sql`（建表 `admin_support_notes`：客服内部备注）；`backend/db/migrate_v34_admin_audit_events.sql`（建表 `admin_audit_events`：管理员敏感操作审计日志） | 文件存在，生产应用状态未核实 | 实施前用 `run_migration.py --apply` 确认/应用 |
+| 8. v33/v34 迁移 | `backend/db/migrate_v33_admin_support_notes.sql`（建表 `admin_support_notes`：客服内部备注）；`backend/db/migrate_v34_admin_audit_events.sql`（建表 `admin_audit_events`：管理员敏感操作审计日志） | ✅ 已应用生产并复核 | 保持现状；未来写操作复用审计底座 |
 | 9. Admin i18n + 主题 | `web/src/lib/admin/adminMessages.ts`（catalog）；`--admin-*` CSS token 约定（现有 admin 页面统一遵守） | ✅ VERIFIED | 新增文案沿用同一 catalog + token 体系 |
 | 10. 分析事件表 | ✅ `analytics_events`（v41，`web/src/app/api/analytics/events/route.ts`），`web/src/lib/analytics.ts` 定义事件类型（含 `draft_published`），事件落库非仅 console | ✅ VERIFIED（范围窄） | 可作为 7 天活跃信号的补充信号，不作为主信号（当前事件集中在 Creative Intelligence 相关操作，非全量行为埋点） |
 
@@ -208,7 +208,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 - [x] ~~v52 迁移应用~~ **已应用**（2026-07-16，`run_migration.py --apply` HTTP 201 + PostgREST 逐列复核 status/generation_request_id/setup_snapshot 存在）。schema drift 造成的 ~2026-06-14 起整月生成行静默丢失自此止血；历史丢失行不可从 DB 恢复（各浏览器 localStorage 50 条/设备 + storage bucket 可部分重建）
 - [x] ~~v51 迁移应用~~ **已应用**（2026-07-16，同通道，HTTP 201）
 - [x] ~~v33/v34 状态确认~~ **已确认并应用**（2026-07-16：探测确认原先未应用 → 应用 → PostgREST 复核 `admin_support_notes`/`admin_audit_events` 存在）
-- [ ] §7.4 验收清单的浏览器实测项（真实数据下的名单/漏斗/Alert Strip 一致性）——首轮目视验收发现的 3 个 P1 已由上述 4 修复解决，待复验
+- [x] §7.4 浏览器实测与复验完成：名单/漏斗/Alert Strip 一致，EN/中文切换、相对时间、精确/推断、空态与 0/0 口径均已覆盖
 - [ ] 已知局限：BatchEditDrawer 在 Studio 上下文的 `pinId` 非草稿 ID（join 不上，无害）；事件仅从部署起累积
 
 ## 9. §7.4 验收 + 安全评审（2026-07-21~22）
@@ -239,17 +239,25 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 | 真超管无 bypass 通过 | ✅ | 页面渲染，替代 bypass 假对照 |
 | `/api/admin/*` 负向 | ✅ | 未认证/普通用户 403 无泄露，超管 200 正对照 |
 | AI 采用率 UI 断言 | ✅ | DOM 实测 60%、3/5、2 exact·1 inferred |
-| hydration | 未复现 | dev 下无警告；待 prod build 定向复验后结案（不记「已修复」） |
+| hydration | ✅ | production build 下 `/admin/today` + 两种 Customer 360 数据形态定向复验，控制台 0 error/0 warning |
 
-### 9.3 越权漏洞（浏览器实证 + 已修，见独立分支）
+### 9.3 越权漏洞（浏览器实证 + 已修并合入候选分支）
 
 **§7.4「非 super admin 访问被重定向」实测判负**：`superAdmin.ts` 的 `isSuperAdminUser`/`adminRoleOf` 回退信任**用户可自改的** `user_metadata.role`。实证：app_metadata 空、仅自设 `user_metadata.role='super_admin'` 的用户完整进入 `/admin/today`（徽章 "Super Admin only · Internal"，见客户邮箱），`/api/admin/me` 返回 `{"isSuperAdmin":true}`；伪造 `support` 进入 `/admin/generation-logs` 读 9 条日志。同类回退还有 `generationDebugAccess.ts`（完整 prompt 访问权）。**既有测试 `test-shared-pin-details` 曾把该漏洞断言为正确规格**。
 
-Codex 裁决：必须移除，无合理例外（Supabase 官方明确 user_metadata 不可用于授权）；单开 `security/admin-auth-trust-boundary` 分支修，不塞驾驶舱分支。修复内容：两处授权只信 `app_metadata.role` + 邮箱允许名单；`E2E_TEST_MODE` 补上此前缺失的 `NODE_ENV !== production` 硬门；predeploy-guard 补拦 `ENABLE_LOCAL_ADMIN_BYPASS`；25 项安全回归测试（回退证明有效：漏洞放回→25→22 失败→恢复→25/25）。**迁移零风险**：生产 5 用户 0 人靠 metadata.role 授权（全走 `SUPER_ADMIN_EMAILS`），0 测试依赖该路径。详见记忆 `admin-auth-user-metadata-vuln`。
+Codex 裁决：必须移除，无合理例外（Supabase 官方明确 user_metadata 不可用于授权）。修复内容：两处授权只信 `app_metadata.role` + 邮箱允许名单；`E2E_TEST_MODE` 补上此前缺失的 `NODE_ENV !== production` 硬门；predeploy-guard 补拦 `ENABLE_LOCAL_ADMIN_BYPASS`。安全分支已追合最新 master 后合入 `feat/admin-cockpit`；最终安全套件 26/26。**迁移零风险**：生产 5 用户 0 人靠 metadata.role 授权（全走 `SUPER_ADMIN_EMAILS`），0 测试依赖该路径。
 
 ### 9.4 回流顺序（Codex 裁决）
 
-Codex 否决"先回流驾驶舱"：不得把已知可利用漏洞作为已签收版本传播。正确顺序 = **安全修复先入最新 master → 驾驶舱追合含修复的 master → 重跑全部门禁与授权负向测试 → Codex 最终签收 → 再回流驾驶舱**。安全分支合并由持有 master worktree 的会话执行（多会话公约）。
+Codex 否决"先回流驾驶舱"：不得把已知可利用漏洞作为已签收版本传播。该顺序已在候选分支闭环：**安全分支追合最新 master → 合入驾驶舱 → 重跑全部门禁与授权负向测试 → Codex 最终签收**。剩余动作仅为把已签收的 `feat/admin-cockpit` 合并进健康、未被其他会话占用的 master worktree，再部署。
+
+### 9.5 最终终审（2026-08-26）
+
+- 隔离测试库重造 17 个合成用户，覆盖五类阻塞、精确/推断发布、45 天历史负向对照、付费/伪造付费排序、五段漏斗与权限正负样本；每次写入前硬断言测试 project ref，未向生产造数。
+- production build 浏览器实测通过：`/admin/today` 基本渲染、Today 首项导航、只读标识、阻塞表、五段漏斗、P1 占位、AI 采用率、EN/中文切换及中文相对时间均符合清单；Customer 360 的阻塞/无阻塞两种形态与 Today 一致，0 hydration/console 错误。
+- 非超管安全门禁真实生效；补修二次跳转丢失 `admin=forbidden` 的问题，最终 URL 为 `/app?admin=forbidden`，并显示可访问、双语的权限提示；安全回归 26/26。
+- 全量门禁最终为 **132/132**，`tsc --noEmit` 零错误，production build 成功。全量门禁首次暴露 basket 同毫秒连续写入可能不推进 LWW 时间戳，已修为严格单调并复跑全绿。
+- 结论：`feat/admin-cockpit` 满足 P0 功能、安全、数据诚实、i18n、权限与生产构建要求；**签收通过，待回流 master + 部署**。
 
 ## 文档历史
 
@@ -261,5 +269,6 @@ Codex 否决"先回流驾驶舱"：不得把已知可利用漏洞作为已签收
 | v1.3 | 2026-07-17 | §8 topology 复核订正：列全 7 个相关提交（含 `2a4f9ec`/`3d4180b`/`1514eae`），厘清 5 已入 master + 2 仅在分支的真实关系；补 v52 未应用 + 整月 `pin_generations` 静默丢行；清剩余 Paddle 引用 → Creem |
 | v1.4 | 2026-07-18 | 迁移 v33/34/51/52 全部已应用+复核（订正 v1.3 的"未应用"）；追合 master 10 个 Creem 提交（含 `e2543f6` 移除 user_metadata plan 授权）；付费置顶安全修复 `99702ff`（isPaid 只信 app_metadata）+ `planOf` 同类收窄；净增量列表更新 |
 | v1.5 | 2026-07-18 | 三次评审闭环：追合 `dc74a0f`（pricing）；清 §6.1/§7.5/§8 三处残留"读 user_metadata.plan"旧口径；§8 提交表补齐至 9 个真实净增量（原写"7 个"）；补 `planOf` 回归测试 `test-customer360-plan.ts` |
-| v1.7 | 2026-07-22 | 代码↔PRD 对照审查（Fable 终审）：支柱4 **删除 billing override**（创始人裁定以代码为准——健康分只看创作成功，欠费不封顶，与本 PRD 定位自洽）；修复推断发布失败未受 24h 窗口约束的真实缺口（`0cc6f96`，附 4 个回归测试，回退验证 34/4→38/0）；C360 硬编码色值记为已知不一致（v0 页面既有风格，不在本次范围） |
 | v1.6 | 2026-07-22 | 新增 §9：隔离测试库 + §7.4 逐项浏览器验收（独立复核，含按 PRD 定义独立写的漏斗 SQL 对账）+ **越权漏洞实证**（user_metadata.role 自授超管）+ 已修（独立 security 分支）+ Codex 裁决的回流顺序。状态：驾驶舱功能验收通过，签收阻塞于安全修复回流 master + hydration prod-build 复验 |
+| v1.7 | 2026-07-22 | 代码↔PRD 对照审查（Fable 终审）：支柱4 **删除 billing override**（创始人裁定以代码为准——健康分只看创作成功，欠费不封顶，与本 PRD 定位自洽）；修复推断发布失败未受 24h 窗口约束的真实缺口（`0cc6f96`，附 4 个回归测试，回退验证 34/4→38/0）；C360 硬编码色值记为已知不一致（v0 页面既有风格，不在本次范围） |
+| v1.8 | 2026-08-26 | Codex 最终终审：安全分支合入候选、production build/hydration 与隔离测试库浏览器复验通过；修复 `/app?admin=forbidden` 参数丢失并补双语提示/安全回归；修复 basket LWW 同毫秒时间戳；最终 132/132 + tsc + production build 全绿，状态更新为“待合并 master + 部署” |
