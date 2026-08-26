@@ -88,7 +88,11 @@ const originalLoad = (Module as any)._load;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
   if (request.includes("server/authUser")) {
-    return { getUserIdFromBearerOrCookies: fakeGetUserIdFromBearerOrCookies };
+    return {
+      getUserIdFromBearerOrCookies: fakeGetUserIdFromBearerOrCookies,
+      // Analyze/quality-judge use this only for best-effort cost attribution.
+      getUserIdFromSameOriginSession: fakeGetUserIdFromBearerOrCookies,
+    };
   }
   if (request.includes("ai-copy/visionServer")) {
     // Wrap the REAL module so pure helpers keep their real behaviour; only the seams

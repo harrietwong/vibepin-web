@@ -147,7 +147,12 @@ const originalLoad = (Module as any)._load;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
   if (request.includes("server/authUser")) {
-    return { getUserIdFromBearerOrCookies: () => Promise.resolve("user-1") };
+    const userId = () => Promise.resolve("user-1");
+    return {
+      getUserIdFromBearerOrCookies: userId,
+      // Analyze/quality-judge use this only for best-effort cost attribution.
+      getUserIdFromSameOriginSession: userId,
+    };
   }
   if (request.includes("ai-copy/visionServer")) {
     const real = originalLoad.call(this, request, parent, isMain);
