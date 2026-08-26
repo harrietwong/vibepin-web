@@ -222,7 +222,7 @@ Customer 360 的角色是支柱 1、2 点进去看细节的**落地页**，不�
 | 生产 | `jaxteelkecvlozdrdoog` | `.env.local`（只读探测） |
 | 测试 | `snulmwprsahzqvdbyenc` | `web/.env.test.local` |
 
-任何写操作前必须打印 project ref 并断言 ≠ 生产。已建 `backend/scripts/setup_test_db.py`（按 console 实读表转录 DDL，52 个迁移非线性自洽不整链重放）+ `seed_test_cockpit.py`（17 个 `e2e-cockpit-*@example.test` 合成用户覆盖五类阻塞 + 负向对照 + 付费/伪造付费 + 漏斗五段）。全程复核生产 `pin_generations` 仍 4 行、0 个 e2e 用户。
+任何写操作前必须打印 project ref 并断言 ≠ 生产。`backend/scripts/setup_test_db.py`（按 console 实读表转录 DDL，52 个迁移非线性自洽不整链重放）与 `seed_test_cockpit.py`（17 个 `e2e-cockpit-*@example.test` 合成用户覆盖五类阻塞 + 负向对照 + 付费/伪造付费 + 漏斗五段）已纳入候选分支。造数密码不写死：可由 `COCKPIT_E2E_PASSWORD` 注入，否则每次随机生成。全程复核生产 `pin_generations` 仍 4 行、0 个 e2e 用户。
 
 ### 9.2 §7.4 逐项验收结果（浏览器实测 + 独立复核）
 
@@ -253,7 +253,7 @@ Codex 否决"先回流驾驶舱"：不得把已知可利用漏洞作为已签收
 
 ### 9.5 最终终审（2026-08-26）
 
-- 隔离测试库重造 17 个合成用户，覆盖五类阻塞、精确/推断发布、45 天历史负向对照、付费/伪造付费排序、五段漏斗与权限正负样本；每次写入前硬断言测试 project ref，未向生产造数。
+- 候选分支内的初始化/造数脚本通过语法、连通性、逐列 schema 合同与实际 reset+seed 验证；隔离测试库重造 17 个合成用户，覆盖五类阻塞、精确/推断发布、45 天历史负向对照、付费/伪造付费排序、五段漏斗与权限正负样本；每次写入前硬断言测试 project ref，未向生产造数，测试账号密码不再硬编码。
 - production build 浏览器实测通过：`/admin/today` 基本渲染、Today 首项导航、只读标识、阻塞表、五段漏斗、P1 占位、AI 采用率、EN/中文切换及中文相对时间均符合清单；Customer 360 的阻塞/无阻塞两种形态与 Today 一致，0 hydration/console 错误。
 - 非超管安全门禁真实生效；补修二次跳转丢失 `admin=forbidden` 的问题，最终 URL 为 `/app?admin=forbidden`，并显示可访问、双语的权限提示；安全回归 26/26。
 - 全量门禁最终为 **132/132**，`tsc --noEmit` 零错误，production build 成功。全量门禁首次暴露 basket 同毫秒连续写入可能不推进 LWW 时间戳，已修为严格单调并复跑全绿。
