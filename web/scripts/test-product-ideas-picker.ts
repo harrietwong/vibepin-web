@@ -29,6 +29,7 @@ function assert(condition: boolean, message: string) {
 const pickerSource = readFileSync(join(process.cwd(), "src/components/studio/InlineCreateAssetPicker.tsx"), "utf8");
 const opportunityPickerSource = readFileSync(join(process.cwd(), "src/components/products/ProductOpportunityPicker.tsx"), "utf8");
 const productsSource = readFileSync(join(process.cwd(), "src/app/app/products/page.tsx"), "utf8");
+const productsApiSource = readFileSync(join(process.cwd(), "src/app/api/products/top/route.ts"), "utf8");
 
 const sampleIdea: ProductIdea = {
   id: "idea-1",
@@ -39,6 +40,7 @@ const sampleIdea: ProductIdea = {
   domain: "shop.example.com",
   merchant: "Shop",
   image_url: "https://example.com/basket.jpg",
+  merchant_image_verified: true,
   save_count: 120,
   reaction_count: 0,
   source_pin_save_count: 80,
@@ -132,9 +134,10 @@ test("Product Ideas skeleton only while loading", () => {
   assert(pickerSource.includes("showSkeleton = loading && products.length === 0 && !error"), "skeleton guard missing");
 });
 
-test("Product Ideas page uses shared useProductIdeas data source", () => {
-  assert(productsSource.includes("useProductIdeas"), "products page missing useProductIdeas");
-  assert(productsSource.includes("useProductIdeasCategoryMap"), "products page missing shared category map hook");
+test("Product Opportunities page uses the v3.7 catalog while Create Pins keeps Product Ideas", () => {
+  assert(productsSource.includes("ProductOpportunitiesV1"), "products page missing the v3.7 catalog");
+  assert(!productsSource.includes("useProductIdeas"), "products page must not restore the retired Product Ideas feed");
+  assert(pickerSource.includes("useProductIdeas"), "Create Pins picker missing its independent Product Ideas source");
 });
 
 test("picker does not use legacy pin_products-only fetch effect", () => {
@@ -167,6 +170,43 @@ test("filterProductIdeas excludes items with empty imageUrl", () => {
   const result = filterProductIdeas(ideas, { search: "", categoryLabel: "All Categories", sourceLabel: "All Sources" });
   assert(result.length === 1, `expected 1 item with valid imageUrl, got ${result.length}`);
   assert(result[0].id === "idea-1", "wrong item returned");
+});
+
+test("Product Ideas preserves unknown Pinterest saves instead of fabricating zero", () => {
+  const fallbackSource = readFileSync(join(process.cwd(), "src/lib/productIdeas.ts"), "utf8");
+  const metricsTypeSource = readFileSync(join(process.cwd(), "src/lib/supabase.ts"), "utf8");
+
+  assert(!productsApiSource.includes('(row.save_count as number) ?? 0'),
+    "API must not coerce a missing product-Pin save count to zero");
+  assert(!productsApiSource.includes('(row.source_pin_save_count as number) ?? 0'),
+    "API must not coerce a missing source-Pin save count to zero");
+  assert(!fallbackSource.includes('productPinSaveCount:      hasProductPin ? (r.save_count ?? 0) : null'),
+    "Supabase fallback must not coerce a missing product-Pin save count to zero");
+  assert(!fallbackSource.includes('sourcePinSaveCount:       r.source_pin_save_count ?? 0'),
+    "Supabase fallback must not coerce a missing source-Pin save count to zero");
+  assert(metricsTypeSource.includes('sourcePinSaveCount:       number | null'),
+    "ProductMetrics must represent an unknown source-Pin save count as null");
+  assert(opportunityPickerSource.includes('if (sourcePinSaves == null) return null'),
+    "picker must omit the evidence row when no Pinterest save measurement exists");
+});
+
+test("Product Ideas reject Pinterest-hosted or unproven product images", () => {
+  const ideas: ProductIdea[] = [
+    sampleIdea,
+    { ...sampleIdea, id: "pinimg", image_url: "https://i.pinimg.com/736x/fake.jpg" },
+    { ...sampleIdea, id: "unproven", merchant_image_verified: false },
+  ];
+  const result = filterProductIdeas(ideas, {
+    search: "",
+    categoryLabel: "All Categories",
+    sourceLabel: "All Sources",
+  });
+  assert(result.length === 1 && result[0].id === sampleIdea.id,
+    `only merchant-proven non-Pinterest images may surface (got ${result.map(r => r.id).join(",")})`);
+  assert(productsApiSource.includes('.eq("detail_fetch_status", "available")'),
+    "legacy Product Ideas API must require merchant-page availability");
+  assert(productsApiSource.includes("isNonPinterestMerchantImageUrl"),
+    "legacy Product Ideas API must reject Pinterest-hosted images");
 });
 
 test("AssetCard button uses column flex layout to prevent clipped image/title content", () => {
@@ -227,6 +267,7 @@ const stlBootstrapIdea: ProductIdea = {
   domain: "us.shein.com",
   merchant: "shein",
   image_url: "https://img.shein.com/dress.jpg",
+  merchant_image_verified: true,
   save_count: 0,                 // STL bootstrap rows have 0 saves on the product row
   reaction_count: 0,
   source_pin_save_count: 8000,   // evidence inherited from the source pin

@@ -659,8 +659,8 @@ async function main() {
 
   // ── Check construction: raw values only, content-free externalId suffixes ─────
   await test("checks carry RAW field values — no labels, prefixes or sibling text", async () => {
-    const route = await import("../src/app/api/generate/route");
-    const checks = route.buildModerationChecks({
+    const moderation = await import("../src/lib/server/generationModeration");
+    const checks = moderation.buildModerationChecks({
       keyword: "cozy mug",
       prompt: "a cozy ceramic mug",
       directionBrief: "warm minimal styling",
@@ -681,8 +681,8 @@ async function main() {
   });
 
   await test("empty fields produce no check (no wasted moderation call)", async () => {
-    const route = await import("../src/app/api/generate/route");
-    const checks = route.buildModerationChecks({
+    const moderation = await import("../src/lib/server/generationModeration");
+    const checks = moderation.buildModerationChecks({
       keyword: "cozy mug", prompt: "", directionBrief: "   ", category: "", selectedTags: [{ label: "" }], productMetadata: null,
     }) as Array<{ suffix: string; text: string }>;
     assertEq(checks.map(c => c.suffix).join(","), "keyword,composite", "only non-empty fields + composite");
@@ -696,7 +696,7 @@ async function main() {
   // validation, so 10,000 tags meant 10,000 outbound calls. Every assertion below
   // checks the OUTBOUND CALL COUNT, not merely the status code.
 
-  const { INPUT_LIMITS, MAX_MODERATION_CHECKS } = await import("../src/app/api/generate/route");
+  const { INPUT_LIMITS, MAX_MODERATION_CHECKS } = await import("../src/lib/server/generationModeration");
   const LIMITS = INPUT_LIMITS as Record<string, number>;
   const MAX_CHECKS = MAX_MODERATION_CHECKS as unknown as number;
 
@@ -911,8 +911,8 @@ async function main() {
   });
 
   await test("BOUND: validation does not truncate — an accepted request keeps every tag", async () => {
-    const route = await import("../src/app/api/generate/route");
-    const result = route.validateGenerationInput({
+    const moderation = await import("../src/lib/server/generationModeration");
+    const result = moderation.validateGenerationInput({
       keyword: "cozy mug",
       prompt: "p",
       directionBrief: "d",
@@ -1182,11 +1182,20 @@ async function main() {
     const userId = freshUser();
     let admitted = 0;
     let denialStatus = 0;
-    for (let i = 0; i < GEN_RULE.limit + 1; i++) {
-      const { status } = await runAs(userId, fullBody());
-      if (status === 200) { admitted++; continue; }
-      denialStatus = status;
-      break;
+    const realNow = Date.now;
+    // Keep all requests in one fixed window. Without this, a test that happens
+    // to cross an epoch-aligned 5-minute boundary truthfully receives a fresh
+    // window and intermittently reports 41 admissions for a 40-slot rule.
+    Date.now = () => 1_700_000_100_000;
+    try {
+      for (let i = 0; i < GEN_RULE.limit + 1; i++) {
+        const { status } = await runAs(userId, fullBody());
+        if (status === 200) { admitted++; continue; }
+        denialStatus = status;
+        break;
+      }
+    } finally {
+      Date.now = realNow;
     }
     assertEq(admitted, GEN_RULE.limit, "exactly `limit` requests were admitted");
     assertEq(denialStatus, 429, "request limit+1 is throttled");

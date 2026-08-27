@@ -11,9 +11,12 @@ import {
   buildPromptFromPrefill,
   buildPrefillFromWorkspace,
   buildPrefillFromProductSignal,
+  buildPrefillFromProductOpportunity,
   buildPrefillFromViralPin,
   buildPrefillFromKeywordTrend,
   buildPrefillFromWeeklyPlan,
+  draftToPrefill,
+  openCreatePinsWithDraft,
   type CreatePinsPrefill,
 } from "../src/lib/createPinsPrefill";
 
@@ -23,6 +26,18 @@ let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
   try {
     fn();
+    console.log(`  ✓  ${name}`);
+    passed++;
+  } catch (e) {
+    console.error(`  ✗  ${name}`);
+    console.error(`     ${String(e)}`);
+    failed++;
+  }
+}
+
+async function asyncTest(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
     console.log(`  ✓  ${name}`);
     passed++;
   } catch (e) {
@@ -278,6 +293,118 @@ test("20. no text overlay rule always present in non-empty prompts", () => {
   }
 });
 
-// ── Summary ───────────────────────────────────────────────────────────────────
-console.log(`\n  ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+test("21. stable Product Opportunity maps to a product image without fabricating a title", () => {
+  const prefill = buildPrefillFromProductOpportunity({
+    id: "product-opportunity-1",
+    productName: null,
+    productImageUrl: "https://merchant.example/product.jpg",
+    productUrl: "https://merchant.example/products/1",
+    domain: "merchant.example",
+    category: "home-decor",
+  });
+  eq(prefill.productImages?.[0]?.id, "product-opportunity-1");
+  eq(prefill.productImages?.[0]?.title, undefined);
+  eq(prefill.productImages?.[0]?.imageUrl, "https://merchant.example/product.jpg");
+  eq(prefill.productImages?.[0]?.productUrl, "https://merchant.example/products/1");
+  eq(prefill.productImages?.[0]?.category, "Home Decor");
+  eq(prefill.opportunity, undefined);
+  notIncludes(JSON.stringify(prefill), "home-decor");
+});
+
+test("22. composer draft wire envelope restores the full Product prefill", () => {
+  const snapshot = buildPrefillFromProductOpportunity({
+    id: "product-opportunity-2",
+    productName: "Merchant-proven lamp",
+    productImageUrl: "https://merchant.example/lamp.jpg",
+    productUrl: "https://merchant.example/products/lamp",
+    domain: "merchant.example",
+    category: "home-decor",
+  });
+  const restored = draftToPrefill({ draft: { draft_snapshot: snapshot } });
+  eq(restored?.productImages?.[0]?.id, "product-opportunity-2");
+  eq(restored?.productImages?.[0]?.title, "Merchant-proven lamp");
+});
+
+test("23. missing Product name stays absent from the generated prompt", () => {
+  const prefill = buildPrefillFromProductOpportunity({
+    id: "product-opportunity-3",
+    productName: null,
+    productImageUrl: "https://merchant.example/unnamed.jpg",
+    productUrl: "https://merchant.example/products/unnamed",
+    domain: "merchant.example",
+    category: "home-decor",
+  });
+  const prompt = buildPromptFromPrefill(prefill);
+  includes(prompt, "featuring the selected product");
+  notIncludes(prompt, '\"the product\"');
+});
+
+async function runAsyncTests(): Promise<void> {
+  await asyncTest("24. storage failure cannot navigate an empty fallback", async () => {
+    const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: { setItem() { throw new Error("quota denied"); } },
+    });
+    let navigated = false;
+    try {
+      let rejected = false;
+      try {
+      await openCreatePinsWithDraft(() => { navigated = true; }, buildPrefillFromProductOpportunity({
+          id: "product-opportunity-storage-failure",
+          productName: null,
+          productImageUrl: "https://merchant.example/item.jpg",
+          productUrl: "https://merchant.example/products/item",
+          domain: "merchant.example",
+          category: "home-decor",
+      }), null);
+      } catch {
+        rejected = true;
+      }
+      ok(rejected, "storage-only handoff must reject when the context was not saved");
+      ok(!navigated, "storage-only handoff must not navigate without saved context");
+    } finally {
+      if (originalStorage) Object.defineProperty(globalThis, "sessionStorage", originalStorage);
+      else delete (globalThis as { sessionStorage?: unknown }).sessionStorage;
+    }
+  });
+
+  await asyncTest("25. persisted draft still navigates when one-shot storage is unavailable", async () => {
+    const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+    const originalFetch = globalThis.fetch;
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: { setItem() { throw new Error("quota denied"); } },
+    });
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ draft_id: "draft-123" }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+    let destination = "";
+    try {
+      await openCreatePinsWithDraft(
+        (url) => { destination = url; },
+        buildPrefillFromProductOpportunity({
+          id: "product-opportunity-persisted",
+          productName: "Merchant proven item",
+          productImageUrl: "https://merchant.example/item.jpg",
+          productUrl: "https://merchant.example/products/item",
+          domain: "merchant.example",
+          category: "home-decor",
+        }),
+        "valid-token",
+      );
+      eq(destination, "/app/studio?draft_id=draft-123");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalStorage) Object.defineProperty(globalThis, "sessionStorage", originalStorage);
+      else delete (globalThis as { sessionStorage?: unknown }).sessionStorage;
+    }
+  });
+
+  // ── Summary ─────────────────────────────────────────────────────────────────
+  console.log(`\n  ${passed} passed, ${failed} failed\n`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+void runAsyncTests();
