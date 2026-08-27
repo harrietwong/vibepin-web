@@ -46,6 +46,13 @@ async function fetchSocialApi(input: RequestInfo | URL, init?: RequestInit): Pro
 export type ConnectionsResponse = {
   platforms: PlatformConnectionSummary[];
   connections: SocialConnection[];
+  /**
+   * The user's resolved plan, so the UI can offer the action that actually exists
+   * (a paid user can buy an extra account slot; a Free user can only upgrade).
+   * Optional on the type because an older cached response may not carry it —
+   * callers must treat "missing" as "free".
+   */
+  plan?: "free" | "starter" | "pro" | "business";
 };
 
 export async function fetchSocialConnections(signal?: AbortSignal): Promise<ConnectionsResponse> {

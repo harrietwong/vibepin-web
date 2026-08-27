@@ -749,6 +749,13 @@ const zhTW: Partial<Record<MessageKey, string>> = {
     "目前方案不包含再連接一個 Pinterest 帳號。可以升級方案，或移除一個不再發布的帳號。本次沒有做任何變更——你已連接的帳號不受影響。",
   "socialPanel.limit.upgrade": "升級方案",
   "socialPanel.limit.dismiss": "暫不",
+  "socialPanel.limit.bodyPaid":
+    "方案內含的帳號名額已全部用完。可以加購一個帳號名額(任一平台皆可使用),或移除一個不再發佈的帳號。這次沒有變更任何已連接的帳號。",
+  "socialPanel.limit.addSlot": "加購一個帳號",
+  "socialPanel.limit.perMonth": "/月",
+  "socialPanel.limit.addSlotBusy": "正在開啟結帳頁…",
+  "socialPanel.limit.addSlotFailed": "無法開啟結帳頁,請再試一次。",
+  "socialPanel.limit.addSlotUnavailable": "加購帳號尚未開放購買。",
 
   // ── productLibrary ──
   "productLibrary.source.viralPin": "熱門 Pin",

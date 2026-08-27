@@ -16,6 +16,10 @@ import {
   PRICING_TIERS,
   type PlanKey,
 } from "@/lib/pricingPlans";
+import {
+  BillingDisabledError,
+  startCreemCheckout,
+} from "@/lib/billing/creemCheckoutClient";
 import { CONTAINER, GradientText, SectionLabel, VibeBtn } from "@/components/landing/conversion/shared";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
@@ -34,43 +38,6 @@ type PaidPlan = Exclude<PlanKey, "free">;
 const PAID_PLANS: readonly PaidPlan[] = ["starter", "pro", "business"];
 function isPaidPlan(id: PlanKey): id is PaidPlan {
   return (PAID_PLANS as readonly PlanKey[]).includes(id);
-}
-
-/** Thrown when checkout is deliberately turned off (CREEM_MODE=disabled → 503). */
-class BillingDisabledError extends Error {
-  constructor() {
-    super("billing_disabled");
-    this.name = "BillingDisabledError";
-  }
-}
-
-/**
- * Start an authenticated Creem checkout for the signed-in buyer. Resolves to the
- * hosted checkout URL. Throws BillingDisabledError when checkout is turned off
- * (503 billing_disabled → the CTA shows a "coming soon" state), or a plain Error
- * on any other failure so the caller can surface the retryable banner.
- */
-async function startCreemCheckout(plan: PaidPlan, interval: "month" | "year"): Promise<string> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  const res = await fetch("/api/billing/creem/checkout", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ plan, interval }),
-  });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string };
-    if (res.status === 503 && err.error === "billing_disabled") {
-      throw new BillingDisabledError();
-    }
-    throw new Error(`checkout endpoint returned ${res.status}`);
-  }
-  const json = (await res.json()) as { url?: string };
-  if (!json.url) throw new Error("checkout endpoint returned no url");
-  return json.url;
 }
 
 function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: boolean) => void }) {
