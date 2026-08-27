@@ -63,6 +63,7 @@ import {
   isExtraAccountProduct,
   isExtraAccountConfigured,
 } from "@/lib/server/creem/creemProducts";
+import { normalizeUnits } from "@/lib/server/creem/creemStore";
 
 const CONNECTIONS_TABLE = "social_connections";
 const SUBSCRIPTIONS_TABLE = "creem_subscriptions";
@@ -212,14 +213,6 @@ export async function countActiveConnectionsByProvider(
   return counts;
 }
 
-/** `units` as a positive integer; anything unusable is 1 (one subscription = one slot). */
-export function normalizeSlotUnits(value: unknown): number {
-  const n = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(n)) return 1;
-  const floored = Math.floor(n);
-  return floored >= 1 ? floored : 1;
-}
-
 /** A mirrored subscription row as read for the slot total. */
 export type ExtraSlotRow = SubscriptionRowForGrant & {
   creem_product_id?: string | null;
@@ -238,7 +231,7 @@ export function sumExtraAccountUnits(rows: ExtraSlotRow[], nowMs: number = Date.
     if (!isExtraAccountProduct(row.creem_product_id)) continue;
     // Same grant rule as resolvePlan — a lapsed scheduled_cancel grants nothing.
     if (filterAccessGrantingSubscriptions([row], nowMs).length === 0) continue;
-    total += normalizeSlotUnits(row.units);
+    total += normalizeUnits(row.units);
   }
   return total;
 }
@@ -266,19 +259,7 @@ export async function getPurchasedExtraSlots(uid: string): Promise<number> {
       return 0;
     }
 
-    type Row = SubscriptionRowForGrant & {
-      creem_product_id?: string | null;
-      units?: unknown;
-    };
-    let total = 0;
-    for (const row of (data as Row[] | null) ?? []) {
-      if (!isExtraAccountProduct(row.creem_product_id)) continue;
-      // Same grant rule as resolvePlan — a lapsed scheduled_cancel grants nothing.
-      const granting = filterAccessGrantingSubscriptions([row]).length > 0;
-      if (!granting) continue;
-      total += normalizeSlotUnits(row.units);
-    }
-    return total;
+    return sumExtraAccountUnits((data as ExtraSlotRow[] | null) ?? []);
   } catch (err) {
     console.error(
       "[social] extra account slots lookup threw:",
