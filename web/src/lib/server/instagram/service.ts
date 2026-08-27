@@ -241,7 +241,14 @@ export type InstagramPublishInput = {
   accessToken: string;
   /** IG user id (the professional account's own id, from the profile call). */
   igUserId: string;
+  /** The cover image. Also the whole post when `imageUrls` is absent or has one entry. */
   imageUrl: string;
+  /**
+   * The full media set in display order (cover first). ≥2 entries publish a real
+   * Instagram CAROUSEL; 1 or absent keeps the single-image request byte-for-byte as
+   * before. Count limits are the caller's (checkInstagramMedia) — nothing is dropped here.
+   */
+  imageUrls?: string[];
   caption?: string;
   /**
    * Destination URL. Instagram captions render links as plain text — they are
@@ -287,7 +294,161 @@ export function buildInstagramCaption(caption?: string, destinationUrl?: string)
 }
 
 /**
- * Publish a single image to an Instagram professional account.
+ * How long ALL container processing for one publish may take, and how often we ask.
+ *
+ * ONE shared budget, not one per container: a 10-item carousel polled sequentially
+ * at 45s each would allow 450s of waiting, which overruns the cron route's
+ * maxDuration (300s) and would kill the whole due-publish batch mid-run.
+ */
+const CONTAINER_DEADLINE_MS = 45_000;
+const CONTAINER_POLL_MS = 2_000;
+
+/** POST /{ig-user-id}/media with the given fields. Returns the container id. */
+async function createContainer(
+  accessToken: string,
+  igUserId: string,
+  fields: Record<string, string>,
+): Promise<string> {
+  const body = new URLSearchParams({ ...fields, access_token: accessToken });
+  const res = await fetch(`${INSTAGRAM_GRAPH_URL}/${igUserId}/media`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  const created = (await res.json().catch(() => ({}))) as {
+    id?: string;
+    error?: { message?: string; code?: number };
+  };
+  if (!res.ok || !created.id) {
+    throw new InstagramApiError(
+      created.error?.message ?? "Instagram rejected the media container",
+      res.status,
+      "container_failed",
+    );
+  }
+  return created.id;
+}
+
+/**
+ * Poll every container until each reports FINISHED, against ONE shared deadline.
+ *
+ * Instagram processes containers asynchronously and refuses to publish (or to
+ * accept as a carousel child) anything not yet FINISHED. ERROR and EXPIRED are
+ * terminal — reported, never retried. `deadlineAt` is an absolute instant so the
+ * children and the carousel container share a single budget.
+ */
+async function awaitContainersReady(
+  accessToken: string,
+  containerIds: readonly string[],
+  deadlineAt: number,
+  traceId: string,
+): Promise<void> {
+  const pending = new Set(containerIds);
+  for (;;) {
+    for (const containerId of [...pending]) {
+      const statusRes = await fetch(
+        `${INSTAGRAM_GRAPH_URL}/${containerId}?fields=status_code&access_token=${encodeURIComponent(accessToken)}`,
+      );
+      const status = (await statusRes.json().catch(() => ({}))) as { status_code?: string };
+      if (status.status_code === "FINISHED") {
+        igPublishDebug({ traceId, containerId, finalContainerStatus: "FINISHED" });
+        pending.delete(containerId);
+        continue;
+      }
+      if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
+        igPublishDebug({ traceId, containerId, finalContainerStatus: status.status_code });
+        throw new InstagramApiError(
+          "Instagram could not process the image for this post",
+          502,
+          "container_processing_failed",
+        );
+      }
+    }
+    if (pending.size === 0) return;
+    if (Date.now() > deadlineAt) {
+      throw new InstagramApiError(
+        "Instagram is still processing the image — please try again",
+        504,
+        "container_timeout",
+      );
+    }
+    await new Promise(r => setTimeout(r, CONTAINER_POLL_MS));
+  }
+}
+
+/** The unchanged single-image flow: one container carrying the caption. */
+async function createSingleImageContainer(
+  accessToken: string,
+  igUserId: string,
+  imageUrl: string,
+  caption: string,
+  traceId: string,
+): Promise<string> {
+  const containerId = await createContainer(accessToken, igUserId, {
+    image_url: imageUrl,
+    ...(caption ? { caption } : {}),
+  });
+  igPublishDebug({ traceId, igUserId, imageHost: hostOf(imageUrl), containerId });
+  await awaitContainersReady(accessToken, [containerId], Date.now() + CONTAINER_DEADLINE_MS, traceId);
+  return containerId;
+}
+
+/**
+ * Build the CAROUSEL container for a 2–10 image post.
+ *
+ * Instagram's shape, in order:
+ *   1. one child container per image — `is_carousel_item=true`, NO caption (a
+ *      child's caption is never shown; the caption belongs to the carousel);
+ *   2. every child must be FINISHED before step 3 — an unready child is rejected
+ *      as a carousel member, so all children are awaited under one shared deadline;
+ *   3. the carousel container — media_type=CAROUSEL, children=<ids in order>,
+ *      caption — which itself processes asynchronously and is awaited too.
+ *
+ * Children are created in the SAME order as the URLs: that order is the slide
+ * order the merchant sees, and Instagram honours the `children` sequence.
+ */
+async function createCarouselContainer(
+  accessToken: string,
+  igUserId: string,
+  imageUrls: readonly string[],
+  caption: string,
+  traceId: string,
+): Promise<string> {
+  const deadlineAt = Date.now() + CONTAINER_DEADLINE_MS;
+
+  const childIds: string[] = [];
+  for (const url of imageUrls) {
+    childIds.push(await createContainer(accessToken, igUserId, {
+      image_url: url,
+      is_carousel_item: "true",
+    }));
+  }
+  igPublishDebug({
+    traceId,
+    igUserId,
+    carouselItems: imageUrls.length,
+    imageHosts: imageUrls.map(hostOf),
+    childContainerIds: childIds,
+  });
+
+  await awaitContainersReady(accessToken, childIds, deadlineAt, traceId);
+
+  const carouselId = await createContainer(accessToken, igUserId, {
+    media_type: "CAROUSEL",
+    children: childIds.join(","),
+    ...(caption ? { caption } : {}),
+  });
+  igPublishDebug({ traceId, igUserId, carouselContainerId: carouselId });
+
+  // The carousel container is processed asynchronously too — publishing it before
+  // it is FINISHED fails exactly the way an unready single-image container does.
+  await awaitContainersReady(accessToken, [carouselId], deadlineAt, traceId);
+  return carouselId;
+}
+
+/**
+ * Publish an image post — one image, or a 2–10 image CAROUSEL — to an Instagram
+ * professional account.
  *
  * Two-step by design on Instagram's side: create a media CONTAINER, then publish
  * it. The container is processed asynchronously, so between the two we poll
@@ -295,79 +456,24 @@ export function buildInstagramCaption(caption?: string, destinationUrl?: string)
  * fails. ERROR and EXPIRED are terminal and reported as such rather than retried.
  */
 export async function publishToInstagram(input: InstagramPublishInput): Promise<InstagramPublishResult> {
-  if (!isPubliclyFetchableImage(input.imageUrl)) {
-    throw new InstagramApiError(
-      "Image URL must be publicly reachable for Instagram to fetch it",
-      400,
-      "invalid_image_url",
-    );
+  // The media set in display order; `imageUrl` remains the single-image contract.
+  const urls = input.imageUrls?.length ? input.imageUrls : [input.imageUrl];
+  for (const url of urls) {
+    if (!isPubliclyFetchableImage(url)) {
+      throw new InstagramApiError(
+        "Image URL must be publicly reachable for Instagram to fetch it",
+        400,
+        "invalid_image_url",
+      );
+    }
   }
 
   const traceId = (globalThis.crypto?.randomUUID?.() ?? String(Date.now())).slice(0, 8);
   const caption = buildInstagramCaption(input.caption, input.destinationUrl);
 
-  // 1 — create the container.
-  const createBody = new URLSearchParams({
-    image_url: input.imageUrl,
-    access_token: input.accessToken,
-  });
-  if (caption) createBody.set("caption", caption);
-
-  const createRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${input.igUserId}/media`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: createBody.toString(),
-  });
-  const created = (await createRes.json().catch(() => ({}))) as {
-    id?: string;
-    error?: { message?: string; code?: number };
-  };
-  if (!createRes.ok || !created.id) {
-    throw new InstagramApiError(
-      created.error?.message ?? "Instagram rejected the media container",
-      createRes.status,
-      "container_failed",
-    );
-  }
-  const containerId = created.id;
-  igPublishDebug({
-    traceId,
-    igUserId: input.igUserId,
-    imageHost: hostOf(input.imageUrl),
-    createContainerStatus: createRes.status,
-    containerId,
-  });
-
-  // 2 — wait for Instagram to finish fetching/processing the image.
-  const DEADLINE_MS = 45_000;
-  const POLL_MS = 2_000;
-  const startedAt = Date.now();
-  for (;;) {
-    const statusRes = await fetch(
-      `${INSTAGRAM_GRAPH_URL}/${containerId}?fields=status_code&access_token=${encodeURIComponent(input.accessToken)}`,
-    );
-    const status = (await statusRes.json().catch(() => ({}))) as { status_code?: string };
-    if (status.status_code === "FINISHED") {
-      igPublishDebug({ traceId, containerId, finalContainerStatus: "FINISHED" });
-      break;
-    }
-    if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
-      igPublishDebug({ traceId, containerId, finalContainerStatus: status.status_code });
-      throw new InstagramApiError(
-        "Instagram could not process the image for this post",
-        502,
-        "container_processing_failed",
-      );
-    }
-    if (Date.now() - startedAt > DEADLINE_MS) {
-      throw new InstagramApiError(
-        "Instagram is still processing the image — please try again",
-        504,
-        "container_timeout",
-      );
-    }
-    await new Promise(r => setTimeout(r, POLL_MS));
-  }
+  const containerId = urls.length > 1
+    ? await createCarouselContainer(input.accessToken, input.igUserId, urls, caption, traceId)
+    : await createSingleImageContainer(input.accessToken, input.igUserId, urls[0], caption, traceId);
 
   // 3 — publish the finished container.
   const publishRes = await fetch(`${INSTAGRAM_GRAPH_URL}/${input.igUserId}/media_publish`, {

@@ -158,6 +158,10 @@ export const STUDIO: string[] = [
   "test-failure-banner",
   "test-publish-error-display",
   "test-publish-failure-consistency",
+  // Multi-image publishing (WS-A 2026-08-27): per-platform media rules + the exact
+  // Pinterest media_source a carousel produces.
+  "test-media-rules",
+  "test-pin-media-source",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",

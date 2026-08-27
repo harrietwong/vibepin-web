@@ -127,6 +127,10 @@ export async function POST(req: Request) {
       uid,
       boardId,
       imageUrl: body.imageUrl,
+      // The Pin's full media set in display order, when the client sends one. Absent
+      // ⇒ imageUrl alone, exactly as before. publishPinForUser validates every entry
+      // and refuses a set Pinterest cannot take — it never truncates to the cover.
+      imageUrls: body.imageUrls,
       title: body.title,
       description: body.description,
       link: body.link,

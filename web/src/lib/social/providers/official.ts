@@ -20,6 +20,11 @@
  * to satisfy the SocialPublishingProvider contract.
  */
 
+import {
+  checkFacebookMedia,
+  checkInstagramMedia,
+  toMediaItems,
+} from "@/lib/publish/mediaRules";
 import type {
   DisconnectInput,
   GetConnectionsInput,
@@ -79,6 +84,17 @@ export const officialProvider: SocialPublishingProvider = {
       return { ok: false, status: "failed", error: "Connect a Facebook Page first." };
     }
 
+    // Every image the Content carries, in display order — never just the cover.
+    const imageUrls = (input.post.imageUrls ?? []).filter(u => typeof u === "string" && u.trim());
+    // A Facebook Page post may legitimately be text-only, so the media rules only
+    // gate a post that HAS images; `no_media` is not a failure here.
+    if (imageUrls.length) {
+      const media = checkFacebookMedia(toMediaItems(imageUrls));
+      if (!media.ok) {
+        return { ok: false, status: "failed", error: media.message };
+      }
+    }
+
     const { getSelectedPageToken } = await import("@/lib/server/facebook/connectionStore");
     // Name the account to publish as. With several Facebook accounts connected,
     // the store refuses to guess — the destination the merchant selected carries
@@ -95,7 +111,10 @@ export const officialProvider: SocialPublishingProvider = {
       const result = await publishToPage(selected.pageAccessToken, selected.pageId, {
         // Facebook has no separate title field — title and caption are one body.
         message: [input.post.title?.trim(), input.post.caption?.trim()].filter(Boolean).join("\n\n"),
-        imageUrl: input.post.imageUrls?.[0] ?? null,
+        // Cover first, then the rest — publishToPage sends ALL of them (one photo
+        // post for a single image, a multi-photo feed post for several).
+        imageUrl: imageUrls[0] ?? null,
+        imageUrls,
         link: input.post.destinationUrl ?? null,
       });
       return {
@@ -161,9 +180,16 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
     return { ok: false, status: "failed", error: "Connect an Instagram account first." };
   }
 
-  const imageUrl = input.post.imageUrls?.[0];
-  if (!imageUrl) {
+  // Every image the Content carries, in display order — never just the cover.
+  const imageUrls = (input.post.imageUrls ?? []).filter(u => typeof u === "string" && u.trim());
+  if (!imageUrls.length) {
     return { ok: false, status: "failed", error: "Instagram posts need an image." };
+  }
+  // Count limits decided before any API call, so an over-long set gets an
+  // actionable message instead of publishing a silently truncated carousel.
+  const media = checkInstagramMedia(toMediaItems(imageUrls));
+  if (!media.ok) {
+    return { ok: false, status: "failed", error: media.message };
   }
 
   const { publishToInstagram, InstagramApiError } = await import("@/lib/server/instagram/service");
@@ -171,7 +197,8 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
     const result = await publishToInstagram({
       accessToken: connection.accessToken,
       igUserId: connection.userId,
-      imageUrl,
+      imageUrl: imageUrls[0],
+      imageUrls,
       // Instagram has no separate title field — title and caption are one body.
       caption: [input.post.title?.trim(), input.post.caption?.trim()].filter(Boolean).join("\n\n"),
       destinationUrl: input.post.destinationUrl ?? undefined,

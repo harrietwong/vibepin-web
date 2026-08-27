@@ -225,7 +225,9 @@ export async function GET(req: Request): Promise<Response> {
               null,
             );
             const fanned = await fanOutDestinations(row.vibepin_user_id, extras, {
-              imageUrls: [input.imageUrl],
+              // The whole media set, in display order — a Content scheduled as a
+              // carousel must fan out as one, not as its cover image.
+              imageUrls: input.imageUrls,
               title: input.title,
               caption: input.description,
               destinationUrl: input.link,

@@ -184,11 +184,18 @@ async function main() {
   });
   await test("10b. publishPinForUser validates image/link BEFORE ever calling Pinterest (same order for manual + cron callers)", () => {
     const src = readFileSync(join(root, "src/lib/server/pinterest/publishPin.ts"), "utf8");
-    const imgIdx = src.indexOf("validatePublicImageUrl(input.imageUrl)");
+    // Matched by CALL, not by argument: multi-image publishing validates every URL in a
+    // loop (`validatePublicImageUrl(raw)`), so pinning this to the old single-image
+    // `(input.imageUrl)` spelling would fail on a change that made validation stricter.
+    const imgIdx = src.indexOf("validatePublicImageUrl(");
     const linkIdx = src.indexOf("validateOptionalLink(input.link)");
+    const mediaIdx = src.indexOf("checkPinterestMedia(toMediaItems(");
     const clientIdx = src.indexOf("PinterestClient.forSandboxDemo");
-    assert.ok(imgIdx > -1 && linkIdx > -1 && clientIdx > -1);
+    assert.ok(imgIdx > -1 && linkIdx > -1 && mediaIdx > -1 && clientIdx > -1);
     assert.ok(imgIdx < clientIdx && linkIdx < clientIdx, "validation must run before any Pinterest client call");
+    // The media-set rules (count / aspect ratio) are part of that same pre-flight: an
+    // unpublishable carousel must be refused here, never truncated at the API call.
+    assert.ok(mediaIdx < clientIdx, "media rules must run before any Pinterest client call");
   });
 
   console.log(`\n1-10 core mapping: ${passed} passed, ${failed} failed so far`);

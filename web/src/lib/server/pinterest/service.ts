@@ -23,6 +23,7 @@ import {
   missingPinterestScopes,
   type PinterestEnv,
 } from "./config";
+import { buildPinMediaSource } from "./pinMediaSource";
 import {
   getActiveConnection,
   getConnectionById,
@@ -248,6 +249,13 @@ export type CreatePinInput = {
   link?: string;
   altText?: string;
   imageUrl: string;
+  /**
+   * The Pin's full media set in display order (cover first). ≥2 entries publish a
+   * real Pinterest carousel; 1 or absent keeps the single-image request byte-for-byte
+   * as before. Count/ratio limits are enforced by the caller (checkPinterestMedia),
+   * never by silently dropping images here.
+   */
+  imageUrls?: string[];
 };
 
 export type CreatedPin = {
@@ -696,7 +704,14 @@ export class PinterestClient {
   async createPin(input: CreatePinInput): Promise<CreatedPin> {
     const body: Record<string, unknown> = {
       board_id: input.boardId,
-      media_source: { source_type: "image_url", url: input.imageUrl },
+      // Single image and carousel differ only in media_source; every top-level
+      // field below (title/description/link/alt_text) is unchanged either way.
+      media_source: buildPinMediaSource({
+        imageUrls: input.imageUrls?.length ? input.imageUrls : [input.imageUrl],
+        title: input.title,
+        description: input.description,
+        link: input.link,
+      }),
     };
     if (input.title) body.title = input.title;
     if (input.description) body.description = input.description;
