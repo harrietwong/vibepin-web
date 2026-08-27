@@ -32,6 +32,10 @@ export const studioModalsMessages = {
   "studioModals.header.subtitle": "Edit, schedule, and publish your pins in bulk.",
   "studioModals.header.schedule": "Schedule",
   "studioModals.header.publishing": "Publishing…",
+  // Every real publish action reads exactly "Publish" (PRD §19). The old
+  // "Publish selected now" key is kept for the 18 locales that still translate it,
+  // but nothing renders it any more.
+  "studioModals.header.publish": "Publish",
   "studioModals.header.publishSelectedNow": "Publish selected now",
   "studioModals.toolbar.searchPins": "Search pins…",
   "studioModals.toolbar.filter": "Filter",

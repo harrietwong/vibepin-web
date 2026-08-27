@@ -1434,7 +1434,11 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
             {checkedCount > 0 && (
               <button type="button" data-testid="batch-edit-publish-now" disabled={publishPhase === "running"} onClick={startPublish}
                 style={{ ...btnBase, padding: "8px 14px", opacity: publishPhase === "running" ? 0.6 : 1, cursor: publishPhase === "running" ? "not-allowed" : "pointer" }}>
-                <Send style={{ width: 13, height: 13 }} /> {publishPhase === "running" ? tr("studioModals.header.publishing") : tr("studioModals.header.publishSelectedNow")}
+                {/* "Publish", exactly — PRD §19. "Publish selected now" hedged with two
+                    words that mean nothing to the merchant: "selected" is already shown
+                    as the count beside it, and "now" implied a second, later kind of
+                    publish that does not exist on this button. */}
+                <Send style={{ width: 13, height: 13 }} /> {publishPhase === "running" ? tr("studioModals.header.publishing") : tr("studioModals.header.publish")}
               </button>
             )}
             <button type="button" data-testid="batch-edit-close" title={tr("pinDetails.close")} aria-label={tr("pinDetails.close")} onClick={onClose}
