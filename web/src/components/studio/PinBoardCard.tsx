@@ -25,12 +25,18 @@ import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import { ContentMediaStrip } from "@/components/studio/ContentMediaStrip";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
-import { contentDestinationResults, contentDestinations, destinationNeedsAttention, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
+import { contentDestinationResults, contentDestinations, destinationKey, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
 import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
+import {
+  AmbiguousScheduleAccountError,
+  buildScheduledDestinations,
+  resolveScheduledAccount,
+} from "@/lib/social/scheduledDestinations";
+import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
 
@@ -194,8 +200,16 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     return providers.length ? Array.from(new Set(providers)) : ["pinterest"];
   });
   const [selectedAccountIds, setSelectedAccountIds] = useState<Array<{ provider: string; id: string }>>(() =>
-    contentDestinations(draft).filter(item => item.accountId).map(item => ({ provider: item.provider, id: item.accountId as string })),
+    contentDestinations(draft).filter(item => item.socialConnectionId).map(item => ({ provider: item.provider, id: item.socialConnectionId as string })),
   );
+  /** The connected accounts the picker loaded — needed to resolve one account per platform. */
+  const [connectionSummaries, setConnectionSummaries] = useState<PlatformConnectionSummary[]>([]);
+  /**
+   * Set when a ticked platform has no destination we may record (several accounts and
+   * no choice, or none connected). Publish/Schedule are blocked while it is set: a
+   * destination without a connection id cannot be published and must never be stored.
+   */
+  const [destinationError, setDestinationError] = useState("");
   // Keyword-chip interaction state (compact card): which chip shows its remove ×, and
   // which chip is briefly flashing "Copied". Card is keyed by draft.id upstream, so this
   // never leaks across drafts.
@@ -216,7 +230,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const boardName = useCallback((id: string) => boards.find(b => b.id === id)?.name ?? "", [boards]);
 
   const persistNow = useCallback((f: PinFieldsValue) => {
-    const existingDestinations = contentDestinations(draft);
     props.onPersist(draft.id, {
       title: f.title,
       description: f.description,
@@ -225,20 +238,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       boardName: boardName(f.boardId),
       altText: f.altText,
       tags: parseTags(f.tags),
-      publishDestinations: selectedProviders.flatMap(provider => {
-        const accountIds = selectedAccountIds.filter(item => item.provider === provider);
-        if (accountIds.length) return accountIds.map(item => ({
-          id: `${draft.id}:${provider}:${item.id}`, provider, accountId: item.id,
-          ...(provider === "pinterest" ? { boardId: f.boardId, boardName: boardName(f.boardId) } : {}),
-        }));
-        const existing = existingDestinations.find(item => item.provider === provider);
-        return [{
-          id: existing?.id || `${draft.id}:${provider}`, provider,
-          ...(provider === "pinterest" ? { boardId: f.boardId, boardName: boardName(f.boardId) } : {}),
-        }];
-      }),
+      // Destinations are NOT written here. They are one fact with one writer
+      // (`persistDestinationSelection` below → `scheduledDestinations`), so a field
+      // edit can never quietly re-derive them from stale component state.
     });
-  }, [props, draft, boardName, selectedProviders, selectedAccountIds]);
+  }, [props, draft.id, boardName]);
 
   const flush = useCallback(() => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; persistNow(pendingRef.current); }
@@ -255,8 +259,14 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     timer.current = setTimeout(() => { timer.current = null; persistNow(next); }, PERSIST_DEBOUNCE);
   }, [persistNow]);
 
-  // Actions flush pending edits first.
-  const doSchedule = useCallback(() => { flush(); props.onSchedule(draft.id); }, [flush, props, draft.id]);
+  // Actions flush pending edits first. An unresolvable destination blocks both:
+  // scheduling or publishing with a half-recorded intent is how a three-platform
+  // choice silently executed as Pinterest-only.
+  const doSchedule = useCallback(() => {
+    if (destinationError) return;
+    flush();
+    props.onSchedule(draft.id);
+  }, [flush, props, draft.id, destinationError]);
   const doCustomSchedule = useCallback(() => {
     if (!customDate || !customTime) return;
     flush();
@@ -264,26 +274,53 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     props.onCustomSchedule(draft.id, customDate, customTime);
   }, [customDate, customTime, draft.id, flush, props]);
   const doGenerateAiImage = useCallback(() => { flush(); props.onGenerateAiImage(draft); }, [flush, props, draft]);
-  const doPublish = useCallback(() => { flush(); props.onPublish(draft.id); }, [flush, props, draft.id]);
+  const doPublish = useCallback(() => {
+    if (destinationError) return;
+    flush();
+    props.onPublish(draft.id);
+  }, [flush, props, draft.id, destinationError]);
   const expand = useCallback(() => props.onSetActive(draft.id), [props, draft.id]);
   const collapse = useCallback(() => { flush(); props.onSetActive(null); }, [flush, props]);
+  /**
+   * THE destination writer: the merchant's platform/account choice, frozen into
+   * `scheduledDestinations` — the same record the due-time worker reads.
+   *
+   * A platform with several connected accounts and no explicit pick is NOT written.
+   * `resolveScheduledAccount` throws for exactly that case, and `buildScheduledDestinations`
+   * would otherwise drop the provider silently: the merchant would tick Instagram, see
+   * it ticked, and get nothing. It surfaces as a field error instead, and Publish /
+   * Schedule stay blocked for this Content until an account is chosen. The other
+   * unresolvable case — no connected account, or an explicit pick that has since been
+   * disconnected — returns null and is reported the same way, never silently dropped.
+   */
   const persistDestinationSelection = useCallback((providers: PublishProvider[], accounts: Array<{ provider: string; id: string }>) => {
-    const existing = contentDestinations(draft);
-    props.onPersist(draft.id, {
-      publishDestinations: providers.flatMap(provider => {
-        const providerAccounts = accounts.filter(item => item.provider === provider);
-        if (providerAccounts.length) return providerAccounts.map(item => ({
-          id: `${draft.id}:${provider}:${item.id}`, provider, accountId: item.id,
-          ...(provider === "pinterest" ? { boardId: fields.boardId, boardName: boardName(fields.boardId) } : {}),
-        }));
-        const previous = existing.find(item => item.provider === provider);
-        return [{
-          id: previous?.id || `${draft.id}:${provider}`, provider,
-          ...(provider === "pinterest" ? { boardId: fields.boardId, boardName: boardName(fields.boardId) } : {}),
-        }];
-      }),
-    });
-  }, [props, draft, fields.boardId, boardName]);
+    let error = "";
+    const destinations = buildScheduledDestinations(
+      providers,
+      { ...draft, boardId: fields.boardId, boardName: boardName(fields.boardId) },
+      provider => {
+        const platform = connectionSummaries.find(summary => summary.provider === provider);
+        const platformAccounts = platform?.accounts ?? [];
+        const explicit = accounts.find(item => item.provider === provider)?.id ?? null;
+        try {
+          const resolved = resolveScheduledAccount(provider, platformAccounts, explicit);
+          if (!resolved && !error) {
+            error = tr("studioBoard.toast.ambiguousAccount").replace("{platform}", platformName(provider));
+          }
+          return resolved;
+        } catch (err) {
+          if (err instanceof AmbiguousScheduleAccountError && !error) {
+            error = tr("studioBoard.toast.ambiguousAccount").replace("{platform}", platformName(provider));
+          }
+          return null;
+        }
+      },
+    );
+    setDestinationError(error);
+    // Pinterest is written from the draft's pinned target, so a Content with no
+    // Pinterest connection yet still records the platforms that DID resolve.
+    props.onPersist(draft.id, { scheduledDestinations: destinations });
+  }, [props, draft, fields.boardId, boardName, connectionSummaries, tr]);
   const changeProviders = useCallback((next: SocialProvider[]) => {
     const supported = next.filter((provider): provider is PublishProvider => provider === "pinterest" || provider === "instagram" || provider === "facebook");
     setSelectedProviders(supported);
@@ -590,8 +627,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               </button>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {(destinations.length ? destinations : [{ id: `${draft.id}:pinterest`, provider: "pinterest" as const }]).map(destination => {
-                const result = destinationResults.find(item => item.destinationId === destination.id || item.provider === destination.provider);
+              {(destinations.length ? destinations : [{ id: destinationKey("pinterest", null), provider: "pinterest" as const, socialConnectionId: null }]).map(destination => {
+                // Tolerates result ids written by earlier shapes, so an un-migrated
+                // draft keeps showing its real state instead of reverting to pending.
+                const result = findDestinationResult(destinationResults, destination);
                 const isFailed = result?.status === "failed";
                 return (
                   <span key={destination.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 8px", borderRadius: 8,
@@ -818,9 +857,16 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           onSelectedChange={changeProviders}
           selectedAccountIds={selectedAccountIds}
           onSelectedAccountIdsChange={changeAccounts}
+          onSummariesChange={setConnectionSummaries}
           onConnectPinterest={props.onConnect}
           pinterestConnected={!disconnected && !needsReconnect}
         />
+        {destinationError && (
+          <p data-testid="card-destination-error" role="alert"
+            style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#b45309" }}>
+            {destinationError}
+          </p>
+        )}
 
         {/* More details */}
         <div>
