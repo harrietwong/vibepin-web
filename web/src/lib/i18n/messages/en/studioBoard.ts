@@ -145,6 +145,53 @@ export const studioBoardMessages = {
   "studioBoard.action.details": "Details",
   "studioBoard.action.schedule": "Schedule",
 
+  // ── PinBoardCard: lifecycle card (PRD 0826 §3–§6, §20) ──
+  // §20: EVERY real publish action reads exactly "Publish". "Publish now" and
+  // "Retry publish" are gone from the card — the scope difference (retry re-sends
+  // only what failed) is carried by the separate Retry action, not by the wording.
+  "studioBoard.actions.publish": "Publish",
+  "studioBoard.actions.retry": "Retry",
+  "studioBoard.actions.edit": "Edit",
+  "studioBoard.actions.done": "Done",
+  "studioBoard.actions.cancel": "Cancel",
+  "studioBoard.actions.unschedule": "Unschedule",
+  "studioBoard.actions.viewResults": "View results",
+  "studioBoard.actions.hideResults": "Hide results",
+  // Publishing a scheduled Content early is a real decision, so it is confirmed.
+  "studioBoard.card.publishConfirmTitle": "Publish now?",
+  "studioBoard.card.publishConfirmBody": "This will publish now instead of waiting for {date} {time}.",
+  "studioBoard.card.fields.title": "Title",
+  "studioBoard.card.fields.description": "Description",
+  "studioBoard.card.fields.descriptionPlaceholder": "Tell people what this content is about",
+  "studioBoard.card.fields.websiteUrl": "Website URL",
+  "studioBoard.card.publishTo": "Publish to",
+  "studioBoard.card.editDestinations": "Edit destinations",
+  "studioBoard.card.aiGenerated": "AI generated",
+  "studioBoard.card.mediaCounter": "{index} / {total}",
+  "studioBoard.card.regenerateImage": "Regenerate image",
+  // Save state, shown as light text at the bottom of the card.
+  "studioBoard.card.saveState.saved": "Saved",
+  "studioBoard.card.saveState.saving": "Saving…",
+  "studioBoard.card.saveState.failed": "Couldn't save",
+  "studioBoard.card.saveState.retry": "Retry",
+  // Posted card.
+  "studioBoard.card.publishedRelative": "Published {when}",
+  "studioBoard.card.relative.now": "just now",
+  "studioBoard.card.relative.minutes": "{n}m ago",
+  "studioBoard.card.relative.hours": "{n}h ago",
+  "studioBoard.card.relative.days": "{n}d ago",
+  "studioBoard.card.resultPublished": "Published",
+  "studioBoard.card.resultFailed": "Failed",
+  "studioBoard.card.resultPending": "Not published yet",
+  "studioBoard.card.viewOn": "View on {platform}",
+  "studioBoard.card.earlierPublishes": "Earlier publishes",
+  "studioBoard.card.needsAttention": "Needs attention",
+  // The one actionable next step per failure category — never a raw message.
+  "studioBoard.card.nextStep.reconnect": "Reconnect",
+  "studioBoard.card.nextStep.chooseBoard": "Choose another board",
+  "studioBoard.card.nextStep.edit": "Edit",
+  "studioBoard.card.scheduledFor": "Scheduled for {time}",
+
   // ── PinBoardCard: expanded card ──
   "studioBoard.expanded.collapseAria": "Collapse",
   // Retained for the aiDrawer title (a NEW generation from an existing pin).
