@@ -23,6 +23,9 @@ import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/p
 import type { PlatformConnectionSummary, SocialConnection } from "@/lib/social/types";
 import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
+/** The plan the panel needs to know about — only "is it paid?" changes the UI. */
+type SocialPlanKey = "free" | "starter" | "pro" | "business";
+
 /** All-not-connected fallback so a failed fetch still shows the platform grid. */
 function notConnectedSummaries(): PlatformConnectionSummary[] {
   return SOCIAL_PROVIDERS.map(provider => ({
@@ -66,6 +69,12 @@ import {
   notifyConnectionsChanged,
 } from "@/lib/social/connectionsCache";
 import { accountDisplayLabel } from "@/lib/social/accountIdentity";
+import { EXTRA_ACCOUNT_PRICE_USD } from "@/lib/pricingPlans";
+import {
+  BillingDisabledError,
+  BillingRefusedError,
+  startExtraAccountCheckout,
+} from "@/lib/billing/creemCheckoutClient";
 import { isMultiSocialAccountsEnabled } from "@/lib/socialFeatureFlags";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
@@ -943,11 +952,48 @@ function AccountMismatchNotice({
  * already used up.
  *
  * A banner rather than a toast, for the same reason as the mismatch notice: nothing
- * was written, and the user has a real choice to make (upgrade, or remove an account
- * they no longer publish to). A toast would vanish before either is actionable.
+ * was written, and the user has a real choice to make (upgrade, buy one more
+ * account, or remove an account they no longer publish to). A toast would vanish
+ * before any of them is actionable.
+ *
+ * Two different situations wear the same banner:
+ *   free  → the only way up is a plan. One CTA: Upgrade.
+ *   paid  → their plan's included accounts are spent, and buying a single extra
+ *           account slot ($X/month, usable on ANY platform) is cheaper and more
+ *           precise than jumping a whole tier. Second CTA: Add another account.
+ * The plan comes from /api/social/connections, resolved server-side by the same
+ * resolver the connect gate uses, so we never offer a purchase the server refuses.
  */
-function AccountLimitNotice({ onDismiss }: { onDismiss: () => void }) {
+function AccountLimitNotice({
+  plan,
+  onDismiss,
+}: {
+  plan: SocialPlanKey;
+  onDismiss: () => void;
+}) {
   const { t: tr } = useLocale();
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const canBuySlot = plan !== "free";
+
+  async function handleAddAccount() {
+    setCheckoutBusy(true);
+    try {
+      const url = await startExtraAccountCheckout(1, "month");
+      window.location.assign(url);
+      // Navigation follows — keep the button busy until the page unloads.
+    } catch (err) {
+      setCheckoutBusy(false);
+      if (err instanceof BillingDisabledError) {
+        toast.info(tr("socialPanel.limit.addSlotUnavailable"));
+      } else if (err instanceof BillingRefusedError) {
+        // Server-authored, customer-readable: it knows exactly why it refused.
+        toast.error(err.userMessage);
+      } else {
+        toast.error(tr("socialPanel.limit.addSlotFailed"));
+      }
+    }
+  }
+
   return (
     <div
       data-testid="pinterest-account-limit"
@@ -963,7 +1009,7 @@ function AccountLimitNotice({ onDismiss }: { onDismiss: () => void }) {
         {tr("socialPanel.limit.title")}
       </p>
       <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
-        {tr("socialPanel.limit.body")}
+        {canBuySlot ? tr("socialPanel.limit.bodyPaid") : tr("socialPanel.limit.body")}
       </p>
       <div style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <a
@@ -978,6 +1024,31 @@ function AccountLimitNotice({ onDismiss }: { onDismiss: () => void }) {
         >
           {tr("socialPanel.limit.upgrade")}
         </a>
+        {canBuySlot && (
+          <button
+            type="button"
+            data-testid="social-limit-add-account"
+            onClick={() => void handleAddAccount()}
+            disabled={checkoutBusy}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "8px 14px", borderRadius: 10,
+              border: "1px solid rgba(245,158,11,0.45)", background: "transparent",
+              color: UI.warning, fontSize: 12, fontWeight: 700,
+              cursor: checkoutBusy ? "wait" : "pointer",
+              opacity: checkoutBusy ? 0.7 : 1,
+            }}
+          >
+            {checkoutBusy ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                {tr("socialPanel.limit.addSlotBusy")}
+              </>
+            ) : (
+              `${tr("socialPanel.limit.addSlot")} · $${EXTRA_ACCOUNT_PRICE_USD.monthly}${tr("socialPanel.limit.perMonth")}`
+            )}
+          </button>
+        )}
         <button
           type="button"
           data-testid="pinterest-limit-dismiss"
@@ -1277,6 +1348,12 @@ export function SocialAccountsPanel() {
    */
   const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(null);
   /**
+   * The user's plan, from the connections response. Drives ONE thing: whether the
+   * limit banner offers to sell an extra account slot. Defaults to "free" so an
+   * older/failed response can only ever under-offer, never over-promise.
+   */
+  const [plan, setPlan] = useState<SocialPlanKey>("free");
+  /**
    * A per-account Remove waiting on the user because that account still has Pins
    * scheduled through it. Holds the account plus the count so the prompt can be
    * specific ("3 Pins"), rather than a vague warning nobody can act on.
@@ -1299,8 +1376,9 @@ export function SocialAccountsPanel() {
   const load = useCallback(async () => {
     setLoadError(false);
     try {
-      const { platforms } = await fetchSocialConnections();
+      const { platforms, plan: resolvedPlan } = await fetchSocialConnections();
       setSummaries(platforms);
+      setPlan(resolvedPlan ?? "free");
     } catch {
       setSummaries(null);
       setLoadError(true);
@@ -1441,7 +1519,8 @@ export function SocialAccountsPanel() {
         if (!result.ok) toast.error(result.message);
         return; // navigates away on success
       }
-      const result = await startSocialConnect(provider);
+      // Pass the reconnect target: a repair must not be refused by the plan gate.
+      const result = await startSocialConnect(provider, undefined, reconnectConnectionId ?? null);
       if (result.status === "oauth_url" && result.url) {
         window.location.assign(result.url);
         return;
@@ -1464,8 +1543,9 @@ export function SocialAccountsPanel() {
    * reconnected (PRD §10). It is remembered in state as well, so the mismatch
    * banner's retry names the same row instead of falling back to accounts[0].
    *
-   * Facebook and Instagram: their connect routes take no reconnect param, so this
-   * starts the ordinary OAuth for that provider. Re-authorizing an account already
+   * Facebook and Instagram: their connect routes accept the reconnect id only to
+   * skip the start-time plan gate (shape-checked, it grants nothing), then run the
+   * ordinary OAuth for that provider. Re-authorizing an account already
    * held is an UPDATE in both stores (they key the row on the provider account id),
    * so it repairs the row and is never refused by the plan limit — but there is also
    * no identity check, so authorizing as a DIFFERENT account adds a new row instead
@@ -1606,7 +1686,7 @@ export function SocialAccountsPanel() {
       </div>
 
       {accountLimitReached && (
-        <AccountLimitNotice onDismiss={() => setAccountLimitReached(false)} />
+        <AccountLimitNotice plan={plan} onDismiss={() => setAccountLimitReached(false)} />
       )}
 
       {pendingRemoval && (

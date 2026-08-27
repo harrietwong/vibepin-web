@@ -176,12 +176,52 @@ async function main() {
       JSON.stringify(["1", "1", "2", "3"]),
       "Accounts per platform (published)",
     );
-    // "Connected platforms" (1/4/4/4) is NOT one of the four canonical allowances
-    // and stays hardcoded — assert it is unchanged so we know we didn't touch it.
-    assertEq(
-      JSON.stringify(byLabel("Connected platforms")?.values),
-      JSON.stringify(["1", "4", "4", "4"]),
-      "Connected platforms (unchanged)",
+    // "Connected platforms" (1/4/4/4) was retired: it was the only hardcoded row,
+    // it counted a platform we do not publish to (TikTok), and it stopped telling
+    // a buyer anything once every paid plan had all of them. Assert it is GONE so
+    // it cannot quietly come back with stale numbers.
+    assertEq(byLabel("Connected platforms"), undefined, "Connected platforms row removed");
+  });
+
+  // ── TikTok is not a platform we publish to ─────────────────────────────────
+  await test("no pricing string mentions TikTok", async () => {
+    const pp = await import("../src/lib/pricingPlans");
+    const visible: string[] = [pp.ACCOUNTS_HELPER_TEXT, pp.EXTRA_ACCOUNT_HELPER_TEXT];
+    for (const t of pp.PRICING_TIERS) {
+      visible.push(t.name, t.description, t.cta, ...t.bullets, ...t.previewBullets);
+    }
+    for (const sec of pp.COMPARISON_SECTIONS) {
+      visible.push(sec.title);
+      for (const r of sec.rows) visible.push(r.label, ...(r.note ? [r.note] : []), ...r.values);
+    }
+    for (const f of pp.PRICING_FAQ) visible.push(f.question, f.answer);
+    const offenders = visible.filter((v) => /tiktok/i.test(v));
+    assertEq(JSON.stringify(offenders), "[]", "TikTok must not appear in any pricing string");
+  });
+
+  // ── The extra-account add-on is quoted from ONE constant ───────────────────
+  await test("the add-on price lives in one exported constant, and every add-on string uses it", async () => {
+    const pp = await import("../src/lib/pricingPlans");
+    const price = pp.EXTRA_ACCOUNT_PRICE_USD;
+    assert(typeof price.monthly === "number" && price.monthly > 0, "monthly price set");
+    assert(
+      typeof price.yearlyPerMonth === "number" && price.yearlyPerMonth > 0,
+      "yearly per-month price set",
+    );
+    const faq = pp.PRICING_FAQ.find((f) => /extra account slots/i.test(f.answer));
+    assert(!!faq, "an FAQ entry must explain the add-on");
+    for (const text of [pp.EXTRA_ACCOUNT_HELPER_TEXT, faq!.answer]) {
+      assert(text.includes(`$${price.monthly}`), `add-on copy must quote $${price.monthly}`);
+      assert(
+        text.includes(`$${price.yearlyPerMonth}`),
+        `add-on copy must quote the yearly price $${price.yearlyPerMonth}`,
+      );
+      assert(/any platform/i.test(text), "a slot works on any platform — say so");
+    }
+    // Free is not in the add-on's audience: the copy names the paid plans.
+    assert(
+      /Starter, Pro,? and Business/.test(faq!.answer),
+      "the FAQ must say which plans can buy it",
     );
   });
 
@@ -257,13 +297,11 @@ async function main() {
   const allRows = COMPARISON_SECTIONS.flatMap((s) => s.rows);
   const imageRow = allRows.find((r) => r.label === "AI image credits");
   const scheduledRow = allRows.find((r) => r.label === "Scheduled posts");
-  const platformsRow = allRows.find((r) => r.label === "Connected platforms");
   const accountsRow = allRows.find((r) => r.label === "Accounts per platform");
 
   await test("pricingPlans still exposes the rows this test depends on", () => {
     if (!imageRow) throw new Error("AI image credits row missing");
     if (!scheduledRow) throw new Error("Scheduled posts row missing");
-    if (!platformsRow) throw new Error("Connected platforms row missing");
     if (!accountsRow) throw new Error("Accounts per platform row missing");
   });
 
@@ -290,24 +328,21 @@ async function main() {
     assertEq(PLAN_ENTITLEMENTS.business.monthlyScheduledPosts, null, "business scheduled = unlimited");
   });
 
-  await test("connectedPlatforms matches the Connected platforms display cells (1/4/4/4)", () => {
+  await test("connectedAccountsPerPlatform matches the Accounts per platform display cells (1/1/2/3)", () => {
+    // ONE key for this number now. lib/planEntitlements.ts used to carry a second
+    // copy under the name `accountsPerPlatform`; it is gone, and the enforcement
+    // path (server/social/accountAllowance.ts) reads the server module below.
     planOrder.forEach((plan, i) => {
       assertEq(
-        PLAN_ENTITLEMENTS[plan].connectedPlatforms,
-        parseDisplayLimit(platformsRow!.values[i]),
-        `${plan} connected platforms`,
-      );
-    });
-  });
-
-  await test("accountsPerPlatform matches the Accounts per platform display cells (1/1/2/3)", () => {
-    planOrder.forEach((plan, i) => {
-      assertEq(
-        PLAN_ENTITLEMENTS[plan].accountsPerPlatform,
+        pe.getPlanEntitlements(plan).connectedAccountsPerPlatform,
         parseDisplayLimit(accountsRow!.values[i]),
         `${plan} accounts per platform`,
       );
     });
+    assert(
+      !("accountsPerPlatform" in (PLAN_ENTITLEMENTS.free as Record<string, unknown>)),
+      "the duplicate accountsPerPlatform key must stay deleted",
+    );
   });
 
   await test("monthlyAiTextGenerations is null for every plan (metered, never limited)", () => {

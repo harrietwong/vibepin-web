@@ -5,7 +5,8 @@
  * active provider abstraction (mock by default) except for Pinterest, which has
  * a dedicated, already-live OAuth flow that must not be disturbed.
  *
- * Body: { provider: "pinterest" | "instagram" | "facebook" | "tiktok", next?: string }
+ * Body: { provider: "pinterest" | "instagram" | "facebook" | "tiktok", next?: string,
+ *         reconnect?: string }  // reconnect = repair this connection, not add one
  *
  * Response:
  *   {
@@ -46,13 +47,21 @@ export async function POST(req: Request) {
 
   const next = typeof body.next === "string" && body.next ? body.next : "/app/settings/social";
 
+  // A reconnect targets an existing connection: the provider start routes let it
+  // past their plan gate (re-auth never adds a row). Shape-checked only — it grants
+  // nothing on its own, since the store still decides insert-vs-update from the
+  // account that actually authorizes and re-checks the limit before any insert.
+  const rawReconnect = typeof body.reconnect === "string" ? body.reconnect.trim() : "";
+  const reconnect = /^[0-9a-fA-F-]{16,64}$/.test(rawReconnect) ? rawReconnect : null;
+  const reconnectParam = reconnect ? `&reconnect=${encodeURIComponent(reconnect)}` : "";
+
   // Pinterest keeps its dedicated, tested OAuth route. Point the client at it
   // rather than routing Pinterest through the generic provider abstraction.
   if (provider === "pinterest") {
     return Response.json({
       provider,
       status: "oauth_url",
-      url: `/api/auth/pinterest/connect?next=${encodeURIComponent(next)}`,
+      url: `/api/auth/pinterest/connect?next=${encodeURIComponent(next)}${reconnectParam}`,
       message: null,
     });
   }
@@ -63,7 +72,7 @@ export async function POST(req: Request) {
     return Response.json({
       provider,
       status: "oauth_url",
-      url: `/api/auth/facebook/connect?next=${encodeURIComponent(next)}`,
+      url: `/api/auth/facebook/connect?next=${encodeURIComponent(next)}${reconnectParam}`,
       message: null,
     });
   }
@@ -75,7 +84,7 @@ export async function POST(req: Request) {
     return Response.json({
       provider,
       status: "oauth_url",
-      url: `/api/auth/instagram/connect?next=${encodeURIComponent(next)}`,
+      url: `/api/auth/instagram/connect?next=${encodeURIComponent(next)}${reconnectParam}`,
       message: null,
     });
   }

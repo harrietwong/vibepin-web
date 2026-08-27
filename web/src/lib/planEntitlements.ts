@@ -1,6 +1,6 @@
 /**
  * planEntitlements — the SINGLE source of truth for the three metered monthly
- * quotas and the (data-only) account limits per plan.
+ * quotas per plan.
  *
  * Pure data, no secrets, no imports beyond the PlanKey type — safe to import from
  * anywhere (server metering + tests). This is the ONLY place the quota numbers
@@ -15,13 +15,19 @@
  *   - monthlyScheduledPosts:  Scheduled posts  — Free 5, Starter 150, Pro 300, Business Unlimited (null)
  *   - monthlyAiTextGenerations: NO plan ever defined a number → null everywhere
  *                              (metered for analytics, never enforced this round).
- *   - connectedPlatforms:     Connected platforms — 1 / 4 / 4 / 4
- *   - accountsPerPlatform:    Accounts per platform — 1 / 1 / 2 / 3
+ *   - connectedPlatforms:     how many platforms exist to connect (data only).
+ *                              It mirrored a "Connected platforms" comparison row
+ *                              that has since been removed from the pricing page,
+ *                              so nothing renders it any more.
  *
  * A `null` limit means "no cap / undefined" — checkAllowance treats it as always
- * allowed. `accountsPerPlatform` IS enforced (Phase D): the Pinterest connect start
- * and OAuth callback both refuse to add an account past it — see
- * lib/server/pinterest/accountQuota.ts. `connectedPlatforms` remains data only.
+ * allowed. `connectedPlatforms` is data only, never enforced.
+ *
+ * ACCOUNTS PER PLATFORM DOES NOT LIVE HERE. It used to, as `accountsPerPlatform`,
+ * which meant one number had two names in two files. The single key is now
+ * `connectedAccountsPerPlatform` in `lib/server/planEntitlements.ts`, read by
+ * `lib/server/social/accountAllowance.ts` — the one place the connect gate is
+ * decided for every platform.
  */
 
 import type { PlanKey } from "./pricingPlans";
@@ -35,11 +41,6 @@ export type PlanEntitlements = {
   monthlyAiTextGenerations: number | null;
   /** How many platforms may be connected (data only — not enforced this round). */
   connectedPlatforms: number | null;
-  /**
-   * Accounts/Pages per platform. ENFORCED for Pinterest (Phase D) via
-   * lib/server/pinterest/accountQuota.ts; null = uncapped.
-   */
-  accountsPerPlatform: number | null;
 };
 
 export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
@@ -48,28 +49,24 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     monthlyScheduledPosts: 5,
     monthlyAiTextGenerations: null,
     connectedPlatforms: 1,
-    accountsPerPlatform: 1,
   },
   starter: {
     monthlyAiImages: 150,
     monthlyScheduledPosts: 150,
     monthlyAiTextGenerations: null,
     connectedPlatforms: 4,
-    accountsPerPlatform: 1,
   },
   pro: {
     monthlyAiImages: 800,
     monthlyScheduledPosts: 300,
     monthlyAiTextGenerations: null,
     connectedPlatforms: 4,
-    accountsPerPlatform: 2,
   },
   business: {
     monthlyAiImages: 3000,
     monthlyScheduledPosts: null, // Unlimited on the pricing page
     monthlyAiTextGenerations: null,
     connectedPlatforms: 4,
-    accountsPerPlatform: 3,
   },
 };
 

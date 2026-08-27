@@ -1782,6 +1782,13 @@ const zhCN: Partial<Record<MessageKey, string>> = {
     "当前套餐不包含再连接一个 Pinterest 账号。可以升级套餐，或移除一个不再发布的账号。本次没有做任何改动——你已连接的账号不受影响。",
   "socialPanel.limit.upgrade": "升级套餐",
   "socialPanel.limit.dismiss": "暂不",
+  "socialPanel.limit.bodyPaid":
+    "套餐自带的账号名额已全部用完。可以加购一个账号名额(任意平台通用),或移除一个不再发布的账号。本次没有改动任何已连接的账号。",
+  "socialPanel.limit.addSlot": "加购一个账号",
+  "socialPanel.limit.perMonth": "/月",
+  "socialPanel.limit.addSlotBusy": "正在打开结账页…",
+  "socialPanel.limit.addSlotFailed": "无法打开结账页,请重试。",
+  "socialPanel.limit.addSlotUnavailable": "加购账号暂未开放购买。",
   // ── studio ──
   "studio.header.title": "创建 Pin",
   "studio.header.saveDraft": "保存草稿",

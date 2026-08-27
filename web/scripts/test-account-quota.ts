@@ -1,12 +1,16 @@
 /**
- * test-account-quota.ts — Phase D ①:accountsPerPlatform 额度真正执行的规则面。
+ * test-account-quota.ts — Phase D ①:Pinterest 侧账号额度真正执行的规则面。
  *
  * 覆盖:
  *  1. 计数规则:已断开的行不计数(否则额度变单向棘轮);
  *  2. null = 不限;
- *  3. 每档数字来自 planEntitlements.ts,不复制第二份;
+ *  3. 每档数字来自 server/planEntitlements.ts 的 connectedAccountsPerPlatform,
+ *     不复制第二份(旧的 lib/planEntitlements.ts accountsPerPlatform 已删除);
  *  4. 路由契约:GET/POST 都有 gate、reconnect 一律放行、
  *     callback 里 create 与 revived 拦截 / 非 revived 放行、拒绝时不写行。
+ *
+ * 共享池(加购 slot)规则本身在 test-account-allowance.ts;这里只固定
+ * accountQuota 这层适配器的形状与委托关系。
  * Run: npx tsx scripts/test-account-quota.ts
  */
 
@@ -25,13 +29,21 @@ import { join } from "node:path";
 
 let passed = 0;
 function test(name: string, fn: () => void) { fn(); passed++; console.log(`  OK  ${name}`); }
+async function testAsync(name: string, fn: () => Promise<void>) {
+  await fn(); passed++; console.log(`  OK  ${name}`);
+}
 
 const root = join(process.cwd());
 const read = (p: string) => readFileSync(join(root, p), "utf8");
 
 async function main() {
 const { canAddAccount, evaluateAccountQuota } = await import("../src/lib/server/pinterest/accountQuota");
-const { PLAN_ENTITLEMENTS } = await import("../src/lib/planEntitlements");
+const { PLAN_ENTITLEMENTS } = await import("../src/lib/server/planEntitlements");
+
+// evaluateAccountQuota now consults the shared allowance module, which reads the
+// OTHER platforms' counts and the purchased-slot total. Inject both so these
+// assertions stay pure: no DB, no network, no add-on products configured.
+const offline = { countActive: async () => ({}), purchasedSlots: async () => 0 };
 
 console.log("\n=== 计数规则 ===");
 test("未达上限 → 允许;正好达上限 → 拒绝;超出(历史脏数据)→ 拒绝", () => {
@@ -49,33 +61,46 @@ test("上限 0 时任何新增都拒绝", () => {
 });
 
 console.log("\n=== 每档数字取自 planEntitlements(不复制第二份)===");
-test("free=1 / starter=1 / pro=2 / business=3,且 evaluateAccountQuota 直接引用它", () => {
+await testAsync("free=1 / starter=1 / pro=2 / business=3,且 evaluateAccountQuota 直接引用它", async () => {
   for (const plan of ["free", "starter", "pro", "business"] as const) {
-    const limit = PLAN_ENTITLEMENTS[plan].accountsPerPlatform;
-    const q = evaluateAccountQuota(plan, 0);
+    const limit = PLAN_ENTITLEMENTS[plan].connectedAccountsPerPlatform;
+    const q = await evaluateAccountQuota("u", plan, 0, offline);
     assert.equal(q.limit, limit, `${plan} 上限必须等于 PLAN_ENTITLEMENTS`);
     assert.equal(q.plan, plan);
   }
-  assert.equal(PLAN_ENTITLEMENTS.free.accountsPerPlatform, 1);
-  assert.equal(PLAN_ENTITLEMENTS.starter.accountsPerPlatform, 1);
-  assert.equal(PLAN_ENTITLEMENTS.pro.accountsPerPlatform, 2);
-  assert.equal(PLAN_ENTITLEMENTS.business.accountsPerPlatform, 3);
+  assert.equal(PLAN_ENTITLEMENTS.free.connectedAccountsPerPlatform, 1);
+  assert.equal(PLAN_ENTITLEMENTS.starter.connectedAccountsPerPlatform, 1);
+  assert.equal(PLAN_ENTITLEMENTS.pro.connectedAccountsPerPlatform, 2);
+  assert.equal(PLAN_ENTITLEMENTS.business.connectedAccountsPerPlatform, 3);
 });
-test("free 已有 1 个活跃 → 拒绝;pro 已有 1 个 → 允许,2 个 → 拒绝", () => {
-  assert.equal(evaluateAccountQuota("free", 1).canAddAccount, false);
-  assert.equal(evaluateAccountQuota("pro", 1).canAddAccount, true);
-  assert.equal(evaluateAccountQuota("pro", 2).canAddAccount, false);
+await testAsync("free 已有 1 个活跃 → 拒绝;pro 已有 1 个 → 允许,2 个 → 拒绝", async () => {
+  assert.equal((await evaluateAccountQuota("u", "free", 1, offline)).canAddAccount, false);
+  assert.equal((await evaluateAccountQuota("u", "pro", 1, offline)).canAddAccount, true);
+  assert.equal((await evaluateAccountQuota("u", "pro", 2, offline)).canAddAccount, false);
 });
-test("used 如实回传,供横幅/日志使用", () => {
-  assert.deepEqual(evaluateAccountQuota("pro", 2), {
+await testAsync("used 如实回传,供横幅/日志使用", async () => {
+  assert.deepEqual(await evaluateAccountQuota("u", "pro", 2, offline), {
     used: 2, limit: 2, plan: "pro", canAddAccount: false,
   });
 });
+await testAsync("买了 1 个加购 slot 后,超出套餐的第 N+1 个账号被放行", async () => {
+  const withSlot = { countActive: async () => ({ pinterest: 1 }), purchasedSlots: async () => 1 };
+  assert.equal((await evaluateAccountQuota("u", "starter", 1, withSlot)).canAddAccount, true);
+  // 名额与 slot 都用完 → 仍然拒绝(池是共享的,不是无限的)
+  const spent = { countActive: async () => ({ pinterest: 2 }), purchasedSlots: async () => 1 };
+  assert.equal((await evaluateAccountQuota("u", "starter", 2, spent)).canAddAccount, false);
+});
 
 console.log("\n=== 计数口径:断开的行不占额度 ===");
-test("accountQuota 用 listActiveConnections(非 listConnections)", () => {
+test("计数口径由 accountAllowance 独占:未断开 且 有 token", () => {
+  const allowance = read("src/lib/server/social/accountAllowance.ts");
+  assert.ok(
+    allowance.includes('.is("disconnected_at", null)') &&
+      allowance.includes('.not("access_token_encrypted", "is", null)'),
+    "活跃计数必须是 未断开 且 有 token(与 listActiveConnections 同一判定)",
+  );
   const src = read("src/lib/server/pinterest/accountQuota.ts");
-  assert.ok(src.includes("listActiveConnections"), "必须按活跃连接计数");
+  assert.ok(src.includes("evaluateAccountAllowance"), "必须委托给唯一实现,不得自己再数一遍");
   assert.ok(!/\blistConnections\b/.test(src), "不得按全部连接计数,否则断开后无法重连");
 });
 test("listActiveConnections 的定义仍是 未断开 且 有 token", () => {
@@ -137,18 +162,28 @@ test("零迁移:额度不落 DB 约束(config 才是上限的家)", () => {
 });
 
 console.log("\n=== 两套 entitlements 单向 import ===");
-test("accountQuota 从 planEntitlements 取数字、从 server/entitlements 取 plan 解析", () => {
-  const src = read("src/lib/server/pinterest/accountQuota.ts");
-  assert.ok(src.includes('from "@/lib/planEntitlements"'));
-  assert.ok(src.includes('resolvePlan'));
-  assert.ok(!/accountsPerPlatform:\s*\d/.test(src), "数字不得在此复制第二份");
-});
-test("planEntitlements 不再自称 accountsPerPlatform 未执行", () => {
-  const src = read("src/lib/planEntitlements.ts");
+test("accountAllowance 从 server/planEntitlements 取数字、从 server/entitlements 取 plan 解析", () => {
+  const src = read("src/lib/server/social/accountAllowance.ts");
+  assert.ok(src.includes('from "@/lib/server/planEntitlements"'));
+  assert.ok(src.includes("resolvePlan"));
   assert.ok(
-    !src.includes("Accounts/Pages per platform (data only — not enforced this round)"),
-    "accountsPerPlatform 已被 accountQuota 执行,注释必须同步更新",
+    !/connectedAccountsPerPlatform:\s*\d/.test(src),
+    "数字不得在此复制第二份",
   );
+  const quota = read("src/lib/server/pinterest/accountQuota.ts");
+  assert.ok(
+    !/connectedAccountsPerPlatform:\s*\d/.test(quota),
+    "数字不得在此复制第二份",
+  );
+});
+test("两个 entitlement 键名已收敛为一个", () => {
+  const client = read("src/lib/planEntitlements.ts");
+  assert.ok(
+    !/^\s*accountsPerPlatform:/m.test(client),
+    "accountsPerPlatform 已删除,唯一键名是 server/planEntitlements 的 connectedAccountsPerPlatform",
+  );
+  const server = read("src/lib/server/planEntitlements.ts");
+  assert.ok(server.includes("connectedAccountsPerPlatform"), "唯一键名必须还在");
 });
 
 console.log("\n=== i18n:limit 横幅文案 18 语言齐全 ===");

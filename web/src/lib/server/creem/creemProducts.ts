@@ -81,3 +81,38 @@ export function creemProductIdFor(
   const productId = (process.env[envVar] ?? "").trim();
   return productId || null;
 }
+
+// ── Extra account slots add-on ────────────────────────────────────────────────
+//
+// A separate product, NOT a plan. It is deliberately kept OUT of PRODUCT_MAP so
+// `resolveCreemProduct` still returns null for it: an add-on subscription must
+// mirror with plan=null and therefore never influence plan resolution (a user who
+// buys slots does not thereby "have" a plan, and their real plan is unaffected).
+// What it does carry is `units` — the number of extra connectable accounts.
+//
+// Read at CALL time, not module load, so a deployment that sets the env var later
+// (and any test that sets it before invoking) sees it without a restart.
+
+const EXTRA_ACCOUNT_ENV: Record<"month" | "year", string> = {
+  month: "CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY",
+  year: "CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY",
+};
+
+/** The add-on product id for a billing interval, or null when its env var is unset. */
+export function extraAccountProductIdFor(interval: "month" | "year"): string | null {
+  const productId = (process.env[EXTRA_ACCOUNT_ENV[interval]] ?? "").trim();
+  return productId || null;
+}
+
+/** True when at least one add-on product id is configured — i.e. slots are buyable. */
+export function isExtraAccountConfigured(): boolean {
+  return extraAccountProductIdFor("month") !== null || extraAccountProductIdFor("year") !== null;
+}
+
+/** True when `productId` is one of the configured extra-account-slot products. */
+export function isExtraAccountProduct(productId: string | null | undefined): boolean {
+  if (!productId) return false;
+  const id = productId.trim();
+  if (!id) return false;
+  return id === extraAccountProductIdFor("month") || id === extraAccountProductIdFor("year");
+}

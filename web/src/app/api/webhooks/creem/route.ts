@@ -28,7 +28,7 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServerClient } from "@/lib/supabase";
-import { resolveCreemProduct } from "@/lib/server/creem/creemProducts";
+import { resolveCreemProduct, isExtraAccountProduct } from "@/lib/server/creem/creemProducts";
 import {
   getCreemSubscriptionsForCustomer,
   linkCustomerToUser,
@@ -36,6 +36,7 @@ import {
   unmarkWebhookEvent,
   upsertCreemCustomer,
   upsertCreemSubscription,
+  normalizeUnits,
 } from "@/lib/server/creem/creemStore";
 import {
   defaultGetActiveSubscriptions,
@@ -67,7 +68,7 @@ interface CreemSubscriptionObject {
   status?: unknown;
   customer?: IdOrObject;
   product?: IdOrObject;
-  items?: Array<{ product_id?: unknown; price_id?: unknown }> | undefined;
+  items?: Array<{ product_id?: unknown; price_id?: unknown; units?: unknown }> | undefined;
   current_period_end_date?: unknown;
   current_period_start_date?: unknown;
   metadata?: CreemMetadata;
@@ -439,6 +440,13 @@ async function handleSubscriptionActive(
   const productId =
     idOf(o.product) ?? asString(o.items?.[0]?.product_id) ?? null;
   const mapping = productId ? resolveCreemProduct(productId) : null;
+  // Quantity on the subscription. 1 for a plan; for the extra-account-slots add-on
+  // it is how many extra accounts the user bought, and it is the whole point of
+  // mirroring the row (accountAllowance sums it).
+  const units = normalizeUnits(o.items?.[0]?.units);
+  // The add-on is NOT a plan: resolveCreemProduct returns null for it on purpose,
+  // so it mirrors with plan=null and never influences plan resolution.
+  const isAddOn = isExtraAccountProduct(productId);
   if (productId && !mapping) {
     console.warn(
       `[creem/webhook] subscription ${subId}: product ${productId} not in CREEM_PRODUCT_* map — mirroring with null plan.`,
@@ -460,6 +468,7 @@ async function handleSubscriptionActive(
     billingInterval: interval,
     currentPeriodEnd,
     scheduledCancel: false,
+    units,
     occurredAt,
   });
 
@@ -497,7 +506,8 @@ async function handleSubscriptionActive(
   await refreshUserPlanCache(userId);
 
   // Establish / roll the usage ledger for this cycle (idempotent; see helper).
-  await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
+  // Skipped for the add-on: it carries no plan, so there is no cycle to allocate.
+  if (!isAddOn) await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
 }
 
 /**
@@ -520,6 +530,13 @@ async function handleScheduledCancel(
   const productId =
     idOf(o.product) ?? asString(o.items?.[0]?.product_id) ?? null;
   const mapping = productId ? resolveCreemProduct(productId) : null;
+  // Quantity on the subscription. 1 for a plan; for the extra-account-slots add-on
+  // it is how many extra accounts the user bought, and it is the whole point of
+  // mirroring the row (accountAllowance sums it).
+  const units = normalizeUnits(o.items?.[0]?.units);
+  // The add-on is NOT a plan: resolveCreemProduct returns null for it on purpose,
+  // so it mirrors with plan=null and never influences plan resolution.
+  const isAddOn = isExtraAccountProduct(productId);
   const plan: PlanKey | null = mapping?.plan ?? null;
   const interval = mapping?.interval ?? null;
   // Contract: the mirrored status REFLECTS the scheduled cancel — we always store
@@ -543,6 +560,7 @@ async function handleScheduledCancel(
     billingInterval: interval,
     currentPeriodEnd,
     scheduledCancel: true, // still entitled until period end
+    units,
     occurredAt,
   });
 
@@ -570,7 +588,9 @@ async function handleScheduledCancel(
   if (userId) {
     await refreshUserPlanCache(userId);
     // Still entitled until period end — keep/roll the ledger for the current cycle.
-    await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
+    // Skipped for the add-on: it carries no plan, so there is no cycle to allocate
+    // and ensureUsageAccount would roll the ledger on an event that changed no plan.
+    if (!isAddOn) await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
   }
 }
 
@@ -595,6 +615,10 @@ async function handleRevoke(
   const productId =
     idOf(o.product) ?? asString(o.items?.[0]?.product_id) ?? null;
   const mapping = productId ? resolveCreemProduct(productId) : null;
+  // Quantity on the subscription. 1 for a plan; for the extra-account-slots add-on
+  // it is how many extra accounts the user bought, and it is the whole point of
+  // mirroring the row (accountAllowance sums it).
+  const units = normalizeUnits(o.items?.[0]?.units);
   const status = asString(o.status) ?? "canceled";
   const currentPeriodEnd = asString(o.current_period_end_date);
   const metaUserId = userIdFromMetadata(o.metadata);
@@ -609,6 +633,7 @@ async function handleRevoke(
     billingInterval: mapping?.interval ?? null,
     currentPeriodEnd,
     scheduledCancel: false,
+    units,
     occurredAt,
   });
 
@@ -652,6 +677,13 @@ async function handleSubscriptionUpdate(
   const productId =
     idOf(o.product) ?? asString(o.items?.[0]?.product_id) ?? null;
   const mapping = productId ? resolveCreemProduct(productId) : null;
+  // Quantity on the subscription. 1 for a plan; for the extra-account-slots add-on
+  // it is how many extra accounts the user bought, and it is the whole point of
+  // mirroring the row (accountAllowance sums it).
+  const units = normalizeUnits(o.items?.[0]?.units);
+  // The add-on is NOT a plan: resolveCreemProduct returns null for it on purpose,
+  // so it mirrors with plan=null and never influences plan resolution.
+  const isAddOn = isExtraAccountProduct(productId);
   if (productId && !mapping) {
     console.warn(
       `[creem/webhook] subscription ${subId}: product ${productId} not in CREEM_PRODUCT_* map — mirroring with null plan.`,
@@ -673,6 +705,7 @@ async function handleSubscriptionUpdate(
     billingInterval: mapping?.interval ?? null,
     currentPeriodEnd,
     scheduledCancel: false,
+    units,
     occurredAt,
   });
 
@@ -701,6 +734,8 @@ async function handleSubscriptionUpdate(
     await refreshUserPlanCache(userId);
     // An update may be an UPGRADE (raise limits, preserve used) or a downgrade;
     // ensureUsageAccount resolves the true current plan and lands it idempotently.
-    await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
+    // Skipped for the add-on: it carries no plan, so there is no cycle to allocate
+    // and ensureUsageAccount would roll the ledger on an event that changed no plan.
+    if (!isAddOn) await allocateUsageForCycle(userId, currentPeriodStart, currentPeriodEnd);
   }
 }

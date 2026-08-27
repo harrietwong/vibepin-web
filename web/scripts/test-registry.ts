@@ -52,6 +52,7 @@ export const CORE: string[] = [
   "test-ai-adoption",
   "test-admin-today-i18n",
   "test-account-quota",
+  "test-account-allowance",
   "test-account-identity",
   "test-publish-capability",
   "test-publish-social-account-guard",

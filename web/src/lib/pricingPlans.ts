@@ -48,13 +48,13 @@ export const PRICING_TIERS: PricingTier[] = [
     bullets: [
       "Limited high-save products, trending Pins, and keyword ideas",
       "Limited AI Pin generation",
-      "1 account on 1 platform",
+      "1 account per platform",
       "5 scheduled posts / month",
       "10 AI image credits / month",
     ],
     previewBullets: [
       "Limited high-save products, trending Pins, and keyword ideas",
-      "1 account on 1 platform",
+      "1 account per platform",
       "5 scheduled posts / month",
       "10 AI image credits / month",
     ],
@@ -74,14 +74,14 @@ export const PRICING_TIERS: PricingTier[] = [
       "High-save products, trending Pins, and keyword ideas",
       "AI Pin generation",
       "AI titles, descriptions, and hashtags",
-      "Publish to Pinterest, Instagram, TikTok, and Facebook",
+      "Publish to Pinterest, Instagram, and Facebook",
     ],
     previewBullets: [
       "1 account per platform",
       "150 scheduled posts / month",
       "150 AI image credits / month",
       "High-save products, trending Pins, and keyword ideas",
-      "Publish to Pinterest, Instagram, TikTok, and Facebook",
+      "Publish to Pinterest, Instagram, and Facebook",
     ],
     cta: "Start Starter",
     ctaHref: "/signup?plan=starter",
@@ -191,11 +191,6 @@ export const COMPARISON_SECTIONS: ComparisonSection[] = [
     title: "Basics",
     rows: [
       {
-        label: "Connected platforms",
-        note: "Pinterest, Instagram, TikTok, and Facebook.",
-        values: ["1", "4", "4", "4"],
-      },
-      {
         label: "Accounts per platform",
         note: "How many accounts or Pages you can connect on each platform.",
         // Derived from PLAN_ENTITLEMENTS.connectedAccountsPerPlatform → "1"/"1"/"2"/"3".
@@ -236,7 +231,6 @@ export const COMPARISON_SECTIONS: ComparisonSection[] = [
     rows: [
       { label: "Pinterest publishing", values: ["Limited", "✓", "✓", "✓"] },
       { label: "Instagram publishing", values: ["Limited", "✓", "✓", "✓"] },
-      { label: "TikTok publishing", values: ["Limited", "✓", "✓", "✓"] },
       { label: "Facebook publishing", values: ["Limited", "✓", "✓", "✓"] },
       { label: "Calendar planning", values: ["Basic", "✓", "✓", "✓"] },
       { label: "Auto-publishing", values: ["—", "✓", "✓", "✓"] },
@@ -262,9 +256,30 @@ export const COMPARISON_SECTIONS: ComparisonSection[] = [
   },
 ];
 
+/**
+ * Price of the extra-account-slots add-on, in USD. ONE place, because it appears
+ * on the pricing page, in the FAQ, and on the Settings limit banner — three
+ * surfaces that must never quote different numbers. Changing the price is editing
+ * this object (and the Creem product itself).
+ *
+ * `yearlyPerMonth` is the per-month figure when billed yearly, matching how the
+ * plan prices are presented.
+ */
+export const EXTRA_ACCOUNT_PRICE_USD = { monthly: 7, yearlyPerMonth: 5 } as const;
+
 /** Caption rendered under the comparison table to explain the account model. */
 export const ACCOUNTS_HELPER_TEXT =
-  "An account means one connected Pinterest, Instagram, TikTok, or Facebook account/page. Starter includes 1 account per platform, Pro includes 2 accounts per platform, and Business includes 3 accounts per platform.";
+  "An account means one connected Pinterest, Instagram, or Facebook account/page. Starter includes 1 account per platform, Pro includes 2 accounts per platform, and Business includes 3 accounts per platform.";
+
+/**
+ * Second caption: the add-on. Kept separate from ACCOUNTS_HELPER_TEXT so the
+ * "what a plan includes" sentence and the "how to get more" sentence can be placed
+ * (and translated) independently.
+ */
+export const EXTRA_ACCOUNT_HELPER_TEXT =
+  `Need more? Add extra account slots for $${EXTRA_ACCOUNT_PRICE_USD.monthly} per account / month ` +
+  `($${EXTRA_ACCOUNT_PRICE_USD.yearlyPerMonth} billed yearly). A slot can be used on any platform, ` +
+  "and you can add as many as you need. Available on Starter, Pro, and Business.";
 
 export type PricingFaqItem = {
   question: string;
@@ -273,9 +288,9 @@ export type PricingFaqItem = {
 
 export const PRICING_FAQ: PricingFaqItem[] = [
   {
-    question: "Can I publish to Pinterest, Instagram, TikTok, and Facebook?",
+    question: "Can I publish to Pinterest, Instagram, and Facebook?",
     answer:
-      "Yes. Paid plans support publishing to Pinterest, Instagram, TikTok, and Facebook. Free users have limited publishing access.",
+      "Yes. Paid plans support publishing to Pinterest, Instagram, and Facebook. Free users have limited publishing access.",
   },
   {
     question: "What are AI image credits?",
@@ -300,7 +315,15 @@ export const PRICING_FAQ: PricingFaqItem[] = [
   {
     question: "How many accounts can I connect?",
     answer:
-      "Starter includes 1 account per platform (Pinterest, Instagram, TikTok, and Facebook). Pro includes 2 accounts per platform. Business includes 3 accounts per platform. Free is limited to 1 account on 1 platform.",
+      "Starter includes 1 account per platform (Pinterest, Instagram, and Facebook). Pro includes 2 accounts per platform. Business includes 3 accounts per platform. Free includes 1 account per platform.",
+  },
+  {
+    question: "Need more accounts on a plan?",
+    answer:
+      `Add extra account slots for $${EXTRA_ACCOUNT_PRICE_USD.monthly} per account / month ` +
+      `($${EXTRA_ACCOUNT_PRICE_USD.yearlyPerMonth} per account / month billed yearly). ` +
+      "A slot can be used on any platform — Pinterest, Instagram, or Facebook — and there is no limit " +
+      "on how many you can add. Extra account slots are available on Starter, Pro, and Business.",
   },
   {
     question: "Which plan should I choose?",

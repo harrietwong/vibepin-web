@@ -146,6 +146,34 @@ function deps(plan: string, count: number | null) {
     }
   });
 
+  await test("disconnected rows do NOT count — swapping accounts at the limit works", async () => {
+    // The bug this replaced: countConnections counted EVERY row for the provider,
+    // including the token-less connection_status='not_connected' rows a disconnect
+    // leaves behind. A user at their limit who disconnected A and tried to connect
+    // B was refused forever, because the dead row still held the seat.
+    //
+    // Counting now lives in accountAllowance.ts and is active-only. The exclusion
+    // is a PostgREST filter, so it is asserted at the source — no pure function can
+    // prove a query predicate.
+    const allowance = readFileSync("src/lib/server/social/accountAllowance.ts", "utf8");
+    assert.ok(
+      allowance.includes('.is("disconnected_at", null)'),
+      "a disconnected row must be excluded (Pinterest writes disconnected_at)",
+    );
+    assert.ok(
+      allowance.includes('.not("access_token_encrypted", "is", null)'),
+      "a token-less row must be excluded (Facebook/Instagram disconnect nulls the token)",
+    );
+    const limitSrc = readFileSync("src/lib/server/social/connectionLimit.ts", "utf8");
+    assert.ok(
+      !limitSrc.includes('{ count: "exact", head: true }'),
+      "the old count-every-row query must stay deleted",
+    );
+    // And the consequence: once the dead row is out of the count, the seat is free.
+    assert.equal((await check("u", "facebook", deps("free", 0))).allowed, true);
+  });
+
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 })();

@@ -80,6 +80,16 @@ export const socialPanelMessages = {
     "Your current plan doesn't include another connected Pinterest account. Upgrade for more, or remove an account you no longer publish to. Nothing was changed — your existing accounts are untouched.",
   "socialPanel.limit.upgrade": "Upgrade",
   "socialPanel.limit.dismiss": "Not now",
+  //    Paid plans get a second, cheaper option than upgrading: buy one extra
+  //    account slot, usable on any platform. Composed as
+  //    "<addSlot> · $<price><perMonth>" so the number stays in pricingPlans.ts.
+  "socialPanel.limit.bodyPaid":
+    "Every account your plan includes is already connected. Add an extra account slot to connect one more on any platform, or remove an account you no longer publish to. Nothing was changed — your existing accounts are untouched.",
+  "socialPanel.limit.addSlot": "Add another account",
+  "socialPanel.limit.perMonth": "/month",
+  "socialPanel.limit.addSlotBusy": "Opening checkout…",
+  "socialPanel.limit.addSlotFailed": "Could not open checkout. Please try again.",
+  "socialPanel.limit.addSlotUnavailable": "Extra accounts are not available for purchase yet.",
 
   // ── Per-account rows + their actions (PRD 0809 §II / PRD 0805 §4-§11) ──
   //    Derived from lib/social/accountActions.ts, one action set per row state.

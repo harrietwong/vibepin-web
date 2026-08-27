@@ -46,6 +46,13 @@ async function fetchSocialApi(input: RequestInfo | URL, init?: RequestInit): Pro
 export type ConnectionsResponse = {
   platforms: PlatformConnectionSummary[];
   connections: SocialConnection[];
+  /**
+   * The user's resolved plan, so the UI can offer the action that actually exists
+   * (a paid user can buy an extra account slot; a Free user can only upgrade).
+   * Optional on the type because an older cached response may not carry it —
+   * callers must treat "missing" as "free".
+   */
+  plan?: "free" | "starter" | "pro" | "business";
 };
 
 export async function fetchSocialConnections(signal?: AbortSignal): Promise<ConnectionsResponse> {
@@ -68,11 +75,17 @@ export type SocialConnectResult = {
 export async function startSocialConnect(
   provider: SocialProvider,
   next?: string,
+  /**
+   * Repairing THIS connection rather than adding one. Carried through to the
+   * provider's OAuth start so an at-limit user can still fix a broken connection
+   * (the plan gate refuses new accounts, never re-auth of an existing one).
+   */
+  reconnectConnectionId?: string | null,
 ): Promise<SocialConnectResult> {
   const res = await fetch("/api/social/connect", {
     method: "POST",
     headers: await authHeaders(),
-    body: JSON.stringify({ provider, next }),
+    body: JSON.stringify({ provider, next, reconnect: reconnectConnectionId ?? undefined }),
   });
   if (!res.ok) throw new Error(await readError(res, "Could not start connection"));
   return res.json();
