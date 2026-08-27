@@ -1188,6 +1188,21 @@ export function StudioBoard() {
       <input ref={fileRef} type="file" accept={ACCEPT} multiple data-testid="board-upload-input" style={{ display: "none" }}
         onChange={e => { if (e.target.files?.length) void handleFiles(e.target.files); e.target.value = ""; }} />
 
+      {/* Context suppression (PRD §2.2): never show the Banner while already on the
+          Failed view — the user is already looking at exactly what it would tell them. */}
+      {filter !== "failed" && (
+        <FailureBanner
+          count={bannerCount}
+          onReview={() => {
+            // Banner CTA → Failed view defaults to "Publish failures" (matches the
+            // Banner's own count, which is publish-failures only). Plan applies the same
+            // rule on its own surface now (stays in Plan's Failed list, no cross-nav).
+            setFilter("failed", "publish");
+          }}
+          onDismiss={dismissBanner}
+        />
+      )}
+
       {/* Header */}
       <div style={{ padding: "16px 22px 10px", display: "flex", flexDirection: "column", gap: 12, background: BUI.surface, borderBottom: `1px solid ${BUI.border}`, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
