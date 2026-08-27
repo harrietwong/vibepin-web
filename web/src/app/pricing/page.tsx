@@ -4,7 +4,7 @@ import PricingPageClient from "./pricing-client";
 export const metadata = {
   title: "Pricing — VibePin",
   description:
-    "Simple pricing for AI content creation and multi-platform publishing across Pinterest, Instagram, TikTok, and Facebook. Start free, upgrade when you create more.",
+    "Simple pricing for AI content creation and multi-platform publishing across Pinterest, Instagram, and Facebook. Start free, upgrade when you create more.",
 };
 
 // Force per-request rendering. `billingEnabled` is read from CREEM_MODE at

@@ -8,6 +8,7 @@ import { ArrowRight, Check, Minus } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
 import {
   ACCOUNTS_HELPER_TEXT,
+  EXTRA_ACCOUNT_HELPER_TEXT,
   COMPARISON_SECTIONS,
   ENTERPRISE_PLAN,
   PRICING_FAQ,
@@ -677,12 +678,17 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
             </h2>
             <p className="text-[14px] leading-relaxed" style={{ color: "#8B93A1" }}>
               Discover high-save products, trending Pins, and keyword ideas. Generate content with
-              AI. Publish to Pinterest, Instagram, TikTok, and Facebook.
+              AI. Publish to Pinterest, Instagram, and Facebook.
             </p>
           </div>
           <ComparisonTable />
           <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-5" style={{ color: "#6B7280" }}>
             {ACCOUNTS_HELPER_TEXT}
+          </p>
+          {/* The add-on, stated where the account numbers are: someone reading
+              "1 account per platform" is exactly who needs to know it can be raised. */}
+          <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-2" style={{ color: "#8B93A1" }}>
+            {EXTRA_ACCOUNT_HELPER_TEXT}
           </p>
         </div>
       </section>
@@ -730,7 +736,7 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
           </h2>
           <p className="text-[14px] leading-relaxed max-w-[560px] mx-auto mb-8" style={{ color: "#8B93A1" }}>
             Discover products and Pin ideas, generate content with AI, and publish to Pinterest,
-            Instagram, TikTok, and Facebook.
+            Instagram, and Facebook.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <Link href="/signup?plan=free" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>
