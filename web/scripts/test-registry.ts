@@ -54,6 +54,7 @@ export const CORE: string[] = [
   "test-account-quota",
   "test-account-identity",
   "test-publish-capability",
+  "test-publish-social-account-guard",
   "test-publish-results",
   "test-per-account-disconnect",
   // Facebook Page OAuth
