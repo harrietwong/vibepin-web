@@ -162,6 +162,9 @@ export const STUDIO: string[] = [
   // Pinterest media_source a carousel produces.
   "test-media-rules",
   "test-pin-media-source",
+  // WS-B2a 2026-08-27: cover ≡ media[0], load-time normalization of stale covers,
+  // in-place media replacement, and the per-platform issue attribution.
+  "test-content-media-model",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",

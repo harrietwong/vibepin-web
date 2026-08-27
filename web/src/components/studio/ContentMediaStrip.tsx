@@ -6,6 +6,7 @@ import type { PinDraft } from "@/lib/pinDraftStore";
 import { addMedia, copyMedia, removeMedia, reorderMedia, setCoverMedia } from "@/lib/pinDraftStore";
 import { contentMedia, coverMedia } from "@/lib/contentDraftModel";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
+import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { BUI } from "@/components/studio/boardUI";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 
@@ -63,7 +64,10 @@ export function ContentMediaStrip({ draft, disabled }: { draft: PinDraft; disabl
       const uploaded = [];
       for (const file of selected) {
         const { publicUrl } = await uploadPinImage(file);
-        uploaded.push({ kind: "image" as const, url: publicUrl, altText: file.name.replace(/\.[^.]+$/, ""), source: "upload" as const });
+        // Measured from the File, not the hosted URL: dimensions are what let the
+        // carousel ratio check say "2 images need adjustment" instead of shrugging.
+        const { width, height } = await measureImageFile(file);
+        uploaded.push({ kind: "image" as const, url: publicUrl, altText: file.name.replace(/\.[^.]+$/, ""), source: "upload" as const, width, height });
       }
       addMedia(draft.id, uploaded);
     } finally {

@@ -373,14 +373,66 @@ function ok(): boolean { return typeof window !== "undefined"; }
 let _memData: StoreData | null = null;
 let _persistFailed = false;
 
+/**
+ * Bring one draft's persisted media in line with "the cover IS media[0]".
+ *
+ * Drafts written before that rule can name a cover sitting at any index; the card
+ * showed it while every publish path led with media[0], so what the merchant saw
+ * was not what went out. Fix by MOVING the named item to the front (never by
+ * rewriting coverMediaId to media[0], which would silently discard the merchant's
+ * actual choice), then make imageUrl agree.
+ *
+ * Returns null when nothing changed. That matters: this runs over every draft on
+ * every cold load, and bumping updatedAt on untouched drafts would push the whole
+ * board through the sync outbox for no reason.
+ */
+function normalizeDraftMedia(draft: PinDraft): PinDraft | null {
+  // Only drafts that actually carry a media[] array. Materializing the legacy
+  // single-image fallback here would rewrite every old draft on first load.
+  const media = draft.media?.filter(item => item?.id && item?.url);
+  if (!media?.length) return null;
+
+  let next = media;
+  const coverIndex = draft.coverMediaId ? media.findIndex(item => item.id === draft.coverMediaId) : -1;
+  if (coverIndex > 0) {
+    next = [media[coverIndex], ...media.filter((_, i) => i !== coverIndex)];
+  }
+  const cover = next[0];
+  const orderChanged = next !== media;
+  const idChanged = draft.coverMediaId !== cover.id;
+  const urlChanged = draft.imageUrl !== cover.url;
+  if (!orderChanged && !idChanged && !urlChanged) return null;
+  return {
+    ...draft,
+    media: next,
+    coverMediaId: cover.id,
+    imageUrl: cover.url,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function load(): StoreData {
   if (!ok()) return { drafts: {} };
   if (_memData) return _memData;
+  let changed = false;
   try {
     const raw = localStorage.getItem(STORE_KEY);
     const p = raw ? (JSON.parse(raw) as Partial<StoreData>) : {};
-    _memData = { drafts: p.drafts ?? {} };
+    const drafts = p.drafts ?? {};
+    // The one-time cover normalization runs HERE, at the single point where
+    // persisted data enters the session (mergeServerDrafts covers the other
+    // entry point, rows arriving mid-session). Putting it in a caller instead
+    // would leave whichever caller ran first reading un-normalized drafts.
+    for (const [id, draft] of Object.entries(drafts)) {
+      const fixed = normalizeDraftMedia(draft);
+      if (fixed) { drafts[id] = fixed; changed = true; }
+    }
+    _memData = { drafts };
   } catch { _memData = { drafts: {} }; }
+  // Persist the repair so it happens once, not on every reload. No emit(): load()
+  // runs inside getSnapshot during render, and dispatching a store event there
+  // would re-enter React's subscription mid-render.
+  if (changed && _memData) persist(_memData);
   return _memData;
 }
 
@@ -670,17 +722,30 @@ export function createBoardDraft(input: {
 export function completeGeneratedDraft(
   id: string,
   imageUrl: string,
-  meta?: { generationId?: string; assetKey?: string },
+  meta?: { generationId?: string; assetKey?: string; replaceMediaId?: string },
 ): PinDraft | null {
   const data = load();
   const draft = data.drafts[id];
   if (!draft) return null;
-  const generatedMediaId = draft.coverMediaId || mediaId(draft.contentId || draft.id, 0);
+  // A generated image lands in ONE media slot. The previous version assigned
+  // `media: [only the new image]`, which deleted every other image the merchant
+  // had added to the Content the moment one generation finished.
+  const existing = contentMedia(draft);
+  const targetId = meta?.replaceMediaId && existing.some(item => item.id === meta.replaceMediaId)
+    ? meta.replaceMediaId
+    : existing[0]?.id;
+  const generatedMediaId = targetId ?? mediaId(draft.contentId || draft.id, 0);
+  const nextMedia: ContentMedia[] = targetId
+    ? existing.map(item => (item.id === targetId
+        ? { ...item, url: imageUrl, source: "ai" as const, width: undefined, height: undefined }
+        : item))
+    : [{ id: generatedMediaId, kind: "image", url: imageUrl, source: "ai" }];
+  const cover = nextMedia[0];
   const updated: PinDraft = {
     ...draft,
-    imageUrl,
-    media: [{ id: generatedMediaId, kind: "image", url: imageUrl, source: "ai" }],
-    coverMediaId: generatedMediaId,
+    imageUrl: cover?.url ?? imageUrl,
+    media: nextMedia,
+    coverMediaId: cover?.id ?? generatedMediaId,
     generationStatus: "completed",
     // Persist the server generation id + a stable asset key so the AI-adoption metric can
     // join on ids, not image-URL strings. Only set when provided (legacy callers unchanged).
@@ -694,6 +759,29 @@ export function completeGeneratedDraft(
   return updated;
 }
 
+/**
+ * Commit a new media list for one Content and re-derive the cover from it.
+ *
+ * Every media mutation funnels through here so the invariant "cover === media[0]"
+ * can never be forgotten by one call site: coverMediaId and the legacy imageUrl
+ * are OUTPUTS of the list order, never independent inputs.
+ */
+function writeMedia(id: string, draft: PinDraft, media: ContentMedia[]): PinDraft | null {
+  const cover = media[0];
+  if (!cover) return draft; // a Content cannot be left without media
+  const data = load();
+  const updated: PinDraft = {
+    ...draft,
+    media,
+    coverMediaId: cover.id,
+    imageUrl: cover.url,
+    updatedAt: new Date().toISOString(),
+  };
+  data.drafts[id] = updated;
+  persist(data); emit(); syncPinMetadataStore(updated);
+  return updated;
+}
+
 /** Add media to one Content without creating another user-visible Draft. */
 export function addMedia(id: string, items: Omit<ContentMedia, "id">[]): PinDraft | null {
   const draft = getDraft(id);
@@ -701,10 +789,22 @@ export function addMedia(id: string, items: Omit<ContentMedia, "id">[]): PinDraf
   const existing = contentMedia(draft);
   const additions = items.filter(item => item.url).map((item, index) => ({ ...item, id: mediaId(draft.contentId || draft.id, existing.length + index) }));
   if (!additions.length) return draft;
-  return updateDraft(id, { media: [...existing, ...additions] });
+  // Appended at the end, so media[0] — and therefore the cover — is untouched.
+  return writeMedia(id, draft, [...existing, ...additions]);
 }
 
-/** Copy media between Contents. The source remains unchanged by design. */
+/**
+ * Copy media between Contents. The source remains unchanged by design.
+ *
+ * Width/height ride along with the copy: they were measured from the original
+ * file and describe the same image, so re-measuring would be pointless and
+ * dropping them would silently make a carousel's ratio check unverifiable.
+ *
+ * The insertion index is clamped to ≥1 on a non-empty target. Dropping a copy
+ * onto the first thumbnail would otherwise take over the cover — and "copy never
+ * changes the cover" is the rule that wins here, because changing what a Content
+ * leads with is a deliberate act (setCoverMedia), not a side effect of a drag.
+ */
 export function copyMedia(sourceId: string, mediaItemId: string, targetId: string, targetIndex?: number): PinDraft | null {
   const source = getDraft(sourceId);
   const target = getDraft(targetId);
@@ -713,11 +813,13 @@ export function copyMedia(sourceId: string, mediaItemId: string, targetId: strin
   if (!item) return target;
   const next = contentMedia(target);
   const copy = { ...item, id: mediaId(target.contentId || target.id, next.length) };
-  const index = targetIndex === undefined ? next.length : Math.max(0, Math.min(targetIndex, next.length));
+  const floor = next.length ? 1 : 0;
+  const index = targetIndex === undefined ? next.length : Math.max(floor, Math.min(targetIndex, next.length));
   next.splice(index, 0, copy);
-  return updateDraft(targetId, { media: next });
+  return writeMedia(targetId, target, next);
 }
 
+/** Reorder a Content's media. Whatever lands at index 0 becomes the cover. */
 export function reorderMedia(id: string, orderedIds: string[]): PinDraft | null {
   const draft = getDraft(id);
   if (!draft) return null;
@@ -725,39 +827,64 @@ export function reorderMedia(id: string, orderedIds: string[]): PinDraft | null 
   const byId = new Map(current.map(item => [item.id, item]));
   const ordered = orderedIds.map(mediaItemId => byId.get(mediaItemId)).filter((item): item is ContentMedia => !!item);
   current.forEach(item => { if (!ordered.some(candidate => candidate.id === item.id)) ordered.push(item); });
-  const cover = ordered[0] ?? null;
-  if (!cover) return draft;
-  const data = load();
-  const updated = { ...draft, media: ordered, coverMediaId: cover.id, imageUrl: cover.url, updatedAt: new Date().toISOString() };
-  data.drafts[id] = updated;
-  persist(data); emit(); syncPinMetadataStore(updated);
-  return updated;
+  return writeMedia(id, draft, ordered);
 }
 
+/**
+ * Choose the cover: MOVE that item to index 0. Cover and lead image are the same
+ * thing, so "make this the cover" and "make this first" are one operation — the
+ * previous version only rewrote coverMediaId and left the item where it was,
+ * which is exactly how the card and the published carousel came to disagree.
+ */
 export function setCoverMedia(id: string, mediaItemId: string): PinDraft | null {
   const draft = getDraft(id);
   if (!draft) return null;
-  const selected = contentMedia(draft).find(item => item.id === mediaItemId);
+  const current = contentMedia(draft);
+  const selected = current.find(item => item.id === mediaItemId);
   if (!selected) return draft;
-  // imageUrl remains the compatibility cover for legacy consumers.
-  const data = load();
-  const updated = { ...draft, coverMediaId: selected.id, imageUrl: selected.url, updatedAt: new Date().toISOString() };
-  data.drafts[id] = updated;
-  persist(data); emit(); syncPinMetadataStore(updated);
-  return updated;
+  return writeMedia(id, draft, [selected, ...current.filter(item => item.id !== mediaItemId)]);
 }
 
+/** Remove one media item. The next item in order inherits the cover. */
 export function removeMedia(id: string, mediaItemId: string): PinDraft | null {
   const draft = getDraft(id);
   if (!draft) return null;
   const next = contentMedia(draft).filter(item => item.id !== mediaItemId);
   if (!next.length) return draft; // a Content cannot be left without media
-  const cover = draft.coverMediaId === mediaItemId ? next[0] : (coverMedia(draft) ?? next[0]);
-  const data = load();
-  const updated = { ...draft, media: next, coverMediaId: cover.id, imageUrl: cover.url, updatedAt: new Date().toISOString() };
-  data.drafts[id] = updated;
-  persist(data); emit(); syncPinMetadataStore(updated);
-  return updated;
+  return writeMedia(id, draft, next);
+}
+
+/**
+ * Replace ONE media item's asset in place — same id, same position.
+ *
+ * This is what "regenerate this image" and "re-upload this slot" need: the item
+ * keeps its identity, so the media order, the cover, and any per-item selection
+ * in the UI all survive the swap. Replacing by remove+add would move the item to
+ * the end and, for media[0], silently hand the cover to its neighbour.
+ */
+export function replaceMedia(
+  id: string,
+  mediaItemId: string,
+  patch: { url: string; width?: number; height?: number; source?: ContentMedia["source"]; altText?: string },
+): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  if (!patch?.url) return draft;
+  const current = contentMedia(draft);
+  const index = current.findIndex(item => item.id === mediaItemId);
+  if (index < 0) return draft;
+  const next = current.slice();
+  next[index] = {
+    ...current[index],
+    url: patch.url,
+    // A replaced asset has NEW dimensions; keeping the old ones would make the
+    // ratio check lie. `undefined` (unmeasured) is honest, a stale number is not.
+    width: patch.width,
+    height: patch.height,
+    ...(patch.source ? { source: patch.source } : {}),
+    ...(patch.altText !== undefined ? { altText: patch.altText } : {}),
+  };
+  return writeMedia(id, draft, next);
 }
 
 /** Mark a Generating placeholder as failed (per-result or whole-run failure). */
@@ -1100,8 +1227,13 @@ export function mergeServerDrafts(
     if (!incoming || typeof incoming.id !== "string" || !incoming.id) continue;
     const local = data.drafts[incoming.id];
     if (local && tsMs(incoming.updatedAt) <= tsMs(local.updatedAt)) continue; // local wins / equal → no-op
-    data.drafts[incoming.id] = incoming;
-    touched.push(incoming);
+    // Second entry point for foreign data: a server row written before the
+    // cover≡media[0] rule must be repaired on the way in, exactly as load() does
+    // for localStorage. Unchanged rows pass through untouched (no updatedAt bump,
+    // so a clean pull does not turn into a push).
+    const normalized = normalizeDraftMedia(incoming) ?? incoming;
+    data.drafts[incoming.id] = normalized;
+    touched.push(normalized);
     applied++;
   }
 

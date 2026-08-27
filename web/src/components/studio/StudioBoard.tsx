@@ -32,6 +32,7 @@ import { readStoredTarget } from "@/lib/studio/publishTarget";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
+import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { type SelectedReference } from "@/lib/studio/selectedReferences";
@@ -379,11 +380,15 @@ export function StudioBoard() {
     const batchId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     let ok = 0;
     const failedNames: string[] = [];
-    const uploaded: Array<{ publicUrl: string; file: File; index: number }> = [];
+    const uploaded: Array<{ publicUrl: string; file: File; index: number; width?: number; height?: number }> = [];
     for (let i = 0; i < arr.length; i++) {
       try {
         const { publicUrl } = await uploadPinImage(arr[i]);
-        uploaded.push({ publicUrl, file: arr[i], index: i });
+        // Measured from the File while we still hold the bytes — the hosted URL
+        // cannot be measured without a second network round trip, and without
+        // dimensions the carousel ratio rules can only say "unverified".
+        const { width, height } = await measureImageFile(arr[i]);
+        uploaded.push({ publicUrl, file: arr[i], index: i, width, height });
         ok++;
       } catch {
         // A failed file never blocks or rolls back the successful ones.
@@ -395,18 +400,25 @@ export function StudioBoard() {
       const first = uploaded[0];
       const created = pinDraftStore.createBoardDraft({
         imageUrl: first.publicUrl,
-        media: uploaded.map(({ publicUrl, file, index }) => ({
+        media: uploaded.map(({ publicUrl, file, index, width, height }) => ({
           id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
-          altText: file.name.replace(/\.[^.]+$/, ""), source: "upload",
+          altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
         })),
         source: "uploaded_image", idempotencyKey: `${batchId}:content`,
         title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
       });
       void startImageAnalysis(created.id);
     } else {
-      uploaded.forEach(({ publicUrl, file, index }) => {
+      uploaded.forEach(({ publicUrl, file, index, width, height }) => {
         const created = pinDraftStore.createBoardDraft({
           imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
+          // Explicit single-item media: the imageUrl-only path lets the store
+          // synthesize a media item, and that synthetic item has nowhere to carry
+          // the dimensions we just measured.
+          media: [{
+            id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
+            altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
+          }],
           title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
         });
         void startImageAnalysis(created.id);
