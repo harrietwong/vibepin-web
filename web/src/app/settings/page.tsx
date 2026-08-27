@@ -5,6 +5,8 @@ import { Check, Link } from "lucide-react";
 import NextLink from "next/link";
 import { apiFetch } from "@/lib/utils";
 
+const MULTI_UPLOAD_MODE_STORAGE_KEY = "vp:studio:multi-upload-mode";
+
 interface Settings {
   auto_publish: boolean;
   review_image: boolean;
@@ -15,6 +17,21 @@ interface Settings {
   pinterest_connected: boolean;
   pinterest_username?: string;
   instagram_connected: boolean;
+}
+
+function SettingsToggle({ label, desc, value, onChange }: { label: string; desc: string; value: boolean; onChange: () => void }) {
+  return (
+    <div className="flex items-start justify-between py-4 border-b border-neutral-100 last:border-0">
+      <div>
+        <p className="text-sm font-medium text-neutral-800">{label}</p>
+        <p className="text-xs text-neutral-400 mt-0.5">{desc}</p>
+      </div>
+      <button onClick={onChange}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${value ? "bg-[#00B08A]" : "bg-neutral-200"}`}>
+        <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${value ? "translate-x-6" : "translate-x-1"}`} />
+      </button>
+    </div>
+  );
 }
 
 export default function SettingsPage() {
@@ -29,24 +46,6 @@ export default function SettingsPage() {
   useEffect(() => {
     apiFetch<Settings>("/api/auth/status").then(s => setSettings(prev => ({ ...prev, ...s }))).catch(() => {});
   }, []);
-
-  function Toggle({ label, desc, field }: { label: string; desc: string; field: keyof Settings }) {
-    const val = settings[field] as boolean;
-    return (
-      <div className="flex items-start justify-between py-4 border-b border-neutral-100 last:border-0">
-        <div>
-          <p className="text-sm font-medium text-neutral-800">{label}</p>
-          <p className="text-xs text-neutral-400 mt-0.5">{desc}</p>
-        </div>
-        <button
-          onClick={() => setSettings(p => ({ ...p, [field]: !val }))}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${val ? "bg-[#00B08A]" : "bg-neutral-200"}`}
-        >
-          <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${val ? "translate-x-6" : "translate-x-1"}`} />
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-[#FAF9F7]">
@@ -104,11 +103,23 @@ export default function SettingsPage() {
         <div className="rounded-2xl border border-neutral-200 bg-white p-6">
           <h2 className="font-semibold text-neutral-800 mb-1">Publish preferences</h2>
           <p className="text-xs text-neutral-400 mb-5">Control when and how content is published.</p>
-          <Toggle label="Auto-publish" desc="Skip review and publish immediately after generation. Off by default." field="auto_publish" />
-          <Toggle label="Review images" desc="Pause for approval before publishing images." field="review_image" />
-          <Toggle label="Review captions" desc="Pause for approval before publishing captions." field="review_copy" />
+          <SettingsToggle label="Auto-publish" desc="Skip review and publish immediately after generation. Off by default." value={settings.auto_publish} onChange={() => setSettings(p => ({ ...p, auto_publish: !p.auto_publish }))} />
+          <SettingsToggle label="Review images" desc="Pause for approval before publishing images." value={settings.review_image} onChange={() => setSettings(p => ({ ...p, review_image: !p.review_image }))} />
+          <SettingsToggle label="Review captions" desc="Pause for approval before publishing captions." value={settings.review_copy} onChange={() => setSettings(p => ({ ...p, review_copy: !p.review_copy }))} />
 
           <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-neutral-200 p-3">
+              <div>
+                <p className="text-sm font-medium text-neutral-700">Multiple-image uploads</p>
+                <p className="text-xs text-neutral-400 mt-0.5">Ask whether images belong to one Content or separate Contents.</p>
+              </div>
+              <button type="button" data-testid="reset-multi-upload-choice" onClick={() => {
+                try { window.localStorage.removeItem(MULTI_UPLOAD_MODE_STORAGE_KEY); } catch { /* storage unavailable */ }
+                toast.success("Create Pins will ask again on your next multi-image upload.");
+              }} className="shrink-0 rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50">
+                Reset choice
+              </button>
+            </div>
             <div>
               <label className="block text-sm font-medium text-neutral-700 mb-1.5">Daily publish limit</label>
               <input

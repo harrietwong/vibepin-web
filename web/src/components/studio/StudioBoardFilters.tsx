@@ -6,11 +6,11 @@ import { BUI } from "@/components/studio/boardUI";
 // Lifecycle-only filters (P0). Source (Uploaded / AI Generated) is a card badge and
 // a separate future filter, never mixed into this status row.
 const TABS: { id: BoardFilter; label: string }[] = [
-  { id: "all",         label: "All" },
-  { id: "unscheduled", label: "Unscheduled" },
+  { id: "unscheduled", label: "Drafts" },
   { id: "scheduled",   label: "Scheduled" },
   { id: "posted",      label: "Posted" },
   { id: "failed",      label: "Failed" },
+  { id: "all",         label: "All" },
 ];
 
 export function StudioBoardFilters({ value, counts, onChange }: {

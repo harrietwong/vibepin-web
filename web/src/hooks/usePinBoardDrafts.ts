@@ -21,6 +21,7 @@ import {
   subscribeInFlight,
   type PinLifecycle,
 } from "@/lib/studio/pinLifecycle";
+import { hasFailedDestination } from "@/lib/contentDraftModel";
 
 export type BoardFilter = "all" | "unscheduled" | "scheduled" | "posted" | "failed";
 
@@ -29,6 +30,10 @@ export type BoardCounts = Record<BoardFilter, number>;
 
 export function matchesFilter(item: BoardItem, filter: BoardFilter): boolean {
   if (filter === "all") return true;
+  // Failed is an attention work view, not a lifecycle replacement. A Content with
+  // one published destination and one failed destination remains Posted while also
+  // appearing here for repair.
+  if (filter === "failed" && hasFailedDestination(item.draft)) return true;
   // "generating" is a transient state, not one of the four resting places a Pin ends
   // up in, so strict lifecycle equality matched it to NO bucket — and since the board
   // lands on "unscheduled" by default, every card vanished the instant the user hit
@@ -63,7 +68,7 @@ export function usePinBoardDrafts(filter: BoardFilter = "all") {
     unscheduled: items.filter(x => x.lifecycle === "unscheduled").length,
     scheduled:   items.filter(x => x.lifecycle === "scheduled").length,
     posted:      items.filter(x => x.lifecycle === "posted").length,
-    failed:      items.filter(x => x.lifecycle === "failed").length,
+    failed:      items.filter(x => x.lifecycle === "failed" || hasFailedDestination(x.draft)).length,
   }), [items]);
 
   const filtered = useMemo(() => items.filter(x => matchesFilter(x, filter)), [items, filter]);

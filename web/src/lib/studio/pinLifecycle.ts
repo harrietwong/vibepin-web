@@ -15,6 +15,7 @@
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { isBoardSource } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
+import { hasFailedDestination, hasPublishedDestination } from "@/lib/contentDraftModel";
 
 export type PinLifecycle = "generating" | "failed" | "unscheduled" | "scheduled" | "posted";
 
@@ -30,8 +31,8 @@ function isGenerationFailed(d: Pick<PinDraft, "generationStatus">): boolean {
   return s === "failed" || s === "error";
 }
 
-export function isPosted(d: Pick<PinDraft, "postedAt" | "remotePinId">): boolean {
-  return !!sanitizeHandoffField(d.postedAt) || !!sanitizeHandoffField(d.remotePinId);
+export function isPosted(d: PinDraft): boolean {
+  return !!sanitizeHandoffField(d.postedAt) || !!sanitizeHandoffField(d.remotePinId) || hasPublishedDestination(d);
 }
 export function isScheduledLifecycle(d: Pick<PinDraft, "scheduledDate" | "plannedAt">): boolean {
   return !!sanitizeHandoffField(d.scheduledDate) || !!sanitizeHandoffField(d.plannedAt);
@@ -101,23 +102,23 @@ export function mapPublishErrorToCategory(code?: string, message?: string): Erro
  *  failures the user can Retry from Plan — so we must not filter them out by source.
  *  Callers that need a board-scoped count layer isBoardSource on top of this. */
 export function isActionablePublishFailure(
-  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt" | "id" | "imageUrl"> & Partial<PinDraft>,
 ): boolean {
-  return d.failureType === "publish"
-    && !!sanitizeHandoffField(d.publishError)
-    && !d.archivedAt;
+  if (d.archivedAt) return false;
+  if (hasFailedDestination(d as PinDraft)) return true;
+  return d.failureType === "publish" && !!sanitizeHandoffField(d.publishError);
 }
 
 /** Full-population actionable publish failures (Plan: the whole-population entry). */
 export function listActionablePublishFailures<
-  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+  T extends PinDraft,
 >(drafts: T[]): T[] {
   return drafts.filter(isActionablePublishFailure);
 }
 
 /** Board-scoped actionable publish failures (Create Pins: layer isBoardSource). */
 export function listBoardActionablePublishFailures<
-  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt" | "source">,
+  T extends PinDraft,
 >(drafts: T[]): T[] {
   return drafts.filter(d => isActionablePublishFailure(d) && isBoardSource(d));
 }
@@ -126,7 +127,7 @@ export function listBoardActionablePublishFailures<
  *  Now equivalent to listActionablePublishFailures().length — it additionally excludes
  *  archived drafts, which is the intended fix (archived failures are off the board). */
 export function countPublishFailures(
-  drafts: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">[],
+  drafts: PinDraft[],
 ): number {
   return listActionablePublishFailures(drafts).length;
 }

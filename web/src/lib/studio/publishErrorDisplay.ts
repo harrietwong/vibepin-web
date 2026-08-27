@@ -47,6 +47,20 @@ export function resolvePublishErrorCategory(d: PublishErrorDisplayInput): ErrorC
  * NEVER returns / embeds the raw `publishError` string.
  */
 export function getPublishErrorDisplayKey(d: PublishErrorDisplayInput): MessageKey {
+  const code = (d.publishErrorCode ?? "").trim().toLowerCase();
+  const message = (d.publishError ?? "").trim().toLowerCase();
+  if (code === "board_not_owned" || /board (not found|not owned|unavailable)/.test(message)) {
+    return "studioBoard.card.publishError.board";
+  }
+  if (code === "invalid_image_url" || /image.*(invalid|failed|format|size|dimension|crop)/.test(message)) {
+    return "studioBoard.card.publishError.image";
+  }
+  if (code === "invalid_link" || /link.*(invalid|failed)|invalid.*url/.test(message)) {
+    return "studioBoard.card.publishError.link";
+  }
+  if (code === "network_error" || /timeout|timed out|network/.test(message)) {
+    return "studioBoard.card.publishError.timeout";
+  }
   switch (resolvePublishErrorCategory(d)) {
     case "auth":      return "studioBoard.card.publishError.auth";
     case "content":   return "studioBoard.card.publishError.content";

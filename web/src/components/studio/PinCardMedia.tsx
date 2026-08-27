@@ -14,13 +14,11 @@
  * naturally prefers the genuine final generated image when it is valid.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { useLocale } from "@/lib/i18n/LocaleProvider";
-import { ImageOff } from "lucide-react";
+import { useMemo, useState } from "react";
 import { toProxyUrl } from "@/lib/imageProxy";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { resolveFailureMediaUrl, type FailureMediaDraft } from "@/lib/studio/failureMedia";
-import { BUI } from "@/components/studio/boardUI";
+import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 
 function lookupParent(id: string): FailureMediaDraft | null {
   return pinDraftStore.getDraft(id);
@@ -85,26 +83,23 @@ export function resolveInitialFailureMediaUrl(draft: FailureMediaDraft): string 
 }
 
 export function PinCardMedia({ draft, alt, className, style, placeholderVariant = "generationFailed", generating, hiddenByQuality }: PinCardMediaProps) {
-  const { t: tr } = useLocale();
   const chain = useMemo(() => candidateChain(draft), [draft]);
-  const [idx, setIdx] = useState(0);
-
-  // A different draft (or an edit that changes the candidate chain) resets the walk.
-  useEffect(() => { setIdx(0); }, [chain]);
+  const chainKey = chain.join("\u0000");
+  const [cursor, setCursor] = useState({ chainKey, index: 0 });
+  // Derive the reset during render rather than synchronously setting state from an
+  // effect. The next decode failure commits a cursor for the new candidate chain.
+  const idx = cursor.chainKey === chainKey ? cursor.index : 0;
+  const advance = () => setCursor({ chainKey, index: idx + 1 });
 
   const current = idx < chain.length ? chain[idx] : null;
 
   if (!current) {
-    const placeholderCopy = placeholderVariant === "noImage"
-      ? tr("studioBoard.card.noImage")
-      : tr("studioBoard.card.generationFailedPlaceholder");
     return (
       <div data-testid="card-generation-failed-placeholder"
-        style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center",
-          justifyContent: "center", gap: 6, background: BUI.surface3, color: BUI.textMuted, ...style }}
+        data-placeholder-variant={placeholderVariant}
+        style={{ width: "100%", height: "100%", ...style }}
         className={className}>
-        <ImageOff style={{ width: 22, height: 22 }} />
-        <span style={{ fontSize: 11, fontWeight: 700 }}>{placeholderCopy}</span>
+        <PinFallbackArtwork busy={!!generating} />
       </div>
     );
   }
@@ -116,13 +111,13 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
       src={toProxyUrl(current)}
       alt={alt}
       loading="lazy"
-      onError={() => setIdx(i => i + 1)}
+      onError={advance}
       onLoad={e => {
         const img = e.currentTarget;
         // A "successfully loaded" 1x1/2x2 pixel is junk (e.g. a stray placeholder PNG
         // data URL) — treat it exactly like a decode error and advance the chain.
         if (img.naturalWidth <= JUNK_IMAGE_MAX_DIMENSION || img.naturalHeight <= JUNK_IMAGE_MAX_DIMENSION) {
-          setIdx(i => i + 1);
+          advance();
         }
       }}
       style={{ width: "100%", height: "100%", objectFit: "cover", display: "block",

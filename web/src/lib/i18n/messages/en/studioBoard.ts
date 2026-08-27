@@ -32,6 +32,7 @@ export const studioBoardMessages = {
   // ── Product picker modal ──
   "studioBoard.productPicker.title": "Select product",
   "studioBoard.productPicker.subtitle": "Create a Pin from a product in your store.",
+  "studioBoard.productPicker.attachSubtitle": "Link a product to this Pin. Its URL fills Website URL only when that field is empty.",
 
   // ── Toasts (StudioBoard) ──
   "studioBoard.toast.uploadedOne": "Uploaded 1 Pin.",
@@ -48,6 +49,8 @@ export const studioBoardMessages = {
   "studioBoard.toast.publishFailed": "Failed to publish. Please try again.",
   "studioBoard.toast.productNoImage": "That product has no image to use yet.",
   "studioBoard.toast.createdPinFromProduct": "Created a Pin from your product.",
+  "studioBoard.toast.linkedProduct": "Product linked to this Pin.",
+  "studioBoard.toast.customTimeScheduled": "Scheduled for {date} at {time}.",
   "studioBoard.toast.generatingOne": "Generating 1 Pin…",
   "studioBoard.toast.generatingMany": "Generating {n} Pins…",
   "studioBoard.toast.generatedSomeFailedSome": "{okCount} Pin{okPlural} generated, {failCount} failed.",
@@ -84,9 +87,18 @@ export const studioBoardMessages = {
   "studioBoard.card.pinImageAlt": "Pin image",
   "studioBoard.card.noImage": "No image",
   "studioBoard.card.generationFailedPlaceholder": "Generation failed",
+  "studioBoard.card.destinations": "Destinations",
+  "studioBoard.card.customTime": "Custom time",
+  "studioBoard.card.customTimeHint": "Optional: choose a specific time instead of Smart Schedule",
+  "studioBoard.card.customDate": "Custom date",
+  "studioBoard.card.apply": "Apply",
 
   // ── PinBoardCard: user-facing publish-failure reason (NEVER the raw API error) ──
   "studioBoard.card.publishError.auth": "Pinterest connection expired. Reconnect and retry.",
+  "studioBoard.card.publishError.board": "This Pinterest board is no longer available. Choose another board and retry.",
+  "studioBoard.card.publishError.image": "Pinterest couldn't use this image. Review the image and retry.",
+  "studioBoard.card.publishError.link": "The destination link isn't valid. Update the link and retry.",
+  "studioBoard.card.publishError.timeout": "Pinterest didn't respond in time. Try publishing again.",
   "studioBoard.card.publishError.content": "This Pin's board, image, or link has a problem. Edit the Pin and retry.",
   "studioBoard.card.publishError.transient": "Publishing failed due to a temporary error. You can retry.",
   "studioBoard.card.publishError.unknown": "Publishing failed, but detailed error information was not recorded.",
@@ -123,6 +135,9 @@ export const studioBoardMessages = {
   "studioBoard.expanded.moreDetails": "More details",
   "studioBoard.expanded.productOptional": "Product · Optional",
   "studioBoard.expanded.noLinkedProduct": "No linked product",
+  "studioBoard.expanded.selectProduct": "Select a product",
+  "studioBoard.expanded.chooseProduct": "Choose",
+  "studioBoard.expanded.changeProduct": "Change",
   "studioBoard.expanded.altTextOptional": "Alt text · Optional",
   "studioBoard.expanded.altTextPlaceholder": "Describe the image for accessibility",
   "studioBoard.expanded.tagsOptional": "Tags · Optional",

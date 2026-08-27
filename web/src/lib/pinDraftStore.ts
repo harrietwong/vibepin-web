@@ -21,6 +21,14 @@ import {
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
 import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
+import {
+  contentMedia,
+  coverMedia,
+  mediaId,
+  type ContentMedia,
+  type DestinationPublishResult,
+  type PublishDestination,
+} from "./contentDraftModel";
 
 const STORE_KEY       = "vp:pin_drafts:v1";
 const MAX_DRAFTS      = 500;
@@ -41,6 +49,16 @@ export type DraftStatus = "needs_review" | "needs_link" | "ready";
 export interface PinDraft {
   id:                  string;
   imageUrl:            string;
+  /** Stable Content identity. Legacy single-image rows fall back to `id`. */
+  contentId?:           string;
+  /** Ordered media collection. Legacy rows synthesize one item from imageUrl. */
+  media?:               ContentMedia[];
+  /** The media used for card/grid previews. Defaults to the first media item. */
+  coverMediaId?:        string;
+  /** Independently configured platform/account destinations. */
+  publishDestinations?: PublishDestination[];
+  /** Independently recorded per-destination publish outcomes. */
+  destinationResults?:  DestinationPublishResult[];
   keyword:             string;
   category:            string;
   title:               string;
@@ -443,6 +461,8 @@ export function createDraft(input: {
  */
 export function createBoardDraft(input: {
   imageUrl:         string;
+  media?:           ContentMedia[];
+  publishDestinations?: PublishDestination[];
   source:           PinBoardSource;
   idempotencyKey?:  string;
   title?:           string;
@@ -474,9 +494,20 @@ export function createBoardDraft(input: {
   }
 
   const now = new Date().toISOString();
+  const id = genId();
+  const normalizedMedia = input.media?.filter(item => item.id && item.url) ?? [];
+  const initialMedia = normalizedMedia.length ? normalizedMedia : (input.imageUrl ? [{
+    id: mediaId(id, 0), kind: "image" as const, url: input.imageUrl,
+    altText: input.altText?.trim(), source: input.source === "uploaded_image" ? "upload" as const : "ai" as const,
+  }] : []);
+  const cover = initialMedia[0];
   const draft: PinDraft = {
-    id:                  genId(),
-    imageUrl:            input.imageUrl,
+    id,
+    contentId:           id,
+    imageUrl:            cover?.url ?? input.imageUrl,
+    media:               initialMedia,
+    coverMediaId:        cover?.id,
+    publishDestinations: input.publishDestinations,
     keyword:             input.keyword ?? "",
     category:            input.category ?? "",
     title:               input.title?.trim() ?? "",
@@ -520,15 +551,84 @@ export function completeGeneratedDraft(id: string, imageUrl: string): PinDraft |
   const data = load();
   const draft = data.drafts[id];
   if (!draft) return null;
+  const generatedMediaId = draft.coverMediaId || mediaId(draft.contentId || draft.id, 0);
   const updated: PinDraft = {
     ...draft,
     imageUrl,
+    media: [{ id: generatedMediaId, kind: "image", url: imageUrl, source: "ai" }],
+    coverMediaId: generatedMediaId,
     generationStatus: "completed",
     updatedAt: new Date().toISOString(),
   };
   data.drafts[id] = updated;
   persist(data);
   emit();
+  return updated;
+}
+
+/** Add media to one Content without creating another user-visible Draft. */
+export function addMedia(id: string, items: Omit<ContentMedia, "id">[]): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft || !items.length) return draft;
+  const existing = contentMedia(draft);
+  const additions = items.filter(item => item.url).map((item, index) => ({ ...item, id: mediaId(draft.contentId || draft.id, existing.length + index) }));
+  if (!additions.length) return draft;
+  return updateDraft(id, { media: [...existing, ...additions] });
+}
+
+/** Copy media between Contents. The source remains unchanged by design. */
+export function copyMedia(sourceId: string, mediaItemId: string, targetId: string, targetIndex?: number): PinDraft | null {
+  const source = getDraft(sourceId);
+  const target = getDraft(targetId);
+  if (!source || !target || sourceId === targetId) return target;
+  const item = contentMedia(source).find(candidate => candidate.id === mediaItemId);
+  if (!item) return target;
+  const next = contentMedia(target);
+  const copy = { ...item, id: mediaId(target.contentId || target.id, next.length) };
+  const index = targetIndex === undefined ? next.length : Math.max(0, Math.min(targetIndex, next.length));
+  next.splice(index, 0, copy);
+  return updateDraft(targetId, { media: next });
+}
+
+export function reorderMedia(id: string, orderedIds: string[]): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  const current = contentMedia(draft);
+  const byId = new Map(current.map(item => [item.id, item]));
+  const ordered = orderedIds.map(mediaItemId => byId.get(mediaItemId)).filter((item): item is ContentMedia => !!item);
+  current.forEach(item => { if (!ordered.some(candidate => candidate.id === item.id)) ordered.push(item); });
+  const cover = ordered[0] ?? null;
+  if (!cover) return draft;
+  const data = load();
+  const updated = { ...draft, media: ordered, coverMediaId: cover.id, imageUrl: cover.url, updatedAt: new Date().toISOString() };
+  data.drafts[id] = updated;
+  persist(data); emit(); syncPinMetadataStore(updated);
+  return updated;
+}
+
+export function setCoverMedia(id: string, mediaItemId: string): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  const selected = contentMedia(draft).find(item => item.id === mediaItemId);
+  if (!selected) return draft;
+  // imageUrl remains the compatibility cover for legacy consumers.
+  const data = load();
+  const updated = { ...draft, coverMediaId: selected.id, imageUrl: selected.url, updatedAt: new Date().toISOString() };
+  data.drafts[id] = updated;
+  persist(data); emit(); syncPinMetadataStore(updated);
+  return updated;
+}
+
+export function removeMedia(id: string, mediaItemId: string): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  const next = contentMedia(draft).filter(item => item.id !== mediaItemId);
+  if (!next.length) return draft; // a Content cannot be left without media
+  const cover = draft.coverMediaId === mediaItemId ? next[0] : (coverMedia(draft) ?? next[0]);
+  const data = load();
+  const updated = { ...draft, media: next, coverMediaId: cover.id, imageUrl: cover.url, updatedAt: new Date().toISOString() };
+  data.drafts[id] = updated;
+  persist(data); emit(); syncPinMetadataStore(updated);
   return updated;
 }
 
@@ -548,7 +648,10 @@ export function failStaleGeneratingDrafts(): number {
   let changed = 0;
   for (const d of Object.values(data.drafts)) {
     const s = (d.generationStatus ?? "").toLowerCase();
-    if (isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued")) {
+    // Generation on this board is client-driven regardless of how a legacy/QA row
+    // labelled its source. After a reload there is no live promise left to complete,
+    // so every non-archived in-flight row is stale and must leave the spinner state.
+    if (!d.archivedAt && (s === "generating" || s === "running" || s === "pending" || s === "queued")) {
       data.drafts[d.id] = { ...d, generationStatus: "failed", updatedAt: new Date().toISOString() };
       changed++;
     }

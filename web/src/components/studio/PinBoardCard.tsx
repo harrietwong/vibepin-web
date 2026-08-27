@@ -18,23 +18,23 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
-import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, Pencil, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { getSourceBadge, getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
+import { getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
 import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
+import { ContentMediaStrip } from "@/components/studio/ContentMediaStrip";
+import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
+import { contentDestinationResults, contentDestinations, destinationNeedsAttention, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
+import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { platformName, type SocialProvider } from "@/lib/social/platforms";
 import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
 
 const PERSIST_DEBOUNCE = 400;
-// Hover → auto-expand delay (ms). Long enough that a mouse merely passing over the
-// card while scrolling/scanning the board never triggers an expand; short enough
-// that a deliberate pause reads as intent. Mirrors common hover-intent UX timings.
-const HOVER_EXPAND_DELAY = 400;
 
 function draftToFields(d: PinDraft): PinFieldsValue {
   return {
@@ -92,6 +92,11 @@ function recommendedFix(tr: (key: MessageKey) => string, category: "transient" |
   if (category === "transient") return "Usually temporary — try publishing again.";
   return "Fix the Pin details, then retry.";
 }
+function customerFacingBoardName(...names: Array<string | null | undefined>): string {
+  const name = names.map(item => item?.trim()).find(item => item
+    && !/^(qa board|vibepin sandbox demo board|sandbox demo board)$/i.test(item));
+  return name || "Pinterest";
+}
 function menuItemStyle(withTopBorder: boolean, danger: boolean): React.CSSProperties {
   return {
     display: "block", width: "100%", textAlign: "left", padding: "9px 12px", border: "none",
@@ -135,6 +140,10 @@ export type PinBoardCardProps = {
   publishing: boolean;
   /** Derived by the board: the qualitative "Top pick" of this generation batch. */
   topPick?: boolean;
+  /** Last customer-selected Board name, used only as a compact display fallback. */
+  fallbackBoardName?: string;
+  selected?: boolean;
+  onSelectedChange?: (id: string, selected: boolean) => void;
   active: boolean;
   onSetActive: (id: string | null) => void;
   boards: PinterestBoard[];
@@ -147,6 +156,8 @@ export type PinBoardCardProps = {
   boardFieldError?: string;
   onPersist: (id: string, patch: Partial<PinDraft>) => void;
   onSchedule: (id: string) => void;
+  onCustomSchedule: (id: string, date: string, time: string) => void;
+  onSelectProduct?: (draft: PinDraft) => void;
   onGenerateAiImage: (draft: PinDraft) => void;
   onPublish: (id: string) => void;
   onDelete: (draft: PinDraft) => void;
@@ -172,7 +183,16 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [fields, setFields] = useState<PinFieldsValue>(() => draftToFields(draft));
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [copyContextOpen, setCopyContextOpen] = useState(false);
+  const [customTimeOpen, setCustomTimeOpen] = useState(false);
+  const [customDate, setCustomDate] = useState(() => draft.scheduledDate ?? "");
+  const [customTime, setCustomTime] = useState(() => draft.scheduledTime ?? "");
+  const [selectedProviders, setSelectedProviders] = useState<PublishProvider[]>(() => {
+    const providers = contentDestinations(draft).map(item => item.provider);
+    return providers.length ? Array.from(new Set(providers)) : ["pinterest"];
+  });
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Array<{ provider: string; id: string }>>(() =>
+    contentDestinations(draft).filter(item => item.accountId).map(item => ({ provider: item.provider, id: item.accountId as string })),
+  );
   // Keyword-chip interaction state (compact card): which chip shows its remove ×, and
   // which chip is briefly flashing "Copied". Card is keyed by draft.id upstream, so this
   // never leaks across drafts.
@@ -182,14 +202,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const selfEdit = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<PinFieldsValue>(fields);
-  // Hover-to-expand (compact card only): a deliberate pause over the card auto-opens
-  // the Quick Edit state, same as clicking Edit. Mouse-out never auto-collapses (the
-  // user may be mid-edit) — collapsing stays on the explicit collapse control / picking
-  // another card. Cleared on unmount and on every re-trigger to avoid a stray expand
-  // firing after the card is gone or already active.
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
-
   useEffect(() => {
     if (selfEdit.current) { selfEdit.current = false; return; }
     const seeded = draftToFields(draft);
@@ -201,6 +213,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const boardName = useCallback((id: string) => boards.find(b => b.id === id)?.name ?? "", [boards]);
 
   const persistNow = useCallback((f: PinFieldsValue) => {
+    const existingDestinations = contentDestinations(draft);
     props.onPersist(draft.id, {
       title: f.title,
       description: f.description,
@@ -209,8 +222,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       boardName: boardName(f.boardId),
       altText: f.altText,
       tags: parseTags(f.tags),
+      publishDestinations: selectedProviders.flatMap(provider => {
+        const accountIds = selectedAccountIds.filter(item => item.provider === provider);
+        if (accountIds.length) return accountIds.map(item => ({
+          id: `${draft.id}:${provider}:${item.id}`, provider, accountId: item.id,
+          ...(provider === "pinterest" ? { boardId: f.boardId, boardName: boardName(f.boardId) } : {}),
+        }));
+        const existing = existingDestinations.find(item => item.provider === provider);
+        return [{
+          id: existing?.id || `${draft.id}:${provider}`, provider,
+          ...(provider === "pinterest" ? { boardId: f.boardId, boardName: boardName(f.boardId) } : {}),
+        }];
+      }),
     });
-  }, [props, draft.id, boardName]);
+  }, [props, draft, boardName, selectedProviders, selectedAccountIds]);
 
   const flush = useCallback(() => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; persistNow(pendingRef.current); }
@@ -229,10 +254,42 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
 
   // Actions flush pending edits first.
   const doSchedule = useCallback(() => { flush(); props.onSchedule(draft.id); }, [flush, props, draft.id]);
+  const doCustomSchedule = useCallback(() => {
+    if (!customDate || !customTime) return;
+    flush();
+    setCustomTimeOpen(false);
+    props.onCustomSchedule(draft.id, customDate, customTime);
+  }, [customDate, customTime, draft.id, flush, props]);
   const doGenerateAiImage = useCallback(() => { flush(); props.onGenerateAiImage(draft); }, [flush, props, draft]);
   const doPublish = useCallback(() => { flush(); props.onPublish(draft.id); }, [flush, props, draft.id]);
   const expand = useCallback(() => props.onSetActive(draft.id), [props, draft.id]);
   const collapse = useCallback(() => { flush(); props.onSetActive(null); }, [flush, props]);
+  const persistDestinationSelection = useCallback((providers: PublishProvider[], accounts: Array<{ provider: string; id: string }>) => {
+    const existing = contentDestinations(draft);
+    props.onPersist(draft.id, {
+      publishDestinations: providers.flatMap(provider => {
+        const providerAccounts = accounts.filter(item => item.provider === provider);
+        if (providerAccounts.length) return providerAccounts.map(item => ({
+          id: `${draft.id}:${provider}:${item.id}`, provider, accountId: item.id,
+          ...(provider === "pinterest" ? { boardId: fields.boardId, boardName: boardName(fields.boardId) } : {}),
+        }));
+        const previous = existing.find(item => item.provider === provider);
+        return [{
+          id: previous?.id || `${draft.id}:${provider}`, provider,
+          ...(provider === "pinterest" ? { boardId: fields.boardId, boardName: boardName(fields.boardId) } : {}),
+        }];
+      }),
+    });
+  }, [props, draft, fields.boardId, boardName]);
+  const changeProviders = useCallback((next: SocialProvider[]) => {
+    const supported = next.filter((provider): provider is PublishProvider => provider === "pinterest" || provider === "instagram" || provider === "facebook");
+    setSelectedProviders(supported);
+    persistDestinationSelection(supported, selectedAccountIds);
+  }, [persistDestinationSelection, selectedAccountIds]);
+  const changeAccounts = useCallback((next: Array<{ provider: string; id: string }>) => {
+    setSelectedAccountIds(next);
+    persistDestinationSelection(selectedProviders, next);
+  }, [persistDestinationSelection, selectedProviders]);
 
   // Quality Judge (Phase C): ONLY an `invalid` verdict changes the card — it renders the
   // image collapsed/dimmed until the user clicks "Show anyway". ok/borderline/pending/failed
@@ -304,15 +361,23 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // GENERATION failure (AI Pin never finished) — same lifecycle value, different
   // recovery paths (mirrors handleTryAgain's own branch upstream). Computed before
   // `status` so the badge override below can use it.
+  const firstDestinationFailure = destinationNeedsAttention(draft)[0];
   const isPublishFailure = isActionablePublishFailure(draft);
-  const failureCategory = draft.errorCategory ?? (isPublishFailure ? mapPublishErrorToCategory(draft.publishErrorCode, draft.publishError) : undefined);
+  const failureCategory = draft.errorCategory ?? (isPublishFailure ? mapPublishErrorToCategory(
+    draft.publishErrorCode || firstDestinationFailure?.errorCode,
+    draft.publishError || firstDestinationFailure?.errorMessage,
+  ) : undefined);
   // SAFE reason line. `draft.publishError` holds the RAW upstream message (cron/batch
   // paths store err.message straight from the Pinterest API) — it must never reach the
   // DOM. We render a fixed, translated sentence chosen by failure category instead; the
   // raw string stays on the draft for internal diagnostics (support context / logs).
   // Shown for publish failures only — a generation failure keeps its own placeholder.
   const publishErrorText = isPublishFailure || draft.publishError?.trim()
-    ? tr(getPublishErrorDisplayKey(draft))
+    ? tr(getPublishErrorDisplayKey({
+        publishError: draft.publishError || firstDestinationFailure?.errorMessage,
+        errorCategory: draft.errorCategory,
+        publishErrorCode: draft.publishErrorCode || firstDestinationFailure?.errorCode,
+      }))
     : "";
 
   const status = getStatusBadge(draft);
@@ -322,10 +387,12 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // caller and already computes isPublishFailure for the action matrix below.
   // i18n backfill pending (WP-G exemption — parallel session owns the i18n catalogs).
   const statusLabel = status.lifecycle === "failed" ? (isPublishFailure ? "Publish failed" : "Generation failed") : status.label;
-  const source = getSourceBadge(draft);
   const publishing = props.publishing;
   const posted = lifecycle === "posted";
   const failed = lifecycle === "failed";
+  const needsAttention = failed || hasFailedDestination(draft);
+  const destinationResults = contentDestinationResults(draft);
+  const destinations = contentDestinations(draft);
   const scheduled = lifecycle === "scheduled";
   const generating = lifecycle === "generating";
   // Prefers the real Pinterest URL captured at publish time; reconstructs from
@@ -345,61 +412,74 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     const pinterest = platformName("pinterest");
     return base.includes(pinterest) ? base.replace(pinterest, target) : `${base} — ${target}`;
   };
-  const boardSummary = draft.boardName?.trim() || tr("studioBoard.card.noBoardYet");
+  const boardSummary = customerFacingBoardName(draft.boardName, props.fallbackBoardName);
+  const linkedProduct = (draft.linkedProducts ?? []).find(product => product.productId === draft.primaryProductId)
+    ?? draft.linkedProducts?.[0]
+    ?? null;
   const schedLabel = scheduledSummary(draft);
   // Recommended high-search Pinterest keywords (only real, ready results — no empty
   // shell, no loading state, capped at 8). NEVER labeled "Trending" (data honesty).
   const keywordChips = draft.keywordStatus === "ready" ? (draft.recommendedKeywords ?? []).slice(0, 8) : [];
 
-  // Hover intent (compact card only): schedule an expand after HOVER_EXPAND_DELAY; a
-  // quick pass-over (mouse leaves before the timer fires) cancels it via
-  // onCardMouseLeave, so scanning/scrolling across many cards never triggers one.
-  // Guarded on `active` (nothing to do — already expanded) and `generating` (no
-  // editable content yet).
-  const onCardMouseEnter = useCallback(() => {
-    if (active || generating) return;
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => { hoverTimer.current = null; expand(); }, HOVER_EXPAND_DELAY);
-  }, [active, generating, expand]);
-  const onCardMouseLeave = useCallback(() => {
-    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
-  }, []);
-
   const badges = (
-    <div style={{ position: "absolute", top: 8, left: 8, display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
-      {source && (
-        <span data-testid="card-source-badge" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "rgba(15,23,42,0.72)", borderRadius: 999, padding: "3px 9px", backdropFilter: "blur(4px)" }}>{source.label}</span>
+    <div style={{ position: "absolute", top: props.onSelectedChange ? 43 : 8, left: 8, display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
+      {lifecycle !== "unscheduled" && (
+        <span data-testid="card-status-badge" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: toneColor[status.tone] ?? BUI.textSec, borderRadius: 999, padding: "3px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}>
+          {publishing && <Loader2 style={{ width: 10, height: 10 }} className="animate-spin" />}{statusLabel}
+        </span>
       )}
-      <span data-testid="card-status-badge" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: toneColor[status.tone] ?? BUI.textSec, borderRadius: 999, padding: "3px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}>
-        {publishing && <Loader2 style={{ width: 10, height: 10 }} className="animate-spin" />}{statusLabel}
-      </span>
     </div>
   );
+
+  const selectionControl = props.onSelectedChange ? (
+    <button type="button" data-testid="card-select" aria-label={props.selected ? "Deselect content" : "Select content"}
+      aria-pressed={!!props.selected}
+      onClick={event => { event.stopPropagation(); props.onSelectedChange?.(draft.id, !props.selected); }}
+      style={{ position: "absolute", zIndex: 5, top: 8, left: 8, width: 27, height: 27, padding: 0, display: "grid", placeItems: "center",
+        borderRadius: 8, border: props.selected ? `1px solid ${BUI.purple}` : "1px solid rgba(255,255,255,.7)",
+        background: props.selected ? BUI.purple : "rgba(15,23,42,.62)", color: "#fff", cursor: "pointer", boxShadow: "0 3px 10px rgba(15,23,42,.16)" }}>
+      {props.selected ? <Check style={{ width: 15, height: 15 }} /> : <span style={{ width: 12, height: 12, border: "1.5px solid rgba(255,255,255,.9)", borderRadius: 3 }} />}
+    </button>
+  ) : null;
 
   // PRD card action matrix — More menu items per lifecycle. Generating renders NO
   // More menu at all. Every item stops at the menu (fixed backdrop) so a click never
   // opens/edits the card.
-  const menuItems: Array<{ id: string; label: string; onClick: () => void; danger?: boolean }> =
+  const menuItems: Array<{ id: string; label: string; danger?: boolean }> =
     lifecycle === "failed" ? (isPublishFailure ? [
-      { id: "move-to-unscheduled", label: tr("studioBoard.menu.moveToUnscheduled"), onClick: () => props.onMoveToUnscheduled(draft.id) },
-      { id: "delete", label: tr("studioBoard.menu.delete"), onClick: () => props.onDelete(draft), danger: true },
+      { id: "move-to-unscheduled", label: tr("studioBoard.menu.moveToUnscheduled") },
+      { id: "delete", label: tr("studioBoard.menu.delete"), danger: true },
     ] : [
-      { id: "regenerate", label: tr("studioBoard.menu.regenerate"), onClick: () => props.onTryAgain(draft) },
-      { id: "delete", label: tr("studioBoard.menu.delete"), onClick: () => props.onDelete(draft), danger: true },
+      { id: "regenerate", label: tr("studioBoard.menu.regenerate") },
+      { id: "delete", label: tr("studioBoard.menu.delete"), danger: true },
     ]) : lifecycle === "scheduled" ? [
-      { id: "duplicate", label: tr("studioBoard.menu.duplicate"), onClick: () => props.onDuplicate(draft.id) },
-      { id: "download", label: tr("studioBoard.menu.download"), onClick: () => props.onDownload(draft) },
-      { id: "unschedule", label: tr("studioBoard.menu.unschedule"), onClick: () => props.onUnschedule(draft.id) },
+      { id: "duplicate", label: tr("studioBoard.menu.duplicate") },
+      { id: "download", label: tr("studioBoard.menu.download") },
+      { id: "unschedule", label: tr("studioBoard.menu.unschedule") },
     ] : lifecycle === "posted" ? [
-      { id: "download", label: tr("studioBoard.menu.download"), onClick: () => props.onDownload(draft) },
-      { id: "save-reference", label: tr("studioBoard.menu.saveAsReference"), onClick: () => props.onSaveAsReference(draft) },
-      { id: "archive", label: tr("studioBoard.menu.archive"), onClick: () => props.onArchive(draft) },
+      { id: "download", label: tr("studioBoard.menu.download") },
+      { id: "save-reference", label: tr("studioBoard.menu.saveAsReference") },
+      { id: "archive", label: tr("studioBoard.menu.archive") },
     ] : [ // unscheduled
-      { id: "publish", label: tr("studioBoard.menu.publishNow"), onClick: doPublish },
-      { id: "duplicate", label: tr("studioBoard.menu.duplicate"), onClick: () => props.onDuplicate(draft.id) },
-      { id: "download", label: tr("studioBoard.menu.download"), onClick: () => props.onDownload(draft) },
-      { id: "delete", label: tr("studioBoard.menu.delete"), onClick: () => props.onDelete(draft), danger: true },
+      { id: "publish", label: tr("studioBoard.menu.publishNow") },
+      { id: "duplicate", label: tr("studioBoard.menu.duplicate") },
+      { id: "download", label: tr("studioBoard.menu.download") },
+      { id: "delete", label: tr("studioBoard.menu.delete"), danger: true },
     ];
+
+  const runMenuAction = useCallback((id: string) => {
+    switch (id) {
+      case "move-to-unscheduled": props.onMoveToUnscheduled(draft.id); break;
+      case "delete": props.onDelete(draft); break;
+      case "regenerate": props.onTryAgain(draft); break;
+      case "duplicate": props.onDuplicate(draft.id); break;
+      case "download": props.onDownload(draft); break;
+      case "unschedule": props.onUnschedule(draft.id); break;
+      case "save-reference": props.onSaveAsReference(draft); break;
+      case "archive": props.onArchive(draft); break;
+      case "publish": doPublish(); break;
+    }
+  }, [doPublish, draft, props]);
 
   const moreMenu = lifecycle === "generating" ? null : (
     <div style={{ position: "absolute", top: 8, right: 8 }}>
@@ -413,7 +493,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 21, minWidth: 172, background: BUI.surface, border: `1px solid ${BUI.borderHi}`, borderRadius: 10, boxShadow: "0 12px 32px rgba(15,23,42,0.18)", overflow: "hidden" }}>
             {menuItems.map((item, i) => (
               <button key={item.id} type="button" data-testid={`card-menu-${item.id}`}
-                onClick={() => { setMenuOpen(false); item.onClick(); }}
+                onClick={() => { setMenuOpen(false); runMenuAction(item.id); }}
                 style={menuItemStyle(i > 0, !!item.danger)}>
                 {item.label}
               </button>
@@ -428,8 +508,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   if (!active) {
     return (
       <div data-testid="pin-board-card" data-active="false" data-source={draft.source} data-lifecycle={lifecycle}
-        onMouseEnter={onCardMouseEnter} onMouseLeave={onCardMouseLeave}
-        style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
+        style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${props.selected ? BUI.purple : BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: props.selected ? "0 0 0 2px rgba(124,58,237,.12)" : "0 1px 2px rgba(15,23,42,0.04)" }}>
         <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 5", background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             // Generation-failure card: walk the original-image fallback chain
@@ -446,11 +525,11 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="noImage" generating={generating} hiddenByQuality={hiddenByQuality} />
           ) : (
-            // Scratch-mode Generating placeholder — no candidate anywhere in the chain yet.
-            <div data-testid="card-generating-placeholder" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Loader2 style={{ width: 26, height: 26, color: BUI.textMuted }} className="animate-spin" />
+            <div data-testid={generating ? "card-generating-placeholder" : "card-fallback-placeholder"} style={{ width: "100%", height: "100%" }}>
+              <PinFallbackArtwork busy={generating} />
             </div>
           )}
+          {selectionControl}
           {hiddenByQuality && (
             <div data-testid="card-quality-hidden" style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column",
               alignItems: "center", justifyContent: "center", gap: 8, padding: 12, textAlign: "center",
@@ -477,35 +556,87 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </span>
           )}
         </div>
+        {!generating && <ContentMediaStrip draft={draft} disabled={publishing} />}
         <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-          <p style={{ margin: 0, fontSize: 13.5, fontWeight: 800, color: BUI.text, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-            {draft.title?.trim() || tr("studioBoard.card.untitledPin")}
-          </p>
-          <p data-testid="card-board-summary" style={{ margin: 0, fontSize: 11, color: BUI.textMuted, display: "inline-flex", alignItems: "center", gap: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {scheduled && schedLabel
-              ? <><CalendarClock style={{ width: 12, height: 12 }} /> {schedLabel}</>
-              : <>📌 {boardSummary}</>}
-          </p>
-          {/* PRD 13 — Failed card info: error text, a recommended fix per bucket, and
-              the schedule slot that was lost (if any). Kept compact; full detail also
-              shows in the expanded card. */}
-          {failed && (
-            <div data-testid="card-failed-info" style={{ display: "flex", flexDirection: "column", gap: 3, padding: "8px 10px", borderRadius: 8, background: "rgba(239,68,68,0.08)", border: `1px solid ${BUI.error}33` }}>
-              {publishErrorText && (
-                <p data-testid="card-failed-reason" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: BUI.error, display: "flex", alignItems: "flex-start", gap: 5, lineHeight: 1.35 }}>
-                  <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} /> {publishErrorText}
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
+            Title
+            <input data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
+              onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
+              style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700, minHeight: 34, padding: "7px 9px" }} />
+          </label>
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
+            Description
+            <textarea data-testid="board-card-description" value={fields.description} disabled={publishing || generating}
+              onChange={event => handleChange({ description: event.target.value })} rows={3} placeholder="Tell people what this content is about"
+              style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, padding: "8px 9px", resize: "vertical", minHeight: 66 }} />
+          </label>
+          <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
+            Website URL
+            <input data-testid="board-card-url" value={fields.websiteUrl} disabled={publishing || generating}
+              onChange={event => handleChange({ websiteUrl: event.target.value })} placeholder="https://"
+              style={{ ...fieldStyle, fontSize: 11.5, minHeight: 34, padding: "7px 9px" }} />
+          </label>
+          <div data-testid="card-publish-to" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <span style={labelStyle}>{tr("studioBoard.card.destinations")}</span>
+              <button type="button" data-testid="card-destination-dropdown" aria-label="Choose publishing destinations" onClick={expand}
+                style={{ width: 26, height: 26, display: "grid", placeItems: "center", border: `1px solid ${BUI.border}`, borderRadius: 7, background: BUI.surface2, padding: 0, color: BUI.textSec, cursor: "pointer" }}>
+                <ChevronDown style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {(destinations.length ? destinations : [{ id: `${draft.id}:pinterest`, provider: "pinterest" as const }]).map(destination => {
+                const result = destinationResults.find(item => item.destinationId === destination.id || item.provider === destination.provider);
+                const isFailed = result?.status === "failed";
+                return (
+                  <span key={destination.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 8px", borderRadius: 8,
+                    border: `1px solid ${isFailed ? "#f59e0b66" : BUI.border}`, background: isFailed ? "#fffbeb" : BUI.surface2,
+                    color: isFailed ? "#b45309" : BUI.textSec, fontSize: 10.5, fontWeight: 750 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: 999, background: isFailed ? "#f59e0b" : result?.status === "published" ? "#22c55e" : BUI.textMuted }} />
+                    {destination.provider === "pinterest" ? customerFacingBoardName(destination.boardName, boardSummary) : destination.provider[0].toUpperCase() + destination.provider.slice(1)}
+                  </span>
+                );
+              })}
+            </div>
+            {needsAttention && (
+              <div data-testid="card-failed-info" style={{ display: "flex", flexDirection: "column", gap: 5, padding: "8px 9px", borderRadius: 8, background: "#fffbeb", border: "1px solid #f59e0b55" }}>
+                <p data-testid="card-failed-reason" style={{ margin: 0, fontSize: 10.5, fontWeight: 750, color: "#b45309", display: "flex", alignItems: "flex-start", gap: 5, lineHeight: 1.4 }}>
+                  <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} />
+                  {publishErrorText || "One destination needs attention."}
                 </p>
-              )}
-              {isPublishFailure && (
-                <p data-testid="card-failed-fix" style={{ margin: 0, fontSize: 10.5, color: BUI.textSec, lineHeight: 1.4 }}>{recommendedFix(tr, failureCategory)}</p>
-              )}
-              {formatPreviousScheduled(draft.previousScheduledTime) && (
-                <p data-testid="card-failed-previous-time" style={{ margin: 0, fontSize: 10.5, color: BUI.textMuted }}>
-                  {formatPreviousScheduled(draft.previousScheduledTime)}
-                </p>
+                {formatPreviousScheduled(draft.previousScheduledTime) && (
+                  <span style={{ fontSize: 10, color: BUI.textMuted }}>{formatPreviousScheduled(draft.previousScheduledTime)}</span>
+                )}
+              </div>
+            )}
+          </div>
+          {!scheduled && !posted && !generating && (
+            <div data-testid="card-custom-time" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+              <button type="button" data-testid="card-custom-time-toggle" onClick={() => setCustomTimeOpen(open => !open)}
+                aria-expanded={customTimeOpen} title={tr("studioBoard.card.customTimeHint")}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 4px", border: 0, background: "transparent", color: BUI.textMuted, fontSize: 9.5, fontWeight: 650, cursor: "pointer", fontFamily: "inherit" }}>
+                <CalendarClock style={{ width: 11, height: 11 }} /> {tr("studioBoard.card.customTime")}
+              </button>
+              {customTimeOpen && (
+                <div data-testid="card-custom-time-fields" style={{ width: "100%", display: "grid", gridTemplateColumns: "minmax(0,1fr) 88px auto", gap: 6, padding: 8, borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface2 }}>
+                  <input aria-label={tr("studioBoard.card.customDate")} type="date" value={customDate} disabled={publishing}
+                    onChange={event => setCustomDate(event.target.value)}
+                    style={{ ...fieldStyle, fontSize: 10, minHeight: 30, padding: "5px 6px" }} />
+                  <input aria-label={tr("studioBoard.card.customTime")} type="time" value={customTime} disabled={publishing}
+                    onChange={event => setCustomTime(event.target.value)}
+                    style={{ ...fieldStyle, fontSize: 10, minHeight: 30, padding: "5px 6px" }} />
+                  <button type="button" data-testid="card-custom-time-apply" onClick={doCustomSchedule}
+                    disabled={!customDate || !customTime || publishing}
+                    style={{ border: 0, borderRadius: 7, padding: "5px 8px", background: BUI.purple, color: "#fff", fontSize: 10, fontWeight: 750, cursor: "pointer" }}>
+                    {tr("studioBoard.card.apply")}
+                  </button>
+                </div>
               )}
             </div>
           )}
+          {/* PRD 13 — Failed card info: error text, a recommended fix per bucket, and
+              the schedule slot that was lost (if any). Kept compact; full detail also
+              shows in the expanded card. */}
           {keywordChips.length > 0 && (
             <div data-testid="card-keyword-chips" style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}
               title={tr("studioBoard.card.keywordChipsTitle")}>
@@ -540,15 +671,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 style={{ ...primaryBtn, opacity: 0.6, cursor: "default" }}>
                 <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> {tr("studioBoard.action.generating")}
               </button>
-            ) : failed ? (
+            ) : needsAttention ? (
               // PRD 13 action matrix: transient failures lead with Retry (the fix is to
               // just try again); content/unknown failures lead with Edit (retrying the
               // same payload won't help until something changes). Generation failures
               // (not a publish attempt) keep the original Try again / Edit order.
-              (isPublishFailure && failureCategory === "content") ? (
+              isPublishFailure ? (
                 <>
-                  <button type="button" data-testid="card-edit" onClick={expand} style={primaryBtn}>
-                    <Pencil style={{ width: 12, height: 12 }} /> {tr("studioBoard.action.edit")}
+                  <button type="button" data-testid="card-details" onClick={expand} style={primaryBtn}>
+                    {tr("studioBoard.action.details")}
                   </button>
                   <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={secondaryBtn}>
                     {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.action.retryPublish")}
@@ -559,15 +690,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                   <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={primaryBtn}>
                     {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {isPublishFailure ? tr("studioBoard.action.retryPublish") : tr("studioBoard.action.tryAgain")}
                   </button>
-                  <button type="button" data-testid="card-edit" onClick={expand} style={secondaryBtn}>
-                    <Pencil style={{ width: 12, height: 12 }} /> {tr("studioBoard.action.edit")}
+                  <button type="button" data-testid="card-details" onClick={expand} style={secondaryBtn}>
+                    {tr("studioBoard.action.details")}
                   </button>
                 </>
               )
             ) : scheduled ? (
               <>
-                <button type="button" data-testid="card-edit" onClick={expand} style={primaryBtn}>
-                  <Pencil style={{ width: 12, height: 12 }} /> {tr("studioBoard.action.edit")}
+                <button type="button" data-testid="card-details" onClick={expand} style={primaryBtn}>
+                  {tr("studioBoard.action.details")}
                 </button>
                 <Link data-testid="card-view-plan" href={planDeepLink(draft.id)} style={{ ...secondaryBtn, textDecoration: "none" }}>
                   {tr("studioBoard.action.viewPlan")}
@@ -600,8 +731,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 <button type="button" data-testid="card-schedule" onClick={doSchedule} disabled={publishing} style={primaryBtn}>
                   <CalendarClock style={{ width: 13, height: 13 }} /> {tr("studioBoard.action.schedule")}
                 </button>
-                <button type="button" data-testid="card-edit" onClick={expand} style={secondaryBtn}>
-                  <Pencil style={{ width: 12, height: 12 }} /> {tr("studioBoard.action.edit")}
+                <button type="button" data-testid="card-details" onClick={expand} style={secondaryBtn}>
+                  {tr("studioBoard.action.details")}
                 </button>
               </>
             )}
@@ -614,9 +745,9 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // ── Expanded (active) quick edit ────────────────────────────────────────────────
   return (
     <div data-testid="pin-board-card" data-active="true" data-source={draft.source} data-lifecycle={lifecycle}
-      style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)", gridColumn: "span 2", maxWidth: 760 }}>
+      style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${BUI.purple}`, borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 28px rgba(124,58,237,0.16)" }}>
       <div style={{ padding: 14, display: "grid", gridTemplateColumns: "96px minmax(0,1fr)", gap: 14, alignItems: "start", borderBottom: `1px solid ${BUI.border}` }}>
-        <div style={{ width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
+        <div style={{ position: "relative", width: 96, aspectRatio: "2 / 3", borderRadius: 12, overflow: "hidden", border: `1px solid ${BUI.border}`, background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="generationFailed" />
@@ -624,17 +755,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             <PinCardMedia draft={draft} alt={draft.altText || draft.title || tr("studioBoard.card.pinImageAlt")}
               placeholderVariant="noImage" />
           ) : (
-            <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: BUI.textMuted, fontSize: 10, fontWeight: 700 }}>{tr("studioBoard.card.noImage")}</div>
+            <PinFallbackArtwork busy={generating} />
           )}
+          {selectionControl}
         </div>
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
             <div style={{ minWidth: 0 }}>
               <p style={{ margin: 0, fontSize: 14, fontWeight: 850, color: BUI.text }}>{tr("pinDetails.editTitle")}</p>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
-                {source && (
-                  <span data-testid="card-source-badge" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "rgba(15,23,42,0.72)", borderRadius: 999, padding: "3px 9px" }}>{source.label}</span>
-                )}
                 <span data-testid="card-status-badge" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: toneColor[status.tone] ?? BUI.textSec, borderRadius: 999, padding: "3px 9px", display: "inline-flex", alignItems: "center", gap: 4 }}>
                   {publishing && <Loader2 style={{ width: 10, height: 10 }} className="animate-spin" />}{statusLabel}
                 </span>
@@ -645,25 +774,28 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               <ChevronUp style={{ width: 16, height: 16 }} />
             </button>
           </div>
-          <PinAICopyPanel
-            ref={aiRef}
-            draftId={draft.id} imageUrl={draft.imageUrl}
-            title={fields.title} description={fields.description} altText={fields.altText}
-            boardId={draft.boardId} boardName={draft.boardName}
-            category={draft.category} keyword={draft.keyword} destinationUrl={draft.destinationUrl}
-            setupSnapshot={draft.setupSnapshot} promptSnapshot={draft.promptSnapshot} opportunity={draft.opportunity}
-            imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
-            boards={boards}
-            analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
-            hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
-            disabled={publishing}
-            onBeforeGenerate={flush}
-            onApplyCopy={applyCopy}
-          />
-          <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", borderRadius: 9, border: `1px solid ${BUI.purple}`, background: "rgba(124,58,237,0.06)", color: BUI.purple, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
-            <Layers style={{ width: 13, height: 13 }} /> {tr("studioBoard.expanded.generateAiImage")}
-          </button>
+          <div data-testid="card-ai-tools" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+            <PinAICopyPanel
+              ref={aiRef}
+              compact
+              draftId={draft.id} imageUrl={draft.imageUrl}
+              title={fields.title} description={fields.description} altText={fields.altText}
+              boardId={draft.boardId} boardName={draft.boardName}
+              category={draft.category} keyword={draft.keyword} destinationUrl={draft.destinationUrl}
+              setupSnapshot={draft.setupSnapshot} promptSnapshot={draft.promptSnapshot} opportunity={draft.opportunity}
+              imageSummary={draft.imageSummary} recommendedKeywords={draft.recommendedKeywords}
+              boards={boards}
+              analysisStatus={draft.imageAnalysisStatus} keywordStatus={draft.keywordStatus}
+              hasGeneratedBefore={!!draft.metadataDraft?.copyGenerationMeta}
+              disabled={publishing}
+              onBeforeGenerate={flush}
+              onApplyCopy={applyCopy}
+            />
+            <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
+              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+              <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.expanded.generateAiImage")}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -675,6 +807,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           disabled={publishing} onChange={handleChange}
           onRegenerateField={() => aiRef.current?.generate()} onConnect={props.onConnect} />
 
+        <PublishDestinations
+          selected={selectedProviders}
+          onSelectedChange={changeProviders}
+          selectedAccountIds={selectedAccountIds}
+          onSelectedAccountIdsChange={changeAccounts}
+          onConnectPinterest={props.onConnect}
+          pinterestConnected={!disconnected && !needsReconnect}
+        />
+
         {/* More details */}
         <div>
           <button type="button" data-testid="card-more-details-toggle" onClick={() => setMoreOpen(o => !o)}
@@ -685,9 +826,21 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             <div data-testid="card-more-details" style={{ display: "flex", flexDirection: "column", gap: 11, marginTop: 10 }}>
               <div>
                 <span style={labelStyle}>{tr("studioBoard.expanded.productOptional")}</span>
-                <div style={{ ...fieldStyle, display: "flex", alignItems: "center", justifyContent: "space-between", color: BUI.textMuted }}>
-                  <span>{tr("studioBoard.expanded.noLinkedProduct")}</span>
-                </div>
+                <button type="button" data-testid="card-select-product" disabled={publishing || !props.onSelectProduct}
+                  onClick={() => { flush(); props.onSelectProduct?.(draft); }}
+                  style={{ ...fieldStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, color: linkedProduct ? BUI.text : BUI.purple, cursor: publishing ? "default" : "pointer", textAlign: "left", fontFamily: "inherit" }}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: linkedProduct ? 700 : 650 }}>
+                    {linkedProduct?.title || tr("studioBoard.expanded.selectProduct")}
+                  </span>
+                  <span style={{ flexShrink: 0, color: BUI.purple, fontSize: 10.5, fontWeight: 750 }}>
+                    {linkedProduct ? tr("studioBoard.expanded.changeProduct") : tr("studioBoard.expanded.chooseProduct")}
+                  </span>
+                </button>
+                {linkedProduct?.productUrl && (
+                  <p style={{ margin: "5px 0 0", fontSize: 10, color: BUI.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {linkedProduct.productUrl}
+                  </p>
+                )}
               </div>
               <div>
                 <span style={labelStyle}>{tr("studioBoard.expanded.altTextOptional")}</span>

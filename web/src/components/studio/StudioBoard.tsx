@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon } from "lucide-react";
+import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon, Images, Rows3, X, AlertTriangle, Sparkles } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { usePinBoardDrafts, type BoardFilter } from "@/hooks/usePinBoardDrafts";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
@@ -21,12 +21,11 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import * as assetStore from "@/lib/assetStore";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { publishPin, startPinterestConnect, fetchPinterestDefaultBoard } from "@/lib/pinterestClient";
+import { publishPin, startPinterestConnect, fetchPinterestDefaultBoard, savePinterestDefaultBoard } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
 import { beginPublish, endPublish, isActionablePublishFailure, listActionablePublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
-import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { isPinReady, isPublishableImage } from "@/lib/pinReadiness";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
@@ -42,9 +41,20 @@ import { BUI } from "@/components/studio/boardUI";
 import { ProductPickerModal, type ProductSelection } from "@/components/studio/ProductPickerModal";
 import { normalizeProductSource, type LinkedProduct } from "@/lib/pinMetadata";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
+import { StudioPlanSidebar } from "@/components/studio/StudioPlanSidebar";
+import { contentDestinationResults, contentDestinations, contentMedia, type DestinationPublishResult, type PublishDestination } from "@/lib/contentDraftModel";
+import { publishToSocial } from "@/lib/social/socialClient";
+import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 type AiDrawerState = { mode: "version"; draft: PinDraft } | { mode: "scratch" } | null;
+
+// Never surface local QA/demo fixtures as if they were a customer's Pinterest board.
+// The stored ID is left untouched for diagnostics; customer-facing pickers and labels
+// only use real board names.
+function isInternalBoardName(name: string | null | undefined): boolean {
+  return /^(qa board|vibepin sandbox demo board|sandbox demo board)$/i.test(name?.trim() ?? "");
+}
 
 // Deep link into /app/plan that reopens the Edit-details drawer for a specific Pin.
 // Reuses the SAME "?modal=publish&pinId=…" contract Plan already parses (see the
@@ -58,6 +68,9 @@ function planDeepLink(draftId: string): string {
 // "unscheduled" (PRD 5.1/6): Create Pins should default to the work still ahead of
 // the user, not a mixed "All" view dominated by already-scheduled/posted cards.
 const FILTER_STORAGE_KEY = "vp:studio:filter";
+const PLAN_PINNED_STORAGE_KEY = "vp:studio:plan-pinned";
+const MULTI_UPLOAD_MODE_STORAGE_KEY = "vp:studio:multi-upload-mode";
+type MultiUploadMode = "together" | "separate";
 const VALID_FILTERS: BoardFilter[] = ["all", "unscheduled", "scheduled", "posted", "failed"];
 function readStoredFilter(): BoardFilter {
   if (typeof window === "undefined") return "unscheduled";
@@ -146,17 +159,18 @@ export function StudioBoard() {
   // so layering the core actionable predicate here is equivalent to the board selector
   // (listBoardActionablePublishFailures over the full population) — same board, same predicate.
   const publishFailureCount = useMemo(() => listActionablePublishFailures(allItems.map(x => x.draft)).length, [allItems]);
-  const { visibleCount: bannerCount, dismiss: dismissBanner } = useFailureBannerDismiss(publishFailureCount, "studio");
   // "Top pick" is derived across the FULL (unfiltered) board so batch membership never
   // depends on the current filter view; the badge transfers automatically as cards change.
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
+  const recentBoardName = useMemo(() => allItems
+    .map(item => item.draft.boardName?.trim())
+    .find(name => !!name && !isInternalBoardName(name)) || "", [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
+  const customerBoards = useMemo(() => boards.filter(board => !isInternalBoardName(board.name)), [boards]);
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
   // scheduling/publishing (distinct from a transient boards API failure).
   const noBoardAccess = disconnected || needsReconnect;
   const boardsError = boardsErr ? "Couldn't load boards. Please try again." : undefined;
-  const isDev = process.env.NODE_ENV !== "production";
-
   // Draft-store hydration gate. The store's SSR/server snapshot is empty and the
   // real localStorage-backed snapshot only becomes authoritative on the client. To
   // avoid briefly rendering the "empty upload zone" (a false empty state) when
@@ -165,11 +179,17 @@ export function StudioBoard() {
   // once mounted. This is separate from the experience decision (which is already
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
+  const [planPinned, setPlanPinned] = useState(false);
   const didInitFilterRef = useRef(false);
   useEffect(() => {
     if (didInitFilterRef.current) return;
     didInitFilterRef.current = true;
     setHydrated(true);
+    try {
+      // Intentional hydration restore: localStorage is unavailable during SSR.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPlanPinned(window.localStorage.getItem(PLAN_PINNED_STORAGE_KEY) === "true");
+    } catch { /* preference remains session-default */ }
     // URL query param wins over session memory (reload-durable deep link). Falls back to
     // the sessionStorage-remembered filter when no valid ?filter= is present.
     const urlFilter = parseFilterParam(searchParams.get("filter"));
@@ -188,6 +208,11 @@ export function StudioBoard() {
     pinDraftStore.failStaleGeneratingDrafts();
   }, [searchParams]);
 
+  const handlePlanPinnedChange = useCallback((next: boolean) => {
+    setPlanPinned(next);
+    try { window.localStorage.setItem(PLAN_PINNED_STORAGE_KEY, String(next)); } catch { /* in-memory preference still works */ }
+  }, []);
+
   const [uploading, setUploading] = useState(false);
   // Per-file upload status: "Uploading 2/5…" while a multi-file batch runs.
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
@@ -198,43 +223,144 @@ export function StudioBoard() {
   const [aiSetupCache, setAiSetupCache] = useState<Record<string, AiVersionDrawerSetup>>({});
   const [aiGenerating, setAiGenerating] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
+  const [productPickerTargetId, setProductPickerTargetId] = useState<string | null>(null);
+  const [pendingUploadFiles, setPendingUploadFiles] = useState<File[] | null>(null);
+  const [uploadChoice, setUploadChoice] = useState<MultiUploadMode>("together");
+  const [rememberUploadChoice, setRememberUploadChoice] = useState(false);
+  const [batchEditOpen, setBatchEditOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const shopifyEnabled = isShopifyIntegrationEnabled();
   const fileRef = useRef<HTMLInputElement>(null);
+  const didPrefillBoardRef = useRef(false);
 
   const flashSaved = useCallback(() => { setSaving(true); setTimeout(() => setSaving(false), 300); }, []);
   const openFilePicker = useCallback(() => fileRef.current?.click(), []);
 
   const hasCards = items.length > 0 || counts.all > 0;
   const aiSetupKey = aiDrawer?.mode === "version" ? aiDrawer.draft.id : aiDrawer?.mode === "scratch" ? "scratch" : null;
+  const batchPins = useMemo<BatchPinRow[]>(() => allItems.map(({ draft }) => ({
+    pinId: draft.id,
+    sessionId: draft.generationSessionId || "create-pins",
+    groupIdx: 0,
+    pinIdx: 0,
+    imageUrl: draft.imageUrl,
+    title: draft.title || "",
+    description: draft.description || "",
+    altText: draft.altText || "",
+    destinationUrl: draft.destinationUrl || "",
+    plannedDate: draft.scheduledDate || "",
+    plannedTime: draft.scheduledTime,
+    plannedAt: draft.plannedAt,
+    postedAt: draft.postedAt,
+    addedToPlanAt: draft.addedToPlanAt,
+    planningStatus: draft.publishError ? "failed" : draft.postedAt ? "posted" : draft.plannedAt || draft.scheduledDate ? "planned" : "not_added",
+    boardSuggestion: draft.boardName || "",
+    boardId: draft.boardId,
+    boardName: draft.boardName,
+    metadataDraft: draft.metadataDraft,
+    linkedProductId: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.productId,
+    linkedProductTitle: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.title,
+    linkedProductUrl: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.productUrl,
+    linkedProductImageUrl: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.imageUrl,
+    linkedProductSource: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.source,
+    taggedProducts: draft.linkedProducts,
+    taggedCount: draft.linkedProducts?.length,
+    category: draft.category,
+    mediaCount: contentMedia(draft).length,
+    publishTo: contentDestinations(draft).map(destination => destination.provider).join(", ") || "pinterest",
+  })), [allItems]);
+  const selectedBatchPins = useMemo(() => batchPins.filter(pin => selectedIds.has(pin.pinId)), [batchPins, selectedIds]);
 
-  // ── Upload → one board draft per image ─────────────────────────────────────
-  const handleFiles = useCallback(async (files: FileList) => {
-    // Snapshot to an array up front: the <input> onChange resets `value=""` right
-    // after calling us, which empties the live FileList before this async loop reads
-    // it. Array.from captures the File references before that happens.
-    const arr = Array.from(files);
+  // PRD §12: a verified last-used Pinterest Board pre-fills boardless content.
+  // The preference is adopted only when that Board is still present in the current
+  // account's live board list; an unavailable/stale preference remains unset.
+  useEffect(() => {
+    if (didPrefillBoardRef.current || boardsLoading || noBoardAccess || !customerBoards.length) return;
+    didPrefillBoardRef.current = true;
+    let cancelled = false;
+    const recentDraftBoard = allItems.map(item => item.draft)
+      .find(draft => draft.boardId?.trim() && !isInternalBoardName(draft.boardName));
+    const applyPreference = (preference: { boardId: string; boardName?: string | null } | null) => {
+      if (cancelled || !preference?.boardId) return;
+      const liveBoard = customerBoards.find(board => board.id === preference.boardId);
+      if (!liveBoard) return;
+      allItems.forEach(({ draft }) => {
+        if (draft.boardId?.trim()) return;
+        const existing = contentDestinations(draft);
+        if (existing.length && !existing.some(destination => destination.provider === "pinterest")) return;
+        const destinations = (existing.length ? existing : [{ id: `${draft.id}:pinterest`, provider: "pinterest" as const }])
+          .map(destination => destination.provider === "pinterest" ? { ...destination, boardId: liveBoard.id, boardName: liveBoard.name } : destination);
+        pinDraftStore.updateDraft(draft.id, { boardId: liveBoard.id, boardName: liveBoard.name, publishDestinations: destinations });
+      });
+    };
+    const recentPreference = recentDraftBoard?.boardId
+      ? { boardId: recentDraftBoard.boardId, boardName: recentDraftBoard.boardName || null }
+      : null;
+    void fetchPinterestDefaultBoard()
+      .then(preference => applyPreference(preference ?? recentPreference))
+      .catch(() => applyPreference(recentPreference));
+    return () => { cancelled = true; };
+  }, [allItems, boardsLoading, customerBoards, noBoardAccess]);
+
+  const handleBatchApply = useCallback(({ rowEdits }: BatchApplyOpts) => {
+    Object.entries(rowEdits).forEach(([id, edit]) => {
+      const patch: Partial<PinDraft> = {
+        title: edit.title,
+        description: edit.description,
+        altText: edit.altText,
+        destinationUrl: edit.destinationUrl,
+        scheduledDate: edit.plannedDate,
+        scheduledTime: edit.plannedTime,
+        plannedAt: edit.plannedAt,
+        boardId: edit.boardId,
+        boardName: edit.boardName,
+      };
+      Object.keys(patch).forEach(key => patch[key as keyof PinDraft] === undefined && delete patch[key as keyof PinDraft]);
+      pinDraftStore.updateDraft(id, patch);
+    });
+    flashSaved();
+  }, [flashSaved]);
+
+  // ── Upload → one Content with N media, or N separate Contents ──────────────
+  const processFiles = useCallback(async (arr: File[], mode: MultiUploadMode) => {
     if (!arr.length) return;
     setUploading(true);
     setUploadProgress({ done: 0, total: arr.length });
     const batchId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     let ok = 0;
     const failedNames: string[] = [];
+    const uploaded: Array<{ publicUrl: string; file: File; index: number }> = [];
     for (let i = 0; i < arr.length; i++) {
       try {
         const { publicUrl } = await uploadPinImage(arr[i]);
-        const created = pinDraftStore.createBoardDraft({
-          imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${i}`,
-          title: arr[i].name.replace(/\.[^.]+$/, "").slice(0, 100),
-        });
-        // Kick off background image analysis + keyword prep immediately — the card is
-        // already created, so this never blocks upload.
-        void startImageAnalysis(created.id);
+        uploaded.push({ publicUrl, file: arr[i], index: i });
         ok++;
       } catch {
         // A failed file never blocks or rolls back the successful ones.
         failedNames.push(arr[i].name);
       }
       setUploadProgress({ done: i + 1, total: arr.length });
+    }
+    if (mode === "together" && uploaded.length) {
+      const first = uploaded[0];
+      const created = pinDraftStore.createBoardDraft({
+        imageUrl: first.publicUrl,
+        media: uploaded.map(({ publicUrl, file, index }) => ({
+          id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
+          altText: file.name.replace(/\.[^.]+$/, ""), source: "upload",
+        })),
+        source: "uploaded_image", idempotencyKey: `${batchId}:content`,
+        title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+      });
+      void startImageAnalysis(created.id);
+    } else {
+      uploaded.forEach(({ publicUrl, file, index }) => {
+        const created = pinDraftStore.createBoardDraft({
+          imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
+          title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+        });
+        void startImageAnalysis(created.id);
+      });
     }
     setUploading(false);
     setUploadProgress(null);
@@ -245,6 +371,31 @@ export function StudioBoard() {
       toast.error(`${tr("studioBoard.toast.uploadFailedPrefix")}${shown}${more}${tr("studioBoard.toast.uploadFailedSuffix")}`);
     }
   }, [flashSaved, tr]);
+
+  const handleFiles = useCallback((files: FileList | File[]) => {
+    const arr = Array.from(files);
+    if (!arr.length) return;
+    if (arr.length === 1) { void processFiles(arr, "separate"); return; }
+    let stored: MultiUploadMode | null = null;
+    try {
+      const value = window.localStorage.getItem(MULTI_UPLOAD_MODE_STORAGE_KEY);
+      stored = value === "together" || value === "separate" ? value : null;
+    } catch { /* ask below */ }
+    if (stored) { void processFiles(arr, stored); return; }
+    setUploadChoice("together");
+    setRememberUploadChoice(false);
+    setPendingUploadFiles(arr);
+  }, [processFiles]);
+
+  const continueMultiUpload = useCallback(() => {
+    const files = pendingUploadFiles;
+    if (!files) return;
+    if (rememberUploadChoice) {
+      try { window.localStorage.setItem(MULTI_UPLOAD_MODE_STORAGE_KEY, uploadChoice); } catch { /* one-time choice still works */ }
+    }
+    setPendingUploadFiles(null);
+    void processFiles(files, uploadChoice);
+  }, [pendingUploadFiles, processFiles, rememberUploadChoice, uploadChoice]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
@@ -258,8 +409,12 @@ export function StudioBoard() {
 
   const handlePersist = useCallback((id: string, patch: Partial<PinDraft>) => {
     pinDraftStore.updateDraft(id, patch); flashSaved();
-    if (patch.boardId) setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
-  }, [flashSaved]);
+    if (patch.boardId) {
+      setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
+      const boardName = patch.boardName?.trim() || boards.find(board => board.id === patch.boardId)?.name || null;
+      void savePinterestDefaultBoard({ boardId: patch.boardId, boardName }).catch(() => {});
+    }
+  }, [boards, flashSaved]);
 
   // AI Copy generation now lives inside <PinAICopyPanel> (shared across Create Pins,
   // Plan edit, and Batch Edit). The card applies results via onPersist → updateDraft.
@@ -294,54 +449,151 @@ export function StudioBoard() {
   const handlePublish = useCallback(async (id: string) => {
     let d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
+    let destinations: PublishDestination[] = contentDestinations(d);
+    if (!destinations.length) destinations = [{ id: `${id}:pinterest`, provider: "pinterest", boardId: d.boardId, boardName: d.boardName }];
+    const priorResults = contentDestinationResults(d);
+    const pendingDestinations = destinations.filter(destination => !priorResults.some(result => result.destinationId === destination.id && result.status === "published"));
+    const targets = pendingDestinations.length ? pendingDestinations : destinations;
+    const pinterestTargets = targets.filter(destination => destination.provider === "pinterest");
+    const socialTargets = targets.filter(destination => destination.provider !== "pinterest");
     // Publishing straight from the card never opens the details drawer, so the drawer's
     // board auto-fill never ran for this draft. Without this, a user who has a default
     // board set is still told to "complete required details" — the board they picked
     // last time simply was never written onto this draft. Adopt it here before gating.
-    if (!d.boardId?.trim() && !noBoardAccess) {
+    if (pinterestTargets.length && !d.boardId?.trim() && !noBoardAccess) {
       try {
         const fallback = await fetchPinterestDefaultBoard();
         if (fallback?.boardId) {
-          d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "" }) ?? d;
+          destinations = destinations.map(destination => destination.provider === "pinterest"
+            ? { ...destination, boardId: fallback.boardId, boardName: fallback.boardName ?? "" }
+            : destination);
+          d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "", publishDestinations: destinations }) ?? d;
         }
       } catch { /* leave the draft as-is; the readiness gate below reports it */ }
     }
-    if (noBoardAccess || !isPinReady(draftReadiness(d))) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
+    const pinterestReady = !pinterestTargets.length || (!noBoardAccess && isPinReady(draftReadiness(d)));
+    if (!pinterestReady && !socialTargets.length) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
     if (!beginPublish(id)) return;
-    pinDraftStore.updateDraft(id, { publishError: undefined });
+    const now = new Date().toISOString();
+    const untouchedResults = priorResults.filter(result => !targets.some(destination => destination.id === result.destinationId));
+    pinDraftStore.updateDraft(id, {
+      publishError: undefined,
+      destinationResults: [
+        ...untouchedResults,
+        ...targets.map((destination): DestinationPublishResult => ({ destinationId: destination.id, provider: destination.provider, status: "publishing", submittedAt: now })),
+      ],
+    });
+    const outcomes: DestinationPublishResult[] = [];
+    let pinterestRemote: { id: string; url?: string } | null = null;
     try {
-      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id });
-      pinDraftStore.updateDraft(id, { postedAt: new Date().toISOString(), remotePinId: res.pin.id, remotePinUrl: res.pin.url, publishError: undefined, failureType: undefined, errorCategory: undefined, publishErrorCode: undefined });
-      toast.success(tr("studioBoard.toast.publishSuccess"));
-    } catch (e) {
-      const err = e as { code?: string; message?: string };
-      // ISO, matching DraftDetailsDrawer.tsx's previousScheduledTime convention (not a
-      // bare local "YYYY-MM-DDTHH:mm" string) so all writers of this field agree.
+      for (const destination of pinterestTargets) {
+        if (!pinterestReady) {
+          outcomes.push({ destinationId: destination.id, provider: "pinterest", status: "failed", errorCode: "missing_board", errorMessage: "Choose a Pinterest board before publishing." });
+          continue;
+        }
+        try {
+          const res = await publishPin({ boardId: destination.boardId || d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id });
+          pinterestRemote = { id: res.pin.id, url: res.pin.url };
+          outcomes.push({ destinationId: destination.id, provider: "pinterest", status: "published", remoteId: res.pin.id, postUrl: res.pin.url, submittedAt: now, publishedAt: new Date().toISOString() });
+        } catch (error) {
+          const err = error as { code?: string; message?: string };
+          outcomes.push({ destinationId: destination.id, provider: "pinterest", status: "failed", errorCode: err.code, errorMessage: err.message || tr("studioBoard.toast.publishFailed"), submittedAt: now });
+        }
+      }
+
+      if (socialTargets.length) {
+        try {
+          const social = await publishToSocial({
+            postId: id,
+            post: { imageUrls: contentMedia(d).map(item => item.url), title: d.title || undefined, caption: d.description || undefined, destinationUrl: d.destinationUrl || undefined, altText: d.altText || undefined },
+            destinations: socialTargets.map(destination => ({ provider: destination.provider, socialConnectionId: destination.accountId })),
+          });
+          const queues = new Map<string, PublishDestination[]>();
+          socialTargets.forEach(destination => queues.set(destination.provider, [...(queues.get(destination.provider) ?? []), destination]));
+          social.destinations.forEach(result => {
+            const destination = queues.get(result.provider)?.shift();
+            if (!destination || result.status === "skipped") return;
+            outcomes.push({
+              destinationId: destination.id,
+              provider: destination.provider,
+              status: result.status === "published" ? "published" : "failed",
+              remoteId: result.externalPostId ?? undefined,
+              postUrl: result.externalPostUrl ?? undefined,
+              errorMessage: result.error ?? undefined,
+              submittedAt: now,
+              publishedAt: result.status === "published" ? new Date().toISOString() : undefined,
+            });
+          });
+        } catch (error) {
+          socialTargets.forEach(destination => outcomes.push({ destinationId: destination.id, provider: destination.provider, status: "failed", errorMessage: (error as Error).message || tr("studioBoard.toast.publishFailed"), submittedAt: now }));
+        }
+      }
+
+      const finalResults = [...untouchedResults, ...outcomes];
+      const published = finalResults.filter(result => result.status === "published");
+      const failed = finalResults.filter(result => result.status === "failed");
+      const socialPosts = finalResults.filter(result => result.provider !== "pinterest" && result.status === "published" && result.remoteId).map(result => ({
+        provider: result.provider, postId: result.remoteId as string, postUrl: result.postUrl ?? "", publishedAt: result.publishedAt ?? now,
+      }));
+      const firstFailure = failed[0];
       const localPlanned = d.plannedAt || d.scheduledDate;
       const prevScheduled = localPlanned
         ? new Date(`${localPlanned.slice(0, 10)}T${(d.scheduledTime?.trim() || localPlanned.slice(11, 16) || "09:00")}:00`).toISOString()
         : undefined;
       pinDraftStore.updateDraft(id, {
-        publishError: err?.message || tr("studioBoard.toast.publishFailed"),
-        failureType: "publish",
-        errorCategory: mapPublishErrorToCategory(err?.code, err?.message),
-        publishErrorCode: err?.code,
-        previousScheduledTime: prevScheduled,
-        scheduledDate: "",
-        scheduledTime: "",
+        publishDestinations: destinations,
+        destinationResults: finalResults,
+        socialPosts,
+        postedAt: published.length ? (d.postedAt || now) : d.postedAt,
+        remotePinId: pinterestRemote?.id || d.remotePinId,
+        remotePinUrl: pinterestRemote?.url || d.remotePinUrl,
+        publishError: firstFailure?.errorMessage,
+        failureType: firstFailure ? "publish" : undefined,
+        errorCategory: firstFailure ? mapPublishErrorToCategory(firstFailure.errorCode, firstFailure.errorMessage) : undefined,
+        publishErrorCode: firstFailure?.errorCode,
+        previousScheduledTime: firstFailure && !published.length ? prevScheduled : d.previousScheduledTime,
+        scheduledDate: firstFailure && !published.length ? "" : d.scheduledDate,
+        scheduledTime: firstFailure && !published.length ? "" : d.scheduledTime,
       });
-      toast.error(tr("studioBoard.toast.publishFailed"));
+      if (published.length && failed.length) toast.info(`${published.length} destination${published.length === 1 ? "" : "s"} published; ${failed.length} needs attention.`);
+      else if (published.length) toast.success(tr("studioBoard.toast.publishSuccess"));
+      else toast.error(tr("studioBoard.toast.publishFailed"));
     } finally { endPublish(id); }
   }, [noBoardAccess, tr]);
 
-  // ── Product → Pin (Shopify "Select product", §3.6) ─────────────────────────
-  // Opening/browsing the picker never creates anything — only a confirmed selection
-  // does. destinationUrl is intentionally left empty (never auto-filled, §2).
+  const handleCustomSchedule = useCallback((id: string, date: string, time: string) => {
+    const d = pinDraftStore.getDraft(id); if (!d) return;
+    if (noBoardAccess || !isPinReady(draftReadiness(d))) {
+      setActiveId(id);
+      if (!d.boardId?.trim() && !noBoardAccess) {
+        setScheduleErrors(prev => ({ ...prev, [id]: tr("studioBoard.toast.chooseBoardToSchedule") }));
+      }
+      toast.error(tr("studioBoard.toast.completeDetailsToSchedule"));
+      return;
+    }
+    if (!date || !time) return;
+    setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
+    const updated = pinDraftStore.smartScheduleDraft(id, { plannedDate: date, plannedTime: time }, null, { source: "manual" });
+    if (updated) {
+      flashSaved();
+      toast.success(tr("studioBoard.toast.customTimeScheduled")
+        .replace("{date}", date)
+        .replace("{time}", time), {
+        action: { label: tr("studioBoard.toast.openInPlan"), onClick: () => { window.location.href = planDeepLink(id); } },
+      });
+    }
+  }, [flashSaved, noBoardAccess, tr]);
+
+  // ── Product → Pin / attach product ─────────────────────────────────────────
+  // A product selected from My Products, Product Opportunities, Shopify, Etsy or a
+  // URL import carries its real product URL. We use it only when Website URL is empty;
+  // a creator's hand-entered destination is never overwritten.
   const handleProductSelect = useCallback((p: ProductSelection) => {
     setShowProductPicker(false);
+    const targetId = productPickerTargetId;
+    setProductPickerTargetId(null);
     // Multi-image selection → the first chosen image becomes the card's cover.
     const chosenImageUrl = p.images?.[0]?.url ?? p.imageUrl ?? "";
-    if (!chosenImageUrl) { toast.error(tr("studioBoard.toast.productNoImage")); return; }
     const linkedProduct: LinkedProduct = {
       productId:    p.id,
       title:        p.title?.trim() || "Product",
@@ -355,19 +607,45 @@ export function StudioBoard() {
       source:       normalizeProductSource(p.source),
       linkType:     "auto",
     };
+
+    if (targetId) {
+      const current = pinDraftStore.getDraft(targetId);
+      if (!current) return;
+      const existing = current.linkedProducts ?? [];
+      const sameProduct = (item: LinkedProduct) =>
+        (!!linkedProduct.productId && item.productId === linkedProduct.productId)
+        || (!!linkedProduct.productUrl && item.productUrl === linkedProduct.productUrl);
+      const remainingProducts = existing.filter(item => !sameProduct(item));
+      const nextProducts = p.asPrimary ? [linkedProduct, ...remainingProducts] : [...remainingProducts, linkedProduct];
+      pinDraftStore.updateDraft(targetId, {
+        linkedProducts: nextProducts,
+        primaryProductId: p.asPrimary || existing.length === 0 ? linkedProduct.productId : current.primaryProductId,
+        ...(!current.destinationUrl.trim() && p.url?.trim() ? {
+          destinationUrl: p.url.trim(),
+          destinationUrlSource: "product",
+        } : {}),
+      });
+      flashSaved();
+      toast.success(tr("studioBoard.toast.linkedProduct"));
+      return;
+    }
+
+    if (!chosenImageUrl) { toast.error(tr("studioBoard.toast.productNoImage")); return; }
     const created = pinDraftStore.createBoardDraft({
       imageUrl: chosenImageUrl,
       source:   "uploaded_image",
       title:    p.title?.trim() || undefined,
+      destinationUrl: p.url?.trim() || undefined,
     });
     pinDraftStore.updateDraft(created.id, {
       linkedProducts: [linkedProduct],
       primaryProductId: linkedProduct.productId,
+      destinationUrlSource: p.url?.trim() ? "product" : undefined,
     });
     void startImageAnalysis(created.id);
     flashSaved();
     toast.success(tr("studioBoard.toast.createdPinFromProduct"));
-  }, [flashSaved, tr]);
+  }, [flashSaved, productPickerTargetId, tr]);
 
   // ── AI drawers ─────────────────────────────────────────────────────────────
   const handleGenerateAiImage = useCallback((d: PinDraft) => setAiDrawer({ mode: "version", draft: d }), []);
@@ -466,8 +744,12 @@ export function StudioBoard() {
     if (typeof window !== "undefined" && !window.confirm(tr("studioBoard.confirm.deleteDraft"))) return;
     if (d.source === "ai_generated_from_upload") track("generation_deleted", { draftId: d.id });
     pinDraftStore.deleteDraft(d.id); toast.success(tr("studioBoard.toast.draftDeleted"));
+    setSelectedIds(previous => { const next = new Set(previous); next.delete(d.id); return next; });
   }, [tr]);
-  const handleArchive = useCallback((d: PinDraft) => { pinDraftStore.archiveDraft(d.id); toast.success(tr("studioBoard.toast.archived")); }, [tr]);
+  const handleArchive = useCallback((d: PinDraft) => {
+    pinDraftStore.archiveDraft(d.id); toast.success(tr("studioBoard.toast.archived"));
+    setSelectedIds(previous => { const next = new Set(previous); next.delete(d.id); return next; });
+  }, [tr]);
   const handleDuplicate = useCallback((id: string) => { pinDraftStore.duplicateDraft(id); toast.success(tr("studioBoard.toast.duplicated")); }, [tr]);
   const handleConnect = useCallback(() => { void startPinterestConnect(); }, []);
 
@@ -555,24 +837,10 @@ export function StudioBoard() {
   }
 
   return (
-    <div data-testid="studio-board" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, background: BUI.bg }}>
+    <div data-testid="studio-board" style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0, background: BUI.bg, position: "relative", overflow: "hidden" }}>
+      <div data-testid="studio-board-content" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
       <input ref={fileRef} type="file" accept={ACCEPT} multiple data-testid="board-upload-input" style={{ display: "none" }}
         onChange={e => { if (e.target.files?.length) void handleFiles(e.target.files); e.target.value = ""; }} />
-
-      {/* Context suppression (PRD §2.2): never show the Banner while already on the
-          Failed view — the user is already looking at exactly what it would tell them. */}
-      {filter !== "failed" && (
-        <FailureBanner
-          count={bannerCount}
-          onReview={() => {
-            // Banner CTA → Failed view defaults to "Publish failures" (matches the
-            // Banner's own count, which is publish-failures only). Plan applies the same
-            // rule on its own surface now (stays in Plan's Failed list, no cross-nav).
-            setFilter("failed", "publish");
-          }}
-          onDismiss={dismissBanner}
-        />
-      )}
 
       {/* Header */}
       <div style={{ padding: "16px 22px 10px", display: "flex", flexDirection: "column", gap: 12, background: BUI.surface, borderBottom: `1px solid ${BUI.border}`, flexShrink: 0 }}>
@@ -582,9 +850,6 @@ export function StudioBoard() {
               <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: BUI.text }}>{tr("studioBoard.title")}</h1>
               <p style={{ margin: "2px 0 0", fontSize: 12.5, color: BUI.textSec }}>{tr("studioBoard.subtitle")}</p>
             </div>
-            {isDev && (
-              <span data-testid="studio-board-v2-marker" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.3, color: "#fff", background: BUI.gradient, borderRadius: 999, padding: "2px 10px" }}>Studio Board V2</span>
-            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
             {savedIndicator}
@@ -597,21 +862,47 @@ export function StudioBoard() {
             side by side. Only shown once the board has cards — the empty state has its own
             upload-first zone with a "Create from your store?" product entry. */}
         {hasCards && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button type="button" data-testid="board-upload-more" onClick={openFilePicker} disabled={uploading}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <button type="button" data-testid="board-create-ai" onClick={handleCreateWithAi}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+              <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.aiDrawer.createWithAi")}
+            </button>
+            <button type="button" data-testid="board-upload-more" onClick={openFilePicker} disabled={uploading}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.textSec, fontSize: 12, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
               {uploading ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Upload style={{ width: 13, height: 13 }} />}
               {uploading && uploadProgress ? ` ${tr("studioBoard.uploadingProgress").replace("{done}", String(uploadProgress.done)).replace("{total}", String(uploadProgress.total))}` : ` ${tr("studioBoard.uploadMore")}`}
             </button>
             {shopifyEnabled && (
-              <button type="button" data-testid="board-select-product" onClick={() => setShowProductPicker(true)}
+              <button type="button" data-testid="board-select-product" onClick={() => { setProductPickerTargetId(null); setShowProductPicker(true); }}
                 style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: BUI.textSec, background: "none", border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
                 {tr("studioBoard.selectProduct")}
               </button>
             )}
+            {selectedIds.size > 0 && (
+              <div data-testid="board-selection-toolbar" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 800, color: BUI.text }}>{selectedIds.size} selected</span>
+                <button type="button" onClick={() => setSelectedIds(new Set(items.map(item => item.draft.id)))}
+                  style={{ border: 0, background: "none", color: BUI.purple, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>Select all</button>
+                <button type="button" onClick={() => setSelectedIds(new Set())}
+                  style={{ border: 0, background: "none", color: BUI.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>Clear</button>
+                {selectedIds.size >= 2 && (
+                  <button type="button" data-testid="board-batch-edit" onClick={() => setBatchEditOpen(true)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                    <Rows3 style={{ width: 13, height: 13 }} /> Batch edit
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
         <StudioBoardFilters value={filter} counts={counts} onChange={setFilter} />
+        {filter !== "failed" && publishFailureCount > 0 && (
+          <button type="button" data-testid="studio-failure-notice" onClick={() => setFilter("failed", "publish")}
+            style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6, padding: 0, border: 0, background: "none", color: "#b45309", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            <AlertTriangle style={{ width: 12, height: 12 }} />
+            {publishFailureCount} {publishFailureCount === 1 ? "destination needs" : "destinations need"} attention · Review
+          </button>
+        )}
       </div>
 
       {/* Body */}
@@ -660,7 +951,7 @@ export function StudioBoard() {
               {tr("studioBoard.empty.noImageCreateWithAi")} <ArrowRight style={{ width: 13, height: 13 }} />
             </button>
             {shopifyEnabled && (
-              <button type="button" data-testid="board-select-product-empty" onClick={() => setShowProductPicker(true)}
+              <button type="button" data-testid="board-select-product-empty" onClick={() => { setProductPickerTargetId(null); setShowProductPicker(true); }}
                 style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, fontSize: 12, fontWeight: 700, color: BUI.purple, cursor: "pointer", fontFamily: "inherit" }}>
                 {tr("studioBoard.empty.createFromStoreSelectProduct")} <ArrowRight style={{ width: 13, height: 13 }} />
               </button>
@@ -692,17 +983,28 @@ export function StudioBoard() {
             <p style={{ margin: 0, fontSize: 12.5 }}>{tr("studioBoard.empty.nothingHereSub")}</p>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, alignItems: "start" }}>
+          <div data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planPinned
+            ? "repeat(auto-fill, minmax(248px, 1fr))"
+            : "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, alignItems: "start" }}>
             {items.map(({ draft, lifecycle }) => (
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}
                 topPick={topPickIds.has(draft.id)}
+                fallbackBoardName={recentBoardName}
+                selected={selectedIds.has(draft.id)}
+                onSelectedChange={(id, selected) => setSelectedIds(previous => {
+                  const next = new Set(previous);
+                  if (selected) next.add(id); else next.delete(id);
+                  return next;
+                })}
                 active={activeId === draft.id} onSetActive={setActiveId}
-                boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
+                boards={customerBoards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}
                 boardFieldError={scheduleErrors[draft.id] || undefined}
                 onPersist={handlePersist}
-                onSchedule={handleSchedule} onGenerateAiImage={handleGenerateAiImage} onPublish={handlePublish}
+                onSchedule={handleSchedule} onCustomSchedule={handleCustomSchedule}
+                onSelectProduct={(pin) => { setProductPickerTargetId(pin.id); setShowProductPicker(true); }}
+                onGenerateAiImage={handleGenerateAiImage} onPublish={handlePublish}
                 onDelete={handleDelete} onArchive={handleArchive} onDuplicate={handleDuplicate}
                 onUnschedule={handleUnschedule} onMoveToUnscheduled={handleMoveToUnscheduled}
                 onDownload={(d) => { void handleDownload(d); }}
@@ -732,12 +1034,92 @@ export function StudioBoard() {
       {showProductPicker && (
         <ProductPickerModal
           title={tr("studioBoard.productPicker.title")}
-          subtitle={tr("studioBoard.productPicker.subtitle")}
+          subtitle={productPickerTargetId ? tr("studioBoard.productPicker.attachSubtitle") : tr("studioBoard.productPicker.subtitle")}
           initialTab="shopify"
           onSelect={handleProductSelect}
-          onClose={() => setShowProductPicker(false)}
+          onClose={() => { setShowProductPicker(false); setProductPickerTargetId(null); }}
         />
       )}
+      <BatchEditDrawer
+        open={batchEditOpen}
+        pins={selectedBatchPins}
+        source="weekly_plan"
+        onClose={() => setBatchEditOpen(false)}
+        onApply={handleBatchApply}
+        onGenerateMetadata={() => toast.info("Select rows, then use Generate copy to fill missing details.")}
+        onScheduleSelected={ids => {
+          ids.forEach(id => { ensureScheduledPlanTime(id); });
+          toast.success(`${ids.length} ${ids.length === 1 ? "content item" : "content items"} scheduled.`);
+        }}
+        onPublishComplete={ids => {
+          const now = new Date().toISOString();
+          ids.forEach(id => {
+            const current = pinDraftStore.getDraft(id);
+            if (!current) return;
+            const pinterest = contentDestinations(current).find(destination => destination.provider === "pinterest") ?? { id: `${id}:pinterest`, provider: "pinterest" as const };
+            const prior = contentDestinationResults(current).filter(result => result.destinationId !== pinterest.id);
+            pinDraftStore.updateDraft(id, {
+              postedAt: now,
+              destinationResults: [...prior, { destinationId: pinterest.id, provider: "pinterest", status: "published", publishedAt: now }],
+              publishError: undefined,
+              failureType: undefined,
+              errorCategory: undefined,
+              publishErrorCode: undefined,
+            });
+          });
+        }}
+      />
+      {pendingUploadFiles && (
+        <div data-testid="multi-upload-modal" role="dialog" aria-modal="true" aria-labelledby="multi-upload-title"
+          style={{ position: "fixed", inset: 0, zIndex: 360, background: "rgba(15,23,42,0.42)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ width: "min(720px, 94vw)", borderRadius: 16, border: `1px solid ${BUI.border}`, background: BUI.surface, boxShadow: "0 24px 70px rgba(15,23,42,0.24)", padding: 22 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <h2 id="multi-upload-title" style={{ margin: 0, fontSize: 18, color: BUI.text }}>You&apos;ve uploaded {pendingUploadFiles.length} images</h2>
+                <p style={{ margin: "5px 0 0", fontSize: 12.5, color: BUI.textSec }}>How would you like to publish them?</p>
+              </div>
+              <button type="button" aria-label="Cancel" onClick={() => setPendingUploadFiles(null)} style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4 }}><X style={{ width: 17, height: 17 }} /></button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginTop: 18 }}>
+              <UploadChoiceCard selected={uploadChoice === "together"} icon={<Images style={{ width: 20, height: 20 }} />} title="Publish together"
+                description="Use all images in one carousel or multi-image post." visual="stack" onClick={() => setUploadChoice("together")} />
+              <UploadChoiceCard selected={uploadChoice === "separate"} icon={<Rows3 style={{ width: 20, height: 20 }} />} title="Publish separately"
+                description={`Create ${pendingUploadFiles.length} separate posts, one image per post.`} visual="rows" onClick={() => setUploadChoice("separate")} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 18 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: BUI.textSec, cursor: "pointer" }}>
+                <input type="checkbox" checked={rememberUploadChoice} onChange={e => setRememberUploadChoice(e.target.checked)} /> Don&apos;t show this again
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={() => setPendingUploadFiles(null)} style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+                <button type="button" data-testid="multi-upload-continue" onClick={continueMultiUpload} style={{ padding: "8px 17px", borderRadius: 8, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Continue</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+      <StudioPlanSidebar drafts={allItems.map(item => item.draft)} pinned={planPinned} onPinnedChange={handlePlanPinnedChange} />
     </div>
+  );
+}
+
+function UploadChoiceCard({ selected, icon, title, description, visual, onClick }: {
+  selected: boolean; icon: React.ReactNode; title: string; description: string; visual: "stack" | "rows"; onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={selected}
+      style={{ padding: 16, minHeight: 172, borderRadius: 12, border: `1.5px solid ${selected ? BUI.purple : BUI.border}`, background: selected ? "rgba(124,58,237,0.045)" : BUI.surface, color: BUI.text, textAlign: "left", cursor: "pointer", fontFamily: "inherit" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 800, color: selected ? BUI.purple : BUI.text }}>{icon}{title}</span>
+        <span style={{ width: 18, height: 18, borderRadius: "50%", border: `1.5px solid ${selected ? BUI.purple : BUI.borderHi}`, background: selected ? BUI.purple : "transparent", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{selected ? <Check style={{ width: 12, height: 12 }} /> : null}</span>
+      </div>
+      <p style={{ margin: "8px 0 14px", fontSize: 11.5, lineHeight: 1.5, color: BUI.textSec }}>{description}</p>
+      <div style={{ height: 72, display: "flex", alignItems: "center", justifyContent: "center", gap: visual === "rows" ? 7 : 0 }}>
+        {(visual === "stack" ? [0, 1, 2] : [0, 1, 2]).map((item, index) => (
+          <span key={item} style={{ width: 44, height: 62, borderRadius: 7, border: `1px solid ${BUI.border}`, background: `linear-gradient(145deg, rgba(124,58,237,${0.08 + index * 0.03}), rgba(14,165,233,0.08))`, boxShadow: visual === "stack" ? "0 5px 12px rgba(15,23,42,0.10)" : "none", marginLeft: visual === "stack" && index ? -16 : 0, transform: visual === "stack" ? `translateY(${Math.abs(index - 1) * 3}px)` : "none" }} />
+        ))}
+      </div>
+    </button>
   );
 }
