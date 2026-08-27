@@ -15,7 +15,8 @@ import {
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getUserDetail, type UserDetail } from "@/lib/server/customer360";
 import { getUserBlockers, type BlockerType, type UserHealth } from "@/lib/server/adminActionCenter";
-import { BLOCKER_LABEL_KEY, HEALTH_DRIVER_KEY, HEALTH_BAND_KEY } from "@/lib/admin/adminConsoleKeys";
+import { BLOCKER_LABEL_KEY, HEALTH_DRIVER_KEY, HEALTH_BAND_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
+import type { AccountKind } from "@/lib/server/adminAccountKind";
 import SupportNotesClient from "./SupportNotesClient";
 import { AdminT } from "../../AdminT";
 
@@ -93,6 +94,28 @@ const HEALTH_TONE: Record<UserHealth["band"], { bg: string; fg: string }> = {
   yellow: { bg: "rgba(245,158,11,0.13)", fg: "#B45309" },
   red: { bg: "rgba(239,68,68,0.12)", fg: "#B91C1C" },
 };
+
+/**
+ * Marks a non-customer account next to the title, using the SAME classifier the
+ * cockpit filters with — so a user who is missing from /admin/today is visibly
+ * a test/internal account here instead of looking overlooked. Real customers
+ * get no chip.
+ */
+function AccountKindChip({ kind }: { kind: AccountKind }) {
+  const key = ACCOUNT_KIND_KEY[kind];
+  if (!key) return null;
+  const tone = kind === "internal"
+    ? { bg: "rgba(99,102,241,0.12)", fg: "#4338CA" }
+    : { bg: "rgba(245,158,11,0.14)", fg: "#B45309" };
+  return (
+    <span
+      className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase align-middle"
+      style={{ background: tone.bg, color: tone.fg }}
+    >
+      <AdminT k={key} />
+    </span>
+  );
+}
 
 function AlertStrip({ blockers }: { blockers: Array<{ blockerType: BlockerType; dataQuality: "exact" | "inferred" }> }) {
   if (blockers.length === 0) {
@@ -190,7 +213,10 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
               <Lock className="h-3.5 w-3.5" />
               Super Admin only · Internal
             </div>
-            <h1 className="text-[23px] font-black tracking-tight text-gray-950">{a.email ?? "(no email)"}</h1>
+            <h1 className="text-[23px] font-black tracking-tight text-gray-950">
+              {a.email ?? "(no email)"}
+              <AccountKindChip kind={a.accountKind} />
+            </h1>
           </div>
         </div>
 

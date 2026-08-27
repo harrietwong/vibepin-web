@@ -29,9 +29,11 @@ import {
   createAdminDb,
   isMissingSchema,
   isoHoursAgo,
+  listAllAuthUsers,
   paginateRows,
   type SupabaseLikeDb,
 } from "./adminQueryUtils";
+import { classifyAccount, emptyExcluded, type ExcludedCounts } from "./adminAccountKind";
 
 // ── contract types ────────────────────────────────────────────────────────────
 
@@ -55,6 +57,18 @@ export interface AiAdoption {
     /** +1 improving, -1 declining, 0 flat/unknown. */
     direction: -1 | 0 | 1;
   };
+  /**
+   * Users whose generations and drafts were left out because they are test /
+   * internal accounts. Zero on both counts when `includeNonCustomers` was set,
+   * and also when the auth user list could not be read (see the warning — the
+   * metric then covers everyone rather than silently reporting nothing).
+   */
+  excluded: ExcludedCounts;
+}
+
+/** Shared options for the cockpit derivations. Default = real customers only. */
+export interface CockpitOptions {
+  includeNonCustomers?: boolean;
 }
 
 // ── linkage primitives (pure) ─────────────────────────────────────────────────
@@ -72,6 +86,8 @@ export interface GenerationLite {
   generationRequestId: string | null;
   /** every output image URL this generation produced (pin_urls ∪ groups_json images). */
   outputUrls: string[];
+  /** owner — used only to drop non-customer rows before the rate is computed. */
+  userId: string | null;
 }
 
 export interface DraftLite {
@@ -81,6 +97,8 @@ export interface DraftLite {
   imageUrls: string[];
   /** true when this draft is published (event OR postedAt). */
   published: boolean;
+  /** owner — used only to drop non-customer rows before the rate is computed. */
+  userId: string | null;
 }
 
 /** Flatten a pin_generations row's outputs into a URL list. */
@@ -162,7 +180,7 @@ async function loadGenerations(
   warnings: string[],
 ): Promise<{ rows: GenerationLite[]; statusAvailable: boolean; available: boolean }> {
   let statusAvailable = true;
-  type GenScanRow = { id: string; created_at: string | null; status: string | null; generation_request_id?: string | null; pin_urls: unknown; groups_json: unknown };
+  type GenScanRow = { id: string; created_at: string | null; status: string | null; user_id?: string | null; generation_request_id?: string | null; pin_urls: unknown; groups_json: unknown };
   const scan = (columns: string) => paginateRows<GenScanRow>(
     db,
     "pin_generations",
@@ -176,9 +194,9 @@ async function loadGenerations(
   // Prefer the row's own generation_request_id (v52+) as the EXACT join key.
   // Pre-v52 DBs lack the column → PostgREST errors; retry without it so those
   // databases still compute adoption via the id-only exact match (unchanged behavior).
-  let res = await scan("id,created_at,status,generation_request_id,pin_urls,groups_json");
+  let res = await scan("id,created_at,status,user_id,generation_request_id,pin_urls,groups_json");
   if (res.error && isMissingSchema(res.error)) {
-    res = await scan("id,created_at,status,pin_urls,groups_json");
+    res = await scan("id,created_at,status,user_id,pin_urls,groups_json");
     if (res.error && isMissingSchema(res.error)) {
       // status column absent — without it we cannot identify "completed" generations.
       statusAvailable = false;
@@ -202,6 +220,7 @@ async function loadGenerations(
     status: r.status,
     generationRequestId: (typeof r.generation_request_id === "string" && r.generation_request_id.trim()) ? r.generation_request_id : null,
     outputUrls: extractOutputUrls(r),
+    userId: typeof r.user_id === "string" && r.user_id ? r.user_id : null,
   }));
   return { rows, statusAvailable, available: true };
 }
@@ -242,6 +261,7 @@ async function loadDrafts(
       sourceGenerationId: str(p.sourceGenerationId),
       imageUrls: Array.from(imageUrls),
       published: publishedByEvent || publishedByPostedAt,
+      userId: r.vibepin_user_id ?? null,
     };
   });
 }
@@ -277,8 +297,41 @@ async function loadPublishedDraftIds(
 
 // ── public entry point ─────────────────────────────────────────────────────────
 
-export async function getAiAdoption(injectedDb?: SupabaseLikeDb): Promise<AiAdoption> {
+/**
+ * Build the set of user ids whose rows must be dropped (test + internal), plus
+ * the per-kind counters.
+ *
+ * DEGRADATION: if the auth user list is unreadable (no service role) we do NOT
+ * fail the metric — an adoption rate over everyone is far more useful than no
+ * rate at all. We warn, exclude nobody, and report zero counters so the UI does
+ * not claim a filter that was not applied.
+ */
+async function loadNonCustomerIds(
+  db: SupabaseLikeDb,
+  warnings: string[],
+): Promise<{ ids: Set<string>; excluded: ExcludedCounts }> {
+  const ids = new Set<string>();
+  const excluded = emptyExcluded();
+  const users = await listAllAuthUsers(db, warnings);
+  if (users === null) {
+    warnings.push("Auth user list unavailable — AI adoption could not exclude test/internal accounts and covers ALL users.");
+    return { ids, excluded };
+  }
+  for (const u of users) {
+    const kind = classifyAccount(u);
+    if (kind === "customer") continue;
+    excluded[kind] += 1;
+    ids.add(u.id);
+  }
+  return { ids, excluded };
+}
+
+export async function getAiAdoption(
+  injectedDb?: SupabaseLikeDb,
+  options: CockpitOptions = {},
+): Promise<AiAdoption> {
   const db = injectedDb ?? (await createAdminDb());
+  const includeNonCustomers = options.includeNonCustomers === true;
   const warnings: string[] = [];
   const since = isoHoursAgo(SCAN_WINDOW_DAYS * 24);
   const now = Date.now();
@@ -286,29 +339,40 @@ export async function getAiAdoption(injectedDb?: SupabaseLikeDb): Promise<AiAdop
 
   // Publish events first (needed to resolve draft published-state), then drafts +
   // generations. Generations + publish events are independent → run in parallel.
-  const [genRes, publishedIds] = await Promise.all([
+  const [genRes, publishedIds, nonCustomers] = await Promise.all([
     loadGenerations(db, since, warnings),
     loadPublishedDraftIds(db, since, warnings),
+    includeNonCustomers
+      ? Promise.resolve({ ids: new Set<string>(), excluded: emptyExcluded() })
+      : loadNonCustomerIds(db, warnings),
   ]);
 
   if (!genRes.available) {
     return {
       available: false, generatedAt: new Date().toISOString(), scanWindowDays: SCAN_WINDOW_DAYS,
       warnings, adopted: 0, completed: 0, rate: null, linkSplit: { exact: 0, inferred: 0 },
-      trend: { last7dRate: null, prior7dRate: null, direction: 0 },
+      trend: { last7dRate: null, prior7dRate: null, direction: 0 }, excluded: emptyExcluded(),
     };
   }
 
-  const drafts = await loadDrafts(db, since, publishedIds, warnings);
+  const allDrafts = await loadDrafts(db, since, publishedIds, warnings);
+
+  // Drop non-customer rows BEFORE the pure linkage functions run, so those stay
+  // free of any notion of account kind. Rows with an unknown owner are kept:
+  // an orphan row is not evidence of a test account, and dropping it would
+  // quietly shrink the denominator.
+  const drop = (uid: string | null): boolean => uid !== null && nonCustomers.ids.has(uid);
+  const generations = nonCustomers.ids.size === 0 ? genRes.rows : genRes.rows.filter(g => !drop(g.userId));
+  const drafts = nonCustomers.ids.size === 0 ? allDrafts : allDrafts.filter(d => !drop(d.userId));
 
   // Global (14d window) adoption.
-  const global = computeAdoption(genRes.rows, drafts);
+  const global = computeAdoption(generations, drafts);
 
   // 7-day direction: split generations into this-7d / prior-7d halves, recompute
   // the rate over each half against the SAME draft set (a draft published now can
   // adopt a generation from either half).
-  const last7 = genRes.rows.filter(g => g.createdAt && g.createdAt >= sevenDaysAgo);
-  const prior7 = genRes.rows.filter(g => g.createdAt && g.createdAt < sevenDaysAgo);
+  const last7 = generations.filter(g => g.createdAt && g.createdAt >= sevenDaysAgo);
+  const prior7 = generations.filter(g => g.createdAt && g.createdAt < sevenDaysAgo);
   const last7Res = computeAdoption(last7, drafts);
   const prior7Res = computeAdoption(prior7, drafts);
   const last7dRate = rateOf(last7Res.adopted, last7Res.completed);
@@ -330,5 +394,6 @@ export async function getAiAdoption(injectedDb?: SupabaseLikeDb): Promise<AiAdop
     rate: rateOf(global.adopted, global.completed),
     linkSplit: { exact: global.exactLinks, inferred: global.inferredLinks },
     trend: { last7dRate, prior7dRate, direction },
+    excluded: nonCustomers.excluded,
   };
 }

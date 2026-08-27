@@ -35,6 +35,12 @@ import {
   type AuthUserLite,
 } from "./adminQueryUtils";
 import type { PlanKey } from "./entitlements";
+import {
+  classifyAccount,
+  emptyExcluded,
+  type AccountKind,
+  type ExcludedCounts,
+} from "./adminAccountKind";
 
 // ── enums / contract types ───────────────────────────────────────────────────
 
@@ -72,6 +78,12 @@ export interface BlockerEvidence {
 export interface BlockerItem {
   userId: string;
   email: string | null;
+  /**
+   * Whether this row belongs to a real customer, a test account, or an internal
+   * (founder / support) login. Always populated — even when the caller asked to
+   * include non-customers, so the UI can label the rows it is showing.
+   */
+  accountKind: AccountKind;
   blockerType: BlockerType;
   /** When this blocker first became true (best available anchor timestamp, ISO). */
   firstSeenAt: string | null;
@@ -96,6 +108,17 @@ export interface ActionCenter {
   windowHours: number;
   warnings: string[];
   items: BlockerItem[];
+  /**
+   * How many USERS (not blockers) were left out of `items` because they are not
+   * real customers. Zero on both counts when `includeNonCustomers` was set.
+   */
+  excluded: ExcludedCounts;
+}
+
+/** Shared options for the cockpit derivations. Default = real customers only. */
+export interface CockpitOptions {
+  /** Include test + internal accounts in the result instead of filtering them out. */
+  includeNonCustomers?: boolean;
 }
 
 export interface UserBlockers {
@@ -227,7 +250,9 @@ function hoursSince(iso: string | null): number | undefined {
  * inferred publish success, across all their drafts) is later than the failure
  * evidence — the same "later success clears it" rule the exact branch applies.
  */
-function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | null {
+type RawBlocker = Omit<BlockerItem, "accountKind">;
+
+function evalPublishFailure(f: UserFacts, windowStart: string): RawBlocker | null {
   const p = f.publish;
   const exactFailed =
     p.lastFailedAt &&
@@ -283,7 +308,7 @@ function evalPublishFailure(f: UserFacts, windowStart: string): BlockerItem | nu
 }
 
 /** pinterest_disconnected — needs_reconnect true OR disconnected_at non-null. */
-function evalPinterestDisconnected(f: UserFacts): BlockerItem | null {
+function evalPinterestDisconnected(f: UserFacts): RawBlocker | null {
   const c = f.conn;
   if (!c.hasRow) return null;
   if (c.disconnectedAt) {
@@ -310,7 +335,7 @@ function evalPinterestDisconnected(f: UserFacts): BlockerItem | null {
 }
 
 /** generation_failures — ≥2 failed generations in the window, no success after the last failure. */
-function evalGenerationFailures(f: UserFacts): BlockerItem | null {
+function evalGenerationFailures(f: UserFacts): RawBlocker | null {
   const g = f.gen;
   if (g.failedCountInWindow < 2) return null;
   // A success strictly after the last failure clears the block.
@@ -326,7 +351,7 @@ function evalGenerationFailures(f: UserFacts): BlockerItem | null {
 }
 
 /** signup_not_connected — auth user created >48h ago with no pinterest connection row. */
-function evalSignupNotConnected(f: UserFacts): BlockerItem | null {
+function evalSignupNotConnected(f: UserFacts): RawBlocker | null {
   if (f.conn.hasRow) return null;
   const created = f.user.created_at;
   if (!created) return null;
@@ -343,7 +368,7 @@ function evalSignupNotConnected(f: UserFacts): BlockerItem | null {
 }
 
 /** connected_not_creating — connection created >72h ago, zero generations AND zero drafts. */
-function evalConnectedNotCreating(f: UserFacts): BlockerItem | null {
+function evalConnectedNotCreating(f: UserFacts): RawBlocker | null {
   const c = f.conn;
   if (!c.hasRow || c.disconnectedAt || !c.createdAt) return null;
   const ageH = hoursSince(c.createdAt);
@@ -362,8 +387,19 @@ function evalConnectedNotCreating(f: UserFacts): BlockerItem | null {
   };
 }
 
-/** Run every predicate for one user's facts. Exported ONLY for the shared paths. */
-export function evaluateBlockers(f: UserFacts, windowStart: string): BlockerItem[] {
+/**
+ * Run every predicate for one user's facts. Exported ONLY for the shared paths.
+ *
+ * `accountKind` is stamped here, once per user, rather than inside each
+ * predicate — the predicates answer "is this user stuck", never "who is this
+ * user". Callers that already classified the user (the list path classifies
+ * every auth user anyway) pass the kind in to avoid re-parsing the env per row.
+ */
+export function evaluateBlockers(
+  f: UserFacts,
+  windowStart: string,
+  accountKind: AccountKind = classifyAccount(f.user),
+): BlockerItem[] {
   const out: BlockerItem[] = [];
   for (const item of [
     evalPublishFailure(f, windowStart),
@@ -372,7 +408,7 @@ export function evaluateBlockers(f: UserFacts, windowStart: string): BlockerItem
     evalSignupNotConnected(f),
     evalConnectedNotCreating(f),
   ]) {
-    if (item) out.push(item);
+    if (item) out.push({ ...item, accountKind });
   }
   return out;
 }
@@ -784,15 +820,19 @@ function isPaid(user: AuthUserLite): boolean {
 
 // ── public entry points ────────────────────────────────────────────────────────
 
-export async function getActionCenter(injectedDb?: SupabaseLikeDb): Promise<ActionCenter> {
+export async function getActionCenter(
+  injectedDb?: SupabaseLikeDb,
+  options: CockpitOptions = {},
+): Promise<ActionCenter> {
   const db = injectedDb ?? (await createAdminDb());
+  const includeNonCustomers = options.includeNonCustomers === true;
   const warnings: string[] = [];
   const since = isoHoursAgo(SCAN_WINDOW_HOURS);
   const windowStart = isoHoursAgo(WINDOW_HOURS);
 
   const users = await listAllAuthUsers(db, warnings);
   if (users === null) {
-    return { available: false, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items: [] };
+    return { available: false, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items: [], excluded: emptyExcluded() };
   }
 
   const [publish, draft, conn, gen] = await Promise.all([
@@ -804,10 +844,18 @@ export async function getActionCenter(injectedDb?: SupabaseLikeDb): Promise<Acti
 
   const items: BlockerItem[] = [];
   const paidByUser = new Map<string, boolean>();
+  const excluded = emptyExcluded();
   for (const user of users) {
+    // Classify BEFORE running the predicates: a skipped user costs nothing, and
+    // the counters below report USERS filtered out, not blockers suppressed.
+    const kind = classifyAccount(user);
+    if (!includeNonCustomers && kind !== "customer") {
+      excluded[kind] += 1;
+      continue;
+    }
     const facts = assembleFacts(user, publish, draft, conn, gen);
     paidByUser.set(user.id, isPaid(user));
-    items.push(...evaluateBlockers(facts, windowStart));
+    items.push(...evaluateBlockers(facts, windowStart, kind));
   }
 
   // Sort: paid users first, then by blocker age (oldest firstSeenAt first — the
@@ -820,7 +868,7 @@ export async function getActionCenter(injectedDb?: SupabaseLikeDb): Promise<Acti
     return (a.firstSeenAt ?? "").localeCompare(b.firstSeenAt ?? "");
   });
 
-  return { available: true, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items };
+  return { available: true, generatedAt: new Date().toISOString(), windowHours: WINDOW_HOURS, warnings, items, excluded };
 }
 
 /**

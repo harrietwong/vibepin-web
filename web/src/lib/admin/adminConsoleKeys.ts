@@ -11,6 +11,7 @@
 
 import type { BlockerType, UserHealth } from "@/lib/server/adminActionCenter";
 import type { FunnelStage } from "@/lib/server/adminActivationFunnel";
+import type { AccountKind } from "@/lib/server/adminAccountKind";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
 export const BLOCKER_LABEL_KEY: Record<BlockerType, AdminMessageKey> = {
@@ -48,4 +49,15 @@ export const HEALTH_BAND_KEY: Record<UserHealth["band"], AdminMessageKey> = {
   green: "c360.health.band.green",
   yellow: "c360.health.band.yellow",
   red: "c360.health.band.red",
+};
+
+/**
+ * Chip label per account kind. `customer` maps to null: a real customer is the
+ * default and gets NO chip — labelling the normal case would make the list
+ * noisier, not clearer.
+ */
+export const ACCOUNT_KIND_KEY: Record<AccountKind, AdminMessageKey | null> = {
+  customer: null,
+  test: "today.accountKind.test",
+  internal: "today.accountKind.internal",
 };

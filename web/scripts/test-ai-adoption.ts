@@ -37,8 +37,8 @@ test("extractOutputUrls: handles missing/garbage shapes", () => {
 });
 
 // ── computeAdoption: linkage precedence + published gate ──────────────────────
-const gen = (id: string, urls: string[], status = "completed", createdAt = daysAgo(1), generationRequestId: string | null = null): GenerationLite => ({ id, createdAt, status, generationRequestId, outputUrls: urls });
-const draft = (o: Partial<DraftLite>): DraftLite => ({ draftId: "d", sourceGenerationId: null, imageUrls: [], published: false, ...o });
+const gen = (id: string, urls: string[], status = "completed", createdAt = daysAgo(1), generationRequestId: string | null = null): GenerationLite => ({ id, createdAt, status, generationRequestId, outputUrls: urls, userId: null });
+const draft = (o: Partial<DraftLite>): DraftLite => ({ draftId: "d", sourceGenerationId: null, imageUrls: [], published: false, userId: null, ...o });
 
 test("computeAdoption: EXACT link via sourceGenerationId, draft published by event", () => {
   const r = computeAdoption([gen("g1", ["https://x/1.png"])], [draft({ draftId: "d1", sourceGenerationId: "g1", published: true })]);
@@ -57,7 +57,7 @@ test("computeAdoption: EXACT link joins on generation_request_id, NOT the DB id"
   const g: GenerationLite = {
     id: "db-uuid-abc",                 // DB-generated primary key
     generationRequestId: "sess_123",   // what the client sent + wrote onto the draft
-    createdAt: daysAgo(1), status: "completed", outputUrls: ["https://x/1.png"],
+    createdAt: daysAgo(1), status: "completed", outputUrls: ["https://x/1.png"], userId: null,
   };
   const r = computeAdoption(
     [g],

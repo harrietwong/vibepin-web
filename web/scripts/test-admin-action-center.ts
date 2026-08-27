@@ -244,7 +244,7 @@ test("health GREEN: all four signals true", () => {
 test("health YELLOW: exactly one signal false", () => {
   // active + publish + pinterest ok, but one open blocker → noOpenBlockers false.
   const f = facts({ lastSignIn: hoursAgo(1), conn: { hasRow: true, createdAt: hoursAgo(200) }, publish: { lastSucceededAt: hoursAgo(2) } });
-  const h = computeHealth(f, [{ userId: "u1", email: null, blockerType: "publish_failure", firstSeenAt: null, dataQuality: "exact", evidence: {} }]);
+  const h = computeHealth(f, [{ userId: "u1", email: null, accountKind: "customer", blockerType: "publish_failure", firstSeenAt: null, dataQuality: "exact", evidence: {} }]);
   assert.equal(h.band, "yellow");
   assert.deepEqual(h.drivers, ["noOpenBlockers"]);
 });
@@ -391,6 +391,154 @@ test("getUserBlockers: shares predicate logic; returns health band", async () =>
   assert.equal(res.userId, "u1");
   assert.equal(res.blockers.length, 0, "healthy user has no blockers");
   assert.equal(res.health.band, "green");
+});
+
+// ── account-kind scoping: the default view is REAL CUSTOMERS ONLY ────────────
+//
+// The production auth table holds the founders' own logins and a paddle e2e
+// fixture; the test DB is entirely e2e-cockpit-*@example.test. Counting those as
+// customers fills the operator's list with rows nobody will act on. These tests
+// go through getActionCenter (not the pure classifier) so the FILTERING and the
+// `excluded` counters are exercised end-to-end.
+//
+// SUPER_ADMIN_EMAILS is read from the REAL process env by the classifier (it is
+// a server-side allowlist, not an injectable), so these tests must set it.
+//
+// The harness starts every test immediately and awaits them together, so tests
+// interleave at await points: a module-level "set env / restore env at the end"
+// pair would restore BEFORE the async bodies ran, and any inherited real value
+// would leak in. Each test therefore brackets its own env with withAccountEnv().
+
+const ACCOUNT_ENV_KEYS = ["SUPER_ADMIN_EMAILS", "SUPPORT_ADMIN_EMAILS", "ADMIN_TEST_ACCOUNT_EMAILS"] as const;
+
+async function withAccountEnv<T>(env: Partial<Record<(typeof ACCOUNT_ENV_KEYS)[number], string>>, fn: () => Promise<T>): Promise<T> {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of ACCOUNT_ENV_KEYS) {
+    saved[k] = process.env[k];
+    const v = env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const k of ACCOUNT_ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k]!;
+    }
+  }
+}
+
+const FOUNDER_ENV = { SUPER_ADMIN_EMAILS: "founder@vibepin.co" };
+
+/** All four users are stuck on signup_not_connected (no connection rows). */
+function mixedPopulationDb() {
+  const authUsers = [
+    { id: "cust1", email: "jane@shopify-store.com", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "cust2", email: "contest@x.com", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "testA", email: "paddle-e2e-test@vibepin.co", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "testB", email: "e2e-cockpit-a@example.test", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+    { id: "intern1", email: "founder@vibepin.co", created_at: hoursAgo(100), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+  ];
+  return makeMockDb(
+    { analytics_events: { rows: [] }, pin_drafts: { rows: [] }, pinterest_connections: { rows: [] }, pin_generations: { rows: [] } },
+    authUsers,
+  );
+}
+
+test("getActionCenter DEFAULT: test + internal accounts are excluded, counters report them", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  const { db } = mixedPopulationDb();
+  const res = await getActionCenter(db);
+  assert.ok(res.available);
+  const ids = res.items.map(i => i.userId).sort();
+  assert.deepEqual(ids, ["cust1", "cust2"], `only real customers may appear, got ${ids.join(",")}`);
+  // 2 test fixtures (paddle-e2e-test + e2e-cockpit-a) and 1 founder.
+  assert.deepEqual(res.excluded, { test: 2, internal: 1 });
+  // contest@x.com is a REAL customer — the token guard must not swallow it.
+  assert.ok(res.items.some(i => i.email === "contest@x.com"), "contest@x.com must not be misread as a test account");
+  assert.ok(res.items.every(i => i.accountKind === "customer"));
+ });
+});
+
+test("getActionCenter includeNonCustomers: everyone appears, each tagged with its kind", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  const { db } = mixedPopulationDb();
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  assert.equal(res.items.length, 5, "all five users must appear");
+  const kindById = new Map(res.items.map(i => [i.userId, i.accountKind]));
+  assert.equal(kindById.get("cust1"), "customer");
+  assert.equal(kindById.get("cust2"), "customer");
+  assert.equal(kindById.get("testA"), "test", "paddle-e2e-test@vibepin.co must be tagged test");
+  assert.equal(kindById.get("testB"), "test", "e2e-cockpit-a@example.test must be tagged test");
+  assert.equal(kindById.get("intern1"), "internal", "SUPER_ADMIN_EMAILS member must be tagged internal");
+  // Nothing was filtered, so nothing may be reported as excluded.
+  assert.deepEqual(res.excluded, { test: 0, internal: 0 });
+ });
+});
+
+test("getActionCenter: excluded counts USERS, not blockers", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  // The test user below trips TWO predicates (disconnected + connected_not_creating
+  // would need a conn row; use disconnected + publish failure instead). Whatever
+  // the count of blockers, `excluded` must report 1 user.
+  const authUsers = [
+    { id: "testA", email: "e2e-cockpit-b@example.test", created_at: hoursAgo(300), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+  ];
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "testA", draft_id: "d1", event_name: "pinterest_publish_failed", payload: { errorCode: "board_not_owned" }, created_at: hoursAgo(2) },
+      ] },
+      pin_drafts: { rows: [] },
+      // disconnected → a second blocker for the same user
+      pinterest_connections: { rows: [{ vibepin_user_id: "testA", needs_reconnect: false, disconnected_at: hoursAgo(5), created_at: hoursAgo(300) }] },
+      pin_generations: { rows: [] },
+    },
+    authUsers,
+  );
+  const withAll = await getActionCenter(db, { includeNonCustomers: true });
+  assert.ok(withAll.items.length >= 2, `expected the user to trip >1 blocker, got ${withAll.items.length}`);
+
+  const { db: db2 } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "testA", draft_id: "d1", event_name: "pinterest_publish_failed", payload: { errorCode: "board_not_owned" }, created_at: hoursAgo(2) },
+      ] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: [{ vibepin_user_id: "testA", needs_reconnect: false, disconnected_at: hoursAgo(5), created_at: hoursAgo(300) }] },
+      pin_generations: { rows: [] },
+    },
+    authUsers,
+  );
+  const res = await getActionCenter(db2);
+  assert.equal(res.items.length, 0);
+  assert.deepEqual(res.excluded, { test: 1, internal: 0 }, "one USER excluded, regardless of how many blockers they had");
+ });
+});
+
+test("getUserBlockers: the per-user view never filters, but still tags the kind", async () => {
+ await withAccountEnv(FOUNDER_ENV, async () => {
+  // An operator who navigated to a test account's page must still see its data —
+  // filtering belongs to the LIST, not the detail view.
+  const authUsers = [
+    { id: "testA", email: "paddle-e2e-test@vibepin.co", created_at: hoursAgo(300), last_sign_in_at: null, app_metadata: {}, user_metadata: {} },
+  ];
+  const { db } = makeMockDb(
+    { analytics_events: { rows: [] }, pin_drafts: { rows: [] }, pinterest_connections: { rows: [] }, pin_generations: { rows: [] } },
+    authUsers,
+  );
+  const res = await getUserBlockers("testA", db);
+  assert.ok(res.blockers.length > 0, "detail view must not filter the user away");
+  assert.ok(res.blockers.every(b => b.accountKind === "test"));
+ });
+});
+
+test("getActionCenter: available:false path still returns zeroed excluded counters", async () => {
+  const { db } = makeMockDb({}, [], { authError: true });
+  const res = await getActionCenter(db);
+  assert.equal(res.available, false);
+  assert.deepEqual(res.excluded, { test: 0, internal: 0 });
 });
 
 void done();

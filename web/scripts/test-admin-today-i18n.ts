@@ -112,6 +112,10 @@ const NEW_KEYS: AdminMessageKey[] = [
   "blocker.evidence.generationFailures", "blocker.evidence.signupNotConnected",
   "blocker.evidence.connectedNotCreating",
   "c360.alerts.title", "c360.alerts.none", "c360.health.driversPrefix",
+  // account-kind scoping (real customers vs test/internal)
+  "today.accounts.excluded", "today.accounts.showAll",
+  "today.accounts.includingAll", "today.accounts.customersOnly",
+  "today.accountKind.test", "today.accountKind.internal",
 ];
 
 test("every new operator-console key resolves in en + zh (non-empty, not key-fallback)", () => {
@@ -133,7 +137,7 @@ test("templated keys carry the SAME placeholder tokens in en and zh", () => {
 });
 
 test("adminTFmt interpolates every placeholder (no {token} residue) in both locales", () => {
-  const vars = { count: 3, hours: 49, code: "auth_expired", exact: 12, inferred: 3, adopted: 8, completed: 20, days: 30 };
+  const vars = { count: 3, hours: 49, code: "auth_expired", exact: 12, inferred: 3, adopted: 8, completed: 20, days: 30, test: 1, internal: 2 };
   for (const key of NEW_KEYS) {
     for (const lang of LOCALES) {
       if (tokensOf(adminT(lang, key)).length === 0) continue;

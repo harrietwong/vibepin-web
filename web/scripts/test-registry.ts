@@ -48,6 +48,7 @@ export const CORE: string[] = [
   "test-social-provider-status",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
+  "test-admin-account-kind",
   "test-admin-action-center",
   "test-activation-funnel",
   "test-ai-adoption",

@@ -143,6 +143,13 @@ const en = {
   "funnel.stage.firstPublish": "First publish",
   "funnel.stage.repeatPublish": "Repeat publish",
 
+  "today.accounts.excluded": "Excluded {test} test account(s) and {internal} internal account(s)",
+  "today.accounts.showAll": "Show all",
+  "today.accounts.includingAll": "Showing test and internal accounts",
+  "today.accounts.customersOnly": "Real customers only",
+  "today.accountKind.test": "Test",
+  "today.accountKind.internal": "Internal",
+
   // ── Customer 360 additions ───────────────────────────────────────────────
   "c360.alerts.title": "Open Blockers",
   "c360.alerts.none": "No open blockers",
@@ -258,6 +265,13 @@ const zh: Record<keyof typeof en, string> = {
   "funnel.stage.firstGeneration": "首次生成",
   "funnel.stage.firstPublish": "首次发布",
   "funnel.stage.repeatPublish": "重复发布",
+
+  "today.accounts.excluded": "已排除 {test} 个测试账号、{internal} 个内部账号",
+  "today.accounts.showAll": "显示全部",
+  "today.accounts.includingAll": "正在显示测试与内部账号",
+  "today.accounts.customersOnly": "只看真实客户",
+  "today.accountKind.test": "测试",
+  "today.accountKind.internal": "内部",
 
   // ── Customer 360 additions ───────────────────────────────────────────────
   "c360.alerts.title": "未解决阻塞",

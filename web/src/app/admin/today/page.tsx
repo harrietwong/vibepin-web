@@ -14,9 +14,10 @@ import {
 } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getActionCenter, type BlockerItem, type BlockerType } from "@/lib/server/adminActionCenter";
+import type { AccountKind } from "@/lib/server/adminAccountKind";
 import { getActivationFunnel, type StageCount } from "@/lib/server/adminActivationFunnel";
 import { getAiAdoption } from "@/lib/server/adminAiAdoption";
-import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY } from "@/lib/admin/adminConsoleKeys";
+import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
 import { AdminT, AdminTFmt } from "../AdminT";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
@@ -92,6 +93,27 @@ function InferredChip() {
   );
 }
 
+/**
+ * Small marker next to an email when the row is NOT a real customer. Rendered
+ * only in the include-everything view (customers carry no chip at all), so the
+ * operator can always tell which rows are noise.
+ */
+function AccountKindChip({ kind }: { kind: AccountKind }) {
+  const key = ACCOUNT_KIND_KEY[kind];
+  if (!key) return null;
+  const tone = kind === "internal"
+    ? { bg: "rgba(99,102,241,0.12)", fg: "#4338CA" }
+    : { bg: "rgba(245,158,11,0.14)", fg: "#B45309" };
+  return (
+    <span
+      className="ml-1.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-black uppercase align-middle"
+      style={{ background: tone.bg, color: tone.fg }}
+    >
+      <AdminT k={key} />
+    </span>
+  );
+}
+
 // ── Action Center ──────────────────────────────────────────────────────────
 
 function BlockerBadge({ type }: { type: BlockerType }) {
@@ -156,6 +178,7 @@ function ActionCenterCard({ items, available, windowHours }: { items: BlockerIte
                       <Link href={`/admin/users/${item.userId}`} className="font-semibold text-indigo-700 hover:underline">
                         {item.email ?? item.userId}
                       </Link>
+                      <AccountKindChip kind={item.accountKind} />
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -223,14 +246,52 @@ function TrendArrow({ direction }: { direction: -1 | 0 | 1 }) {
 
 // ── page ────────────────────────────────────────────────────────────────────
 
-export default async function AdminTodayPage() {
+/**
+ * Banner explaining WHICH population the page is currently reporting on, with
+ * the one-click toggle to the other view. Always rendered — an operator must
+ * never have to guess whether the numbers above include the founders' own
+ * accounts. Counts come from the action center (the whole-user-table pass);
+ * the funnel and adoption report their own, cohort/row-scoped tallies, and
+ * summing the three would double-count the same people.
+ */
+function AccountScopeNote({ includeNonCustomers, excluded }: { includeNonCustomers: boolean; excluded: { test: number; internal: number } }) {
+  return (
+    <p className="mt-2 text-[12px]" style={{ color: "var(--admin-text-muted, #9CA3AF)" }}>
+      {includeNonCustomers ? (
+        <>
+          <AdminT k="today.accounts.includingAll" />
+          {" · "}
+          <Link href="/admin/today" className="font-semibold text-indigo-700 hover:underline">
+            <AdminT k="today.accounts.customersOnly" />
+          </Link>
+        </>
+      ) : (
+        <>
+          <AdminTFmt k="today.accounts.excluded" vars={{ test: excluded.test, internal: excluded.internal }} />
+          {" · "}
+          <Link href="/admin/today?accounts=all" className="font-semibold text-indigo-700 hover:underline">
+            <AdminT k="today.accounts.showAll" />
+          </Link>
+        </>
+      )}
+    </p>
+  );
+}
+
+export default async function AdminTodayPage({ searchParams }: { searchParams: Promise<{ accounts?: string }> }) {
   const admin = await getCurrentSuperAdmin();
   if (!admin) redirect("/app?admin=forbidden");
 
+  // `?accounts=all` opts into the unfiltered view; anything else (including the
+  // absent param) means the default: real customers only.
+  const { accounts } = await searchParams;
+  const includeNonCustomers = accounts === "all";
+  const options = { includeNonCustomers };
+
   const [actionCenter, funnel, adoption] = await Promise.all([
-    getActionCenter(),
-    getActivationFunnel(),
-    getAiAdoption(),
+    getActionCenter(undefined, options),
+    getActivationFunnel(undefined, options),
+    getAiAdoption(undefined, options),
   ]);
 
   const allWarnings = [...actionCenter.warnings, ...funnel.warnings, ...adoption.warnings];
@@ -249,6 +310,7 @@ export default async function AdminTodayPage() {
           </div>
           <h1 className="text-[25px] font-black tracking-tight text-gray-950"><AdminT k="today.title" /></h1>
           <p className="mt-1 text-[13px] text-gray-500"><AdminT k="today.subtitle" /></p>
+          <AccountScopeNote includeNonCustomers={includeNonCustomers} excluded={actionCenter.excluded} />
         </div>
 
         {allWarnings.length > 0 && (

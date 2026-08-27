@@ -20,6 +20,8 @@
 // that DO exist (generations, publishes, connections, last login). Both are
 // clearly labeled as derived in the UI.
 
+import { classifyAccount, type AccountKind } from "./adminAccountKind";
+
 type Db = ReturnType<typeof import("@/lib/supabase").createServerClient>;
 type PgError = { code?: string; message?: string } | null;
 
@@ -318,6 +320,14 @@ export type UserDetail = {
     plan: string | null;
     status: AccountStatus;
     internalTags: string[];
+    /**
+     * customer / test / internal, derived from the SAME classifier the cockpit
+     * filters with, so a user hidden from /admin/today is visibly labelled here
+     * rather than looking like a customer the operator forgot about. Computed
+     * from the auth row already in hand — no extra query, and raw app_metadata
+     * never leaves this layer.
+     */
+    accountKind: AccountKind;
   } | null;
   workspaces: { available: boolean; derived: boolean; rows: WorkspaceRow[] };
   integrations: IntegrationRow[];
@@ -397,6 +407,7 @@ export async function getUserDetail(userId: string): Promise<UserDetail> {
       plan: planOf(authUser),
       status: accountStatusOf(authUser),
       internalTags,
+      accountKind: classifyAccount(authUser),
     },
     workspaces,
     integrations,
