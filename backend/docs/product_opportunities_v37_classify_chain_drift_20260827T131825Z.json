@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-08-27T13:18:25Z",
+  "mode": "production-read-only",
+  "finding": "installed classify wrapper requires a worker route absent from deployed run_worker.py",
+  "severity": "P1",
+  "latestAutomaticChain": {
+    "startedAt": "2026-08-27T05:07:21Z",
+    "finishedAt": "2026-08-27T05:07:29Z",
+    "systemdResult": "exit-code",
+    "execMainStatus": 2,
+    "failure": "run_worker.py rejected --job classify-chain as an invalid choice",
+    "opportunitiesRegenerated": false
+  },
+  "deployedFiles": {
+    "/opt/vibepin/backend/run_worker.py": {
+      "sha256": "2d0013fe000b6e87b907070d48d6e596ddaa63f78d4f33998e59e63c4f130077",
+      "bytes": 37665,
+      "mtime": "2026-08-26 17:29:17.720105108 +0800",
+      "classifyChainRouteOccurrences": 0
+    },
+    "/opt/vibepin/backend/scripts/cloud_run_pin_classify.sh": {
+      "sha256": "45d171e8dcfaf9d04f178db70cd3109eed70e33a3ad9a44ce0d3de34fb120a64",
+      "bytes": 3487,
+      "mtime": "2026-07-31 16:59:21.913177708 +0800",
+      "invokes": "run_worker.py --job classify-chain"
+    },
+    "/etc/systemd/system/vibepin-pin-classify.service": {
+      "sha256": "eb14ca9877f86f6c92dca0e57c2f4b000b4ab35d1bc3d9710f0583c369cc8593",
+      "bytes": 2155,
+      "mtime": "2026-07-31 16:59:26.755335363 +0800"
+    }
+  },
+  "candidateRepair": {
+    "commit": "58598b4d51504738bcf54cfa400bae2a296b7659",
+    "path": "backend/run_worker.py",
+    "gitBlobSha1": "6af5801762f213cb1a310012c6f4e077a73622dc",
+    "sha256": "f498f2632e40cce926eb68e6c68b05d2fe5727baf8cdd06f39341bc9cbc57bdc",
+    "bytes": 41819,
+    "scope": "worker function, route and parser choice only; no unit, wrapper, timer, provider budget or write budget change"
+  },
+  "dataQualityImpact": {
+    "crawlSucceeded": true,
+    "sameDayReferenceClassificationProven": false,
+    "sameDayProductSignalClassificationProven": false,
+    "sameDayOpportunityRegenerationProven": false,
+    "scheduledSupplyMayRun": true,
+    "scheduledSupplyFreshClassificationClaimAllowed": false
+  },
+  "productionMutations": []
+}

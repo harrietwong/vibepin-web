@@ -25,6 +25,14 @@ manifest; the remaining four manifest dependencies are already byte-identical
 on the remote base. No provider/write budget changed. No Usage/Metering production
 file or migration is included.
 
+The immutable read-only production drift receipt is
+`backend/docs/product_opportunities_v37_classify_chain_drift_20260827T131825Z.json`.
+It proves the installed wrapper invokes `--job classify-chain`, the deployed
+worker contains zero such routes, and the automatic 2026-08-27 chain exited 2
+before any classification stage. Until the repaired worker is deployed and an
+automatic Crawl -> Classify run passes, no same-day fresh-classification claim is
+allowed for Product Supply output.
+
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean

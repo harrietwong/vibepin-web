@@ -21,6 +21,11 @@ the 76-artifact
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
+The read-only production evidence is archived at
+`backend/docs/product_opportunities_v37_classify_chain_drift_20260827T131825Z.json`:
+the automatic 2026-08-27 chain exited 2 because the deployed worker had zero
+`classify-chain` routes. The repair is locally qualified but not deployed, so
+same-day fresh classification remains unproven in production.
 It changes 72 paths and all 72 belong to that manifest. The four remaining
 manifest dependencies are byte-identical to the remote base. This eliminates
 the Usage/Metering production files that a whole-tree deployment of the former
