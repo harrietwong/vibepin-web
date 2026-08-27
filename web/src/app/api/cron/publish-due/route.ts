@@ -27,14 +27,13 @@ import { createServerClient } from "@/lib/supabase";
 import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
-import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
 import {
   createPublishJob,
   fanOutDestinations,
   pinterestOutcomeRow,
   recordOutcomes,
 } from "@/lib/social/publishFanout";
-import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
+import type { DestinationOutcome } from "@/lib/social/publishRules";
 import {
   recordPublishEvent,
   recordFailedPublishEvent,
@@ -50,6 +49,7 @@ import {
   payloadAfterFailure,
   destinationPublishInput,
   describeThrown,
+  owedDestinations,
 } from "./publishDueLogic";
 
 export const runtime = "nodejs";
@@ -205,19 +205,16 @@ export async function GET(req: Request): Promise<Response> {
         metadata: { source: "scheduled-cron" },
       });
 
-      // ── The destinations this Content was scheduled to ────────────────────────
+      // ── The destinations this Content still owes ──────────────────────────────
       // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
       // here, so it behaves exactly as it did before: no extra platforms are ever
-      // invented for it, and exactly one Pinterest publish happens.
-      const intent = resolveScheduledDestinations(row.payload as Parameters<typeof resolveScheduledDestinations>[0]);
-      // What is still owed. A row re-claimed after a stale lock (this route is
-      // at-least-once by construction — see the header) must not re-publish the
-      // account that already succeeded; `pendingDestinations` is keyed by ACCOUNT,
-      // so two accounts on one platform retry independently.
-      const priorResults = Array.isArray(row.payload.destinationResults)
-        ? (row.payload.destinationResults as Array<{ provider: string; status: string; socialConnectionId?: string | null }>)
-        : [];
-      const owed = pendingDestinations(intent, priorResults);
+      // invented for it, and exactly one Pinterest publish happens. A row re-claimed
+      // after a stale lock (this route is at-least-once by construction — see the
+      // header) must not re-publish an account that already succeeded, which is why
+      // this is what is OWED and not what was intended. It is the same helper
+      // `payloadToPublishInput` consults to decide whether a board is required, so the
+      // two can never disagree about which platforms this run is for.
+      const owed = owedDestinations(row.payload);
       const pinterestTargets = owed.filter(d => d.provider === "pinterest");
       const extras = owed.filter(d => d.provider !== "pinterest");
       const legacyTarget = typeof row.payload.targetConnectionId === "string" ? row.payload.targetConnectionId.trim() : "";
