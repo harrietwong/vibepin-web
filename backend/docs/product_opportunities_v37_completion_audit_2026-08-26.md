@@ -15,9 +15,12 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`351e47912ce44fc34728097041dbfdd95889081a`; and its exact Product boundary is
+`01dcb539460bd282cb1542afa1ea4992f1f34659`; and its exact Product boundary is
 the 76-artifact
-`backend/docs/product_opportunities_v37_release_manifest_351e479.json`.
+`backend/docs/product_opportunities_v37_release_manifest_01dcb53.json`. This tip
+inherits the reviewed Product implementation from `351e479` and moves only the
+Tracking schedule to 17:15 Asia/Shanghai so a bounded run cannot cross the UTC
+day boundary.
 It changes 72 paths and all 72 belong to that manifest. The four remaining
 manifest dependencies are byte-identical to the remote base. This eliminates
 the Usage/Metering production files that a whole-tree deployment of the former

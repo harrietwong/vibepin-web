@@ -5,19 +5,22 @@ production database write, VPS deployment, timer enablement, or budget increase.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `351e47912ce44fc34728097041dbfdd95889081a`, and exact
+functional tip `01dcb539460bd282cb1542afa1ea4992f1f34659`, and exact
 76-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_351e479.json`.
+`backend/docs/product_opportunities_v37_release_manifest_01dcb53.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 This candidate supersedes `99efabc` for deployment topology. That earlier tree
 was functionally qualified but sat on a local integration base containing
 Usage/Metering production changes not present in the production remote. Because
 Vercel promotes a whole tree, its exact Product manifest could not prevent those
-unrelated files from shipping. `351e479` reconstructs the same Product boundary
-directly on `b22930e`: 72 paths differ and every one is listed in the 76-artifact
+unrelated files from shipping. `01dcb53` reconstructs the same Product boundary
+directly on `b22930e`: it inherits the Product implementation from `351e479` and
+adds only the Tracking schedule hardening and its contract evidence. The same 72
+production paths differ and every one is listed in the 76-artifact
 manifest; the remaining four manifest dependencies are already byte-identical
-on the remote base. No Usage/Metering production file or migration is included.
+on the remote base. No provider/write budget changed. No Usage/Metering production
+file or migration is included.
 
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while

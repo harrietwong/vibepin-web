@@ -20,7 +20,7 @@ COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_351e479.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_01dcb53.json"
 )
 PRD = (
     ROOT.parent
@@ -60,8 +60,9 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "351e47912ce44fc34728097041dbfdd95889081a"
-    manifest_name = "product_opportunities_v37_release_manifest_351e479.json"
+    functional = "01dcb539460bd282cb1542afa1ea4992f1f34659"
+    core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
+    manifest_name = "product_opportunities_v37_release_manifest_01dcb53.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
@@ -71,11 +72,12 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["candidateCommit"] == functional
+    assert manifest["trackingScheduleHardeningCommit"] == functional
     assert manifest["productionRemoteBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     assert manifest["prequalifiedIntegrationBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     paths = [item["path"] for item in manifest["artifacts"]]
     assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 76
-    assert manifest["liveProductTruthGateCommit"] == functional
+    assert manifest["liveProductTruthGateCommit"] == core_functional
     assert "web/src/app/api/generate/route.ts" in paths
     assert "web/src/lib/server/generationModeration.ts" in paths
     assert "backend/product_supply_receipt_contract.py" in paths

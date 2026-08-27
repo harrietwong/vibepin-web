@@ -1,7 +1,8 @@
 {
   "schemaVersion": 2,
-  "candidateCommit": "351e47912ce44fc34728097041dbfdd95889081a",
-  "integrationCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "candidateCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
+  "integrationCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
+  "trackingScheduleHardeningCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
   "trackingFailurePropagationCommit": "351e47912ce44fc34728097041dbfdd95889081a",
   "primarySwitchProofCommit": "351e47912ce44fc34728097041dbfdd95889081a",
   "evidenceHostHardeningCommit": "351e47912ce44fc34728097041dbfdd95889081a",
@@ -162,9 +163,9 @@
     },
     {
       "path": "backend/deploy/systemd/vibepin-product-tracking.timer",
-      "gitBlobSha1": "2b2b3278e08e68c35e057d616ab8cc7a44201f78",
-      "sha256": "89e1b9dfce3e07b6d1de9b150400d8eb48553d6e7e23d14f2ea9b5a7683d081a",
-      "bytes": 787
+      "gitBlobSha1": "d6bef00de1acaed4b07fee8d0b6c5b279873046c",
+      "sha256": "7739fc1c637e4016e902edb252847d44163e0fe80effd084000b3f1e24e474a5",
+      "bytes": 1086
     },
     {
       "path": "backend/scripts/cloud_run_product_opportunity_admission.sh",
