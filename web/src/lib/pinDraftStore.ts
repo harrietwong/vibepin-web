@@ -26,7 +26,6 @@ import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
 import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
 import {
   contentMedia,
-  coverMedia,
   mediaId,
   type ContentMedia,
   type DestinationPublishResult,
