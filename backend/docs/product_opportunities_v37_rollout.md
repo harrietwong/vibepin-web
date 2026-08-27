@@ -98,12 +98,15 @@ The Web deployment config is part of this exact boundary and must use
 or reusing an unverified `node_modules` tree invalidates the dependency-security
 evidence and blocks promotion.
 
-Before creating a Web candidate, read back the Vercel project settings and
-prove that its Root Directory is `web`; otherwise `web/vercel.json` is not proven
-to be the active deployment config. The candidate build log must show `npm ci`,
-Next.js 16.3.3 and a successful production build before promotion. A different
-root, `npm install`, an older Next.js version, or an unverifiable cached install
-is a hard stop and requires discarding that candidate, not promoting it.
+Before creating a Web candidate, determine the actual deployment mode. For the
+current CLI-upload mode, `web` is the upload working directory and Vercel
+correctly reports that uploaded directory as Root Directory `.`. A Git-integrated
+monorepo deployment would instead require repository Root Directory `web`.
+Never change this setting merely to make a report string match: doing so under
+CLI-upload mode can produce an invalid `web/web` boundary. In either mode, the
+candidate build log must show `npm ci`, Next.js 16.3.3 and a successful build
+before promotion. `npm install`, an older Next.js version, or an unverifiable
+cached install in the candidate build is a hard stop.
 The `2026-08-27T10:44:29Z` read-only evidence attempt did not close this gate:
 the local Vercel credential was expired, its project-list API returned 403, and
 both available browser paths failed to attach. Do not reinterpret those access
@@ -119,15 +122,17 @@ values could be read. The updated gap is
 the promotion stop remains unchanged.
 
 The platform values were finally read back with authenticated Vercel CLI 58.4.0
-at `2026-08-27T17:36:28Z`. This closes the observation gap but fails the release
-gate: project `web` currently reports Root Directory `.`, install command
-`npm install`, and the latest Ready production deployment used Next.js 16.2.6.
-Those values contradict the reviewed `web` / `npm ci` / Next.js 16.3.3 release
-boundary, and no immutable deployment exists for functional candidate
-`6839e7609ddff3f1fe288c48a42918e105a75fc9`. Promotion is therefore `BLOCK`,
-not `NEEDS EVIDENCE`. Do not change Vercel settings or deploy until that
-platform mutation is separately authorized. Exact evidence:
-`backend/docs/product_opportunities_v37_vercel_platform_block_20260827T173628Z.json`.
+at `2026-08-27T17:36:28Z`. The latest Ready deployment reports entrypoint `.`,
+contains no Git/source metadata, and embeds a Vercel config that exactly matches
+the historical `web/vercel.json` at `096d921` (`npm install`, Next.js 16.2.6).
+This is strong evidence that production is uploaded from the `web` directory,
+so Root Directory `.` is expected and must not be changed to `web` without
+contrary authoritative source metadata. The earlier configuration-mismatch
+interpretation is superseded by
+`backend/docs/product_opportunities_v37_vercel_deployment_mode_20260827T175000Z.json`.
+Promotion remains `BLOCK` for one narrower reason: no immutable deployment and
+build log yet exist for functional candidate `6839e760`, whose checked-in config
+requires `npm ci` and Next.js 16.3.3.
 
 The latest GET-only pre-Supply data-quality baseline is
 `backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.

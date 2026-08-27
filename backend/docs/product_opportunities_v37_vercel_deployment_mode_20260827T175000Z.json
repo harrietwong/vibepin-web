@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-27T17:50:00Z",
+  "auditMode": "read_only",
+  "candidateFunctionalTip": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
+  "reassesses": "backend/docs/product_opportunities_v37_vercel_platform_block_20260827T173628Z.json",
+  "latestProductionDeployment": {
+    "id": "dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn",
+    "createdAt": "2026-08-18T13:16:28.083Z",
+    "readyState": "READY",
+    "inspectTopLevelKeys": [
+      "id",
+      "name",
+      "url",
+      "target",
+      "readyState",
+      "createdAt",
+      "aliases",
+      "builds",
+      "contextName"
+    ],
+    "gitSourcePresent": false,
+    "sourceMetadataPresent": false,
+    "buildEntrypoint": ".",
+    "embeddedVercelConfig": {
+      "framework": "nextjs",
+      "installCommand": "npm install",
+      "buildCommand": "npm run build",
+      "outputDirectory": ".next",
+      "redirectSource": "/www",
+      "redirectDestination": "https://vibepin.co"
+    }
+  },
+  "repositoryHistoryProof": {
+    "matchingHistoricalCommit": "096d921a38412b95877b81bd73048b0ea604ad9f",
+    "matchingPath": "web/vercel.json",
+    "matchingFields": [
+      "framework",
+      "installCommand",
+      "buildCommand",
+      "outputDirectory",
+      "redirects"
+    ],
+    "historicalInstallCommand": "npm install",
+    "candidateConfigCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+    "candidateInstallCommand": "npm ci"
+  },
+  "deploymentModeConclusion": {
+    "status": "CONSISTENT_WITH_CLI_UPLOAD_FROM_WEB_DIRECTORY",
+    "confidence": "strong inference; Vercel inspect does not expose an explicit local cwd field",
+    "rootDirectoryDotMeaning": "the uploaded web directory is the deployment root, so '.' is not evidence that the monorepo root is built",
+    "unsafeAction": "do not change Root Directory to web without contrary authoritative source metadata; that may turn the effective path into web/web"
+  },
+  "verdict": "BLOCK_PROMOTION_PENDING_EXACT_CANDIDATE_BUILD",
+  "notRequired": [
+    "do not change the current Root Directory solely because project inspect reports '.'",
+    "do not change production aliases before candidate verification"
+  ],
+  "requiredBeforePromotion": [
+    "create an immutable non-production deployment from the exact candidate with web as the CLI upload working directory",
+    "read back its embedded vercelConfig and build log",
+    "require npm ci, Next.js 16.3.3, TypeScript success, Product routes, and the Product truth verifier",
+    "promote only after the candidate deployment passes and retain dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn as the rollback target"
+  ],
+  "settingChanged": false,
+  "deploymentCreated": false,
+  "productionMutation": false
+}

@@ -131,15 +131,16 @@ evidence is recorded in
 `backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T170544Z.json`.
 
 Authenticated Vercel CLI 58.4.0 subsequently returned the authoritative values
-at `2026-08-27T17:36:28Z`. The project currently uses Root Directory `.`, an
-`npm install` install command and Node.js 24.x. Its latest Ready production build
-ran `npm install` and Next.js 16.2.6; it predates the current 16.3.3 candidate.
-This replaces the former observation gap with a concrete release failure: the
-platform does not match the reviewed `web` / `npm ci` boundary and there is no
-immutable build log for functional candidate `6839e760`. Vercel promotion is
-therefore `BLOCK` until a separately authorized settings correction and exact
-candidate deployment are read back successfully. Evidence:
-`backend/docs/product_opportunities_v37_vercel_platform_block_20260827T173628Z.json`.
+at `2026-08-27T17:36:28Z`. The latest Ready build has entrypoint `.`, no exposed
+Git/source metadata, and an embedded config exactly matching historical
+`web/vercel.json@096d921` (`npm install`, Next.js 16.2.6). This is strong evidence
+for the existing CLI-upload-from-`web` workflow: in that mode Root Directory `.`
+means the uploaded `web` directory and is not a configuration failure. Changing
+it to `web` could create `web/web`, so the earlier settings-correction conclusion
+is superseded. Vercel promotion remains `BLOCK` only until an exact immutable
+`6839e760` candidate build proves `npm ci`, Next.js 16.3.3, TypeScript and Product
+routes before promotion. Evidence:
+`backend/docs/product_opportunities_v37_vercel_deployment_mode_20260827T175000Z.json`.
 
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure
