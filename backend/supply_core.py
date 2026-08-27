@@ -234,6 +234,7 @@ _JSONLD = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?
                      re.I | re.S)
 _META = re.compile(r'<meta\s+[^>]*>', re.I)
 _TITLE = re.compile(r'<title[^>]*>(.*?)</title>', re.I | re.S)
+_IMG_TAG = re.compile(r'<img\b[^>]*>', re.I | re.S)
 
 _TITLE_CHROME = (
     re.compile(r"^\s*Amazon\.com\s*:?\s*", re.I),
@@ -292,6 +293,62 @@ def _first_str(v) -> str | None:
             if s:
                 return s
     return None
+
+
+def _tag_attr(tag: str, name: str) -> str | None:
+    match = re.search(
+        rf'\b{re.escape(name)}\s*=\s*(["\'])(.*?)\1', tag, re.I | re.S
+    )
+    if not match:
+        return None
+    return _html.unescape(match.group(2)).strip() or None
+
+
+def _amazon_product_image(page: str, domain: str) -> tuple[str | None, str | None]:
+    """Extract Amazon's literal primary-product image when metadata omits it.
+
+    Amazon frequently returns a real PDP with ``#landingImage`` but no usable
+    JSON-LD/OG image to non-browser HTTP clients. Only the explicitly identified
+    primary image element is admissible; arbitrary page images, Pin/card data and
+    inferred URLs remain unavailable to this function.
+    """
+    host = str(domain or "").lower().rstrip(".")
+    if host != "amazon.com" and not host.endswith(".amazon.com"):
+        return None, None
+
+    for tag in _IMG_TAG.findall(page):
+        image_id = (_tag_attr(tag, "id") or "").lower()
+        if image_id not in {"landingimage", "imgblkfront"}:
+            continue
+
+        dynamic = _tag_attr(tag, "data-a-dynamic-image")
+        if dynamic:
+            try:
+                candidates = json.loads(dynamic)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                candidates = None
+            if isinstance(candidates, dict):
+                ranked: list[tuple[int, str]] = []
+                for url, dimensions in candidates.items():
+                    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                        continue
+                    area = 0
+                    if (
+                        isinstance(dimensions, list)
+                        and len(dimensions) >= 2
+                        and all(isinstance(v, (int, float)) for v in dimensions[:2])
+                    ):
+                        area = int(dimensions[0] * dimensions[1])
+                    ranked.append((area, url))
+                if ranked:
+                    return max(ranked)[1], f"image:amazon#{image_id}.data-a-dynamic-image"
+
+        for attr in ("data-old-hires", "src"):
+            url = _tag_attr(tag, attr)
+            if url and url.startswith(("http://", "https://")):
+                return url, f"image:amazon#{image_id}.{attr}"
+
+    return None, None
 
 
 def _clean_title(t: str, domain: str) -> str:
@@ -365,6 +422,10 @@ def extract_details(page: str, domain: str) -> dict:
                 image = m[k]
                 ev.append(f"image:{k}")
                 break
+    if not image:
+        image, image_evidence = _amazon_product_image(page, domain)
+        if image_evidence:
+            ev.append(image_evidence)
     if price is None:
         for k in ("product:price:amount", "og:price:amount"):
             if m.get(k):

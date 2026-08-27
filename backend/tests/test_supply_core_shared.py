@@ -224,6 +224,51 @@ class TestCardFabricationDiscarded(unittest.TestCase):
         self.assertEqual(failures[0]["admissionFailReason"],
                          "missing_verified_merchant_image")
 
+    def test_amazon_primary_image_is_page_proven_when_metadata_omits_image(self):
+        url = "https://www.amazon.com/dp/B0CPSBDQBR"
+        page = """
+        <html><head><title>Handwoven Boho Rug : Home & Kitchen</title></head>
+        <body>Handwoven Boho Rug
+          <img id="landingImage" alt="Handwoven Boho Rug"
+               data-a-dynamic-image="{&quot;https://m.media-amazon.com/images/I/small.jpg&quot;:[320,320],&quot;https://m.media-amazon.com/images/I/large.jpg&quot;:[1200,1200]}"
+               src="https://m.media-amazon.com/images/I/fallback.jpg">
+        </body></html>
+        """
+        web = FakeWebClient({url: (200, page)})
+        rows, failures = core.discover(
+            web, stl._stl_candidates([_card(url)]), want=core.MAX_BATCH
+        )
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            rows[0]["row"]["image_url"],
+            "https://m.media-amazon.com/images/I/large.jpg",
+        )
+        self.assertIn(
+            "image:amazon#landingimage.data-a-dynamic-image",
+            rows[0]["rec"]["evidence"],
+        )
+        self.assertTrue(core.check_red_lines(rows)[0])
+
+    def test_amazon_primary_image_rule_does_not_accept_other_domains(self):
+        page = (
+            '<html><head><title>Named Product Here</title></head><body>'
+            '<img id="landingImage" src="https://cdn.example/product.jpg">'
+            'Named Product Here</body></html>'
+        )
+        details = core.extract_details(page, "merchant.example")
+        self.assertIsNone(details["image_url"])
+        self.assertFalse(any(e.startswith("image:amazon#") for e in details["evidence"]))
+
+    def test_amazon_primary_image_still_rejects_pinterest_host(self):
+        page = (
+            '<html><head><title>Named Product Here : Home & Kitchen</title></head><body>'
+            '<img id="landingImage" src="https://i.pinimg.com/originals/fake.jpg">'
+            'Named Product Here</body></html>'
+        )
+        details = core.extract_details(page, "amazon.com")
+        self.assertIsNone(details["image_url"])
+        self.assertIn("image:REJECTED_pinterest_hosted", details["evidence"])
+
 
 class TestRedLineProvenance(unittest.TestCase):
     def test_name_not_found_in_page_is_red_lined(self):
