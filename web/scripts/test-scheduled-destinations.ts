@@ -17,6 +17,7 @@ import {
   pinterestDestinationFrom,
   hasExplicitIntent,
   isUsableDestination,
+  legacyPinterestMirror,
   scheduledProviders,
 } from "../src/lib/social/scheduledDestinations";
 import { payloadAfterSuccess, payloadAfterFailure } from "../src/app/api/cron/publish-due/publishDueLogic";
@@ -44,17 +45,21 @@ function legacyDraft(over: Partial<PinDraft> = {}): PinDraft {
   } as PinDraft;
 }
 
-const CONNECTIONS: Record<string, { id: string; label?: string }> = {
-  instagram: { id: "conn-ig-1", label: "@shop_ig" },
-  facebook:  { id: "conn-fb-1", label: "Shop Page" },
+/** The connected accounts, in the shape the picker reports them. */
+const acct = (id: string, username: string) => ({ id, connectionStatus: "connected", providerAccountUsername: username });
+const ACCOUNTS: Record<string, ReturnType<typeof acct>[]> = {
+  pinterest: [acct("conn-pinterest-A", "shop_pin")],
+  instagram: [acct("conn-ig-1", "@shop_ig")],
+  facebook:  [acct("conn-fb-1", "Shop Page")],
 };
-const resolveConn = (p: SocialProvider) => CONNECTIONS[p] ?? null;
+const accountsOf = (p: SocialProvider) => ACCOUNTS[p] ?? [];
 
 // ── writing intent ───────────────────────────────────────────────────────────
 section("capturing intent");
 
 const built = buildScheduledDestinations(
-  ["pinterest", "instagram", "facebook"], legacyDraft(), resolveConn,
+  [{ provider: "pinterest" }, { provider: "instagram" }, { provider: "facebook" }],
+  legacyDraft(), accountsOf,
   new Date("2026-08-18T12:00:00.000Z"),
 );
 check("all three chosen platforms are captured", built.length === 3,
@@ -72,7 +77,8 @@ check("every entry is stamped with when it was captured",
 // A platform with no resolvable account must not become a half-record that would
 // fail at due time pointing at nothing.
 const partial = buildScheduledDestinations(
-  ["pinterest", "instagram"], legacyDraft(), (p) => (p === "instagram" ? null : CONNECTIONS[p] ?? null),
+  [{ provider: "pinterest" }, { provider: "instagram" }], legacyDraft(),
+  (p) => (p === "instagram" ? [] : accountsOf(p)),
 );
 check("a platform with no resolvable account is omitted, not stored empty",
   partial.length === 1 && partial[0].provider === "pinterest");
@@ -183,6 +189,74 @@ check("no pinned account ⇒ no Pinterest intent",
 const p = pinterestDestinationFrom(legacyDraft(), "t")!;
 check("board name/label are carried as display snapshots",
   p.boardName === "Board A" && p.accountLabel === "@shopA");
+
+// ── WS-B3: several accounts per platform, each its own destination ──────────
+section("N accounts per platform (WS-B3)");
+{
+  const PIN_A = { id: "pin_A", connectionStatus: "connected", providerAccountUsername: "shopA" };
+  const PIN_B = { id: "pin_B", connectionStatus: "connected", providerAccountUsername: "shopB" };
+  const IG_A  = { id: "ig_A",  connectionStatus: "connected", providerAccountUsername: "ig_one" };
+  const IG_B  = { id: "ig_B",  connectionStatus: "connected", providerAccountUsername: "ig_two" };
+  const accounts = (p: SocialProvider) =>
+    p === "pinterest" ? [PIN_A, PIN_B] : p === "instagram" ? [IG_A, IG_B] : [];
+
+  const two = buildScheduledDestinations([
+    { provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", boardName: "Board A" },
+    { provider: "pinterest", socialConnectionId: "pin_B", boardId: "b-B", boardName: "Board B" },
+    { provider: "instagram", socialConnectionId: "ig_A" },
+    { provider: "instagram", socialConnectionId: "ig_B" },
+  ], {}, accounts);
+  check("two Pinterest accounts become two destinations",
+    two.filter(d => d.provider === "pinterest").length === 2, JSON.stringify(two));
+  check("two Instagram accounts become two destinations",
+    two.filter(d => d.provider === "instagram").length === 2);
+  check("each Pinterest entry keeps its OWN board",
+    two[0].boardId === "b-A" && two[1].boardId === "b-B",
+    "a shared board would publish account B's Pin into account A's board");
+
+  const deduped = buildScheduledDestinations([
+    { provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A" },
+    { provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A" },
+  ], {}, accounts);
+  check("the same account picked twice is stored once", deduped.length === 1);
+
+  let threw: unknown = null;
+  try {
+    buildScheduledDestinations([{ provider: "instagram" }], {}, accounts);
+  } catch (e) { threw = e; }
+  check("a pick with no account and several connected FAILS CLOSED (throws)",
+    threw instanceof Error && threw.name === "AmbiguousScheduleAccountError",
+    "picking the first would silently schedule to the wrong account");
+
+  const single = buildScheduledDestinations([{ provider: "instagram" }], {},
+    (p) => (p === "instagram" ? [IG_A] : []));
+  check("with exactly one connected account, no explicit pick is needed",
+    single.length === 1 && single[0].socialConnectionId === "ig_A");
+
+  // A second Pinterest account must NOT inherit the draft-level (first account's) board.
+  const noInherit = buildScheduledDestinations(
+    [{ provider: "pinterest", socialConnectionId: "pin_B" }],
+    { targetConnectionId: "pin_A", boardId: "b-A", boardName: "Board A" },
+    accounts,
+  );
+  check("a second Pinterest account does not inherit the legacy board",
+    !noInherit[0].boardId,
+    `got ${JSON.stringify(noInherit[0])} — that board belongs to the other account`);
+  const inherits = buildScheduledDestinations(
+    [{ provider: "pinterest", socialConnectionId: "pin_A" }],
+    { targetConnectionId: "pin_A", boardId: "b-A", boardName: "Board A" },
+    accounts,
+  );
+  check("the entry that IS the legacy target still inherits its board",
+    inherits[0].boardId === "b-A" && inherits[0].boardName === "Board A");
+
+  const mirror = legacyPinterestMirror(two);
+  check("the legacy mirror follows the FIRST Pinterest entry",
+    mirror.targetConnectionId === "pin_A" && mirror.boardId === "b-A", JSON.stringify(mirror));
+  check("no Pinterest entry ⇒ the mirror is cleared, never left stale",
+    legacyPinterestMirror([two[2]]).targetConnectionId === ""
+      && legacyPinterestMirror([two[2]]).boardId === "");
+}
 
 console.log(`\nScheduled destinations: ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

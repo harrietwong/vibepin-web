@@ -547,6 +547,9 @@ const en = {
   "publishDestinations.connectAccountSuffix": " account in Settings to publish here.",
   "publishDestinations.loadError": "Could not refresh account status.",
   "publishDestinations.tryAgain": "Try again",
+  "publishDestinations.boardLabel": "Board",
+  "publishDestinations.boardPlaceholder": "Choose a board",
+  "publishDestinations.boardLoading": "Loading boards…",
   "publishDestinations.footerConnected": "Connect more accounts to repurpose this product post across platforms. Each account may require a different caption, media format, or account connection.",
   "publishDestinations.footerNone": "Connect accounts to repurpose this product post across platforms. You can publish only after reviewing and approving the content.",
   // ── WP-E sync-status indicator ──

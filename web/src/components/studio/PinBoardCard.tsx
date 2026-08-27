@@ -36,8 +36,11 @@ import { platformName, type SocialProvider } from "@/lib/social/platforms";
 import {
   AmbiguousScheduleAccountError,
   buildScheduledDestinations,
+  legacyPinterestMirror,
   resolveScheduledAccount,
+  type DestinationPick,
 } from "@/lib/social/scheduledDestinations";
+import type { SelectedAccount } from "@/components/social/PublishDestinations";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { BUI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
@@ -238,8 +241,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     const providers = contentDestinations(draft).map(item => item.provider);
     return providers.length ? Array.from(new Set(providers)) : ["pinterest"];
   });
-  const [selectedAccountIds, setSelectedAccountIds] = useState<Array<{ provider: string; id: string }>>(() =>
-    contentDestinations(draft).filter(item => item.socialConnectionId).map(item => ({ provider: item.provider, id: item.socialConnectionId as string })),
+  /**
+   * The ACCOUNTS this Content publishes to, seeded from its stored intent — one entry
+   * per destination, so two accounts on one platform both stay ticked (and each keeps
+   * its own Pinterest board) across a remount.
+   */
+  const [selectedAccountIds, setSelectedAccountIds] = useState<SelectedAccount[]>(() =>
+    contentDestinations(draft)
+      .filter(item => item.socialConnectionId)
+      .map(item => ({
+        provider: item.provider,
+        id: item.socialConnectionId as string,
+        ...(item.boardId ? { boardId: item.boardId } : {}),
+        ...(item.boardName ? { boardName: item.boardName } : {}),
+      })),
   );
   /** The connected accounts the picker loaded — needed to resolve one account per platform. */
   const [connectionSummaries, setConnectionSummaries] = useState<PlatformConnectionSummary[]>([]);
@@ -383,40 +398,69 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
    * unresolvable case — no connected account, or an explicit pick that has since been
    * disconnected — returns null and is reported the same way, never silently dropped.
    */
-  const persistDestinationSelection = useCallback((providers: PublishProvider[], accounts: Array<{ provider: string; id: string }>) => {
+  const persistDestinationSelection = useCallback((providers: PublishProvider[], accounts: SelectedAccount[]) => {
     let error = "";
-    const destinations = buildScheduledDestinations(
-      providers,
-      { ...draft, boardId: fields.boardId, boardName: boardName(fields.boardId) },
-      provider => {
-        const platform = connectionSummaries.find(summary => summary.provider === provider);
-        const platformAccounts = platform?.accounts ?? [];
-        const explicit = accounts.find(item => item.provider === provider)?.id ?? null;
-        try {
-          const resolved = resolveScheduledAccount(provider, platformAccounts, explicit);
-          if (!resolved && !error) {
-            error = tr("studioBoard.toast.ambiguousAccount").replace("{platform}", platformName(provider));
-          }
-          return resolved;
-        } catch (err) {
-          if (err instanceof AmbiguousScheduleAccountError && !error) {
-            error = tr("studioBoard.toast.ambiguousAccount").replace("{platform}", platformName(provider));
-          }
-          return null;
+    const picks: DestinationPick[] = [];
+    for (const provider of providers) {
+      const platform = connectionSummaries.find(summary => summary.provider === provider);
+      const platformAccounts = platform?.accounts ?? [];
+      const chosen = accounts.filter(item => item.provider === provider);
+      if (chosen.length) {
+        // Every account ticked on this platform is its own destination.
+        for (const item of chosen) {
+          picks.push({
+            provider,
+            socialConnectionId: item.id,
+            ...(provider === "pinterest"
+              ? { boardId: item.boardId ?? "", boardName: item.boardName ?? "" }
+              : {}),
+          });
         }
-      },
+        continue;
+      }
+      // No account narrowed: only legitimate when exactly one is connected. With
+      // several, resolveScheduledAccount throws and we refuse the selection rather
+      // than picking one — the merchant would see the platform ticked and get a
+      // publish to whichever account happened to be first.
+      try {
+        const resolved = resolveScheduledAccount(provider, platformAccounts, null);
+        if (!resolved) {
+          if (!error) error = tr("studioBoard.toast.ambiguousAccount").replace("{platform}", platformName(provider));
+          continue;
+        }
+        picks.push({
+          provider,
+          socialConnectionId: resolved.id,
+          // The card's own board field IS the first Pinterest entry's board.
+          ...(provider === "pinterest" ? { boardId: fields.boardId, boardName: boardName(fields.boardId) } : {}),
+        });
+      } catch (err) {
+        if (err instanceof AmbiguousScheduleAccountError && !error) {
+          error = tr("studioBoard.toast.ambiguousAccount").replace("{platform}", platformName(provider));
+        }
+      }
+    }
+    const destinations = buildScheduledDestinations(
+      picks,
+      { ...draft, boardId: fields.boardId, boardName: boardName(fields.boardId) },
+      provider => connectionSummaries.find(summary => summary.provider === provider)?.accounts ?? [],
     );
     setDestinationError(error);
-    // Pinterest is written from the draft's pinned target, so a Content with no
-    // Pinterest connection yet still records the platforms that DID resolve.
-    props.onPersist(draft.id, { scheduledDestinations: destinations });
+    // The legacy Pinterest mirror follows the FIRST Pinterest entry, in the same write:
+    // an un-migrated reader (plan drawer, admin, older cron) can never see a target the
+    // intent record does not name.
+    props.onPersist(draft.id, { scheduledDestinations: destinations, ...legacyPinterestMirror(destinations) });
   }, [props, draft, fields.boardId, boardName, connectionSummaries, tr]);
   const changeProviders = useCallback((next: SocialProvider[]) => {
     const supported = next.filter((provider): provider is PublishProvider => provider === "pinterest" || provider === "instagram" || provider === "facebook");
     setSelectedProviders(supported);
-    persistDestinationSelection(supported, selectedAccountIds);
+    // Unticking a platform drops its account picks too, so a re-tick cannot resurrect
+    // an account the merchant removed (§18: unchecking clears that entry).
+    const kept = selectedAccountIds.filter(a => supported.some(p => p === a.provider));
+    if (kept.length !== selectedAccountIds.length) setSelectedAccountIds(kept);
+    persistDestinationSelection(supported, kept);
   }, [persistDestinationSelection, selectedAccountIds]);
-  const changeAccounts = useCallback((next: Array<{ provider: string; id: string }>) => {
+  const changeAccounts = useCallback((next: SelectedAccount[]) => {
     setSelectedAccountIds(next);
     persistDestinationSelection(selectedProviders, next);
   }, [persistDestinationSelection, selectedProviders]);

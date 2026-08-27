@@ -145,6 +145,28 @@ export function checkMediaForProvider(
 }
 
 /**
+ * WHICH board a Pinterest destination publishes to.
+ *
+ * Its own board wins. The draft-level `boardId` is a fallback ONLY for the entry that
+ * IS the draft's legacy Pinterest target (or for a legacy destination naming no account
+ * at all) — with several Pinterest accounts it describes the FIRST one, so falling back
+ * to it for a second account would publish that account's Pin into a board id that
+ * belongs to another account: either a hard "board not owned" failure or, worse, a Pin
+ * silently landing on the wrong board.
+ */
+export function boardForDestination(
+  destination: Pick<PublishDestination, "socialConnectionId" | "boardId">,
+  draft: Pick<ContentDraftLike, "boardId" | "targetConnectionId">,
+): string | undefined {
+  const own = destination.boardId?.trim();
+  if (own) return own;
+  const target = draft.targetConnectionId?.trim();
+  const id = destination.socialConnectionId?.trim();
+  if (!id || (target && id === target)) return draft.boardId;
+  return undefined;
+}
+
+/**
  * Why a destination will be refused before any network call is made.
  *
  * `code` is the contract; `message` is only the English fallback for a surface with no
@@ -203,8 +225,9 @@ export function explainPublishBlockers(draft: ContentDraftLike): PublishBlocker[
       continue;
     }
     if (destination.provider === "pinterest") {
-      // Same fallback publishContent uses: the destination's board, else the draft's.
-      if (!(destination.boardId || draft.boardId)?.trim()) {
+      // Same fallback publishContent uses: the destination's own board, and the
+      // draft-level board ONLY for the entry that is the draft's legacy target.
+      if (!boardForDestination(destination, draft)?.trim()) {
         blockers.push({
           code: "missing_board",
           provider: "pinterest",
@@ -347,7 +370,7 @@ export async function publishContent(
     const socialTargets = dispatch.filter(d => d.provider !== "pinterest");
 
     for (const destination of pinterestTargets) {
-      const boardId = destination.boardId || draft.boardId;
+      const boardId = boardForDestination(destination, draft);
       if (!boardId?.trim()) {
         outcomes.push(refusedRow(destination, "missing_board", "Choose a Pinterest board before publishing.", submittedAt));
         continue;

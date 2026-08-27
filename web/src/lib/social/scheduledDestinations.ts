@@ -112,19 +112,6 @@ export function hasExplicitIntent(draft: Partial<Pick<PinDraft, "scheduledDestin
     && draft.scheduledDestinations.filter(isUsableDestination).length > 0;
 }
 
-/**
- * THE write rule: turn the merchant's current selection into frozen intent.
- *
- * Pinterest takes its account and board from the draft's pinned target, so the
- * intent and the legacy `targetConnectionId`/`boardId` fields can never
- * disagree — the due-time worker and any un-migrated code path keep seeing the
- * same Pinterest destination.
- *
- * Non-Pinterest platforms need an explicitly resolved connection id; a selected
- * platform with no resolvable account is dropped from the intent rather than
- * stored as a half-record that would fail at due time with nothing to point at.
- * Callers are expected to have refused that selection upstream.
- */
 /** A connected account as the destination picker reports it. */
 export type ConnectableAccount = {
   id: string;
@@ -181,32 +168,111 @@ export function resolveScheduledAccount(
   throw new AmbiguousScheduleAccountError(provider, connected.length);
 }
 
+/**
+ * One destination the merchant ticked, as the picker reports it.
+ *
+ * `socialConnectionId` is optional ONLY for the single-account case: a platform row
+ * ticked when exactly one account is connected needs no second click, and the account
+ * is resolved here. With several connected accounts the picker must name one — an
+ * unnamed pick then throws rather than guessing (see `resolveScheduledAccount`).
+ *
+ * Pinterest picks carry their OWN board: two Pinterest accounts are two destinations
+ * with two different boards, and a board id means nothing on the other account.
+ */
+export type DestinationPick = {
+  provider: SocialProvider;
+  socialConnectionId?: string | null;
+  accountLabel?: string | null;
+  boardId?: string | null;
+  boardName?: string | null;
+};
+
+/** How the picker reports each platform's connected accounts to the builder. */
+export type AccountsByProvider =
+  | ReadonlyArray<{ provider: string; accounts: readonly ConnectableAccount[] }>
+  | ((provider: SocialProvider) => readonly ConnectableAccount[]);
+
+function accountsFor(source: AccountsByProvider, provider: SocialProvider): readonly ConnectableAccount[] {
+  if (typeof source === "function") return source(provider);
+  return source.find(s => s.provider === provider)?.accounts ?? [];
+}
+
+/**
+ * THE write rule: turn the merchant's current selection into frozen intent.
+ *
+ * N entries per provider are allowed — two Pinterest accounts, two Instagram accounts,
+ * each its own destination with its own board and its own result row. Entries are
+ * deduped by `${provider}:${socialConnectionId}`, so a picker that reports the same
+ * account twice (platform row + account row) records it once.
+ *
+ * A pick that resolves to no account is DROPPED rather than stored as a half-record
+ * that would fail at due time with nothing to point at; a pick that is ambiguous
+ * THROWS (`AmbiguousScheduleAccountError`) so the caller can refuse the selection
+ * instead of quietly publishing to the wrong account. Callers that prefer to collect
+ * the error per-provider catch it around their own loop.
+ */
 export function buildScheduledDestinations(
-  selected: readonly SocialProvider[],
+  picks: readonly DestinationPick[],
   draft: Partial<Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName">>,
-  resolveConnection: (provider: SocialProvider) => { id: string; label?: string } | null,
+  accounts: AccountsByProvider,
   now: Date = new Date(),
 ): ScheduledDestination[] {
   const capturedAt = now.toISOString();
   const out: ScheduledDestination[] = [];
-  for (const provider of selected) {
-    if (provider === "pinterest") {
-      const p = pinterestDestinationFrom(draft, capturedAt);
-      if (p) out.push(p);
-      continue;
-    }
-    const conn = resolveConnection(provider);
-    if (!conn || !str(conn.id)) continue;
+  const seen = new Set<string>();
+  for (const pick of picks) {
+    if (!isSocialProvider(pick.provider)) continue;
+    const explicit = str(pick.socialConnectionId);
+    // An explicit id is the merchant's own choice and is taken as given — but it is
+    // still checked against the connected list so a disconnected account cannot be
+    // frozen as intent (resolveScheduledAccount returns null for that).
+    const resolved = resolveScheduledAccount(pick.provider, accountsFor(accounts, pick.provider), explicit || null);
+    if (!resolved || !str(resolved.id)) continue;
+    const key = `${pick.provider}:${resolved.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const d: ScheduledDestination = {
-      provider,
-      socialConnectionId: str(conn.id),
+      provider: pick.provider,
+      socialConnectionId: resolved.id,
       capturedAt,
     };
-    const label = str(conn.label);
+    const label = str(pick.accountLabel) || str(resolved.label);
     if (label) d.accountLabel = label;
+    if (pick.provider === "pinterest") {
+      // The board this ENTRY publishes to. The draft-level board is only a fallback
+      // for the entry that IS the legacy target — never for a second account, whose
+      // board would then be another account's board.
+      const isLegacyTarget = resolved.id === str(draft.targetConnectionId);
+      const boardId = str(pick.boardId) || (isLegacyTarget ? str(draft.boardId) : "");
+      const boardName = str(pick.boardName) || (isLegacyTarget ? str(draft.boardName) : "");
+      if (boardId) d.boardId = boardId;
+      if (boardName) d.boardName = boardName;
+    }
     out.push(d);
   }
   return out;
+}
+
+/**
+ * The legacy Pinterest mirror for a set of entries: the FIRST Pinterest entry.
+ *
+ * The mirror describes ONE Pinterest target, and every un-migrated reader (the plan
+ * drawer's board field, admin views, older cron code paths) reads it as such. With N
+ * Pinterest entries there is no honest single answer, so the first entry — the one the
+ * merchant sees first on the chip row — is the one mirrored, and the rest live only in
+ * `scheduledDestinations`. Returns cleared fields when there is no Pinterest entry, so
+ * unticking Pinterest cannot leave a stale target pinned to the draft.
+ */
+export function legacyPinterestMirror(
+  destinations: readonly ScheduledDestination[],
+): Pick<PinDraft, "targetConnectionId" | "targetAccountLabel" | "boardId" | "boardName"> {
+  const first = destinations.find(d => d.provider === "pinterest" && !!str(d.socialConnectionId));
+  return {
+    targetConnectionId: first ? first.socialConnectionId : "",
+    targetAccountLabel: first ? str(first.accountLabel) : "",
+    boardId: first ? str(first.boardId) : "",
+    boardName: first ? str(first.boardName) : "",
+  };
 }
 
 /** The providers named by a draft's effective intent, in order. */

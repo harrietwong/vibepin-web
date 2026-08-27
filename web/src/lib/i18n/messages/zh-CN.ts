@@ -444,6 +444,9 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "publishDestinations.connectAccountSuffix": " 账号即可在此发布。",
   "publishDestinations.loadError": "无法刷新账号连接状态。",
   "publishDestinations.tryAgain": "重试",
+  "publishDestinations.boardLabel": "画板",
+  "publishDestinations.boardPlaceholder": "选择画板",
+  "publishDestinations.boardLoading": "正在加载画板…",
   "publishDestinations.footerConnected": "连接更多账号，将这条商品内容分发到各个平台。每个账号可能需要不同的文案、媒体格式或账号连接。",
   "publishDestinations.footerNone": "连接账号，将这条商品内容分发到各个平台。你只能在审核并批准内容后才能发布。",
   // ── WP-E sync-status indicator ──

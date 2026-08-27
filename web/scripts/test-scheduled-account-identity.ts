@@ -91,9 +91,9 @@ section("INT-P0-05/06 — the saved schedule is immune to later changes");
   // Saved today with B chosen. Tomorrow a third account appears and the default
   // moves. The stored intent must still name B.
   const saved = buildScheduledDestinations(
-    ["instagram"],
+    [{ provider: "instagram", socialConnectionId: "ig_B" }],
     {},
-    (provider) => resolveScheduledAccount(provider, [A, B], "ig_B"),
+    () => [A, B],
   );
   check("intent records the specific connection id", saved[0]?.socialConnectionId === "ig_B",
     JSON.stringify(saved));
@@ -104,9 +104,9 @@ section("INT-P0-05/06 — the saved schedule is immune to later changes");
 section("Pinterest keeps account AND board");
 {
   const saved = buildScheduledDestinations(
-    ["pinterest"],
+    [{ provider: "pinterest" }],
     { targetConnectionId: "pin_conn_1", targetAccountLabel: "harrietstudio", boardId: "813814663854885698", boardName: "家居" },
-    () => null,
+    () => [{ id: "pin_conn_1", connectionStatus: "connected", providerAccountUsername: "harrietstudio" }],
   );
   const p = saved[0];
   check("board id is persisted", p?.boardId === "813814663854885698", JSON.stringify(p));

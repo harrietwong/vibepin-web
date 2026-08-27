@@ -848,17 +848,26 @@ export function PinDetailsModal({
     // scheduled from somewhere else.
     if (trimmedDate) {
       try {
+      // This drawer picks ONE account per platform (its Board field belongs to a single
+      // Pinterest target), so it emits one pick per ticked platform. The builder still
+      // resolves/validates each: an unpicked platform with several connected accounts
+      // throws, which is caught below.
       patch.scheduledDestinations = buildScheduledDestinations(
-        socialDestinations,
-        { ...activeDraft, boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" },
-        (provider) => {
-          const summary = destinationSummaries.find(s => s.provider === provider);
+        socialDestinations.map(provider => {
           // The account the merchant actually ticked, when the platform offered a
           // choice. resolveScheduledAccount refuses to guess when several are
           // connected and none was picked — see its doc comment.
           const explicit = socialAccountIds.find(a => a.provider === provider)?.id;
-          return resolveScheduledAccount(provider, summary?.accounts ?? [], explicit);
-        },
+          return {
+            provider,
+            socialConnectionId: explicit ?? null,
+            ...(provider === "pinterest"
+              ? { boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" }
+              : {}),
+          };
+        }),
+        { ...activeDraft, boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" },
+        (provider) => destinationSummaries.find(s => s.provider === provider)?.accounts ?? [],
       );
       } catch (err) {
         // Several accounts connected on a platform and none picked. Refusing is the

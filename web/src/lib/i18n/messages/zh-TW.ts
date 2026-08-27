@@ -444,6 +444,9 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "publishDestinations.connectAccountSuffix": " 帳號即可在此發布。",
   "publishDestinations.loadError": "無法重新整理帳號連線狀態。",
   "publishDestinations.tryAgain": "重試",
+  "publishDestinations.boardLabel": "看板",
+  "publishDestinations.boardPlaceholder": "選擇看板",
+  "publishDestinations.boardLoading": "正在載入看板…",
   "publishDestinations.footerConnected": "連接更多帳號，將這則商品內容分發到各個平台。每個帳號可能需要不同的文案、媒體格式或帳號連接。",
   "publishDestinations.footerNone": "連接帳號，將這則商品內容分發到各個平台。你只能在審核並核准內容後才能發布。",
   // ── WP-E sync-status indicator ──
