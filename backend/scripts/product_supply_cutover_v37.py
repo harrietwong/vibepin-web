@@ -420,7 +420,7 @@ def transient_run(client: paramiko.SSHClient, mode: str,
     stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
     unit = f"vibepin-product-supply-cutover-{mode}-{stamp}"
     limit = 100
-    mix = "fashion:20,womens-fashion:15,home-decor:20,digital-products:20,wedding:15,jewelry:10"
+    mix = "fashion:29,womens-fashion:22,home-decor:29,digital-products:20"
     settings = [
         "--property=Type=oneshot",
         f"--property=WorkingDirectory={REMOTE_BACKEND}",

@@ -43,28 +43,24 @@ class TestCategoryMix(unittest.TestCase):
     def test_digital_products_requires_explicit_narrow_opt_in(self):
         with self.assertRaises(ValueError):
             parse_category_mix(
-                "fashion:20,womens-fashion:15,home-decor:20,digital-products:20,"
-                "wedding:15,jewelry:10"
+                "fashion:29,womens-fashion:22,home-decor:29,digital-products:20"
             )
         with unittest.mock.patch.dict(
             os.environ,
             {"VIBEPIN_STL_ALLOW_EXCLUDED": "digital-products"},
         ):
             mix = parse_category_mix(
-                "fashion:20,womens-fashion:15,home-decor:20,digital-products:20,"
-                "wedding:15,jewelry:10"
+                "fashion:29,womens-fashion:22,home-decor:29,digital-products:20"
             )
         self.assertEqual(mix["digital-products"], 20)
         self.assertEqual(sum(mix.values()), 100)
 
     def test_reviewed_launch_mix_selects_exact_digital_quota(self):
         mix = {
-            "fashion": 20,
-            "womens-fashion": 15,
-            "home-decor": 20,
+            "fashion": 29,
+            "womens-fashion": 22,
+            "home-decor": 29,
             "digital-products": 20,
-            "wedding": 15,
-            "jewelry": 10,
         }
 
         def sources(category, _cutoff, *, bootstrap_only, limit):

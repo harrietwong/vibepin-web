@@ -83,8 +83,7 @@ class TestBootstrapFailClosed(unittest.TestCase):
             rc = self._run_main([
                 "--limit", "100", "--timeout-seconds", "5400",
                 "--category-mix",
-                "fashion:20,womens-fashion:15,home-decor:20,digital-products:20,"
-                "wedding:15,jewelry:10",
+                "fashion:29,womens-fashion:22,home-decor:29,digital-products:20",
             ])
         finally:
             runner._run_preflight = original
