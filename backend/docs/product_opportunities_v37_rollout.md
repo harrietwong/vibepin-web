@@ -46,7 +46,7 @@ The `2026-08-27T10:44:29Z` read-only evidence attempt did not close this gate:
 the local Vercel credential was expired, its project-list API returned 403, and
 both available browser paths failed to attach. Do not reinterpret those access
 failures as platform verification; use
-`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T104429Z.json`
+`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T124031Z.json`
 as the exact open-evidence record.
 
 The latest GET-only pre-Supply data-quality baseline is

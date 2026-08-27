@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-27T12:40:31Z",
+  "candidateFunctionalTip": "351e47912ce44fc34728097041dbfdd95889081a",
+  "candidateContractTip": "d07e92b24e9a133f67f01c38b8579085e45831e7",
+  "candidateEvidenceTipBeforeThisReport": "1ea75b2e",
+  "productionRemoteBase": "b22930ebe73847cf35bc44be789414902ae6b599",
+  "localRepositoryEvidence": {
+    "linkedProjectMetadataPresent": false,
+    "expectedRootDirectory": "web",
+    "candidateVercelConfig": "web/vercel.json",
+    "framework": "nextjs",
+    "installCommand": "npm ci",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next",
+    "localCleanInstallPackages": 417,
+    "localBuildPassed": true,
+    "localBuildStaticPages": "70/70",
+    "localWebTests": "132/132",
+    "localBackendTests": "877 passed, 2 skipped, 77 subtests",
+    "localRenderedProductTruth": "PASS",
+    "knownVulnerabilities": 0
+  },
+  "platformEvidenceAttempts": {
+    "vercelCliAuthExpiredAt": "2026-08-26T18:07:33Z",
+    "projectListApiResult": "HTTP 403 Forbidden",
+    "inAppBrowser": {
+      "attempts": 2,
+      "result": "Vercel dashboard page could not attach"
+    },
+    "chrome": {
+      "connected": true,
+      "signedInProjectTabFound": true,
+      "tabTitle": "web – Build and Deployment – Vercel",
+      "tabUrl": "https://vercel.com/harriets-projects-86e9e358/web/settings/build-and-deployment",
+      "contentReadResult": "timed out before authoritative setting values could be read"
+    }
+  },
+  "verified": false,
+  "verifiedFacts": [
+    "the signed-in account exposes a Vercel project named web",
+    "the exact Build and Deployment settings URL exists in the connected Chrome session"
+  ],
+  "factsNotProven": [
+    "Root Directory currently equals web",
+    "the checked-in web/vercel.json is the active platform configuration",
+    "an immutable deployment exists for functional commit 351e47912ce44fc34728097041dbfdd95889081a",
+    "that deployment build log used npm ci and Next.js 16.3.3",
+    "an immutable truth-safe rollback deployment exists for d8cc0b869d871763ec8c2c549dd913494aa487b1"
+  ],
+  "hardStop": "Do not promote the Web release until every unproven platform fact is read back successfully.",
+  "loginAttempted": false,
+  "tokenRefreshAttempted": false,
+  "settingChanged": false,
+  "deploymentCreated": false,
+  "productionMutation": false
+}

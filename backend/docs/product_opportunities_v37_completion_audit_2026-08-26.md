@@ -90,7 +90,7 @@ change or deployment was attempted. Therefore the platform evidence remains a
 hard stop rather than an inferred pass. The local candidate still proves only
 its checked-in `web/vercel.json` (`npm ci`, `npm run build`, `.next`), clean
 install, 135/135 Web tests and 70/70-page build. Evidence:
-`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T104429Z.json`.
+`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T124031Z.json`.
 
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure
