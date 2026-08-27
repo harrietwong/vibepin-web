@@ -191,6 +191,12 @@ export const studioBoardMessages = {
   "studioBoard.card.nextStep.chooseBoard": "Choose another board",
   "studioBoard.card.nextStep.edit": "Edit",
   "studioBoard.card.scheduledFor": "Scheduled for {time}",
+  "studioBoard.card.publishFailedBadge": "Publish failed",
+  "studioBoard.card.generationFailedBadge": "Generation failed",
+  "studioBoard.card.wasScheduled": "Was scheduled: {time}",
+  "studioBoard.card.fix.reconnect": "Reconnect Pinterest, then retry.",
+  "studioBoard.card.fix.temporary": "Usually temporary — try publishing again.",
+  "studioBoard.card.fix.editDetails": "Fix the Pin details, then retry.",
 
   // ── PinBoardCard: expanded card ──
   "studioBoard.expanded.collapseAria": "Collapse",

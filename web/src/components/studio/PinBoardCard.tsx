@@ -14,14 +14,17 @@
  *           tags) → autosave + Schedule. No manual publish-time fields.
  */
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
-import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle, Sparkles, Pencil } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
+import { hasPersistFailure, retryPersist, subscribe as subscribeDrafts } from "@/lib/pinDraftStore";
 import { getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
 import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
+import { buildCardViewModel, relativePublishedParts, type CardResultRow } from "@/lib/studio/cardView";
+import { coverMedia } from "@/lib/contentDraftModel";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
 import { ContentMediaStrip } from "@/components/studio/ContentMediaStrip";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
@@ -72,31 +75,37 @@ function planDeepLink(draftId: string): string {
   return `/app/studio?view=plan&modal=publish&pinId=${encodeURIComponent(draftId)}`;
 }
 // "Was scheduled: <time>" — reads the ISO snapshot WP-B captures right before a
-// failed publish clears the live schedule fields. Format per PRD "失败情况优化" §5:
-// "Was scheduled: Jul 10, 09:38" (24h HH:mm, not 12h AM/PM).
-// i18n backfill pending — copy hardcoded per WP-G's explicit i18n exemption (a
-// parallel session owns web/src/lib/i18n/messages/ during this work package).
-function formatPreviousScheduled(iso: string | undefined): string {
+// failed publish clears the live schedule fields. The timestamp is formatted with the
+// merchant's locale; only the sentence around it is translated.
+function formatPreviousScheduled(tr: (key: MessageKey) => string, iso: string | undefined): string {
   const v = (iso ?? "").trim();
   if (!v) return "";
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return "";
-  const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
-  return `Was scheduled: ${day}, ${time}`;
+  const day = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  return tr("studioBoard.card.wasScheduled").replace("{time}", `${day}, ${time}`);
 }
-// Human-readable recommended-fix copy per failure bucket (PRD "失败情况优化" §5).
-// Matches the action-matrix split below: transient gets its own message; content AND
-// "no category" (legacy drafts / undetermined) share the content message.
-// i18n backfill pending — copy hardcoded per WP-G's explicit i18n exemption (the
-// existing studioBoard.card.fix.* i18n keys carry the OLDER copy; a parallel session
-// owns web/src/lib/i18n/messages/ during this work package so those keys are left
-// untouched — this function intentionally no longer reads them).
+// Recommended-fix copy per failure bucket (PRD "失败情况优化" §5). Transient gets its
+// own message; content AND "no category" (legacy drafts / undetermined) share the
+// content message, because in both cases something on the Pin has to change first.
 function recommendedFix(tr: (key: MessageKey) => string, category: "transient" | "content" | "auth" | undefined): string {
-  void tr; // kept in the signature so call sites don't need to change
-  if (category === "auth") return "Reconnect Pinterest, then retry.";
-  if (category === "transient") return "Usually temporary — try publishing again.";
-  return "Fix the Pin details, then retry.";
+  if (category === "auth") return tr("studioBoard.card.fix.reconnect");
+  if (category === "transient") return tr("studioBoard.card.fix.temporary");
+  return tr("studioBoard.card.fix.editDetails");
+}
+/**
+ * The one actionable next step for a failure (PRD §4) — a category, not a message.
+ * The merchant is never shown a raw error and then left to guess what to do with it.
+ */
+function nextStepFor(category: "transient" | "content" | "auth" | undefined, errorCode?: string):
+  { key: MessageKey; action: "reconnect" | "board" | "edit" } | null {
+  if (category === "auth") return { key: "studioBoard.card.nextStep.reconnect", action: "reconnect" };
+  if ((errorCode ?? "").toLowerCase() === "board_not_owned") {
+    return { key: "studioBoard.card.nextStep.chooseBoard", action: "board" };
+  }
+  if (category === "content") return { key: "studioBoard.card.nextStep.edit", action: "edit" };
+  return null; // transient / unknown: Retry alone is the whole remedy.
 }
 function customerFacingBoardName(...names: Array<string | null | undefined>): string {
   const name = names.map(item => item?.trim()).find(item => item
@@ -167,8 +176,18 @@ export type PinBoardCardProps = {
   onSchedule: (id: string) => void;
   onCustomSchedule: (id: string, date: string, time: string) => void;
   onSelectProduct?: (draft: PinDraft) => void;
-  onGenerateAiImage: (draft: PinDraft) => void;
-  onPublish: (id: string) => void;
+  /**
+   * Regenerate ONE image, never the whole set. `mediaId` names the item the result
+   * replaces — the cover unless the merchant selected another thumbnail — and the
+   * board threads it into `completeGeneratedDraft(..., { replaceMediaId })`.
+   */
+  onGenerateAiImage: (draft: PinDraft, mediaId?: string) => void;
+  /**
+   * Publish this Content. `onlyPending` (the board's default) re-sends only what has
+   * not published — Retry semantics. A republish of an edited Posted Content passes
+   * `false`, so every destination gets the new content.
+   */
+  onPublish: (id: string, options?: { onlyPending?: boolean }) => void;
   onDelete: (draft: PinDraft) => void;
   onArchive: (draft: PinDraft) => void;
   onDuplicate: (id: string) => void;
@@ -192,6 +211,19 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [fields, setFields] = useState<PinFieldsValue>(() => draftToFields(draft));
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  /**
+   * Card-local edit state (PRD §4–§5): a Scheduled/Posted card opens its editable
+   * form ONLY from the explicit Edit button. Never hover-triggered, and never lifted
+   * to the board — a hover or a shared "active card" would make the merchant's cards
+   * shift under the pointer while they scan a board of dozens.
+   */
+  const [editing, setEditing] = useState(false);
+  /** "View results" expansion on a Posted card. */
+  const [resultsOpen, setResultsOpen] = useState(false);
+  /** Publishing a Scheduled card early is confirmed first — it overrides their plan. */
+  const [confirmPublish, setConfirmPublish] = useState(false);
+  /** The destination picker, anchored to the chips instead of expanding the card. */
+  const [destinationsOpen, setDestinationsOpen] = useState(false);
   const [customTimeOpen, setCustomTimeOpen] = useState(false);
   const [customDate, setCustomDate] = useState(() => draft.scheduledDate ?? "");
   const [customTime, setCustomTime] = useState(() => draft.scheduledTime ?? "");
@@ -245,18 +277,49 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   }, [props, draft.id, boardName]);
 
   const flush = useCallback(() => {
-    if (timer.current) { clearTimeout(timer.current); timer.current = null; persistNow(pendingRef.current); }
+    if (timer.current) {
+      clearTimeout(timer.current); timer.current = null;
+      persistNow(pendingRef.current);
+      setPendingSave(false);
+      setPersistFailed(hasPersistFailure());
+    }
   }, [persistNow]);
 
   useEffect(() => () => { if (timer.current) { clearTimeout(timer.current); persistNow(pendingRef.current); } }, [persistNow]);
+
+  /**
+   * The card's REAL save state (PRD §3), not a decorative tick.
+   *
+   * "Saving…" is the debounce window — the merchant's keystrokes are in memory and
+   * not yet written. "Saved" is the settled state. "Couldn't save" reads the store's
+   * own `hasPersistFailure()`, which is set when the localStorage write throws
+   * (quota/private mode): edits survive in memory, so the honest line is a retry
+   * offer, not a lie either way. The old card rendered a hardcoded green "Saved"
+   * unconditionally, which said "Saved" loudest exactly when nothing was.
+   */
+  const [pendingSave, setPendingSave] = useState(false);
+  const [persistFailed, setPersistFailed] = useState(false);
+  useEffect(() => {
+    const sync = () => setPersistFailed(hasPersistFailure());
+    sync();
+    return subscribeDrafts(sync);
+  }, []);
+  const retrySave = useCallback(() => { retryPersist(); setPersistFailed(hasPersistFailure()); }, []);
+  const saveState: "saved" | "saving" | "failed" = persistFailed ? "failed" : pendingSave ? "saving" : "saved";
 
   const handleChange = useCallback((patch: Partial<PinFieldsValue>) => {
     selfEdit.current = true;
     const next = { ...pendingRef.current, ...patch };
     pendingRef.current = next;
     setFields(next);
+    setPendingSave(true);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => { timer.current = null; persistNow(next); }, PERSIST_DEBOUNCE);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      persistNow(next);
+      setPendingSave(false);
+      setPersistFailed(hasPersistFailure());
+    }, PERSIST_DEBOUNCE);
   }, [persistNow]);
 
   // Actions flush pending edits first. An unresolvable destination blocks both:
@@ -273,14 +336,35 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     setCustomTimeOpen(false);
     props.onCustomSchedule(draft.id, customDate, customTime);
   }, [customDate, customTime, draft.id, flush, props]);
-  const doGenerateAiImage = useCallback(() => { flush(); props.onGenerateAiImage(draft); }, [flush, props, draft]);
-  const doPublish = useCallback(() => {
+  /**
+   * Regenerate ONE image (PRD §7).
+   *
+   * The target is the SELECTED thumbnail, and selection is the cover — `setCoverMedia`
+   * moves the picked item to media[0], so ContentMediaStrip's existing selection UI and
+   * the cover invariant are the same fact. Building a second "selected media" state
+   * here would let the highlighted thumbnail and the regenerated one drift apart, which
+   * is the whole-set overwrite this replaces, one step removed.
+   */
+  const doGenerateAiImage = useCallback(() => {
+    flush();
+    props.onGenerateAiImage(draft, coverMedia(draft)?.id);
+  }, [flush, props, draft]);
+  /**
+   * Publish. `onlyPending` is the board default (Retry semantics); an explicit
+   * republish of an edited Posted Content sends everything, because the point of that
+   * action is to push the NEW content to every destination it names.
+   */
+  const doPublish = useCallback((options?: { onlyPending?: boolean }) => {
     if (destinationError) return;
     flush();
-    props.onPublish(draft.id);
+    setConfirmPublish(false);
+    props.onPublish(draft.id, options);
   }, [flush, props, draft.id, destinationError]);
   const expand = useCallback(() => props.onSetActive(draft.id), [props, draft.id]);
   const collapse = useCallback(() => { flush(); props.onSetActive(null); }, [flush, props]);
+  /** Enter/leave the card-local edit form. Leaving always flushes pending edits. */
+  const startEditing = useCallback(() => { setEditing(true); props.onSetActive(draft.id); }, [props, draft.id]);
+  const stopEditing = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
   /**
    * THE destination writer: the merchant's platform/account choice, frozen into
    * `scheduledDestinations` — the same record the due-time worker reads.
@@ -422,13 +506,18 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       }))
     : tr("studioBoard.card.generationError.generic");
 
+  // THE derivation of what this card shows. Every variant/action/result decision
+  // below reads this one object rather than re-deriving lifecycle facts per branch.
+  const view = useMemo(() => buildCardViewModel(draft, lifecycle, { editing }), [draft, lifecycle, editing]);
+
   const status = getStatusBadge(draft);
   // Badge copy override for the failed lifecycle only (PRD "失败情况优化" §5): the
   // shared getStatusBadge() in pinLifecycle.ts still returns the generic "Failed" —
   // overridden here rather than in the shared helper since PinBoardCard is its only
   // caller and already computes isPublishFailure for the action matrix below.
-  // i18n backfill pending (WP-G exemption — parallel session owns the i18n catalogs).
-  const statusLabel = status.lifecycle === "failed" ? (isPublishFailure ? "Publish failed" : "Generation failed") : status.label;
+  const statusLabel = status.lifecycle === "failed"
+    ? tr(isPublishFailure ? "studioBoard.card.publishFailedBadge" : "studioBoard.card.generationFailedBadge")
+    : status.label;
   const publishing = props.publishing;
   const posted = lifecycle === "posted";
   const failed = lifecycle === "failed";
