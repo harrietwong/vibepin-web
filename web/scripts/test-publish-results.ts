@@ -104,4 +104,80 @@ test("a published Pin shows Publish results ONCE, not once per render site", () 
     "the just-published block must be gated on !isPosted so a posted Pin renders it once");
 });
 
+console.log("\n=== a FAILED destination is never presented as Published ===");
+test("a stored failed row keeps its status, raw reason and code", () => {
+  // The regression this guards: PublishResults.tsx rendered CheckCircle2 +
+  // "publishResults.published" for EVERY row regardless of status, so a publish where
+  // Instagram failed reported all-green. The row data always said `failed` — only the
+  // component ignored it — which is why the data-only tests above all passed while the
+  // merchant-visible bug was live. Hence the source-contract assertions further down.
+  const rows = publishResultRows({
+    destinationResults: [
+      { destinationId: "pinterest:c1", provider: "pinterest", socialConnectionId: "c1",
+        status: "published", accountLabel: "harrietstudio", boardName: "Home",
+        remoteId: "123", postUrl: "https://www.pinterest.com/pin/123/", publishedAt: "2026-08-10T02:00:00Z" },
+      { destinationId: "instagram:c2", provider: "instagram", socialConnectionId: "c2",
+        status: "failed", accountLabel: "@vibepin.co",
+        errorCode: "invalid_image_url", errorMessage: "IG-4210 media upload rejected: aspect ratio" },
+    ],
+  });
+  assert.deepEqual(rows.map(r => r.status), ["published", "failed"]);
+  assert.equal(rows[1].errorMessage, "IG-4210 media upload rejected: aspect ratio");
+  assert.equal(rows[1].errorCode, "invalid_image_url", "the stable code must survive: it picks the safe sentence");
+  assert.equal(rows[1].accountName, "@vibepin.co");
+});
+test("a failed destination gets NO view action, even with a url on the row", () => {
+  assert.equal(canViewExternally({ status: "failed", postUrl: "https://instagram.com/p/x" }), false,
+    "a failed publish left nothing to view — a link would be a lie, not a convenience");
+  assert.equal(canViewExternally({ status: "publishing", postUrl: "https://instagram.com/p/x" }), false);
+  assert.equal(canViewExternally({ status: "pending", postUrl: "https://instagram.com/p/x" }), false);
+});
+test("in-flight and not-yet-attempted destinations survive as their own statuses", () => {
+  const rows = publishResultRows({
+    destinationResults: [
+      { destinationId: "facebook:c3", provider: "facebook", socialConnectionId: "c3", status: "publishing" },
+      { destinationId: "instagram:c4", provider: "instagram", socialConnectionId: "c4", status: "pending" },
+    ],
+  });
+  assert.deepEqual(rows.map(r => r.status), ["publishing", "pending"]);
+  assert.equal(rows.every(r => !canViewExternally(r)), true);
+});
+
+console.log("\n=== the component renders BY status, and never the raw reason ===");
+const component = readFileSync("src/components/social/PublishResults.tsx", "utf8");
+test("no unconditional success icon: the check mark is chosen by status, not hardcoded", () => {
+  assert(!/<CheckCircle2\b/.test(component),
+    "CheckCircle2 must not be rendered directly in JSX — it has to come from the status branch");
+  assert(component.includes("statusPresentation"), "a single status→presentation map must decide icon/label/colour");
+});
+test("every status has its own words, not just its own colour", () => {
+  for (const key of ["publishResults.published", "publishResults.failed", "publishResults.publishing", "publishResults.pending"]) {
+    assert(component.includes(key), `${key} must be reachable from the component`);
+  }
+  assert(component.includes("AlertTriangle"), "the failed row needs a non-colour signal too");
+});
+test("the status element exposes data-status for QA/tests, keeping the old testids", () => {
+  assert(component.includes("data-status={row.status}"));
+  assert(component.includes("`publish-result-${row.provider}-status`"), "the existing testid must survive");
+  assert(component.includes("`publish-result-${row.provider}-view`"), "the existing testid must survive");
+});
+test("the raw upstream errorMessage never reaches the DOM", () => {
+  // publishErrorDisplay.ts owns this contract: `errorMessage` can carry API internals
+  // and ids, so the row shows a fixed translated sentence chosen by category instead.
+  assert(component.includes("getPublishErrorDisplayKey"),
+    "the failed reason must be mapped to a customer-safe sentence");
+  assert(!/\{\s*row\.errorMessage\s*\}/.test(component),
+    "row.errorMessage must never be rendered verbatim");
+});
+test("the panel is only success-green when every destination published", () => {
+  // A failed line inside an all-green box is the same untruth one level up.
+  assert(component.includes("allPublished"),
+    "the container tint must follow the worst row, not assume success");
+});
+test("the failed row points at the Retry that already exists, without adding a second one", () => {
+  assert(component.includes("publishResults.retryHint"));
+  assert(!/onRetry|onClick=\{\s*\(\)\s*=>\s*retry/i.test(component),
+    "PublishResults must not grow its own retry path — the card and the drawer already own one");
+});
+
 console.log(`\nPublish results: ${passed} passed, 0 failed\n`);

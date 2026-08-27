@@ -31,8 +31,13 @@ export type PublishResultRow = {
   postUrl?: string | null;
   postId?: string | null;
   publishedAt?: string | null;
-  /** User-facing failure reason, for a `failed` row. */
+  /**
+   * The RAW upstream failure text for a `failed` row. Diagnostic payload, not display
+   * text — the UI maps it through `getPublishErrorDisplayKey` and never renders it.
+   */
   errorMessage?: string | null;
+  /** Stable failure code, when the platform gave one. Drives the same mapping. */
+  errorCode?: string | null;
 };
 
 /** The draft fields these rows are read from. A superset is fine. */
@@ -52,6 +57,7 @@ export function toPublishResultRow(result: DestinationPublishResult): PublishRes
     postId: clean(result.remoteId),
     publishedAt: clean(result.publishedAt),
     errorMessage: clean(result.errorMessage),
+    errorCode: clean(result.errorCode),
   };
 }
 
