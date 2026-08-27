@@ -68,11 +68,17 @@ export type SocialConnectResult = {
 export async function startSocialConnect(
   provider: SocialProvider,
   next?: string,
+  /**
+   * Repairing THIS connection rather than adding one. Carried through to the
+   * provider's OAuth start so an at-limit user can still fix a broken connection
+   * (the plan gate refuses new accounts, never re-auth of an existing one).
+   */
+  reconnectConnectionId?: string | null,
 ): Promise<SocialConnectResult> {
   const res = await fetch("/api/social/connect", {
     method: "POST",
     headers: await authHeaders(),
-    body: JSON.stringify({ provider, next }),
+    body: JSON.stringify({ provider, next, reconnect: reconnectConnectionId ?? undefined }),
   });
   if (!res.ok) throw new Error(await readError(res, "Could not start connection"));
   return res.json();

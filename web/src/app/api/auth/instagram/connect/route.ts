@@ -24,6 +24,7 @@ import {
   getUserIdFromCookieSession,
 } from "@/lib/server/authUser";
 import { ConfigurationError } from "@/lib/server/pinterest/errors";
+import { canConnectAnotherAccount } from "@/lib/server/social/connectionLimit";
 import { buildAuthorizeUrl, getInstagramEnv, isInstagramConfigured } from "@/lib/server/instagram/config";
 import {
   OAUTH_STATE_COOKIE,
@@ -38,6 +39,7 @@ import {
 export const dynamic = "force-dynamic";
 
 const SOCIAL_SETTINGS_PATH = "/app/settings/social";
+const PROVIDER = "instagram";
 
 function settingsRedirect(req: NextRequest, status: string): NextResponse {
   const url = req.nextUrl.clone();
@@ -63,6 +65,49 @@ function loginRedirect(req: NextRequest, returnTo: string): NextResponse {
   url.pathname = "/login";
   url.search = `?next=${encodeURIComponent(returnTo)}`;
   return NextResponse.redirect(url);
+}
+
+/**
+ * Plan gate for "add an account": true when the flow must be refused because the
+ * user has no room left (plan allowance + purchased extra slots all spent).
+ *
+ * This mirrors the Pinterest connect route. Until now Instagram had no start-side
+ * check at all: the user was sent all the way through the OAuth dialog, granted
+ * permissions, and only THEN had the write refused by the store. Refusing before
+ * the dialog is the difference between "you cannot add another account" and
+ * "authorize us, wait, and then be told no".
+ *
+ * A `reconnect=<id>` flow is ALWAYS allowed through. Reconnect repairs an existing
+ * row (the store's UPDATE branch, which never consults the limit) — refusing it at
+ * the ceiling would leave an at-limit user permanently unable to fix a broken
+ * connection. The id is only shape-checked here; it grants nothing, because the
+ * store still decides insert-vs-update from the account that actually authorizes,
+ * and the insert branch re-checks. So a forged id cannot create an over-limit row.
+ *
+ * Fails OPEN on an unexpected error: an entitlement lookup that throws must not
+ * become a connect outage. The persist-time check is the backstop.
+ */
+async function isOverAccountLimit(uid: string, reconnectId: string | null): Promise<boolean> {
+  if (reconnectId) return false;
+  try {
+    const verdict = await canConnectAnotherAccount(uid, PROVIDER);
+    if (verdict.allowed) return false;
+    console.warn(
+      `[instagram/connect] account limit reached (plan=${verdict.plan}, used=${verdict.current}/${verdict.limit})`,
+    );
+    return true;
+  } catch (err) {
+    console.error("[instagram/connect] quota check failed, allowing start:", (err as Error).message);
+    return false;
+  }
+}
+
+/** Shape-only validation of a reconnect id (see isOverAccountLimit). */
+function sanitizeReconnectId(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!/^[0-9a-fA-F-]{16,64}$/.test(trimmed)) return null;
+  return trimmed;
 }
 
 /** Config check with a safe message (never echoes secret values). */
@@ -120,9 +165,16 @@ function configErrorResponse(req: NextRequest, err: ConfigurationError, asJson: 
 
 export async function GET(req: NextRequest) {
   const returnTo = sanitizeReturnTo(req.nextUrl.searchParams.get("next"));
+  const reconnectId = sanitizeReconnectId(req.nextUrl.searchParams.get("reconnect"));
 
   const uid = await getUserIdFromCookieSession();
   if (!uid) return loginRedirect(req, returnTo);
+
+  // Refuse BEFORE the OAuth dialog. `account_limit` is the same flag the callback
+  // redirects with, so the Settings panel shows one banner either way.
+  if (await isOverAccountLimit(uid, reconnectId)) {
+    return settingsRedirect(req, "account_limit");
+  }
 
   let payload: ConnectPayload;
   try {
@@ -152,9 +204,11 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   let returnTo = SOCIAL_SETTINGS_PATH;
+  let reconnectId: string | null = null;
   try {
-    const body = (await req.json()) as { next?: string };
+    const body = (await req.json()) as { next?: string; reconnect?: string };
     returnTo = sanitizeReturnTo(body.next ?? null);
+    reconnectId = sanitizeReconnectId(body.reconnect ?? null);
   } catch {
     /* empty body ok */
   }
@@ -162,6 +216,13 @@ export async function POST(req: NextRequest) {
   const uid = (await getUserIdFromBearer(req)) ?? (await getUserIdFromCookies());
   if (!uid) {
     return NextResponse.json({ error: "Unauthorized", code: "unauthorized" }, { status: 401 });
+  }
+
+  if (await isOverAccountLimit(uid, reconnectId)) {
+    return NextResponse.json(
+      { error: "You've reached your plan's connected account limit.", code: "account_limit" },
+      { status: 403 },
+    );
   }
 
   let payload: ConnectPayload;

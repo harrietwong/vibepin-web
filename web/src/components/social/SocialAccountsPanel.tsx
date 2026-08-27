@@ -1370,7 +1370,8 @@ export function SocialAccountsPanel() {
         if (!result.ok) toast.error(result.message);
         return; // navigates away on success
       }
-      const result = await startSocialConnect(provider);
+      // Pass the reconnect target: a repair must not be refused by the plan gate.
+      const result = await startSocialConnect(provider, undefined, reconnectConnectionId ?? null);
       if (result.status === "oauth_url" && result.url) {
         window.location.assign(result.url);
         return;
