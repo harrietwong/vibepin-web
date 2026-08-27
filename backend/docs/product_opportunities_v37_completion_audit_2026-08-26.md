@@ -62,6 +62,14 @@ is frozen in
 it does not substitute for staging those six exact unit bytes on the VPS and
 running Linux `systemd-analyze verify` before installation.
 
+That host gate is now closed under the authorized `/tmp`-only boundary. The VPS
+matched all six unit SHA-256 values, and systemd 255 verified the exact units and
+four exact wrappers inside an isolated alternate root with exit 0 and no output.
+The direct-host attempt's only candidate-related findings were the expected
+absence of the not-yet-deployed Admission/Tracking wrappers. All temporary files
+were removed; `/etc`, `/opt`, daemon state, services and timers were untouched.
+Evidence: `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
+
 The former `codex/product-v37-security-deps` pointer below remains historical
 functional evidence, not the current whole-tree deployment candidate.
 
@@ -141,6 +149,17 @@ is superseded. Vercel promotion remains `BLOCK` only until an exact immutable
 `6839e760` candidate build proves `npm ci`, Next.js 16.3.3, TypeScript and Product
 routes before promotion. Evidence:
 `backend/docs/product_opportunities_v37_vercel_deployment_mode_20260827T175000Z.json`.
+
+The exact non-production candidate now has an immutable Preview artifact:
+`dpl_CAungjKNgdCrcHnxXtPuTeFbtQvV`, target `preview`, READY. It was uploaded from
+an exact `6839e760:web` archive and its platform log proves `npm ci`, zero known
+vulnerabilities, Next.js 16.3.3, TypeScript completion, 70/70 pages and all
+required Product Opportunity routes. Anonymous Product-truth verification was
+redirected to Vercel SSO and correctly rejected as non-authoritative; the root
+HTML fetched through authenticated Vercel access passed the unchanged browser
+truth rules. The production alias remains on `dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn`.
+This closes Preview qualification but does not authorize promotion. Evidence:
+`backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
 
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure

@@ -32,6 +32,13 @@ PRD = (
     / "0825数据功能修改-VibePin_Product_Opportunities_PRD_v3.7_—_产品与技术执行版.md"
 ).read_text(encoding="utf-8")
 VERCEL_CONFIG = json.loads((ROOT.parent / "web" / "vercel.json").read_text(encoding="utf-8"))
+PLATFORM_PREFLIGHT = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_platform_preflight_20260827T234511Z.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() -> None:
@@ -216,6 +223,30 @@ def test_web_deploy_uses_the_reviewed_lockfile_without_reresolving() -> None:
     assert "Root Directory `.`" in RUNBOOK
     assert "invalid `web/web` boundary" in RUNBOOK
     assert "Promotion remains `BLOCK`" in RUNBOOK
+
+
+def test_exact_platform_preflight_is_non_production_and_auditable() -> None:
+    vps = PLATFORM_PREFLIGHT["vpsSystemd"]
+    preview = PLATFORM_PREFLIGHT["vercelPreview"]
+    production = PLATFORM_PREFLIGHT["productionAlias"]
+    assert vps["unitCount"] == 6
+    assert vps["unitSha256Match"] is True
+    assert vps["isolatedAlternateRootVerify"]["exitCode"] == 0
+    assert vps["cleanupVerified"] is True
+    assert vps["installed"] is False
+    assert vps["daemonReloaded"] is False
+    assert vps["serviceStarted"] is False
+    assert vps["timerChanged"] is False
+    assert preview["deploymentId"] == "dpl_CAungjKNgdCrcHnxXtPuTeFbtQvV"
+    assert preview["target"] == "preview"
+    assert preview["readyState"] == "READY"
+    assert preview["installCommand"] == "npm ci"
+    assert preview["nextVersion"] == "16.3.3"
+    assert preview["requiredProductRoutesPresent"] is True
+    assert preview["deploymentProtection"]["authenticatedHtmlBrowserRender"] == "PASS"
+    assert preview["promoted"] is False
+    assert production["deploymentId"] == "dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn"
+    assert production["unchanged"] is True
 
 
 def test_release_manifest_keeps_create_pin_null_title_contract_together() -> None:

@@ -93,6 +93,17 @@ verification. The exact six unit blobs must still be staged read-only on the VPS
 and pass SHA-256 plus `systemd-analyze verify` before installation. Evidence:
 `backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`.
 
+The authorized host preflight closed this gate at `2026-08-27T23:45:11Z` without
+installing anything. The VPS received the six exact candidate units under a
+random `/tmp` directory; every SHA-256 matched the manifest. A direct host verify
+parsed the units and failed only because the not-yet-deployed Admission/Tracking
+wrappers do not exist under `/opt`. An isolated `/tmp` alternate root containing
+the exact four candidate wrappers plus minimal target stubs then passed systemd
+255 verification with exit 0 and empty output. Cleanup was verified. This is the
+pre-install systemd PASS; it does not authorize copying to `/etc` or `/opt`,
+daemon-reload, starting services or changing timers. Evidence:
+`backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
+
 The Web deployment config is part of this exact boundary and must use
 `installCommand: npm ci`. Replacing it with `npm install`, omitting the lockfile,
 or reusing an unverified `node_modules` tree invalidates the dependency-security
@@ -133,6 +144,19 @@ interpretation is superseded by
 Promotion remains `BLOCK` for one narrower reason: no immutable deployment and
 build log yet exist for functional candidate `6839e760`, whose checked-in config
 requires `npm ci` and Next.js 16.3.3.
+
+The authorized non-production Preview closed that build gate at
+`2026-08-27T23:45:11Z`. Deployment `dpl_CAungjKNgdCrcHnxXtPuTeFbtQvV` is READY
+with target `preview`; it was sourced from an exact `6839e760:web` Git archive,
+used `npm ci`, found zero vulnerabilities, built Next.js 16.3.3, completed
+TypeScript and generated 70/70 pages including the Product Opportunity APIs,
+`/app/products` and `/app/products/saved`. Vercel Protection redirects anonymous
+requests to SSO, so the direct truth verifier was not authoritative; the same
+Preview root HTML fetched through authenticated `vercel curl` had SHA-256
+`3d007093...a2159` and passed the unchanged browser-rendered Product-truth rules.
+`vibepin.co` still points to production deployment `dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn`.
+Do not promote the Preview without separate production-rollout authorization.
+Evidence: `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
 
 The latest GET-only pre-Supply data-quality baseline is
 `backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
