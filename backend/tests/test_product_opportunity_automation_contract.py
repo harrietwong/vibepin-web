@@ -19,7 +19,7 @@ COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_f73d5df.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_351e479.json"
 )
 PRD = (
     ROOT.parent
@@ -42,21 +42,23 @@ def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() ->
     assert "9 minutes 59 seconds" in TIMER
 
 
-def test_current_origin_based_release_pointer_and_manifest_are_exact() -> None:
-    functional = "f73d5df22659c5733cb8ea48f6037515e0497342"
-    manifest_name = "product_opportunities_v37_release_manifest_f73d5df.json"
+def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
+    functional = "351e47912ce44fc34728097041dbfdd95889081a"
+    manifest_name = "product_opportunities_v37_release_manifest_351e479.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "881 backend tests" in RUNBOOK
-    assert "70/70 static pages" in RUNBOOK
+    assert "877 tests" in RUNBOOK
+    assert "132/132" in RUNBOOK
+    assert "generated 70/70" in RUNBOOK
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["candidateCommit"] == functional
     assert manifest["productionRemoteBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
-    assert manifest["prequalifiedIntegrationBase"] == "64365494fea74cfaabcba43345794579eb652d68"
+    assert manifest["prequalifiedIntegrationBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     paths = [item["path"] for item in manifest["artifacts"]]
-    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 73
+    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 76
+    assert manifest["liveProductTruthGateCommit"] == functional
     assert "web/src/app/api/generate/route.ts" in paths
     assert "web/src/lib/server/generationModeration.ts" in paths
     assert "backend/product_supply_receipt_contract.py" in paths
@@ -64,6 +66,8 @@ def test_current_origin_based_release_pointer_and_manifest_are_exact() -> None:
     assert "web/package.json" in paths
     assert "web/package-lock.json" in paths
     assert "web/vercel.json" in paths
+    assert "web/scripts/test-product-live-truth-verifier.ts" in paths
+    assert "web/scripts/verify-product-truth-url.ts" in paths
 
     assert subprocess.run(
         [
@@ -208,6 +212,20 @@ def test_release_manifest_keeps_public_product_truth_surfaces_together() -> None
     for path in required:
         assert f"`{path}`" in RUNBOOK
     assert "retired Product Opportunity score/competition" in RUNBOOK
+
+
+def test_release_manifest_keeps_live_product_truth_gate_atomic() -> None:
+    manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
+    paths = {item["path"] for item in manifest["artifacts"]}
+    required = {
+        "web/package.json",
+        "web/scripts/test-registry.ts",
+        "web/scripts/test-product-live-truth-verifier.ts",
+        "web/scripts/verify-product-truth-url.ts",
+    }
+    assert required <= paths
+    assert "npm run verify:product-truth -- https://vibepin.co/" in RUNBOOK
+    assert "d8cc0b869d871763ec8c2c549dd913494aa487b1" in RUNBOOK
 
 
 def test_release_manifest_keeps_canary_proven_product_supply_runtime_together() -> None:
