@@ -389,5 +389,50 @@ test("payloadAfterOutcomes: a social-only publish that failed is a Content failu
   assert.equal(after.scheduledDate, "", "but it still leaves the due scan — no retry storm");
 });
 
+// ── The draft that names no account at all (pre-adopt-once Pins) ────────────
+// resolveScheduledDestinations can only derive intent from a PINNED target, so a draft
+// with a board and no targetConnectionId resolves to nothing owed — and once
+// destinations drove the publish, that made the row leave the due scan as "completed"
+// after being metered, having published nothing at all.
+test("owedDestinations: a draft with a board but no account owes one Pinterest publish", () => {
+  const owed = owedDestinations({ imageUrl: "https://cdn/x.jpg", boardId: "b-A", boardName: "Board A" });
+  assert.equal(owed.length, 1, "a scheduled Pin must never silently publish nowhere");
+  assert.equal(owed[0].provider, "pinterest");
+  assert.ok(!owed[0].socialConnectionId, "it names no account — the publish adopts the default one");
+  assert.equal(owed[0].boardId, "b-A");
+  assert.equal(owed[0].boardName, "Board A");
+});
+
+test("owedDestinations: that legacy destination publishes with adopt-once, into its board", () => {
+  const payload = { imageUrl: "https://cdn/x.jpg", boardId: "b-A" };
+  const base = payloadToPublishInput("u", payload)!;
+  assert.equal(base.boardId, "b-A", "a board-only draft is still publishable, exactly as before");
+  const perDestination = destinationPublishInput(base, owedDestinations(payload)[0], "")!;
+  assert.equal(perDestination.boardId, "b-A");
+  assert.equal(perDestination.connectionId, undefined,
+    "no connection is named, so publishPinForUser resolves the default and the route adopts it");
+});
+
+test("owedDestinations: no board and no intent ⇒ nothing owed, and the Content is refused", () => {
+  assert.deepEqual(owedDestinations({ imageUrl: "https://cdn/x.jpg" }), []);
+  assert.equal(payloadToPublishInput("u", { imageUrl: "https://cdn/x.jpg" }), null,
+    "still the 'Missing image or board' failure — a board-less Pinterest Pin is unpublishable");
+});
+
+test("owedDestinations: a legacy draft that already published owes nothing (no double post)", () => {
+  const owed = owedDestinations({
+    imageUrl: "https://cdn/x.jpg",
+    boardId: "b-A",
+    destinationResults: [{ destinationId: "pinterest:legacy", provider: "pinterest", status: "published" }],
+  });
+  assert.deepEqual(owed, [], "a stale re-claim must not re-publish the Pin this row already created");
+});
+
+test("owedDestinations: a draft that DOES name an account is untouched by the legacy path", () => {
+  const owed = owedDestinations({ imageUrl: "https://cdn/x.jpg", boardId: "b-A", targetConnectionId: "pin_A" });
+  assert.equal(owed.length, 1);
+  assert.equal(owed[0].socialConnectionId, "pin_A", "derived intent still wins — nothing synthetic is added");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

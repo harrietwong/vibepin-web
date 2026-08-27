@@ -119,7 +119,34 @@ export function owedDestinations(payload: Record<string, unknown>): ScheduledDes
   const prior = Array.isArray(payload.destinationResults)
     ? (payload.destinationResults as Array<{ provider: string; status: string; socialConnectionId?: string | null }>)
     : [];
-  return pendingDestinations(intent, prior);
+  if (intent.length) return pendingDestinations(intent, prior);
+
+  // ── The draft that names no account at all ────────────────────────────────────
+  // `resolveScheduledDestinations` can only derive intent from a PINNED target, so a
+  // draft with a board but no `targetConnectionId` — every Pin scheduled before
+  // adopt-once wrote one back — resolves to nothing. Once destinations drove the
+  // publish, "nothing owed" made such a row leave the due scan as completed after
+  // being metered, publishing absolutely nothing. It used to publish through
+  // `publishPinForUser` on the DEFAULT connection and adopt it, so that is what is
+  // owed: one Pinterest destination naming no account.
+  //
+  // The empty `socialConnectionId` is the point, not an oversight — it is what makes
+  // `destinationPublishInput` leave `connectionId` unset, so the publish resolves the
+  // default account and the route's adopt-once branch pins it. It is also why the
+  // stored result row keys as `pinterest:legacy`, exactly as it always did.
+  const boardId = firstString(payload.boardId);
+  if (!boardId) return []; // nothing to publish INTO — payloadToPublishInput refuses it
+  // A stale re-claim must not double-post the Pin this row already published.
+  if (prior.some(r => r.provider === "pinterest" && r.status === "published")) return [];
+  const legacy: ScheduledDestination = {
+    provider: "pinterest",
+    socialConnectionId: "",
+    boardId,
+    capturedAt: new Date().toISOString(),
+  };
+  const boardName = firstString(payload.boardName);
+  if (boardName) legacy.boardName = boardName;
+  return [legacy];
 }
 
 export function payloadToPublishInput(uid: string, payload: Record<string, unknown>): DuePublishInput | null {
