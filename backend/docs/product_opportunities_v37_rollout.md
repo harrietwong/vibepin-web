@@ -5,7 +5,7 @@ production database write, VPS deployment, timer enablement, or budget increase.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `c8f0d7753de01086b5a32d33bd8737b2c174d3f8`, and exact
+functional tip `5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62`, and exact
 76-artifact Product boundary
 `backend/docs/product_opportunities_v37_release_manifest_58598b4.json`.
 Earlier branch pointers and manifests are chronological evidence only.
@@ -30,6 +30,9 @@ provenance. It adds Wedding & Celebrations, Gifts, and Jewelry & Accessories,
 normalizes Women's Fashion acquisition evidence into the Fashion catalog, and
 allows Wedding to be independently Physical or Digital. The exact GET-only
 evidence is `backend/docs/product_opportunities_v37_launch_taxonomy_audit_20260827T140231Z.json`.
+`5b5f98c` additionally recognizes the production `jewelry` source bucket as
+physical provenance while keeping the user-facing category normalized to
+Jewelry & Accessories. It does not change the Supply budget or category mix.
 
 The immutable read-only production drift receipt is
 `backend/docs/product_opportunities_v37_classify_chain_drift_20260827T131825Z.json`.

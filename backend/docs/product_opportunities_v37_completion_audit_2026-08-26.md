@@ -15,7 +15,7 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`c8f0d7753de01086b5a32d33bd8737b2c174d3f8`; and its exact Product boundary is
+`5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62`; and its exact Product boundary is
 the 76-artifact
 `backend/docs/product_opportunities_v37_release_manifest_58598b4.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
@@ -24,6 +24,9 @@ Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 It also includes `c8f0d77`, which separates the PRD launch business taxonomy
 from immutable acquisition source category and independently validated
 Physical/Digital family. Wedding is therefore not collapsed into Physical.
+Follow-up `5b5f98c` admits the real production `jewelry` source label as
+physical provenance and normalizes it to the existing Jewelry & Accessories
+business category without changing discovery quotas.
 The read-only production evidence is archived at
 `backend/docs/product_opportunities_v37_classify_chain_drift_20260827T131825Z.json`:
 the automatic 2026-08-27 chain exited 2 because the deployed worker had zero

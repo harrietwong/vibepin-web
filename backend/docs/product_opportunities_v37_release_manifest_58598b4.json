@@ -1,8 +1,9 @@
 {
   "schemaVersion": 2,
-  "candidateCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
-  "integrationCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
+  "candidateCommit": "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62",
+  "integrationCommit": "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62",
   "launchTaxonomyCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
+  "sourceProvenanceAliasCommit": "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62",
   "classifyChainRepairCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
   "trackingScheduleHardeningCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
   "trackingFailurePropagationCommit": "351e47912ce44fc34728097041dbfdd95889081a",
@@ -15,9 +16,9 @@
   "artifacts": [
     {
       "path": "backend/db/migrate_v63_product_opportunities_v1.sql",
-      "gitBlobSha1": "7926253079c430089a7d7ec560f3672a0488d2ab",
-      "sha256": "0207d4146fc8f79a4e4994b85a02366043f26a59a8ac0113dd6544a7331c496a",
-      "bytes": 74061
+      "gitBlobSha1": "e3bc0115cbb0d225fa8d503e213714a628eea65c",
+      "sha256": "035308eaa9e5ac6dda247f5554b268824649ebfe261a4e77439a3493769350a6",
+      "bytes": 74083
     },
     {
       "path": "backend/db/rollback_v63_product_opportunities_v1.sql",
@@ -51,9 +52,9 @@
     },
     {
       "path": "backend/product_opportunity_admission.py",
-      "gitBlobSha1": "972f765002102de5ce77d153bbf717d965b8c35a",
-      "sha256": "a520ac4e0973696f86f83989114fb208eef456f1fde0fbf62498c2e41d1d4899",
-      "bytes": 30331
+      "gitBlobSha1": "6e423330a4415b35aba4dda0002a6a97c7e424f6",
+      "sha256": "86d4943a4d3525a40814c9aff516e555a2f5fd38fd040ef492bd3ca0a4501c9b",
+      "bytes": 30371
     },
     {
       "path": "backend/product_opportunity_admission_pipeline.py",
@@ -63,9 +64,9 @@
     },
     {
       "path": "backend/product_opportunity_manifest.py",
-      "gitBlobSha1": "0008231948e3e005fdb731cef74ec0feeb7f0747",
-      "sha256": "1b5acdfa4f2f4bb618e8b2b52b3d3ce94850646e26eb1c0a52f7789a825108ea",
-      "bytes": 28122
+      "gitBlobSha1": "9878e28f067e5a9524ed7032dff49176a683b54b",
+      "sha256": "a9f3618d7fb78c075fa59f341f269d176e53ad42979142cee90836ec5bfcc693",
+      "bytes": 28135
     },
     {
       "path": "backend/product_opportunity_tracking.py",
