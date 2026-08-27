@@ -125,7 +125,9 @@ test("only unusable accounts ⇒ none, not ambiguous", () => {
 section("both messages say what to do next, in platform terms");
 
 test("the messages name the platform and the action", () => {
-  assert.equal(connectAccountMessage("instagram"), "Connect a Instagram account first.");
+  assert.equal(connectAccountMessage("instagram"), "Connect an Instagram account first.");
+  assert.equal(connectAccountMessage("pinterest"), "Connect a Pinterest account first.");
+  assert.equal(connectAccountMessage("facebook"), "Connect a Facebook Page account first.");
   assert.equal(chooseAccountMessage("instagram"), "Choose which Instagram account to publish to.");
   // PLATFORMS[provider].name — "Facebook Page", the same wording every other
   // publish-side message uses.

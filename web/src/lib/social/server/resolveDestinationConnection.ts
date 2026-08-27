@@ -57,9 +57,12 @@ export function resolveDestinationConnection(
   return { kind: "ambiguous", count: connected.length };
 }
 
-/** Nothing to publish to. */
+/** Nothing to publish to. "an Instagram", "a Pinterest" — the article follows the
+ *  platform's display name, because "Connect a Instagram account" is what a broken
+ *  product sounds like. */
 export function connectAccountMessage(provider: SocialProvider): string {
-  return `Connect a ${platformName(provider)} account first.`;
+  const name = platformName(provider);
+  return `Connect ${/^[aeiou]/i.test(name) ? "an" : "a"} ${name} account first.`;
 }
 
 /**
