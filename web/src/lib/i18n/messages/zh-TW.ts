@@ -1105,6 +1105,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.plan.title": "計畫",
   "studioBoard.plan.open": "固定計畫面板",
   "studioBoard.plan.close": "關閉計畫面板",
+  "studioBoard.plan.openPanel": "開啟計畫",
   "studioBoard.plan.previousWeek": "上一週",
   "studioBoard.plan.nextWeek": "下一週",
   "studioBoard.plan.today": "本週",

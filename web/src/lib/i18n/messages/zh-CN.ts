@@ -2176,6 +2176,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.plan.title": "计划",
   "studioBoard.plan.open": "固定计划面板",
   "studioBoard.plan.close": "关闭计划面板",
+  "studioBoard.plan.openPanel": "打开计划",
   "studioBoard.plan.previousWeek": "上一周",
   "studioBoard.plan.nextWeek": "下一周",
   "studioBoard.plan.today": "本周",

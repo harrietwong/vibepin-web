@@ -52,6 +52,7 @@ import { EMPTY_TOUCHED, type LinkedProduct } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
+import { useViewportBucket } from "@/hooks/useViewportBucket";
 import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
 import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
 import {
@@ -233,6 +234,11 @@ export function StudioBoard() {
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
   const [planPinned, setPlanPinned] = useState(false);
+  // PRD 0809 §IX — the Plan panel only DOCKS on wide desktop. On tablet/mobile it
+  // opens as an overlay that takes no horizontal space, so a "pinned" preference
+  // restored from localStorage must not keep narrowing the board's columns there.
+  const viewportBucket = useViewportBucket();
+  const planDocked = planPinned && viewportBucket === "desktop";
   // PRD 0826 §24 — the board tells the Plan sidebar when a schedule just succeeded, so
   // the sidebar can highlight the new item (when it is open) or count it on its trigger
   // (when it is not). A list, not a single id: a batch of N must move the badge by N.
@@ -1460,7 +1466,7 @@ export function StudioBoard() {
             <p style={{ margin: 0, fontSize: 12.5 }}>{tr("studioBoard.empty.nothingHereSub")}</p>
           </div>
         ) : (
-          <div data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planPinned
+          <div data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planDocked
             ? "repeat(auto-fill, minmax(248px, 1fr))"
             : "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, alignItems: "start" }}>
             {items.map(({ draft, lifecycle }) => (
