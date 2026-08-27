@@ -33,6 +33,7 @@ import {
   destinationKey,
   findDestinationResult,
   legacyFieldsFromResults,
+  type ContentDraftLike,
   type DestinationPublishResult,
   type PublishDestination,
 } from "../contentDraftModel";
@@ -40,6 +41,7 @@ import {
   checkPinterestMedia,
   checkInstagramMedia,
   checkFacebookMedia,
+  type MediaCheckFailureCode,
   type MediaCheckResult,
   type PublishMediaItem,
 } from "../publish/mediaRules";
@@ -92,6 +94,89 @@ export function checkMediaForProvider(
   if (provider === "instagram") return checkInstagramMedia(media);
   if (provider === "facebook") return checkFacebookMedia(media);
   return { ok: true };
+}
+
+/**
+ * Why a destination will be refused before any network call is made.
+ *
+ * `code` is the contract; `message` is only the English fallback for a surface with no
+ * translation for that code. A bulk confirm sheet has to tell the merchant WHY each
+ * item cannot publish BEFORE anything is sent — deriving that by trial-publishing
+ * would post the ones that are fine and only then report on the ones that are not.
+ */
+export type PublishBlockerCode =
+  | "no_destinations"
+  | "missing_board"
+  | "no_account"
+  | MediaCheckFailureCode;
+
+export type PublishBlocker = {
+  code: PublishBlockerCode;
+  /** Absent only for `no_destinations`, which is a whole-Content condition. */
+  provider?: PublishDestination["provider"];
+  destinationId?: string;
+  accountLabel?: string;
+  message: string;
+};
+
+/**
+ * The pre-dispatch refusals `publishContent` would produce for this Content, without
+ * publishing anything.
+ *
+ * It MUST mirror the checks inside publishContent (media rule → missing board →
+ * missing account), because a sheet that predicts a different set than the publish
+ * actually enforces is worse than no sheet: it promises a publish that then fails, or
+ * warns about one that would have worked. Both branches read the same helpers.
+ *
+ * A destination NOT listed here is dispatchable. Per PRD §29 a Content with one bad
+ * destination and one good one still publishes the good one — so callers must treat
+ * "some blockers" as partial, not as a whole-Content block.
+ */
+export function explainPublishBlockers(draft: ContentDraftLike): PublishBlocker[] {
+  const destinations = contentDestinations(draft);
+  if (!destinations.length) {
+    return [{
+      code: "no_destinations",
+      message: "Choose where to publish before publishing.",
+    }];
+  }
+  const media = contentMedia(draft).map(item => ({ url: item.url, width: item.width, height: item.height }));
+  const blockers: PublishBlocker[] = [];
+  for (const destination of destinations) {
+    const check = checkMediaForProvider(destination.provider, media);
+    if (!check.ok) {
+      blockers.push({
+        code: check.code,
+        provider: destination.provider,
+        destinationId: destination.id,
+        accountLabel: destination.accountLabel,
+        message: check.message,
+      });
+      continue;
+    }
+    if (destination.provider === "pinterest") {
+      // Same fallback publishContent uses: the destination's board, else the draft's.
+      if (!(destination.boardId || draft.boardId)?.trim()) {
+        blockers.push({
+          code: "missing_board",
+          provider: "pinterest",
+          destinationId: destination.id,
+          accountLabel: destination.accountLabel,
+          message: "Choose a Pinterest board before publishing.",
+        });
+      }
+      continue;
+    }
+    if (!destination.socialConnectionId) {
+      blockers.push({
+        code: "no_account",
+        provider: destination.provider,
+        destinationId: destination.id,
+        message: `Choose which ${destination.provider} account to publish as.`,
+      });
+    }
+  }
+  return blockers;
 }
 
 /** A row describing a destination that was refused before any network call. */

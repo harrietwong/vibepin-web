@@ -165,6 +165,10 @@ export const STUDIO: string[] = [
   // WS-B2a 2026-08-27: cover ≡ media[0], load-time normalization of stale covers,
   // in-place media replacement, and the per-platform issue attribution.
   "test-content-media-model",
+  // Bulk operations on the Create Pins board (WS-F, PRD 0826 §19/§30): the
+  // publish partition (fully-published items must never be re-sent), the
+  // per-lifecycle delete impact, and the result summary's reason contract.
+  "test-bulk-actions",
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",
