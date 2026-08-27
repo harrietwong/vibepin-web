@@ -124,7 +124,33 @@ export type ContentDraftLike = {
     boardId?: string; boardName?: string; capturedAt: string;
   }>;
   destinationResults?: DestinationPublishResult[];
+  /** `published` rows superseded by a later publish — history only, never publish input. */
+  previousResults?: DestinationPublishResult[];
 };
+
+/**
+ * The `published` rows a fresh attempt is about to overwrite.
+ *
+ * Results are keyed by destination, so republishing an edited Posted Content replaces
+ * the row describing the Pin that is LIVE on the platform. Capturing the superseded
+ * rows here is what lets the card still show "Earlier publishes" with the original
+ * permalink instead of losing it. Only `published` rows are worth keeping: a failed
+ * row carries no artifact on the platform, and a `publishing`/`pending` row never
+ * described a real outcome. Capped so a Content republished many times cannot grow the
+ * stored draft without bound (oldest dropped first).
+ */
+export const MAX_PREVIOUS_RESULTS = 20;
+
+export function supersededResults(
+  prior: readonly DestinationPublishResult[],
+  fresh: readonly DestinationPublishResult[],
+  existingHistory: readonly DestinationPublishResult[] = [],
+): DestinationPublishResult[] {
+  const replaced = new Set(fresh.map(r => r.destinationId));
+  const superseded = prior.filter(r => r.status === "published" && replaced.has(r.destinationId));
+  if (!superseded.length) return [...existingHistory];
+  return [...existingHistory, ...superseded].slice(-MAX_PREVIOUS_RESULTS);
+}
 
 function legacyMediaSource(source?: string): ContentMediaSource {
   if (source === "uploaded_image") return "upload";

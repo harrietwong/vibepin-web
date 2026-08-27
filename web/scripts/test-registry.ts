@@ -165,6 +165,10 @@ export const STUDIO: string[] = [
   // WS-B2a 2026-08-27: cover ≡ media[0], load-time normalization of stale covers,
   // in-place media replacement, and the per-platform issue attribution.
   "test-content-media-model",
+  // Create Pins card view model (WS-C1, PRD 0826 §3–§6, §20): variant per lifecycle,
+  // the "1 / N" cover counter, per-destination result rows, and the partial-success
+  // rule (posted + needs attention → Retry, not Publish).
+  "test-card-lifecycle-view",
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",

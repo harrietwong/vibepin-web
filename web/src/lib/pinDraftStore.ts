@@ -80,6 +80,15 @@ export interface PinDraft {
    * (postedAt / remotePinId / socialPosts) are derived FROM them.
    */
   destinationResults?:  DestinationPublishResult[];
+  /**
+   * `published` rows superseded by a LATER publish of the same destination.
+   *
+   * Editing a Posted Content and publishing again overwrites its result row (results
+   * are keyed by destination). Without this, the Pin that is actually live on the
+   * platform — and its permalink — silently disappeared from the card the moment a
+   * second publish started. Append-only history; never read by the publish path.
+   */
+  previousResults?:     DestinationPublishResult[];
   keyword:             string;
   category:            string;
   title:               string;

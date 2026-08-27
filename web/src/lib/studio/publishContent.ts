@@ -33,6 +33,7 @@ import {
   destinationKey,
   findDestinationResult,
   legacyFieldsFromResults,
+  supersededResults,
   type DestinationPublishResult,
   type PublishDestination,
 } from "../contentDraftModel";
@@ -320,6 +321,10 @@ export async function publishContent(
     }
 
     const results = mergeResults(priorResults, outcomes);
+    // A row that WAS published and is being replaced by this attempt describes a post
+    // that is still live on the platform. Keep it (with its permalink) as history — the
+    // Posted card shows it under "Earlier publishes" instead of losing it silently.
+    const previousResults = supersededResults(priorResults, outcomes, draft.previousResults ?? []);
     const published = results.filter(r => r.status === "published");
     const failed = results.filter(r => r.status === "failed");
     const legacy = legacyFieldsFromResults(results, draft);
@@ -334,6 +339,7 @@ export async function publishContent(
 
     pinDraftStore.updateDraft(draftId, {
       destinationResults: results,
+      ...(previousResults.length ? { previousResults } : {}),
       socialPosts: legacy.socialPosts,
       postedAt: legacy.postedAt,
       remotePinId: legacy.remotePinId,
