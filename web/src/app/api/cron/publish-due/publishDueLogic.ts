@@ -104,7 +104,15 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
   const mediaUrls = readMediaUrls(payload);
   const storedImage = mediaUrls[0] || firstString(payload.imageUrl, payload.sourceImageUrl);
   const boardId = firstString(payload.boardId);
-  if (!storedImage || !boardId) return null;
+  // A board is still required, but it may live on a Pinterest ENTRY rather than on the
+  // draft: a Content whose only Pinterest destination carries its own board has no
+  // legacy `payload.boardId` at all, and refusing it here would fail a publish that is
+  // perfectly well specified. `destinationPublishInput` re-checks per entry, so an
+  // entry that genuinely has no board is still refused — just individually.
+  const anyEntryBoard = Array.isArray(payload.scheduledDestinations)
+    && (payload.scheduledDestinations as Array<Record<string, unknown>>)
+      .some(d => d && typeof d === "object" && d.provider === "pinterest" && firstString(d.boardId));
+  if (!storedImage || (!boardId && !anyEntryBoard)) return null;
   // Resolve to the absolute public URL, exactly as the Publish-now path does
   // (DraftDetailsDrawer passes the image through toProxyUrl before publishing).
   //
@@ -328,6 +336,117 @@ export function payloadAfterFailure(
   next.scheduledTime = "";
   next.plannedAt = "";
   return next;
+}
+
+/**
+ * The payload patch to persist after an attempt that had N destinations.
+ *
+ * The single-target `payloadAfterSuccess`/`payloadAfterFailure` pair cannot express
+ * what a multi-account publish produces: two Pinterest accounts can now be two
+ * destinations, and "one succeeded, one failed" is neither a success payload nor a
+ * failure payload. This folds every outcome into the SAME per-destination rows the
+ * client writes, then derives the legacy fields from them — the identical rule
+ * `publishContent` uses on the client, so a Content published on a schedule and one
+ * published by hand can never disagree about what happened.
+ *
+ * The split that matters:
+ *   - at least one destination published ⇒ POSTED. Its schedule is consumed (a partial
+ *     success must not re-fire and double-post the account that worked), and the legacy
+ *     remotePin fields name the first published Pinterest destination.
+ *   - nothing published ⇒ FAILURE. WP-B §11.5 semantics, and the time it WAS scheduled
+ *     for is preserved so a reschedule can offer it back.
+ */
+export function payloadAfterOutcomes(
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+  /** Adopt-once: the connection an untargeted draft actually published through. */
+  adoptedConnectionId?: string | null,
+): Record<string, unknown> {
+  const next = { ...withAdoptedTarget(payload, adoptedConnectionId) };
+  next.destinationResults = mergeDestinationResults(payload, outcomes, nowIso);
+  // The client's mergeServerDrafts LWW compares this field — see payloadAfterSuccess.
+  next.updatedAt = nowIso;
+
+  const attempted = outcomes.filter(o => o.status !== "skipped");
+  const publishedPinterest = attempted.find(o => o.provider === "pinterest" && o.status === "published");
+  const anyPublished = attempted.some(o => o.status === "published");
+
+  // Nothing was ATTEMPTED because nothing was still owed — every destination had
+  // already published on an earlier attempt (a stale-claim re-run). That is a
+  // completed Content, not a failure: it just needs to leave the due scan.
+  if (!attempted.length) {
+    next.scheduledDate = "";
+    next.scheduledTime = "";
+    next.plannedAt = "";
+    return next;
+  }
+
+  if (anyPublished) {
+    next.postedAt = nowIso;
+    if (publishedPinterest?.externalPostId) next.remotePinId = publishedPinterest.externalPostId;
+    if (publishedPinterest?.externalPostUrl) next.remotePinUrl = publishedPinterest.externalPostUrl;
+    next.generationStatus = "completed";
+    // Clear scheduling so lifecycle derives "posted" and the row is no longer due.
+    next.scheduledDate = "";
+    next.scheduledTime = "";
+    next.plannedAt = "";
+    delete next.publishError;
+    delete next.failureType;
+    delete next.errorCategory;
+    delete next.publishErrorCode;
+    return next;
+  }
+
+  // Nothing was delivered. The first failure is what the Content-level banner reports;
+  // every destination keeps its own reason in its own row.
+  const firstFailure = attempted.find(o => o.status === "failed");
+  const message = firstFailure?.error || "Publish failed";
+  const previousScheduled = previousScheduledIso(payload);
+  next.publishError = message;
+  next.failureType = "publish";
+  next.errorCategory = mapPublishErrorToCategory(undefined, message);
+  if (previousScheduled) next.previousScheduledTime = previousScheduled;
+  next.scheduledDate = "";
+  next.scheduledTime = "";
+  next.plannedAt = "";
+  return next;
+}
+
+/**
+ * The instant a payload WAS scheduled for, as ISO — preserved across a failure so a
+ * reschedule can offer the lost slot back. Stored as ISO (matching DraftDetailsDrawer
+ * and promote.ts) rather than the raw local wall-clock string.
+ */
+function previousScheduledIso(payload: Record<string, unknown>): string | undefined {
+  const localPlanned = firstString(payload.plannedAt, payload.scheduledDate);
+  if (!localPlanned) return undefined;
+  const m = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/.exec(localPlanned);
+  if (!m) return undefined;
+  const ms = Date.parse(`${m[1]}T${m[2] ?? "00:00"}:00.000Z`);
+  return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
+}
+
+/**
+ * The publish input for ONE destination: the shared Content fields, this entry's own
+ * board, and this entry's own account.
+ *
+ * `payloadToPublishInput` answers "can this Content publish at all" from the draft's
+ * single legacy board; with N Pinterest entries the board is a property of the ENTRY,
+ * so a second account with no board of its own is refused on its own rather than
+ * publishing into the first account's board.
+ */
+export function destinationPublishInput(
+  base: DuePublishInput,
+  destination: { socialConnectionId?: string | null; boardId?: string | null },
+  /** The draft's legacy target — the only entry the draft-level board belongs to. */
+  legacyTargetConnectionId: string,
+): DuePublishInput | null {
+  const own = typeof destination.boardId === "string" ? destination.boardId.trim() : "";
+  const id = typeof destination.socialConnectionId === "string" ? destination.socialConnectionId.trim() : "";
+  const boardId = own || (!id || id === legacyTargetConnectionId ? base.boardId : "");
+  if (!boardId) return null;
+  return { ...base, boardId, connectionId: id || base.connectionId };
 }
 
 /** Extract { message, code } from a thrown error for categorization. Connection/API

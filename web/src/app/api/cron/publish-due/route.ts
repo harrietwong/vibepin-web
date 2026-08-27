@@ -34,7 +34,7 @@ import {
   pinterestOutcomeRow,
   recordOutcomes,
 } from "@/lib/social/publishFanout";
-import type { DestinationOutcome } from "@/lib/social/publishRules";
+import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
 import {
   recordPublishEvent,
   recordFailedPublishEvent,
@@ -46,8 +46,9 @@ import {
 import {
   staleClaimCutoffIso,
   payloadToPublishInput,
-  payloadAfterSuccess,
+  payloadAfterOutcomes,
   payloadAfterFailure,
+  destinationPublishInput,
   describeThrown,
 } from "./publishDueLogic";
 
@@ -204,76 +205,137 @@ export async function GET(req: Request): Promise<Response> {
         metadata: { source: "scheduled-cron" },
       });
 
-      const result = await publishPinForUser(input);
-      if (result.ok) {
-        // ── Fan out to the other destinations this Pin was scheduled to ────────
-        // Runs BEFORE persistSuccess so a fan-out crash cannot leave the Pin marked
-        // posted with no record of the platforms that were still owed. Pinterest has
-        // already published at this point, so the fan-out never re-sends it — it is
-        // folded in as a result row so the merchant sees one coherent set.
-        //
-        // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
-        // here, so it behaves exactly as it did before: no extra platforms are ever
-        // invented for it.
-        const destinations = resolveScheduledDestinations(row.payload as Parameters<typeof resolveScheduledDestinations>[0]);
-        const extras = destinations.filter(d => d.provider !== "pinterest");
-        // Kept for persistSuccess: the per-destination rows it writes onto the payload
-        // must describe what the fan-out ACHIEVED, not merely what was intended.
-        let fannedOutcomes: DestinationOutcome[] = [];
-        if (extras.length) {
-          try {
-            const jobId = await createPublishJob(
-              db,
-              row.vibepin_user_id,
-              typeof row.draft_id === "string" ? row.draft_id : null,
-              null,
-            );
-            const fanned = await fanOutDestinations(row.vibepin_user_id, extras, {
-              // The whole media set, in display order — a Content scheduled as a
-              // carousel must fan out as one, not as its cover image.
-              imageUrls: input.imageUrls,
-              title: input.title,
-              caption: input.description,
-              destinationUrl: input.link,
-              altText: input.altText,
-            });
-            fannedOutcomes = fanned;
-            if (jobId) {
-              const pinterestIntent = destinations.find(d => d.provider === "pinterest");
-              await recordOutcomes(db, jobId, [
-                ...(pinterestIntent
-                  ? [pinterestOutcomeRow(pinterestIntent, {
-                      ok: true, connectionId: result.connectionId,
-                      pinId: result.pin.id, pinUrl: result.pin.url,
-                    })]
-                  : []),
-                ...fanned,
-              ]);
-            }
-          } catch (fanErr) {
-            // A fan-out failure must never undo a Pinterest publish that already
-            // succeeded, so it is logged and the Pin still completes as posted.
-            console.error("[cron/publish-due] fan-out:", (fanErr as Error).message);
-          }
-        }
+      // ── The destinations this Content was scheduled to ────────────────────────
+      // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
+      // here, so it behaves exactly as it did before: no extra platforms are ever
+      // invented for it, and exactly one Pinterest publish happens.
+      const intent = resolveScheduledDestinations(row.payload as Parameters<typeof resolveScheduledDestinations>[0]);
+      // What is still owed. A row re-claimed after a stale lock (this route is
+      // at-least-once by construction — see the header) must not re-publish the
+      // account that already succeeded; `pendingDestinations` is keyed by ACCOUNT,
+      // so two accounts on one platform retry independently.
+      const priorResults = Array.isArray(row.payload.destinationResults)
+        ? (row.payload.destinationResults as Array<{ provider: string; status: string; socialConnectionId?: string | null }>)
+        : [];
+      const owed = pendingDestinations(intent, priorResults);
+      const pinterestTargets = owed.filter(d => d.provider === "pinterest");
+      const extras = owed.filter(d => d.provider !== "pinterest");
+      const legacyTarget = typeof row.payload.targetConnectionId === "string" ? row.payload.targetConnectionId.trim() : "";
 
-        // result.connectionId is the row that actually published — pinned onto the draft
-        // when it had no target yet (adopt-once, PRD §14). Already-targeted drafts are
-        // left untouched by withAdoptedTarget.
-        await persistSuccess(db, row, result.pin, nowIso, result.connectionId, fannedOutcomes);
+      const outcomes: DestinationOutcome[] = [];
+      let adoptedConnectionId: string | null = null;
+      let firstFailure: { code?: string; message: string } | null = null;
+      let trialBlocked = 0;
+
+      // ── Publish EVERY Pinterest destination, each to its own account+board ────
+      // One account failing must not abandon the others or the social fan-out: each
+      // gets its own try/catch and its own result row. Before this, a Content with
+      // two Pinterest accounts published to one of them and the second silently
+      // never happened.
+      for (const destination of pinterestTargets) {
+        const perDestination = destinationPublishInput(input, destination, legacyTarget);
+        if (!perDestination) {
+          outcomes.push({
+            provider: "pinterest", status: "failed",
+            socialConnectionId: destination.socialConnectionId ?? null,
+            error: "Choose a Pinterest board before publishing.",
+          });
+          if (!firstFailure) firstFailure = { code: "bad_request", message: "Choose a Pinterest board before publishing." };
+          continue;
+        }
+        try {
+          const result = await publishPinForUser(perDestination);
+          if (result.ok) {
+            // Adopt-once (PRD §14) applies only to a Content that named no account.
+            if (!destination.socialConnectionId && result.connectionId) adoptedConnectionId = result.connectionId;
+            outcomes.push(pinterestOutcomeRow(destination, {
+              ok: true, connectionId: result.connectionId,
+              pinId: result.pin.id, pinUrl: result.pin.url,
+            }));
+          } else {
+            outcomes.push(pinterestOutcomeRow(destination, {
+              ok: false, connectionId: result.connectionId, error: result.error,
+            }));
+            if (!firstFailure) firstFailure = { code: result.code, message: result.error };
+          }
+        } catch (err) {
+          if (err instanceof PinterestTrialAccessError) {
+            // Not a failure — the Content is publishable, just not until Pinterest
+            // grants access. Record nothing for this destination so the row keeps its
+            // schedule (handled after the loop).
+            trialBlocked++;
+            continue;
+          }
+          const described = describeThrown(err);
+          outcomes.push(pinterestOutcomeRow(destination, { ok: false, error: described.message }));
+          if (!firstFailure) firstFailure = described;
+        }
+      }
+
+      // Every attempted Pinterest destination was blocked by trial access and nothing
+      // else was owed: keep today's behaviour exactly — release the claim, leave the
+      // payload and scheduled_at untouched so the row is re-scanned until approved.
+      if (trialBlocked > 0 && outcomes.length === 0 && extras.length === 0) {
+        await releaseClaim(db, row);
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+          code: "pinterest_trial_access", message: "Pinterest access is still under review",
+        });
+        skipped++;
+        continue;
+      }
+
+      // ── Fan out to the non-Pinterest destinations ─────────────────────────────
+      // Runs BEFORE the persist so a fan-out crash cannot leave the Content marked
+      // posted with no record of the platforms that were still owed.
+      if (extras.length) {
+        try {
+          const jobId = await createPublishJob(
+            db,
+            row.vibepin_user_id,
+            typeof row.draft_id === "string" ? row.draft_id : null,
+            null,
+          );
+          const fanned = await fanOutDestinations(row.vibepin_user_id, extras, {
+            // The whole media set, in display order — a Content scheduled as a
+            // carousel must fan out as one, not as its cover image.
+            imageUrls: input.imageUrls,
+            title: input.title,
+            caption: input.description,
+            destinationUrl: input.link,
+            altText: input.altText,
+          });
+          outcomes.push(...fanned);
+          if (jobId) await recordOutcomes(db, jobId, outcomes);
+        } catch (fanErr) {
+          // A fan-out failure must never undo a Pinterest publish that already
+          // succeeded, so it is logged and the Content still completes as posted.
+          console.error("[cron/publish-due] fan-out:", (fanErr as Error).message);
+        }
+      }
+
+      if (!outcomes.length) {
+        // Nothing was owed at all (every destination had already published on an
+        // earlier attempt). Clear the schedule so the row leaves the due scan.
+        await persistOutcomes(db, row, [], nowIso, null);
+        skipped++;
+        continue;
+      }
+
+      await persistOutcomes(db, row, outcomes, nowIso, adoptedConnectionId);
+      const anyPublished = outcomes.some(o => o.status === "published");
+      if (anyPublished) {
+        const pin = outcomes.find(o => o.provider === "pinterest" && o.status === "published");
         void recordPublishEvent(db, PUBLISH_EVENT_SUCCEEDED, {
           ...eventBase,
           durationMs: Date.now() - rowStartedMs,
-          remotePinId: result.pin.id,
-          remotePinUrl: result.pin.url,
+          remotePinId: pin?.externalPostId ?? undefined,
+          remotePinUrl: pin?.externalPostUrl ?? undefined,
         });
         published++;
       } else {
-        // Typed validation failure (bad board / image / link) — NOT thrown.
-        await persistFailure(db, row, { message: result.error, code: result.code }, nowIso, result.connectionId);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
-          code: result.code,
-          message: result.error,
+          code: firstFailure?.code,
+          message: firstFailure?.message ?? "Publish failed",
         });
         failed++;
       }
@@ -284,9 +346,9 @@ export async function GET(req: Request): Promise<Response> {
         // (WP-B) keeps the same exemption client-side: "save this Pin and publish
         // after access is approved". Cron must be consistent: only release the claim,
         // leave payload/scheduled_at untouched so the row is re-scanned (and skipped
-        // again) on every future run until the account is approved. Acceptable for
-        // now given small trial-user pin volumes; revisit if this ever blocks scan
-        // throughput for other due rows.
+        // again) on every future run until the account is approved. (The per-destination
+        // loop above handles the same error for a Pinterest entry; this catches it from
+        // anywhere else in the row's processing.)
         await releaseClaim(db, row);
         // Draft-wise this is a skip (row stays scheduled, no failure written), but the
         // publish ATTEMPT did terminate — Pinterest refused it. Record the terminal event
@@ -309,16 +371,24 @@ export async function GET(req: Request): Promise<Response> {
   return json({ claimed: claimed.length, published, failed, skipped });
 }
 
-/** Persist the success payload (posted + remote Pin + cleared scheduling + cleared claim). */
-async function persistSuccess(
+/**
+ * Persist what the attempt achieved across ALL its destinations.
+ *
+ * Replaces the success/failure pair for the multi-destination path: with two Pinterest
+ * accounts, "one published, one failed" is neither, and forcing it into one of them
+ * would either lose the failure or mark a delivered Pin as failed. `scheduled_at` is
+ * cleared either way — a partial success must not re-fire and double-post the account
+ * that worked, and a total failure leaves the due scan (no retry storm), exactly as
+ * before.
+ */
+async function persistOutcomes(
   db: ReturnType<typeof createServerClient>,
   row: DueRow,
-  pin: { id: string; url: string },
+  outcomes: readonly DestinationOutcome[],
   nowIso: string,
   connectionId?: string | null,
-  fanned?: readonly DestinationOutcome[],
 ): Promise<void> {
-  const payload = payloadAfterSuccess(row.payload, pin, nowIso, connectionId, fanned);
+  const payload = payloadAfterOutcomes(row.payload, outcomes, nowIso, connectionId);
   const { error } = await db
     .from(TABLE)
     .update({
