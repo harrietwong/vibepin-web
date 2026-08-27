@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS product_opportunities (
       CHECK ((
         (
           provenance->>'source_category' IN (
-            'fashion', 'womens-fashion', 'home-decor', 'jewelry-accessories'
+            'fashion', 'womens-fashion', 'home-decor', 'jewelry', 'jewelry-accessories'
           )
           AND product_family = 'physical'
         )
@@ -882,7 +882,7 @@ BEGIN
       IF NOT (
         (
           v_candidate->'provenance'->>'source_category'
-            IN ('fashion', 'womens-fashion', 'home-decor', 'jewelry-accessories')
+            IN ('fashion', 'womens-fashion', 'home-decor', 'jewelry', 'jewelry-accessories')
           AND v_candidate->>'product_family' = 'physical'
         )
         OR (

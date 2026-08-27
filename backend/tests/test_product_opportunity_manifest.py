@@ -158,6 +158,12 @@ def test_womens_fashion_is_source_provenance_not_a_second_business_category() ->
     assert hint["category"] == "fashion"
 
 
+def test_jewelry_source_bucket_maps_to_jewelry_business_category() -> None:
+    hint = bridge._legacy_hint(legacy(source_category="jewelry", product_type="physical"))
+    assert hint["source_category"] == "jewelry"
+    assert hint["category"] == "jewelry-accessories"
+
+
 def test_html_entity_unicode_and_whitespace_normalization_proves_merchant_name() -> None:
     html = (
         '<meta property="og:title" content="Polo &amp; Shirt   –  Example Shop">'

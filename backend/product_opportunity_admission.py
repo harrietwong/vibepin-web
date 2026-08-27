@@ -51,6 +51,7 @@ SOURCE_CATEGORY_FAMILIES = {
     "wedding": frozenset({"physical", "digital"}),
     "wedding-celebrations": frozenset({"physical", "digital"}),
     "gifts": frozenset({"physical", "digital"}),
+    "jewelry": frozenset({"physical"}),
     "jewelry-accessories": frozenset({"physical"}),
 }
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}

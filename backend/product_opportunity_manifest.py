@@ -72,7 +72,7 @@ def _business_category(source_category: str, family: str, product_type: str | No
         return "wedding-celebrations"
     if source_category == "gifts":
         return "gifts"
-    if source_category == "jewelry-accessories":
+    if source_category in ("jewelry", "jewelry-accessories"):
         return "jewelry-accessories"
     if source_category in ("fashion", "womens-fashion"):
         return "fashion"

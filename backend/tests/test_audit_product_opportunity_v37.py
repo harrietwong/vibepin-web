@@ -149,17 +149,25 @@ def test_automatic_admission_scope_is_not_inflated_by_unreviewed_categories() ->
             source_category="wedding",
             product_type="digital",
         ),
+        product(
+            id="jewelry-physical",
+            normalized_product_url_hash="hash-jewelry-physical",
+            parent_pin_id="723456789012345678",
+            source_category="jewelry",
+            product_type="physical",
+        ),
     ]
 
     result = summarize(products, [], today=date(2026, 8, 27))
 
-    assert result["migration_gate_pass_rows"] == 6
-    assert result["automatic_admission_scope_rows"] == 4
-    assert result["automatic_admission_scope_unique_products"] == 4
-    assert result["automatic_admission_scope_by_family"] == {"physical": 2, "digital": 2}
+    assert result["migration_gate_pass_rows"] == 7
+    assert result["automatic_admission_scope_rows"] == 5
+    assert result["automatic_admission_scope_unique_products"] == 5
+    assert result["automatic_admission_scope_by_family"] == {"physical": 3, "digital": 2}
     assert result["automatic_admission_scope_by_category"] == {
         "home-decor": 1,
         "digital-products": 1,
+        "jewelry": 1,
         "wedding": 2,
     }
     assert result["automatic_admission_scope_exclusions"] == {
@@ -170,6 +178,7 @@ def test_automatic_admission_scope_is_not_inflated_by_unreviewed_categories() ->
         "beauty": {"physical": 1},
         "digital-products": {"digital": 1, "physical": 1},
         "home-decor": {"physical": 1},
+        "jewelry": {"physical": 1},
         "wedding": {"digital": 1, "physical": 1},
     }
     assert result["automatic_admission_scope_exclusions_by_category"] == {

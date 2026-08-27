@@ -183,6 +183,7 @@ def test_category_must_be_reviewed_and_match_product_family(
         ("gifts", "physical", "gifts"),
         ("gifts", "digital", "gifts"),
         ("jewelry-accessories", "physical", "fashion"),
+        ("jewelry-accessories", "physical", "jewelry"),
     ],
 )
 def test_launch_business_category_is_independent_from_acquisition_bucket(

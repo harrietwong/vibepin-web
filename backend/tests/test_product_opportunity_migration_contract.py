@@ -90,6 +90,7 @@ def test_business_category_is_separate_and_matches_product_family() -> None:
 
 def test_acquisition_source_category_is_persisted_separately_in_provenance() -> None:
     assert "product_opportunities_source_category_provenance_check" in LOWER
+    assert "'jewelry', 'jewelry-accessories'" in LOWER
     constraint = LOWER.split(
         "product_opportunities_source_category_provenance_check", 1
     )[1].split("constraint", 1)[0]
