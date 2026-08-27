@@ -118,15 +118,25 @@ CREATE TABLE IF NOT EXISTS product_opportunities (
       CHECK (product_family IN ('physical', 'digital')),
     CONSTRAINT product_opportunities_category_family_check
       CHECK ((
-        (category IN ('fashion', 'womens-fashion', 'home-decor')
+        (category IN ('fashion', 'home-decor', 'jewelry-accessories')
           AND product_family = 'physical')
+        OR (category IN ('wedding-celebrations', 'gifts')
+          AND product_family IN ('physical', 'digital'))
         OR (category = 'digital-products' AND product_family = 'digital')
       ) IS TRUE),
     CONSTRAINT product_opportunities_source_category_provenance_check
       CHECK ((
         (
-          provenance->>'source_category' IN ('fashion', 'womens-fashion', 'home-decor')
+          provenance->>'source_category' IN (
+            'fashion', 'womens-fashion', 'home-decor', 'jewelry-accessories'
+          )
           AND product_family = 'physical'
+        )
+        OR (
+          provenance->>'source_category' IN (
+            'wedding', 'wedding-celebrations', 'gifts'
+          )
+          AND product_family IN ('physical', 'digital')
         )
         OR (
           provenance->>'source_category' = 'digital-products'
@@ -872,8 +882,13 @@ BEGIN
       IF NOT (
         (
           v_candidate->'provenance'->>'source_category'
-            IN ('fashion', 'womens-fashion', 'home-decor')
+            IN ('fashion', 'womens-fashion', 'home-decor', 'jewelry-accessories')
           AND v_candidate->>'product_family' = 'physical'
+        )
+        OR (
+          v_candidate->'provenance'->>'source_category'
+            IN ('wedding', 'wedding-celebrations', 'gifts')
+          AND v_candidate->>'product_family' IN ('physical', 'digital')
         )
         OR (
           v_candidate->'provenance'->>'source_category' = 'digital-products'
@@ -943,12 +958,14 @@ BEGIN
         RAISE EXCEPTION 'Product type lacks exact merchant-page provenance';
       END IF;
       IF NOT (
-        (v_candidate->>'category' IN ('fashion', 'womens-fashion', 'home-decor')
+        (v_candidate->>'category' IN ('fashion', 'home-decor', 'jewelry-accessories')
           AND v_candidate->>'product_family' = 'physical')
+        OR (v_candidate->>'category' IN ('wedding-celebrations', 'gifts')
+          AND v_candidate->>'product_family' IN ('physical', 'digital'))
         OR (v_candidate->>'category' = 'digital-products'
           AND v_candidate->>'product_family' = 'digital')
       ) THEN
-        RAISE EXCEPTION 'Product category must be a reviewed source bucket matching product family';
+        RAISE EXCEPTION 'Product category must be a reviewed business category matching product family';
       END IF;
       INSERT INTO product_opportunities (
         canonical_product_url, canonical_url_hash, external_product_url,
@@ -1406,8 +1423,10 @@ SELECT
       p.category,
       CASE p.category
         WHEN 'fashion' THEN 'Fashion'
-        WHEN 'womens-fashion' THEN 'Women''s Fashion Womens Fashion'
         WHEN 'home-decor' THEN 'Home Decor'
+        WHEN 'wedding-celebrations' THEN 'Wedding Celebrations Bridal'
+        WHEN 'gifts' THEN 'Gifts'
+        WHEN 'jewelry-accessories' THEN 'Jewelry Jewellery Accessories'
         WHEN 'digital-products' THEN 'Digital Products'
       END,
       p.product_type

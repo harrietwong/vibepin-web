@@ -135,17 +135,32 @@ def test_automatic_admission_scope_is_not_inflated_by_unreviewed_categories() ->
             source_category="digital-products",
             product_type="physical",
         ),
+        product(
+            id="wedding-physical",
+            normalized_product_url_hash="hash-wedding-physical",
+            parent_pin_id="523456789012345678",
+            source_category="wedding",
+            product_type="physical",
+        ),
+        product(
+            id="wedding-digital",
+            normalized_product_url_hash="hash-wedding-digital",
+            parent_pin_id="623456789012345678",
+            source_category="wedding",
+            product_type="digital",
+        ),
     ]
 
     result = summarize(products, [], today=date(2026, 8, 27))
 
-    assert result["migration_gate_pass_rows"] == 4
-    assert result["automatic_admission_scope_rows"] == 2
-    assert result["automatic_admission_scope_unique_products"] == 2
-    assert result["automatic_admission_scope_by_family"] == {"physical": 1, "digital": 1}
+    assert result["migration_gate_pass_rows"] == 6
+    assert result["automatic_admission_scope_rows"] == 4
+    assert result["automatic_admission_scope_unique_products"] == 4
+    assert result["automatic_admission_scope_by_family"] == {"physical": 2, "digital": 2}
     assert result["automatic_admission_scope_by_category"] == {
         "home-decor": 1,
         "digital-products": 1,
+        "wedding": 2,
     }
     assert result["automatic_admission_scope_exclusions"] == {
         "source_category_not_reviewed": 1,
@@ -155,6 +170,7 @@ def test_automatic_admission_scope_is_not_inflated_by_unreviewed_categories() ->
         "beauty": {"physical": 1},
         "digital-products": {"digital": 1, "physical": 1},
         "home-decor": {"physical": 1},
+        "wedding": {"digital": 1, "physical": 1},
     }
     assert result["automatic_admission_scope_exclusions_by_category"] == {
         "category_family_mismatch": {"digital-products": 1},

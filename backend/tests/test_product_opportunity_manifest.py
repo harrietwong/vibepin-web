@@ -137,8 +137,25 @@ def test_reviewed_source_category_supplies_missing_broad_product_family() -> Non
 def test_source_category_family_mapping_rejects_conflict_or_unknown_bucket() -> None:
     with pytest.raises(ValueError, match="conflicts"):
         bridge._legacy_hint(legacy(product_type="physical", source_category="digital-products"))
-    with pytest.raises(ValueError, match="no physical/digital family"):
+    with pytest.raises(ValueError, match="unreviewed source category"):
         bridge._legacy_hint(legacy(product_type=None, source_category="beauty"))
+
+
+def test_mixed_wedding_source_requires_declared_family_and_keeps_source_provenance() -> None:
+    physical = bridge._legacy_hint(legacy(product_type="physical", source_category="wedding"))
+    digital = bridge._legacy_hint(legacy(product_type="digital", source_category="wedding"))
+    assert physical["family"] == "physical"
+    assert digital["family"] == "digital"
+    assert physical["category"] == digital["category"] == "wedding-celebrations"
+    assert physical["source_category"] == digital["source_category"] == "wedding"
+    with pytest.raises(ValueError, match="no physical/digital family"):
+        bridge._legacy_hint(legacy(product_type=None, source_category="wedding"))
+
+
+def test_womens_fashion_is_source_provenance_not_a_second_business_category() -> None:
+    hint = bridge._legacy_hint(legacy(source_category="womens-fashion"))
+    assert hint["source_category"] == "womens-fashion"
+    assert hint["category"] == "fashion"
 
 
 def test_html_entity_unicode_and_whitespace_normalization_proves_merchant_name() -> None:
@@ -172,6 +189,8 @@ def test_jsonld_product_category_becomes_proven_optional_product_type() -> None:
     assert row["provenance"]["product_type_found_in_merchant_page"] is True
     assert row["provenance"]["product_type_value"] == row["product_type"]
     assert "product_type:schema.org/Product.category" in row["provenance"]["merchant_field_evidence"]
+    assert row["category"] == "jewelry-accessories"
+    assert row["source_category"] == "fashion"
 
 
 def test_merchant_name_is_kept_only_with_page_provenance() -> None:

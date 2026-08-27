@@ -126,7 +126,10 @@ for (const event of [
 assert.match(component, /Most Saved/, "The first truthful sort must remain available");
 assert.match(component, /Newest Discovered/, "Newest discovery sorting must remain available");
 assert.match(component, />Category</, "Category filtering must remain user-visible");
-assert.match(component, /"womens-fashion": "Women's Fashion"/, "Internal category slugs need user-facing labels");
+assert.doesNotMatch(component, /"womens-fashion": "Women's Fashion"/, "Acquisition provenance must not become a second business category");
+assert.match(component, /"wedding-celebrations": "Wedding & Celebrations"/, "Wedding needs a user-facing label");
+assert.match(component, /gifts: "Gifts"/, "Gifts needs a user-facing label");
+assert.match(component, /"jewelry-accessories": "Jewelry & Accessories"/, "Jewelry needs a user-facing label");
 assert.match(component, /"digital-products": "Digital Products"/, "Digital category needs a user-facing label");
 assert.match(component, /Object\.entries\(CATEGORY_LABELS\)/, "Category filtering must render labels while submitting stable slugs");
 assert.match(component, />Platform</, "Platform filtering must remain user-visible");

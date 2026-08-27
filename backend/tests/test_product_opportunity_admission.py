@@ -161,7 +161,7 @@ def test_optional_display_field_exact_limit_is_preserved(
 def test_category_must_be_reviewed_and_match_product_family(
     category: str | None, family: str
 ) -> None:
-    with pytest.raises(ValueError, match="reviewed source bucket"):
+    with pytest.raises(ValueError, match="reviewed business category"):
         admission.validate_candidate(
             candidate(category=category, product_family=family), now=NOW
         )
@@ -173,6 +173,33 @@ def test_category_must_be_reviewed_and_match_product_family(
     }
     digital = admission.validate_candidate(digital_candidate, now=NOW)
     assert digital["category"] == "digital-products"
+
+
+@pytest.mark.parametrize(
+    ("category", "family", "source_category"),
+    [
+        ("wedding-celebrations", "physical", "wedding"),
+        ("wedding-celebrations", "digital", "wedding"),
+        ("gifts", "physical", "gifts"),
+        ("gifts", "digital", "gifts"),
+        ("jewelry-accessories", "physical", "fashion"),
+    ],
+)
+def test_launch_business_category_is_independent_from_acquisition_bucket(
+    category: str, family: str, source_category: str
+) -> None:
+    row = candidate(category=category, product_family=family)
+    row["provenance"] = {**row["provenance"], "source_category": source_category}
+    validated = admission.validate_candidate(row, now=NOW)
+    assert validated["category"] == category
+    assert validated["source_category"] == source_category
+
+
+def test_jewelry_category_cannot_be_relabelled_as_digital() -> None:
+    row = candidate(category="jewelry-accessories", product_family="digital")
+    row["provenance"] = {**row["provenance"], "source_category": "wedding"}
+    with pytest.raises(ValueError, match="reviewed business category"):
+        admission.validate_candidate(row, now=NOW)
 
 
 def test_equivalent_external_url_is_persisted_as_the_canonical_identity() -> None:

@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "db"))
 
 from product_harvest import accept_link, normalize_product_url
 from product_opportunity_admission import (
-    CATEGORY_FAMILY,
+    SOURCE_CATEGORY_FAMILIES,
     MAX_MERCHANT_CHARS,
     MAX_PRODUCT_NAME_CHARS,
     MAX_PRODUCT_TYPE_CHARS,
@@ -50,7 +50,37 @@ MAX_MERCHANT_BYTES = 2_000_000
 MAX_MERCHANT_REQUESTS = 3
 VERIFIER_VERSION = "product-opportunity-manifest-v1"
 NAME_PROOF_NORMALIZATION = "html-unescape+nfkc+whitespace+casefold-v1"
-FAMILY_BY_SOURCE_CATEGORY = CATEGORY_FAMILY
+FAMILY_BY_SOURCE_CATEGORY = {
+    category: next(iter(families))
+    for category, families in SOURCE_CATEGORY_FAMILIES.items()
+    if len(families) == 1
+}
+
+
+def _business_category(source_category: str, family: str, product_type: str | None) -> str:
+    """Derive catalog taxonomy without rewriting acquisition provenance."""
+    normalized_type = (product_type or "").casefold()
+    if family == "physical" and any(
+        token in normalized_type for token in ("jewelry", "jewellery", "accessor")
+    ):
+        return "jewelry-accessories"
+    if any(token in normalized_type for token in ("wedding", "bridal", "bride")):
+        return "wedding-celebrations"
+    if "gift" in normalized_type:
+        return "gifts"
+    if source_category in ("wedding", "wedding-celebrations"):
+        return "wedding-celebrations"
+    if source_category == "gifts":
+        return "gifts"
+    if source_category == "jewelry-accessories":
+        return "jewelry-accessories"
+    if source_category in ("fashion", "womens-fashion"):
+        return "fashion"
+    if source_category == "home-decor":
+        return "home-decor"
+    if source_category == "digital-products":
+        return "digital-products"
+    raise ValueError("legacy candidate has no reviewed business category")
 
 
 @dataclass(frozen=True)
@@ -118,14 +148,15 @@ def _legacy_hint(raw: object) -> dict:
     ok, reason = accept_link(product_url)
     if not ok:
         raise ValueError(f"legacy candidate is not a PDP: {reason}")
-    category = str(raw.get("source_category") or raw.get("category") or "").strip()
+    source_category = str(raw.get("source_category") or raw.get("category") or "").strip()
     declared_family = str(raw.get("product_type") or "").strip()
-    category_family = FAMILY_BY_SOURCE_CATEGORY.get(category)
-    if declared_family in ("physical", "digital") and category_family:
-        if declared_family != category_family:
+    source_families = SOURCE_CATEGORY_FAMILIES.get(source_category, frozenset())
+    category_family = FAMILY_BY_SOURCE_CATEGORY.get(source_category)
+    if not source_families:
+        raise ValueError("legacy candidate has an unreviewed source category")
+    if declared_family in ("physical", "digital"):
+        if declared_family not in source_families:
             raise ValueError("legacy candidate family conflicts with its reviewed source category")
-        family = declared_family
-    elif declared_family in ("physical", "digital"):
         family = declared_family
     elif category_family:
         # Product Supply deliberately writes only merchant-proven product details;
@@ -146,7 +177,8 @@ def _legacy_hint(raw: object) -> dict:
         "pin_id": pin_id,
         "evidence_type": "product_pin" if product_pin_id else "source_pin",
         "family": family,
-        "category": category or None,
+        "source_category": source_category,
+        "category": _business_category(source_category, family, None),
         "discovery_method": (
             str(raw.get("discovery_method") or "")
             if str(raw.get("discovery_method") or "")
@@ -226,8 +258,10 @@ def _raw_manifest_row(
         "product_page_verification_method": page_method,
         "product_name": product_name,
         "merchant": merchant_name,
-        "category": hint["category"],
-        "source_category": hint["category"],
+        "category": _business_category(
+            hint["source_category"], hint["family"], product_type
+        ),
+        "source_category": hint["source_category"],
         "product_type": product_type,
         "product_family": hint["family"],
         "discovery_method": hint["discovery_method"],
@@ -247,7 +281,7 @@ def _raw_manifest_row(
             # Acquisition provenance is not a user-facing business category.
             # Persist it independently so future category taxonomy changes do
             # not erase where the Product was actually discovered.
-            "source_category": hint["category"],
+            "source_category": hint["source_category"],
             "merchant_field_evidence": field_evidence,
             **pin_provenance,
         },

@@ -31,11 +31,27 @@ APPLY_CONFIRM = "ADMIT_REVIEWED_PRODUCTS"
 IMAGE_SOURCES = {"merchant_page", "merchant_json_ld", "merchant_open_graph", "merchant_feed"}
 PAGE_METHODS = {"merchant_html", "merchant_structured_data", "retailer_pdp_rule"}
 DISCOVERY_METHODS = {"outbound_link", "shop_the_look", "merchant_product_reference", "reviewed_migration"}
-CATEGORY_FAMILY = {
-    "fashion": "physical",
-    "womens-fashion": "physical",
-    "home-decor": "physical",
-    "digital-products": "digital",
+# User-facing catalog taxonomy and immutable acquisition provenance are
+# intentionally separate. A mixed acquisition bucket such as Wedding can
+# contain both a physical dress and a digital invitation; it must not decide the
+# metric family by itself.
+BUSINESS_CATEGORY_FAMILIES = {
+    "home-decor": frozenset({"physical"}),
+    "wedding-celebrations": frozenset({"physical", "digital"}),
+    "gifts": frozenset({"physical", "digital"}),
+    "jewelry-accessories": frozenset({"physical"}),
+    "fashion": frozenset({"physical"}),
+    "digital-products": frozenset({"digital"}),
+}
+SOURCE_CATEGORY_FAMILIES = {
+    "fashion": frozenset({"physical"}),
+    "womens-fashion": frozenset({"physical"}),
+    "home-decor": frozenset({"physical"}),
+    "digital-products": frozenset({"digital"}),
+    "wedding": frozenset({"physical", "digital"}),
+    "wedding-celebrations": frozenset({"physical", "digital"}),
+    "gifts": frozenset({"physical", "digital"}),
+    "jewelry-accessories": frozenset({"physical"}),
 }
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 MAX_REDIRECT_HOPS = 2
@@ -292,8 +308,8 @@ def validate_candidate(raw: object, *, now: datetime) -> dict:
     if family not in ("physical", "digital"):
         raise ValueError("product_family must be physical or digital")
     category = str(raw.get("category") or "").strip()
-    if CATEGORY_FAMILY.get(category) != family:
-        raise ValueError("category must be a reviewed source bucket matching product_family")
+    if family not in BUSINESS_CATEGORY_FAMILIES.get(category, frozenset()):
+        raise ValueError("category must be a reviewed business category matching product_family")
     discovery = str(raw.get("discovery_method") or "")
     if discovery not in DISCOVERY_METHODS:
         raise ValueError("discovery_method is not approved")
@@ -309,10 +325,10 @@ def validate_candidate(raw: object, *, now: datetime) -> dict:
     if str(provenance.get("product_image_url") or "").strip() != image:
         raise ValueError("provenance product_image_url does not match")
     source_category = str(provenance.get("source_category") or "").strip()
-    if CATEGORY_FAMILY.get(source_category) != family:
+    if family not in SOURCE_CATEGORY_FAMILIES.get(source_category, frozenset()):
         raise ValueError(
             "provenance source_category must be a reviewed acquisition bucket "
-            "matching product_family"
+            "compatible with product_family"
         )
     page_hash = str(provenance.get("merchant_page_sha256") or "").lower()
     if len(page_hash) != 64 or any(char not in "0123456789abcdef" for char in page_hash):

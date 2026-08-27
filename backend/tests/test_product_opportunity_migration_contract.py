@@ -68,9 +68,11 @@ def test_product_type_is_nullable_and_requires_exact_merchant_provenance() -> No
     assert "field_evidence.value like 'product_type:%'" in LOWER
 
 
-def test_category_is_a_reviewed_source_bucket_matching_product_family() -> None:
+def test_business_category_is_separate_and_matches_product_family() -> None:
     assert "product_opportunities_category_family_check" in LOWER
-    assert "category in ('fashion', 'womens-fashion', 'home-decor')" in LOWER
+    assert "category in ('fashion', 'home-decor', 'jewelry-accessories')" in LOWER
+    assert "category in ('wedding-celebrations', 'gifts')" in LOWER
+    assert "product_family in ('physical', 'digital')" in LOWER
     assert "category = 'digital-products' and product_family = 'digital'" in LOWER
     assert ") is true" in LOWER.split(
         "product_opportunities_category_family_check", 1
@@ -78,8 +80,10 @@ def test_category_is_a_reviewed_source_bucket_matching_product_family() -> None:
     admission = LOWER.split(
         "create or replace function admit_product_opportunity_batch", 1
     )[1].split("$$;", 1)[0]
-    assert "product category must be a reviewed source bucket matching product family" in admission
-    assert "when 'womens-fashion' then 'women''s fashion womens fashion'" in LOWER
+    assert "product category must be a reviewed business category matching product family" in admission
+    assert "when 'wedding-celebrations' then 'wedding celebrations bridal'" in LOWER
+    assert "when 'gifts' then 'gifts'" in LOWER
+    assert "when 'jewelry-accessories' then 'jewelry jewellery accessories'" in LOWER
     assert "when 'home-decor' then 'home decor'" in LOWER
     assert "when 'digital-products' then 'digital products'" in LOWER
 
@@ -90,6 +94,7 @@ def test_acquisition_source_category_is_persisted_separately_in_provenance() -> 
         "product_opportunities_source_category_provenance_check", 1
     )[1].split("constraint", 1)[0]
     assert "provenance->>'source_category'" in constraint
+    assert "'wedding', 'wedding-celebrations', 'gifts'" in constraint
     assert "and product_family = 'physical'" in constraint
     assert "and product_family = 'digital'" in constraint
     admission = LOWER.split(

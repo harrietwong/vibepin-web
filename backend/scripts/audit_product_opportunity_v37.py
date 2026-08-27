@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "db"))
 
-from product_opportunity_admission import CATEGORY_FAMILY as AUTOMATIC_ADMISSION_CATEGORY_FAMILY
+from product_opportunity_admission import SOURCE_CATEGORY_FAMILIES
 
 
 PRODUCT_COLUMNS = ",".join(
@@ -157,11 +157,11 @@ def summarize(products: list[dict], snapshots: list[dict], *, today: date) -> di
         source_category = str(row.get("source_category") or "unknown")
         categories[source_category] += 1
         technical_by_category_family[source_category][family] += 1
-        expected_family = AUTOMATIC_ADMISSION_CATEGORY_FAMILY.get(source_category)
-        if expected_family is None:
+        expected_families = SOURCE_CATEGORY_FAMILIES.get(source_category)
+        if expected_families is None:
             automatic_scope_exclusions["source_category_not_reviewed"] += 1
             automatic_scope_exclusions_by_category["source_category_not_reviewed"][source_category] += 1
-        elif expected_family != family:
+        elif family not in expected_families:
             automatic_scope_exclusions["category_family_mismatch"] += 1
             automatic_scope_exclusions_by_category["category_family_mismatch"][source_category] += 1
         else:

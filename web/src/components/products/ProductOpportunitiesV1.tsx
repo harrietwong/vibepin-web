@@ -43,8 +43,10 @@ function productDetailsLabel(item: ProductOpportunityItem): string {
 
 const CATEGORY_LABELS: Record<string, string> = {
   fashion: "Fashion",
-  "womens-fashion": "Women's Fashion",
   "home-decor": "Home Decor",
+  "wedding-celebrations": "Wedding & Celebrations",
+  gifts: "Gifts",
+  "jewelry-accessories": "Jewelry & Accessories",
   "digital-products": "Digital Products",
 };
 
