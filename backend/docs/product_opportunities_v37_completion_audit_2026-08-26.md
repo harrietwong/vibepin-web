@@ -570,6 +570,11 @@ to production.
   and Tracking wrappers passed ShellCheck. The two source-using wrappers were
   checked with SC1091 excluded only because stdin has no path; their separately
   checked `cloud_lib.sh` blob passed with no exclusion.
+- VPS read-only systemd evidence at `2026-08-27T17:10:44Z` proves only the
+  installed legacy Supply units parse. Their hashes do not match the current
+  candidate and all Admission/Tracking units are absent, so exact candidate-unit
+  verification remains open. See
+  `backend/docs/product_opportunities_v37_systemd_evidence_gap_20260827T171044Z.json`.
 
 ## Product Supply cutover status
 

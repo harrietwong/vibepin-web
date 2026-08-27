@@ -58,7 +58,7 @@ failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
 --audit-level=low` reported zero known vulnerabilities, and the built localhost
 site passed the executable Product-truth render verifier. The Product automation
-contract for the current manifest passed 22/22; the focused worker, automation,
+contract for the current manifest passed 23/23; the focused worker, automation,
 and admission group passed 59/59. These local gates do not authorize
 production rollout.
 
@@ -68,6 +68,13 @@ The only excluded diagnostic was SC1091 for the intentional runtime-relative
 `cloud_lib.sh` source; no semantic, quoting, process, lock or pipeline warning
 was suppressed. This closes local shell lint, but exact candidate systemd units
 still require `systemd-analyze verify` on a Linux host before deployment.
+
+The latest VPS read-only check at `2026-08-27T17:10:44Z` makes that boundary
+exact. The installed Supply service/timer parse successfully, but their hashes
+(`09d8f2ad...` / `4dfd713b...`) differ from the candidate (`51f78a4e...` /
+`9b046ec9...`); all four Admission/Tracking units are absent. Therefore the
+installed-unit PASS cannot be reused for the candidate. Evidence:
+`backend/docs/product_opportunities_v37_systemd_evidence_gap_20260827T171044Z.json`.
 
 The Web deployment config is part of this exact boundary and must use
 `installCommand: npm ci`. Replacing it with `npm install`, omitting the lockfile,

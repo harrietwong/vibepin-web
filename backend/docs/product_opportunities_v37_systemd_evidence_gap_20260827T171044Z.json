@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-27T17:10:44Z",
+  "auditMode": "read_only",
+  "candidateFunctionalTip": "f93a29a993594605bffed9115119e8210a6bfcf1",
+  "candidateManifest": "backend/docs/product_opportunities_v37_release_manifest_f93a29a.json",
+  "vpsSystemdVersion": 255,
+  "candidateUnitSha256": {
+    "vibepin-product-supply.service": "51f78a4eb235d6c5b13f83cf727173f3b3427a6ff7c863e2024657e8b9312a20",
+    "vibepin-product-supply.timer": "9b046ec96db1b2861f087d2f8c51f910661f72c7455a1b2fd91fbdc320068e1a",
+    "vibepin-product-opportunity-admission.service": "7be37e3b0606cadc01c874ca19fc7f97050489ad3113d40c24b6b666aabeea22",
+    "vibepin-product-opportunity-admission.timer": "554d6ba4e0362b691aae9c334091999e1c2a5e0b282ee2273d947282a663be4c",
+    "vibepin-product-tracking.service": "b8621d95a22e1dd89057c97efba7d26417f191e4568e4083fd9dd7154e76e74f",
+    "vibepin-product-tracking.timer": "7739fc1c637e4016e902edb252847d44163e0fe80effd084000b3f1e24e474a5"
+  },
+  "installedState": {
+    "vibepin-product-supply.service": {
+      "exists": true,
+      "enabled": "disabled",
+      "active": "inactive",
+      "sha256": "09d8f2ad2708c52c5a4c1bc4159c96e0571db3d5bd4d1759afb5b664d63aaebf",
+      "matchesCandidate": false,
+      "systemdAnalyzeVerifyExitCode": 0
+    },
+    "vibepin-product-supply.timer": {
+      "exists": true,
+      "enabled": "enabled",
+      "active": "active",
+      "sha256": "4dfd713bc9a5e827e58855adf02544463f5e2544f40507be40ec890aea60d44e",
+      "matchesCandidate": false,
+      "systemdAnalyzeVerifyExitCode": 0
+    },
+    "vibepin-product-opportunity-admission.service": {"exists": false},
+    "vibepin-product-opportunity-admission.timer": {"exists": false},
+    "vibepin-product-tracking.service": {"exists": false},
+    "vibepin-product-tracking.timer": {"exists": false}
+  },
+  "interpretation": {
+    "installedSupplyVerify": "PASS for the currently installed legacy Supply units only",
+    "candidateExactUnitVerify": "NEEDS VPS EVIDENCE because neither installed Supply unit matches the candidate and Admission/Tracking units are absent",
+    "unrelatedVerifyWarnings": "cloudmonitor.service only; no VibePin finding"
+  },
+  "requiredBeforeInstallOrEnable": [
+    "stage all six exact candidate unit blobs without replacing the active units",
+    "verify every staged SHA-256 against the manifest",
+    "run systemd-analyze verify against the exact staged files",
+    "recheck hashes immediately before atomic install",
+    "keep Admission and Tracking timers disabled until their own rollout gates pass"
+  ],
+  "filesWrittenOnVps": 0,
+  "daemonReloaded": false,
+  "serviceStarted": false,
+  "timerChanged": false,
+  "productionMutation": false
+}
