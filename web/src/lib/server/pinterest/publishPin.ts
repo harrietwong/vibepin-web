@@ -24,6 +24,7 @@
 import { PinterestApiError, PinterestClient } from "./service";
 import { canAttemptSandboxPublish, getPinterestApiEnv } from "./config";
 import { validateOptionalLink, validatePublicImageUrl } from "./validatePublish";
+import { checkPinterestMedia, toMediaItems } from "@/lib/publish/mediaRules";
 
 const MAX_BOARD_PAGES = 5; // fallback scan up to ~500 boards to confirm ownership
 
@@ -32,6 +33,15 @@ export interface PublishPinInput {
   uid: string;
   boardId: string;
   imageUrl: unknown;
+  /**
+   * The Pin's full media set in display order (cover first). ≥2 entries publish a
+   * Pinterest carousel; 1 or absent falls back to `imageUrl` and the request is
+   * identical to what it has always been. Never truncated: a set Pinterest cannot
+   * take is REFUSED (carousel_too_many / carousel_aspect_mismatch) rather than
+   * quietly publishing only the cover, which would look like a success while
+   * dropping the merchant's other images.
+   */
+  imageUrls?: unknown;
   title?: unknown;
   description?: unknown;
   link?: unknown;
@@ -74,7 +84,11 @@ export interface PublishValidationFailure {
     | "bad_request"
     | "invalid_image_url"
     | "invalid_link"
-    | "board_not_owned";
+    | "board_not_owned"
+    // Media-set failures, decided before any Pinterest call (see checkPinterestMedia).
+    | "carousel_too_few"
+    | "carousel_too_many"
+    | "carousel_aspect_mismatch";
   status: 400 | 403 | 422;
   /**
    * The connection this attempt authenticated as, when it got that far (board_not_owned
@@ -99,9 +113,45 @@ export async function publishPinForUser(input: PublishPinInput): Promise<Publish
     return { ok: false, kind: "validation", error: "boardId is required", code: "bad_request", status: 400 };
   }
 
-  const img = validatePublicImageUrl(input.imageUrl);
-  if (!img.ok) {
-    return { ok: false, kind: "validation", error: img.message, code: "invalid_image_url", status: 422 };
+  // The media set, in the Content's display order. `imageUrls` wins when supplied;
+  // `imageUrl` is the single-image contract every existing caller still uses. The
+  // cover is index 0 either way — order is decided upstream and never re-sorted here.
+  const requestedUrls = Array.isArray(input.imageUrls)
+    ? input.imageUrls.filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+    : [];
+  const rawUrls = requestedUrls.length ? requestedUrls : [input.imageUrl];
+
+  // EVERY image is validated, not just the cover: a carousel whose 4th image is a
+  // blob: URL must fail here with a fixable message rather than at Pinterest, where
+  // the error names nothing the merchant can act on.
+  const validatedUrls: string[] = [];
+  for (const raw of rawUrls) {
+    const img = validatePublicImageUrl(raw);
+    if (!img.ok) {
+      return { ok: false, kind: "validation", error: img.message, code: "invalid_image_url", status: 422 };
+    }
+    validatedUrls.push(img.url);
+  }
+
+  // Count / aspect-ratio limits, decided BEFORE the API call so an over-long or
+  // mixed-ratio set gets a customer-safe, actionable message — and so nothing is
+  // ever silently truncated to the cover image.
+  const mediaCheck = checkPinterestMedia(toMediaItems(validatedUrls));
+  if (!mediaCheck.ok) {
+    return {
+      ok: false,
+      kind: "validation",
+      error: mediaCheck.message,
+      code:
+        mediaCheck.code === "too_many"
+          ? "carousel_too_many"
+          : mediaCheck.code === "aspect_mismatch"
+            ? "carousel_aspect_mismatch"
+            : mediaCheck.code === "too_few"
+              ? "carousel_too_few"
+              : "invalid_image_url",
+      status: 422,
+    };
   }
 
   const link = validateOptionalLink(input.link);
@@ -152,7 +202,8 @@ export async function publishPinForUser(input: PublishPinInput): Promise<Publish
       description,
       link: link.url,
       altText,
-      imageUrl: img.url,
+      imageUrl: validatedUrls[0],
+      imageUrls: validatedUrls,
     });
   } catch (err) {
     // A board-shaped rejection (403/404) with no owned board found is our clearer

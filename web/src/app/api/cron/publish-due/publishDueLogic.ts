@@ -41,10 +41,42 @@ function firstString(...vals: unknown[]): string {
   return "";
 }
 
+/**
+ * The Content's media URLs in display order, read from the stored draft payload.
+ *
+ * `payload.media` is the multi-image Content's media list — `{ id, url, … }` entries
+ * whose ARRAY ORDER is the merchant's display order (index 0 is the cover). Read
+ * defensively: the payload is whatever the client last synced, so a missing field, a
+ * non-array, or an entry without a usable url must degrade to the single-image path
+ * rather than throw inside a cron batch.
+ *
+ * Returns [] when there is no usable media list — the caller then falls back to
+ * `payload.imageUrl`, i.e. the behaviour every pre-multi-image draft has always had.
+ */
+function readMediaUrls(payload: Record<string, unknown>): string[] {
+  const media = payload.media;
+  if (!Array.isArray(media)) return [];
+  const urls: string[] = [];
+  for (const entry of media) {
+    if (!entry || typeof entry !== "object") continue;
+    const url = (entry as { url?: unknown }).url;
+    if (typeof url === "string" && url.trim()) urls.push(url.trim());
+  }
+  return urls;
+}
+
 export interface DuePublishInput {
   uid: string;
   boardId: string;
+  /** The cover image — `imageUrls[0]`, kept for callers on the single-image contract. */
   imageUrl: string;
+  /**
+   * The Content's whole media set in display order (cover first), every entry already
+   * resolved to an absolute public URL. Always at least one entry. Pinterest and the
+   * social fan-out both publish ALL of them — a scheduled multi-image Content must go
+   * out as the carousel the merchant built, not as its first image.
+   */
+  imageUrls: string[];
   title?: string;
   description?: string;
   link?: string;
@@ -66,7 +98,11 @@ export interface DuePublishInput {
  * payloadAfterFailure.
  */
 export function payloadToPublishInput(uid: string, payload: Record<string, unknown>): DuePublishInput | null {
-  const storedImage = firstString(payload.imageUrl, payload.sourceImageUrl);
+  // A multi-image Content stores its whole media set in `payload.media`, in display
+  // order, with the cover first. Older/single-image drafts have no `media` at all —
+  // they fall back to `imageUrl`, which is exactly what this function always read.
+  const mediaUrls = readMediaUrls(payload);
+  const storedImage = mediaUrls[0] || firstString(payload.imageUrl, payload.sourceImageUrl);
   const boardId = firstString(payload.boardId);
   if (!storedImage || !boardId) return null;
   // Resolve to the absolute public URL, exactly as the Publish-now path does
@@ -79,11 +115,16 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
   // "imageUrl is not a valid URL". Publish now never hit this because it already
   // resolved; only the scheduled path passed the raw value through, which is why
   // the same draft could publish by hand and fail on a schedule.
-  const imageUrl = toProxyUrl(storedImage);
+  //
+  // EVERY image is resolved, not just the cover: a carousel whose 2nd image kept the
+  // relative proxy path would fail the same way — publishable by hand, broken on a
+  // schedule — which is precisely the divergence this resolution exists to close.
+  const imageUrls = (mediaUrls.length ? mediaUrls : [storedImage]).map(toProxyUrl);
   return {
     uid,
     boardId,
-    imageUrl,
+    imageUrl: imageUrls[0],
+    imageUrls,
     title: firstString(payload.title) || undefined,
     description: firstString(payload.description) || undefined,
     // destination link is optional/recommended (never blocks publish).

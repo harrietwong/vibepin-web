@@ -468,6 +468,9 @@ export type AttachedProduct = {
 export type PublishPinInput = {
   boardId: string;
   imageUrl: string;
+  /** The Content's media in display order, cover first. ≥2 publishes a Pinterest
+   *  carousel; omitted ⇒ `imageUrl` alone (unchanged single-image publish). */
+  imageUrls?: string[];
   title?: string;
   description?: string;
   link?: string;
