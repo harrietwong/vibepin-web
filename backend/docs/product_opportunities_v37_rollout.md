@@ -87,6 +87,13 @@ failures as platform verification; use
 `backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T124031Z.json`
 as the exact open-evidence record.
 
+The current candidate was retried read-only at `2026-08-27T17:05:44Z`. Chrome
+again proved the signed-in project page and exact settings URL exist, but two
+tab claims and a fresh-tab DOM read timed out before Root Directory or build-log
+values could be read. The updated gap is
+`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T170544Z.json`;
+the promotion stop remains unchanged.
+
 The latest GET-only pre-Supply data-quality baseline is
 `backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
 It originally proved 123 technical migration candidates and 25 reviewed

@@ -115,6 +115,14 @@ its checked-in `web/vercel.json` (`npm ci`, `npm run build`, `.next`), clean
 install, 135/135 Web tests and 70/70-page build. Evidence:
 `backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T124031Z.json`.
 
+A fresh read-only attempt at `2026-08-27T17:05:44Z` reached the same signed-in
+project title and exact Build and Deployment URL from Chrome, including in a
+fresh same-profile tab. Two existing-tab claims and the fresh-tab DOM read all
+timed out before authoritative values were exposed. Therefore this still proves
+project presence, not Root Directory or build-log contents. Current-candidate
+evidence is recorded in
+`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T170544Z.json`.
+
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure
 rule test, registry and full TypeScript gate pass, and the built full candidate

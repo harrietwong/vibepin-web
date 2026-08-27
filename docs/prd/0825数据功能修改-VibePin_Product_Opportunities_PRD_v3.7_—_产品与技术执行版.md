@@ -1218,6 +1218,8 @@ first complete permanent-timer Product Supply attempt = BLOCK; invocation b0f7bd
 daily capacity contract = PASS in candidate code; Product Supply scans 100 Source Pins and may write 0-50 legacy discovery rows across atomic batches of at most 20, while Product Tracking independently covers up to 2,499 unique active Primary Pins and at most 5,000 provider requests per day; 20 is not a per-day Product limit
 Web deployment reproducibility = PASS; Vercel installCommand is npm ci, package.json/package-lock.json/vercel.json are one exact release boundary, and deployment must fail review if the lockfile is omitted or dependencies are re-resolved
 Vercel project binding = NEEDS EVIDENCE; before promotion the platform must prove Root Directory=web and the candidate build log must show npm ci plus Next.js 16.3.3, because the repository has no linked .vercel/project.json metadata
+
+2026-08-27T17:05:44Z 的新一轮 Chrome 只读检查再次证明已登录账号中存在 `web` 项目的 Build and Deployment 页面，且目标设置 URL 与页面标题正确；但两次接管既有页面和一次新同会话页面的 DOM 读取均在权威设置值出现前超时。因此 Root Directory 与候选构建日志仍未证明，不能将“页面存在”误报为平台门槛通过。证据：`backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T170544Z.json`。
 database contract / PGlite transaction checks = PASS
 current lifecycle trigger = PASS in an exact PostgreSQL-compatible transaction harness; valid transitions and timestamps passed, invalid rollback and retired reactivation were rejected
 exact schema rollback object scan = PASS; 0 v63 relations and 0 v63 functions remained
