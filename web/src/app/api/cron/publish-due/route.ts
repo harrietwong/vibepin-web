@@ -272,10 +272,18 @@ export async function GET(req: Request): Promise<Response> {
         }
       }
 
-      // Every attempted Pinterest destination was blocked by trial access and nothing
-      // else was owed: keep today's behaviour exactly — release the claim, leave the
-      // payload and scheduled_at untouched so the row is re-scanned until approved.
-      if (trialBlocked > 0 && outcomes.length === 0 && extras.length === 0) {
+      // Every attempted Pinterest destination was blocked by trial access: keep today's
+      // behaviour exactly — release the claim and leave the payload and scheduled_at
+      // untouched, so the row is re-scanned until the account is approved.
+      //
+      // This deliberately runs BEFORE the fan-out, extras or not. Trial access is an
+      // APP-level block, so "every Pinterest entry blocked while IG/FB are also owed"
+      // is the ordinary case, not an edge. Falling through would fan out, see a
+      // published social row, mark the Content posted and clear its schedule — the
+      // Pinterest entries would then have no result rows and nothing would ever
+      // re-attempt them, breaking the promise that the Content keeps its slot until
+      // Pinterest approves. The social destinations are re-attempted with it.
+      if (trialBlocked > 0 && outcomes.length === 0) {
         await releaseClaim(db, row);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "pinterest_trial_access", message: "Pinterest access is still under review",
@@ -321,7 +329,10 @@ export async function GET(req: Request): Promise<Response> {
         continue;
       }
 
-      await persistOutcomes(db, row, outcomes, nowIso, adoptedConnectionId);
+      // firstFailure carries the platform's stable CODE, which the outcome rows do not:
+      // categorizing from the message alone would put a differently-worded
+      // needs_reconnect in "transient" and offer the merchant the wrong fix.
+      await persistOutcomes(db, row, outcomes, nowIso, adoptedConnectionId, firstFailure?.code);
       const anyPublished = outcomes.some(o => o.status === "published");
       if (anyPublished) {
         const pin = outcomes.find(o => o.provider === "pinterest" && o.status === "published");
@@ -387,8 +398,9 @@ async function persistOutcomes(
   outcomes: readonly DestinationOutcome[],
   nowIso: string,
   connectionId?: string | null,
+  failureCode?: string,
 ): Promise<void> {
-  const payload = payloadAfterOutcomes(row.payload, outcomes, nowIso, connectionId);
+  const payload = payloadAfterOutcomes(row.payload, outcomes, nowIso, connectionId, failureCode);
   const { error } = await db
     .from(TABLE)
     .update({

@@ -212,6 +212,19 @@ async function main() {
     // while a genuine bypass of the validate/truncate path slipped through.
     assert.match(src, /await publishPinForUser\(/);
   });
+  await test("10c. trial-access release happens BEFORE the social fan-out (the Content keeps its slot)", () => {
+    const src = readFileSync(join(root, "src/app/api/cron/publish-due/route.ts"), "utf8");
+    const trialIdx = src.indexOf("if (trialBlocked > 0");
+    const fanIdx = src.indexOf("await fanOutDestinations(");
+    assert.ok(trialIdx > 0 && fanIdx > 0, "both branches must exist");
+    assert.ok(trialIdx < fanIdx,
+      "fanning out first would publish IG/FB, mark the Content posted and clear scheduled_at — "
+      + "the trial-blocked Pinterest destinations would then never be re-attempted");
+    // The guard must not also require "no other destinations": trial access is an
+    // APP-level block, so blocked-Pinterest-plus-owed-social is the ordinary case.
+    assert.ok(!/if \(trialBlocked > 0 &&[^)]*extras\.length === 0/.test(src),
+      "the skip must not be conditional on there being no social destinations");
+  });
   await test("10b. publishPinForUser validates image/link BEFORE ever calling Pinterest (same order for manual + cron callers)", () => {
     const src = readFileSync(join(root, "src/lib/server/pinterest/publishPin.ts"), "utf8");
     // Matched by CALL, not by argument: multi-image publishing validates every URL in a

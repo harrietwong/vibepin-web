@@ -273,6 +273,26 @@ test("payloadAfterOutcomes: nothing published ⇒ WP-B failure semantics + the l
   assert.equal(after.scheduledDate, "", "drops out of the due scan — no retry storm");
 });
 
+test("payloadAfterOutcomes: the failure CODE drives the category, not the wording", () => {
+  // The outcome rows carry only a user-facing message. Categorizing from that alone
+  // puts a differently-worded needs_reconnect in "transient" and offers the wrong fix.
+  const after = payloadAfterOutcomes({ scheduledDate: "2026-08-27" }, [
+    { provider: "pinterest", status: "failed", socialConnectionId: "pin_A", error: "Something Pinterest said" },
+  ], "2026-08-27T10:00:00.000Z", null, "needs_reconnect");
+  assert.equal(after.errorCategory, "auth");
+  assert.equal(after.publishErrorCode, "needs_reconnect");
+});
+
+test("payloadAfterOutcomes: a later success clears a previous attempt's error code", () => {
+  const after = payloadAfterOutcomes(
+    { scheduledDate: "2026-08-27", publishError: "old", publishErrorCode: "needs_reconnect", failureType: "publish" },
+    [{ provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "p1" }],
+    "2026-08-27T10:00:00.000Z",
+  );
+  assert.equal(after.publishErrorCode, undefined);
+  assert.equal(after.failureType, undefined);
+});
+
 test("payloadAfterOutcomes: nothing owed ⇒ completed, never marked failed", () => {
   // A stale-claim re-run where every destination had already published.
   const after = payloadAfterOutcomes({ scheduledDate: "2026-08-27" }, [], "2026-08-27T10:00:00.000Z");

@@ -362,6 +362,16 @@ export function payloadAfterOutcomes(
   nowIso: string,
   /** Adopt-once: the connection an untargeted draft actually published through. */
   adoptedConnectionId?: string | null,
+  /**
+   * The stable error CODE of the first failure, when the platform gave one.
+   *
+   * It cannot be recovered from the outcome rows — those carry only a user-facing
+   * message — and the message alone is not a reliable categorization input: a
+   * `needs_reconnect` worded differently would land in "transient" and the retry
+   * affordance would offer the wrong fix. Everything downstream that reads
+   * `publishErrorCode` degrades with it, so the caller passes it in.
+   */
+  failureCode?: string,
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, adoptedConnectionId) };
   next.destinationResults = mergeDestinationResults(payload, outcomes, nowIso);
@@ -405,7 +415,8 @@ export function payloadAfterOutcomes(
   const previousScheduled = previousScheduledIso(payload);
   next.publishError = message;
   next.failureType = "publish";
-  next.errorCategory = mapPublishErrorToCategory(undefined, message);
+  next.errorCategory = mapPublishErrorToCategory(failureCode, message);
+  if (failureCode) next.publishErrorCode = failureCode;
   if (previousScheduled) next.previousScheduledTime = previousScheduled;
   next.scheduledDate = "";
   next.scheduledTime = "";
