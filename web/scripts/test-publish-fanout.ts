@@ -83,6 +83,32 @@ check("a destination left 'publishing' is still pending",
 check("a 'failed' destination is pending",
   pendingDestinations(intent, [{ provider: "facebook", status: "failed" }]).length === 3);
 
+// ── two accounts on ONE platform are two destinations, not one ──────────────
+// Keying "already done" by provider alone skipped the second Facebook Page for
+// good: the platform read as published, so the Page that never got the post was
+// never retried. The key is provider + account.
+const twoPages: ScheduledDestination[] = [
+  { provider: "facebook", socialConnectionId: "conn-fb-a", capturedAt: "2026-08-18T00:00:00.000Z" },
+  { provider: "facebook", socialConnectionId: "conn-fb-b", capturedAt: "2026-08-18T00:00:00.000Z" },
+];
+const secondPage = pendingDestinations(twoPages, [
+  { provider: "facebook", status: "published", socialConnectionId: "conn-fb-a" },
+  { provider: "facebook", status: "failed", socialConnectionId: "conn-fb-b" },
+]);
+check("the second account on a platform is still retried after the first published",
+  secondPage.length === 1 && secondPage[0].socialConnectionId === "conn-fb-b",
+  `pending: ${JSON.stringify(secondPage.map(d => d.socialConnectionId))}`);
+check("the account that published is not re-sent (no double post on that Page)",
+  !secondPage.some(d => d.socialConnectionId === "conn-fb-a"));
+check("both accounts published ⇒ nothing pending",
+  pendingDestinations(twoPages, twoPages.map(d =>
+    ({ provider: d.provider, status: "published", socialConnectionId: d.socialConnectionId }))).length === 0);
+// A row from before per-account results existed cannot say which account it was.
+// It keeps the provider-wide meaning — guessing "some other account" would be the
+// double post this rule exists to prevent.
+check("a legacy attempted row with no account still blocks the whole platform",
+  pendingDestinations(twoPages, [{ provider: "facebook", status: "published" }]).length === 0);
+
 // Retry reads the ACCOUNT off the frozen intent, so it cannot drift to whatever
 // the default happens to be now.
 check("the retried destination keeps its original account id",

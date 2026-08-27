@@ -59,15 +59,28 @@ export function rollUpJobStatus(outcomes: readonly DestinationOutcome[]): JobSta
  * the platforms that worked. Anything not yet `published` — failed, still
  * `publishing` after a crash — stays pending, so an interrupted attempt is
  * completed rather than abandoned.
+ *
+ * Keyed by ACCOUNT, not by platform. Keying on the provider alone meant a merchant
+ * with two Facebook Pages who published to one and failed on the other got nothing
+ * on retry: the platform read as "already done" and the second Page was skipped
+ * forever. An attempted row that names no account keeps the old provider-wide
+ * meaning (a legacy row cannot say which account it was, and treating it as
+ * account-specific would be the double-post it exists to prevent).
  */
 export function pendingDestinations(
   intent: readonly ScheduledDestination[],
-  alreadyAttempted: readonly { provider: string; status: string }[],
+  alreadyAttempted: readonly { provider: string; status: string; socialConnectionId?: string | null }[],
 ): ScheduledDestination[] {
-  const done = new Set(
-    alreadyAttempted.filter(r => r.status === "published").map(r => r.provider),
+  const published = alreadyAttempted.filter(r => r.status === "published");
+  const doneAccounts = new Set(
+    published.filter(r => !!r.socialConnectionId).map(r => `${r.provider}:${r.socialConnectionId}`),
   );
-  return intent.filter(d => !done.has(d.provider));
+  const doneProviders = new Set(
+    published.filter(r => !r.socialConnectionId).map(r => r.provider),
+  );
+  return intent.filter(d =>
+    !doneProviders.has(d.provider)
+    && !doneAccounts.has(`${d.provider}:${d.socialConnectionId}`));
 }
 
 /**
