@@ -19,6 +19,9 @@ export const socialPanelMessages = {
   // ── Card subtitle ──
   "socialPanel.card.accountConnected": "Account connected",
   "socialPanel.card.accountMasked": "Pinterest account ••••{last4}",
+  //    Same fallback, for the account rows that now render on EVERY platform —
+  //    the Pinterest-worded one above would mislabel an Instagram row.
+  "socialPanel.card.accountMaskedAnyPlatform": "{platform} account ••••{last4}",
   "socialPanel.card.accountUnidentified": "Account connected",
   "socialPanel.card.eachAccountBelow": "Each account's status is shown below",
   "publishResults.title": "Publish results",
@@ -72,7 +75,10 @@ export const socialPanelMessages = {
   "socialPanel.limit.upgrade": "Upgrade",
   "socialPanel.limit.dismiss": "Not now",
 
-  // ── Per-account rows + Remove (PRD §14 / Phase D ③) ──
+  // ── Per-account rows + their actions (PRD 0809 §II / PRD 0805 §4-§11) ──
+  //    Derived from lib/social/accountActions.ts, one action set per row state.
+  "socialPanel.account.disconnect": "Disconnect",
+  "socialPanel.account.reconnect": "Reconnect",
   "socialPanel.account.remove": "Remove",
   //    Composed as: "<account><bodyPrefix><count><bodySuffix>".
   "socialPanel.removeDialog.title": "This account still has scheduled Pins",
@@ -86,6 +92,8 @@ export const socialPanelMessages = {
   // ── Toasts ──
   "socialPanel.toast.accountRemoved": "Account removed",
   "socialPanel.toast.accountRemoveFailed": "Could not remove that account. Please try again.",
+  "socialPanel.toast.accountDisconnected": "Account disconnected",
+  "socialPanel.toast.accountDisconnectFailed": "Could not disconnect that account. Please try again.",
   "socialPanel.toast.pinterestDisconnected": "Pinterest disconnected",
   "socialPanel.toast.pinterestDisconnectFailed": "Could not disconnect Pinterest. Please try again.",
   "socialPanel.toast.connectionComingSoonSuffix": " connection is coming soon.",

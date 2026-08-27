@@ -78,16 +78,67 @@ export async function startSocialConnect(
   return res.json();
 }
 
-export type SocialDisconnectResult = { ok: boolean; usePinterestFlow?: boolean };
+/**
+ * "disconnect" invalidates the credentials and KEEPS the account row (reversible
+ * by reconnecting); "remove" deletes it. The two are separate words on purpose —
+ * a single "Disconnect" that also deleted the row is what made the old
+ * platform-level button impossible to reason about.
+ */
+export type SocialDisconnectMode = "disconnect" | "remove";
 
-export async function disconnectSocial(connectionId: string): Promise<SocialDisconnectResult> {
+export type SocialDisconnectResult = {
+  ok: boolean;
+  usePinterestFlow?: boolean;
+  mode?: SocialDisconnectMode;
+  cancelledScheduled?: number;
+};
+
+export async function disconnectSocial(
+  connectionId: string,
+  opts?: {
+    /** Defaults to the soft, reversible action server-side. */
+    mode?: SocialDisconnectMode;
+    /** Only meaningful with mode "remove" — a soft disconnect never touches schedules. */
+    cancelScheduled?: boolean;
+  },
+): Promise<SocialDisconnectResult> {
+  const mode = opts?.mode ?? "disconnect";
   const res = await fetch("/api/social/disconnect", {
     method: "POST",
     headers: await authHeaders(),
-    body: JSON.stringify({ connectionId }),
+    body: JSON.stringify({
+      connectionId,
+      mode,
+      // Never send it on a soft disconnect: clearing a merchant's schedules is a
+      // consequence of removing an account, never of switching one off.
+      ...(mode === "remove" && opts?.cancelScheduled ? { cancelScheduled: true } : {}),
+    }),
   });
   if (!res.ok) throw new Error(await readError(res, "Could not disconnect account"));
   return res.json();
+}
+
+/**
+ * How many scheduled Contents still publish through this account — asked before a
+ * per-account Remove so the merchant is never silently stripped of planned work.
+ *
+ * Read-only and best-effort: a failure answers 0 rather than blocking the Remove.
+ * A wrong 0 costs a prompt, not a post — the publish path still refuses a
+ * destination whose account is gone.
+ */
+export async function fetchSocialScheduledCount(connectionId: string): Promise<number> {
+  if (!connectionId) return 0;
+  try {
+    const res = await fetch(
+      `/api/social/disconnect?connectionId=${encodeURIComponent(connectionId)}`,
+      { headers: await authHeaders(), cache: "no-store" },
+    );
+    if (!res.ok) return 0;
+    const body = await res.json() as { scheduledCount?: number };
+    return typeof body.scheduledCount === "number" ? body.scheduledCount : 0;
+  } catch {
+    return 0;
+  }
 }
 
 // ── Publish destinations ────────────────────────────────────────────────────
