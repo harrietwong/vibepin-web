@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
 import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
@@ -38,6 +38,7 @@ function notConnectedSummaries(): PlatformConnectionSummary[] {
 import {
   disconnectSocial,
   fetchSocialConnections,
+  fetchSocialScheduledCount,
   startSocialConnect,
 } from "@/lib/social/socialClient";
 import {
@@ -53,6 +54,13 @@ import {
   ACCOUNT_UI_STATE_TONE,
   type AccountUiState,
 } from "@/lib/social/accountUiState";
+import {
+  accountRowActions,
+  accountRowState,
+  ACCOUNT_ROW_ACTION_LABEL_KEY,
+  isSecondaryAccountAction,
+  type AccountRowAction,
+} from "@/lib/social/accountActions";
 import {
   SOCIAL_CONNECTIONS_CHANGED_EVENT,
   notifyConnectionsChanged,
@@ -308,9 +316,7 @@ function PlatformCard({
   connecting,
   multiAccount,
   onConnect,
-  onReconnect,
-  onDisconnect,
-  onRemoveAccount,
+  onAccountAction,
   busyAccountId,
   onRefresh,
 }: {
@@ -322,15 +328,12 @@ function PlatformCard({
   /** Connect a first account, or ADD another one — never targets an existing row. */
   onConnect: () => void;
   /**
-   * Repair one existing connection. Separate from onConnect because the server has
-   * to treat them differently: a reconnect that comes back as a different account is
-   * refused (PRD §10), while an add is exactly how you connect a different account.
+   * Act on ONE account row. Every lifecycle action is per-account (PRD 0809 §II):
+   * the platform-level "Disconnect <platform>" is gone, because with two accounts
+   * connected it could not say WHICH one it meant — and in fact tore down both.
    */
-  onReconnect: (connectionId: string | null) => void;
-  onDisconnect: () => void;
-  /** Remove ONE account (only reachable when the platform holds more than one). */
-  onRemoveAccount: (account: SocialConnection) => void;
-  /** The account row currently mid-Remove, if any. */
+  onAccountAction: (action: AccountRowAction, account: SocialConnection) => void;
+  /** The account row currently mid-action, if any. */
   busyAccountId: string | null;
   /** Re-fetch the connection list (used after a Facebook Page selection). */
   onRefresh: () => void;
@@ -346,11 +349,9 @@ function PlatformCard({
   const hasSeveralAccounts = summary.accountCount > 1;
   // ONE customer-visible state per account (PRD §6) — null for an empty platform slot.
   const accountState = platformAccountState(summary);
-  // A degraded connection is the ONLY case that shows Reconnect. Derived from the
-  // same single state as the chip, so the badge and the buttons can never disagree.
-  const degraded = accountState === "needs_reconnect" || accountState === "needs_attention" || accountState === "disconnected";
-  // Healthy = a usable connection with no problem → Disconnect only.
-  const healthy = connected && accountState === "connected";
+  // An empty platform slot is the ONLY case the card itself offers an action for.
+  // With one account or twenty, the actions live on the rows.
+  const hasAccounts = summary.accounts.length > 0;
 
   return (
     <section
@@ -436,60 +437,40 @@ function PlatformCard({
         </ul>
       )}
 
-      {/* Per-account rows + their own Remove. Renders only above one account, where
-          the platform-level Disconnect stops being able to express "remove this one". */}
-      <AccountRows summary={summary} busyAccountId={busyAccountId} onRemoveAccount={onRemoveAccount} />
+      {/* Per-account rows. Rendered for EVERY platform that holds at least one
+          account — a single-account merchant sees exactly one row, and it carries
+          the same actions the second row would. The four states and the actions
+          they offer belong to a ROW, never to the platform (PRD 0809 §II). */}
+      <AccountRows
+        summary={summary}
+        busyAccountId={busyAccountId}
+        connecting={connecting}
+        onAccountAction={onAccountAction}
+      />
 
       <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {healthy ? (
-          // Connected & healthy → Disconnect only (+ optional Add-another behind flag).
-          <>
-            <DisconnectButton provider={summary.provider} busy={busy} onClick={onDisconnect} />
-            {multiAccount && meta.liveConnect && (
-              <button
-                type="button"
-                data-testid={`social-add-account-${summary.provider}`}
-                onClick={onConnect}
-                disabled={busy || connecting}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "8px 14px", borderRadius: 10,
-                  border: `1px solid ${UI.border}`, background: "transparent", color: UI.textSec,
-                  fontSize: 12, fontWeight: 700,
-                  cursor: (busy || connecting) ? "not-allowed" : "pointer", opacity: (busy || connecting) ? 0.6 : 1,
-                }}
-              >
-                <Plus size={13} /> {tr("socialPanel.action.addAnotherAccountPrefix")}{meta.name}{tr("socialPanel.action.addAnotherAccountSuffix")}
-              </button>
-            )}
-          </>
-        ) : degraded ? (
-          // Token invalid (expired / revoked / error) → Reconnect + Disconnect.
-          <>
+        {hasAccounts ? (
+          // Platform level keeps exactly ONE affordance: add another account. It is
+          // the only action that isn't about a specific existing account.
+          multiAccount && meta.liveConnect && (
             <button
               type="button"
-              data-testid={`social-reconnect-${summary.provider}`}
-              // Names the row being repaired so the callback can require that the
-              // account coming back is that same account.
-              onClick={() => onReconnect(summary.accounts[0]?.id ?? null)}
+              data-testid={`social-add-account-${summary.provider}`}
+              onClick={onConnect}
               disabled={busy || connecting}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
                 padding: "8px 14px", borderRadius: 10,
-                border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.12)", color: UI.warning,
+                border: `1px solid ${UI.border}`, background: "transparent", color: UI.textSec,
                 fontSize: 12, fontWeight: 700,
                 cursor: (busy || connecting) ? "not-allowed" : "pointer", opacity: (busy || connecting) ? 0.6 : 1,
               }}
             >
-              {connecting ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-              {connecting
-                ? `${tr("socialPanel.action.redirectingToPrefix")}${meta.name}${tr("socialPanel.action.redirectingToSuffix")}`
-                : `${tr("socialPanel.action.reconnectPrefix")}${meta.name}`}
+              <Plus size={13} /> {tr("socialPanel.action.addAnotherAccountPrefix")}{meta.name}{tr("socialPanel.action.addAnotherAccountSuffix")}
             </button>
-            <DisconnectButton provider={summary.provider} busy={busy} onClick={onDisconnect} />
-          </>
+          )
         ) : (
-          // Not connected → Connect (live) or Coming soon (setup pending). No Disconnect.
+          // No account at all → Connect (live) or Coming soon (setup pending).
           <button
             type="button"
             data-testid={`social-connect-${summary.provider}`}
@@ -851,28 +832,16 @@ function InstagramDetails({ summary }: { summary: PlatformConnectionSummary }) {
   );
 }
 
-/** Shared destructive Disconnect button used in both healthy and degraded states. */
-function DisconnectButton({ provider, busy, onClick }: { provider: SocialProvider; busy: boolean; onClick: () => void }) {
-  const { t: tr } = useLocale();
-  return (
-    <button
-      type="button"
-      data-testid={`social-disconnect-${provider}`}
-      onClick={onClick}
-      disabled={busy}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 6,
-        padding: "8px 14px", borderRadius: 10,
-        border: "1px solid rgba(239,68,68,0.4)", background: "transparent", color: "#F87171",
-        fontSize: 12, fontWeight: 700,
-        cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
-      }}
-    >
-      {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-      {tr("socialPanel.action.disconnectPrefix")}{PLATFORMS[provider].name}
-    </button>
-  );
-}
+/**
+ * There is deliberately NO platform-level Disconnect button any more.
+ *
+ * It used to sit here and call `/api/pinterest/disconnect` with no connectionId,
+ * which tore down EVERY connection for the platform. With one account that read as
+ * "disconnect my account"; with two it silently signed the merchant out of both,
+ * and there was no wording that could have made it honest — "Disconnect Pinterest"
+ * cannot name which Pinterest. The action now belongs to the row that owns it
+ * (PRD 0809 §II); `AccountRows` below renders it per account.
+ */
 
 /**
  * PRD §10: the reconnect that landed on the wrong Pinterest account.
@@ -1027,27 +996,94 @@ function AccountLimitNotice({ onDismiss }: { onDismiss: () => void }) {
 }
 
 /**
- * Per-account rows with their own Remove — Phase D ③.
+ * The label for one account row — display name → @username → masked id.
  *
- * Only rendered when a platform actually holds more than one account. With a single
- * account the card's platform-level Disconnect already IS "remove this account", and
- * duplicating it would give the same act two buttons with two code paths.
+ * Shared by the rows and by the Remove dialog so the merchant is asked about the
+ * account under exactly the name they are looking at. Takes `tr` rather than
+ * calling useLocale so it can be used from an event handler too.
+ */
+function accountLabelFor(
+  provider: SocialProvider,
+  account: SocialConnection,
+  tr: (key: MessageKey) => string,
+): string {
+  const platform = PLATFORMS[provider].name;
+  // Display name first, then @username, then a masked id — never a fabricated
+  // name, and never a bare "Account connected" (identical for every row once a
+  // merchant holds two accounts). See lib/social/accountIdentity.
+  return accountDisplayLabel(
+    {
+      displayName: account.providerAccountName,
+      username: account.providerAccountUsername,
+      accountId: account.providerAccountId,
+    },
+    {
+      // Named by platform, not "Pinterest" for everyone: these rows now render on
+      // Instagram and Facebook too.
+      maskedTemplate: (last4) =>
+        tr("socialPanel.card.accountMaskedAnyPlatform")
+          .replace("{platform}", platform)
+          .replace("{last4}", last4),
+      unidentifiedLabel: tr("socialPanel.card.accountUnidentified"),
+    },
+  );
+}
+
+/**
+ * The two spellings of "your plan's connected-account limit stopped this".
  *
- * This exists because until now a multi-account platform had no way to remove one
- * account: the only control was the platform-level Disconnect, which tore down every
- * connection at once.
+ * Pinterest's connect route and callback redirect `limit_reached`; the Facebook
+ * and Instagram callbacks redirect `account_limit`. Same fact, same banner. Before
+ * this alias the FB/IG spelling fell through to the per-platform message table,
+ * matched nothing, and the merchant was returned to Settings with no explanation
+ * at all for why their account had not been connected.
+ */
+function isAccountLimitFlag(flag: string): boolean {
+  return flag === "limit_reached" || flag === "account_limit";
+}
+
+/** Per-action button styling. Remove is secondary; Reconnect carries the amber cue. */
+const ACCOUNT_ACTION_STYLE: Record<AccountRowAction, { border: string; background: string; color: string }> = {
+  disconnect: { border: "1px solid rgba(239,68,68,0.4)", background: "transparent", color: "#F87171" },
+  reconnect: { border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.12)", color: UI.warning },
+  remove: { border: `1px solid ${UI.border}`, background: "transparent", color: UI.textSec },
+};
+
+const ACCOUNT_ACTION_ICON: Record<AccountRowAction, typeof RefreshCw> = {
+  disconnect: Unlink,
+  reconnect: RefreshCw,
+  remove: Trash2,
+};
+
+/**
+ * Per-account rows — one per connected account, on EVERY platform.
+ *
+ * Previously these appeared only above one account, on the theory that a single
+ * account was adequately served by the card's platform-level Disconnect. It was
+ * not: that button meant "tear down every connection", a second account stuck in
+ * `needs_reconnect` had no reachable Reconnect at all (the card's button was
+ * hard-bound to `accounts[0]`), and the state chip described the platform rather
+ * than any particular account.
+ *
+ * So each row now carries its own state chip and its own actions, derived from the
+ * same `accountUiState` the chip shows (lib/social/accountActions.ts). A row can
+ * never offer a Reconnect while claiming to be Connected, because both come from
+ * one value.
  */
 function AccountRows({
   summary,
   busyAccountId,
-  onRemoveAccount,
+  connecting,
+  onAccountAction,
 }: {
   summary: PlatformConnectionSummary;
   busyAccountId: string | null;
-  onRemoveAccount: (account: SocialConnection) => void;
+  /** A connect/reconnect redirect is in flight for this platform. */
+  connecting: boolean;
+  onAccountAction: (action: AccountRowAction, account: SocialConnection) => void;
 }) {
   const { t: tr } = useLocale();
-  if (summary.accounts.length < 2) return null;
+  if (summary.accounts.length === 0) return null;
 
   return (
     <div
@@ -1055,55 +1091,58 @@ function AccountRows({
       style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}
     >
       {summary.accounts.map(account => {
-        const busy = busyAccountId === account.id;
-        // Display name first, then @username, then a masked id — never a fabricated
-        // name, and never a bare "Account connected" (identical for every row once a
-        // merchant holds two accounts). See lib/social/accountIdentity.
-        const label = accountDisplayLabel(
-          {
-            displayName: account.providerAccountName,
-            username: account.providerAccountUsername,
-            accountId: account.providerAccountId,
-          },
-          {
-            maskedTemplate: (last4) => tr("socialPanel.card.accountMasked").replace("{last4}", last4),
-            unidentifiedLabel: tr("socialPanel.card.accountUnidentified"),
-          },
-        );
+        const busy = busyAccountId === account.id || connecting;
+        const state = accountRowState(account, summary.provider);
+        const chip: StatusChip = {
+          label: tr(ACCOUNT_UI_STATE_LABEL_KEY[state]),
+          ...TONE_STYLES[ACCOUNT_UI_STATE_TONE[state]],
+        };
         return (
           <div
             key={account.id}
             data-testid={`social-account-row-${account.id}`}
+            data-account-row-state={state}
             style={{
-              display: "flex", alignItems: "center", gap: 10,
+              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
               padding: "8px 10px", borderRadius: 10,
               border: `1px solid ${UI.border}`, background: UI.surface2,
             }}
           >
             <span
               style={{
-                flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: UI.text,
+                flex: 1, minWidth: 120, fontSize: 12, fontWeight: 600, color: UI.text,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               }}
             >
-              {label}
+              {accountLabelFor(summary.provider, account, tr)}
             </span>
-            <button
-              type="button"
-              data-testid={`social-remove-account-${account.id}`}
-              onClick={() => onRemoveAccount(account)}
-              disabled={busy}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 5,
-                padding: "6px 11px", borderRadius: 9,
-                border: `1px solid ${UI.border}`, background: "transparent", color: UI.textSec,
-                fontSize: 11.5, fontWeight: 700,
-                cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
-              }}
-            >
-              {busy ? <Loader2 size={12} className="animate-spin" /> : null}
-              {tr("socialPanel.account.remove")}
-            </button>
+            <Chip chip={chip} />
+            {accountRowActions(state).map(action => {
+              const Icon = ACCOUNT_ACTION_ICON[action];
+              return (
+                <button
+                  key={action}
+                  type="button"
+                  data-testid={`social-account-${action}-${account.id}`}
+                  data-account-action={action}
+                  onClick={() => onAccountAction(action, account)}
+                  disabled={busy}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "6px 11px", borderRadius: 9,
+                    fontSize: 11.5, fontWeight: 700,
+                    ...ACCOUNT_ACTION_STYLE[action],
+                    opacity: busy ? 0.6 : isSecondaryAccountAction(action) ? 0.85 : 1,
+                    cursor: busy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {busyAccountId === account.id
+                    ? <Loader2 size={12} className="animate-spin" />
+                    : <Icon size={12} />}
+                  {tr(ACCOUNT_ROW_ACTION_LABEL_KEY[action])}
+                </button>
+              );
+            })}
           </div>
         );
       })}
@@ -1230,6 +1269,14 @@ export function SocialAccountsPanel() {
    */
   const [accountLimitReached, setAccountLimitReached] = useState(false);
   /**
+   * The account row whose Reconnect started the flow that is now coming back.
+   *
+   * Kept so the mismatch banner's "Sign in to <account>" retries the SAME row. It
+   * used to hard-code `accounts[0]`, which meant a merchant repairing their second
+   * account was silently redirected to repair their first.
+   */
+  const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(null);
+  /**
    * A per-account Remove waiting on the user because that account still has Pins
    * scheduled through it. Holds the account plus the count so the prompt can be
    * specific ("3 Pins"), rather than a vague warning nobody can act on.
@@ -1242,6 +1289,12 @@ export function SocialAccountsPanel() {
   const [busyAccountId, setBusyAccountId] = useState<string | null>(null);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
 
+
+  /** This panel's binding of accountLabelFor — the rows use the same function. */
+  const labelForAccount = useCallback(
+    (provider: SocialProvider, account: SocialConnection) => accountLabelFor(provider, account, tr),
+    [tr],
+  );
 
   const load = useCallback(async () => {
     setLoadError(false);
@@ -1276,6 +1329,15 @@ export function SocialAccountsPanel() {
   useEffect(() => {
     const flag = params.get("facebook");
     if (!flag) return;
+    // A plan-limit refusal is not a toast: nothing was written and the merchant
+    // has a real choice (upgrade, or remove an account they no longer publish to).
+    // Same banner Pinterest raises for `limit_reached` — the body and CTAs are
+    // shared, only the flag spelling differs.
+    if (isAccountLimitFlag(flag)) {
+      setAccountLimitReached(true);
+      router.replace(SETTINGS_SOCIAL_PATH);
+      return;
+    }
     const m = FACEBOOK_CALLBACK_MESSAGES[flag];
     if (m) {
       const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
@@ -1313,7 +1375,7 @@ export function SocialAccountsPanel() {
 
     // Same treatment for the plan limit: a persistent banner with an Upgrade CTA,
     // not a toast. Both the connect start and the OAuth callback redirect here.
-    if (flag === "limit_reached") {
+    if (isAccountLimitFlag(flag)) {
       setAccountLimitReached(true);
       router.replace(SETTINGS_SOCIAL_PATH);
       return;
@@ -1343,6 +1405,15 @@ export function SocialAccountsPanel() {
   useEffect(() => {
     const flag = params.get("instagram");
     if (!flag) return;
+    // A plan-limit refusal is not a toast: nothing was written and the merchant
+    // has a real choice (upgrade, or remove an account they no longer publish to).
+    // Same banner Pinterest raises for `limit_reached` — the body and CTAs are
+    // shared, only the flag spelling differs.
+    if (isAccountLimitFlag(flag)) {
+      setAccountLimitReached(true);
+      router.replace(SETTINGS_SOCIAL_PATH);
+      return;
+    }
     const m = INSTAGRAM_CALLBACK_MESSAGES[flag];
     if (m) {
       const notify = m.type === "success" ? toast.success : m.type === "error" ? toast.error : toast.info;
@@ -1385,37 +1456,68 @@ export function SocialAccountsPanel() {
   }
 
 
-  async function handleDisconnect(summary: PlatformConnectionSummary) {
-    const provider = summary.provider;
-    setBusyProvider(provider);
+  /**
+   * Repair ONE account by re-authorizing it.
+   *
+   * The row's own connection id is what makes this a repair rather than an add:
+   * Pinterest's callback refuses to write a DIFFERENT account over the one being
+   * reconnected (PRD §10). It is remembered in state as well, so the mismatch
+   * banner's retry names the same row instead of falling back to accounts[0].
+   *
+   * Facebook and Instagram: their connect routes take no reconnect param, so this
+   * starts the ordinary OAuth for that provider. Re-authorizing an account already
+   * held is an UPDATE in both stores (they key the row on the provider account id),
+   * so it repairs the row and is never refused by the plan limit — but there is also
+   * no identity check, so authorizing as a DIFFERENT account adds a new row instead
+   * of repairing this one. Identity-aware repair for FB/IG is deliberately out of
+   * scope here.
+   */
+  async function handleReconnectAccount(provider: SocialProvider, account: SocialConnection) {
+    setReconnectTargetId(account.id);
+    await handleConnect(provider, account.id);
+  }
+
+  /**
+   * Disconnect ONE account — SOFT: the credentials are invalidated, the account
+   * record stays. Reversible by reconnecting, and it never touches the merchant's
+   * other accounts on the same platform.
+   *
+   * Both calls below are narrowed by connection id, and that narrowing is the whole
+   * point: the platform button this replaces called `/api/pinterest/disconnect`
+   * with NO id, which tore down every connection the user had on that platform.
+   */
+  async function handleDisconnectAccount(provider: SocialProvider, account: SocialConnection) {
+    setBusyAccountId(account.id);
     try {
       if (provider === "pinterest") {
-        // Optimistic: the server round trip (bearer verification + DB update) can take
-        // seconds on a slow network — flip the row immediately, settle in background,
-        // and reconcile from the server either way (load() restores the truth on failure).
-        setSummaries(prev => prev?.map(s => (s.provider === "pinterest"
-          ? { ...s, status: "not_connected" as const, connected: false, accountCount: 0, accountName: null, accounts: [] }
-          : s)) ?? prev);
-        toast.success(tr("socialPanel.toast.pinterestDisconnected"));
-        disconnectPinterest()
-          .catch(() => { toast.error(tr("socialPanel.toast.pinterestDisconnectFailed")); })
-          .finally(() => { notifyConnectionsChanged(); void load(); });
-        return;
+        // Pinterest's DELETE is already the soft form (tokens nulled, row kept with
+        // disconnected_at set). Known asymmetry: the row then drops out of the
+        // Settings list, because readPinterestConnections only surfaces live
+        // connections. That read path is untouched here on purpose — changing it
+        // would also change the publish pickers and the plan-limit count.
+        await disconnectPinterest(account.id);
       } else {
-        const primary = summary.accounts[0];
-        if (!primary) return;
-        const res = await disconnectSocial(primary.id);
-        if (res.usePinterestFlow) {
-          await disconnectPinterest();
-        }
-        toast.success(`${PLATFORMS[provider].name}${tr("socialPanel.toast.disconnectedSuffix")}`);
+        await disconnectSocial(account.id, { mode: "disconnect" });
       }
-      await load();
+      toast.success(tr("socialPanel.toast.accountDisconnected"));
     } catch (e) {
-      toast.error((e as Error).message || tr("socialPanel.toast.couldNotDisconnect"));
+      toast.error((e as Error).message || tr("socialPanel.toast.accountDisconnectFailed"));
     } finally {
-      setBusyProvider(null);
+      setBusyAccountId(null);
+      notifyConnectionsChanged();
+      await load(); // the server is the truth either way
     }
+  }
+
+  /** Route one row's action to its handler. The row decides WHICH actions exist. */
+  function handleAccountAction(
+    provider: SocialProvider,
+    action: AccountRowAction,
+    account: SocialConnection,
+  ) {
+    if (action === "disconnect") { void handleDisconnectAccount(provider, account); return; }
+    if (action === "reconnect") { void handleReconnectAccount(provider, account); return; }
+    void handleRemoveAccount(provider, account);
   }
 
   /**
@@ -1425,35 +1527,20 @@ export function SocialAccountsPanel() {
    * scheduled ⇒ remove immediately; otherwise hand the decision to the user rather
    * than quietly stranding work they planned.
    *
-   * Pinterest-only, asserted rather than assumed. The rows this hangs off render for
-   * any platform holding 2+ accounts, and only Pinterest's storage can produce that
-   * today — but the scheduled-count and disconnect calls below are Pinterest routes.
-   * Handing them a Facebook connection id would hit the store's provider filter,
-   * match zero rows, and return a cheerful 200 that the UI would render as a
-   * successful removal until the next load() silently put the account back. When
-   * another platform goes multi-account it needs its own branch here, and this guard
-   * is what will make that a visible error instead of a phantom success.
+   * Wired for every platform now, but the count is asked of the RIGHT route per
+   * provider rather than one route for all. Pinterest's scheduled口径 is the legacy
+   * `payload.targetConnectionId`; Facebook's and Instagram's has only ever existed
+   * inside `payload.scheduledDestinations[]`. Asking Pinterest's endpoint about a
+   * Facebook id would match zero rows and answer a confident 0 — the merchant would
+   * lose scheduled posts without ever being warned.
    */
   async function handleRemoveAccount(provider: SocialProvider, account: SocialConnection) {
-    if (provider !== "pinterest") {
-      console.error(`[social] per-account removal is not wired for ${provider}`);
-      toast.error(tr("socialPanel.toast.couldNotDisconnect"));
-      return;
-    }
     setBusyAccountId(account.id);
     try {
-      const label = accountDisplayLabel(
-        {
-          displayName: account.providerAccountName,
-          username: account.providerAccountUsername,
-          accountId: account.providerAccountId,
-        },
-        {
-          maskedTemplate: (last4) => tr("socialPanel.card.accountMasked").replace("{last4}", last4),
-          unidentifiedLabel: tr("socialPanel.card.accountUnidentified"),
-        },
-      );
-      const scheduledCount = await getScheduledCountForConnection(account.id);
+      const label = labelForAccount(provider, account);
+      const scheduledCount = provider === "pinterest"
+        ? await getScheduledCountForConnection(account.id)
+        : await fetchSocialScheduledCount(account.id);
       if (scheduledCount > 0) {
         // The dialog owns the next step. Release the row so the card isn't frozen
         // behind a prompt the user may legitimately dismiss.
@@ -1495,7 +1582,11 @@ export function SocialAccountsPanel() {
     }) ?? prev);
 
     try {
-      await disconnectPinterest(account.id, { cancelScheduled });
+      if (provider === "pinterest") {
+        await disconnectPinterest(account.id, { cancelScheduled });
+      } else {
+        await disconnectSocial(account.id, { mode: "remove", cancelScheduled });
+      }
       toast.success(tr("socialPanel.toast.accountRemoved"));
     } catch {
       toast.error(tr("socialPanel.toast.accountRemoveFailed"));
@@ -1549,8 +1640,12 @@ export function SocialAccountsPanel() {
           onSignInToOriginal={() => {
             // Retry the SAME repair: still a reconnect, so a second wrong account is
             // refused again rather than quietly taking over the connection.
+            // The row the merchant actually pressed Reconnect on. Falling back to
+            // accounts[0] (as this once did) would redirect someone repairing their
+            // SECOND account into repairing their first.
             const pinterest = summaries?.find(s => s.provider === "pinterest");
-            void handleConnect("pinterest", pinterest?.accounts[0]?.id ?? null);
+            const target = reconnectTargetId ?? pinterest?.accounts[0]?.id ?? null;
+            void handleConnect("pinterest", target);
           }}
           onAddAsNew={() => {
             // Deliberately NOT a reconnect: this is the user accepting the account
@@ -1629,9 +1724,7 @@ export function SocialAccountsPanel() {
               connecting={connectingProvider === provider}
               multiAccount={isMultiAccountAllowed(provider, multiAccountEnabled)}
               onConnect={() => void handleConnect(provider)}
-              onReconnect={id => void handleConnect(provider, id)}
-              onDisconnect={() => void handleDisconnect(summary)}
-              onRemoveAccount={account => void handleRemoveAccount(provider, account)}
+              onAccountAction={(action, account) => handleAccountAction(provider, action, account)}
               busyAccountId={busyAccountId}
               onRefresh={() => void load()}
             />
