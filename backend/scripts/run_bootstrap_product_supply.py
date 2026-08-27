@@ -56,10 +56,28 @@ RUN_WORKER = BACKEND / "run_worker.py"
 
 APPLY_CONFIRM_TOKEN = "APPLY_BOOTSTRAP_PRODUCTS"
 
-DEFAULT_SOURCE_REPORT = "logs/product_supply_expand_shop_the_look_20260623_042058.json"
-DEFAULT_LIMIT = 50
-DEFAULT_CATEGORY_MIX = "fashion:18,womens-fashion:14,home-decor:18"
+# Scheduled runs must select fresh, not-yet-scraped Source Pins. A frozen report is
+# accepted only when an operator explicitly passes --source-report for a reproducible
+# dry-run/canary; an old file merely existing on disk must never redirect every daily
+# run back to the same source set.
+DEFAULT_SOURCE_REPORT = None
+# Source discovery breadth and database admission are different budgets.
+# ``--limit`` counts Source Pins inspected. The shared core and incremental
+# writer independently cap rows that remain written to MAX_BATCH across the
+# entire run. A wide scan is necessary because most Source Pins produce no
+# merchant-verifiable product at all.
+MAX_BATCH = 20
+MAX_RUN_ADMISSIONS = 50
+MAX_SOURCE_SCAN = 100
+DEFAULT_LIMIT = 20
+# The category mix must total DEFAULT_LIMIT (run_shop_the_look_expand refuses a mix that
+# does not sum to the limit). Kept proportional to the prior fashion/womens/home split.
+DEFAULT_CATEGORY_MIX = "fashion:7,womens-fashion:6,home-decor:7"
 DEFAULT_TIMEOUT_SECONDS = 1200
+# Production evidence: a 100-source Shop-the-Look scan took about 85 minutes.
+# Keep the process-tree timeout proportional so an operator cannot request the
+# broad scan with the old 20-source timeout and lose the tail of the run.
+MIN_TIMEOUT_PER_SOURCE_SECONDS = 54
 
 
 def _log(msg: str) -> None:
@@ -237,8 +255,8 @@ def main() -> int:
                     help="Operator waives the post-Pinterest cooldown for apply. "
                          f"Requires --confirm {APPLY_CONFIRM_TOKEN} and prints a warning.")
     ap.add_argument("--source-report", default=DEFAULT_SOURCE_REPORT,
-                    help="Approved frozen dry-run JSON (relative to backend). "
-                         f"Default: {DEFAULT_SOURCE_REPORT}")
+                    help="Optional approved frozen dry-run JSON (relative to backend). "
+                         "Omit for normal fresh daily source selection.")
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
                     help=f"Source pins to process (default {DEFAULT_LIMIT}).")
     ap.add_argument("--category-mix", default=DEFAULT_CATEGORY_MIX,
@@ -250,6 +268,25 @@ def main() -> int:
     ap.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS,
                     help=f"Max seconds for the worker run (default {DEFAULT_TIMEOUT_SECONDS}).")
     args = ap.parse_args()
+
+    if args.limit > MAX_SOURCE_SCAN:
+        raise SystemExit(
+            f"--limit {args.limit} exceeds MAX_SOURCE_SCAN {MAX_SOURCE_SCAN}. "
+            "Source discovery is capped independently from the "
+            f"MAX_RUN_ADMISSIONS={MAX_RUN_ADMISSIONS} run ceiling and "
+            f"MAX_BATCH={MAX_BATCH} atomic write ceiling."
+        )
+    if args.limit <= 0:
+        raise SystemExit(f"--limit must be a positive integer, got {args.limit}.")
+    required_timeout = max(
+        DEFAULT_TIMEOUT_SECONDS,
+        args.limit * MIN_TIMEOUT_PER_SOURCE_SECONDS,
+    )
+    if args.timeout_seconds < required_timeout:
+        raise SystemExit(
+            f"--timeout-seconds {args.timeout_seconds} is too small for "
+            f"--limit {args.limit}; require at least {required_timeout}."
+        )
 
     apply = bool(args.apply)
 

@@ -64,7 +64,8 @@
     "check:test-registry": "npx tsx scripts/check-test-registry.ts",
     "test:browser": "npx tsx scripts/run-browser-qa.ts",
     "test:db": "npx tsx scripts/test-db-integration-rate-limit.ts && npx tsx scripts/test-usage-ledger-db.ts",
-    "predeploy:guard": "node scripts/predeploy-guard.mjs"
+    "predeploy:guard": "node scripts/predeploy-guard.mjs",
+    "verify:product-truth": "npx tsx scripts/verify-product-truth-url.ts"
   },
   "dependencies": {
     "@paddle/paddle-js": "^1.6.4",
@@ -73,7 +74,7 @@
     "@supabase/supabase-js": "^2.105.4",
     "clsx": "^2.1.1",
     "lucide-react": "^1.23.0",
-    "next": "^16.2.6",
+    "next": "16.3.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
@@ -88,10 +89,10 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.6",
+    "eslint-config-next": "16.3.3",
     "playwright": "^1.60.0",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "undici": "^8.3.0"
+    "undici": "8.9.0"
   }
 }

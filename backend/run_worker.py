@@ -44,6 +44,12 @@ from pipeline_tracking import (  # noqa: E402
 )
 
 
+# Exit code for "a precondition could not be VERIFIED" (database unreachable),
+# as opposed to exit 1 = "a precondition was verified and is genuinely wrong".
+# 75 is EX_TEMPFAIL from sysexits.h: retryable, the caller should try later.
+EXIT_PRECONDITION_UNVERIFIED = 75
+
+
 def _log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -411,6 +417,22 @@ async def run_job(args: argparse.Namespace) -> int:
         if args.apply and args.dry_run:
             _log("Choose either --dry-run or --apply, not both.")
             return 2
+        # ``--limit`` is Source Pins scanned, not rows admitted. A broad scan is
+        # permitted, while _IncrementalWriter enforces 50 rows per run and
+        # supply_core keeps every atomic write/readback/rollback at MAX_BATCH=20.
+        # Keep a separate source ceiling to prevent an unbounded crawl.
+        if args.engine == "shop-the-look":
+            from scripts.run_bootstrap_product_supply import (  # noqa: E402
+                MAX_SOURCE_SCAN as _MAX_SOURCE_SCAN,
+            )
+            _limit = args.limit if args.limit is not None else 50
+            if _limit > _MAX_SOURCE_SCAN:
+                _log(f"Job 'product-supply-expand' (shop-the-look) refuses --limit {_limit} "
+                     f"> MAX_SOURCE_SCAN {_MAX_SOURCE_SCAN}.")
+                return 2
+            if _limit <= 0:
+                _log(f"Job 'product-supply-expand' refuses non-positive --limit {_limit}.")
+                return 2
         kwargs = dict(
             engine=args.engine,
             since_hours=args.since_hours or 168,
@@ -741,6 +763,13 @@ def main() -> int:
         _log("Interrupted.")
         return 130
     except Exception as exc:
+        # Exit 75 (EX_TEMPFAIL) = "we could not determine the state of the
+        # world", not "the world is broken". Operators and retry wrappers must
+        # be able to tell a transient DB outage from a real schema defect
+        # (exit 1) without parsing log text.
+        if type(exc).__name__ == "SchemaCheckUnavailable":
+            pipeline._err(f"Worker could not verify preconditions: {exc}")
+            return EXIT_PRECONDITION_UNVERIFIED
         pipeline._err(f"Worker failed: {exc}")
         return 1
 

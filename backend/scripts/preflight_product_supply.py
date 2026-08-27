@@ -154,6 +154,19 @@ def playwright_procs() -> int:
 # sentinel — none of which this exclusion touches.
 IGNORED_LOG_GLOBS = ("cloud_run_*.log",)
 
+# A wrapper log is cooldown evidence only after its controlled worker actually
+# launched. Merely creating an apply/dry-run log, or failing preflight before the
+# launch marker, must not reset the cooldown clock. The log mtime is conservative:
+# it is at or after the last Pinterest request and therefore can only lengthen the
+# wait, never shorten it.
+PINTEREST_ACTIVITY_LOG_MARKERS = (
+    ("cloud_run_pin_crawl_*.log", "CRAWL: run_worker --job crawl"),
+    ("cloud_run_keyword_trends_*.log", "TRENDS: run_worker --job trends"),
+    ("cloud_run_dry-run_*.log", "[runner] launch:"),
+    ("cloud_run_apply_*.log", "[runner] launch:"),
+)
+ACTIVITY_MARKER_READ_LIMIT = 256 * 1024
+
 
 def _is_ignored_log(name: str) -> bool:
     """True if a log filename is a wrapper-owned scheduler log (ignored by
@@ -176,6 +189,64 @@ def logs_growing() -> list:
             except Exception:
                 continue
     return growing
+
+
+def _activity_marker_for_log(name: str) -> str | None:
+    for pattern, marker in PINTEREST_ACTIVITY_LOG_MARKERS:
+        if fnmatch.fnmatch(name, pattern):
+            return marker
+    return None
+
+
+def cooldown_state(cooldown_min: int, *, now: dt.datetime | None = None) -> dict:
+    """Return fail-closed, machine-verifiable cooldown evidence.
+
+    Only logs from the controlled wrappers and containing the post-preflight
+    launch marker are eligible. Missing/unreadable evidence never becomes an
+    implicit waiver.
+    """
+    now_utc = now or dt.datetime.now(dt.timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=dt.timezone.utc)
+    latest_path: Path | None = None
+    latest_mtime: float | None = None
+    for directory in LOG_DIRS:
+        if not directory.exists():
+            continue
+        for log_path in directory.glob("cloud_run_*.log"):
+            marker = _activity_marker_for_log(log_path.name)
+            if marker is None:
+                continue
+            try:
+                with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+                    prefix = stream.read(ACTIVITY_MARKER_READ_LIMIT)
+                if marker not in prefix:
+                    continue
+                mtime = log_path.stat().st_mtime
+            except OSError:
+                continue
+            if latest_mtime is None or mtime > latest_mtime:
+                latest_path = log_path
+                latest_mtime = mtime
+
+    if latest_path is None or latest_mtime is None:
+        return {
+            "known": False,
+            "satisfied": False,
+            "requiredMinutes": cooldown_min,
+            "reason": "no trustworthy completed Pinterest activity log",
+        }
+
+    last_activity = dt.datetime.fromtimestamp(latest_mtime, tz=dt.timezone.utc)
+    elapsed_seconds = max(0.0, (now_utc - last_activity).total_seconds())
+    return {
+        "known": True,
+        "satisfied": elapsed_seconds >= cooldown_min * 60,
+        "requiredMinutes": cooldown_min,
+        "elapsedMinutes": round(elapsed_seconds / 60, 2),
+        "lastActivityAt": last_activity.isoformat(),
+        "evidenceLog": str(latest_path),
+    }
 
 
 def db_sentinel() -> dict:
@@ -235,6 +306,7 @@ def main() -> int:
         "locks": joblock.describe_locks(),
         "logsGrowing": logs_growing(),
         "dbSentinel": db_sentinel(),
+        "cooldown": cooldown_state(args.cooldown_min),
     }
 
     # ── decision ──────────────────────────────────────────────────────────────
@@ -267,13 +339,22 @@ def main() -> int:
         rec = "WAIT"
     else:
         # No Pinterest contention, no writer. Dry-run is safe.
-        # Apply additionally needs cooldown satisfied or explicitly waived.
+        # Apply additionally needs measured cooldown evidence or an explicit,
+        # separately confirm-gated operator waiver.
         rec = "SAFE_FOR_DRY_RUN"
-        cooldown_ok = args.waive_cooldown  # operator asserts cooldown satisfied
+        cooldown_ok = args.waive_cooldown or report["cooldown"]["satisfied"]
         if cooldown_ok:
             rec = "SAFE_FOR_APPLY"
         else:
-            reasons.append(f"apply also requires --waive-cooldown or {args.cooldown_min}min since last Pinterest activity (operator-confirmed)")
+            if report["cooldown"]["known"]:
+                reasons.append(
+                    f"apply requires {args.cooldown_min}min since last Pinterest activity; "
+                    f"measured {report['cooldown']['elapsedMinutes']}min"
+                )
+            else:
+                reasons.append(
+                    f"apply requires trustworthy evidence of {args.cooldown_min}min since last Pinterest activity"
+                )
 
     report["recommendation"] = rec
     report["reasons"] = reasons

@@ -5,7 +5,7 @@
 # Do not enable until explicitly approved.
 #
 # Schedule rationale: 23:00 Asia/Shanghai is a low-traffic window that sits well AFTER
-# the keyword-trends (09:00) and crawl (10:30) windows — ~12.5h after the crawl, far
+# the keyword-trends (11:00) and crawl (12:00) windows — at least 11h after the crawl, far
 # beyond the 120-min Pinterest cooldown — so a future dry-run/apply has fresh source
 # pins and a satisfied cooldown. The randomized delay avoids a thundering-herd if
 # multiple timers ever share the slot.
@@ -19,6 +19,7 @@ Description=Daily trigger for VibePin Product-Supply cloud runner
 [Timer]
 OnCalendar=*-*-* 23:00:00 Asia/Shanghai
 RandomizedDelaySec=900
+AccuracySec=1s
 # Do NOT run a missed job on boot — avoids surprise catch-up runs after downtime.
 Persistent=false
 Unit=vibepin-product-supply.service

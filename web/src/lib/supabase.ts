@@ -86,7 +86,8 @@ export type ProductMetrics = {
   productPinSaveCount:      number | null;
   // Saves on the source "Shop the look" Pin the product was discovered in.
   // This is a SOURCE-PIN metric, NOT a product metric — label it as such.
-  sourcePinSaveCount:       number;
+  // null means Pinterest did not provide a measurement; it must not become 0.
+  sourcePinSaveCount:       number | null;
   // Distinct source Pins across the deduped product identity (Pinterest sources).
   productSourcePinCount:    number;
   // Distinct product Pins mapped to the same product identity.

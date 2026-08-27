@@ -30,7 +30,23 @@ EnvironmentFile=-/opt/vibepin/backend/.env
 # Non-secret runtime config. Default mode is the SAFE no-op preflight.
 Environment=VIBEPIN_CLOUD_MODE=preflight
 Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
-Environment=VIBEPIN_TIMEOUT_SECONDS=2400
+Environment=VIBEPIN_SUPPLY_LIMIT=100
+Environment=VIBEPIN_CATEGORY_MIX=fashion:29,womens-fashion:22,home-decor:29,digital-products:20
+# Digital Products is a PRD v3.7 launch family. Keep the generic crawler's
+# fail-closed exclusion and opt in only this reviewed category; Beauty remains
+# excluded until its separate evidence audit passes.
+Environment=VIBEPIN_STL_ALLOW_EXCLUDED=digital-products
+Environment=VIBEPIN_SUPPLY_SINCE_HOURS=720
+Environment=VIBEPIN_SUPPLY_WRITE_LIMIT=50
+# --limit counts Source Pins inspected, not products written. The shared core
+# independently caps rows remaining written at 50 per run, while each atomic
+# INSERT/readback/rollback stays at MAX_BATCH=20.
+# The 2026-08-25 production run scanned 100 sources in about 85 minutes and
+# produced only four legacy rows, so retaining the 100-source discovery breadth
+# is necessary. 5400 seconds is the measured wrapper hard bound.
+Environment=VIBEPIN_TIMEOUT_SECONDS=5400
+# Flush scraped products to pin_products every N source pins (default 10).
+Environment=STL_WRITE_BATCH_SIZE=10
 
 ExecStart=/opt/vibepin/backend/scripts/cloud_run_product_supply.sh
 
@@ -39,7 +55,10 @@ ExecStart=/opt/vibepin/backend/scripts/cloud_run_product_supply.sh
 # SIGKILLs the whole service cgroup — every child (runner, run_worker, Playwright/
 # chromium) dies; defence-in-depth against orphans. Type=oneshot ignores RuntimeMaxSec,
 # so TimeoutStartSec is the correct bound here.
-TimeoutStartSec=3000
+#
+# MUST stay > VIBEPIN_TIMEOUT_SECONDS. The runner's tree-kill must execute first
+# and emit its receipt; systemd remains a 900-second outer safety bound.
+TimeoutStartSec=6300
 TimeoutStopSec=60
 KillMode=control-group
 

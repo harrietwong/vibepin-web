@@ -9,10 +9,11 @@ import {
 } from "lucide-react";
 import { take, placeholders, type LandingAsset } from "@/lib/landingAssets";
 import { bohoReferences, bohoProducts } from "@/lib/landing/bohoLivingRoomDemo";
-import OpportunityIntelligence from "@/components/landing/OpportunityIntelligence";
-import IntelligenceInAction from "@/components/landing/IntelligenceInAction";
 import ExecutionSystem from "@/components/landing/ExecutionSystem";
-import { LandingConversionBlock } from "@/components/landing/conversion/LandingConversionBlock";
+import { SupportedNichesStrip } from "@/components/landing/conversion/SupportedNichesStrip";
+import { PricingSection } from "@/components/landing/conversion/PricingSection";
+import { FaqSection } from "@/components/landing/conversion/FaqSection";
+import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
 
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace" };
 const scoreColor = (s: number) => (s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : "#EF4444");
@@ -484,12 +485,8 @@ export default function HomePage() {
   const products = bohoProducts;
 
   // Asset derivations (real data → placeholder fallback)
-  const heroMainImg  = pinSamples.find(a => a.category === "Home Decor") ?? pinSamples[0];
   const heroSignals  = take(products, 7, "Product");
   const heroRefs     = take(pinSamples, 5, "Reference", 1);
-  const tlCreateProd = take(products, 3, "Product", 3);
-  const tlCreateRefs = take(pinSamples, 3, "Reference", 13);
-  const tlWeek       = take(pinSamples, 7, "Planned Pin", 18);
 
   return (
     <div className="lp min-h-screen antialiased" style={{ background: "var(--bg)", color: "var(--text)" }}>
@@ -517,11 +514,11 @@ export default function HomePage() {
         <div className="max-w-[1240px] mx-auto px-5 grid grid-cols-1 lg:grid-cols-[0.92fr_1.18fr] gap-10 lg:gap-12 items-center relative">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 mb-6" style={{ background: "rgba(217,70,239,0.08)", borderColor: "rgba(217,70,239,0.25)" }}><Sparkles className="w-3 h-3" style={{ color: "#E879F9" }} /><span className="text-[11px] font-semibold tracking-wide" style={{ color: "#E879F9" }}>Pinterest Growth Intelligence</span></div>
-            <h1 className="text-[2.6rem] sm:text-[3.3rem] lg:text-[3.6rem] font-black text-white leading-[1.03] tracking-[-0.045em] mb-5">Pinterest growth starts with signals.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>VibePin turns demand into content.</span></h1>
-            <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[460px]" style={{ color: "#8B93A1" }}>VibePin discovers what people want, shows which products and Pin formats are already working, then turns them into ready-to-publish Pins and a weekly content plan.</p>
+            <h1 className="text-[2.6rem] sm:text-[3.3rem] lg:text-[3.6rem] font-black text-white leading-[1.03] tracking-[-0.045em] mb-5">Pinterest growth starts with signals.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>VibePin turns evidence into content.</span></h1>
+            <p className="text-[15px] sm:text-[16px] leading-relaxed mb-7 max-w-[460px]" style={{ color: "#8B93A1" }}>VibePin connects real product pages with auditable Pinterest evidence, shows Pin formats supported by real engagement, then turns those inputs into ready-to-publish Pins and a weekly content plan.</p>
             <div className="flex flex-col sm:flex-row gap-3 mb-6">
               <Link href="/app/studio" className={`${VibeBtn} px-7 py-3.5 text-[14px] flex items-center justify-center gap-2`}>Build my next 7 Pins <ArrowRight className="w-4 h-4" /></Link>
-              <Link href="/app/products" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>See this week&apos;s opportunities</Link>
+              <Link href="/app/products" className="flex items-center justify-center gap-2 rounded-full px-7 py-3.5 text-[14px] font-semibold border transition-colors hover:text-white hover:border-white/30" style={{ color: "#9097A0", borderColor: "rgba(255,255,255,0.14)" }}>Explore Product Opportunities</Link>
             </div>
             <div className="flex items-center gap-3 mb-5">
               <div className="flex -space-x-2">{["#FF4D8D", "#D946EF", "#A855F7", "#7C3AED"].map((g, i) => <span key={i} className="h-8 w-8 rounded-full border-2" style={{ borderColor: "var(--bg)", background: `linear-gradient(135deg,${g},#0C1018)` }} />)}</div>
@@ -529,31 +526,7 @@ export default function HomePage() {
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">{["No credit card required", "Cancel anytime", "Set up in 30 seconds"].map(t => <span key={t} className="flex items-center gap-1.5 text-[11px]" style={{ color: "#6B7280" }}><Check className="w-3 h-3" style={{ color: "#10B981" }} /> {t}</span>)}</div>
           </div>
-          <HeroOpportunityCard mainImg={heroMainImg} signals={heroSignals} refs={heroRefs} />
-        </div>
-      </section>
-
-      {/* ══ LIVE TICKER ══ */}
-      <div className="overflow-hidden border-y py-2.5" style={{ borderColor: "rgba(255,255,255,0.07)", background: "#080C12" }}>
-        <div className="marquee-track text-[12px] font-semibold" style={{ color: "#4B5563" }}>
-          {[...TICKERS, ...TICKERS].map((t, i) => <span key={i} className="inline-flex items-center gap-2 px-6"><span style={{ color: "#E879F9" }}>● Live</span><span>{t.emoji} <span style={{ color: "#9097A0" }}>{t.name}</span></span><span className="font-bold tabular-nums" style={{ color: "#10B981", ...MONO }}>{t.yoy} this week</span><span style={{ color: "#1F2937" }}>·</span></span>)}
-        </div>
-      </div>
-
-      {/* ══ STATS — SIGNAL ANALYSIS ══ */}
-      <section className="py-12 border-b" style={{ borderColor: "rgba(255,255,255,0.06)", background: "var(--surface)" }}>
-        <div className="max-w-[1100px] mx-auto px-5">
-          <div className="rounded-2xl border overflow-hidden" style={{ background: "linear-gradient(180deg,#0C1018,#0A0C14)", borderColor: "rgba(255,255,255,0.08)", boxShadow: "0 0 50px rgba(168,85,247,0.06)" }}>
-            <p className="text-center text-[11px] font-semibold uppercase tracking-[0.2em] pt-6" style={{ color: "#6B7280" }}>Powered by continuous Pinterest signal analysis</p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 px-4 pt-4 pb-7">
-              {SIGNAL_STATS.map((s, i) => (
-                <div key={s.label} className="px-6 py-4 text-center" style={{ borderLeft: i === 0 ? "none" : "1px solid rgba(255,255,255,0.07)" }}>
-                  <p className="text-3xl sm:text-4xl font-black tracking-tight mb-1" style={{ background: `linear-gradient(120deg,${s.grad})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", ...MONO }}>{s.value}</p>
-                  <p className="text-[12px]" style={{ color: "#8B93A1" }}>{s.label}</p>
-                </div>
-              ))}
-            </div>
-          </div>
+          <HeroComposer products={heroSignals.slice(0, 4)} refs={heroRefs.slice(0, 4)} />
         </div>
       </section>
 
@@ -569,22 +542,18 @@ export default function HomePage() {
             </div>
             <div className="rounded-2xl border p-6 sm:p-7 transition-transform hover:-translate-y-1" style={{ background: "linear-gradient(180deg,rgba(124,58,237,0.12),rgba(12,16,24,0.35))", borderColor: "rgba(168,85,247,0.34)", boxShadow: "0 0 40px rgba(168,85,247,0.08)" }}>
               <div className="flex items-center gap-3 mb-5"><span className="h-9 w-9 rounded-full flex items-center justify-center" style={{ background: "rgba(168,85,247,0.22)", color: "#C4B5FD" }}><Check className="w-5 h-5" /></span><div><p className="text-[16px] font-black text-white">VibePin</p><p className="text-[12px]" style={{ color: "#C4B5FD" }}>Better decisions, better results.</p></div></div>
-              <ul className="space-y-3">{["Start from real Pinterest demand", "See why an opportunity matters", "Bring products and references together", "Turn decisions into Pins and a weekly plan", "Focus on what will perform"].map(t => <li key={t} className="flex items-center gap-3 text-[13px]" style={{ color: "#C8CDD6" }}><span className="h-6 w-6 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(168,85,247,0.16)", color: "#C4B5FD" }}><Check className="w-3.5 h-3.5" /></span>{t}</li>)}</ul>
+              <ul className="space-y-3">{["Start from real Pinterest evidence", "See why a product or Pin is relevant", "Bring products and references together", "Turn decisions into Pins and a weekly plan", "Use evidence to choose what to create"].map(t => <li key={t} className="flex items-center gap-3 text-[13px]" style={{ color: "#C8CDD6" }}><span className="h-6 w-6 rounded-lg flex items-center justify-center shrink-0" style={{ background: "rgba(168,85,247,0.16)", color: "#C4B5FD" }}><Check className="w-3.5 h-3.5" /></span>{t}</li>)}</ul>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ══ OPPORTUNITY INTELLIGENCE ══ */}
-      <OpportunityIntelligence pinSamples={pinSamples} products={products} />
-
-      {/* ══ INTELLIGENCE IN ACTION ══ */}
-      <IntelligenceInAction pinSamples={pinSamples} products={products} />
-
       {/* ══ EXECUTION SYSTEM ══ */}
       <ExecutionSystem pinSamples={pinSamples} products={products} />
-
-      <LandingConversionBlock />
+      <SupportedNichesStrip />
+      <PricingSection />
+      <FaqSection />
+      <LandingFooter />
 
     </div>
   );

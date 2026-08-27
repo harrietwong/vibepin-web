@@ -1,0 +1,19 @@
+# Candidate schedule only. Installing this file does not enable it.
+# 06:15 Asia/Shanghai follows the separately scheduled 03:15 bounded admission
+# job and its mandatory post-Pinterest cooldown. See the arithmetic below.
+# Persistent=false avoids surprise catch-up requests after a reboot.
+[Unit]
+Description=Daily trigger for VibePin Product Opportunity tracking
+
+[Timer]
+# Admission can start as late as 03:20:01 and has a 2700-second outer bound, so
+# its latest possible finish is 04:05:01. The 120min mandatory Pinterest cooldown
+# then ends at 06:05:01, leaving 9 minutes 59 seconds before full-catalog tracking.
+OnCalendar=*-*-* 06:15:00 Asia/Shanghai
+RandomizedDelaySec=300
+AccuracySec=1s
+Persistent=false
+Unit=vibepin-product-tracking.service
+
+[Install]
+WantedBy=timers.target

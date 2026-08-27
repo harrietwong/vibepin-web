@@ -1,0 +1,16 @@
+# DISABLED by shipping. Enable only after v63 schema + manual admission canary.
+[Unit]
+Description=Daily trigger for bounded Product Opportunity admission
+
+[Timer]
+# Product Supply can start as late as 23:15:01 and has a 6300-second outer bound,
+# so its latest possible finish is 01:00:01. 03:15 leaves the mandatory 120-minute
+# Pinterest cooldown plus 14 minutes 59 seconds of margin.
+OnCalendar=*-*-* 03:15:00 Asia/Shanghai
+RandomizedDelaySec=300
+AccuracySec=1s
+Persistent=false
+Unit=vibepin-product-opportunity-admission.service
+
+[Install]
+WantedBy=timers.target

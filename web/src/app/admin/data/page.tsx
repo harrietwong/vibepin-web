@@ -128,7 +128,7 @@ function productStripItems(products: LatestProduct[]) {
     // a fabricated "Product" impersonate the name — that is the T10 disease. Show an
     // explicit status that plainly is NOT a product name; the seed keyword still shows
     // truthfully in the sub-line below.
-    caption: (p.product_name ?? "").trim() || "Name unavailable",
+    caption: (p.product_name ?? "").trim() || "Name not provided",
     sub: `${((p.save_count || p.source_pin_save_count) ?? 0).toLocaleString()} saves · ${p.seed_keyword ?? ""} · ${fmtShortDate(p.created_at)}`,
     href: null,
   }));

@@ -3,6 +3,7 @@ import { looksLikeAmazon } from "@/lib/affiliate/amazon";
 import { matchesCategory } from "@/lib/productIdeasCategoryMatch";
 import type { ProductMetrics } from "@/lib/supabase";
 import type { ProductOpportunityPublicMetrics } from "@/lib/productOpportunityCounts";
+import { isNonPinterestMerchantImageUrl } from "@/lib/productImageEvidence";
 import {
   deriveProductSourceType,
   excludeRetired,
@@ -32,6 +33,9 @@ export type ProductIdea = {
   domain:                string | null;
   merchant:              string | null;
   image_url:             string;
+  // True only when the server/fallback proved an available merchant page and
+  // the image URL is not hosted by Pinterest. Undefined is never accepted.
+  merchant_image_verified: boolean;
   save_count:            number | null;
   reaction_count:        number;
   source_pin_save_count: number | null;
@@ -186,6 +190,7 @@ function mapApiRow(r: Record<string, unknown>): ProductIdea {
     domain:                r.domain as string | null,
     merchant:              r.merchant as string | null,
     image_url:             (r.image_url as string) ?? "",
+    merchant_image_verified: r.merchant_image_verified === true,
     save_count:            typeof r.save_count === "number" ? r.save_count : null,
     reaction_count:        0,
     source_pin_save_count: typeof r.source_pin_save_count === "number" ? r.source_pin_save_count : null,
@@ -283,7 +288,12 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
     if (resp.ok) {
       const json = await resp.json() as Record<string, unknown>;
       const rows = (json.items ?? json.data ?? []) as Record<string, unknown>[];
-      const products = rankProductIdeas(rows.map(mapApiRow).filter(p => !!p.image_url && isUserFacingProductRow(p) && shouldShowInProductIdeas(p)));
+      const products = rankProductIdeas(rows.map(mapApiRow).filter(
+        p => p.merchant_image_verified
+          && isNonPinterestMerchantImageUrl(p.image_url)
+          && isUserFacingProductRow(p)
+          && shouldShowInProductIdeas(p),
+      ));
       return {
         products,
         lastUpdatedAt: (json.lastUpdatedAt as string | null) ?? null,
@@ -305,7 +315,7 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
       "id,product_name,price,currency,source_url,domain,merchant,image_url,save_count," +
       "reaction_count,source_pin_save_count,product_pin_id,canonical_product_url,product_url_hash," +
       "seed_keyword,parent_pin_id,scraped_at," +
-      "discovery_method,discovery_method_detail,source_category,created_at";
+      "discovery_method,discovery_method_detail,source_category,created_at,detail_fetch_status";
 
     // Bootstrap-first: fetch harvested products explicitly (they have lower inherited
     // saves and would otherwise fall outside the top-400-by-saves window), then fill
@@ -322,17 +332,20 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
       // dirty batch has no clean time boundary, so only state can fence it off.)
       excludeRetired(supabase.from("pin_products").select(SELECT)
         .in("discovery_method", [...OUTBOUND_DISCOVERY_METHODS])
+        .eq("detail_fetch_status", "available")
         .not("image_url", "is", null))
         .order("created_at", { ascending: false })
         .limit(300),
       excludeRetired(supabase.from("pin_products").select(SELECT)
         .eq("discovery_method", "stl")
+        .eq("detail_fetch_status", "available")
         .not("image_url", "is", null)
         .not("source_url", "is", null))
         .order("source_pin_save_count", { ascending: false })
         .limit(300),
       excludeRetired(supabase.from("pin_products").select(SELECT)
         .gte("save_count", 10)
+        .eq("detail_fetch_status", "available")
         .not("image_url", "is", null))
         .order("save_count", { ascending: false })
         .limit(400),
@@ -353,6 +366,7 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
       discovery_method: string | null; discovery_method_detail: string | null;
       source_category: string | null;
       created_at: string | null;
+      detail_fetch_status: string | null;
     };
     const bootData = (bootRes.data ?? []) as unknown as PinProductRow[];
     const stlData  = (stlRes.error ? [] : (stlRes.data ?? [])) as unknown as PinProductRow[];
@@ -366,16 +380,22 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
 
     // Build product-identity aggregates from the fetched rows (dedup by the
     // strongest available identity: product_url_hash > canonical_product_url).
-    const aggMap = new Map<string, { sourcePins: Set<string>; productPinSaves: Map<string, number> }>();
+    const aggMap = new Map<string, { sourcePins: Set<string>; productPins: Set<string>; productPinSaves: Map<string, number> }>();
     const idKey = (r: PinProductRow): string | null =>
       r.product_url_hash ? `h:${r.product_url_hash}` : r.canonical_product_url ? `c:${r.canonical_product_url}` : null;
     for (const r of data) {
       const k = idKey(r);
       if (!k) continue;
       let a = aggMap.get(k);
-      if (!a) { a = { sourcePins: new Set(), productPinSaves: new Map() }; aggMap.set(k, a); }
+      if (!a) { a = { sourcePins: new Set(), productPins: new Set(), productPinSaves: new Map() }; aggMap.set(k, a); }
       if (r.parent_pin_id) a.sourcePins.add(r.parent_pin_id);
-      if (r.product_pin_id) a.productPinSaves.set(r.product_pin_id, Math.max(a.productPinSaves.get(r.product_pin_id) ?? 0, r.save_count ?? 0));
+      if (r.product_pin_id) {
+        a.productPins.add(r.product_pin_id);
+        if (r.save_count != null) {
+          const previous = a.productPinSaves.get(r.product_pin_id);
+          a.productPinSaves.set(r.product_pin_id, previous == null ? r.save_count : Math.max(previous, r.save_count));
+        }
+      }
     }
     const buildMetrics = (r: PinProductRow): ProductMetrics => {
       const k = idKey(r);
@@ -383,15 +403,17 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
       const hasProductPin = !!r.product_pin_id;
       const dedupIdentity: ProductMetrics["dedupIdentity"] =
         r.product_url_hash ? "product_url_hash" : r.canonical_product_url ? "canonical_product_url" : "pin_product_id";
-      const productPinSaveValues = a ? [...a.productPinSaves.values()] : (hasProductPin ? [r.save_count ?? 0] : []);
+      const productPinSaveValues = a
+        ? [...a.productPinSaves.values()]
+        : (hasProductPin && r.save_count != null ? [r.save_count] : []);
       const aggregateProductPinSaves = productPinSaveValues.length ? productPinSaveValues.reduce((s, v) => s + v, 0) : null;
       return {
-        productPinSaveCount:      hasProductPin ? (r.save_count ?? 0) : null,
-        sourcePinSaveCount:       r.source_pin_save_count ?? 0,
+        productPinSaveCount:      hasProductPin ? r.save_count : null,
+        sourcePinSaveCount:       r.source_pin_save_count,
         productSourcePinCount:    a ? a.sourcePins.size : (r.parent_pin_id ? 1 : 0),
-        uniqueProductPinCount:    a ? a.productPinSaves.size : (hasProductPin ? 1 : 0),
+        uniqueProductPinCount:    a ? a.productPins.size : (hasProductPin ? 1 : 0),
         aggregateProductPinSaves,
-        primarySaveKind:          hasProductPin ? "product_pin" : "source_pin",
+        primarySaveKind:          aggregateProductPinSaves != null ? "product_pin" : "source_pin",
         metricSource:             "pinterest_stl",
         dedupIdentity,
       };
@@ -409,7 +431,13 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
       });
       // Resolve a category for filtering from source_category (STL bootstrap only),
       // then drop raw provenance / dedup-identity fields so they never reach the UI.
-      const { source_category, canonical_product_url, product_url_hash, ...rest } = r;
+      const {
+        source_category,
+        canonical_product_url,
+        product_url_hash,
+        detail_fetch_status,
+        ...rest
+      } = r;
       void canonical_product_url; void product_url_hash;
       const category =
         r.discovery_method_detail === STL_BOOTSTRAP_DETAIL && source_category
@@ -417,6 +445,9 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
           : null;
       return {
         ...rest,
+        merchant_image_verified:
+          detail_fetch_status === "available"
+          && isNonPinterestMerchantImageUrl(r.image_url),
         category,
         source_type:           deriveProductSourceType(r),
         product_metrics:       buildMetrics(r),
@@ -431,7 +462,12 @@ export async function fetchProductIdeasWithMeta(): Promise<ProductIdeasFetchResu
         source_context:        classified.source_context,
         risk_flags:            classified.risk_flags,
       };
-    }).filter(p => isUserFacingProductRow(p) && shouldShowInProductIdeas(p)) as ProductIdea[]);
+    }).filter(
+      p => p.merchant_image_verified
+        && isNonPinterestMerchantImageUrl(p.image_url)
+        && isUserFacingProductRow(p)
+        && shouldShowInProductIdeas(p),
+    ) as ProductIdea[]);
 
     const scraped = products.map(p => p.scraped_at).filter(Boolean) as string[];
     const lastUpdatedAt = scraped.length ? scraped.sort().reverse()[0] : null;
@@ -482,7 +518,11 @@ export function filterProductIdeas(
   products: ProductIdea[],
   opts: { search: string; categoryLabel: string; sourceLabel?: string; kwCatMap?: Record<string, string> },
 ): ProductIdea[] {
-  let list = products.filter(p => !!p.image_url && shouldShowInProductIdeas(p));
+  let list = products.filter(
+    p => p.merchant_image_verified
+      && isNonPinterestMerchantImageUrl(p.image_url)
+      && shouldShowInProductIdeas(p),
+  );
   const q = opts.search.trim().toLowerCase();
 
   if (q) {

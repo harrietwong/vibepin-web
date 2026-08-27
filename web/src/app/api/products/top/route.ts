@@ -9,13 +9,24 @@ import {
   OUTBOUND_DISCOVERY_METHODS,
   STL_BOOTSTRAP_DETAIL,
 } from "@/lib/productTopTiers";
-import {
-  buildDemandThresholds,
-  deriveProductOpportunityPublicMetrics,
-  deriveProductSaveCount,
-  type ProductOpportunityPublicMetrics,
-} from "@/lib/productOpportunityCounts";
+import { deriveProductSaveCount } from "@/lib/productOpportunityCounts";
 import { computeVisiblePlatforms } from "@/lib/mvpTaxonomy";
+import { isNonPinterestMerchantImageUrl } from "@/lib/productImageEvidence";
+
+type LegacyPickerProduct = Omit<
+  ProductWithScore,
+  | "product_name"
+  | "opportunity_score"
+  | "trend_score"
+  | "save_velocity_score"
+  | "freshness_score"
+  | "competition_score"
+> & {
+  product_name: string | null;
+  created_at?: string | null;
+  category?: string | null;
+  parent_pin_id?: string | null;
+};
 
 export const revalidate = 120;
 
@@ -51,9 +62,8 @@ const CACHE_TTL_MS = 90_000;
 // Query params:
 //   ?limit=20          — rows (default 20, max 100)
 //   ?category=home     — filter by seed keyword category
-//   ?min_score=0       — minimum opportunity_score
 //   ?offset=0          — pagination
-//   ?sort=opportunity  — sort field: opportunity | saves | velocity
+//   ?sort=most_saved   — sort field: most_saved | newest
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const cacheKey = searchParams.toString();
@@ -67,8 +77,7 @@ export async function GET(request: Request) {
 
   const limit     = Math.min(parseInt(searchParams.get("limit")     ?? String(DEFAULT_LIMIT), 10), MAX_LIMIT);
   const offset    = parseInt(searchParams.get("offset")    ?? "0", 10);
-  const minScore  = parseFloat(searchParams.get("min_score") ?? "0");
-  const sort      = searchParams.get("sort") ?? "opportunity";
+  const sort      = searchParams.get("sort") === "newest" ? "newest" : "most_saved";
 
   const db = createServerClient();
 
@@ -96,42 +105,29 @@ export async function GET(request: Request) {
     created_at,
     discovery_method,
     discovery_method_detail,
-    source_category
+    source_category,
+    detail_fetch_status
   `;
   // NOTE: discovery_method / discovery_method_detail / source_category are fetched for
   // server-side derivation only (source_type, category). They are never echoed back to
   // the client — see enrichRow's returned shape.
 
-  // Primary fetch: top product rows by direct Pinterest signal. product_scores is
-  // an OPTIONAL embed (left join) — Product Opportunity v1 does not depend on it,
-  // so rows with no score still surface here. A caller may still request a minimum
-  // opportunity_score via ?min_score=N, which upgrades the embed to an inner join
-  // (!inner) and re-applies the legacy score filter for backward compatibility.
-  const wantScoreFilter = minScore > 0;
+  // Legacy Product Picker inventory only. Product Opportunities v3.7 has its own
+  // evidence-safe catalog API; this compatibility endpoint must never return or
+  // sort by the retired percentile Demand, keyword Trend, Competition, or
+  // Opportunity Score conclusions.
   let scoredQuery = excludeRetired(db
     .from("pin_products")
-    .select(`${BASE_COLS}, product_scores${wantScoreFilter ? "!inner" : ""} (
-        opportunity_score,
-        trend_score,
-        save_velocity_score,
-        freshness_score,
-        competition_score,
-        scored_at
-      )`, { count: "exact" })
+    .select(BASE_COLS, { count: "exact" })
+    .eq("detail_fetch_status", "available")
     .not("image_url", "is", null))
     .range(offset, offset + limit - 1);
-  if (wantScoreFilter) {
-    scoredQuery = scoredQuery.gte("product_scores.opportunity_score", minScore);
-  }
 
-  if (sort === "saves" || sort === "demand" || sort === "most_saved") {
-    scoredQuery = scoredQuery.order("save_count", { ascending: false });
-  } else if (sort === "velocity") {
-    scoredQuery = scoredQuery.order("source_pin_save_count", { ascending: false });
-  } else if (sort === "newest") {
+  if (sort === "newest") {
     scoredQuery = scoredQuery.order("created_at", { ascending: false });
   } else {
-    // Public Opportunity is derived after scored + unscored rows are merged.
+    // Honest Pinterest save evidence; final precedence is applied after the tiers
+    // merge. Unsupported historical sort names deliberately fall back here.
     scoredQuery = scoredQuery.order("source_pin_save_count", { ascending: false });
   }
 
@@ -144,6 +140,7 @@ export async function GET(request: Request) {
     .from("pin_products")
     .select(BASE_COLS)
     .eq("discovery_method", "stl")
+    .eq("detail_fetch_status", "available")
     .not("image_url", "is", null)
     .not("source_url", "is", null))
     .order("source_pin_save_count", { ascending: false })
@@ -158,6 +155,7 @@ export async function GET(request: Request) {
     .from("pin_products")
     .select(BASE_COLS)
     .eq("discovery_method_detail", STL_BOOTSTRAP_DETAIL)
+    .eq("detail_fetch_status", "available")
     .not("image_url", "is", null)
     .not("source_url", "is", null))
     .order("created_at", { ascending: false })
@@ -176,6 +174,7 @@ export async function GET(request: Request) {
     .from("pin_products")
     .select(BASE_COLS)
     .in("discovery_method", [...OUTBOUND_DISCOVERY_METHODS])
+    .eq("detail_fetch_status", "available")
     .not("image_url", "is", null)
     .not("source_url", "is", null))
     .order("created_at", { ascending: false })
@@ -186,7 +185,8 @@ export async function GET(request: Request) {
   // source Pins / product Pins and sum genuine product-Pin saves. Non-fatal.
   const aggQuery = excludeRetired(db
     .from("pin_products")
-    .select("product_url_hash,canonical_product_url,parent_pin_id,product_pin_id,save_count"));
+    .select("product_url_hash,canonical_product_url,parent_pin_id,product_pin_id,save_count")
+    .eq("detail_fetch_status", "available"));
 
   const [
     { data: scoredData, error: scoredError, count },
@@ -243,11 +243,15 @@ export async function GET(request: Request) {
     if (ppid) {
       a.productPins.add(ppid);
       // Genuine product-Pin saves (only meaningful when product_pin_id exists).
-      a.productPinSaves.set(ppid, Math.max(a.productPinSaves.get(ppid) ?? 0, (r.save_count as number) ?? 0));
+      const saves = typeof r.save_count === "number" ? r.save_count : null;
+      if (saves != null) {
+        const previous = a.productPinSaves.get(ppid);
+        a.productPinSaves.set(ppid, previous == null ? saves : Math.max(previous, saves));
+      }
     }
   }
 
-  function enrichRow(row: Record<string, unknown>, scores: Record<string, unknown> | null | undefined) {
+  function enrichRow(row: Record<string, unknown>) {
     const classified = classifyDestination({
       title: row.product_name as string | null,
       domain: row.domain as string | null,
@@ -271,8 +275,10 @@ export async function GET(request: Request) {
     // Pin (has product_pin_id). Otherwise save_count was inherited from the
     // source "Shop the look" Pin and is a SOURCE metric, not a product metric.
     const productPinId   = (row.product_pin_id as string | null) ?? null;
-    const rowSaveCount   = (row.save_count as number) ?? 0;
-    const sourcePinSaves = (row.source_pin_save_count as number) ?? 0;
+    const rowSaveCount = typeof row.save_count === "number" ? row.save_count : null;
+    const sourcePinSaves = typeof row.source_pin_save_count === "number"
+      ? row.source_pin_save_count
+      : null;
     const hasProductPin  = !!productPinId;
 
     const h = row.product_url_hash as string | null;
@@ -282,7 +288,9 @@ export async function GET(request: Request) {
       h ? "product_url_hash" : c ? "canonical_product_url" : "pin_product_id";
     const agg = key ? aggByIdentity.get(key) : undefined;
 
-    const productPinSaveValues = agg ? [...agg.productPinSaves.values()] : (hasProductPin ? [rowSaveCount] : []);
+    const productPinSaveValues = agg
+      ? [...agg.productPinSaves.values()]
+      : (hasProductPin && rowSaveCount != null ? [rowSaveCount] : []);
     const aggregateProductPinSaves = productPinSaveValues.length
       ? productPinSaveValues.reduce((s, v) => s + v, 0)
       : null;
@@ -293,7 +301,7 @@ export async function GET(request: Request) {
       productSourcePinCount:    agg ? agg.sourcePins.size : (row.parent_pin_id ? 1 : 0),
       uniqueProductPinCount:    agg ? agg.productPins.size : (hasProductPin ? 1 : 0),
       aggregateProductPinSaves,
-      primarySaveKind:          hasProductPin ? "product_pin" : "source_pin",
+      primarySaveKind:          aggregateProductPinSaves != null ? "product_pin" : "source_pin",
       metricSource:             "pinterest_stl",
       dedupIdentity,
     };
@@ -314,6 +322,7 @@ export async function GET(request: Request) {
       domain:               row.domain,
       merchant:             row.merchant,
       image_url:            row.image_url,
+      merchant_image_verified: true,
       source_url:           row.source_url,
       save_count:           row.save_count,
       source_pin_save_count: row.source_pin_save_count,
@@ -334,12 +343,6 @@ export async function GET(request: Request) {
       category,
       scraped_at:           row.scraped_at,
       created_at:           row.created_at,
-      opportunity_score:    scores?.opportunity_score ?? null,
-      trend_score:          scores?.trend_score ?? null,
-      save_velocity_score:  scores?.save_velocity_score ?? null,
-      freshness_score:      scores?.freshness_score ?? null,
-      competition_score:    scores?.competition_score ?? null,
-      scored_at:            scores?.scored_at ?? null,
       item_type:            classified.item_type,
       product_type:         classified.product_type,
       product_subtype:      classified.product_subtype,
@@ -352,56 +355,24 @@ export async function GET(request: Request) {
 
   // Merge the four tiers (scored → legacy bootstrap → newest bootstrap-detail →
   // newest outbound), deduped by row id and product identity, imageless rows dropped.
-  // Tier origin does not decide final order — everything is re-sorted below. product_scores
-  // live only on scored rows, so capture them before the merge erases tier origin.
-  const scoresById = new Map<unknown, Record<string, unknown> | null>();
-  for (const row of scoredData ?? []) {
-    const r = row as Record<string, unknown>;
-    scoresById.set(r.id, (r.product_scores as Record<string, unknown> | null) ?? null);
-  }
+  // Tier origin does not decide final order — everything is re-sorted below.
   const mergedRows = mergeProductTiers({
     scored: (scoredData ?? []) as Record<string, unknown>[],
     bootstrap: (bootstrapData ?? []) as Record<string, unknown>[],
     bootstrapDetail: (bootstrapDetailData ?? []) as Record<string, unknown>[],
     outbound: (outboundData ?? []) as Record<string, unknown>[],
-  });
-  const enrichedRows = mergedRows.map(r => enrichRow(r, scoresById.get(r.id) ?? null));
+  }).filter((row) => isNonPinterestMerchantImageUrl(row.image_url));
+  const enrichedRows = mergedRows.map(enrichRow);
 
-  const enrichedUnsorted = enrichedRows.filter(row => shouldShowInProductIdeas(row)) as ProductWithScore[];
-  const demandThresholds = buildDemandThresholds(enrichedUnsorted);
-  // Attach the public Demand / Trend / Competition metrics to every row so the
-  // UI renders exactly what the API derived (no unified opportunity label/score
-  // — the v2.0 direction lets the user judge from the three metrics).
-  const metricsById = new Map<unknown, ProductOpportunityPublicMetrics>();
-  for (const row of enrichedUnsorted) {
-    metricsById.set(row.id, deriveProductOpportunityPublicMetrics(row, demandThresholds));
-  }
-  const trendRank: Record<ProductOpportunityPublicMetrics["trend"]["label"], number> = {
-    rising: 3,
-    stable: 2,
-    declining: 1,
-    unknown: 0,
-  };
-  const competitionRank: Record<ProductOpportunityPublicMetrics["competition"]["label"], number> = {
-    low: 3,
-    medium: 2,
-    high: 1,
-    unknown: 0,
-  };
-  const rowTime = (p: ProductWithScore) =>
-    Date.parse((p as ProductWithScore & { created_at?: string | null }).created_at ?? p.scraped_at ?? "") || 0;
-  const sortValue = (p: ProductWithScore): number => {
-    const metrics = metricsById.get(p.id) ?? deriveProductOpportunityPublicMetrics(p, demandThresholds);
-    const demand = metrics.demand.saveCount ?? -1;
+  const enrichedUnsorted = enrichedRows.filter(row => shouldShowInProductIdeas(row)) as unknown as LegacyPickerProduct[];
+  const rowTime = (p: LegacyPickerProduct) =>
+    Date.parse(p.created_at ?? p.scraped_at ?? "") || 0;
+  const sortValue = (p: LegacyPickerProduct): number => {
     if (sort === "newest") return rowTime(p);
-    if (sort === "rising") return trendRank[metrics.trend.label] * 1_000_000 + demand;
-    if (sort === "low_competition") return competitionRank[metrics.competition.label] * 1_000_000 + demand;
-    // Default (and saves/demand/most_saved/velocity/legacy "opportunity"): most saved.
     return deriveProductSaveCount(p).value ?? -1;
   };
   const enriched = [...enrichedUnsorted]
-    .sort((a, b) => sortValue(b) - sortValue(a))
-    .map(p => ({ ...p, public_metrics: metricsById.get(p.id) ?? null }));
+    .sort((a, b) => sortValue(b) - sortValue(a));
 
   // Search-keyword join: the actual suggestion keyword (pin_samples.source_keyword)
   // that surfaced each product's SOURCE pin — completes the provenance chain
@@ -431,15 +402,6 @@ export async function GET(request: Request) {
     console.warn("[products/top] search-keyword join failed (non-fatal):", e instanceof Error ? e.message : e);
   }
 
-  // Public freshness follows product/demand recency, not legacy score freshness.
-  // Score freshness remains available separately in meta for admin/internal health.
-  const scoredTimes = (enriched as { scored_at?: string | null }[])
-    .map(p => p.scored_at)
-    .filter((t): t is string => !!t);
-  const lastScored = scoredTimes.length
-    ? scoredTimes.reduce((a, b) => (a > b ? a : b))
-    : null;
-
   const createdTimes = (enriched as { created_at?: string | null }[])
     .map(p => p.created_at)
     .filter((t): t is string => !!t);
@@ -468,9 +430,7 @@ export async function GET(request: Request) {
     /* pipeline_runs may not exist yet */
   }
 
-  const lastUpdatedAt = lastProductCreated ?? lastScraped ?? lastPipelineAt ?? lastScored ?? new Date().toISOString();
-  const scoredCount = (enriched as Array<ProductWithScore & { scored_at?: string | null }>).filter(p => p.scored_at).length;
-  const unscoredCount = enriched.length - scoredCount;
+  const lastUpdatedAt = lastProductCreated ?? lastScraped ?? lastPipelineAt ?? new Date().toISOString();
 
   // Product-first freshness counters for Product Opportunity v1. These describe the
   // whole pin_products table (not just the visible page) and are the readiness
@@ -490,7 +450,11 @@ export async function GET(request: Request) {
   };
   // Retired rows are excluded from these counters too — they describe the corpus the
   // product surfaces actually draw from, so a retired row must not inflate them.
-  const pp = () => excludeRetired(db.from("pin_products").select("*", { count: "exact", head: true }));
+  const pp = () => excludeRetired(
+    db.from("pin_products")
+      .select("*", { count: "exact", head: true })
+      .eq("detail_fetch_status", "available"),
+  );
   const [
     totalPinProducts,
     productRowsLast24h,
@@ -509,7 +473,7 @@ export async function GET(request: Request) {
 
   // categoryCounts over the returned (visible) items — honest, no extra query.
   const categoryCounts: Record<string, number> = {};
-  for (const p of enriched as Array<ProductWithScore & { category?: string | null; seed_keyword?: string | null }>) {
+  for (const p of enriched) {
     const cat = p.category ?? p.seed_keyword ?? "uncategorized";
     categoryCounts[cat] = (categoryCounts[cat] ?? 0) + 1;
   }
@@ -530,14 +494,23 @@ export async function GET(request: Request) {
     for (let from = 0; from <= 100_000; from += PLATFORM_PAGE) {
       const { data, error } = await excludeRetired(db
         .from("pin_products")
-        .select("source_url,domain")
+        .select("source_url,domain,image_url")
+        .eq("detail_fetch_status", "available")
         .not("image_url", "is", null)
         .not("source_url", "is", null)
         .neq("parent_pin_id", "0"))
         .range(from, from + PLATFORM_PAGE - 1);
       if (error) throw error;
-      const batch = (data ?? []) as Array<{ source_url: string | null; domain: string | null }>;
-      for (const r of batch) platformRows.push({ sourceUrl: r.source_url, domain: r.domain });
+      const batch = (data ?? []) as Array<{
+        source_url: string | null;
+        domain: string | null;
+        image_url: string | null;
+      }>;
+      for (const r of batch) {
+        if (isNonPinterestMerchantImageUrl(r.image_url)) {
+          platformRows.push({ sourceUrl: r.source_url, domain: r.domain });
+        }
+      }
       if (batch.length < PLATFORM_PAGE) break;
     }
     const pv = computeVisiblePlatforms(platformRows);
@@ -562,12 +535,6 @@ export async function GET(request: Request) {
     platformCounts,
     latestProductCreatedAt: lastProductCreated,
     latestPinScrapedAt: lastScraped,
-    latestDemandUpdatedAt: lastScraped ?? lastProductCreated,
-    latestCompetitionUpdatedAt: lastProductCreated ?? lastScraped,
-    // Optional / deprecated: product scoring is NOT required for Product Opportunity.
-    latestScoreUpdatedAt: lastScored,
-    scoredCount,
-    unscoredCount,
     totalVisibleCount: enriched.length,
   };
 

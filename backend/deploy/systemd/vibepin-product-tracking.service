@@ -1,0 +1,29 @@
+# VibePin daily Product Opportunity tracking. DISABLED AND SAFE BY DEFAULT.
+[Unit]
+Description=VibePin Product Opportunity daily tracking (preflight-gated)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=2
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vibepin/backend
+EnvironmentFile=-/opt/vibepin/backend/.env
+Environment=VIBEPIN_TRACKING_RUN_MODE=preflight
+Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
+Environment=VIBEPIN_PRODUCT_TRACKING_TIMEOUT_SECONDS=7200
+Environment=VIBEPIN_PRODUCT_TRACKING_LIMIT=2499
+ExecStart=/opt/vibepin/backend/scripts/cloud_run_product_tracking.sh
+TimeoutStartSec=7800
+TimeoutStopSec=60
+KillMode=control-group
+Restart=no
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vibepin-product-tracking
+
+[Install]
+WantedBy=multi-user.target

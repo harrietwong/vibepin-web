@@ -24,6 +24,12 @@ import { createServerClient }        from "@/lib/supabase";
 import { moderatePrompt, type ModerationResult } from "@/lib/server/creem/moderatePrompt";
 import { validateImageModelKey, DEFAULT_IMAGE_MODEL_KEY } from "@/lib/server/imageModelKey";
 import { consumeRateLimit, RATE_LIMITED_ERROR, RATE_LIMITED_MESSAGE } from "@/lib/server/rateLimit";
+import {
+  buildModerationChecks,
+  INPUT_LIMITS,
+  MAX_MODERATION_CHECKS,
+  validateGenerationInput,
+} from "@/lib/server/generationModeration";
 
 export const runtime     = "nodejs";
 // TEMP 2026-07-10: capped at 300 (Vercel Hobby plan's serverless function limit)
@@ -248,28 +254,6 @@ function buildImageInputs(productImages: string[], styleRef: string | null): Gen
 // generation path flows through (single, batch, retry, AiVersions, and the
 // Python chat fallback all sit behind this route), so a single gate here covers
 // all of them.
-export type ModeratedFields = {
-  keyword: string;
-  prompt: string;
-  directionBrief: string;
-  category: string;
-  selectedTags: Array<{ label?: string }>;
-  productMetadata?: Array<{ title?: string }> | null;
-};
-
-export function buildModeratedText(fields: ModeratedFields): string {
-  return [
-    fields.keyword,
-    fields.prompt,
-    fields.directionBrief,
-    fields.category,
-    ...fields.selectedTags.map(t => t?.label ?? ""),
-    ...(fields.productMetadata ?? []).map(p => p?.title ?? ""),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 // ── Per-field checks (context-dilution fix) ───────────────────────────────────
 // Moderating ONLY the joined text is exploitable: measured against the live
 // Creem endpoint, a violent prompt that is denied on its own is ALLOWED once
@@ -337,20 +321,6 @@ export function buildModeratedText(fields: ModeratedFields): string {
 // proceed: silently dropping fields would moderate less text than the user
 // actually submitted, which is exactly the dilution failure the per-field gate
 // exists to prevent.
-export const INPUT_LIMITS = {
-  KEYWORD: 200,
-  PROMPT: 4000,
-  CATEGORY: 64,
-  DIRECTION_BRIEF: 1200,
-  TAG_LABEL: 64,
-  TAG_ID: 128,
-  TAG_GROUP: 64,
-  TAGS: 24,
-  PRODUCT_TITLE: 300,
-  PRODUCT_URL: 2048,
-  PRODUCTS: 24,
-} as const;
-
 // Absolute ceiling on outbound moderation calls for ONE request. Derived from
 // the caps above — the maximum legitimate check list is:
 //   keyword + prompt + direction + category   =  4
@@ -363,8 +333,6 @@ export const INPUT_LIMITS = {
 // issued: over the ceiling → 400 with ZERO outbound requests. It is never used to
 // truncate the list, and a partial batch is never fired — a bounded-but-wrong
 // request must fail loudly rather than be silently screened in part.
-export const MAX_MODERATION_CHECKS = 56;
-
 function invalidRequestResponse(generationRequestId: string, detail: string): NextResponse {
   return NextResponse.json(
     {
@@ -379,119 +347,7 @@ function invalidRequestResponse(generationRequestId: string, detail: string): Ne
   );
 }
 
-/** A plain object — not null, not an array, not a boxed primitive. */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export type InputValidation =
-  | { ok: true; selectedTags: Array<{ id: string; label: string; group: string }>; productMetadata: Array<{ title?: string; productUrl?: string }> | null }
-  | { ok: false; detail: string };
-
-/**
- * Validate and bound every user-controlled field that feeds the moderation gate,
- * BEFORE the check list is built. Replaces the previous blind `as` casts on
- * `selectedTags` / `product_metadata` with real structural validation: each entry
- * must be a plain object (arrays / null / primitives rejected) whose text fields
- * are strings within their caps.
- *
- * Exported so the bound can be unit-tested without driving the whole handler.
- */
-export function validateGenerationInput(raw: {
-  keyword: string;
-  prompt: string;
-  directionBrief: string;
-  category: string;
-  selectedTags: unknown;
-  productMetadata: unknown;
-}): InputValidation {
-  const tooLong = (name: string, value: string, max: number) =>
-    value.length > max ? `${name} exceeds the maximum length of ${max} characters` : null;
-
-  const scalarError =
-    tooLong("keyword", raw.keyword, INPUT_LIMITS.KEYWORD) ??
-    tooLong("prompt", raw.prompt, INPUT_LIMITS.PROMPT) ??
-    tooLong("directionBrief", raw.directionBrief, INPUT_LIMITS.DIRECTION_BRIEF) ??
-    tooLong("category", raw.category, INPUT_LIMITS.CATEGORY);
-  if (scalarError) return { ok: false, detail: scalarError };
-
-  // selectedTags: absent → []. Present but not an array → reject (a blind cast
-  // previously turned `{}` or a string into an empty list silently).
-  let selectedTags: Array<{ id: string; label: string; group: string }> = [];
-  if (raw.selectedTags !== undefined && raw.selectedTags !== null) {
-    if (!Array.isArray(raw.selectedTags)) return { ok: false, detail: "selectedTags must be an array" };
-    if (raw.selectedTags.length > INPUT_LIMITS.TAGS) {
-      return { ok: false, detail: `selectedTags exceeds the maximum of ${INPUT_LIMITS.TAGS} tags` };
-    }
-    const validated: Array<{ id: string; label: string; group: string }> = [];
-    for (let i = 0; i < raw.selectedTags.length; i++) {
-      const entry = raw.selectedTags[i] as unknown;
-      if (!isPlainObject(entry)) return { ok: false, detail: `selectedTags[${i}] must be an object` };
-      const { id, label, group } = entry;
-      if (id !== undefined && typeof id !== "string") return { ok: false, detail: `selectedTags[${i}].id must be a string` };
-      if (label !== undefined && typeof label !== "string") return { ok: false, detail: `selectedTags[${i}].label must be a string` };
-      if (group !== undefined && typeof group !== "string") return { ok: false, detail: `selectedTags[${i}].group must be a string` };
-      const idStr = (id as string | undefined) ?? "";
-      const labelStr = (label as string | undefined) ?? "";
-      const groupStr = (group as string | undefined) ?? "";
-      if (idStr.length > INPUT_LIMITS.TAG_ID) return { ok: false, detail: `selectedTags[${i}].id exceeds the maximum length of ${INPUT_LIMITS.TAG_ID} characters` };
-      if (labelStr.length > INPUT_LIMITS.TAG_LABEL) return { ok: false, detail: `selectedTags[${i}].label exceeds the maximum length of ${INPUT_LIMITS.TAG_LABEL} characters` };
-      if (groupStr.length > INPUT_LIMITS.TAG_GROUP) return { ok: false, detail: `selectedTags[${i}].group exceeds the maximum length of ${INPUT_LIMITS.TAG_GROUP} characters` };
-      validated.push({ id: idStr, label: labelStr, group: groupStr });
-    }
-    selectedTags = validated;
-  }
-
-  // product_metadata: absent / non-array → null (matches the previous shape so
-  // the generator payload is unchanged), but a PRESENT array is fully validated.
-  let productMetadata: Array<{ title?: string; productUrl?: string }> | null = null;
-  if (Array.isArray(raw.productMetadata)) {
-    if (raw.productMetadata.length > INPUT_LIMITS.PRODUCTS) {
-      return { ok: false, detail: `product_metadata exceeds the maximum of ${INPUT_LIMITS.PRODUCTS} products` };
-    }
-    const validated: Array<{ title?: string; productUrl?: string }> = [];
-    for (let i = 0; i < raw.productMetadata.length; i++) {
-      const entry = raw.productMetadata[i] as unknown;
-      if (!isPlainObject(entry)) return { ok: false, detail: `product_metadata[${i}] must be an object` };
-      const { title, productUrl } = entry;
-      if (title !== undefined && typeof title !== "string") return { ok: false, detail: `product_metadata[${i}].title must be a string` };
-      if (productUrl !== undefined && typeof productUrl !== "string") return { ok: false, detail: `product_metadata[${i}].productUrl must be a string` };
-      if (typeof title === "string" && title.length > INPUT_LIMITS.PRODUCT_TITLE) {
-        return { ok: false, detail: `product_metadata[${i}].title exceeds the maximum length of ${INPUT_LIMITS.PRODUCT_TITLE} characters` };
-      }
-      if (typeof productUrl === "string" && productUrl.length > INPUT_LIMITS.PRODUCT_URL) {
-        return { ok: false, detail: `product_metadata[${i}].productUrl exceeds the maximum length of ${INPUT_LIMITS.PRODUCT_URL} characters` };
-      }
-      validated.push({
-        ...(title !== undefined ? { title: title as string } : {}),
-        ...(productUrl !== undefined ? { productUrl: productUrl as string } : {}),
-      });
-    }
-    productMetadata = validated;
-  }
-
-  return { ok: true, selectedTags, productMetadata };
-}
-
-export function buildModerationChecks(fields: ModeratedFields): Array<{ suffix: string; text: string }> {
-  const checks: Array<{ suffix: string; text: string }> = [];
-  const push = (suffix: string, raw: string) => {
-    if (raw.trim()) checks.push({ suffix, text: raw });
-  };
-
-  push("keyword", fields.keyword);
-  push("prompt", fields.prompt);
-  push("direction", fields.directionBrief);
-  push("category", fields.category);
-  fields.selectedTags.forEach((t, i) => push(`tag${i + 1}`, t?.label ?? ""));
-  (fields.productMetadata ?? []).forEach((p, i) => push(`product${i + 1}`, p?.title ?? ""));
-
-  // Composite last: catches intent that is only harmful once the fields combine.
-  push("composite", buildModeratedText(fields));
-  return checks;
-}
-
-export type ModerationGateOutcome =
+type ModerationGateOutcome =
   | { proceed: true }
   | { proceed: false; response: NextResponse };
 
@@ -527,11 +383,12 @@ function unavailableResponse(generationRequestId: string): NextResponse {
 
 /**
  * Pure decision helper — maps a ModerationResult to whether the request may
- * proceed and, if not, the exact HTTP response. Exported so the gate can be
- * unit-tested without a live Creem call. On {ok:true} the caller continues to
- * the dispatch branches; anything else STOPS before lock acquisition/dispatch.
+ * proceed and, if not, the exact HTTP response. On {ok:true} the caller
+ * continues to the dispatch branches; anything else STOPS before lock
+ * acquisition/dispatch. It stays private because Next route modules may only
+ * export HTTP handlers and supported route configuration.
  */
-export function evaluateModerationForRequest(
+function evaluateModerationForRequest(
   result: ModerationResult,
   generationRequestId: string,
 ): ModerationGateOutcome {
@@ -549,7 +406,7 @@ export function evaluateModerationForRequest(
  * reports 400 prompt_rejected even if a sibling check happened to be unreachable.
  * Exported for unit tests.
  */
-export function evaluateModerationResults(
+function evaluateModerationResults(
   results: ModerationResult[],
   generationRequestId: string,
 ): ModerationGateOutcome {
