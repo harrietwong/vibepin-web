@@ -50,6 +50,8 @@ export const studioBoardMessages = {
   "studioBoard.toast.publishPartial": "{published} destination(s) published; {failed} need attention.",
   "studioBoard.toast.ambiguousAccount": "Choose which {platform} account to publish as.",
   "studioBoard.toast.publishFailed": "Failed to publish. Please try again.",
+  "studioBoard.toast.nothingToRetry": "Everything is already published.",
+  "studioBoard.toast.splitCreated": "Created {n} separate posts.",
   "studioBoard.toast.productNoImage": "That product has no image to use yet.",
   "studioBoard.toast.createdPinFromProduct": "Created a Pin from your product.",
   "studioBoard.toast.linkedProduct": "Product linked to this Pin.",
@@ -221,6 +223,17 @@ export const studioBoardMessages = {
   "studioBoard.card.aiGenerated": "AI generated",
   "studioBoard.card.mediaCounter": "{index} / {total}",
   "studioBoard.card.regenerateImage": "Regenerate image",
+  // ── Media compatibility notice (PRD §9/§13) ──
+  // One compact amber line per failing platform. It never removes an image or unticks a
+  // platform: it reports the platform's own rule and offers the split as the way out.
+  "studioBoard.card.mediaNotice.headline": "{platform} needs review",
+  "studioBoard.card.mediaNotice.aspectMismatch": "{n} image needs adjustment",
+  "studioBoard.card.mediaNotice.aspectMismatchPlural": "{n} images need adjustment",
+  "studioBoard.card.mediaNotice.tooMany": "{platform} carousels hold up to {max} images",
+  "studioBoard.card.mediaNotice.tooFew": "{platform} carousels need {min}–{max} images",
+  "studioBoard.card.mediaNotice.noMedia": "Add an image before publishing to {platform}",
+  "studioBoard.card.mediaNotice.splitSeparate": "Publish separately",
+  "studioBoard.card.dropHint": "Drop to add to this content",
   // Save state, shown as light text at the bottom of the card.
   "studioBoard.card.saveState.saved": "Saved",
   "studioBoard.card.saveState.saving": "Saving…",

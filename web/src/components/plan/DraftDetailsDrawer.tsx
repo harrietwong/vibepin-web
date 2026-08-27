@@ -271,6 +271,8 @@ export function PinDetailsModal({
   const [overflowOpen, setOverflowOpen] = useState(false);
   // "Publish now" is irreversible and, when scheduled, drops the slot — confirm first.
   const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
+  /** Which affordance opened the confirm dialog: Try again (retry) vs Publish now. */
+  const [publishIsRetry, setPublishIsRetry] = useState(false);
   const boardSelectRef = useRef<HTMLInputElement | null>(null);
 
   // ── Pinterest redirect feedback ─────────────────────────────────────────────
@@ -978,12 +980,22 @@ export function PinDetailsModal({
 
   // Silent guards mirror handlePublish's own: never open the dialog while a publish or an
   // OAuth redirect is already in flight.
-  function requestPublish() {
+  //
+  // `retry` distinguishes the drawer's TWO publish affordances, which share this one
+  // handler (PRD §26/§29): "Try again" on a failed Content re-sends only what has not
+  // published (`onlyPending: true`), while "Publish now" on a Content that may already
+  // be posted is an explicit "send this again" and must reach every destination
+  // (`onlyPending: false`). Hardcoding `true` for both meant Publish now on a fully
+  // published Content silently did nothing once publishContent stopped falling back to
+  // the whole set. It travels through state because the confirm dialog sits between the
+  // click and the publish.
+  function requestPublish(options?: { retry?: boolean }) {
     if (publishing || isRedirectingToPinterest) return;
+    setPublishIsRetry(!!options?.retry);
     setConfirmPublishOpen(true);
   }
 
-  async function handlePublish() {
+  async function handlePublish(retry: boolean) {
     // Dev-only click trace — verifies the handler fires from a real browser click.
     if (process.env.NODE_ENV !== "production") {
       console.log("[publish-click]", {
@@ -1133,7 +1145,7 @@ export function PinDetailsModal({
       // current. onlyPending is the shared retry semantics: a destination that already
       // published is not re-sent, so retrying a partial failure cannot double-post.
       const outcome = await publishContent(activeDraft.id, {
-        onlyPending: true,
+        onlyPending: retry,
         destinations,
         extras: {
           attachedProducts: products.length ? products : undefined,
@@ -1151,6 +1163,13 @@ export function PinDetailsModal({
       if (outcome.blocked) {
         setPublishError(t("pinDetails.error.publishFailed"));
         toast.error(t("pinDetails.error.publishFailed"), { id: PUBLISH_TOAST_ID });
+        return;
+      }
+      // Try again with every destination already published. Neutral — nothing failed,
+      // and nothing was sent, so the failure banner must not be repainted either.
+      if (outcome.nothingToRetry) {
+        setPublishError(null);
+        toast.info(t("studioBoard.toast.nothingToRetry"), { id: PUBLISH_TOAST_ID });
         return;
       }
 
@@ -1987,7 +2006,7 @@ export function PinDetailsModal({
                 >
                   {t("pinDetails.reportCreditsIssue")}
                 </button>
-                <button type="button" data-testid="draft-cta-try-again" onClick={requestPublish} disabled={publishing || isRedirectingToPinterest}
+                <button type="button" data-testid="draft-cta-try-again" onClick={() => requestPublish({ retry: true })} disabled={publishing || isRedirectingToPinterest}
                   style={{ ...primaryBtn, opacity: (publishing || isRedirectingToPinterest) ? 0.6 : 1 }}>
                   {publishing ? <><Loader2 size={13} className="animate-spin" /> {t("pinDetails.publishing")}</> : t("pinDetails.tryAgain")}
                 </button>
@@ -1998,7 +2017,7 @@ export function PinDetailsModal({
                     Enabled without a date/time — publishing needs no schedule. Disabled
                     only while a publish/redirect is in flight. */}
                 <button type="button" data-testid="draft-cta-publish-now"
-                  onClick={requestPublish} disabled={publishing || isRedirectingToPinterest}
+                  onClick={() => requestPublish()} disabled={publishing || isRedirectingToPinterest}
                   style={{ ...ghostBtn, opacity: (publishing || isRedirectingToPinterest) ? 0.6 : 1, cursor: (publishing || isRedirectingToPinterest) ? "not-allowed" : "pointer" }}>
                   {publishing ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Loader2 size={13} className="animate-spin" /> {t("pinDetails.publishing")}</span> : t("pinDetails.publishNow")}
                 </button>
@@ -2060,7 +2079,7 @@ export function PinDetailsModal({
           hasSchedule={isScheduled}
           busy={publishing || isRedirectingToPinterest}
           onCancel={() => setConfirmPublishOpen(false)}
-          onConfirm={() => { setConfirmPublishOpen(false); void handlePublish(); }}
+          onConfirm={() => { setConfirmPublishOpen(false); void handlePublish(publishIsRetry); }}
           ui={{ card: UI.card, border: UI.border, text: UI.text, textSec: UI.textSec }}
         />
 

@@ -606,6 +606,10 @@ export function StudioBoard() {
     const outcome = await publishContent(id, { onlyPending: options?.onlyPending ?? true });
     if (outcome.blocked === "locked") return;
     if (outcome.blocked) { toast.error(tr("studioBoard.toast.publishFailed")); return; }
+    // A Retry with nothing left to send. Neutral, not an error: nothing failed, and
+    // without this branch it falls through to "0 published, 0 failed" → publishFailed,
+    // which tells the merchant a publish broke when in fact it was already done.
+    if (outcome.nothingToRetry) { toast.info(tr("studioBoard.toast.nothingToRetry")); return; }
     const publishedCount = outcome.published.length;
     const failedCount = outcome.failed.length;
     if (publishedCount && failedCount) {
@@ -1053,6 +1057,11 @@ export function StudioBoard() {
           id: target.id, title: target.title, status: "skipped",
           message: blockers.map(b => blockerText(tr, b)).join(" ") || tr("studioBoard.blocker.unknown"),
         });
+      } else if (outcome.nothingToRetry) {
+        // Everything this Content names had already published — the partition's own
+        // `alreadyPublished` bucket normally catches this, but a sibling tab can publish
+        // between the sheet and this loop. Skipped, not failed: nothing went wrong.
+        rows.push({ id: target.id, title: target.title, status: "skipped", message: tr("studioBoard.toast.nothingToRetry") });
       } else if (outcome.published.length) {
         rows.push({
           id: target.id, title: target.title, status: "published",
@@ -1136,10 +1145,17 @@ export function StudioBoard() {
     toast.success(tr("studioBoard.toast.savedToReferences"));
   }, [tr]);
 
-  // Failed card "Try again": publish-failed → retry the real publish; generation-
-  // failed → reopen the AI drawer (parent draft as source when the lineage exists).
+  // Failed card "Try again": generation-failed → reopen the AI drawer (parent draft as
+  // source when the lineage exists); everything else → retry the real publish.
+  //
+  // The test is `failureType === "generation"`, not "does the legacy publishError field
+  // have text". A per-destination failure need not populate that legacy field at all
+  // (legacyFieldsFromResults derives it, and a partial success clears it), so keying on
+  // it sent a Content whose ONLY problem was one failed destination into the AI image
+  // drawer — offering to regenerate an image for a publish failure. Retry semantics come
+  // from handlePublish's default (`onlyPending ?? true`): only what has not published.
   const handleTryAgain = useCallback((d: PinDraft) => {
-    if (d.publishError?.trim()) { void handlePublish(d.id); return; }
+    if (d.failureType !== "generation") { void handlePublish(d.id); return; }
     const parent = d.parentDraftId ? pinDraftStore.getDraft(d.parentDraftId) : null;
     // Restore the failed card's OWN generation group reference, so retrying a failed
     // reference group regenerates against the same reference instead of reopening a

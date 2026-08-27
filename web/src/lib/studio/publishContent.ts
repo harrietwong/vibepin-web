@@ -53,8 +53,12 @@ import { beginPublish, endPublish, mapPublishErrorToCategory } from "./pinLifecy
 export type PublishContentOptions = {
   /**
    * Skip destinations whose stored result is already `published` — Retry semantics.
-   * With no pending destination left, every destination is re-attempted (an explicit
-   * "publish again" on a fully published Content).
+   *
+   * With NO pending destination left, this returns `nothingToRetry` without calling a
+   * single platform API. It used to fall back to re-attempting every destination, which
+   * turned "Retry" on a fully published Content into a silent duplicate post — exactly
+   * what onlyPending exists to prevent (PRD §26/§29). A caller that means "send this
+   * again" says so explicitly with `onlyPending: false`.
    */
   onlyPending?: boolean;
   /**
@@ -103,6 +107,13 @@ export type PublishContentOutcome = {
    * Content names no resolvable destination; `not_found` = no such draft.
    */
   blocked?: "locked" | "no_destinations" | "not_found";
+  /**
+   * A Retry (`onlyPending: true`) found every destination already published, so nothing
+   * was sent. NOT a `blocked` value: every caller treats a non-locked `blocked` as a
+   * publish error, and "it is already published everywhere" is a neutral outcome, not a
+   * failure. Nothing was written — the stored rows in `results` are the prior ones.
+   */
+  nothingToRetry?: boolean;
   /**
    * The Pinterest connection this Content actually published through, when it had
    * none and the server resolved one (adopt-once, PRD §14). The caller writes it to
@@ -299,12 +310,19 @@ export async function publishContent(
     return { published: [], failed: [], results: priorResults, blocked: "no_destinations" };
   }
 
-  // Retry targets what has not published yet. When everything already published, an
-  // explicit publish re-attempts the whole set rather than silently doing nothing.
-  const pending = options.onlyPending
+  // Retry targets what has not published yet — and ONLY that.
+  //
+  // The removed fallback ("nothing pending ⇒ re-attempt everything") made Retry on a
+  // fully published Content re-post to every destination, which is the duplicate-post
+  // defect onlyPending exists to prevent. A surface that means "send this again" now
+  // has to say `onlyPending: false`; a Retry with nothing pending does nothing at all,
+  // before the lock and before any store write, and reports it neutrally.
+  const targets = options.onlyPending
     ? destinations.filter(d => findDestinationResult(priorResults, d)?.status !== "published")
     : destinations;
-  const targets = pending.length ? pending : destinations;
+  if (!targets.length) {
+    return { published: [], failed: [], results: priorResults, nothingToRetry: true };
+  }
 
   // The shared in-flight lock lives HERE, not in the callers: with each surface taking
   // it before calling in, the second acquire would fail and every publish would report
