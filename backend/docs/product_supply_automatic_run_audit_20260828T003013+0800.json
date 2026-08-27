@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "auditMode": "read_only",
+  "auditedAt": "2026-08-27T16:31:46Z",
+  "verdict": "BLOCK",
+  "reason": "The permanent timer invocation completed, but one Source Pin recorded renderFailure=true, so the scheduled receipt is not trusted for automatic Admission.",
+  "scheduledOrigin": {
+    "timer": "vibepin-product-supply.timer",
+    "service": "vibepin-product-supply.service",
+    "invocationId": "b0f7bda39ad64aaf8f5e28f9da4c0e5d",
+    "triggeredBy": "vibepin-product-supply.timer",
+    "startedAt": "2026-08-27T15:03:50Z",
+    "exitedAt": "2026-08-27T16:30:13Z",
+    "serviceResult": "success",
+    "serviceExecMainStatus": 0,
+    "serviceRestarts": 0,
+    "nextTriggerAt": "2026-08-28T15:06:06Z"
+  },
+  "report": {
+    "path": "/opt/vibepin/backend/logs/product_supply_expand_shop_the_look_latest.json",
+    "sha256": "8adde3fda53fdcb0cf8fa92ee33a6227fd7db0020d94ac8df55a9fd6384dff80",
+    "bytes": 1662100,
+    "generatedAt": "2026-08-27T16:30:05.388921Z",
+    "mtimeAt": "2026-08-27T16:30:06.088282Z",
+    "mode": "apply",
+    "resultTrust": "partial:some_pins_failed_to_render",
+    "authenticatedRun": true,
+    "selectedTotal": 100,
+    "categoryMix": {
+      "fashion": 36,
+      "womens-fashion": 28,
+      "home-decor": 36
+    },
+    "renderFailureCount": 1,
+    "failedBatches": 0,
+    "failedWrites": 0,
+    "writes": 0,
+    "insertedIds": [],
+    "readbackCount": 0,
+    "batchReceiptsSafe": true,
+    "batchReceiptCount": 8,
+    "atomicWriteBatchCap": 20,
+    "runAdmissionCap": 50,
+    "merchantDiscoveryCandidateCap": 100,
+    "productJsonResponses": 4722,
+    "pinsWithZeroProductJson": 18,
+    "responseErrorCount": 50
+  },
+  "supplyFunnel": {
+    "sourcePinsScanned": 100,
+    "rawProductCandidates": 937,
+    "rejectedProductCandidates": 807,
+    "acceptedBeforeDedup": 130,
+    "duplicatesSkippedWithinRun": 82,
+    "uniqueAcceptedCandidates": 48,
+    "alreadyInDatabase": 8,
+    "crossBatchDuplicates": 167,
+    "skippedByRunAdmissionCap": 0,
+    "merchantDiscoveryAttempts": 13,
+    "merchantVerified": 0,
+    "merchantVerificationFailures": 13,
+    "safeLegacyRowsWritten": 0
+  },
+  "databaseBeforeAndAfter": {
+    "pinProductsTotal": 4115,
+    "sortedIdChecksum": "bb72bcd04dfbaef9ffec177b6b8d0dfb",
+    "createdToday": 0,
+    "unchanged": true
+  },
+  "runtimeCleanup": {
+    "networkLockFree": true,
+    "writerLockFree": true,
+    "matchingProcesses": 0,
+    "playwrightProcesses": 0,
+    "kernelOomHits": 0,
+    "memoryPeakBytes": 945405952,
+    "swapPeakBytes": 946180096
+  },
+  "strictAudit": {
+    "command": "product_supply_cutover_v37.py audit --require-scheduled-run",
+    "exitCode": 1,
+    "error": "scheduled report is not a trusted authenticated run"
+  },
+  "launchImpact": {
+    "legacyDataDirty": false,
+    "qualifiesAsFirstSuccessfulAutomaticReceipt": false,
+    "eligibleForAutomaticAdmission": false,
+    "v37ProductionReady": false,
+    "manualRetryPerformed": false
+  }
+}

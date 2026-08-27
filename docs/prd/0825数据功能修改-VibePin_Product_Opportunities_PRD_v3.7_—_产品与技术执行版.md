@@ -1153,6 +1153,12 @@ Digital today / 7d / 14d / 30d / full metric = 0 / 0 / 0 / 0 / 0
 
 永久 Product Supply timer 当前为 enabled + active，下一次真实触发为 `2026-08-27T15:03:44Z`。上一轮 timer 在写入前以 exit 10 拒绝，journal 证明原因是 Pinterest cooldown 只有 91.43 分钟、低于 120 分钟，而不是发生了部分写入。当前只读 preflight 的 cooldown 已达 328.52 分钟，按固定触发时刻预计为 596.38 分钟；真实 VPS 锁均为空、无相关进程、service 本身没有作为 boot target 启用，新的 Admission / Tracking timer 也尚未安装。结论仅为“今晚具备自动尝试条件”，不能提前宣称本次运行通过。完整证据固定为 `backend/docs/product_supply_pretrigger_readiness_20260827T103549Z.json`。
 
+### 19.2.5 2026-08-27 15:03:50 UTC 首次完整自动运行复核
+
+永久 timer 确实自动触发了唯一 service invocation `b0f7bda39ad64aaf8f5e28f9da4c0e5d`，并在 86 分 23 秒后以 service exit 0 自然结束。它完整扫描 100 个 Source Pins，Physical-only 配额仍为 36/28/36；业务漏斗为 937 个原始候选、807 个拒绝、130 个去重前接受、48 个唯一候选、13 次商家页验证、0 个商家验证通过、0 个安全 legacy 写入。数据库运行前后均为 `pin_products=4,115`，排序 ID 校验和均为 `bb72bcd04dfbaef9ffec177b6b8d0dfb`，没有脏写。
+
+这次运行仍然 **BLOCK**，不得宣称首次自动运行通过：第 79 个 Source Pin 触发 120 秒整 Pin 超时，最终报告明确记录 `renderFailureCount=1`、`resultTrust=partial:some_pins_failed_to_render`。严格 `--require-scheduled-run` 审计因此 exit 1，并且该报告不得进入自动 Admission。服务退出后两个真实 VPS 锁均释放、相关进程为 0、内核窗口无 OOM，下一次 timer 已排到 `2026-08-28T15:06:06Z`。完整只读证据固定为 `backend/docs/product_supply_automatic_run_audit_20260828T003013+0800.json`。
+
 ### 19.3 自动准入候选实现状态
 
 隔离候选已补齐 Product Supply 与 v3.7 之间的自动准入编排，但本节不表示已部署或已启用：
@@ -1206,6 +1212,7 @@ local rendered Product truth = PASS; the built localhost candidate passed the ex
 release manifest contract = PASS; the current 351e479 manifest/automation contract passed 20/20
 shell wrappers = PASS; ShellCheck passed the exact 351e479 Git blobs for cloud_lib, Product Supply, Product Opportunity Admission and Product Tracking, excluding only the intentional dynamic-source SC1091 diagnostic; exact systemd-analyze verify for the not-yet-installed candidate units remains a deployment-host gate
 production data readiness = BLOCK; the 2026-08-27T12:10:42Z GET-only pre-Supply audit found 123 technical migration candidates but only 25 in the reviewed automatic-Admission scope (18 Physical / 7 Digital), and all 25 had zero today/G7/G14/G30/full-metric coverage; discovery inventory exists but launch-ready trend intelligence does not
+first complete permanent-timer Product Supply attempt = BLOCK; invocation b0f7bda39ad64aaf8f5e28f9da4c0e5d scanned 100/100 and wrote zero dirty rows, but one render failure made resultTrust partial and the strict scheduled audit exited 1; this receipt is ineligible for automatic Admission
 daily capacity contract = PASS in candidate code; Product Supply scans 100 Source Pins and may write 0-50 legacy discovery rows across atomic batches of at most 20, while Product Tracking independently covers up to 2,499 unique active Primary Pins and at most 5,000 provider requests per day; 20 is not a per-day Product limit
 Web deployment reproducibility = PASS; Vercel installCommand is npm ci, package.json/package-lock.json/vercel.json are one exact release boundary, and deployment must fail review if the lockfile is omitted or dependencies are re-resolved
 Vercel project binding = NEEDS EVIDENCE; before promotion the platform must prove Root Directory=web and the candidate build log must show npm ci plus Next.js 16.3.3, because the repository has no linked .vercel/project.json metadata
@@ -1247,6 +1254,7 @@ working tree = clean before this documentation update
 2. 当前线上 100-Pin Product Supply 配额仍是 Physical-only（Fashion 36 / Women’s Fashion 28 / Home Decor 36）；它不能被描述为已经供给 Digital。本地发布候选已在不扩大 100-Pin 总预算的前提下改为 Fashion 29 / Women’s Fashion 22 / Home Decor 29 / Digital Products 20，并与自动准入口径一致，但尚未部署。该候选必须单独完成零写 dry-run、精确 ID canary 和明确的部署授权，旧 36/28/36 报告不得被自动准入当作 Digital 首发报告。
 3. 新 Demand / Trend 在真实每日 observations 形成并分别达到 70% 质量门槛前必须保持隐藏；不得用旧指标或迁移前 snapshots 填绿。
 4. Product Supply 的一行生产 canary 和 23:00 timer 恢复属于 legacy 发现链切换，只能证明该链不会继续写入 Pin 卡片商品字段，不能替代 v3.7 上线验收。
+5. 首次完整永久 timer 运行已经发生，但因 1 个 render failure 被严格门禁拒绝；必须先审查根因并由后续自然 timer 运行产生一份零 render failure 的完整报告，才能关闭“首次成功自动 receipt”门槛。不得手工重跑冒充永久 timer 证据。
 
 ---
 

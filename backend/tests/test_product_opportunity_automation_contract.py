@@ -22,6 +22,9 @@ COMPLETION_AUDIT = (
 CURRENT_MANIFEST_PATH = (
     ROOT / "docs" / "product_opportunities_v37_release_manifest_58598b4.json"
 )
+FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
+    ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
+)
 PRD = (
     ROOT.parent
     / "docs"
@@ -118,6 +121,31 @@ def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
     assert references
     missing = [path for path in sorted(references) if not (ROOT.parent / path).is_file()]
     assert missing == []
+
+
+def test_first_complete_automatic_supply_attempt_is_not_misreported_as_pass() -> None:
+    audit = json.loads(FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH.read_text(encoding="utf-8"))
+
+    assert audit["verdict"] == "BLOCK"
+    assert audit["auditMode"] == "read_only"
+    assert audit["scheduledOrigin"]["invocationId"] == (
+        "b0f7bda39ad64aaf8f5e28f9da4c0e5d"
+    )
+    assert audit["scheduledOrigin"]["serviceResult"] == "success"
+    assert audit["scheduledOrigin"]["serviceExecMainStatus"] == 0
+    assert audit["report"]["selectedTotal"] == 100
+    assert audit["report"]["renderFailureCount"] == 1
+    assert audit["report"]["resultTrust"] == "partial:some_pins_failed_to_render"
+    assert audit["report"]["writes"] == 0
+    assert audit["report"]["insertedIds"] == []
+    assert audit["databaseBeforeAndAfter"]["unchanged"] is True
+    assert audit["runtimeCleanup"]["matchingProcesses"] == 0
+    assert audit["runtimeCleanup"]["kernelOomHits"] == 0
+    assert audit["strictAudit"]["exitCode"] == 1
+    assert audit["launchImpact"]["qualifiesAsFirstSuccessfulAutomaticReceipt"] is False
+    assert audit["launchImpact"]["eligibleForAutomaticAdmission"] is False
+    assert FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH.name in PRD
+    assert FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH.name in COMPLETION_AUDIT
 
 
 def test_current_release_manifest_blob_hashes_and_sizes_are_exact() -> None:

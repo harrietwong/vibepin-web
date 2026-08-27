@@ -652,19 +652,23 @@ to production.
 
 ## Production conditions still open
 
-The latest read-only pre-trigger check found the permanent Supply timer enabled
-and active with its next trigger at `2026-08-27T15:03:44Z`. The previous timer
-run exited 10 before any write because only 91.43 of the required 120 cooldown
-minutes had elapsed; its journal proves the intended fail-closed behavior. At
-`10:35:49Z` the current cooldown was 328.52 minutes and projects to 596.38
-minutes at tonight's trigger. Both real VPS locks were free, no matching process
-was alive, the service itself was disabled as a boot target, and neither v3.7
-admission nor tracking timer was installed. This makes tonight's scheduled run
-ready to attempt; it is not evidence that the future run will pass. Immutable
-evidence: `backend/docs/product_supply_pretrigger_readiness_20260827T103549Z.json`.
+The first complete permanent-timer attempt has now run. Invocation
+`b0f7bda39ad64aaf8f5e28f9da4c0e5d` processed 100/100 Source Pins from the
+deployed Physical 36/28/36 mix and exited service status 0 after 86 minutes 23
+seconds. It closed a 937 -> 807 rejected -> 130 accepted-before-dedup -> 48
+unique -> 13 merchant attempts -> 0 merchant-verified -> 0 safe-write funnel.
+The database remained exactly 4,115 rows with the same sorted-ID checksum and
+no created-today row. This is not a successful automatic receipt: one Pin hit
+the bounded 120-second whole-Pin timeout, making `renderFailureCount=1` and
+`resultTrust=partial:some_pins_failed_to_render`; the strict scheduled audit
+exited 1 before any Admission use. Service cleanup still passed: both locks
+free, no matching process, no kernel OOM, next timer trigger in the future.
+Immutable evidence:
+`backend/docs/product_supply_automatic_run_audit_20260828T003013+0800.json`.
 
-1. Verify the next Product Supply timer-originated run from its exact receipt;
-   do not start a duplicate manual run while it is active or pending.
+1. Diagnose the bounded render failure without weakening the zero-render-failure
+   gate, then require a later natural permanent-timer run to produce a complete
+   trusted receipt; do not use a manual retry as timer-origin proof.
 2. Obtain separate production authorization for the clean release candidate.
    Do not merge or deploy the 274-commit evidence branch wholesale, deploy from
    a dirty master, or combine unrelated incomplete work.
@@ -687,7 +691,8 @@ evidence: `backend/docs/product_supply_pretrigger_readiness_20260827T103549Z.jso
 Until those production conditions are complete, the accurate launch statement
 is: **the integrated v3.7 plus safe Product Supply release line is locally
 qualified and independently reproducible, Product Supply has completed its safe
-cutover and proved fail-closed timer triggering but still awaits its first
+cutover and its first complete permanent-timer attempt was correctly rejected
+for one render failure with zero dirty writes, so it still awaits its first
 successful timer-originated receipt, and the new Product
 Opportunity v63/Web/admission/tracking data product is not yet live.**
 
