@@ -48,7 +48,7 @@ import { selectionFromLinkedProduct, toLinkedProduct, resolveProductPublicUrl, t
 import { EMPTY_TOUCHED, type LinkedProduct } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
-import { StudioPlanSidebar } from "@/components/studio/StudioPlanSidebar";
+import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
 import { contentDestinationResults, contentDestinations, contentMedia, type DestinationPublishResult, type PublishDestination } from "@/lib/contentDraftModel";
 import { publishToSocial } from "@/lib/social/socialClient";
 import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
@@ -226,6 +226,14 @@ export function StudioBoard() {
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
   const [planPinned, setPlanPinned] = useState(false);
+  // PRD 0826 §24 — the board tells the Plan sidebar when a schedule just succeeded, so
+  // the sidebar can highlight the new item (when it is open) or count it on its trigger
+  // (when it is not). A list, not a single id: a batch of N must move the badge by N.
+  const [lastScheduled, setLastScheduled] = useState<PlanScheduleSignal | undefined>(undefined);
+  const announceScheduled = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    setLastScheduled({ ids, at: Date.now() });
+  }, []);
   const didInitFilterRef = useRef(false);
   useEffect(() => {
     if (didInitFilterRef.current) return;
@@ -523,6 +531,7 @@ export function StudioBoard() {
     setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
     const result = ensureScheduledPlanTime(id);
     if (result.ok) {
+      announceScheduled([id]);
       // PRD 5.2 — success toast gets an "Open in Plan" action that deep-links to the
       // exact Pin's edit drawer in Plan (same ?modal=publish&pinId= contract the
       // post-OAuth restore flow already uses there).
@@ -530,7 +539,7 @@ export function StudioBoard() {
     } else {
       toast.error(result.toast);
     }
-  }, [noBoardAccess, tr]);
+  }, [announceScheduled, noBoardAccess, tr]);
 
   // ── Publish now (from ⋮) ───────────────────────────────────────────────────
   const handlePublish = useCallback(async (id: string) => {
@@ -685,13 +694,14 @@ export function StudioBoard() {
     const updated = pinDraftStore.smartScheduleDraft(id, { plannedDate: date, plannedTime: time }, null, { source: "manual" });
     if (updated) {
       flashSaved();
+      announceScheduled([id]);
       toast.success(tr("studioBoard.toast.customTimeScheduled")
         .replace("{date}", date)
         .replace("{time}", time), {
         action: { label: tr("studioBoard.toast.openInPlan"), onClick: () => { window.location.href = planDeepLink(id); } },
       });
     }
-  }, [flashSaved, noBoardAccess, tr]);
+  }, [announceScheduled, flashSaved, noBoardAccess, tr]);
 
   // ── Product → Pin / attach product ─────────────────────────────────────────
   // A product selected from My Products, Product Opportunities, Shopify, Etsy or a
@@ -1439,7 +1449,11 @@ export function StudioBoard() {
         onApply={handleBatchApply}
         onGenerateMetadata={() => toast.info("Select rows, then use Generate copy to fill missing details.")}
         onScheduleSelected={ids => {
-          ids.forEach(id => { ensureScheduledPlanTime(id); });
+          // Only the ones that actually took a slot are announced: a draft that failed
+          // validation is still unscheduled, and counting it would put a "+1" on the
+          // Plan trigger pointing at nothing.
+          const scheduled = ids.filter(id => ensureScheduledPlanTime(id).ok);
+          announceScheduled(scheduled);
           toast.success(`${ids.length} ${ids.length === 1 ? "content item" : "content items"} scheduled.`);
         }}
         onPublishComplete={ids => {
@@ -1490,7 +1504,7 @@ export function StudioBoard() {
         </div>
       )}
       </div>
-      <StudioPlanSidebar drafts={allItems.map(item => item.draft)} pinned={planPinned} onPinnedChange={handlePlanPinnedChange} />
+      <StudioPlanSidebar drafts={allItems.map(item => item.draft)} pinned={planPinned} onPinnedChange={handlePlanPinnedChange} lastScheduled={lastScheduled} />
     </div>
   );
 }
