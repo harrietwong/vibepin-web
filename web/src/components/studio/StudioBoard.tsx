@@ -21,7 +21,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import * as assetStore from "@/lib/assetStore";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { publishPin, startPinterestConnect, fetchPinterestDefaultBoard, savePinterestDefaultBoard } from "@/lib/pinterestClient";
+import { startPinterestConnect, fetchPinterestDefaultBoard, savePinterestDefaultBoard } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
@@ -49,8 +49,8 @@ import { EMPTY_TOUCHED, type LinkedProduct } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar } from "@/components/studio/StudioPlanSidebar";
-import { contentDestinationResults, contentDestinations, contentMedia, type DestinationPublishResult, type PublishDestination } from "@/lib/contentDraftModel";
-import { publishToSocial } from "@/lib/social/socialClient";
+import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
+import { publishContent } from "@/lib/studio/publishContent";
 import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
@@ -338,9 +338,9 @@ export function StudioBoard() {
         if (draft.boardId?.trim()) return;
         const existing = contentDestinations(draft);
         if (existing.length && !existing.some(destination => destination.provider === "pinterest")) return;
-        const destinations = (existing.length ? existing : [{ id: `${draft.id}:pinterest`, provider: "pinterest" as const }])
-          .map(destination => destination.provider === "pinterest" ? { ...destination, boardId: liveBoard.id, boardName: liveBoard.name } : destination);
-        pinDraftStore.updateDraft(draft.id, { boardId: liveBoard.id, boardName: liveBoard.name, publishDestinations: destinations });
+        // Only the board is written: the Pinterest destination reads its board back
+        // off the draft, so there is no second copy that can go stale.
+        pinDraftStore.updateDraft(draft.id, { boardId: liveBoard.id, boardName: liveBoard.name });
       });
     };
     const recentPreference = recentDraftBoard?.boardId
@@ -533,16 +533,15 @@ export function StudioBoard() {
   }, [noBoardAccess, tr]);
 
   // ── Publish now (from ⋮) ───────────────────────────────────────────────────
+  // Gating and toasts live here (they are card UI); the publish ITSELF is
+  // publishContent(), the one function every surface goes through — see its header
+  // for why four divergent publish paths was the defect.
   const handlePublish = useCallback(async (id: string) => {
     let d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
-    let destinations: PublishDestination[] = contentDestinations(d);
-    if (!destinations.length) destinations = [{ id: `${id}:pinterest`, provider: "pinterest", boardId: d.boardId, boardName: d.boardName }];
-    const priorResults = contentDestinationResults(d);
-    const pendingDestinations = destinations.filter(destination => !priorResults.some(result => result.destinationId === destination.id && result.status === "published"));
-    const targets = pendingDestinations.length ? pendingDestinations : destinations;
-    const pinterestTargets = targets.filter(destination => destination.provider === "pinterest");
-    const socialTargets = targets.filter(destination => destination.provider !== "pinterest");
+    const destinations = contentDestinations(d);
+    const pinterestTargets = destinations.filter(destination => destination.provider === "pinterest");
+    const socialTargets = destinations.filter(destination => destination.provider !== "pinterest");
     // Publishing straight from the card never opens the details drawer, so the drawer's
     // board auto-fill never ran for this draft. Without this, a user who has a default
     // board set is still told to "complete required details" — the board they picked
@@ -555,10 +554,9 @@ export function StudioBoard() {
         // which is the pre-multi-account behaviour.
         const fallback = await fetchPinterestDefaultBoard(undefined, readStoredTarget(d) || undefined);
         if (fallback?.boardId) {
-          destinations = destinations.map(destination => destination.provider === "pinterest"
-            ? { ...destination, boardId: fallback.boardId, boardName: fallback.boardName ?? "" }
-            : destination);
-          d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "", publishDestinations: destinations }) ?? d;
+          // The board lives on the draft; contentDestinations() reads it back onto the
+          // Pinterest destination, so there is no second place to keep in step.
+          d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "" }) ?? d;
         }
       } catch { /* leave the draft as-is; the readiness gate below reports it */ }
     }
@@ -574,100 +572,20 @@ export function StudioBoard() {
       toast.error(tr("studioBoard.toast.fieldTooLong"));
       return;
     }
-    if (!beginPublish(id)) return;
-    const now = new Date().toISOString();
-    const untouchedResults = priorResults.filter(result => !targets.some(destination => destination.id === result.destinationId));
-    pinDraftStore.updateDraft(id, {
-      publishError: undefined,
-      destinationResults: [
-        ...untouchedResults,
-        ...targets.map((destination): DestinationPublishResult => ({ destinationId: destination.id, provider: destination.provider, status: "publishing", submittedAt: now })),
-      ],
-    });
-    const outcomes: DestinationPublishResult[] = [];
-    let pinterestRemote: { id: string; url?: string } | null = null;
-    let adoptedConnectionId: string | undefined;
-    try {
-      for (const destination of pinterestTargets) {
-        if (!pinterestReady) {
-          outcomes.push({ destinationId: destination.id, provider: "pinterest", status: "failed", errorCode: "missing_board", errorMessage: "Choose a Pinterest board before publishing." });
-          continue;
-        }
-        try {
-          // Publish AS the account the merchant pinned to this draft (or the account
-          // the destination itself names), never "the first connection we find".
-          const storedTarget = destination.accountId || readStoredTarget(d) || undefined;
-          const res = await publishPin({ boardId: destination.boardId || d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id, draftId: id, source: "immediate", connectionId: storedTarget });
-          pinterestRemote = { id: res.pin.id, url: res.pin.url };
-          // Adopt-once (PRD §14): a draft that had no pinned target keeps the connection
-          // it actually published through, so every later retry/action stays on it.
-          if (!readStoredTarget(d) && res.connectionId) adoptedConnectionId = res.connectionId;
-          outcomes.push({ destinationId: destination.id, provider: "pinterest", status: "published", remoteId: res.pin.id, postUrl: res.pin.url, submittedAt: now, publishedAt: new Date().toISOString() });
-        } catch (error) {
-          const err = error as { code?: string; message?: string };
-          outcomes.push({ destinationId: destination.id, provider: "pinterest", status: "failed", errorCode: err.code, errorMessage: err.message || tr("studioBoard.toast.publishFailed"), submittedAt: now });
-        }
-      }
-
-      if (socialTargets.length) {
-        try {
-          const social = await publishToSocial({
-            postId: id,
-            post: { imageUrls: contentMedia(d).map(item => item.url), title: d.title || undefined, caption: d.description || undefined, destinationUrl: d.destinationUrl || undefined, altText: d.altText || undefined },
-            destinations: socialTargets.map(destination => ({ provider: destination.provider, socialConnectionId: destination.accountId })),
-          });
-          const queues = new Map<string, PublishDestination[]>();
-          socialTargets.forEach(destination => queues.set(destination.provider, [...(queues.get(destination.provider) ?? []), destination]));
-          social.destinations.forEach(result => {
-            const destination = queues.get(result.provider)?.shift();
-            if (!destination || result.status === "skipped") return;
-            outcomes.push({
-              destinationId: destination.id,
-              provider: destination.provider,
-              status: result.status === "published" ? "published" : "failed",
-              remoteId: result.externalPostId ?? undefined,
-              postUrl: result.externalPostUrl ?? undefined,
-              errorMessage: result.error ?? undefined,
-              submittedAt: now,
-              publishedAt: result.status === "published" ? new Date().toISOString() : undefined,
-            });
-          });
-        } catch (error) {
-          socialTargets.forEach(destination => outcomes.push({ destinationId: destination.id, provider: destination.provider, status: "failed", errorMessage: (error as Error).message || tr("studioBoard.toast.publishFailed"), submittedAt: now }));
-        }
-      }
-
-      const finalResults = [...untouchedResults, ...outcomes];
-      const published = finalResults.filter(result => result.status === "published");
-      const failed = finalResults.filter(result => result.status === "failed");
-      const socialPosts = finalResults.filter(result => result.provider !== "pinterest" && result.status === "published" && result.remoteId).map(result => ({
-        provider: result.provider, postId: result.remoteId as string, postUrl: result.postUrl ?? "", publishedAt: result.publishedAt ?? now,
-      }));
-      const firstFailure = failed[0];
-      const localPlanned = d.plannedAt || d.scheduledDate;
-      const prevScheduled = localPlanned
-        ? new Date(`${localPlanned.slice(0, 10)}T${(d.scheduledTime?.trim() || localPlanned.slice(11, 16) || "09:00")}:00`).toISOString()
-        : undefined;
-      pinDraftStore.updateDraft(id, {
-        publishDestinations: destinations,
-        destinationResults: finalResults,
-        socialPosts,
-        postedAt: published.length ? (d.postedAt || now) : d.postedAt,
-        remotePinId: pinterestRemote?.id || d.remotePinId,
-        remotePinUrl: pinterestRemote?.url || d.remotePinUrl,
-        publishError: firstFailure?.errorMessage,
-        failureType: firstFailure ? "publish" : undefined,
-        errorCategory: firstFailure ? mapPublishErrorToCategory(firstFailure.errorCode, firstFailure.errorMessage) : undefined,
-        publishErrorCode: firstFailure?.errorCode,
-        previousScheduledTime: firstFailure && !published.length ? prevScheduled : d.previousScheduledTime,
-        scheduledDate: firstFailure && !published.length ? "" : d.scheduledDate,
-        scheduledTime: firstFailure && !published.length ? "" : d.scheduledTime,
-        ...(adoptedConnectionId ? { targetConnectionId: adoptedConnectionId } : {}),
-      });
-      if (published.length && failed.length) toast.info(`${published.length} destination${published.length === 1 ? "" : "s"} published; ${failed.length} needs attention.`);
-      else if (published.length) toast.success(tr("studioBoard.toast.publishSuccess"));
-      else toast.error(tr("studioBoard.toast.publishFailed"));
-    } finally { endPublish(id); }
+    // publishContent takes the shared in-flight lock itself, resolves the destinations
+    // from the stored intent, media-checks each one, and writes the per-destination
+    // records plus the derived legacy fields. Nothing about the record is decided here.
+    const outcome = await publishContent(id, { onlyPending: true });
+    if (outcome.blocked === "locked") return;
+    if (outcome.blocked) { toast.error(tr("studioBoard.toast.publishFailed")); return; }
+    const publishedCount = outcome.published.length;
+    const failedCount = outcome.failed.length;
+    if (publishedCount && failedCount) {
+      toast.info(tr("studioBoard.toast.publishPartial")
+        .replace("{published}", String(publishedCount))
+        .replace("{failed}", String(failedCount)));
+    } else if (publishedCount) toast.success(tr("studioBoard.toast.publishSuccess"));
+    else toast.error(tr("studioBoard.toast.publishFailed"));
   }, [noBoardAccess, tr]);
 
   const handleCustomSchedule = useCallback((id: string, date: string, time: string) => {
@@ -1442,23 +1360,13 @@ export function StudioBoard() {
           ids.forEach(id => { ensureScheduledPlanTime(id); });
           toast.success(`${ids.length} ${ids.length === 1 ? "content item" : "content items"} scheduled.`);
         }}
-        onPublishComplete={ids => {
-          const now = new Date().toISOString();
-          ids.forEach(id => {
-            const current = pinDraftStore.getDraft(id);
-            if (!current) return;
-            const pinterest = contentDestinations(current).find(destination => destination.provider === "pinterest") ?? { id: `${id}:pinterest`, provider: "pinterest" as const };
-            const prior = contentDestinationResults(current).filter(result => result.destinationId !== pinterest.id);
-            pinDraftStore.updateDraft(id, {
-              postedAt: now,
-              destinationResults: [...prior, { destinationId: pinterest.id, provider: "pinterest", status: "published", publishedAt: now }],
-              publishError: undefined,
-              failureType: undefined,
-              errorCategory: undefined,
-              publishErrorCode: undefined,
-            });
-          });
-        }}
+        // No result-writing here any more. This used to FABRICATE a Pinterest
+        // "published" row for every id the batch reported — a record no publish had
+        // produced, which outranked the real one and could claim a destination
+        // published when only Pinterest was attempted. The batch drawer now publishes
+        // through publishContent(), which writes the real per-destination rows; this
+        // callback is only the queue/refresh signal it always should have been.
+        onPublishComplete={() => { /* results are written by publishContent */ }}
       />
       {pendingUploadFiles && (
         <div data-testid="multi-upload-modal" role="dialog" aria-modal="true" aria-labelledby="multi-upload-title"

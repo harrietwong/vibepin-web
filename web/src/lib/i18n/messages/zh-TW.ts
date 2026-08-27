@@ -865,6 +865,8 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.imageUnavailable": "圖片無法使用——請重新上傳圖片後再發布。",
   "studioBoard.toast.completeDetailsToPublish": "請完善 Pin 詳情以完成發布。",
   "studioBoard.toast.publishSuccess": "Pin 發布成功。",
+  "studioBoard.toast.publishPartial": "{published} 個目的地已發布；{failed} 個需要處理。",
+  "studioBoard.toast.ambiguousAccount": "請選擇要用哪個 {platform} 帳號發布。",
   "studioBoard.toast.publishFailed": "發布失敗，請再試一次。",
   "studioBoard.toast.productNoImage": "該商品目前沒有可用的圖片。",
   "studioBoard.toast.createdPinFromProduct": "已從你的商品建立 Pin。",

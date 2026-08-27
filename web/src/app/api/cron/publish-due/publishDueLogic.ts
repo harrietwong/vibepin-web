@@ -134,6 +134,67 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
   };
 }
 
+/** One destination's outcome, in the shape the fan-out layer already produces. */
+export type DestinationOutcomeLike = {
+  provider: string;
+  status: string;
+  socialConnectionId?: string | null;
+  externalPostId?: string | null;
+  externalPostUrl?: string | null;
+  accountName?: string | null;
+  error?: string | null;
+};
+
+/**
+ * Fold this attempt's outcomes into the payload's `destinationResults[]`.
+ *
+ * The point of writing these from cron at all: a scheduled publish must leave the SAME
+ * per-destination record an immediate one leaves. Without it, a Pin published by the
+ * worker showed only the legacy single-Pinterest fields, so the card that had shown
+ * three destination rows before the schedule fired showed one afterwards — the merchant
+ * could not tell whether Instagram had gone out.
+ *
+ * Keyed `${provider}:${socialConnectionId ?? "legacy"}`, the same key the client uses,
+ * so a retry updates the row it belongs to instead of appending a duplicate.
+ */
+export function mergeDestinationResults(
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+): Array<Record<string, unknown>> {
+  const prior = Array.isArray(payload.destinationResults)
+    ? (payload.destinationResults as Array<Record<string, unknown>>)
+    : [];
+  const rows = outcomes
+    // `skipped` is "not attempted" — recording an outcome for it would claim
+    // something happened that did not.
+    .filter(o => o.status !== "skipped")
+    .map(o => {
+      const connectionId = typeof o.socialConnectionId === "string" && o.socialConnectionId.trim()
+        ? o.socialConnectionId.trim()
+        : null;
+      const published = o.status === "published";
+      const row: Record<string, unknown> = {
+        destinationId: `${o.provider}:${connectionId ?? "legacy"}`,
+        provider: o.provider,
+        socialConnectionId: connectionId,
+        status: published ? "published" : "failed",
+        submittedAt: nowIso,
+      };
+      if (o.accountName) row.accountLabel = o.accountName;
+      if (published) {
+        row.publishedAt = nowIso;
+        if (o.externalPostId) row.remoteId = o.externalPostId;
+        if (o.externalPostUrl) row.postUrl = o.externalPostUrl;
+      } else {
+        row.errorMessage = o.error || "Publishing failed.";
+      }
+      return row;
+    });
+  const fresh = new Set(rows.map(r => r.destinationId));
+  return [...prior.filter(r => !fresh.has(r?.destinationId)), ...rows];
+}
+
 /**
  * Pin an adopted target onto a payload — the adopt-once write-back (PRD §14).
  *
@@ -163,8 +224,24 @@ export function payloadAfterSuccess(
   nowIso: string,
   /** The connection this publish ran through — pinned onto untargeted drafts (adopt-once). */
   connectionId?: string | null,
+  /**
+   * What the non-Pinterest fan-out achieved, so a scheduled publish records the SAME
+   * per-destination rows an immediate one does. Omitted ⇒ Pinterest-only, which is
+   * exactly what a legacy (intent-less) Pin resolves to.
+   */
+  fanned?: readonly DestinationOutcomeLike[],
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, connectionId) };
+  next.destinationResults = mergeDestinationResults(payload, [
+    {
+      provider: "pinterest",
+      status: "published",
+      socialConnectionId: firstString(payload.targetConnectionId) || connectionId || null,
+      externalPostId: pin.id,
+      externalPostUrl: pin.url,
+    },
+    ...(fanned ?? []),
+  ], nowIso);
   // Bump payload.updatedAt: the client's mergeServerDrafts LWW compares this field
   // (pinDraftStore.ts:815, local wins on tie) — without it the client never sees the
   // cron's result and a later local edit can push the stale scheduled payload back,
@@ -217,6 +294,14 @@ export function payloadAfterFailure(
   // Bump payload.updatedAt (same reason as payloadAfterSuccess — see comment there):
   // the client's LWW merge compares this field, so it must match the row's updated_at.
   next.updatedAt = nowIso;
+  // The failed Pinterest destination gets a row of its own, carrying the reason, so the
+  // card shows WHICH destination failed and why — not just a Content-level error.
+  next.destinationResults = mergeDestinationResults(payload, [{
+    provider: "pinterest",
+    status: "failed",
+    socialConnectionId: firstString(payload.targetConnectionId) || connectionId || null,
+    error: fail.message,
+  }], nowIso);
 
   // previousScheduledTime is stored as ISO (matches DraftDetailsDrawer.tsx:955 and
   // promote.ts's deriveLocalPlanned + "append :00.000Z" UTC convention) rather than the

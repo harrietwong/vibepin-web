@@ -19,6 +19,7 @@ import {
 import { startPinterestConnect, publishPin, type PinterestBoard } from "@/lib/pinterestClient";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
+import { publishContent } from "@/lib/studio/publishContent";
 import { readStoredTarget, sharedTargetForSelection } from "@/lib/studio/publishTarget";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import type { PinterestClientError } from "@/lib/pinterestClient";
@@ -1275,6 +1276,33 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       if (!isPinReady(input)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") }); continue; }
       const lenErrors = pinFieldErrors(input);
       if (lenErrors.title || lenErrors.description) { results.push({ pinId: p.pinId, title, status: "skipped", message: lenErrors.title || lenErrors.description }); continue; }
+      // A row backed by a real draft publishes through the ONE shared publish
+      // function, so a batch publish produces exactly the per-destination records an
+      // immediate card publish does — and actually reaches Instagram/Facebook when
+      // the Content is scheduled to them. This path previously called publishPin
+      // directly (Pinterest only) and the parent then wrote a fabricated Pinterest
+      // "published" row for it.
+      //
+      // In the Studio (history) context `p.pinId` is NOT a pinDraftStore id — there is
+      // no draft to read destinations from or write results to — so those rows keep
+      // the direct single-image Pinterest publish below. That boundary is the reason
+      // both paths still exist.
+      const backingDraft = pinDraftStore.getDraft(p.pinId);
+      if (backingDraft) {
+        const outcome = await publishContent(p.pinId, { onlyPending: true });
+        if (outcome.blocked === "locked") {
+          results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") });
+        } else if (outcome.blocked) {
+          results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") });
+        } else if (outcome.published.length) {
+          const pinterest = outcome.published.find(r => r.provider === "pinterest");
+          results.push({ pinId: p.pinId, title, status: "published", url: pinterest?.postUrl ?? outcome.published[0].postUrl ?? undefined });
+          publishedIds.push(p.pinId);
+        } else {
+          results.push({ pinId: p.pinId, title, status: "failed", message: outcome.failed[0]?.errorMessage ?? tr("studioModals.publish.publishFailed") });
+        }
+        continue;
+      }
       // Shared in-flight lock (StudioBoard.tsx's card publish uses the same registry) —
       // skip a pin that's already being published from another surface rather than
       // double-submitting it.

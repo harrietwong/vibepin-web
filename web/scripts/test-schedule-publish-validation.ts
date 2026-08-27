@@ -106,8 +106,11 @@ async function main() {
   });
   await test("5/6b. PinBoardCard flushes pending debounced edits synchronously before onSchedule/onPublish", () => {
     const src = readFileSync(join(root, "src/components/studio/PinBoardCard.tsx"), "utf8");
-    assert.match(src, /const doSchedule = useCallback\(\(\) => \{ flush\(\); props\.onSchedule\(draft\.id\); \}/);
-    assert.match(src, /const doPublish = useCallback\(\(\) => \{ flush\(\); props\.onPublish\(draft\.id\); \}/);
+    // Both actions guard on destinationError first (an unresolvable account must not
+    // schedule or publish a half-recorded intent), then flush, then act. The ORDER is
+    // what matters: flush() must land before the handler re-reads the store.
+    assert.match(src, /const doSchedule = useCallback\(\(\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onSchedule\(draft\.id\);/);
+    assert.match(src, /const doPublish = useCallback\(\(\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onPublish\(draft\.id\);/);
     // flush() must be a SYNCHRONOUS persistNow call (not merely clearing the debounce
     // timer) so the store write has landed before onSchedule/onPublish re-reads it.
     assert.match(src, /const flush = useCallback\(\(\) => \{\s*\n?\s*if \(timer\.current\) \{ clearTimeout\(timer\.current\); timer\.current = null; persistNow\(pendingRef\.current\); \}/);
@@ -141,7 +144,20 @@ async function main() {
     const studio = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
     const batch = readFileSync(join(root, "src/components/studio/BatchEditDrawer.tsx"), "utf8");
     const drawer = readFileSync(join(root, "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
-    assert.match(studio, /if \(!beginPublish\(id\)\) return;/);
+    const shared = readFileSync(join(root, "src/lib/studio/publishContent.ts"), "utf8");
+    // The lock now lives INSIDE publishContent, the one function the card and the
+    // batch drawer publish through. It had to move: with each caller taking it first,
+    // publishContent's own acquire would fail and every publish would report
+    // "already publishing" against itself. The invariant is unchanged — a publish is
+    // still guarded by the shared registry, and a caller that loses the race is told.
+    assert.match(shared, /if \(!beginPublish\(draftId\)\) \{/);
+    assert.match(shared, /endPublish\(draftId\);/);
+    assert.match(studio, /await publishContent\(id, \{ onlyPending: true \}\)/);
+    assert.match(studio, /outcome\.blocked === "locked"/, "the card honours the lock's verdict");
+    assert.match(batch, /await publishContent\(p\.pinId, \{ onlyPending: true \}\)/);
+    assert.match(batch, /outcome\.blocked === "locked"/);
+    // The history (non-draft) rows in the batch drawer and the Plan drawer still
+    // publish directly, so they still take the lock themselves.
     assert.match(batch, /if \(!beginPublish\(p\.pinId\)\)/);
     assert.match(drawer, /if \(!beginPublish\(activeDraft\.id\)\) return;/);
   });
@@ -250,8 +266,11 @@ async function main() {
   });
   await test("StudioBoard.handlePublish blocks on pinFieldErrors before beginPublish", () => {
     const src = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
-    const fn = src.match(/const handlePublish = useCallback\(async \(id: string\) => \{[\s\S]*?if \(!beginPublish\(id\)\) return;/);
-    assert.ok(fn, "handlePublish body up to beginPublish not found");
+    // The publish itself (and the shared lock it takes) moved into publishContent, so
+    // the boundary the length gate must precede is now the call to it. Same invariant:
+    // an over-limit title is refused BEFORE anything is sent or locked.
+    const fn = src.match(/const handlePublish = useCallback\(async \(id: string\) => \{[\s\S]*?await publishContent\(id,/);
+    assert.ok(fn, "handlePublish body up to the publishContent call not found");
     assert.match(fn![0], /const lenErrors = pinFieldErrors/);
   });
   await test("DraftDetailsDrawer.canSchedule and handlePublish both include the length gate", () => {

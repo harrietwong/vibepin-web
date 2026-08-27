@@ -1936,6 +1936,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.imageUnavailable": "图片不可用——请重新上传图片后再发布。",
   "studioBoard.toast.completeDetailsToPublish": "请完善 Pin 详情以完成发布。",
   "studioBoard.toast.publishSuccess": "Pin 发布成功。",
+  "studioBoard.toast.publishPartial": "{published} 个目的地已发布；{failed} 个需要处理。",
+  "studioBoard.toast.ambiguousAccount": "请选择要用哪个 {platform} 账号发布。",
   "studioBoard.toast.publishFailed": "发布失败，请重试。",
   "studioBoard.toast.productNoImage": "该商品暂无可用图片。",
   "studioBoard.toast.createdPinFromProduct": "已从你的商品创建 Pin。",

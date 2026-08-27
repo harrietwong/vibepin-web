@@ -34,6 +34,7 @@ import {
   pinterestOutcomeRow,
   recordOutcomes,
 } from "@/lib/social/publishFanout";
+import type { DestinationOutcome } from "@/lib/social/publishRules";
 import {
   recordPublishEvent,
   recordFailedPublishEvent,
@@ -216,6 +217,9 @@ export async function GET(req: Request): Promise<Response> {
         // invented for it.
         const destinations = resolveScheduledDestinations(row.payload as Parameters<typeof resolveScheduledDestinations>[0]);
         const extras = destinations.filter(d => d.provider !== "pinterest");
+        // Kept for persistSuccess: the per-destination rows it writes onto the payload
+        // must describe what the fan-out ACHIEVED, not merely what was intended.
+        let fannedOutcomes: DestinationOutcome[] = [];
         if (extras.length) {
           try {
             const jobId = await createPublishJob(
@@ -233,6 +237,7 @@ export async function GET(req: Request): Promise<Response> {
               destinationUrl: input.link,
               altText: input.altText,
             });
+            fannedOutcomes = fanned;
             if (jobId) {
               const pinterestIntent = destinations.find(d => d.provider === "pinterest");
               await recordOutcomes(db, jobId, [
@@ -255,7 +260,7 @@ export async function GET(req: Request): Promise<Response> {
         // result.connectionId is the row that actually published — pinned onto the draft
         // when it had no target yet (adopt-once, PRD §14). Already-targeted drafts are
         // left untouched by withAdoptedTarget.
-        await persistSuccess(db, row, result.pin, nowIso, result.connectionId);
+        await persistSuccess(db, row, result.pin, nowIso, result.connectionId, fannedOutcomes);
         void recordPublishEvent(db, PUBLISH_EVENT_SUCCEEDED, {
           ...eventBase,
           durationMs: Date.now() - rowStartedMs,
@@ -311,8 +316,9 @@ async function persistSuccess(
   pin: { id: string; url: string },
   nowIso: string,
   connectionId?: string | null,
+  fanned?: readonly DestinationOutcome[],
 ): Promise<void> {
-  const payload = payloadAfterSuccess(row.payload, pin, nowIso, connectionId);
+  const payload = payloadAfterSuccess(row.payload, pin, nowIso, connectionId, fanned);
   const { error } = await db
     .from(TABLE)
     .update({

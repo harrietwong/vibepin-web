@@ -30,7 +30,6 @@ import {
   mediaId,
   type ContentMedia,
   type DestinationPublishResult,
-  type PublishDestination,
 } from "./contentDraftModel";
 
 const STORE_KEY       = "vp:pin_drafts:v1";
@@ -73,9 +72,14 @@ export interface PinDraft {
   media?:               ContentMedia[];
   /** The media used for card/grid previews. Defaults to the first media item. */
   coverMediaId?:        string;
-  /** Independently configured platform/account destinations. */
-  publishDestinations?: PublishDestination[];
-  /** Independently recorded per-destination publish outcomes. */
+  /**
+   * One durable record per destination of the last publish (PRD §27).
+   *
+   * Publish INTENT is not here — it is `scheduledDestinations` below, the single
+   * source of truth the cron worker and the server job tables also read. These are
+   * the RESULTS of acting on that intent, and the legacy publish fields
+   * (postedAt / remotePinId / socialPosts) are derived FROM them.
+   */
   destinationResults?:  DestinationPublishResult[];
   keyword:             string;
   category:            string;
@@ -280,6 +284,10 @@ export interface SocialPostRef {
    * field existed simply omit the line.
    */
   accountName?: string;
+  /** Same value as accountName, under the name the Content model uses. */
+  accountLabel?: string;
+  /** WHICH connected account published it — the result key's other half. */
+  socialConnectionId?: string;
 }
 
 /**
@@ -564,7 +572,6 @@ export function createDraft(input: {
 export function createBoardDraft(input: {
   imageUrl:         string;
   media?:           ContentMedia[];
-  publishDestinations?: PublishDestination[];
   source:           PinBoardSource;
   idempotencyKey?:  string;
   title?:           string;
@@ -620,7 +627,6 @@ export function createBoardDraft(input: {
     imageUrl:            cover?.url ?? input.imageUrl,
     media:               initialMedia,
     coverMediaId:        cover?.id,
-    publishDestinations: input.publishDestinations,
     keyword:             input.keyword ?? "",
     category:            input.category ?? "",
     title:               input.title?.trim() ?? "",
