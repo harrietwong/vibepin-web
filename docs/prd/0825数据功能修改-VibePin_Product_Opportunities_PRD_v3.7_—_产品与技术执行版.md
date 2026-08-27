@@ -1159,6 +1159,8 @@ Digital today / 7d / 14d / 30d / full metric = 0 / 0 / 0 / 0 / 0
 
 这次运行仍然 **BLOCK**，不得宣称首次自动运行通过：第 79 个 Source Pin 触发 120 秒整 Pin 超时，最终报告明确记录 `renderFailureCount=1`、`resultTrust=partial:some_pins_failed_to_render`。严格 `--require-scheduled-run` 审计因此 exit 1，并且该报告不得进入自动 Admission。服务退出后两个真实 VPS 锁均释放、相关进程为 0、内核窗口无 OOM，下一次 timer 已排到 `2026-08-28T15:06:06Z`。完整只读证据固定为 `backend/docs/product_supply_automatic_run_audit_20260828T003013+0800.json`。
 
+后续静态定位确认，该 Pin 为 Home Decor Source Pin `1127518456800539414`，关键词为 `kids room decor ideas`。整 Pin 内部存在多个 Playwright 默认等待，并且旧实现最多串行读取、点击 10 个通用 tab；这些等待的累计预算可以耗尽 120 秒总墙钟。候选 `f93a29a993594605bffed9115119e8210a6bfcf1` 没有提高 120 秒总预算，也没有放宽零渲染失败门禁，而是将可选 DOM 探测分别限制在 5–8 秒、通用 tab 最多处理 4 个，并在报告中保留精确超时阶段。该修复的本地聚焦回归为 264 passed / 35 subtests；仍须由后续永久 timer 自动运行证明 `renderFailureCount=0`，本次 BLOCK 报告本身不得改判。
+
 ### 19.3 自动准入候选实现状态
 
 隔离候选已补齐 Product Supply 与 v3.7 之间的自动准入编排，但本节不表示已部署或已启用：

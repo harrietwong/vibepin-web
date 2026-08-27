@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`881c359a97671c040f6d01fdd0d37dee5d30b9f0`; and its exact Product boundary is
+`f93a29a993594605bffed9115119e8210a6bfcf1`; and its exact Product boundary is
 the 76-artifact
-`backend/docs/product_opportunities_v37_release_manifest_58598b4.json`. This tip
+`backend/docs/product_opportunities_v37_release_manifest_f93a29a.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -42,7 +42,7 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 890 passed with 2 live-only skips and 77
+and contract-test state: backend 895 passed with 2 live-only skips and 77
 subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -663,6 +663,13 @@ the bounded 120-second whole-Pin timeout, making `renderFailureCount=1` and
 `resultTrust=partial:some_pins_failed_to_render`; the strict scheduled audit
 exited 1 before any Admission use. Service cleanup still passed: both locks
 free, no matching process, no kernel OOM, next timer trigger in the future.
+The failed row was Source Pin `1127518456800539414` (Home Decor, keyword
+`kids room decor ideas`). Static review found repeated default Playwright waits
+inside the 120-second whole-Pin wall, including up to ten generic tab label/click
+probes. Candidate `f93a29a` gives those optional probes smaller independent
+budgets, caps generic tabs at four, and reports the exact timeout stage. It does
+not turn this failed receipt into a pass; a later permanent-timer run must still
+produce zero render failures.
 Immutable evidence:
 `backend/docs/product_supply_automatic_run_audit_20260828T003013+0800.json`.
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "candidateCommit": "881c359a97671c040f6d01fdd0d37dee5d30b9f0",
-  "integrationCommit": "881c359a97671c040f6d01fdd0d37dee5d30b9f0",
+  "candidateCommit": "f93a29a993594605bffed9115119e8210a6bfcf1",
+  "integrationCommit": "f93a29a993594605bffed9115119e8210a6bfcf1",
   "launchTaxonomyCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
   "sourceProvenanceAliasCommit": "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62",
   "classifyChainRepairCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
@@ -46,9 +46,9 @@
     },
     {
       "path": "backend/shop_the_look_expand.py",
-      "gitBlobSha1": "3b555c60382c16023e3430ca73219910df59f5b5",
-      "sha256": "e64134be6b2971ea66aa9beeaca92c01eb13f29e7effb085a8185bedd87de31d",
-      "bytes": 114009
+      "gitBlobSha1": "8128346eaac904c14195be9e5f3abb425a63704f",
+      "sha256": "511a4f8e0eba42d4fba233c49c0eb5ad092b4014719e4492e0bc3530bb1c7ba2",
+      "bytes": 116304
     },
     {
       "path": "backend/product_opportunity_admission.py",
