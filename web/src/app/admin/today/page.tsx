@@ -19,6 +19,7 @@ import { getActivationFunnel, type StageCount } from "@/lib/server/adminActivati
 import { getAiAdoption } from "@/lib/server/adminAiAdoption";
 import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
 import { AdminT, AdminTFmt } from "../AdminT";
+import { BlockerReason } from "../_components/BlockerReason";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
 export const dynamic = "force-dynamic";
@@ -125,28 +126,6 @@ function BlockerBadge({ type }: { type: BlockerType }) {
       <AdminT k={BLOCKER_LABEL_KEY[type]} />
     </span>
   );
-}
-
-function BlockerReason({ item }: { item: BlockerItem }) {
-  const e = item.evidence;
-  switch (item.blockerType) {
-    case "publish_failure":
-      return e.publishErrorCode ? (
-        <AdminTFmt k="blocker.evidence.publishFailureWithCode" vars={{ count: e.failedPublishCount ?? 1, code: e.publishErrorCode }} />
-      ) : (
-        <AdminTFmt k="blocker.evidence.publishFailure" vars={{ count: e.failedPublishCount ?? 1 }} />
-      );
-    case "pinterest_disconnected":
-      return <AdminT k={e.disconnectReason === "disconnected" ? "blocker.evidence.pinterestDisconnected.disconnected" : "blocker.evidence.pinterestDisconnected.needsReconnect"} />;
-    case "generation_failures":
-      return <AdminTFmt k="blocker.evidence.generationFailures" vars={{ count: e.failedGenerationCount ?? 0 }} />;
-    case "signup_not_connected":
-      return <AdminTFmt k="blocker.evidence.signupNotConnected" vars={{ hours: e.ageHours ?? 0 }} />;
-    case "connected_not_creating":
-      return <AdminTFmt k="blocker.evidence.connectedNotCreating" vars={{ hours: e.ageHours ?? 0 }} />;
-    default:
-      return null;
-  }
 }
 
 function ActionCenterCard({ items, available, windowHours }: { items: BlockerItem[]; available: boolean; windowHours: number }) {

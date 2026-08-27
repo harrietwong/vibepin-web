@@ -69,8 +69,20 @@ export interface BlockerEvidence {
   draftId?: string | null;
   /** pinterest_disconnected: stable reason code. */
   disconnectReason?: PinterestDisconnectReason;
+  /**
+   * publish_failure: the sanitized human-readable message from the failed event
+   * (payload.errorMessage, already truncated to <=300 chars at write time) or,
+   * on the inferred path, the draft's payload.publishError text. The CODE tells
+   * the operator what class of failure it was; the MESSAGE is what they actually
+   * need to answer the user ("board not found: <name>").
+   */
+  publishErrorMessage?: string | null;
   /** generation_failures: failed generation count in the window. */
   failedGenerationCount?: number;
+  /** generation_failures: error_type of the MOST RECENT failure in the window. */
+  generationErrorType?: string | null;
+  /** generation_failures: error_message of that same failure, trimmed to <=200 chars. */
+  generationErrorMessage?: string | null;
   /** signup_not_connected / connected_not_creating: hours since the anchoring event. */
   ageHours?: number;
 }
@@ -137,6 +149,8 @@ interface PublishFacts {
   /** latest pinterest_publish_failed (exact) at/after windowStart. */
   lastFailedAt: string | null;
   lastFailedCode: string | null;
+  /** sanitized prose from the failed event's payload.errorMessage. */
+  lastFailedMessage: string | null;
   lastFailedDraftId: string | null;
   failedCountInWindow: number;
   /** latest pinterest_publish_succeeded (exact), any time in the scanned window. */
@@ -149,6 +163,8 @@ interface DraftFacts {
   /** a live draft carrying payload.publishError (inferred publish failure). */
   publishErrorDraftId: string | null;
   publishErrorCode: string | null;
+  /** the draft's payload.publishError prose (the inferred path's message). */
+  publishErrorMessage: string | null;
   /** a live draft whose scheduled_at passed with no postedAt (inferred stuck publish). */
   overdueDraftId: string | null;
   overdueScheduledAt: string | null;
@@ -177,6 +193,9 @@ interface ConnFacts {
 
 interface GenFacts {
   lastFailedAt: string | null;
+  /** error_type / error_message of the failure at lastFailedAt (newest in-window). */
+  lastFailedType: string | null;
+  lastFailedMessage: string | null;
   lastSucceededAt: string | null;
   failedCountInWindow: number;
   lastCreatedAt: string | null;
@@ -268,6 +287,7 @@ function evalPublishFailure(f: UserFacts, windowStart: string): RawBlocker | nul
       evidence: {
         failedPublishCount: p.failedCountInWindow || 1,
         publishErrorCode: p.lastFailedCode,
+        publishErrorMessage: p.lastFailedMessage,
         draftId: p.lastFailedDraftId,
       },
     };
@@ -286,7 +306,12 @@ function evalPublishFailure(f: UserFacts, windowStart: string): RawBlocker | nul
       blockerType: "publish_failure",
       firstSeenAt: d.lastDraftUpdatedAt,
       dataQuality: "inferred",
-      evidence: { failedPublishCount: 1, publishErrorCode: d.publishErrorCode, draftId: d.publishErrorDraftId },
+      evidence: {
+        failedPublishCount: 1,
+        publishErrorCode: d.publishErrorCode,
+        publishErrorMessage: d.publishErrorMessage,
+        draftId: d.publishErrorDraftId,
+      },
     };
   }
   if (
@@ -301,7 +326,9 @@ function evalPublishFailure(f: UserFacts, windowStart: string): RawBlocker | nul
       blockerType: "publish_failure",
       firstSeenAt: d.overdueScheduledAt,
       dataQuality: "inferred",
-      evidence: { failedPublishCount: 1, publishErrorCode: null, draftId: d.overdueDraftId },
+      // Overdue has no error text by construction: nothing reported a failure,
+      // the scheduled instant simply passed with no postedAt.
+      evidence: { failedPublishCount: 1, publishErrorCode: null, publishErrorMessage: null, draftId: d.overdueDraftId },
     };
   }
   return null;
@@ -346,7 +373,11 @@ function evalGenerationFailures(f: UserFacts): RawBlocker | null {
     blockerType: "generation_failures",
     firstSeenAt: g.lastFailedAt,
     dataQuality: "exact",
-    evidence: { failedGenerationCount: g.failedCountInWindow },
+    evidence: {
+      failedGenerationCount: g.failedCountInWindow,
+      generationErrorType: g.lastFailedType,
+      generationErrorMessage: g.lastFailedMessage,
+    },
   };
 }
 
@@ -461,6 +492,7 @@ async function loadPublishFacts(
   const empty = (): PublishFacts => ({
     lastFailedAt: null,
     lastFailedCode: null,
+    lastFailedMessage: null,
     lastFailedDraftId: null,
     failedCountInWindow: 0,
     lastSucceededAt: null,
@@ -501,6 +533,8 @@ async function loadPublishFacts(
           f.lastFailedAt = at;
           const p = r.payload ?? {};
           f.lastFailedCode = typeof p.errorCode === "string" ? p.errorCode : null;
+          // Already sanitized + capped at <=300 chars by the publish writer.
+          f.lastFailedMessage = clipMessage(p.errorMessage, 300);
           f.lastFailedDraftId = r.draft_id ?? null;
         }
       }
@@ -523,6 +557,22 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
 }
 
+/**
+ * Cap an error message before it enters the evidence bag.
+ *
+ * These strings are provider/DB prose, not our own copy, so they are the one
+ * place free text crosses into this data layer. Publish-event messages are
+ * already sanitized+capped at write time; generation error_message is raw DB
+ * content, so it is capped here. The UI shows the first line inline and puts
+ * the full value in a title attribute.
+ */
+function clipMessage(v: unknown, max: number): string | null {
+  const s = str(v);
+  if (!s) return null;
+  const t = s.trim();
+  return t.length <= max ? t : t.slice(0, max);
+}
+
 async function loadDraftFacts(
   db: SupabaseLikeDb,
   since: string,
@@ -532,6 +582,7 @@ async function loadDraftFacts(
   const empty = (): DraftFacts => ({
     publishErrorDraftId: null,
     publishErrorCode: null,
+    publishErrorMessage: null,
     overdueDraftId: null,
     overdueScheduledAt: null,
     firstPostedAt: null,
@@ -584,6 +635,9 @@ async function loadDraftFacts(
     if (publishError && !f.publishErrorDraftId) {
       f.publishErrorDraftId = r.draft_id ?? null;
       f.publishErrorCode = str(p.publishErrorCode);
+      // payload.publishError IS the message on this path — the code lives in a
+      // separate field, and older drafts carry only the prose.
+      f.publishErrorMessage = clipMessage(publishError, 300);
     }
     // Overdue: a scheduled instant in the past with no postedAt on the same draft.
     if (usedScheduled && !postedAt && r.scheduled_at && r.scheduled_at < nowIso && !f.overdueDraftId) {
@@ -678,6 +732,8 @@ interface GenRow {
   user_id: string | null;
   created_at: string | null;
   status: string | null;
+  error_type?: string | null;
+  error_message?: string | null;
 }
 
 async function loadGenFacts(
@@ -689,6 +745,8 @@ async function loadGenFacts(
   const byUser = new Map<string, GenFacts>();
   const empty = (): GenFacts => ({
     lastFailedAt: null,
+    lastFailedType: null,
+    lastFailedMessage: null,
     lastSucceededAt: null,
     failedCountInWindow: 0,
     lastCreatedAt: null,
@@ -696,23 +754,31 @@ async function loadGenFacts(
     hasAnyGenEver: false,
   });
 
-  // Try with status; fall back to a status-less scan (older DBs) so totalCount /
-  // connected_not_creating still work even when the success/failure split can't.
+  // Column availability degrades in two independent steps, so the fallback has
+  // three layers rather than the usual two:
+  //   1. status + error_type/error_message — the full picture.
+  //   2. status only — older DBs without the error columns still get the
+  //      failure COUNT (the predicate) but no reason text.
+  //   3. neither — totalCount / connected_not_creating still work; the
+  //      success/failure split cannot.
+  // Collapsing 1 and 2 would mean a DB missing only the error columns loses the
+  // generation_failures blocker entirely, which is a regression, not a degrade.
   let statusAvailable = true;
-  let res = await paginateRows<GenRow>(db, "pin_generations", {
-    columns: "user_id,created_at,status",
+  const scan = (columns: string) => paginateRows<GenRow>(db, "pin_generations", {
+    columns,
     filters: qb => qb.gte("created_at", since),
     orderColumn: "created_at",
     ascending: false,
   });
+  let errorColumnsAvailable = true;
+  let res = await scan("user_id,created_at,status,error_type,error_message");
   if (res.error && isMissingSchema(res.error)) {
-    statusAvailable = false;
-    res = await paginateRows<GenRow>(db, "pin_generations", {
-      columns: "user_id,created_at",
-      filters: qb => qb.gte("created_at", since),
-      orderColumn: "created_at",
-      ascending: false,
-    });
+    errorColumnsAvailable = false;
+    res = await scan("user_id,created_at,status");
+    if (res.error && isMissingSchema(res.error)) {
+      statusAvailable = false;
+      res = await scan("user_id,created_at");
+    }
   }
   if (res.missing) {
     warnings.push("pin_generations unavailable — generation blockers disabled.");
@@ -732,6 +798,14 @@ async function loadGenFacts(
     if (statusAvailable && r.created_at && r.created_at >= windowStart) {
       if (r.status === "failed") {
         f.failedCountInWindow += 1;
+        // Rows arrive newest-first, so the FIRST failure seen in-window is the
+        // most recent one — capture its reason then, mirroring how
+        // loadPublishFacts pins lastFailedCode. Using newer() for the timestamp
+        // but a later row's text would pair a stale message with a fresh time.
+        if (!f.lastFailedAt) {
+          f.lastFailedType = errorColumnsAvailable ? str(r.error_type) : null;
+          f.lastFailedMessage = errorColumnsAvailable ? clipMessage(r.error_message, 200) : null;
+        }
         f.lastFailedAt = newer(f.lastFailedAt, r.created_at);
       } else if (r.status === "completed") {
         f.lastSucceededAt = newer(f.lastSucceededAt, r.created_at);
@@ -750,6 +824,8 @@ async function loadGenFacts(
 
   if (!statusAvailable) {
     warnings.push("pin_generations.status column not present — generation_failures blocker cannot fire.");
+  } else if (!errorColumnsAvailable) {
+    warnings.push("pin_generations.error_type/error_message columns not present — generation failures are counted but show no reason.");
   }
   return { byUser, statusAvailable };
 }
@@ -757,16 +833,16 @@ async function loadGenFacts(
 // ── assembly ──────────────────────────────────────────────────────────────────
 
 const EMPTY_PUBLISH: PublishFacts = {
-  lastFailedAt: null, lastFailedCode: null, lastFailedDraftId: null,
+  lastFailedAt: null, lastFailedCode: null, lastFailedMessage: null, lastFailedDraftId: null,
   failedCountInWindow: 0, lastSucceededAt: null, firstSucceededAt: null,
 };
 const EMPTY_DRAFT: DraftFacts = {
-  publishErrorDraftId: null, publishErrorCode: null, overdueDraftId: null,
+  publishErrorDraftId: null, publishErrorCode: null, publishErrorMessage: null, overdueDraftId: null,
   overdueScheduledAt: null, firstPostedAt: null, lastPostedAt: null,
   hasAnyDraft: false, hasAnyDraftEver: false, lastDraftUpdatedAt: null,
 };
 const EMPTY_CONN: ConnFacts = { createdAt: null, needsReconnect: false, disconnectedAt: null, hasRow: false };
-const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false };
+const EMPTY_GEN: GenFacts = { lastFailedAt: null, lastFailedType: null, lastFailedMessage: null, lastSucceededAt: null, failedCountInWindow: 0, lastCreatedAt: null, totalCount: 0, hasAnyGenEver: false };
 
 function assembleFacts(
   user: AuthUserLite,

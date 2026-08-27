@@ -14,9 +14,10 @@ import {
 } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getUserDetail, type UserDetail } from "@/lib/server/customer360";
-import { getUserBlockers, type BlockerType, type UserHealth } from "@/lib/server/adminActionCenter";
+import { getUserBlockers, type BlockerItem, type UserHealth } from "@/lib/server/adminActionCenter";
 import { BLOCKER_LABEL_KEY, HEALTH_DRIVER_KEY, HEALTH_BAND_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
 import type { AccountKind } from "@/lib/server/adminAccountKind";
+import { BlockerReason } from "../../_components/BlockerReason";
 import SupportNotesClient from "./SupportNotesClient";
 import { AdminT } from "../../AdminT";
 
@@ -117,7 +118,16 @@ function AccountKindChip({ kind }: { kind: AccountKind }) {
   );
 }
 
-function AlertStrip({ blockers }: { blockers: Array<{ blockerType: BlockerType; dataQuality: "exact" | "inferred" }> }) {
+/**
+ * Per-blocker chips, each followed by the SAME reason line the /admin/today list
+ * renders (shared BlockerReason component) — an operator opening a customer's
+ * page should not have to go back to the list to find out WHY they are blocked.
+ *
+ * Chips stack vertically rather than wrapping inline now that each carries a
+ * reason underneath; a row of chips with prose hanging off them wrapped into an
+ * unreadable mess.
+ */
+function AlertStrip({ blockers }: { blockers: BlockerItem[] }) {
   if (blockers.length === 0) {
     return (
       <div className="mb-2 flex items-center gap-2">
@@ -129,16 +139,21 @@ function AlertStrip({ blockers }: { blockers: Array<{ blockerType: BlockerType; 
     );
   }
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+    <div className="mb-2 flex flex-col gap-1.5">
       {blockers.map((b, i) => (
-        <span key={i} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black uppercase" style={{ background: "rgba(239,68,68,0.10)", color: "#B91C1C" }}>
-          <AdminT k={BLOCKER_LABEL_KEY[b.blockerType]} />
-          {b.dataQuality === "inferred" && (
-            <span className="ml-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-black normal-case" style={{ background: "rgba(107,114,128,0.14)", color: "#6B7280" }}>
-              <AdminT k="today.dataQuality.inferred" />
-            </span>
-          )}
-        </span>
+        <div key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black uppercase" style={{ background: "rgba(239,68,68,0.10)", color: "#B91C1C" }}>
+            <AdminT k={BLOCKER_LABEL_KEY[b.blockerType]} />
+            {b.dataQuality === "inferred" && (
+              <span className="ml-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-black normal-case" style={{ background: "rgba(107,114,128,0.14)", color: "#6B7280" }}>
+                <AdminT k="today.dataQuality.inferred" />
+              </span>
+            )}
+          </span>
+          <span className="text-[12px] text-gray-600">
+            <BlockerReason item={b} />
+          </span>
+        </div>
       ))}
     </div>
   );

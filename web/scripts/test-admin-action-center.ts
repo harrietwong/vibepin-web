@@ -541,4 +541,115 @@ test("getActionCenter: available:false path still returns zeroed excluded counte
   assert.deepEqual(res.excluded, { test: 0, internal: 0 });
 });
 
+// -- failure REASONS carried into the evidence bag ----------------------------
+//
+// A code like `board_not_owned` names the class of failure; answering the actual
+// customer usually needs the specific detail. These tests pin the message onto
+// each of the three paths that can produce one (exact publish event, inferred
+// draft publishError, generation row) and prove the capture picks the MOST
+// RECENT failure rather than whichever row happened to be scanned first.
+
+const REASON_USER = [{ id: "u1", email: "e@x.com", created_at: hoursAgo(300), last_sign_in_at: hoursAgo(1), app_metadata: {}, user_metadata: {} }];
+const CONNECTED_ROW = [{ vibepin_user_id: "u1", needs_reconnect: false, disconnected_at: null, created_at: hoursAgo(300) }];
+
+test("evidence: EXACT publish failure carries the sanitized event message", async () => {
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "u1", draft_id: "d1", event_name: "pinterest_publish_failed", payload: { errorCode: "board_not_owned", errorMessage: "Board not owned by this account" }, created_at: hoursAgo(2) },
+      ] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const pf = res.items.find(i => i.blockerType === "publish_failure");
+  assert.ok(pf, "expected a publish_failure item");
+  assert.equal(pf!.dataQuality, "exact");
+  assert.equal(pf!.evidence.publishErrorCode, "board_not_owned");
+  assert.equal(pf!.evidence.publishErrorMessage, "Board not owned by this account");
+});
+
+test("evidence: EXACT publish failure takes the message from the NEWEST failure", async () => {
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [
+        { user_id: "u1", draft_id: "dOld", event_name: "pinterest_publish_failed", payload: { errorCode: "old_code", errorMessage: "stale message" }, created_at: hoursAgo(9) },
+        { user_id: "u1", draft_id: "dNew", event_name: "pinterest_publish_failed", payload: { errorCode: "new_code", errorMessage: "the current problem" }, created_at: hoursAgo(1) },
+      ] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const pf = res.items.find(i => i.blockerType === "publish_failure");
+  assert.ok(pf);
+  assert.equal(pf!.evidence.failedPublishCount, 2);
+  assert.equal(pf!.evidence.publishErrorMessage, "the current problem", "must report the LATEST failure, not the first row scanned");
+  assert.equal(pf!.evidence.publishErrorCode, "new_code");
+});
+
+test("evidence: INFERRED publish failure carries the draft publishError text", async () => {
+  const { db } = makeMockDb(
+    {
+      // analytics_events absent -> the inferred draft path is the only source.
+      pin_drafts: { rows: [{ vibepin_user_id: "u1", draft_id: "dERR", payload: { publishError: "Pinterest rejected the image: aspect ratio too tall", publishErrorCode: "content_error" }, updated_at: hoursAgo(1), scheduled_at: null, deleted_at: null }] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const pf = res.items.find(i => i.blockerType === "publish_failure");
+  assert.ok(pf);
+  assert.equal(pf!.dataQuality, "inferred");
+  assert.equal(pf!.evidence.publishErrorCode, "content_error");
+  assert.equal(pf!.evidence.publishErrorMessage, "Pinterest rejected the image: aspect ratio too tall");
+});
+
+test("evidence: generation failures carry error_type + error_message of the LATEST failure", async () => {
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [
+        { user_id: "u1", created_at: hoursAgo(8), status: "failed", error_type: "api_server_error", error_message: "older failure" },
+        { user_id: "u1", created_at: hoursAgo(2), status: "failed", error_type: "safety_blocked", error_message: "Prompt blocked by the safety filter" },
+      ] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const gf = res.items.find(i => i.blockerType === "generation_failures");
+  assert.ok(gf, "expected a generation_failures item");
+  assert.equal(gf!.evidence.failedGenerationCount, 2);
+  assert.equal(gf!.evidence.generationErrorType, "safety_blocked", "must report the most recent failure type");
+  assert.equal(gf!.evidence.generationErrorMessage, "Prompt blocked by the safety filter");
+});
+
+test("evidence: generation error_message is clipped to 200 chars", async () => {
+  const long = "x".repeat(500);
+  const { db } = makeMockDb(
+    {
+      analytics_events: { rows: [] },
+      pin_drafts: { rows: [] },
+      pinterest_connections: { rows: CONNECTED_ROW },
+      pin_generations: { rows: [
+        { user_id: "u1", created_at: hoursAgo(3), status: "failed", error_type: "unknown_error", error_message: long },
+        { user_id: "u1", created_at: hoursAgo(4), status: "failed", error_type: "unknown_error", error_message: long },
+      ] },
+    },
+    REASON_USER,
+  );
+  const res = await getActionCenter(db, { includeNonCustomers: true });
+  const gf = res.items.find(i => i.blockerType === "generation_failures");
+  assert.ok(gf);
+  assert.equal(gf!.evidence.generationErrorMessage?.length, 200);
+});
+
 void done();
