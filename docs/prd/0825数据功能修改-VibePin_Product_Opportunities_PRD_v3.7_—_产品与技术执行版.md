@@ -1204,6 +1204,8 @@ Web tests = PASS; 132/132 registry tests passed with zero failures after excludi
 Web dependency security = PASS; clean npm ci installed 417 packages and npm audit --audit-level=low reported 0 known vulnerabilities with Next.js 16.3.3 and the reviewed lockfile
 local rendered Product truth = PASS; the built localhost candidate passed the executable Product-truth verifier
 release manifest contract = PASS; the current 351e479 manifest/automation contract passed 20/20
+production data readiness = BLOCK; the 2026-08-27T12:10:42Z GET-only pre-Supply audit found 123 technical migration candidates but only 25 in the reviewed automatic-Admission scope (18 Physical / 7 Digital), and all 25 had zero today/G7/G14/G30/full-metric coverage; discovery inventory exists but launch-ready trend intelligence does not
+daily capacity contract = PASS in candidate code; Product Supply scans 100 Source Pins and may write 0-50 legacy discovery rows across atomic batches of at most 20, while Product Tracking independently covers up to 2,499 unique active Primary Pins and at most 5,000 provider requests per day; 20 is not a per-day Product limit
 Web deployment reproducibility = PASS; Vercel installCommand is npm ci, package.json/package-lock.json/vercel.json are one exact release boundary, and deployment must fail review if the lockfile is omitted or dependencies are re-resolved
 Vercel project binding = NEEDS EVIDENCE; before promotion the platform must prove Root Directory=web and the candidate build log must show npm ci plus Next.js 16.3.3, because the repository has no linked .vercel/project.json metadata
 database contract / PGlite transaction checks = PASS

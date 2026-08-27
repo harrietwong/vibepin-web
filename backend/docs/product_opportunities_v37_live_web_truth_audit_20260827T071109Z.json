@@ -1,0 +1,20 @@
+{
+  "audited_at": "2026-08-27T07:11:09.2308207Z",
+  "url": "https://vibepin.co/",
+  "method": "public read-only rendered-text fetch",
+  "mutation": false,
+  "verdict": "FAIL",
+  "severity": "P0 product truth",
+  "observed_forbidden_claims": [
+    "Opportunity score 94",
+    "+210% Demand vs last 30 days",
+    "Low Competition",
+    "Live weekly growth percentages",
+    "static high-save Pin and matched-product counts",
+    "Product demand High",
+    "Estimated opportunity High"
+  ],
+  "candidate_status": "The reviewed candidate HomePage does not render the legacy mock intelligence panels and its marketing truth contract passes.",
+  "release_effect": "The current production Web deployment is not an eligible rollback target for Product truth. A Web promotion cannot be called successful until a post-promotion live scan proves these claims absent.",
+  "production_changes_performed": false
+}

@@ -49,6 +49,17 @@ failures as platform verification; use
 `backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T104429Z.json`
 as the exact open-evidence record.
 
+The latest GET-only pre-Supply data-quality baseline is
+`backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
+It proves 123 technical migration candidates and 25 reviewed automatic-Admission
+candidates (18 Physical / 7 Digital), but zero current/G7/G14/G30/full-metric
+coverage for all 25. Therefore Product discovery inventory exists, while v3.7
+trend intelligence remains not launch-ready until Admission and daily tracking
+are deployed and produce real persisted history. Do not confuse Supply's 20-row
+atomic transaction cap with daily capacity: the candidate Supply run scans 100
+Source Pins and may safely write 0-50 legacy rows, and the separate daily
+tracking job covers up to 2,499 unique active Primary Pins.
+
 The product contract is
 `docs/prd/0825数据功能修改-VibePin_Product_Opportunities_PRD_v3.7_—_产品与技术执行版.md`.
 When this runbook and the PRD differ, stop and resolve the difference before

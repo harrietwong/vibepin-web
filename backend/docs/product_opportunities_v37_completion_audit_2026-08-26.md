@@ -185,6 +185,15 @@ to production.
   stable comparison point before the next permanent Product Supply trigger; it
   does not make the legacy rows user-visible v3.7 entities. Evidence:
   `backend/docs/product_opportunities_v37_production_audit_20260827T102233Z.json`.
+- A third GET-only baseline at `2026-08-27T12:10:42Z`, before the permanent
+  `23:03:44 Asia/Shanghai` Supply trigger, again produced identical inventory
+  and coverage. Of 123 technical candidates, only 25 fit the reviewed automatic
+  Admission categories/families (18 Physical / 7 Digital), and all 25 still have
+  zero today, G7, G14, G30 and full-metric coverage. The 20-row constant is only
+  an atomic write/readback/rollback cap; the candidate Supply run scans 100
+  Source Pins and may write at most 50 legacy discovery rows, while v3.7 daily
+  tracking is separately bounded at 2,499 unique active Primary Pins. Evidence:
+  `backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
 - A separate service-role GET of the production PostgREST OpenAPI schema at
   `2026-08-27T07:05:21Z` exposed 72 paths, including the legacy control paths
   `/pin_products` and `/pin_save_snapshots`, but zero path matching any v63
@@ -690,8 +699,9 @@ UI contracts passed again; the canonical entitlement suite passed 12/12, the
 build compiled and generated 70/70 static pages. This closes local and remote
 lineage simultaneously without rewriting local master or pushing any branch.
 
-The resulting release boundary is frozen in
-`backend/docs/product_opportunities_v37_release_manifest_7d6601b.json`. It names
+The resulting release boundary is frozen in historical manifest
+`product_opportunities_v37_release_manifest_7d6601b.json`, archived at evidence
+commit `2763cce`. It names
 candidate `7d6601b51dc698f0d07de837f3582b3e39dcb5bf`, both reviewed bases and the
 functional integration commit, and records the Git blob SHA-1, exact-byte SHA-256
 and byte count for all 66 release artifacts. A clean-tree verifier parsed the
@@ -712,8 +722,9 @@ Tracking/automation suite passes 60/60 and the full backend suite passes 832
 with 2 live-credential skips and 77 subtests. This change is local only and must
 be included in a newly hashed candidate before any Tracking deployment.
 
-That refreshed boundary is recorded in
-`backend/docs/product_opportunities_v37_release_manifest_12dc5fa.json`, whose
+That refreshed boundary is recorded in historical manifest
+`product_opportunities_v37_release_manifest_12dc5fa.json`, archived at evidence
+commit `2763cce`, whose
 candidate and Tracking-hardening commit are both
 `12dc5fa0abb6ca1a4414953adeb2f85e0b188164`. The previous `7d6601b` manifest is
 retained as immutable evidence for its earlier candidate; it is not the deploy
@@ -728,9 +739,9 @@ RPC call can no longer bypass the fetch proof. Migration/Tracking/automation
 contracts pass 85/85 and the full backend suite remains 832 passed, 2 skipped,
 77 subtests. Production v63 remains unapplied.
 
-The current functional deploy boundary is therefore `99f3cb1`, frozen as 66
-exact artifacts in
-`backend/docs/product_opportunities_v37_release_manifest_99f3cb1.json`. The
+The historical functional deploy boundary was `99f3cb1`, frozen as 66 exact
+artifacts in `product_opportunities_v37_release_manifest_99f3cb1.json`, archived
+at evidence commit `2763cce`. The
 manifest records both hardening commits and supersedes the earlier candidates
 for any future v63/Tracking deployment review; the earlier manifests remain
 historical evidence only.
@@ -745,8 +756,9 @@ Pin id in the URL path to equal the persisted `pinterest_pin_id` at both Python
 and database boundaries. Focused admission/manifest/migration contracts pass
 106/106. No production data or schema was touched.
 
-The current functional candidate is `5be5fde`, frozen as 66 exact artifacts in
-`backend/docs/product_opportunities_v37_release_manifest_5be5fde.json`. Full
+The historical functional candidate was `5be5fde`, frozen as 66 exact artifacts
+in `product_opportunities_v37_release_manifest_5be5fde.json`, archived at
+evidence commit `2763cce`. Full
 backend regression after all three reverse-audit hardenings is 834 passed, 2
 live-credential skips and 77 subtests. This manifest supersedes `99f3cb1` for a
 future v63/Admission/Tracking deploy review.
@@ -761,8 +773,9 @@ states that Product Opportunities do not use a competition badge or Opportunity
 Score. The dedicated marketing-truth and public-compliance contracts passed,
 the full 92-script Web core suite passed, TypeScript passed, the release-manifest
 contract passed 15/15, and the production build compiled and generated 70/70
-static pages. The exact 68-artifact boundary is frozen in
-`backend/docs/product_opportunities_v37_release_manifest_8c2ad12.json`; direct
+static pages. The historical 68-artifact boundary is frozen in
+`product_opportunities_v37_release_manifest_8c2ad12.json`, archived at evidence
+commit `2763cce`; direct
 Git-object verification found zero order, duplicate, missing, blob, SHA-256 or
 byte-count mismatch. This remains local evidence only and does not authorize a
 push, deployment, database migration, feature flag or timer change.
@@ -782,8 +795,9 @@ Functional candidate `61a6080` makes this distinction explicit in the audit
 output and adds a regression test proving unreviewed categories cannot inflate
 the automatic-admission inventory. Focused audit and Admission/automation tests
 passed 6/6 and 61/61; the full backend suite passed 835 with 2 live-credential
-skips and 77 subtests. Its exact 68-artifact boundary is frozen in
-`backend/docs/product_opportunities_v37_release_manifest_61a6080.json`; direct
+skips and 77 subtests. Its historical 68-artifact boundary is frozen in
+`product_opportunities_v37_release_manifest_61a6080.json`, archived at evidence
+commit `2763cce`; direct
 Git-object verification found zero order, duplicate, missing, blob, SHA-256 or
 byte-count mismatch. This audit correction changes no production data, runtime
 budget, category allocation, service or timer.
@@ -852,8 +866,9 @@ Fashion-to-Women's-Fashion source rewrite failed with the database exception
 `Product Opportunity acquisition source category is immutable`; the persisted
 source remained Fashion. A separate update adding an unrelated provenance audit
 note succeeded. Complete rollback again removed the Product table. The 68-file
-release boundary is frozen at
-`backend/docs/product_opportunities_v37_release_manifest_ed28855.json` and no
+historical release boundary is frozen in
+`product_opportunities_v37_release_manifest_ed28855.json`, archived at evidence
+commit `2763cce`, and no
 production database, deployment, service or timer was changed.
 
 A user-output reverse scan then found one remaining wording ambiguity rather
@@ -863,6 +878,7 @@ are tracked independently of user saves, that wording could imply that Save
 starts tracking. Functional commit `3fd6453` now describes Saved Products only
 as a shortlist for comparison or Create Pin, and the v3.7 UI contract prevents
 the tracking-trigger wording from returning. Full TypeScript and the production
-Web build passed with 70/70 pages. The exact 68-file release boundary is frozen
-in `backend/docs/product_opportunities_v37_release_manifest_3fd6453.json`; this
+Web build passed with 70/70 pages. The historical 68-file release boundary is
+frozen in `product_opportunities_v37_release_manifest_3fd6453.json`, archived at
+evidence commit `2763cce`; this
 copy correction does not change tracking behavior, production data or timers.

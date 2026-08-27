@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -77,6 +78,18 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
         cwd=ROOT.parent,
         check=False,
     ).returncode == 0
+
+
+def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
+    references = set(
+        re.findall(
+            r"backend/docs/[A-Za-z0-9_.-]+\.json",
+            "\n".join((RUNBOOK, COMPLETION_AUDIT, PRD)),
+        )
+    )
+    assert references
+    missing = [path for path in sorted(references) if not (ROOT.parent / path).is_file()]
+    assert missing == []
 
 
 def test_current_release_manifest_blob_hashes_and_sizes_are_exact() -> None:

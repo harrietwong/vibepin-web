@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-27T12:10:42.274850+00:00",
+  "operation": "GET-only production data-quality baseline before the 2026-08-27 Product Supply timer run",
+  "productionMutation": false,
+  "legacyPinProducts": 4115,
+  "legacyPinSaveSnapshots": 34073,
+  "technicalMigrationCandidates": {
+    "rows": 123,
+    "uniqueProducts": 123,
+    "physical": 112,
+    "digital": 11,
+    "duplicateRows": 0,
+    "sourcePinPrimaryEvidence": 123,
+    "productPinPrimaryEvidence": 0,
+    "outboundLinkDiscovery": 123,
+    "availableDetailStatus": 24,
+    "legacyUnknownDetailStatus": 99
+  },
+  "reviewedAutomaticAdmissionScope": {
+    "rows": 25,
+    "uniqueProducts": 25,
+    "physical": 18,
+    "digital": 7,
+    "byCategory": {
+      "fashion": 6,
+      "womens-fashion": 2,
+      "home-decor": 10,
+      "digital-products": 7
+    },
+    "todayCoverage": 0,
+    "g7AnchorCoverage": 0,
+    "g14AnchorCoverage": 0,
+    "g30AnchorCoverage": 0,
+    "fullMetricCoverage": 0,
+    "counterRegressions": 0
+  },
+  "technicalCandidateSnapshotCoverage": {
+    "today": 0,
+    "g7Anchor": 2,
+    "g14Anchor": 2,
+    "g30Anchor": 0,
+    "fullMetric": 0
+  },
+  "observationDayDistribution": {
+    "0": 111,
+    "1-9": 12,
+    "10-19": 0,
+    "20-29": 0,
+    "30+": 0
+  },
+  "nonExclusiveLegacyRejectionReasons": {
+    "retired": 833,
+    "pinterestHostedImage": 3872,
+    "missingProductImage": 116,
+    "missingAuditablePin": 4,
+    "missingRealProductUrl": 1
+  },
+  "comparisonTo20260827T102233Z": "identical counts and coverage; only auditedAt changed",
+  "businessConclusion": "Discovery inventory exists, but no reviewed automatic-admission candidate has a complete current/G7/G30 metric set. Production is not yet ready to claim v3.7 trend intelligence.",
+  "evidenceLimit": "A non-Pinterest image host is only a migration candidate. Merchant image provenance and persisted v63 Evidence must still pass Admission before activation."
+}

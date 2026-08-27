@@ -1,0 +1,265 @@
+{
+  "audited_at": "2026-08-27T10:22:33.785195+00:00",
+  "automatic_admission_scope_by_category": {
+    "digital-products": 7,
+    "fashion": 6,
+    "home-decor": 10,
+    "womens-fashion": 2
+  },
+  "automatic_admission_scope_by_family": {
+    "digital": 7,
+    "physical": 18
+  },
+  "automatic_admission_scope_exclusions": {
+    "category_family_mismatch": 7,
+    "source_category_not_reviewed": 91
+  },
+  "automatic_admission_scope_exclusions_by_category": {
+    "category_family_mismatch": {
+      "digital-products": 7
+    },
+    "source_category_not_reviewed": {
+      "animals": 1,
+      "architecture": 7,
+      "art": 1,
+      "beauty": 12,
+      "design": 3,
+      "diy-crafts": 2,
+      "education": 1,
+      "event-planning": 1,
+      "food-and-drink": 2,
+      "gardening": 6,
+      "health": 3,
+      "holidays-seasonal": 4,
+      "home": 7,
+      "kids-fashion": 2,
+      "mens-fashion": 8,
+      "parenting": 5,
+      "sport": 2,
+      "sports": 1,
+      "travel": 8,
+      "trending": 1,
+      "wedding": 14
+    }
+  },
+  "automatic_admission_scope_rows": 25,
+  "automatic_admission_scope_snapshot_coverage": {
+    "anchor_14": 0,
+    "anchor_30": 0,
+    "anchor_7": 0,
+    "counter_regression": 0,
+    "full_metric": 0,
+    "today": 0
+  },
+  "automatic_admission_scope_snapshot_coverage_by_family": {
+    "digital": {
+      "anchor_14": 0,
+      "anchor_30": 0,
+      "anchor_7": 0,
+      "counter_regression": 0,
+      "full_metric": 0,
+      "today": 0
+    },
+    "physical": {
+      "anchor_14": 0,
+      "anchor_30": 0,
+      "anchor_7": 0,
+      "counter_regression": 0,
+      "full_metric": 0,
+      "today": 0
+    }
+  },
+  "automatic_admission_scope_unique_products": 25,
+  "duplicate_eligible_rows": 0,
+  "eligible_by_family": {
+    "digital": 11,
+    "physical": 112
+  },
+  "eligible_categories": {
+    "architecture": 7,
+    "beauty": 12,
+    "design": 3,
+    "digital-products": 14,
+    "diy-crafts": 2,
+    "fashion": 6,
+    "food-and-drink": 2,
+    "gardening": 6,
+    "health": 3,
+    "holidays-seasonal": 4,
+    "home": 7,
+    "home-decor": 10,
+    "kids-fashion": 2,
+    "mens-fashion": 8,
+    "parenting": 5,
+    "sport": 2,
+    "travel": 8,
+    "trending": 1,
+    "wedding": 14,
+    "womens-fashion": 2
+  },
+  "eligible_detail_fetch_status": {
+    "available": 24,
+    "legacy_unknown": 99
+  },
+  "eligible_discovery_methods": {
+    "outbound_link": 123
+  },
+  "eligible_primary_evidence_kind": {
+    "source_pin": 123
+  },
+  "eligible_snapshot_coverage": {
+    "anchor_14": 2,
+    "anchor_30": 0,
+    "anchor_7": 2,
+    "counter_regression": 0,
+    "full_metric": 0,
+    "today": 0
+  },
+  "eligible_snapshot_coverage_by_family": {
+    "digital": {
+      "anchor_14": 0,
+      "anchor_30": 0,
+      "anchor_7": 0,
+      "counter_regression": 0,
+      "full_metric": 0,
+      "today": 0
+    },
+    "physical": {
+      "anchor_14": 2,
+      "anchor_30": 0,
+      "anchor_7": 2,
+      "counter_regression": 0,
+      "full_metric": 0,
+      "today": 0
+    }
+  },
+  "eligible_top_domains": {
+    "amazon.ca": 3,
+    "amazon.com": 30,
+    "ballbella.com": 2,
+    "barndominiumplans.com": 3,
+    "boho-mood.com": 1,
+    "charmingcharlie.com": 1,
+    "circleandsquaredecor.com": 1,
+    "cuddlekawaii.com": 1,
+    "cyflymder.com": 2,
+    "dannitoni.com": 2,
+    "decoryourholiday.com": 1,
+    "ikeehome.com": 2,
+    "junerings.com": 3,
+    "ketocandygirl.com": 1,
+    "luluandgeorgia.com": 2,
+    "montvoorugs.com": 1,
+    "payhip.com": 5,
+    "sususummer.com": 1,
+    "teacherspayteachers.com": 4,
+    "weddingshoppeinc.com": 2
+  },
+  "eligible_without_name_by_family": {},
+  "important_limit": "A non-Pinterest image host is only a migration candidate, not proof of merchant image provenance. Rows must pass evidence backfill before activation.",
+  "legacy_snapshot_rows": 34073,
+  "maximum_gap_distribution": {
+    "0-1": 118,
+    "2-3": 1,
+    "4-7": 2,
+    "8+": 2
+  },
+  "migration_gate_by_source_category_family": {
+    "animals": {
+      "physical": 1
+    },
+    "architecture": {
+      "physical": 7
+    },
+    "art": {
+      "physical": 1
+    },
+    "beauty": {
+      "physical": 12
+    },
+    "design": {
+      "physical": 3
+    },
+    "digital-products": {
+      "digital": 7,
+      "physical": 7
+    },
+    "diy-crafts": {
+      "physical": 2
+    },
+    "education": {
+      "physical": 1
+    },
+    "event-planning": {
+      "physical": 1
+    },
+    "fashion": {
+      "physical": 6
+    },
+    "food-and-drink": {
+      "physical": 2
+    },
+    "gardening": {
+      "digital": 1,
+      "physical": 5
+    },
+    "health": {
+      "digital": 2,
+      "physical": 1
+    },
+    "holidays-seasonal": {
+      "physical": 4
+    },
+    "home": {
+      "physical": 7
+    },
+    "home-decor": {
+      "physical": 10
+    },
+    "kids-fashion": {
+      "physical": 2
+    },
+    "mens-fashion": {
+      "physical": 8
+    },
+    "parenting": {
+      "physical": 5
+    },
+    "sport": {
+      "physical": 2
+    },
+    "sports": {
+      "physical": 1
+    },
+    "travel": {
+      "physical": 8
+    },
+    "trending": {
+      "physical": 1
+    },
+    "wedding": {
+      "digital": 1,
+      "physical": 13
+    },
+    "womens-fashion": {
+      "physical": 2
+    }
+  },
+  "migration_gate_pass_rows": 123,
+  "migration_gate_pass_unique_products": 123,
+  "observation_day_distribution": {
+    "0": 111,
+    "1-9": 12,
+    "10-19": 0,
+    "20-29": 0,
+    "30+": 0
+  },
+  "rejection_reasons_nonexclusive": {
+    "no_auditable_pin": 4,
+    "no_product_image": 116,
+    "no_real_product_url": 1,
+    "pinterest_hosted_image": 3872,
+    "retired": 833
+  },
+  "total_pin_product_rows": 4115
+}
