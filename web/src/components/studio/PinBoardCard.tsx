@@ -68,6 +68,20 @@ function scheduledSummary(d: PinDraft): string {
   const hh = Number(h); const ampm = hh >= 12 ? "PM" : "AM"; const h12 = hh % 12 === 0 ? 12 : hh % 12;
   return `${day} · ${h12}:${String(Number(m ?? 0)).padStart(2, "0")} ${ampm}`;
 }
+/** The scheduled day / clock time, split for the "publishes now instead of {date} {time}"
+ *  confirm. Locale-formatted; empty when the Content has no slot. */
+function scheduledDateLabel(d: PinDraft): string {
+  const date = (d.scheduledDate ?? "").trim();
+  if (!date) return "";
+  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function scheduledTimeLabel(d: PinDraft): string {
+  const t = (d.scheduledTime ?? "").trim();
+  if (!t) return "";
+  const [h, m] = t.split(":");
+  const hh = Number(h); const ampm = hh >= 12 ? "PM" : "AM"; const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${h12}:${String(Number(m ?? 0)).padStart(2, "0")} ${ampm}`;
+}
 // Deep link into the Plan view inside the canonical Create Pins workspace.
 // (same "?modal=publish&pinId=…" contract the post-OAuth restore flow already parses —
 // no new mechanism; /app/plan is now only a param-preserving redirect to this URL.)
@@ -510,6 +524,22 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   // below reads this one object rather than re-deriving lifecycle facts per branch.
   const view = useMemo(() => buildCardViewModel(draft, lifecycle, { editing }), [draft, lifecycle, editing]);
 
+  // "AI generated" is a property of the IMAGE on screen, so it reads the cover's own
+  // source (upload/ai/product) and only falls back to the draft-level source for the
+  // legacy single-image drafts that have no media[].
+  const cover = coverMedia(draft);
+  const isAiSourced = cover?.source === "ai" || (!cover?.source && draft.source === "ai_generated_from_upload");
+
+  const nextStep = nextStepFor(
+    draft.errorCategory ?? (isPublishFailure ? mapPublishErrorToCategory(
+      draft.publishErrorCode || firstDestinationFailure?.errorCode,
+      draft.publishError || firstDestinationFailure?.errorMessage) : undefined),
+    draft.publishErrorCode || firstDestinationFailure?.errorCode,
+  );
+
+  // Draft cards edit in place; scheduled/posted/failed stay compact until Edit.
+  const compactFields = lifecycle === "unscheduled" || lifecycle === "generating";
+
   const status = getStatusBadge(draft);
   // Badge copy override for the failed lifecycle only (PRD "失败情况优化" §5): the
   // shared getStatusBadge() in pinLifecycle.ts still returns the generic "Failed" —
@@ -635,12 +665,116 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     </div>
   );
 
+  /**
+   * One destination line. The reason on a failed row is ALWAYS the customer-safe
+   * sentence from publishErrorDisplay — `errorMessage` holds the raw upstream text
+   * (Pinterest API internals, ids) and must never reach the DOM. A link is offered
+   * only for a published row that really has a permalink.
+   */
+  const renderResultRow = (row: CardResultRow, index: number) => (
+    <li key={`${row.destinationId}:${index}`} data-testid="card-result-row" data-status={row.status}
+      style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "5px 0", fontSize: 11, color: BUI.textSec, listStyle: "none",
+        opacity: row.superseded ? 0.72 : 1 }}>
+      <span style={{ fontWeight: 750, color: BUI.text }}>{platformName(row.provider as SocialProvider)}</span>
+      {row.accountLabel && <span style={{ color: BUI.textMuted }}>{row.accountLabel}</span>}
+      <span style={{ color: BUI.textMuted }}>—</span>
+      <span style={{ fontWeight: 700, color: row.status === "published" ? BUI.success : row.status === "failed" ? BUI.warning : BUI.textMuted }}>
+        {tr(row.status === "published" ? "studioBoard.card.resultPublished"
+          : row.status === "failed" ? "studioBoard.card.resultFailed"
+          : "studioBoard.card.resultPending")}
+      </span>
+      {row.status === "failed" && (
+        <span data-testid="card-result-reason" style={{ color: BUI.textSec }}>
+          · {tr(getPublishErrorDisplayKey({ publishError: row.errorMessage, publishErrorCode: row.errorCode }))}
+        </span>
+      )}
+      {row.postUrl && (
+        <a data-testid="card-result-link" href={row.postUrl} target="_blank" rel="noopener noreferrer"
+          style={{ display: "inline-flex", alignItems: "center", gap: 3, color: BUI.purple, fontWeight: 700, textDecoration: "none" }}>
+          {tr("studioBoard.card.viewOn").replace("{platform}", platformName(row.provider as SocialProvider))}
+          <ExternalLink style={{ width: 10, height: 10 }} />
+        </a>
+      )}
+    </li>
+  );
+
+  /** "Published 3h ago" — from the newest publishedAt across all destinations. */
+  const relative = relativePublishedParts(view.latestPublishedAt);
+  const publishedRelativeLabel = relative
+    ? tr("studioBoard.card.publishedRelative").replace("{when}", relative.unit === "now"
+        ? tr("studioBoard.card.relative.now")
+        : tr(relative.unit === "minute" ? "studioBoard.card.relative.minutes"
+            : relative.unit === "hour" ? "studioBoard.card.relative.hours"
+            : "studioBoard.card.relative.days").replace("{n}", String(relative.value)))
+    : "";
+
+  /** Light save-state text at the BOTTOM of the card (PRD §1) — the real status. */
+  const saveStateLine = (
+    <div data-testid="card-save-state" data-state={saveState}
+      style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 600, color: saveState === "failed" ? BUI.warning : BUI.textMuted }}>
+      {saveState === "failed" ? (
+        <>
+          {tr("studioBoard.card.saveState.failed")} ·{" "}
+          <button type="button" data-testid="card-save-retry" onClick={retrySave}
+            style={{ border: 0, background: "none", padding: 0, color: BUI.purple, fontSize: 10, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
+            {tr("studioBoard.card.saveState.retry")}
+          </button>
+        </>
+      ) : tr(saveState === "saving" ? "studioBoard.card.saveState.saving" : "studioBoard.card.saveState.saved")}
+    </div>
+  );
+
+  /** The Scheduled-card publish confirm (PRD §20) — publishing early overrides a plan. */
+  const publishConfirm = confirmPublish ? (
+    <div data-testid="card-publish-confirm" role="dialog"
+      style={{ display: "flex", flexDirection: "column", gap: 7, padding: "9px 10px", borderRadius: 9, border: `1px solid ${BUI.borderHi}`, background: BUI.surface2 }}>
+      <p style={{ margin: 0, fontSize: 11.5, fontWeight: 800, color: BUI.text }}>{tr("studioBoard.card.publishConfirmTitle")}</p>
+      <p style={{ margin: 0, fontSize: 11, color: BUI.textSec, lineHeight: 1.4 }}>
+        {tr("studioBoard.card.publishConfirmBody")
+          .replace("{date}", scheduledDateLabel(draft))
+          .replace("{time}", scheduledTimeLabel(draft))}
+      </p>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button type="button" data-testid="card-publish-confirm-yes" onClick={() => doPublish()} disabled={publishing}
+          style={{ ...primaryBtn, padding: "7px 10px", fontSize: 11.5 }}>
+          {tr("studioBoard.actions.publish")}
+        </button>
+        <button type="button" data-testid="card-publish-confirm-cancel" onClick={() => setConfirmPublish(false)}
+          style={{ ...secondaryBtn, padding: "7px 12px", fontSize: 11.5 }}>
+          {tr("studioBoard.actions.cancel")}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  /** Posted card: the per-platform summary + the expandable result list (PRD §3). */
+  const resultsBlock = (view.hasPublished || view.needsAttention) ? (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <button type="button" data-testid="card-view-results" aria-expanded={resultsOpen}
+        onClick={() => setResultsOpen(open => !open)}
+        style={{ alignSelf: "flex-start", border: 0, background: "none", padding: 0, color: BUI.purple, fontSize: 11, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
+        {tr(resultsOpen ? "studioBoard.actions.hideResults" : "studioBoard.actions.viewResults")}
+      </button>
+      {resultsOpen && (
+        <ul data-testid="card-results-list" style={{ margin: 0, padding: 0, display: "flex", flexDirection: "column" }}>
+          {view.resultRows.map(renderResultRow)}
+          {view.earlierResultRows.length > 0 && (
+            <li style={{ listStyle: "none", marginTop: 6 }}>
+              <span data-testid="card-earlier-publishes" style={{ ...labelStyle, display: "block" }}>{tr("studioBoard.card.earlierPublishes")}</span>
+              <ul style={{ margin: 0, padding: 0 }}>{view.earlierResultRows.map(renderResultRow)}</ul>
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  ) : null;
+
   // ── Compact (default) ─────────────────────────────────────────────────────────
   if (!active) {
     return (
       <div data-testid="pin-board-card" data-active="false" data-source={draft.source} data-lifecycle={lifecycle}
         style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${props.selected ? BUI.purple : BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: props.selected ? "0 0 0 2px rgba(124,58,237,.12)" : "0 1px 2px rgba(15,23,42,0.04)" }}>
-        <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 5", background: BUI.surface3 }}>
+        <div data-testid="card-media" style={{ position: "relative", width: "100%", aspectRatio: "2 / 3", background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             // Generation-failure card: walk the original-image fallback chain
             // (generated → source → parent) instead of the raw draft.imageUrl, which
@@ -681,6 +815,21 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           )}
           {badges}
           {moreMenu}
+          {/* "1 / N" — the cover IS media[0], so the current index is always 1. */}
+          {view.counter && !generating && (
+            <span data-testid="card-media-counter" style={{ position: "absolute", bottom: 8, right: 8, fontSize: 10, fontWeight: 800,
+              color: "#fff", background: "rgba(15,23,42,0.72)", borderRadius: 999, padding: "3px 8px", backdropFilter: "blur(4px)" }}>
+              {view.counter}
+            </span>
+          )}
+          {/* The ONLY marker allowed on top of the image besides status (PRD §1: no
+              badge pile) — and only when the image really came from generation. */}
+          {isAiSourced && !hiddenByQuality && !generating && (
+            <span data-testid="card-ai-marker" style={{ position: "absolute", bottom: 8, left: 8, display: "inline-flex", alignItems: "center", gap: 3,
+              fontSize: 9.5, fontWeight: 700, color: "rgba(255,255,255,0.92)", background: "rgba(15,23,42,0.45)", borderRadius: 999, padding: "2px 7px", backdropFilter: "blur(3px)" }}>
+              <Sparkles style={{ width: 9, height: 9 }} /> {tr("studioBoard.card.aiGenerated")}
+            </span>
+          )}
           {props.topPick && !hiddenByQuality && !generating && (
             <span data-testid="card-top-pick" style={{ position: "absolute", bottom: 8, left: 8, display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 800, color: "#fff", background: "rgba(124,58,237,0.92)", borderRadius: 999, padding: "3px 9px", backdropFilter: "blur(4px)" }}>
               <Star style={{ width: 10, height: 10, fill: "#fff" }} /> {tr("studioBoard.card.topPick")}
@@ -688,34 +837,73 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           )}
         </div>
         {!generating && <ContentMediaStrip draft={draft} disabled={publishing} />}
+        {/* Regenerate stays NEXT TO the media (PRD §7) and targets the selected
+            thumbnail — which is the cover, since setCoverMedia moves it to media[0].
+            Never regenerates the whole set. */}
+        {!generating && !posted && (
+          <div style={{ padding: "6px 12px 0", display: "flex" }}>
+            <button type="button" data-testid="card-regenerate-image" onClick={doGenerateAiImage} disabled={publishing}
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
+            </button>
+          </div>
+        )}
         <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Posted header line: when it went live + a single "Needs attention" chip
+              on a partial success. One notice, never a stack (PRD §5). */}
+          {posted && (
+            <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+              {publishedRelativeLabel && (
+                <span data-testid="card-published-relative" style={{ fontSize: 11.5, fontWeight: 750, color: BUI.textSec }}>
+                  {publishedRelativeLabel}
+                </span>
+              )}
+              {view.needsAttention && (
+                <span data-testid="card-needs-attention" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 800,
+                  color: "#b45309", background: "#fffbeb", border: "1px solid #f59e0b55", borderRadius: 999, padding: "2px 8px" }}>
+                  <AlertTriangle style={{ width: 10, height: 10 }} /> {tr("studioBoard.card.needsAttention")}
+                </span>
+              )}
+            </div>
+          )}
+          {/* Scheduled card is compact by default: its date+time reads here. */}
+          {scheduled && schedLabel && (
+            <span data-testid="card-scheduled-time" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 750, color: BUI.textSec }}>
+              <CalendarClock style={{ width: 13, height: 13 }} /> {tr("studioBoard.card.scheduledFor").replace("{time}", schedLabel)}
+            </span>
+          )}
+          {/* Draft cards edit inline (PRD §1). Scheduled/Posted stay compact until the
+              merchant presses Edit, which opens the SAME form via the expanded card. */}
+          {compactFields && (
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
-            Title
+            {tr("studioBoard.card.fields.title")}
             <input data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
               onChange={event => handleChange({ title: event.target.value })} placeholder={tr("studioBoard.card.untitledPin")}
               style={{ ...fieldStyle, fontSize: 12.5, fontWeight: 700, minHeight: 34, padding: "7px 9px" }} />
           </label>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
-            Description
+            {tr("studioBoard.card.fields.description")}
             <textarea data-testid="board-card-description" value={fields.description} disabled={publishing || generating}
-              onChange={event => handleChange({ description: event.target.value })} rows={3} placeholder="Tell people what this content is about"
+              onChange={event => handleChange({ description: event.target.value })} rows={3} placeholder={tr("studioBoard.card.fields.descriptionPlaceholder")}
               style={{ ...fieldStyle, fontSize: 11.5, lineHeight: 1.45, padding: "8px 9px", resize: "vertical", minHeight: 66 }} />
           </label>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
-            Website URL
+            {tr("studioBoard.card.fields.websiteUrl")}
             <input data-testid="board-card-url" value={fields.websiteUrl} disabled={publishing || generating}
               onChange={event => handleChange({ websiteUrl: event.target.value })} placeholder="https://"
               style={{ ...fieldStyle, fontSize: 11.5, minHeight: 34, padding: "7px 9px" }} />
           </label>
+          )}
           <div data-testid="card-publish-to" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <span style={labelStyle}>{tr("studioBoard.card.destinations")}</span>
-              <button type="button" data-testid="card-destination-dropdown" aria-label="Choose publishing destinations" onClick={expand}
+              <span style={labelStyle}>{tr("studioBoard.card.publishTo")}</span>
+              <button type="button" data-testid="card-destination-dropdown" aria-label={tr("studioBoard.card.editDestinations")}
+                aria-expanded={destinationsOpen} onClick={() => setDestinationsOpen(open => !open)}
                 style={{ width: 26, height: 26, display: "grid", placeItems: "center", border: `1px solid ${BUI.border}`, borderRadius: 7, background: BUI.surface2, padding: 0, color: BUI.textSec, cursor: "pointer" }}>
                 <ChevronDown style={{ width: 14, height: 14 }} />
               </button>
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            <div style={{ position: "relative", display: "flex", flexWrap: "wrap", gap: 5 }}>
               {(destinations.length ? destinations : [{ id: destinationKey("pinterest", null), provider: "pinterest" as const, socialConnectionId: null }]).map(destination => {
                 // Tolerates result ids written by earlier shapes, so an un-migrated
                 // draft keeps showing its real state instead of reverting to pending.
@@ -726,10 +914,41 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                     border: `1px solid ${isFailed ? "#f59e0b66" : BUI.border}`, background: isFailed ? "#fffbeb" : BUI.surface2,
                     color: isFailed ? "#b45309" : BUI.textSec, fontSize: 10.5, fontWeight: 750 }}>
                     <span style={{ width: 6, height: 6, borderRadius: 999, background: isFailed ? "#f59e0b" : result?.status === "published" ? "#22c55e" : BUI.textMuted }} />
-                    {destination.provider === "pinterest" ? customerFacingBoardName(destination.boardName, boardSummary) : destination.provider[0].toUpperCase() + destination.provider.slice(1)}
+                    {destination.provider === "pinterest" ? customerFacingBoardName(destination.boardName, boardSummary) : platformName(destination.provider as SocialProvider)}
+                    {/* The account is what disambiguates two chips on one platform. */}
+                    {(destination.accountLabel || result?.accountLabel) && (
+                      <span style={{ color: BUI.textMuted, fontWeight: 650 }}>{destination.accountLabel || result?.accountLabel}</span>
+                    )}
                   </span>
                 );
               })}
+              {/* PRD §6: the picker opens ANCHORED TO THE CHIPS. Editing where a
+                  Content publishes must not require expanding the whole card — that
+                  cost the merchant their place on the board for a two-click change.
+                  Mounted per-open so PublishDestinations loads the account summaries
+                  that resolveScheduledAccount needs. */}
+              {destinationsOpen && (
+                <>
+                  <div style={{ position: "fixed", inset: 0, zIndex: 20 }} onClick={() => setDestinationsOpen(false)} />
+                  <div data-testid="card-destination-popover" style={{ position: "absolute", zIndex: 21, top: "calc(100% + 6px)", left: 0, right: 0, minWidth: 220,
+                    padding: 10, borderRadius: 10, border: `1px solid ${BUI.borderHi}`, background: BUI.surface, boxShadow: "0 12px 32px rgba(15,23,42,0.18)" }}>
+                    <PublishDestinations
+                      selected={selectedProviders}
+                      onSelectedChange={changeProviders}
+                      selectedAccountIds={selectedAccountIds}
+                      onSelectedAccountIdsChange={changeAccounts}
+                      onSummariesChange={setConnectionSummaries}
+                      onConnectPinterest={props.onConnect}
+                      pinterestConnected={!disconnected && !needsReconnect}
+                    />
+                    {destinationError && (
+                      <p data-testid="card-destination-error" role="alert" style={{ margin: "8px 0 0", fontSize: 11, fontWeight: 700, color: "#b45309" }}>
+                        {destinationError}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
             {needsAttention && (
               <div data-testid="card-failed-info" style={{ display: "flex", flexDirection: "column", gap: 5, padding: "8px 9px", borderRadius: 8, background: "#fffbeb", border: "1px solid #f59e0b55" }}>
@@ -737,8 +956,8 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                   <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} />
                   {failureReasonText}
                 </p>
-                {formatPreviousScheduled(draft.previousScheduledTime) && (
-                  <span style={{ fontSize: 10, color: BUI.textMuted }}>{formatPreviousScheduled(draft.previousScheduledTime)}</span>
+                {formatPreviousScheduled(tr, draft.previousScheduledTime) && (
+                  <span style={{ fontSize: 10, color: BUI.textMuted }}>{formatPreviousScheduled(tr, draft.previousScheduledTime)}</span>
                 )}
               </div>
             )}
@@ -797,79 +1016,76 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               })}
             </div>
           )}
-          {/* PRD action matrix: max 1 primary + 1 secondary + More (More lives on the image). */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+          {/* PRD §3–§6 action matrix. Every real publish action reads exactly
+              "Publish" (§20); the failed card's primary is "Retry", which differs in
+              SCOPE (only what failed), not in what the word means. */}
+          {resultsBlock}
+          {publishConfirm}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
             {generating ? (
               <button type="button" data-testid="card-generating" disabled
                 style={{ ...primaryBtn, opacity: 0.6, cursor: "default" }}>
                 <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> {tr("studioBoard.action.generating")}
               </button>
-            ) : needsAttention ? (
-              // PRD 13 action matrix: transient failures lead with Retry (the fix is to
-              // just try again); content/unknown failures lead with Edit (retrying the
-              // same payload won't help until something changes). Generation failures
-              // (not a publish attempt) keep the original Try again / Edit order.
-              isPublishFailure ? (
-                <>
-                  <button type="button" data-testid="card-details" onClick={expand} style={primaryBtn}>
-                    {tr("studioBoard.action.details")}
+            ) : view.needsAttention && isPublishFailure ? (
+              // Retry re-sends ONLY the failed destinations (onlyPending), so retrying a
+              // partial success can never double-post the one that already published.
+              <>
+                <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={primaryBtn}>
+                  {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.actions.retry")}
+                </button>
+                {/* The one actionable next step for this failure category — never a raw message. */}
+                {nextStep && (
+                  <button type="button" data-testid="card-next-step"
+                    onClick={() => { if (nextStep.action === "reconnect") props.onConnect?.(); else startEditing(); }}
+                    style={secondaryBtn}>
+                    {tr(nextStep.key)}
                   </button>
-                  <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={secondaryBtn}>
-                    {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.action.retryPublish")}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={primaryBtn}>
-                    {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {isPublishFailure ? tr("studioBoard.action.retryPublish") : tr("studioBoard.action.tryAgain")}
-                  </button>
-                  <button type="button" data-testid="card-details" onClick={expand} style={secondaryBtn}>
-                    {tr("studioBoard.action.details")}
-                  </button>
-                </>
-              )
+                )}
+                <button type="button" data-testid="card-edit" onClick={startEditing} style={secondaryBtn}>
+                  {tr("studioBoard.actions.edit")}
+                </button>
+              </>
+            ) : view.needsAttention ? (
+              // Generation failure: not a publish attempt, so its own recovery stands.
+              <>
+                <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing} style={primaryBtn}>
+                  {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.action.tryAgain")}
+                </button>
+                <button type="button" data-testid="card-edit" onClick={startEditing} style={secondaryBtn}>
+                  {tr("studioBoard.actions.edit")}
+                </button>
+              </>
             ) : scheduled ? (
               <>
-                <button type="button" data-testid="card-details" onClick={expand} style={primaryBtn}>
-                  {tr("studioBoard.action.details")}
+                <button type="button" data-testid="card-edit" onClick={startEditing} style={primaryBtn}>
+                  {tr("studioBoard.actions.edit")}
                 </button>
-                <Link data-testid="card-view-plan" href={planDeepLink(draft.id)} style={{ ...secondaryBtn, textDecoration: "none" }}>
-                  {tr("studioBoard.action.viewPlan")}
-                </Link>
+                {/* Publishing now overrides the merchant's own plan, so it confirms first. */}
+                <button type="button" data-testid="card-publish" onClick={() => setConfirmPublish(true)} disabled={publishing} style={secondaryBtn}>
+                  {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
+                </button>
+                <button type="button" data-testid="card-unschedule" onClick={() => props.onUnschedule(draft.id)} style={secondaryBtn}>
+                  {tr("studioBoard.actions.unschedule")}
+                </button>
               </>
             ) : posted ? (
-              <>
-                {pinUrl ? (
-                  <a data-testid="card-view-pin" href={pinUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
-                    {tr("studioBoard.action.viewPin")} <ExternalLink style={{ width: 12, height: 12 }} />
-                  </a>
-                ) : (
-                  <button type="button" data-testid="card-details" onClick={expand} style={primaryBtn}>{tr("studioBoard.action.details")}</button>
-                )}
-                {pinUrl && (
-                  <button type="button" data-testid="card-details" onClick={expand} style={secondaryBtn}>{tr("studioBoard.action.details")}</button>
-                )}
-                {/* Also-published destinations (e.g. "View on Facebook"). Secondary —
-                    the Pinterest Pin stays the primary action on a Posted card. */}
-                {socialPostRefs.map(ref => (
-                  <a key={ref.provider} data-testid={`card-view-on-${ref.provider}`}
-                    href={ref.postUrl} target="_blank" rel="noopener noreferrer"
-                    style={{ ...secondaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}>
-                    {viewOnLabel(ref.provider)} <ExternalLink style={{ width: 11, height: 11 }} />
-                  </a>
-                ))}
-              </>
+              <button type="button" data-testid="card-edit" onClick={startEditing} style={primaryBtn}>
+                {tr("studioBoard.actions.edit")}
+              </button>
             ) : (
               <>
                 <button type="button" data-testid="card-schedule" onClick={doSchedule} disabled={publishing} style={primaryBtn}>
                   <CalendarClock style={{ width: 13, height: 13 }} /> {tr("studioBoard.action.schedule")}
                 </button>
-                <button type="button" data-testid="card-details" onClick={expand} style={secondaryBtn}>
-                  {tr("studioBoard.action.details")}
+                <button type="button" data-testid="card-publish" onClick={() => doPublish()} disabled={publishing} style={secondaryBtn}>
+                  {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
                 </button>
               </>
             )}
           </div>
+          {/* Saved / Saving… / Couldn't save · Retry — the card BOTTOM (PRD §1). */}
+          {!generating && saveStateLine}
         </div>
       </div>
     );
@@ -1009,9 +1225,9 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             {isPublishFailure && (
               <p style={{ margin: 0, fontSize: 11, color: BUI.textSec, lineHeight: 1.45 }}>{recommendedFix(tr, failureCategory)}</p>
             )}
-            {formatPreviousScheduled(draft.previousScheduledTime) && (
+            {formatPreviousScheduled(tr, draft.previousScheduledTime) && (
               <p style={{ margin: 0, fontSize: 11, color: BUI.textMuted }}>
-                {formatPreviousScheduled(draft.previousScheduledTime)}
+                {formatPreviousScheduled(tr, draft.previousScheduledTime)}
               </p>
             )}
           </div>

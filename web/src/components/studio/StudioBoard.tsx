@@ -59,7 +59,7 @@ type AiDrawerState =
   // `product` on the version variant carries a RETRY's own product forward, so a
   // failed run that chose a different product than its parent is not re-inherited
   // from the parent on retry.
-  | { mode: "version"; draft: PinDraft; product?: CanonicalProductSelection }
+  | { mode: "version"; draft: PinDraft; product?: CanonicalProductSelection; targetMediaId?: string }
   | { mode: "scratch"; product?: CanonicalProductSelection }
   | null;
 
@@ -557,7 +557,7 @@ export function StudioBoard() {
   // Gating and toasts live here (they are card UI); the publish ITSELF is
   // publishContent(), the one function every surface goes through — see its header
   // for why four divergent publish paths was the defect.
-  const handlePublish = useCallback(async (id: string) => {
+  const handlePublish = useCallback(async (id: string, options?: { onlyPending?: boolean }) => {
     let d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
     const destinations = contentDestinations(d);
@@ -596,7 +596,10 @@ export function StudioBoard() {
     // publishContent takes the shared in-flight lock itself, resolves the destinations
     // from the stored intent, media-checks each one, and writes the per-destination
     // records plus the derived legacy fields. Nothing about the record is decided here.
-    const outcome = await publishContent(id, { onlyPending: true });
+    // Default is Retry semantics (re-send only what has not published). A republish of
+    // an edited Posted Content passes onlyPending:false so the NEW content goes to every
+    // destination it names — otherwise editing a published Pin would publish nothing.
+    const outcome = await publishContent(id, { onlyPending: options?.onlyPending ?? true });
     if (outcome.blocked === "locked") return;
     if (outcome.blocked) { toast.error(tr("studioBoard.toast.publishFailed")); return; }
     const publishedCount = outcome.published.length;
@@ -691,11 +694,27 @@ export function StudioBoard() {
   }, [flashSaved, productPickerTargetId, tr]);
 
   // ── AI drawers ─────────────────────────────────────────────────────────────
-  const handleGenerateAiImage = useCallback((d: PinDraft) => setAiDrawer({ mode: "version", draft: d }), []);
+  // The card names WHICH image to regenerate (the selected thumbnail = the cover).
+  // It rides the drawer state so the completion path can replace that one media item
+  // instead of the whole set — regenerating image 3 of 4 must not delete the other 3.
+  const handleGenerateAiImage = useCallback((d: PinDraft, mediaId?: string) =>
+    setAiDrawer({ mode: "version", draft: d, targetMediaId: mediaId }), []);
   const handleCreateWithAi = useCallback(() => setAiDrawer({ mode: "scratch" }), []);
   const handleAiGenerate = useCallback(async (opts: AiVersionOptions) => {
     if (!aiDrawer) return;
     const parent = aiDrawer.mode === "version" ? aiDrawer.draft : null;
+    // Which media item a result replaces, and on which draft. Only meaningful when the
+    // generation lands back on the SAME Content the merchant clicked Regenerate on:
+    // version mode also creates brand-new placeholder cards, and an id from the parent
+    // would name nothing there (completeGeneratedDraft falls back to media[0], which is
+    // correct for a new card and wrong to force). Threaded as a pair for that reason.
+    const regenerateTarget = parent && aiDrawer.mode === "version" && aiDrawer.targetMediaId
+      ? { draftId: parent.id, mediaId: aiDrawer.targetMediaId }
+      : null;
+    const replaceMetaFor = (draftId: string): { replaceMediaId?: string } =>
+      regenerateTarget && regenerateTarget.draftId === draftId
+        ? { replaceMediaId: regenerateTarget.mediaId }
+        : {};
     setAiGenerating(true);
     // Regenerating from an existing pin (version mode) is a "regenerate" action.
     if (parent) track("regenerate_clicked", { draftId: parent.id });
@@ -846,7 +865,7 @@ export function StudioBoard() {
           const placeholder = placeholders[slot];
           if (!placeholder) return;
           if (status === "done" && url) {
-            pinDraftStore.completeGeneratedDraft(placeholder.id, url);
+            pinDraftStore.completeGeneratedDraft(placeholder.id, url, replaceMetaFor(placeholder.id));
             void startImageAnalysis(placeholder.id);
             doneCount++;
           } else {
@@ -875,6 +894,7 @@ export function StudioBoard() {
         pinDraftStore.completeGeneratedDraft(placeholders[i].id, url, {
           generationId: result.generationRequestId,
           assetKey: `gen:${requestId}:${i}`,
+          ...replaceMetaFor(placeholders[i].id),
         });
         void startImageAnalysis(placeholders[i].id);
         // Phase C: grade AI results in parallel (independent of copy analysis).
