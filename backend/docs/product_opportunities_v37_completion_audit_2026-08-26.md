@@ -29,8 +29,12 @@ subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
 the Product-truth render verifier; and the manifest/automation contract passed
-20/20. No environment file was created, no production endpoint was used, and no
-push, deployment, database write or timer mutation occurred.
+20/20. ShellCheck also passed the exact `351e479` Git blobs for `cloud_lib.sh`,
+Product Supply, Product Opportunity Admission and Product Tracking wrappers;
+the intentional dynamic shared-library source warning was excluded explicitly,
+while no other finding was suppressed. No environment file was created, no
+production endpoint was used, and no push, deployment, database write or timer
+mutation occurred.
 
 The former `codex/product-v37-security-deps` pointer below remains historical
 functional evidence, not the current whole-tree deployment candidate.

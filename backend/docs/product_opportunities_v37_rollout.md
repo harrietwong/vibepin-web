@@ -31,6 +31,13 @@ site passed the executable Product-truth render verifier. The Product automation
 contract for the new manifest passed 20/20. These local gates do not authorize
 production rollout.
 
+ShellCheck passed the exact functional-commit Git blobs for `cloud_lib.sh`,
+Product Supply, Product Opportunity Admission and Product Tracking wrappers.
+The only excluded diagnostic was SC1091 for the intentional runtime-relative
+`cloud_lib.sh` source; no semantic, quoting, process, lock or pipeline warning
+was suppressed. This closes local shell lint, but exact candidate systemd units
+still require `systemd-analyze verify` on a Linux host before deployment.
+
 The Web deployment config is part of this exact boundary and must use
 `installCommand: npm ci`. Replacing it with `npm install`, omitting the lockfile,
 or reusing an unverified `node_modules` tree invalidates the dependency-security
