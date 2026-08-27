@@ -1145,17 +1145,22 @@ export function StudioBoard() {
     toast.success(tr("studioBoard.toast.savedToReferences"));
   }, [tr]);
 
-  // Failed card "Try again": generation-failed → reopen the AI drawer (parent draft as
-  // source when the lineage exists); everything else → retry the real publish.
+  // Failed card "Try again": publish-failed → retry the real publish; generation-failed
+  // → reopen the AI drawer (parent draft as source when the lineage exists).
   //
-  // The test is `failureType === "generation"`, not "does the legacy publishError field
-  // have text". A per-destination failure need not populate that legacy field at all
-  // (legacyFieldsFromResults derives it, and a partial success clears it), so keying on
-  // it sent a Content whose ONLY problem was one failed destination into the AI image
-  // drawer — offering to regenerate an image for a publish failure. Retry semantics come
-  // from handlePublish's default (`onlyPending ?? true`): only what has not published.
+  // The test is `isActionablePublishFailure` — the SAME rule PinBoardCard uses to decide
+  // which Try Again it is rendering (`isPublishFailure`, which also gates the
+  // generation-only "Regenerate" menu item). Keying on the legacy `publishError` field
+  // having text was a second, weaker rule: that field is DERIVED from the destination
+  // rows and is cleared by a partial success, so a Content whose only problem was one
+  // failed destination fell into the else-branch and opened the AI image drawer —
+  // offering to regenerate an image for a publish failure. Two rules for one question is
+  // how the card's button and the handler behind it came to disagree.
+  //
+  // Retry semantics come from handlePublish's default (`onlyPending ?? true`): only what
+  // has not published is re-sent.
   const handleTryAgain = useCallback((d: PinDraft) => {
-    if (d.failureType !== "generation") { void handlePublish(d.id); return; }
+    if (isActionablePublishFailure(d)) { void handlePublish(d.id); return; }
     const parent = d.parentDraftId ? pinDraftStore.getDraft(d.parentDraftId) : null;
     // Restore the failed card's OWN generation group reference, so retrying a failed
     // reference group regenerates against the same reference instead of reopening a
