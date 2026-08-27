@@ -1035,7 +1035,7 @@ export function PinDetailsModal({
           provider,
           socialConnectionId: id,
           ...(provider === "pinterest"
-            ? { boardId, boardName: boards.find(b => b.id === boardId)?.name ?? defaultBoard?.name ?? activeDraft.boardName }
+            ? { boardId, boardName: boards.find(b => b.id === boardId)?.name ?? defaultBoard?.boardName ?? activeDraft.boardName ?? undefined }
             : {}),
         }));
       });
