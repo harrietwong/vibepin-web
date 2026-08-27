@@ -140,6 +140,7 @@ export const CORE: string[] = [
 
 /** Create Pins / Studio board + the Pin editing surfaces. */
 export const STUDIO: string[] = [
+  "test-publishing-prefs",
   "test-studio-flow-regression",
   "test-studio-plan-match",
   "test-studio-generated-section",
