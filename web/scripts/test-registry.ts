@@ -162,6 +162,9 @@ export const STUDIO: string[] = [
   // Pinterest media_source a carousel produces.
   "test-media-rules",
   "test-pin-media-source",
+  // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
+  // future-before-history ordering, state classification, the "+N" trigger badge.
+  "test-plan-sidebar-model",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",

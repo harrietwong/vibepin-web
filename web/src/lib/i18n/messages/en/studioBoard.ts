@@ -186,4 +186,30 @@ export const studioBoardMessages = {
   "studioBoard.target.boardUnavailable": "This Board is no longer available. Choose another Board before retrying.",
   // Fallback when the pinned account's username is unknown (identity never synced).
   "studioBoard.target.thisAccount": "this account",
+
+  // ── Right-side Plan sidebar (PRD 0826 §23–§24) ──────────────────────────────
+  // A peek at the week's schedule without leaving Create Pins. It can be hovered
+  // open, or pinned so it stays as a column beside the board.
+  "studioBoard.plan.title": "Plan",
+  "studioBoard.plan.open": "Keep Plan open",
+  "studioBoard.plan.close": "Close Plan",
+  "studioBoard.plan.previousWeek": "Previous week",
+  "studioBoard.plan.nextWeek": "Next week",
+  "studioBoard.plan.today": "Today",
+  "studioBoard.plan.openFullPlanner": "Open full planner",
+  // Week header count. Counts what still has to go out (upcoming + needs attention);
+  // already-posted history is deliberately excluded so the number means "work left".
+  "studioBoard.plan.scheduledThisWeek": "{n} scheduled this week",
+  "studioBoard.plan.oneScheduledThisWeek": "1 scheduled this week",
+  "studioBoard.plan.nothingScheduledThisWeek": "Nothing scheduled this week",
+  // Per-item accessible name: what a screen reader announces for the link.
+  "studioBoard.plan.itemLabel": "{time} · {title}",
+  "studioBoard.plan.untitled": "Untitled",
+  // The three item states (also the marker tooltips).
+  "studioBoard.plan.statusScheduled": "Scheduled",
+  "studioBoard.plan.statusPosted": "Posted",
+  "studioBoard.plan.statusFailed": "Needs attention",
+  // Trigger badge: how many schedules landed while the panel was closed. It never
+  // opens the panel by itself — it only counts, and clears the next time it opens.
+  "studioBoard.plan.newSinceLastOpen": "{n} newly scheduled since you last opened Plan",
 } as const;
