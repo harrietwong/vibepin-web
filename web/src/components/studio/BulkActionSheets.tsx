@@ -50,6 +50,10 @@ const BLOCKER_KEYS: Record<PublishBlocker["code"], MessageKey> = {
   missing_board: "studioBoard.blocker.missing_board",
   no_account: "studioBoard.blocker.no_account",
   no_media: "studioBoard.blocker.no_media",
+  // Never produced by the current platform checks (every platform accepts one image),
+  // but part of the media vocabulary — mapped so a caller that starts producing it
+  // gets a sentence rather than a raw code.
+  too_few: "studioBoard.blocker.too_few",
   too_many: "studioBoard.blocker.too_many",
   aspect_mismatch: "studioBoard.blocker.aspect_mismatch",
 };

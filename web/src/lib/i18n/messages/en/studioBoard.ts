@@ -102,6 +102,7 @@ export const studioBoardMessages = {
   "studioBoard.blocker.missing_board": "Choose a Pinterest board.",
   "studioBoard.blocker.no_account": "Choose which {provider} account to publish as.",
   "studioBoard.blocker.no_media": "Add an image.",
+  "studioBoard.blocker.too_few": "Add more images for {provider}.",
   "studioBoard.blocker.too_many": "Too many images for {provider}. Remove some and try again.",
   "studioBoard.blocker.aspect_mismatch": "{provider} needs every image in the same shape. Match the aspect ratios and try again.",
   "studioBoard.blocker.unknown": "This Pin can't be published yet.",

@@ -913,6 +913,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.blocker.missing_board": "請選擇一個 Pinterest board。",
   "studioBoard.blocker.no_account": "請選擇要用哪個 {provider} 帳號發布。",
   "studioBoard.blocker.no_media": "請新增圖片。",
+  "studioBoard.blocker.too_few": "請為 {provider} 新增更多圖片。",
   "studioBoard.blocker.too_many": "圖片數量超出 {provider} 的上限，請刪除部分後重試。",
   "studioBoard.blocker.aspect_mismatch": "{provider} 要求所有圖片比例一致，請統一比例後重試。",
   "studioBoard.blocker.unknown": "這個 Pin 目前無法發布。",

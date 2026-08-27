@@ -1984,6 +1984,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.blocker.missing_board": "请选择一个 Pinterest board。",
   "studioBoard.blocker.no_account": "请选择用哪个 {provider} 账号发布。",
   "studioBoard.blocker.no_media": "请添加图片。",
+  "studioBoard.blocker.too_few": "请为 {provider} 添加更多图片。",
   "studioBoard.blocker.too_many": "图片数量超出 {provider} 的上限，请删除部分后重试。",
   "studioBoard.blocker.aspect_mismatch": "{provider} 要求所有图片比例一致，请统一比例后重试。",
   "studioBoard.blocker.unknown": "这个 Pin 目前无法发布。",
