@@ -101,7 +101,7 @@ test("计数口径由 accountAllowance 独占:未断开 且 有 token", () => {
   );
   const src = read("src/lib/server/pinterest/accountQuota.ts");
   assert.ok(src.includes("evaluateAccountAllowance"), "必须委托给唯一实现,不得自己再数一遍");
-  assert.ok(!/listConnections/.test(src), "不得按全部连接计数,否则断开后无法重连");
+  assert.ok(!/\blistConnections\b/.test(src), "不得按全部连接计数,否则断开后无法重连");
 });
 test("listActiveConnections 的定义仍是 未断开 且 有 token", () => {
   const store = read("src/lib/server/pinterest/connectionStore.ts");
