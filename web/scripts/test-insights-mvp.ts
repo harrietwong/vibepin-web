@@ -175,10 +175,13 @@ await test("Insights stays a single simple page with honest platform language", 
   const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
   const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/vibepinPublishedPins.ts"), "utf8");
   const pinMetadataRoute = readFileSync(join(process.cwd(), "src/app/api/insights/pinterest-pins/route.ts"), "utf8");
+  // The page renders through the i18n catalog now, so the honest-language
+  // wording lives in en/insights.ts rather than as JSX literals.
+  const catalog = readFileSync(join(process.cwd(), "src/lib/i18n/messages/en/insights.ts"), "utf8");
   assert.match(layout, /href: "\/app\/insights"/);
-  assert.match(page, /Last 30 days/);
-  assert.match(page, /Went to website/);
-  assert.match(page, /Not available/);
+  assert.match(catalog, /Last 30 days/);
+  assert.match(catalog, /Went to website/);
+  assert.match(catalog, /Not available for feed images/);
   assert.match(page, /freshAccessToken/);
   assert.match(page, /Authorization: `Bearer \$\{token\}`/);
   assert.match(page, /\/api\/insights\/pinterest-pins\?ids=/);
@@ -193,12 +196,57 @@ await test("Insights stays a single simple page with honest platform language", 
   assert.match(dashboard, /listVibePinPublishedPinterestPins/);
   assert.match(provenance, /payload\.remotePinId/);
   assert.match(provenance, /if \(!pinId\) return null/);
-  assert.match(page, /All \$\{dashboard\.content\.length\} Pins verified from VibePin publish records/);
+  assert.match(catalog, /All \{count\} Pins verified from VibePin publish records/);
   assert.match(pinMetadataRoute, /MAX_IDS = 10/);
   assert.match(pinMetadataRoute, /CONCURRENCY = 5/);
   assert.doesNotMatch(page, /Overview[\s\S]*Pins[\s\S]*Analytics[\s\S]*Boards[\s\S]*Audience/);
   assert.match(instagramConfig, /instagram_business_manage_insights/);
 });
+
+await test("All-accounts view shows accounts side by side and never sums them", () => {
+  const page = readFileSync(join(process.cwd(), "src/app/app/insights/page.tsx"), "utf8");
+  const catalog = readFileSync(join(process.cwd(), "src/lib/i18n/messages/en/insights.ts"), "utf8");
+  // One request per account rather than one aggregate request: two accounts that
+  // serve different audiences have no meaningful combined number, and a summed
+  // "12K seen" would hide which brand actually earned it.
+  assert.match(page, /ALL_ACCOUNTS = "__all__"/);
+  assert.match(page, /accountCards/);
+  // Each account owns its own loading and failure state, so one bad token
+  // cannot blank the page for the accounts that are fine.
+  assert.match(page, /insights\.state\.accountFailed/);
+  // The merged table tags each row with its owner instead of collapsing rows.
+  assert.match(page, /accountLabel: accountHandle\(account\)/);
+  assert.match(catalog, /"insights\.content\.colAccount"/);
+  assert.match(catalog, /"insights\.accounts\.all"/);
+});
+
+await test("Pin metadata is read with the account that owns the Pin", () => {
+  const route = readFileSync(join(process.cwd(), "src/app/api/insights/pinterest-pins/route.ts"), "utf8");
+  const page = readFileSync(join(process.cwd(), "src/app/app/insights/page.tsx"), "utf8");
+  // A Pin is only readable with its own account's token; a user-scoped client
+  // would 404 every Pin of the non-default account and silently drop its
+  // thumbnail. Insights therefore never falls back to forUser().
+  assert.match(route, /forConnection\(uid, connectionId\)/);
+  assert.doesNotMatch(route, /forUser\(/);
+  // The page always knows which account owns the row it is hydrating.
+  assert.match(page, /connectionId=\$\{encodeURIComponent\(target\.connectionId\)\}/);
+});
+
+await test("Insights attributes each Pin to the account that published it", () => {
+  const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/vibepinPublishedPins.ts"), "utf8");
+  const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
+  assert.match(provenance, /targetConnectionId: nonEmptyString\(payload\.targetConnectionId\)/);
+  // Unattributed legacy drafts stay visible rather than vanishing from every account.
+  assert.match(dashboard, /item\.targetConnectionId === null \|\| item\.targetConnectionId === connection\.id/);
+});
+
+await test("server-side Insights strings are not hardcoded Chinese", () => {
+  const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
+  // dashboard.ts runs on the server with no locale, so its user-facing warning /
+  // availability text must be plain English rather than one hardcoded language.
+  assert.doesNotMatch(dashboard, /[一-鿿]/);
+});
+
 
 console.log(`\n${passed} Insights MVP tests passed.`);
 }

@@ -56,7 +56,18 @@ export async function GET(req: Request) {
     const uid = await getUserIdFromSameOriginSession(req);
     if (!uid) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-    const rawIds = new URL(req.url).searchParams.get("ids") ?? "";
+    const params = new URL(req.url).searchParams;
+    const rawIds = params.get("ids") ?? "";
+    // Which connected account owns these Pins. REQUIRED: Pin metadata is readable
+    // only with that account's own token, so a user-scoped client would 404 every
+    // Pin belonging to the non-default account and the row would silently lose its
+    // thumbnail — a wrong answer dressed as a missing image. The caller always
+    // knows the owning account (it is rendering that account's rows), so demanding
+    // it here is free and removes the only way to get this silently wrong.
+    const connectionId = params.get("connectionId")?.trim() || null;
+    if (!connectionId) {
+      return Response.json({ error: "connectionId is required" }, { status: 400 });
+    }
     const ids = [...new Set(rawIds.split(","))]
       .filter(id => /^\d+$/.test(id))
       .slice(0, MAX_IDS);
@@ -68,7 +79,7 @@ export async function GET(req: Request) {
     const items: PinterestPinMetadata[] = [];
     const missing: string[] = [];
     for (const id of ids) {
-      const cached = metadataCache.get(`${uid}:${id}`);
+      const cached = metadataCache.get(`${uid}:${connectionId}:${id}`);
       if (cached && now - cached.at < CACHE_TTL_MS) {
         if (cached.item) items.push(cached.item);
       } else {
@@ -77,11 +88,11 @@ export async function GET(req: Request) {
     }
 
     if (missing.length > 0) {
-      const client = await PinterestClient.forUser(uid);
+      const client = await PinterestClient.forConnection(uid, connectionId);
       const fetched = await mapWithConcurrency(missing, id => readPin(client, id));
       for (let index = 0; index < missing.length; index += 1) {
         const item = fetched[index];
-        metadataCache.set(`${uid}:${missing[index]}`, { at: now, item });
+        metadataCache.set(`${uid}:${connectionId}:${missing[index]}`, { at: now, item });
         if (item) items.push(item);
       }
       if (metadataCache.size > 2_000) metadataCache.clear();

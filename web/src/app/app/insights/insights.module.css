@@ -318,6 +318,146 @@
   text-decoration: none;
 }
 
+/* ── Multi-account switcher ─────────────────────────────────────────────────
+   Pinterest only. "All accounts" shows one card per account side by side; the
+   accounts are never summed, so there is no combined-total affordance here. */
+.accountSwitcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.accountChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-surface);
+  color: var(--app-text-sec);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+
+.accountChip:hover { color: var(--app-text); }
+
+.accountChipActive {
+  border-color: rgba(124, 58, 237, .75);
+  background: rgba(124, 58, 237, .12);
+  color: var(--app-text);
+}
+
+.accountChipAvatar { border-radius: 999px; object-fit: cover; }
+
+.accountChipWarning {
+  color: var(--app-warning, #f59e0b);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ── Per-account summary cards (All accounts view) ────────────────────────── */
+.accountCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.accountCard {
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  background: var(--app-surface);
+  overflow: hidden;
+}
+
+.accountCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.accountAvatar { border-radius: 999px; object-fit: cover; }
+
+.accountAvatarFallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--app-inset);
+  display: inline-block;
+}
+
+.accountCardHandle {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--app-text);
+}
+
+.accountCardBody {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+}
+
+.accountStat { display: flex; flex-direction: column; gap: 4px; }
+
+.accountStatLabel {
+  font-size: 11px;
+  font-weight: 750;
+  color: var(--app-text-muted);
+}
+
+.accountStatValue {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--app-text);
+}
+
+.accountCardNote {
+  margin: 0;
+  padding: 0 14px 13px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--app-text-muted);
+}
+
+.accountCardError {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 18px 14px;
+  font-size: 12px;
+  color: var(--app-text-sec);
+}
+
+/* ── Stacked per-account heatmap rows ─────────────────────────────────────── */
+.heatmapRow { margin-bottom: 14px; }
+
+.heatmapRowLabel {
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--app-text-sec);
+}
+
+/* ── Content table: account column + filter ───────────────────────────────── */
+.accountCell {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--app-text-sec);
+  white-space: nowrap;
+}
+
+.filterLabel { display: inline-flex; align-items: center; }
+
 .skeleton { height: 126px; background: var(--app-inset); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .5; } }
 
@@ -331,6 +471,7 @@
 }
 
 @media (max-width: 520px) {
+  .accountCards { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: 1fr; }
   .metric { min-height: 106px; border-right: 0; border-bottom: 1px solid var(--app-border); }
   .metric:nth-child(2) { border-bottom: 1px solid var(--app-border); }

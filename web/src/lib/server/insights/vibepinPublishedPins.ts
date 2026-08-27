@@ -13,6 +13,14 @@ export type VibePinPublishedPinterestPin = {
   postUrl: string;
   publishedAt: string | null;
   mediaType: string | null;
+  /**
+   * The social_connections row this Pin was actually published through
+   * (adopt-once, PRD §14). Null for drafts published before targets were
+   * recorded — those cannot be attributed to one account, so Insights shows
+   * them on every account rather than silently hiding them from the account
+   * that really owns them.
+   */
+  targetConnectionId: string | null;
 };
 
 export type VibePinPublishedPinterestResult = {
@@ -55,6 +63,7 @@ export function publishedPinterestPinFromDraft(
     postUrl: nonEmptyString(payload.remotePinUrl) ?? `https://www.pinterest.com/pin/${pinId}/`,
     publishedAt: nonEmptyString(payload.postedAt),
     mediaType: mediaType(payload),
+    targetConnectionId: nonEmptyString(payload.targetConnectionId),
   };
 }
 

@@ -3,6 +3,7 @@ import { dashboardMessages } from "./en/dashboard";
 import { discoverMessages } from "./en/discover";
 import { helpMessages } from "./en/help";
 import { historyMessages } from "./en/history";
+import { insightsMessages } from "./en/insights";
 import { manualPublishMessages } from "./en/manualPublish";
 import { opportunityMessages } from "./en/opportunity";
 import { pinDrawerMessages } from "./en/pinDrawer";
@@ -31,6 +32,7 @@ const en = {
   "nav.keywordTrends": "Keyword Trends",
   "nav.pinIdeas": "Pin Ideas",
   "nav.productIdeas": "Product Opportunities",
+  "nav.insights": "Insights",
   "nav.settings": "Settings",
   "nav.helpSupport": "Help & Support",
   "adminForbidden.title": "Admin access required",
@@ -555,6 +557,7 @@ const en = {
   ...productLibraryMessages,
   ...productsMessages,
   ...queueMessages,
+  ...insightsMessages,
   ...socialPanelMessages,
   ...studioMessages,
   ...studioBoardMessages,

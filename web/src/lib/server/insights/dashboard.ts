@@ -148,8 +148,8 @@ function emptyDashboard(
       views: platform === "pinterest" ? "pin_level" : "media_level",
       websiteClicks: platform === "pinterest" ? "pin_level" : "account_level",
       message: platform === "pinterest"
-        ? "Pinterest 可按 Pin 读取站外点击；这里的点击表示用户离开 Pinterest，不等于网页已完成加载。"
-        : "Instagram 普通图片帖没有可点击的 Caption 链接；只能读取账号主页链接点击，不能归因到某张图。",
+        ? "Pinterest reports outbound clicks per Pin. A click means someone left Pinterest — it does not prove the page finished loading."
+        : "A normal Instagram feed image has no clickable caption link. Only account-level profile link taps are available, and they cannot be assigned to one image.",
     },
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
@@ -184,7 +184,18 @@ async function buildPinterestDashboard(
   // publish. Use the complete VibePin provenance set as the source of truth;
   // intersecting with the first page of Pinterest-owned Pins silently dropped
   // older VibePin posts from Insights.
-  const published = Array.from(provenance.pins.values());
+  //
+  // With several connected accounts, a Pin belongs to the connection it was
+  // published through (`targetConnectionId`, adopt-once PRD §14). Without this
+  // filter every account's dashboard would list every account's Pins, so the
+  // All-accounts view would repeat each Pin once per account and this account's
+  // token would return no metrics for the other account's Pins — reported as
+  // "Pinterest has not returned metrics yet" rather than as the mis-attribution
+  // it really is. Drafts published before targets were recorded have no
+  // attribution at all; they stay visible on every account (metrics only come
+  // back on the one that truly owns them) rather than disappearing entirely.
+  const published = Array.from(provenance.pins.values())
+    .filter(item => item.targetConnectionId === null || item.targetConnectionId === connection.id);
   const analyticsResult = await loadVerifiedPinterestAnalytics(
     client,
     published.map(item => item.pinId),
@@ -276,13 +287,13 @@ async function buildPinterestDashboard(
   const missingImages = rawContent.filter(item => !item.imageUrl).length;
   let warning: string | null = null;
   if (!provenance.storageAvailable) {
-    warning = "VibePin 发布记录暂不可用。为避免混入其他图片，本页不会展示无法核验来源的 Pin。";
+    warning = "VibePin publish records are temporarily unavailable. To avoid mixing in Pins we cannot verify, none are shown here.";
   } else if (published.length === 0) {
-    warning = "暂未找到带有 Pinterest 发布成功凭证的 VibePin 内容。没有发布凭证的图片不会展示。";
+    warning = "No VibePin content has a confirmed Pinterest publish record yet. Images without a publish record are never shown here.";
   } else if (!analyticsResult.available || missingAnalytics > 0) {
-    warning = `${published.length} 个已发布的 VibePin Pin 中，有 ${missingAnalytics || published.length} 个暂未返回 Pinterest 官方指标，指标以 — 显示。`;
+    warning = `Pinterest has not returned official metrics for ${missingAnalytics || published.length} of ${published.length} published VibePin Pins yet. Those rows show — instead of a number.`;
   } else if (missingImages > 0) {
-    warning = `${missingImages} 个已确认由 VibePin 发布的 Pin 暂无本地缩略图，系统会继续向 Pinterest 补取。`;
+    warning = `${missingImages} confirmed VibePin Pins have no local thumbnail yet. VibePin keeps fetching them from Pinterest.`;
   }
 
   return {
@@ -300,7 +311,7 @@ async function buildPinterestDashboard(
     availability: {
       views: "pin_level",
       websiteClicks: "pin_level",
-      message: "显示所有有 VibePin 成功发布凭证的 Pin；没有发布凭证的草稿不会出现在这里。“进网站”表示用户离开 Pinterest，不等于网页已完成加载。",
+      message: "Shows every Pin with a confirmed VibePin publish record; drafts without one never appear here. \"Went to site\" means someone left Pinterest — it does not prove the page finished loading.",
     },
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
@@ -321,7 +332,7 @@ async function buildInstagramDashboard(
       name: connection.providerAccountName ?? connection.providerAccountUsername ?? "Instagram",
       username: connection.providerAccountUsername,
     };
-    dashboard.warning = "重新连接 Instagram 后，VibePin 才能读取观看、收藏、分享和主页链接点击。";
+    dashboard.warning = "Reconnect Instagram so VibePin can read views, saves, shares and profile link taps.";
     return dashboard;
   }
 
@@ -329,7 +340,7 @@ async function buildInstagramDashboard(
   const userId = token?.userId ?? connection.providerAccountId;
   if (!token?.accessToken || !userId) {
     const dashboard = emptyDashboard("instagram", "needs_reconnect", startDate, endDate, null);
-    dashboard.warning = "Instagram 授权已失效，请重新连接。";
+    dashboard.warning = "This Instagram authorization is no longer valid. Please reconnect the account.";
     return dashboard;
   }
 
@@ -426,13 +437,13 @@ async function buildInstagramDashboard(
     availability: {
       views: "media_level",
       websiteClicks: "account_level",
-      message: "主页链接点击是账号近30天总数，不能归因到某张普通图片；图片行只显示官方媒体互动。",
+      message: "Profile link taps are an account total for the last 30 days and cannot be attributed to one feed image. Image rows show only official media interactions.",
     },
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
     warning: failedMedia > 0
-      ? `${failedMedia} 条内容的部分指标暂未被 Instagram 返回。未返回的数据不会伪装成网站点击。`
-      : "Instagram 图片行是媒体累计数据；热力图和主页链接点击按近30天展示。",
+      ? `Instagram has not returned some metrics for ${failedMedia} items. Missing data is never presented as website clicks.`
+      : "Instagram image rows are lifetime media totals; the heatmap and profile link taps cover the last 30 days.",
   };
 }
 
@@ -482,7 +493,7 @@ export async function getInsightsDashboard(
       endDate,
       error instanceof InstagramInsightsError || error instanceof PinterestApiError
         ? error.message
-        : "暂时无法读取平台数据，请稍后重试。",
+        : "Platform data could not be read right now. Please try again shortly.",
     );
     dashboard.account = connection ? {
       id: connection.providerAccountId ?? connection.id,
