@@ -32,12 +32,13 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 877 passed with 2 live-only skips and 77
+and contract-test state: backend 882 passed with 2 live-only skips and 77
 subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
 the Product-truth render verifier; and the manifest/automation contract passed
-20/20. ShellCheck also passed the exact `351e479` Git blobs for `cloud_lib.sh`,
+22/22, while the focused worker, automation, and admission group passed 59/59.
+ShellCheck also passed the exact `351e479` Git blobs for `cloud_lib.sh`,
 Product Supply, Product Opportunity Admission and Product Tracking wrappers;
 the intentional dynamic shared-library source warning was excluded explicitly,
 while no other finding was suppressed. No environment file was created, no

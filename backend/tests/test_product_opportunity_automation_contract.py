@@ -66,7 +66,8 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "877 tests" in RUNBOOK
+    assert "882 tests" in RUNBOOK
+    assert "59/59" in RUNBOOK
     assert "132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
 

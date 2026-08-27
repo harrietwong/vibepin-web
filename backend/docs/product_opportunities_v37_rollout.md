@@ -36,13 +36,14 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 877 tests with 2
+committed Product-only state, the full backend suite passed 882 tests with 2
 live-only skips and 77 subtests, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
 --audit-level=low` reported zero known vulnerabilities, and the built localhost
 site passed the executable Product-truth render verifier. The Product automation
-contract for the new manifest passed 20/20. These local gates do not authorize
+contract for the current manifest passed 22/22; the focused worker, automation,
+and admission group passed 59/59. These local gates do not authorize
 production rollout.
 
 ShellCheck passed the exact functional-commit Git blobs for `cloud_lib.sh`,
