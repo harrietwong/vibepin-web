@@ -597,6 +597,26 @@ export function createBoardDraft(input: {
   /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
   sourceGenerationId?: string;
   sourceAssetKey?:     string;
+  /**
+   * PRD §17 — the merchant's Default Publishing Destinations, already narrowed to
+   * accounts that are still connected (see `resolveDefaultDestinations`).
+   *
+   * It is an INPUT rather than a lookup inside this function on purpose: this module
+   * is imported by server code, while "which accounts are connected right now" is a
+   * browser-session fact. Passing it in keeps the store free of that dependency and
+   * makes the prefill rule testable as a pure transformation.
+   *
+   * The defaults seed NEW content only. Nothing anywhere re-applies them to existing
+   * drafts — that was the §12 load-time effect this replaces, which rewrote every
+   * boardless draft on the board each time Create Pins loaded.
+   */
+  defaultDestinations?: ReadonlyArray<{
+    provider: string;
+    socialConnectionId: string;
+    boardId?: string;
+    boardName?: string;
+    accountLabel?: string;
+  }>;
 }): PinDraft {
   const data = load();
 
@@ -614,6 +634,26 @@ export function createBoardDraft(input: {
     altText: input.altText?.trim(), source: input.source === "uploaded_image" ? "upload" as const : "ai" as const,
   }] : []);
   const cover = initialMedia[0];
+
+  // PRD §17 prefill. Only NEW content reaches here, so applying the defaults cannot
+  // disturb anything the merchant has already drafted, scheduled or posted. Legacy
+  // Pinterest fields are mirrored from the Pinterest entry so the due-time worker and
+  // any un-migrated read path see exactly the same destination as the intent record.
+  const seeded = (input.defaultDestinations ?? [])
+    .filter(d => d && typeof d.socialConnectionId === "string" && d.socialConnectionId.trim())
+    .map<ScheduledDestination>(d => {
+      const entry: ScheduledDestination = {
+        provider: d.provider,
+        socialConnectionId: d.socialConnectionId.trim(),
+        capturedAt: now,
+      };
+      if (d.accountLabel?.trim()) entry.accountLabel = d.accountLabel.trim();
+      if (d.boardId?.trim())      entry.boardId      = d.boardId.trim();
+      if (d.boardName?.trim())    entry.boardName    = d.boardName.trim();
+      return entry;
+    });
+  const seededPinterest = seeded.find(d => d.provider === "pinterest");
+
   const draft: PinDraft = {
     id,
     contentId:           id,
@@ -627,8 +667,13 @@ export function createBoardDraft(input: {
     description:         input.description?.trim() ?? "",
     altText:             input.altText?.trim() ?? "",
     destinationUrl:      input.destinationUrl?.trim() ?? "",
-    boardId:             "",
-    boardName:           "",
+    boardId:             seededPinterest?.boardId   ?? "",
+    boardName:           seededPinterest?.boardName ?? "",
+    ...(seeded.length ? { scheduledDestinations: seeded } : {}),
+    ...(seededPinterest ? {
+      targetConnectionId: seededPinterest.socialConnectionId,
+      ...(seededPinterest.accountLabel ? { targetAccountLabel: seededPinterest.accountLabel } : {}),
+    } : {}),
     weeklyPlanItemId:    "",
     generationSessionId: input.generationSessionId ?? "",
     scheduledDate:       "",

@@ -29,6 +29,8 @@ import { beginPublish, endPublish, isActionablePublishFailure, isActionablePubli
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { readStoredTarget } from "@/lib/studio/publishTarget";
+import { getCachedConnections } from "@/lib/social/connectionsCache";
+import { migrateMultiUploadMode, patchPublishingPrefs, resolveDefaultDestinations } from "@/lib/publishingPrefsStore";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
@@ -82,7 +84,6 @@ function planDeepLink(draftId: string): string {
 // the user, not a mixed "All" view dominated by already-scheduled/posted cards.
 const FILTER_STORAGE_KEY = "vp:studio:filter";
 const PLAN_PINNED_STORAGE_KEY = "vp:studio:plan-pinned";
-const MULTI_UPLOAD_MODE_STORAGE_KEY = "vp:studio:multi-upload-mode";
 type MultiUploadMode = "together" | "separate";
 const VALID_FILTERS: BoardFilter[] = ["all", "unscheduled", "scheduled", "posted", "failed"];
 function readStoredFilter(): BoardFilter {
@@ -281,7 +282,23 @@ export function StudioBoard() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const shopifyEnabled = isShopifyIntegrationEnabled();
   const fileRef = useRef<HTMLInputElement>(null);
-  const didPrefillBoardRef = useRef(false);
+
+  /**
+   * PRD §17 — the destinations NEW content should be seeded with, narrowed to the
+   * accounts that are connected right now. Recomputed per creation (not memoized on
+   * mount) so a default whose account was disconnected mid-session stops being applied
+   * immediately. When the connections cache is empty we deliberately seed NOTHING:
+   * an unverified default would pin fresh content to an account that may be gone.
+   */
+  const defaultDestinationsForNewContent = useCallback(() => {
+    const cached = getCachedConnections();
+    if (!cached) return [];
+    const connectedIds = new Set(
+      cached.platforms.flatMap(platform =>
+        platform.accounts.filter(a => a.connectionStatus === "connected").map(a => a.id)),
+    );
+    return resolveDefaultDestinations(connectedIds);
+  }, []);
 
   const flashSaved = useCallback(() => { setSaving(true); setTimeout(() => setSaving(false), 300); }, []);
   const openFilePicker = useCallback(() => fileRef.current?.click(), []);
@@ -321,36 +338,15 @@ export function StudioBoard() {
   })), [allItems]);
   const selectedBatchPins = useMemo(() => batchPins.filter(pin => selectedIds.has(pin.pinId)), [batchPins, selectedIds]);
 
-  // PRD §12: a verified last-used Pinterest Board pre-fills boardless content.
-  // The preference is adopted only when that Board is still present in the current
-  // account's live board list; an unavailable/stale preference remains unset.
-  useEffect(() => {
-    if (didPrefillBoardRef.current || boardsLoading || noBoardAccess || !customerBoards.length) return;
-    didPrefillBoardRef.current = true;
-    let cancelled = false;
-    const recentDraftBoard = allItems.map(item => item.draft)
-      .find(draft => draft.boardId?.trim() && !isInternalBoardName(draft.boardName));
-    const applyPreference = (preference: { boardId: string; boardName?: string | null } | null) => {
-      if (cancelled || !preference?.boardId) return;
-      const liveBoard = customerBoards.find(board => board.id === preference.boardId);
-      if (!liveBoard) return;
-      allItems.forEach(({ draft }) => {
-        if (draft.boardId?.trim()) return;
-        const existing = contentDestinations(draft);
-        if (existing.length && !existing.some(destination => destination.provider === "pinterest")) return;
-        const destinations = (existing.length ? existing : [{ id: `${draft.id}:pinterest`, provider: "pinterest" as const }])
-          .map(destination => destination.provider === "pinterest" ? { ...destination, boardId: liveBoard.id, boardName: liveBoard.name } : destination);
-        pinDraftStore.updateDraft(draft.id, { boardId: liveBoard.id, boardName: liveBoard.name, publishDestinations: destinations });
-      });
-    };
-    const recentPreference = recentDraftBoard?.boardId
-      ? { boardId: recentDraftBoard.boardId, boardName: recentDraftBoard.boardName || null }
-      : null;
-    void fetchPinterestDefaultBoard()
-      .then(preference => applyPreference(preference ?? recentPreference))
-      .catch(() => applyPreference(recentPreference));
-    return () => { cancelled = true; };
-  }, [allItems, boardsLoading, customerBoards, noBoardAccess]);
+  // PRD §17 replaced the load-time board prefill that used to live here.
+  //
+  // That effect walked EVERY boardless draft on load and rewrote it to the
+  // remembered Board — so a Draft the merchant had deliberately left without a
+  // Board, and content already Scheduled or Posted, silently changed underneath
+  // them, and it happened again on every reload. §17 is explicit that a default
+  // "only prefills NEW content; never rewrites existing Draft/Scheduled/Posted",
+  // so the prefill now happens once, at creation, in pinDraftStore.createBoardDraft
+  // (seeded by `defaultDestinationsForNewContent` below).
 
   const handleBatchApply = useCallback(({ rowEdits }: BatchApplyOpts) => {
     Object.entries(rowEdits).forEach(([id, edit]) => {
@@ -374,6 +370,7 @@ export function StudioBoard() {
   // ── Upload → one Content with N media, or N separate Contents ──────────────
   const processFiles = useCallback(async (arr: File[], mode: MultiUploadMode) => {
     if (!arr.length) return;
+    const seedDestinations = defaultDestinationsForNewContent();
     setUploading(true);
     setUploadProgress({ done: 0, total: arr.length });
     const batchId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -401,6 +398,7 @@ export function StudioBoard() {
         })),
         source: "uploaded_image", idempotencyKey: `${batchId}:content`,
         title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+        defaultDestinations: seedDestinations,
       });
       void startImageAnalysis(created.id);
     } else {
@@ -408,6 +406,7 @@ export function StudioBoard() {
         const created = pinDraftStore.createBoardDraft({
           imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
           title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+          defaultDestinations: seedDestinations,
         });
         void startImageAnalysis(created.id);
       });
@@ -420,18 +419,16 @@ export function StudioBoard() {
       const more = failedNames.length > 3 ? tr("studioBoard.toast.uploadFailedAndMore").replace("{n}", String(failedNames.length - 3)) : "";
       toast.error(`${tr("studioBoard.toast.uploadFailedPrefix")}${shown}${more}${tr("studioBoard.toast.uploadFailedSuffix")}`);
     }
-  }, [flashSaved, tr]);
+  }, [defaultDestinationsForNewContent, flashSaved, tr]);
 
   const handleFiles = useCallback((files: FileList | File[]) => {
     const arr = Array.from(files);
     if (!arr.length) return;
     if (arr.length === 1) { void processFiles(arr, "separate"); return; }
-    let stored: MultiUploadMode | null = null;
-    try {
-      const value = window.localStorage.getItem(MULTI_UPLOAD_MODE_STORAGE_KEY);
-      stored = value === "together" || value === "separate" ? value : null;
-    } catch { /* ask below */ }
-    if (stored) { void processFiles(arr, stored); return; }
+    // PRD §12: the merchant's standing answer wins; "ask" (the default) opens the dialog.
+    // migrate… adopts a pre-prefs answer from the old browser key exactly once.
+    const stored = migrateMultiUploadMode().multiUploadDefault;
+    if (stored !== "ask") { void processFiles(arr, stored); return; }
     setUploadChoice("together");
     setRememberUploadChoice(false);
     setPendingUploadFiles(arr);
@@ -441,7 +438,9 @@ export function StudioBoard() {
     const files = pendingUploadFiles;
     if (!files) return;
     if (rememberUploadChoice) {
-      try { window.localStorage.setItem(MULTI_UPLOAD_MODE_STORAGE_KEY, uploadChoice); } catch { /* one-time choice still works */ }
+      // Stored as a preference, not a browser key: it syncs with the merchant's other
+      // publishing prefs and is editable in Settings instead of only resettable there.
+      patchPublishingPrefs({ multiUploadDefault: uploadChoice });
     }
     setPendingUploadFiles(null);
     void processFiles(files, uploadChoice);
@@ -856,8 +855,10 @@ export function StudioBoard() {
       model: resolveModelLabel(undefined, opts.modelKey),
       modelKey: opts.modelKey,
     };
+    const seedDestinations = defaultDestinationsForNewContent();
     const placeholders = Array.from({ length: requested }, (_, i) =>
       pinDraftStore.createBoardDraft({
+        defaultDestinations: seedDestinations,
         // Placeholder shows the parent image while generating; scratch mode has none.
         imageUrl: parent?.imageUrl ?? "",
         source: "ai_generated_from_upload",
@@ -951,6 +952,7 @@ export function StudioBoard() {
           model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
           generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
           sourceGenerationId: result.generationRequestId, sourceAssetKey: `gen:${requestId}:extra:${i}`,
+          defaultDestinations: seedDestinations,
         });
         void startImageAnalysis(extra.id);
         void startQualityJudge(extra.id);
@@ -1007,7 +1009,7 @@ export function StudioBoard() {
         else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
       },
     });
-  }, [aiDrawer, tr]);
+  }, [aiDrawer, defaultDestinationsForNewContent, tr]);
 
 
   const handleDelete = useCallback((d: PinDraft) => {

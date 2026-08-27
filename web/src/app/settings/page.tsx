@@ -6,8 +6,6 @@ import NextLink from "next/link";
 import { apiFetch } from "@/lib/utils";
 import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
-const MULTI_UPLOAD_MODE_STORAGE_KEY = "vp:studio:multi-upload-mode";
-
 interface Settings {
   auto_publish: boolean;
   review_image: boolean;
@@ -109,18 +107,6 @@ export default function SettingsPage() {
           <SettingsToggle label="Review captions" desc="Pause for approval before publishing captions." value={settings.review_copy} onChange={() => setSettings(p => ({ ...p, review_copy: !p.review_copy }))} />
 
           <div className="mt-4 space-y-3">
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-neutral-200 p-3">
-              <div>
-                <p className="text-sm font-medium text-neutral-700">Multiple-image uploads</p>
-                <p className="text-xs text-neutral-400 mt-0.5">Ask whether images belong to one Content or separate Contents.</p>
-              </div>
-              <button type="button" data-testid="reset-multi-upload-choice" onClick={() => {
-                try { window.localStorage.removeItem(MULTI_UPLOAD_MODE_STORAGE_KEY); } catch { /* storage unavailable */ }
-                toast.success("Create Pins will ask again on your next multi-image upload.");
-              }} className="shrink-0 rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50">
-                Reset choice
-              </button>
-            </div>
             <div>
               <label className="block text-sm font-medium text-neutral-700 mb-1.5">Daily publish limit</label>
               <input
