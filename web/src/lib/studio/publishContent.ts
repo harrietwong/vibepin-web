@@ -43,7 +43,7 @@ import {
   type MediaCheckResult,
   type PublishMediaItem,
 } from "../publish/mediaRules";
-import { publishPin } from "../pinterestClient";
+import { publishPin, type AttachedProduct } from "../pinterestClient";
 import { publishToSocial } from "../social/socialClient";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "./pinLifecycle";
 
@@ -54,6 +54,31 @@ export type PublishContentOptions = {
    * "publish again" on a fully published Content).
    */
   onlyPending?: boolean;
+  /**
+   * Publish to THESE destinations instead of the ones the draft's stored intent names.
+   *
+   * "Publish now" from the Plan drawer has no stored intent to read: the drawer only
+   * freezes `scheduledDestinations` for a Content that has a DATE ("Publish now needs
+   * no stored intent"), so an undated Content would resolve to nothing and — because
+   * this function fails closed — publish nowhere. The drawer's live checkbox state IS
+   * the intent for that click, so it passes it in. Empty/omitted keeps the stored
+   * intent, which is what every scheduled path wants.
+   */
+  destinations?: readonly PublishDestination[];
+  /**
+   * Fields carried by ONE surface's publish that are not part of the Content itself.
+   * Threaded straight through to the underlying call, unchanged.
+   */
+  extras?: {
+    /**
+     * Products to attach to the Pin (Pinterest only). Not read from the draft: the
+     * drawer sends the products as they are on screen, which may be ahead of what the
+     * debounced autosave has flushed.
+     */
+    attachedProducts?: AttachedProduct[];
+    primaryProductUrl?: string;
+    productAttachmentMode?: "vibepin_metadata_v1";
+  };
   /** Injected in tests. Production callers never pass these. */
   deps?: Partial<PublishContentDeps>;
 };
@@ -75,6 +100,28 @@ export type PublishContentOutcome = {
    * Content names no resolvable destination; `not_found` = no such draft.
    */
   blocked?: "locked" | "no_destinations" | "not_found";
+  /**
+   * The Pinterest connection this Content actually published through, when it had
+   * none and the server resolved one (adopt-once, PRD §14). The caller writes it to
+   * its own account state; the draft has already been patched here.
+   */
+  adoptedConnectionId?: string;
+  /**
+   * Pinterest refused because the app is still on Trial/Standard-access review.
+   *
+   * NOT a publish failure: the Content is publishable, just not until Pinterest grants
+   * access, and the product promise is "save it and publish once approved". So it keeps
+   * its schedule and is never marked failed — see the catch below, which suppresses the
+   * failed row for this code alone. Surfaced here so the caller can show its notice.
+   */
+  trialAccess?: boolean;
+  /**
+   * The raw errors the platforms threw, in attempt order. The stored rows keep only a
+   * user-facing code/message; a caller that must DECIDE something from a failure (does
+   * this mean "reconnect Pinterest"? `needsReconnect` is not a message) needs the
+   * original. Never rendered — the durable rows are what the merchant sees.
+   */
+  errors?: Array<{ provider: string; error: unknown }>;
 };
 
 const defaultDeps: PublishContentDeps = {
@@ -157,7 +204,10 @@ export async function publishContent(
   const draft = pinDraftStore.getDraft(draftId);
   if (!draft) return { published: [], failed: [], results: [], blocked: "not_found" };
 
-  const destinations = contentDestinations(draft);
+  // An explicit destination list is this click's intent; otherwise read the Content's.
+  const destinations = options.destinations?.length
+    ? [...options.destinations]
+    : contentDestinations(draft);
   const priorResults = contentDestinationResults(draft);
   if (!destinations.length) {
     return { published: [], failed: [], results: priorResults, blocked: "no_destinations" };
@@ -204,6 +254,8 @@ export async function publishContent(
 
     const outcomes: DestinationPublishResult[] = [...refused];
     let adoptedConnectionId: string | undefined;
+    let trialAccess = false;
+    const errors: Array<{ provider: string; error: unknown }> = [];
 
     const pinterestTargets = dispatch.filter(d => d.provider === "pinterest");
     const socialTargets = dispatch.filter(d => d.provider !== "pinterest");
@@ -231,6 +283,12 @@ export async function publishContent(
           // Publish AS the account this destination names. Null only for a legacy
           // draft; the server then resolves the default and reports it back below.
           connectionId: destination.socialConnectionId ?? undefined,
+          // Surface-specific extras (product attachment), passed through untouched.
+          ...(options.extras?.attachedProducts?.length
+            ? { attachedProducts: options.extras.attachedProducts }
+            : {}),
+          ...(options.extras?.primaryProductUrl ? { primaryProductUrl: options.extras.primaryProductUrl } : {}),
+          ...(options.extras?.productAttachmentMode ? { productAttachmentMode: options.extras.productAttachmentMode } : {}),
         });
         // Adopt-once (PRD §14): an untargeted draft keeps the connection it really
         // published through, so every later retry/action stays on that account.
@@ -248,6 +306,20 @@ export async function publishContent(
         });
       } catch (error) {
         const err = error as { code?: string; message?: string };
+        errors.push({ provider: destination.provider, error });
+        // Trial/Standard-access is a "not yet", not a failure. Recording a failed row
+        // would flow through legacyFieldsFromResults into failureType "publish" and
+        // RELEASE the Content's schedule — the Pin would silently leave its slot for a
+        // block that resolves on Pinterest's side without the merchant doing anything.
+        // The destination is left as it was, and the caller shows the access notice.
+        if (err?.code === "pinterest_trial_access") {
+          trialAccess = true;
+          outcomes.push({
+            ...baseRow(destination, "pending", submittedAt),
+            submittedAt: undefined,
+          });
+          continue;
+        }
         outcomes.push({
           ...baseRow(destination, "failed", submittedAt),
           errorCode: err?.code,
@@ -313,6 +385,7 @@ export async function publishContent(
         }
       } catch (error) {
         const message = (error as Error)?.message || "Publishing failed.";
+        errors.push({ provider: "social", error });
         for (const destination of socialTargets) {
           outcomes.push({ ...baseRow(destination, "failed", submittedAt), errorMessage: message });
         }
@@ -348,7 +421,14 @@ export async function publishContent(
       ...(adoptedConnectionId ? { targetConnectionId: adoptedConnectionId } : {}),
     } as Partial<PinDraft>);
 
-    return { published, failed, results };
+    return {
+      published,
+      failed,
+      results,
+      ...(adoptedConnectionId ? { adoptedConnectionId } : {}),
+      ...(trialAccess ? { trialAccess: true } : {}),
+      ...(errors.length ? { errors } : {}),
+    };
   } finally {
     endPublish(draftId);
   }
