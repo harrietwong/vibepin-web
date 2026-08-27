@@ -205,7 +205,7 @@ function DestinationRow({
               }}
             >
               {connecting ? <Loader2 size={12} className="animate-spin" /> : <LinkIcon size={12} />}
-              {connecting ? t("publishDestinations.redirecting") : "Connect"}
+              {connecting ? t("publishDestinations.redirecting") : t("socialPanel.action.connect")}
             </button>
           )}
         </div>

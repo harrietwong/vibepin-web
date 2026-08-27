@@ -208,6 +208,7 @@ export const studioBoardMessages = {
   "studioBoard.actions.edit": "Edit",
   "studioBoard.actions.done": "Done",
   "studioBoard.actions.cancel": "Cancel",
+  "studioBoard.actions.continue": "Continue",
   "studioBoard.actions.unschedule": "Unschedule",
   "studioBoard.actions.viewResults": "View results",
   "studioBoard.actions.hideResults": "Hide results",

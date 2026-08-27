@@ -17,6 +17,7 @@ import {
   type LinkedProduct,
 } from "@/lib/pinMetadata";
 import { startPinterestConnect, publishPin, type PinterestBoard } from "@/lib/pinterestClient";
+import { platformName } from "@/lib/social/platforms";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 import { publishContent } from "@/lib/studio/publishContent";
@@ -1394,7 +1395,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     { id: "check", label: "" }, { id: "pin", label: tr("studioModals.col.pin") },
     { id: "media", label: "Media" },
     { id: "dest", label: tr("studioModals.col.destinationUrl") }, { id: "title", label: tr("pinDetails.title.label") }, { id: "desc", label: tr("studioModals.col.description") },
-    { id: "board", label: tr("studioModals.col.board") }, { id: "publishTo", label: "Publish to" }, { id: "alt", label: tr("studioModals.col.altText") }, { id: "product", label: tr("studioModals.col.product") },
+    { id: "board", label: tr("studioModals.col.board") }, { id: "publishTo", label: tr("studioModals.col.publishTo") }, { id: "alt", label: tr("studioModals.col.altText") }, { id: "product", label: tr("studioModals.col.product") },
     { id: "time", label: tr("studioModals.col.publishTime") }, { id: "plan", label: tr("studioModals.col.plan") }, { id: "more", label: "" },
   ];
   const tableWidth = cols.reduce((s, c) => s + colW[c.id], 0);
@@ -1660,8 +1661,8 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                             case "publishTo":
                               return (
                                 <td key={c.id} style={td}>
-                                  <span data-testid="batch-edit-publish-to" title={p.publishTo || "Pinterest"} style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: UI.textSec, fontSize: 10.5, textTransform: "capitalize" }}>
-                                    {p.publishTo || "Pinterest"}
+                                  <span data-testid="batch-edit-publish-to" title={p.publishTo || platformName("pinterest")} style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: UI.textSec, fontSize: 10.5, textTransform: "capitalize" }}>
+                                    {p.publishTo || platformName("pinterest")}
                                   </span>
                                 </td>
                               );
