@@ -131,7 +131,8 @@ class TestSystemdService(unittest.TestCase):
         self.assertIn("Environment=VIBEPIN_SUPPLY_LIMIT=100", self.txt)
         self.assertIn(
             "Environment=VIBEPIN_CATEGORY_MIX="
-            "fashion:29,womens-fashion:22,home-decor:29,digital-products:20",
+            "fashion:20,womens-fashion:15,home-decor:20,digital-products:20,"
+            "wedding:15,jewelry:10",
             self.txt,
         )
         self.assertIn("Environment=VIBEPIN_STL_ALLOW_EXCLUDED=digital-products", self.txt)

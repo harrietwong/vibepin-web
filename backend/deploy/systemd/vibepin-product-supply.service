@@ -31,7 +31,7 @@ EnvironmentFile=-/opt/vibepin/backend/.env
 Environment=VIBEPIN_CLOUD_MODE=preflight
 Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
 Environment=VIBEPIN_SUPPLY_LIMIT=100
-Environment=VIBEPIN_CATEGORY_MIX=fashion:29,womens-fashion:22,home-decor:29,digital-products:20
+Environment=VIBEPIN_CATEGORY_MIX=fashion:20,womens-fashion:15,home-decor:20,digital-products:20,wedding:15,jewelry:10
 # Digital Products is a PRD v3.7 launch family. Keep the generic crawler's
 # fail-closed exclusion and opt in only this reviewed category; Beauty remains
 # excluded until its separate evidence audit passes.

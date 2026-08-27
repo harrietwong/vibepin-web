@@ -616,7 +616,10 @@ def test_transient_supply_run_uses_reviewed_digital_launch_mix(
     cutover.transient_run(object(), "dry-run")
     launch = commands[0]
     assert "VIBEPIN_SUPPLY_LIMIT=100" in launch
-    assert "VIBEPIN_CATEGORY_MIX=fashion:29,womens-fashion:22,home-decor:29,digital-products:20" in launch
+    assert (
+        "VIBEPIN_CATEGORY_MIX=fashion:20,womens-fashion:15,home-decor:20,"
+        "digital-products:20,wedding:15,jewelry:10"
+    ) in launch
     assert "VIBEPIN_STL_ALLOW_EXCLUDED=digital-products" in launch
     assert "VIBEPIN_STL_ALLOW_EXCLUDED=beauty" not in launch
 
