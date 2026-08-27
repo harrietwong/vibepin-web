@@ -19,13 +19,15 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle, Sparkles } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { hasPersistFailure, retryPersist, subscribe as subscribeDrafts } from "@/lib/pinDraftStore";
+import { hasPersistFailure, retryPersist, subscribe as subscribeDrafts, splitContentMedia, copyMedia } from "@/lib/pinDraftStore";
+import { toast } from "sonner";
 import { getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
 import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
 import { buildCardViewModel, relativePublishedParts, type CardResultRow } from "@/lib/studio/cardView";
 import { coverMedia } from "@/lib/contentDraftModel";
 import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio/PinCardMedia";
-import { ContentMediaStrip } from "@/components/studio/ContentMediaStrip";
+import { ContentMediaStrip, MEDIA_DRAG_TYPE, currentDragSourceDraftId } from "@/components/studio/ContentMediaStrip";
+import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type MediaNotice } from "@/lib/studio/mediaNotice";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 import { contentDestinationResults, contentDestinations, destinationKey, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
@@ -105,6 +107,28 @@ function recommendedFix(tr: (key: MessageKey) => string, category: "transient" |
  * The one actionable next step for a failure (PRD §4) — a category, not a message.
  * The merchant is never shown a raw error and then left to guess what to do with it.
  */
+/**
+ * "Pinterest needs review · 2 images need adjustment" — the whole notice, localized.
+ *
+ * The reason comes from the notice's CODE, not from the rule's English `message`.
+ * mediaRules is a pure module shared with the server and carries English fallbacks
+ * only; rendering those verbatim would put untranslated text on a localized card.
+ */
+function mediaNoticeText(tr: (key: MessageKey) => string, notice: MediaNotice): string {
+  const platform = platformName(notice.provider);
+  const count = notice.offendingMediaIds.length;
+  const reason =
+    notice.code === "aspect_mismatch"
+      ? tr(count === 1 ? "studioBoard.card.mediaNotice.aspectMismatch" : "studioBoard.card.mediaNotice.aspectMismatchPlural")
+          .replace("{n}", String(count))
+      : notice.code === "too_many"
+        ? tr("studioBoard.card.mediaNotice.tooMany").replace("{platform}", platform).replace("{max}", String(notice.limit.max))
+        : notice.code === "too_few"
+          ? tr("studioBoard.card.mediaNotice.tooFew").replace("{platform}", platform).replace("{min}", String(notice.limit.min)).replace("{max}", String(notice.limit.max))
+          : tr("studioBoard.card.mediaNotice.noMedia").replace("{platform}", platform);
+  return `${tr("studioBoard.card.mediaNotice.headline").replace("{platform}", platform)} · ${reason}`;
+}
+
 function nextStepFor(category: "transient" | "content" | "auth" | undefined, errorCode?: string):
   { key: MessageKey; action: "reconnect" | "board" | "edit" } | null {
   if (category === "auth") return { key: "studioBoard.card.nextStep.reconnect", action: "reconnect" };
@@ -356,6 +380,71 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     flush();
     props.onGenerateAiImage(draft, coverMedia(draft)?.id);
   }, [flush, props, draft]);
+
+  /**
+   * Media compatibility (PRD §9/§13). Recomputed from the `draft` prop, which the board
+   * re-hands on every store write — so add/drop/remove/replace AND a destination change
+   * all refresh this with no subscription of its own, and no chance of the notice
+   * describing a media set the card is no longer showing.
+   */
+  const notices = useMemo(() => mediaNotices(draft), [draft]);
+  const offendingIds = useMemo(() => collectOffendingMediaIds(notices), [notices]);
+  /**
+   * "Publish separately" — §13's alternative to Review & crop (the crop tool is
+   * deferred). Splits the OFFENDING items into their own Contents, leaving this one
+   * with a set its platforms accept. Never removes an image without creating the post
+   * that carries it, and never unticks a platform.
+   */
+  const doSplitSeparate = useCallback(() => {
+    flush();
+    const ids = Array.from(offendingIds);
+    const created = splitContentMedia(draft.id, ids.length ? ids : undefined);
+    if (created.length) toast.success(tr("studioBoard.toast.splitCreated").replace("{n}", String(created.length)));
+  }, [flush, draft.id, offendingIds, tr]);
+
+  /**
+   * Card-level drop target for a media drag from ANOTHER card (PRD §9).
+   *
+   * Before this, the only drop targets were the strip's own thumbnails, with a 2px
+   * border as the only hint — a target the merchant had to find. The whole card now
+   * accepts the payload and appends the copy at the end; dropping on a thumbnail still
+   * inserts before it (the strip stops propagation), so the precise gesture survives.
+   *
+   * `dragDepth` is a COUNTER, not a boolean: dragenter/dragleave fire for every child
+   * element crossed, so a boolean flickers the hint on and off as the pointer moves
+   * across the card's own contents.
+   */
+  const [dragDepth, setDragDepth] = useState(0);
+  const foreignDrag = useCallback((event: React.DragEvent) => {
+    // getData() is empty until the drop, so the source card is identified through the
+    // module-level drag ref rather than the payload. Both must agree: our media type,
+    // and a source that is not this card.
+    if (!event.dataTransfer.types.includes(MEDIA_DRAG_TYPE)) return false;
+    const source = currentDragSourceDraftId();
+    return !!source && source !== draft.id;
+  }, [draft.id]);
+  const onCardDragEnter = useCallback((event: React.DragEvent) => {
+    if (!foreignDrag(event)) return;
+    event.preventDefault();
+    setDragDepth(depth => depth + 1);
+  }, [foreignDrag]);
+  const onCardDragOver = useCallback((event: React.DragEvent) => {
+    if (!foreignDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, [foreignDrag]);
+  const onCardDragLeave = useCallback(() => setDragDepth(depth => Math.max(0, depth - 1)), []);
+  const onCardDrop = useCallback((event: React.DragEvent) => {
+    setDragDepth(0);
+    let payload: { sourceDraftId?: string; mediaId?: string } | null = null;
+    try { payload = JSON.parse(event.dataTransfer.getData(MEDIA_DRAG_TYPE) || "null"); } catch { payload = null; }
+    if (!payload?.sourceDraftId || !payload.mediaId || payload.sourceDraftId === draft.id) return;
+    event.preventDefault();
+    // No index: appended at the end. Copy, never move — the source card keeps its item,
+    // which is what makes dragging a good image onto three Contents safe.
+    copyMedia(payload.sourceDraftId, payload.mediaId, draft.id);
+  }, [draft.id]);
+  const showDropHint = dragDepth > 0;
   /**
    * Publish. `onlyPending` is the board default (Retry semantics); an explicit
    * republish of an edited Posted Content sends everything, because the point of that
@@ -765,7 +854,19 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   if (!active) {
     return (
       <div data-testid="pin-board-card" data-active="false" data-source={draft.source} data-lifecycle={lifecycle}
-        style={{ display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${props.selected ? BUI.purple : BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: props.selected ? "0 0 0 2px rgba(124,58,237,.12)" : "0 1px 2px rgba(15,23,42,0.04)" }}>
+        onDragEnter={onCardDragEnter} onDragOver={onCardDragOver} onDragLeave={onCardDragLeave} onDrop={onCardDrop}
+        style={{ position: "relative", display: "flex", flexDirection: "column", background: BUI.surface, border: `1px solid ${showDropHint ? BUI.purple : props.selected ? BUI.purple : BUI.border}`, borderRadius: 14, overflow: "hidden", boxShadow: props.selected ? "0 0 0 2px rgba(124,58,237,.12)" : "0 1px 2px rgba(15,23,42,0.04)" }}>
+        {/* The whole card is a drop target for media dragged from ANOTHER card, not
+            just the strip's thumbnails. Shown only for a foreign payload — the source
+            card must never invite a drop of the item it already holds. */}
+        {showDropHint && (
+          <div data-testid="card-drop-hint" style={{ position: "absolute", inset: 0, zIndex: 30, display: "grid", placeItems: "center",
+            background: "rgba(124,58,237,0.12)", border: `2px dashed ${BUI.purple}`, borderRadius: 14, pointerEvents: "none", backdropFilter: "blur(1px)" }}>
+            <span style={{ padding: "6px 12px", borderRadius: 999, background: BUI.purple, color: "#fff", fontSize: 11, fontWeight: 800 }}>
+              {tr("studioBoard.card.dropHint")}
+            </span>
+          </div>
+        )}
         <div data-testid="card-media" style={{ position: "relative", width: "100%", aspectRatio: "2 / 3", background: BUI.surface3 }}>
           {failed && !isPublishFailure ? (
             // Generation-failure card: walk the original-image fallback chain
@@ -828,7 +929,26 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </span>
           )}
         </div>
-        {!generating && <ContentMediaStrip draft={draft} disabled={publishing} />}
+        {!generating && <ContentMediaStrip draft={draft} disabled={publishing} offendingMediaIds={offendingIds} />}
+        {/* Media compatibility (PRD §9/§13): ONE compact amber line per platform that
+            refuses this set, directly under the images it is about. It reports and
+            offers a way out — it never removes an image and never unticks a platform,
+            because both throw away a choice the merchant made deliberately. */}
+        {!generating && notices.length > 0 && (
+          <div data-testid="card-media-notice" style={{ display: "flex", flexDirection: "column", gap: 4, padding: "8px 10px", borderBottom: `1px solid ${BUI.border}`, background: "#fffbeb" }}>
+            {notices.map(notice => (
+              <p key={notice.provider} data-testid="card-media-notice-line" data-provider={notice.provider} data-code={notice.code}
+                style={{ margin: 0, display: "flex", alignItems: "flex-start", gap: 5, fontSize: 10.5, fontWeight: 750, lineHeight: 1.4, color: "#b45309" }}>
+                <AlertTriangle style={{ width: 11, height: 11, flexShrink: 0, marginTop: 1.5 }} />
+                {mediaNoticeText(tr, notice)}
+              </p>
+            ))}
+            <button type="button" data-testid="card-split-separate" onClick={doSplitSeparate} disabled={publishing}
+              style={{ alignSelf: "flex-start", padding: "2px 4px", border: "none", background: "transparent", color: "#b45309", fontSize: 10.5, fontWeight: 800, textDecoration: "underline", cursor: publishing ? "default" : "pointer", fontFamily: "inherit" }}>
+              {tr("studioBoard.card.mediaNotice.splitSeparate")}
+            </button>
+          </div>
+        )}
         {/* Regenerate stays NEXT TO the media (PRD §7) and targets the selected
             thumbnail — which is the cover, since setCoverMedia moves it to media[0].
             Never regenerates the whole set. */}

@@ -10,9 +10,24 @@ import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { BUI } from "@/components/studio/boardUI";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
 
-const MEDIA_DRAG_TYPE = "application/x-vibepin-content-media";
+export const MEDIA_DRAG_TYPE = "application/x-vibepin-content-media";
 
 type DragPayload = { sourceDraftId: string; mediaId: string };
+
+/**
+ * Which Content the in-flight media drag started from.
+ *
+ * A module-level ref, not React state, because of a DOM rule that leaves no choice:
+ * `dataTransfer.getData()` returns "" during dragover/dragenter — only `types` is
+ * readable until the drop. A card therefore CANNOT read the payload to decide whether
+ * the drag came from itself, and without that it would offer "Drop to add to this
+ * content" to the card the item is already in. The source id is published here on
+ * dragstart and cleared on dragend; readers treat a null as "not ours".
+ */
+let dragSourceDraftId: string | null = null;
+export function currentDragSourceDraftId(): string | null {
+  return dragSourceDraftId;
+}
 
 function MediaThumbnail({ src, alt }: { src: string; alt: string }) {
   const [failed, setFailed] = useState(false);
@@ -33,7 +48,16 @@ function readPayload(event: React.DragEvent): DragPayload | null {
   }
 }
 
-export function ContentMediaStrip({ draft, disabled }: { draft: PinDraft; disabled?: boolean }) {
+export function ContentMediaStrip({ draft, disabled, offendingMediaIds }: {
+  draft: PinDraft;
+  disabled?: boolean;
+  /**
+   * Items a destination platform's rule takes issue with (PRD §9). Ringed in amber so
+   * the notice under the strip ("2 images need adjustment") points at something. Never
+   * removed, never reordered, never unpublishable — the merchant decides.
+   */
+  offendingMediaIds?: ReadonlySet<string>;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -87,17 +111,22 @@ export function ContentMediaStrip({ draft, disabled }: { draft: PinDraft; disabl
       <div style={{ display: "flex", gap: 7, overflowX: "auto", paddingBottom: 2 }}>
         {media.map((item, index) => {
           const selected = item.id === cover?.id;
+          const offending = !!offendingMediaIds?.has(item.id);
           return (
-            <div key={item.id} draggable={!disabled}
+            <div key={item.id} draggable={!disabled} data-testid="content-media-thumb" data-offending={offending ? "true" : "false"}
               onDragStart={event => {
                 event.dataTransfer.effectAllowed = "copyMove";
                 event.dataTransfer.setData(MEDIA_DRAG_TYPE, JSON.stringify({ sourceDraftId: draft.id, mediaId: item.id }));
+                dragSourceDraftId = draft.id;
               }}
+              onDragEnd={() => { dragSourceDraftId = null; }}
               onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropTargetId(item.id); }}
               onDragLeave={() => setDropTargetId(id => id === item.id ? null : id)}
               onDrop={event => dropBefore(event, item.id)}
               style={{ position: "relative", flex: "0 0 54px", height: 66, borderRadius: 9, padding: 2,
-                border: `2px solid ${dropTargetId === item.id ? BUI.purple : selected ? BUI.purple : "transparent"}`,
+                // Amber wins over the cover ring: "this image blocks a platform" is more
+                // urgent than "this image leads the set", and they are rarely both true.
+                border: `2px solid ${offending ? BUI.warning : dropTargetId === item.id ? BUI.purple : selected ? BUI.purple : "transparent"}`,
                 background: BUI.surface, cursor: disabled ? "default" : "grab" }}>
               <button type="button" aria-label={`Use media ${index + 1} as cover`} disabled={disabled}
                 onClick={() => !disabled && setCoverMedia(draft.id, item.id)}
