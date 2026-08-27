@@ -322,19 +322,19 @@ await testAsync("断开一个账号不会波及同平台的其它账号", async 
   assert.match(official, /disconnectFacebookConnection\(input\.userId, input\.connectionId\)/);
   assert.match(official, /disconnectInstagramConnection\(input\.userId, input\.connectionId\)/);
 
-  // 端到端地演一遍:两条 Facebook 连接,断开其中一条,另一条的 id 不得出现在
-  // 任何一次 .eq("id", …) 里。
-  const { db, chains } = makeFakeDb([{ data: [{ id: "fb-1", metadata: null }] }, { data: null }]);
-  const store = { db };
-  const update = store.db.from("social_connections")
-    .update({ connection_status: "not_connected" })
-    .eq("user_id", "u1")
-    .eq("provider", "facebook")
-    .eq("id", "fb-1");
-  await update;
-  const targeted = chains.flat().filter(c => c.method === "eq" && c.args[0] === "id").map(c => c.args[1]);
-  assert.deepEqual(targeted, ["fb-1"], "只有被点的那条连接可以出现在 id 过滤里");
-  assert.ok(!targeted.includes("fb-2"), "同平台的另一个账号不得被波及");
+  // 路由必须把 connectionId 交给 provider.disconnect —— 这是上面那些收敛能被
+  // 触发的唯一前提。少了这一行,store 侧写得再对也永远走"全平台清空"分支。
+  const socialRoute = read("src/app/api/social/disconnect/route.ts");
+  assert.match(
+    socialRoute,
+    /await getSocialProviderById\(connection\.authProvider\)\.disconnect\(\{\s*\n\s*userId: uid,\s*\n\s*connectionId,/,
+    "路由必须按连接点名,不能只报 provider",
+  );
+  // 反向守卫:store 里不得存在"带了 id 却仍然全表更新"的写法。
+  for (const [name, src] of [["facebook", fb], ["instagram", ig]] as const) {
+    assert.doesNotMatch(src, /connection_status: "not_connected",[\s\S]{0,400}?\}\)\s*;\s*\n\s*\/\/ no user filter/,
+      `${name} 的 disconnect 不得存在无过滤的写路径`);
+  }
 });
 test("Keep 分支不重复实现拦截:唯一执行点仍是 Phase C 的 retryBlockReason", () => {
   // 前提校验(不推断,直接查):Keep 之所以能是"什么都不做",全靠这条已存在的拦截。
