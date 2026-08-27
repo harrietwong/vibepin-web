@@ -165,6 +165,9 @@ export const STUDIO: string[] = [
   // WS-B2a 2026-08-27: cover ≡ media[0], load-time normalization of stale covers,
   // in-place media replacement, and the per-platform issue attribution.
   "test-content-media-model",
+  // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
+  // future-before-history ordering, state classification, the "+N" trigger badge.
+  "test-plan-sidebar-model",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",

@@ -972,6 +972,24 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "studioBoard.expanded.posted": "已發布",
   "studioBoard.expanded.schedule": "排程",
 
+  // 右側計畫側欄（PRD 0826 §23–§24）
+  "studioBoard.plan.title": "計畫",
+  "studioBoard.plan.open": "固定計畫面板",
+  "studioBoard.plan.close": "關閉計畫面板",
+  "studioBoard.plan.previousWeek": "上一週",
+  "studioBoard.plan.nextWeek": "下一週",
+  "studioBoard.plan.today": "本週",
+  "studioBoard.plan.openFullPlanner": "開啟完整計畫",
+  "studioBoard.plan.scheduledThisWeek": "本週已排程 {n} 則",
+  "studioBoard.plan.oneScheduledThisWeek": "本週已排程 1 則",
+  "studioBoard.plan.nothingScheduledThisWeek": "本週尚無排程",
+  "studioBoard.plan.itemLabel": "{time} · {title}",
+  "studioBoard.plan.untitled": "未命名",
+  "studioBoard.plan.statusScheduled": "已排程",
+  "studioBoard.plan.statusPosted": "已發布",
+  "studioBoard.plan.statusFailed": "需要處理",
+  "studioBoard.plan.newSinceLastOpen": "自上次開啟計畫以來新增 {n} 則排程",
+
   // ── studioCreative ──
   "studioCreative.badge.steady": "穩定",
   "studioCreative.badge.competitive": "競爭激烈",
