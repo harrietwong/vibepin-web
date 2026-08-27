@@ -164,5 +164,21 @@ test("an explicitly named account still goes through the user-scoped lookup", ()
   assert.match(route, /choice\.kind === "explicit"\s*\r?\n?\s*\? await findConnection\(uid, choice\.connectionId\)/);
 });
 
+test("an explicit id that is no longer connected fails — it never falls back to another account", () => {
+  // The resolver hands the id back and the route resolves it; when that account cannot
+  // publish, the destination FAILS. Quietly publishing to a different connected account
+  // instead would be the same wrong-account defect by another route.
+  const guard = route.indexOf('if (!connection || connection.connectionStatus !== "connected")');
+  const call = route.indexOf("publishPost({");
+  assert.ok(guard > 0 && guard < call, "a disconnected account must be refused before the provider call");
+  const block = route.slice(guard, call);
+  assert.match(block, /status: "failed"/);
+  assert.match(block, /account in Settings to publish here./);
+  assert.match(block, /continue;/, "and nothing is published for that destination");
+  // The resolver itself never substitutes a different account for a named one.
+  const choice = resolveDestinationConnection(summaryOf(account("ig-1")), { socialConnectionId: "ig-gone" });
+  assert.deepEqual(choice, { kind: "explicit", connectionId: "ig-gone" });
+});
+
 console.log(`\nPublish social account guard: ${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);
