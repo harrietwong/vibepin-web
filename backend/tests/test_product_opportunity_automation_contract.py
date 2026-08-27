@@ -43,6 +43,22 @@ def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() ->
     assert "9 minutes 59 seconds" in TIMER
 
 
+def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> None:
+    # Shanghai UTC-day boundary is 08:00 local. The reviewed live chain starts
+    # Crawl at 12:00 (+600s jitter), then allows 7800s Crawl and 2700s Classify.
+    crawl_latest_finish = 12 * 3600 + 600 + 7800 + 2700
+    cooldown_after_crawl = crawl_latest_finish + 120 * 60
+    tracking_earliest_start = 17 * 3600 + 15 * 60
+    tracking_latest_finish = tracking_earliest_start + 300 + 7800
+    supply_earliest_start = 23 * 3600
+
+    assert cooldown_after_crawl < tracking_earliest_start
+    assert 8 * 3600 < tracking_earliest_start < tracking_latest_finish < 32 * 3600
+    assert tracking_latest_finish + 120 * 60 < supply_earliest_start
+    assert "OnCalendar=*-*-* 17:15:00 Asia/Shanghai" in TIMER
+    assert "stays wholly inside one UTC day" in TIMER
+
+
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     functional = "351e47912ce44fc34728097041dbfdd95889081a"
     manifest_name = "product_opportunities_v37_release_manifest_351e479.json"
@@ -343,7 +359,7 @@ def test_cross_job_lock_tree_kill_and_schedule_are_explicit() -> None:
     assert '"orphanCount": None' in TRACKING
     assert "tracking lock held; scheduled run did not execute" in TRACKING
     assert "KillMode=control-group" in SERVICE
-    assert "OnCalendar=*-*-* 06:15:00 Asia/Shanghai" in TIMER
+    assert "OnCalendar=*-*-* 17:15:00 Asia/Shanghai" in TIMER
     assert "120min mandatory Pinterest cooldown" in TIMER
-    assert "06:15 Asia/Shanghai schedule" in RUNBOOK
+    assert "17:15 Asia/Shanghai schedule" in RUNBOOK
     assert "03:00 Asia/Shanghai schedule" not in RUNBOOK

@@ -371,7 +371,14 @@ Exit condition: canary DB readback and UI review pass with zero fabricated field
 1. Deploy the exact candidate backend artifacts and verify their hashes.
 2. Run ShellCheck on both wrappers and `systemd-analyze verify` on the service and
    timer. Confirm wrapper timeout 7,200 seconds is below systemd 7,800 seconds,
-   `KillMode=control-group`, no overlap lock, and 06:15 Asia/Shanghai schedule.
+   `KillMode=control-group`, no overlap lock, and 17:15 Asia/Shanghai schedule.
+   This time is based on the read-only live VPS schedule observed on 2026-08-27:
+   Crawl 12:00 with 600-second jitter and 7,800-second outer bound, followed by
+   Classify with a 2,700-second outer bound. Their latest combined finish is
+   15:05:01; the 120-minute cooldown ends at 17:05:01. Tracking then starts no
+   earlier than 17:15 and ends no later than 19:30:01. It therefore cannot cross
+   the Shanghai 08:00 UTC-day boundary and still leaves more than 120 minutes
+   before Product Supply at 23:00.
 3. Install/reload units but keep `vibepin-product-tracking.timer` disabled.
 4. Run wrapper `preflight`; then `dry-run`. Dry-run performs inventory and budget
    checks only: no Pinterest calls and no database writes.
@@ -479,11 +486,13 @@ search, pagination, direct ID, Saved Products, or client-side requests.
    JavaScript/meta refreshes, broken chains, unapproved statuses, more than two
    hops, and redirect guesses remain rejected.
 4. After automatic admission passes, enable only
-   `vibepin-product-tracking.timer` and verify the first real 06:15
-   Asia/Shanghai trigger. Admission can start as late as 03:20 and has a
-   2,700-second outer bound, so it ends by 04:05; the mandatory 120-minute
-   cooldown ends by 06:05, leaving 10 minutes. A manual start does not count as
-   timer proof.
+   `vibepin-product-tracking.timer` and verify the first real 17:15
+   Asia/Shanghai trigger. The live 12:00 Crawl -> Classify chain can finish as
+   late as 15:05:01; the mandatory 120-minute cooldown ends at 17:05:01, leaving
+   9 minutes 59 seconds. With timer jitter and the 7,800-second outer bound,
+   Tracking ends by 19:30:01, remains within one UTC day, and leaves 209 minutes
+   59 seconds before the 23:00 Product Supply window. A manual start does not
+   count as timer proof.
 5. Product Supply has its own independent cutover gate. Its reviewed scheduled
    candidate configuration is 100 source Pins with the 29/22/29/20
    Fashion/Women's Fashion/Home/Digital split, at most 50 admitted rows per run,

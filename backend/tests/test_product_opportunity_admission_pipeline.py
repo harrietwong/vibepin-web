@@ -537,7 +537,7 @@ def test_systemd_and_wrapper_contract_is_disabled_bounded_and_cooldown_safe() ->
     assert "systemctl enable" not in timer
     assert "Persistent=false" in timer
     assert "OnCalendar=*-*-* 03:15:00 Asia/Shanghai" in timer
-    assert "OnCalendar=*-*-* 06:15:00 Asia/Shanghai" in tracking_timer
+    assert "OnCalendar=*-*-* 17:15:00 Asia/Shanghai" in tracking_timer
     assert "cloud_preflight_gate SAFE_FOR_APPLY" in wrapper
     assert "cloud_network_flock" in wrapper
     assert "cloud_run_with_tree_timeout" in wrapper
