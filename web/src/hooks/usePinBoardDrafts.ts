@@ -31,6 +31,7 @@ import {
   subscribeInFlight,
   type PinLifecycle,
 } from "@/lib/studio/pinLifecycle";
+import { hasFailedDestination } from "@/lib/contentDraftModel";
 
 export type BoardFilter = "all" | "unscheduled" | "scheduled" | "posted" | "failed";
 
@@ -50,14 +51,23 @@ export function deriveBoardCollections(all: PinDraft[]): { activeDrafts: PinDraf
   // Derived FROM boardItems (not re-derived from activeDrafts) so the subset relation
   // failed ⊆ all is structural, not a coincidence two call sites have to keep in sync.
   // Only the ordering differs: most recently failed first.
+  //
+  // Failed is an ATTENTION view, not a lifecycle bucket (Content model, PRD 0826): a
+  // Content that published to Pinterest and failed on Instagram has lifecycle "posted"
+  // (posted is checked first in getPinLifecycle) yet still needs repair, so it appears
+  // in Failed as well. Both counts.failed and the Failed view read this one collection,
+  // so widening it here is the only place that semantic lives.
   const failureItems = boardItems
-    .filter(item => item.lifecycle === "failed")
+    .filter(item => item.lifecycle === "failed" || hasFailedDestination(item.draft))
     .sort((a, b) => b.draft.updatedAt.localeCompare(a.draft.updatedAt) || byCreated(a, b));
   return { activeDrafts, boardItems, failureItems };
 }
 
 export function matchesFilter(item: BoardItem, filter: BoardFilter): boolean {
   if (filter === "all") return true;
+  // Same widening as failureItems above, for the callers that filter a list themselves
+  // instead of reading the hook's collections (keeps the two paths in agreement).
+  if (filter === "failed" && hasFailedDestination(item.draft)) return true;
   // "generating" is a transient state, not one of the four resting places a Pin ends
   // up in, so strict lifecycle equality matched it to NO bucket — and since the board
   // lands on "unscheduled" by default, every card vanished the instant the user hit

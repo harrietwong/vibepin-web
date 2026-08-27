@@ -84,6 +84,8 @@ export type PinAICopyPanelProps = {
   /** True when copy was already generated (labels the button "Regenerate copy"). */
   hasGeneratedBefore?: boolean;
   disabled?: boolean;
+  /** Compact secondary treatment for card-level AI tools. */
+  compact?: boolean;
   /** Called just before a generate run — e.g. to flush pending manual edits. */
   onBeforeGenerate?: () => void;
   onApplyCopy: (result: PinAICopyResult) => void;
@@ -224,14 +226,19 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
   const showPreStrip = (stage === "idle") && (props.analysisStatus === "pending" || props.analysisStatus === "ready");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
       {/* Single primary action — length/language pickers removed from this surface
           (PRD WP-D). The API still accepts both; only the UI was collapsed. */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {/* Content-width when a sibling action shares the row (Create Pins), full-width
             when it is the only action (other surfaces keep their existing look). */}
         <button type="button" data-testid="ai-copy-generate" onClick={generate} disabled={busy || props.disabled}
-          style={{ flex: props.actionsSlot ? "0 1 auto" : "1 1 160px", minHeight: 38, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: "none", background: P.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+          // compact  → the borderless inline action the compact Content card uses.
+          // otherwise → the gradient primary; content-width when actionsSlot shares
+          //             the row (Create Pins), full-width when it is the only action.
+          style={props.compact
+            ? { flex: "0 0 auto", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: "#7C3AED", fontSize: 10.5, fontWeight: 700, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }
+            : { flex: props.actionsSlot ? "0 1 auto" : "1 1 160px", minHeight: 38, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", borderRadius: 9, border: "none", background: P.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: busy || props.disabled ? "default" : "pointer", opacity: props.disabled ? 0.6 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }}>
           {busy ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Sparkles style={{ width: 13, height: 13 }} />}
           {busy ? progressLabel : tr("pinForm.generateCopy")}
         </button>

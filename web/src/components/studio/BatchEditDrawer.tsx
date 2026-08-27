@@ -115,6 +115,9 @@ export type BatchPinRow = {
   taggedProducts?:      LinkedProduct[];
   category?:            string;
   setupProducts?:       ProductSnapshot[];
+  /** Create Pins content-level context. Legacy callers may omit both fields. */
+  mediaCount?:          number;
+  publishTo?:           string;
 };
 
 export type BatchEditInitialFilter =
@@ -699,9 +702,9 @@ function ProductLinksPopover({ products, affiliateUrl, onClose, onAdd, onManage 
 
 // ── Column model ──────────────────────────────────────────────────────────────
 
-type ColId = "check" | "pin" | "dest" | "title" | "desc" | "board" | "alt" | "product" | "time" | "plan" | "more";
+type ColId = "check" | "pin" | "media" | "dest" | "title" | "desc" | "board" | "publishTo" | "alt" | "product" | "time" | "plan" | "more";
 const DEFAULT_W: Record<ColId, number> = {
-  check: 34, pin: 56, dest: 180, title: 190, desc: 230, board: 150, alt: 190, product: 190, time: 150, plan: 110, more: 44,
+  check: 34, pin: 56, media: 84, dest: 180, title: 190, desc: 230, board: 150, publishTo: 150, alt: 190, product: 190, time: 150, plan: 110, more: 44,
 };
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -1361,8 +1364,9 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   // Column order — Pin preview near the left; Plan is the canonical planning column.
   const cols: { id: ColId; label: string }[] = [
     { id: "check", label: "" }, { id: "pin", label: tr("studioModals.col.pin") },
+    { id: "media", label: "Media" },
     { id: "dest", label: tr("studioModals.col.destinationUrl") }, { id: "title", label: tr("pinDetails.title.label") }, { id: "desc", label: tr("studioModals.col.description") },
-    { id: "board", label: tr("studioModals.col.board") }, { id: "alt", label: tr("studioModals.col.altText") }, { id: "product", label: tr("studioModals.col.product") },
+    { id: "board", label: tr("studioModals.col.board") }, { id: "publishTo", label: "Publish to" }, { id: "alt", label: tr("studioModals.col.altText") }, { id: "product", label: tr("studioModals.col.product") },
     { id: "time", label: tr("studioModals.col.publishTime") }, { id: "plan", label: tr("studioModals.col.plan") }, { id: "more", label: "" },
   ];
   const tableWidth = cols.reduce((s, c) => s + colW[c.id], 0);
@@ -1522,6 +1526,14 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                   </button>
                                 </td>
                               );
+                            case "media":
+                              return (
+                                <td key={c.id} style={td}>
+                                  <span data-testid="batch-edit-media-count" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 42, padding: "4px 7px", borderRadius: 7, border: `1px solid ${UI.border}`, background: UI.bg2, color: UI.textSec, fontSize: 10.5, fontWeight: 750 }}>
+                                    {p.mediaCount ?? 1} {(p.mediaCount ?? 1) === 1 ? "image" : "images"}
+                                  </span>
+                                </td>
+                              );
                             case "product": {
                               // Neutral, source-agnostic summary. Amazon is only a small
                               // badge; the link label reflects Affiliate vs Product link.
@@ -1611,6 +1623,14 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                                   <div data-testid="batch-edit-board-cell">
                                     <BoardSelect dense value={board} boardsState={boardsState} onChange={b => patchRow(p.pinId, { boardId: b?.id ?? "", boardName: b?.name ?? "" })} recommendFor={{ category: p.category, topic: title }} />
                                   </div>
+                                </td>
+                              );
+                            case "publishTo":
+                              return (
+                                <td key={c.id} style={td}>
+                                  <span data-testid="batch-edit-publish-to" title={p.publishTo || "Pinterest"} style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: UI.textSec, fontSize: 10.5, textTransform: "capitalize" }}>
+                                    {p.publishTo || "Pinterest"}
+                                  </span>
                                 </td>
                               );
                             case "alt":
