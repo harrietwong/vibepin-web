@@ -24,6 +24,12 @@ export const socialPanelMessages = {
   "publishResults.title": "Publish results",
   "publishResults.published": "Published",
   "publishResults.viewOnPrefix": "View on ",
+  // A destination that did NOT publish states so in its own words. Rendering every
+  // row as "Published" told merchants a post existed that never did.
+  "publishResults.failed": "Failed",
+  "publishResults.publishing": "Publishing…",
+  "publishResults.pending": "Not published yet",
+  "publishResults.retryHint": "Retry publishing to send this destination again.",
   "socialPanel.card.connectToPublish": "Connect to publish approved content here.",
   "socialPanel.card.setupPendingComingSoon": "Connection setup pending — coming soon.",
   "socialPanel.card.accountsCountSuffix": " accounts",

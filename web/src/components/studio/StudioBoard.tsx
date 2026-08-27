@@ -1582,7 +1582,7 @@ export function StudioBoard() {
                 <h2 id="multi-upload-title" style={{ margin: 0, fontSize: 18, color: BUI.text }}>You&apos;ve uploaded {pendingUploadFiles.length} images</h2>
                 <p style={{ margin: "5px 0 0", fontSize: 12.5, color: BUI.textSec }}>How would you like to publish them?</p>
               </div>
-              <button type="button" aria-label="Cancel" onClick={() => setPendingUploadFiles(null)} style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4 }}><X style={{ width: 17, height: 17 }} /></button>
+              <button type="button" aria-label={tr("studioBoard.actions.cancel")} onClick={() => setPendingUploadFiles(null)} style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4 }}><X style={{ width: 17, height: 17 }} /></button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginTop: 18 }}>
               <UploadChoiceCard selected={uploadChoice === "together"} icon={<Images style={{ width: 20, height: 20 }} />} title="Publish together"
@@ -1595,8 +1595,8 @@ export function StudioBoard() {
                 <input type="checkbox" checked={rememberUploadChoice} onChange={e => setRememberUploadChoice(e.target.checked)} /> Don&apos;t show this again
               </label>
               <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" onClick={() => setPendingUploadFiles(null)} style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-                <button type="button" data-testid="multi-upload-continue" onClick={continueMultiUpload} style={{ padding: "8px 17px", borderRadius: 8, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Continue</button>
+                <button type="button" onClick={() => setPendingUploadFiles(null)} style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{tr("studioBoard.actions.cancel")}</button>
+                <button type="button" data-testid="multi-upload-continue" onClick={continueMultiUpload} style={{ padding: "8px 17px", borderRadius: 8, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{tr("studioBoard.actions.continue")}</button>
               </div>
             </div>
           </div>
