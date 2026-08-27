@@ -186,9 +186,14 @@ async function main() {
 
   await step("Matrix · Posted = View Pin/Details + More(Download,Save as reference,Archive); View Pin only with remotePinUrl", async () => {
     const c = card(page, "posted").first();
-    const href = await c.getByTestId("card-view-pin").getAttribute("href");
-    if (href !== "https://www.pinterest.com/pin/rp1/") throw new Error(`View Pin href=${href}`);
-    if (!await c.getByTestId("card-details").isVisible()) throw new Error("no Details secondary");
+    // A Posted card is a RESULT card now (PRD 0826 §3): the permalink lives on the
+    // per-destination row behind "View results", not on a card-level primary button,
+    // because a Content can go to several platforms and only one of them is Pinterest.
+    if (!await c.getByTestId("card-view-results").isVisible()) throw new Error("no View results");
+    await c.getByTestId("card-view-results").click();
+    const href = await c.getByTestId("card-result-link").first().getAttribute("href");
+    if (href !== "https://www.pinterest.com/pin/rp1/") throw new Error(`result link href=${href}`);
+    if (!await c.getByTestId("card-edit").isVisible()) throw new Error("no Edit action");
     const items = await openMore(page, c);
     const labels = (await items.allTextContents()).join("|");
     await page.mouse.click(5, 5);
