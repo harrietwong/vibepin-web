@@ -128,13 +128,12 @@ async function main() {
     assert.ok(start > -1 && end > start, "handlePublish body bounds not found");
     const body = src.slice(start, end);
     assert.match(body, /persistDraft\(\);/, "handlePublish must persist current field state before publishing");
-    // The publish payload is built from the same title/description/destinationUrl/boardId
-    // local state persistDraft() just wrote — not re-derived from a separate stale source.
-    assert.match(body, /title: title\.trim\(\) \|\| undefined/);
-    assert.match(body, /description: description\.trim\(\) \|\| undefined/);
-    // persistDraft() (the write) must happen textually before the publishPin() call (the
-    // read) so the store and the outgoing payload never disagree.
-    assert.ok(body.indexOf("persistDraft();") < body.indexOf("await publishPin("), "persist must precede the publish payload build");
+    // The drawer publishes through the shared publishContent, which reads copy / image /
+    // link off the draft in the store — so the store IS the single source, and the
+    // write (persistDraft) must land before that read starts.
+    assert.match(body, /await publishContent\(activeDraft\.id, \{/, "the drawer must publish through the shared publishContent");
+    assert.doesNotMatch(body, /await publishPin\(/, "no second Pinterest publish path may remain in the drawer");
+    assert.ok(body.indexOf("persistDraft();") < body.indexOf("await publishContent("), "persist must precede the shared publish");
   });
 
   // ── 7. Double-click Publish sends exactly one request ─────────────────────────
@@ -164,10 +163,12 @@ async function main() {
     assert.match(studio, /outcome\.blocked === "locked"/, "the card honours the lock's verdict");
     assert.match(batch, /await publishContent\(p\.pinId, \{ onlyPending: true \}\)/);
     assert.match(batch, /outcome\.blocked === "locked"/);
-    // The history (non-draft) rows in the batch drawer and the Plan drawer still
-    // publish directly, so they still take the lock themselves.
+    // The history (non-draft) rows in the batch drawer still publish directly, so
+    // they still take the lock themselves; the Plan drawer now goes through
+    // publishContent and honours the lock's verdict like the card does.
     assert.match(batch, /if \(!beginPublish\(p\.pinId\)\)/);
-    assert.match(drawer, /if \(!beginPublish\(activeDraft\.id\)\) return;/);
+    assert.match(drawer, /await publishContent\(activeDraft\.id, \{/);
+    assert.match(drawer, /outcome\.blocked === "locked"/, "the drawer honours the lock's verdict");
   });
 
   // ── 8. Batch: one item failing does not affect the others ────────────────────
