@@ -144,7 +144,7 @@ function baseInput(over: Partial<Record<string, unknown>>) {
 }
 
 async function main() {
-  const { upsertCreemSubscription, creemStatusGrantsAccess } = await import(
+  const { upsertCreemSubscription, creemStatusGrantsAccess, normalizeUnits } = await import(
     "../src/lib/server/creem/creemStore"
   );
   const { resolvePlan, highestPlanFromGrants } = await import(
@@ -356,6 +356,79 @@ async function main() {
     }
     assertEq(threw, false, "did not throw on missing userId");
     assertEq(store.get("sub_1")?.user_id ?? null, null, "user_id deferred (null)");
+  });
+
+  // -- units (migrate_v63): the add-on's quantity must survive the mirror ------
+  await test("units defaults to 1 when the event carries none", async () => {
+    const store = new Map<string, Row>();
+    const db = makeFakeDb(store);
+    await upsertCreemSubscription(baseInput({}), db);
+    assertEq(store.get("sub_1")?.units, 1, "a plan subscription is always 1 unit");
+  });
+
+  await test("units is persisted verbatim for an add-on subscription", async () => {
+    const store = new Map<string, Row>();
+    const db = makeFakeDb(store);
+    await upsertCreemSubscription(
+      baseInput({ productId: "prod_extra_account_m", plan: null, units: 3 }),
+      db,
+    );
+    assertEq(store.get("sub_1")?.units, 3, "3 slots bought -> 3 stored");
+    assertEq(store.get("sub_1")?.plan ?? null, null, "an add-on never mirrors as a plan");
+  });
+
+  await test("a later event updates units (quantity raised in the Creem portal)", async () => {
+    const store = new Map<string, Row>();
+    const db = makeFakeDb(store);
+    await upsertCreemSubscription(
+      baseInput({ productId: "prod_extra_account_m", plan: null, units: 1 }),
+      db,
+    );
+    await upsertCreemSubscription(
+      baseInput({
+        productId: "prod_extra_account_m",
+        plan: null,
+        units: 4,
+        occurredAt: "2026-07-20T00:00:00.000Z",
+      }),
+      db,
+    );
+    assertEq(store.get("sub_1")?.units, 4, "the newer event's quantity wins");
+  });
+
+  await test("a stale event never lowers units", async () => {
+    const store = new Map<string, Row>();
+    const db = makeFakeDb(store);
+    await upsertCreemSubscription(
+      baseInput({
+        plan: null,
+        productId: "prod_extra_account_m",
+        units: 4,
+        occurredAt: "2026-07-20T00:00:00.000Z",
+      }),
+      db,
+    );
+    const outcome = await upsertCreemSubscription(
+      baseInput({
+        plan: null,
+        productId: "prod_extra_account_m",
+        units: 1,
+        occurredAt: "2026-07-10T00:00:00.000Z",
+      }),
+      db,
+    );
+    assertEq(outcome, "stale", "older event is stale");
+    assertEq(store.get("sub_1")?.units, 4, "an out-of-order replay must not take slots away");
+  });
+
+  await test("normalizeUnits: junk, zero and fractions can never zero a user's slots", () => {
+    assertEq(normalizeUnits(undefined), 1, "absent -> 1");
+    assertEq(normalizeUnits(null), 1, "null -> 1");
+    assertEq(normalizeUnits(0), 1, "0 -> 1");
+    assertEq(normalizeUnits(-5), 1, "negative -> 1");
+    assertEq(normalizeUnits("abc"), 1, "junk -> 1");
+    assertEq(normalizeUnits(2.9), 2, "fraction floors");
+    assertEq(normalizeUnits("3"), 3, "numeric string parses");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
