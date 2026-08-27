@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense, useCallback } from "react";
+import { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { X, ArrowUpRight, Bell, Loader2, Copy, AlertCircle, Zap, Clock, Moon, Sun, Monitor, Check, LifeBuoy } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -32,13 +32,20 @@ import {
   type LanguageCode,
 } from "@/lib/i18n/config";
 import {
-  getPublishingPrefs,
-  savePublishingPrefs,
   defaultPublishingPrefs,
+  migrateMultiUploadMode,
+  patchPublishingPrefs,
+  type DefaultDestination,
+  type MultiUploadDefault,
   type PublishingPrefs,
   type PublishingMode,
   type PublishingFormat,
 } from "@/lib/publishingPrefsStore";
+import { SOCIAL_PROVIDERS, platformName, type SocialProvider } from "@/lib/social/platforms";
+import { fetchSocialConnections } from "@/lib/social/socialClient";
+import { getCachedConnections, setCachedConnections } from "@/lib/social/connectionsCache";
+import type { PlatformConnectionSummary } from "@/lib/social/types";
+import { fetchPinterestBoards } from "@/lib/pinterestClient";
 import { SmartScheduleConfigForm } from "@/components/plan/SmartScheduleConfigForm";
 import {
   getAmazonAffiliateSettings,
@@ -749,19 +756,116 @@ function SocialTabFallback() {
 
 // ── Publishing Tab ────────────────────────────────────────────────────────────
 
+/**
+ * The connected accounts the Default Publishing Destinations section can choose
+ * between. Same source as the publish destination rows (`/api/social/connections`),
+ * so Settings can never offer an account the picker doesn't have — or hide one it does.
+ */
+function useConnectedPlatforms(): { platforms: PlatformConnectionSummary[]; loading: boolean } {
+  const cached = getCachedConnections();
+  const [platforms, setPlatforms] = useState<PlatformConnectionSummary[]>(cached?.platforms ?? []);
+  const [loading, setLoading] = useState(!cached);
+
+  useEffect(() => {
+    let alive = true;
+    fetchSocialConnections()
+      .then(result => {
+        if (!alive) return;
+        setCachedConnections(result.platforms);
+        setPlatforms(result.platforms);
+      })
+      .catch(() => { /* keep whatever the cache gave us */ })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  return { platforms, loading };
+}
+
 function PublishingTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() => Promise<void>) | null> }) {
   const { t } = useLocale();
   const [prefs, setPrefs] = useState<PublishingPrefs>(() => defaultPublishingPrefs());
+  const { platforms, loading: platformsLoading } = useConnectedPlatforms();
+  const [boards, setBoards] = useState<{ id: string; name: string }[]>([]);
 
-  useEffect(() => { setPrefs(getPublishingPrefs()); }, []);
+  // Adopt a pre-prefs multi-upload answer before painting, so the radio shows what
+  // Create Pins would actually do rather than a misleading "Ask every time".
+  useEffect(() => { setPrefs(migrateMultiUploadMode()); }, []);
+
+  const defaultsByProvider = useMemo(() => {
+    const map = new Map<SocialProvider, DefaultDestination>();
+    for (const d of prefs.defaultDestinations) map.set(d.provider, d);
+    return map;
+  }, [prefs.defaultDestinations]);
+
+  const pinterestDefault = defaultsByProvider.get("pinterest");
+  const pinterestConnectionId = pinterestDefault?.socialConnectionId;
+
+  // Boards are per-account, so the board list is refetched whenever the chosen
+  // Pinterest account changes. Without the account id this would list the boards of
+  // whichever account the server picks by default — a different account's boards.
+  useEffect(() => {
+    let alive = true;
+    if (!pinterestConnectionId) {
+      // No account chosen ⇒ no boards. Cleared asynchronously so the effect never
+      // sets state during the same commit that scheduled it.
+      Promise.resolve().then(() => { if (alive) setBoards([]); });
+      return () => { alive = false; };
+    }
+    fetchPinterestBoards(undefined, undefined, pinterestConnectionId)
+      .then(result => { if (alive) setBoards(result.items.map(b => ({ id: b.id, name: b.name }))); })
+      .catch(() => { if (alive) setBoards([]); });
+    return () => { alive = false; };
+  }, [pinterestConnectionId]);
 
   function patch(p: Partial<PublishingPrefs>) { setPrefs(prev => ({ ...prev, ...p })); }
 
+  function setDestination(provider: SocialProvider, next: DefaultDestination | null) {
+    setPrefs(prev => {
+      const rest = prev.defaultDestinations.filter(d => d.provider !== provider);
+      return { ...prev, defaultDestinations: next ? [...rest, next] : rest };
+    });
+  }
+
   async function handleSave() {
-    savePublishingPrefs(prefs);
+    // Merge rather than overwrite: the multi-upload answer can also be given in
+    // Create Pins while this tab is open, and saving a copy loaded at mount would
+    // silently revert it.
+    patchPublishingPrefs({
+      weeklyGoal:          prefs.weeklyGoal,
+      defaultMode:         prefs.defaultMode,
+      defaultFormat:       prefs.defaultFormat,
+      duplicateUrlWarning: prefs.duplicateUrlWarning,
+      showAltTextField:    prefs.showAltTextField,
+      imageRefresh:        prefs.imageRefresh,
+      multiUploadDefault:  prefs.multiUploadDefault,
+      defaultDestinations: prefs.defaultDestinations,
+    });
     toast.success(t("toast.publishingSaved"));
   }
   saveFnRef.current = handleSave;
+
+  const uploadBtn = (value: MultiUploadDefault, label: string) => (
+    <button
+      type="button"
+      key={value}
+      data-testid={`publishing-multi-upload-${value}`}
+      aria-pressed={prefs.multiUploadDefault === value}
+      onClick={() => patch({ multiUploadDefault: value })}
+      style={{
+        flex: 1, padding: "9px 0", borderRadius: 9,
+        border: `1px solid ${prefs.multiUploadDefault === value ? "rgba(59,130,246,0.45)" : UI.border}`,
+        background: prefs.multiUploadDefault === value ? "rgba(59,130,246,0.12)" : "transparent",
+        color: prefs.multiUploadDefault === value ? UI.blue : UI.textSec,
+        fontSize: 12, fontWeight: 700, cursor: "pointer",
+      }}
+    >{label}</button>
+  );
+
+  const selectCss: React.CSSProperties = {
+    width: "100%", padding: "8px 10px", borderRadius: 9, border: `1px solid ${UI.border}`,
+    background: UI.surface2, color: UI.text, fontSize: 12.5,
+  };
 
   const modeBtn = (mode: PublishingMode, label: string) => (
     <button type="button" onClick={() => patch({ defaultMode: mode })} style={{
@@ -809,6 +913,96 @@ function PublishingTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() =>
             {t("publishing.formatHint")}
           </p>
         </div>
+      </SectionCard>
+
+      {/* PRD §12 — what happens when several images are picked at once. */}
+      <SectionCard testId="publishing-multi-upload">
+        <SectionTitle>{t("publishing.multiUpload")}</SectionTitle>
+        <div data-testid="publishing-multi-upload-options" style={{ display: "flex", gap: 8 }}>
+          {uploadBtn("ask",       t("publishing.multiUploadAsk"))}
+          {uploadBtn("together",  t("publishing.multiUploadTogether"))}
+          {uploadBtn("separate",  t("publishing.multiUploadSeparate"))}
+        </div>
+        <p style={{ margin: "7px 0 0", fontSize: 11, color: UI.textMuted }}>
+          {t("publishing.multiUploadHint")}
+        </p>
+      </SectionCard>
+
+      {/* PRD §17 — default account (and Pinterest board) for new content. */}
+      <SectionCard testId="publishing-default-destinations">
+        <SectionTitle>{t("publishing.defaultDestinations")}</SectionTitle>
+        <p style={{ margin: "-6px 0 12px", fontSize: 11.5, color: UI.textSec }}>
+          {t("publishing.defaultDestinationsDesc")}
+        </p>
+
+        {platformsLoading && !platforms.length ? (
+          <p style={{ margin: 0, fontSize: 12, color: UI.textSec }}>{t("socialPanel.loading")}</p>
+        ) : null}
+
+        {SOCIAL_PROVIDERS.map(provider => {
+          const summary = platforms.find(p => p.provider === provider);
+          const accounts = (summary?.accounts ?? []).filter(a => a.connectionStatus === "connected");
+          // A platform with no connected account offers nothing to default TO. Showing
+          // an empty dropdown would read as "no default chosen" rather than "connect first".
+          if (!accounts.length) return null;
+          const chosen = defaultsByProvider.get(provider);
+          return (
+            <div key={provider} style={{ padding: "10px 0", borderBottom: `1px solid ${UI.border}` }}>
+              <span style={labelCss}>{platformName(provider)}</span>
+              <select
+                data-testid={`publishing-default-account-${provider}`}
+                value={chosen?.socialConnectionId ?? ""}
+                onChange={e => {
+                  const id = e.target.value;
+                  if (!id) { setDestination(provider, null); return; }
+                  const account = accounts.find(a => a.id === id);
+                  const label = account?.providerAccountUsername ?? account?.providerAccountName ?? undefined;
+                  // Switching account drops the board: a board id belongs to one account
+                  // and means nothing — or worse, something else — on another.
+                  setDestination(provider, {
+                    provider,
+                    socialConnectionId: id,
+                    ...(label ? { accountLabel: label } : {}),
+                  });
+                }}
+                style={selectCss}
+              >
+                <option value="">{t("publishing.defaultDestinationNone")}</option>
+                {accounts.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.providerAccountUsername ?? a.providerAccountName ?? a.id}
+                  </option>
+                ))}
+              </select>
+
+              {provider === "pinterest" && chosen ? (
+                <div style={{ marginTop: 8 }}>
+                  <span style={labelCss}>{t("publishing.defaultBoard")}</span>
+                  <select
+                    data-testid="publishing-default-board"
+                    value={chosen.boardId ?? ""}
+                    onChange={e => {
+                      const boardId = e.target.value;
+                      const board = boards.find(b => b.id === boardId);
+                      setDestination(provider, {
+                        ...chosen,
+                        ...(boardId ? { boardId, boardName: board?.name ?? "" } : { boardId: undefined, boardName: undefined }),
+                      });
+                    }}
+                    style={selectCss}
+                  >
+                    <option value="">{t("publishing.defaultBoardNone")}</option>
+                    {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+
+        <p data-testid="publishing-default-destinations-note" style={{ margin: "12px 0 0", fontSize: 11, color: UI.textMuted }}>
+          {t("publishing.defaultDestinationsNote")}
+        </p>
       </SectionCard>
 
       <SectionCard>
