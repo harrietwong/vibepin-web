@@ -5,7 +5,7 @@ production database write, VPS deployment, timer enablement, or budget increase.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `58598b4d51504738bcf54cfa400bae2a296b7659`, and exact
+functional tip `c8f0d7753de01086b5a32d33bd8737b2c174d3f8`, and exact
 76-artifact Product boundary
 `backend/docs/product_opportunities_v37_release_manifest_58598b4.json`.
 Earlier branch pointers and manifests are chronological evidence only.
@@ -14,7 +14,7 @@ This candidate supersedes `99efabc` for deployment topology. That earlier tree
 was functionally qualified but sat on a local integration base containing
 Usage/Metering production changes not present in the production remote. Because
 Vercel promotes a whole tree, its exact Product manifest could not prevent those
-unrelated files from shipping. `58598b4` reconstructs the same Product boundary
+unrelated files from shipping. `58598b4` reconstructed the same Product boundary
 directly on `b22930e`: it inherits the Product implementation from `351e479` and
 the Tracking schedule hardening from `01dcb53`. It also restores the
 `classify-chain` worker route required by the already-installed Crawl OnSuccess
@@ -24,6 +24,12 @@ every one is listed in the 76-artifact
 manifest; the remaining four manifest dependencies are already byte-identical
 on the remote base. No provider/write budget changed. No Usage/Metering production
 file or migration is included.
+
+`c8f0d77` then separates user-facing launch taxonomy from immutable acquisition
+provenance. It adds Wedding & Celebrations, Gifts, and Jewelry & Accessories,
+normalizes Women's Fashion acquisition evidence into the Fashion catalog, and
+allows Wedding to be independently Physical or Digital. The exact GET-only
+evidence is `backend/docs/product_opportunities_v37_launch_taxonomy_audit_20260827T140231Z.json`.
 
 The immutable read-only production drift receipt is
 `backend/docs/product_opportunities_v37_classify_chain_drift_20260827T131825Z.json`.
@@ -36,7 +42,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 882 tests with 2
+committed Product-only state, the full backend suite passed 890 tests with 2
 live-only skips and 77 subtests, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
@@ -73,9 +79,12 @@ as the exact open-evidence record.
 
 The latest GET-only pre-Supply data-quality baseline is
 `backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
-It proves 123 technical migration candidates and 25 reviewed automatic-Admission
-candidates (18 Physical / 7 Digital), but zero current/G7/G14/G30/full-metric
-coverage for all 25. Therefore Product discovery inventory exists, while v3.7
+It originally proved 123 technical migration candidates and 25 reviewed
+automatic-Admission candidates. The later taxonomy audit on `c8f0d77` keeps the
+same 123 technical candidates and expands the reviewed source/family scope to 39
+(31 Physical / 8 Digital), including 14 Wedding candidates (13 Physical / 1
+Digital), but still has zero current/G7/G14/G30/full-metric coverage for all 39.
+Therefore Product discovery inventory exists, while v3.7
 trend intelligence remains not launch-ready until Admission and daily tracking
 are deployed and produce real persisted history. Do not confuse Supply's 20-row
 atomic transaction cap with daily capacity: the candidate Supply run scans 100

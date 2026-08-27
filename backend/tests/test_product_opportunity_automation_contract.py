@@ -60,20 +60,23 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "58598b4d51504738bcf54cfa400bae2a296b7659"
+    functional = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
     manifest_name = "product_opportunities_v37_release_manifest_58598b4.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "882 tests" in RUNBOOK
+    assert "890 tests" in RUNBOOK
     assert "59/59" in RUNBOOK
     assert "132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["candidateCommit"] == functional
-    assert manifest["classifyChainRepairCommit"] == functional
+    assert manifest["classifyChainRepairCommit"] == (
+        "58598b4d51504738bcf54cfa400bae2a296b7659"
+    )
+    assert manifest["launchTaxonomyCommit"] == functional
     assert manifest["trackingScheduleHardeningCommit"] == (
         "01dcb539460bd282cb1542afa1ea4992f1f34659"
     )

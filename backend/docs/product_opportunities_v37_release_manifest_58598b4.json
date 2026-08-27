@@ -1,7 +1,8 @@
 {
   "schemaVersion": 2,
-  "candidateCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
-  "integrationCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
+  "candidateCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
+  "integrationCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
+  "launchTaxonomyCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
   "classifyChainRepairCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
   "trackingScheduleHardeningCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
   "trackingFailurePropagationCommit": "351e47912ce44fc34728097041dbfdd95889081a",
@@ -14,9 +15,9 @@
   "artifacts": [
     {
       "path": "backend/db/migrate_v63_product_opportunities_v1.sql",
-      "gitBlobSha1": "874c53e0f5ac967216f037a610153850043ea2ea",
-      "sha256": "075f9bb6d4816204ea92a3b1ca0a02a8199f0cfad523cab357bfb4dc32d39662",
-      "bytes": 73204
+      "gitBlobSha1": "7926253079c430089a7d7ec560f3672a0488d2ab",
+      "sha256": "0207d4146fc8f79a4e4994b85a02366043f26a59a8ac0113dd6544a7331c496a",
+      "bytes": 74061
     },
     {
       "path": "backend/db/rollback_v63_product_opportunities_v1.sql",
@@ -50,9 +51,9 @@
     },
     {
       "path": "backend/product_opportunity_admission.py",
-      "gitBlobSha1": "8f47574797ba5eb22d7fc9ec9bb6ee7613b4672a",
-      "sha256": "4326bd40289baa11d7eb92eb6bc78e5bcc4ffd04f8fdc29425d8735cc075744f",
-      "bytes": 29407
+      "gitBlobSha1": "972f765002102de5ce77d153bbf717d965b8c35a",
+      "sha256": "a520ac4e0973696f86f83989114fb208eef456f1fde0fbf62498c2e41d1d4899",
+      "bytes": 30331
     },
     {
       "path": "backend/product_opportunity_admission_pipeline.py",
@@ -62,9 +63,9 @@
     },
     {
       "path": "backend/product_opportunity_manifest.py",
-      "gitBlobSha1": "986154b76cd52f51573b74f0caccf6a535c717b2",
-      "sha256": "45d84ec454a95a3087075c51a07b81c6155a59f6821d1348dada8cc4fea78858",
-      "bytes": 26616
+      "gitBlobSha1": "0008231948e3e005fdb731cef74ec0feeb7f0747",
+      "sha256": "1b5acdfa4f2f4bb618e8b2b52b3d3ce94850646e26eb1c0a52f7789a825108ea",
+      "bytes": 28122
     },
     {
       "path": "backend/product_opportunity_tracking.py",
@@ -116,9 +117,9 @@
     },
     {
       "path": "backend/scripts/audit_product_opportunity_v37.py",
-      "gitBlobSha1": "f84c251fa160172ff440a57f86d02096ac5e99ef",
-      "sha256": "f9bca13eedd28e53694c42333974dfab4fd452fab7f843bf3abc0b6e0fb464ab",
-      "bytes": 13888
+      "gitBlobSha1": "790c4f15e52711570c876b9dddc387925f16a8af",
+      "sha256": "19ac62af4bb69316cc7465e14d5a51f152d604627ff802d0014a706d057a166c",
+      "bytes": 13857
     },
     {
       "path": "backend/scripts/cloud_run_product_supply.sh",
@@ -278,9 +279,9 @@
     },
     {
       "path": "web/src/components/products/ProductOpportunitiesV1.tsx",
-      "gitBlobSha1": "0fcaf622742caaa7420bc1277547bcc45aaf2776",
-      "sha256": "4657a2a7dba33cdadd363707180355c8838a3d24a00f78bae626384902fb4af4",
-      "bytes": 31329
+      "gitBlobSha1": "a23e4b69257b2fe0ef27a67c0d48f846d1112ec2",
+      "sha256": "185b61e71cd3b92414410436db217a3269f469fde1ed93bf8a16d88755302784",
+      "bytes": 31410
     },
     {
       "path": "web/src/components/products/ProductOpportunitiesV1.module.css",

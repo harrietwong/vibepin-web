@@ -15,12 +15,15 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`58598b4d51504738bcf54cfa400bae2a296b7659`; and its exact Product boundary is
+`c8f0d7753de01086b5a32d33bd8737b2c174d3f8`; and its exact Product boundary is
 the 76-artifact
 `backend/docs/product_opportunities_v37_release_manifest_58598b4.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
+It also includes `c8f0d77`, which separates the PRD launch business taxonomy
+from immutable acquisition source category and independently validated
+Physical/Digital family. Wedding is therefore not collapsed into Physical.
 The read-only production evidence is archived at
 `backend/docs/product_opportunities_v37_classify_chain_drift_20260827T131825Z.json`:
 the automatic 2026-08-27 chain exited 2 because the deployed worker had zero
@@ -32,7 +35,7 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 882 passed with 2 live-only skips and 77
+and contract-test state: backend 890 passed with 2 live-only skips and 77
 subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -207,6 +210,13 @@ to production.
   Source Pins and may write at most 50 legacy discovery rows, while v3.7 daily
   tracking is separately bounded at 2,499 unique active Primary Pins. Evidence:
   `backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
+- The `2026-08-27T14:02:31Z` GET-only taxonomy rerun did not change production
+  data. It proved that adding the PRD Wedding acquisition source expands the
+  reviewed source/family scope from 25 to 39 candidates: 31 Physical and 8
+  Digital, including 13 Physical Wedding and 1 Digital Wedding candidate. All
+  39 still have zero today/G7/G14/G30/full-metric coverage. This is exactly why
+  acquisition category cannot decide Product family. Evidence:
+  `backend/docs/product_opportunities_v37_launch_taxonomy_audit_20260827T140231Z.json`.
 - A separate service-role GET of the production PostgREST OpenAPI schema at
   `2026-08-27T07:05:21Z` exposed 72 paths, including the legacy control paths
   `/pin_products` and `/pin_save_snapshots`, but zero path matching any v63
