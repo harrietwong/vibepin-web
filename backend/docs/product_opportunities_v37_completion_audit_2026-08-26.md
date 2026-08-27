@@ -47,7 +47,7 @@ subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
 the Product-truth render verifier; and the manifest/automation contract passed
-23/23, while the latest focused systemd/worker/automation/admission group passed
+24/24, while the latest focused systemd/worker/automation/admission group passed
 156/156. ShellCheck also passed the exact current-candidate Git blobs for `cloud_lib.sh`,
 Product Supply, Product Opportunity Admission and Product Tracking wrappers;
 the intentional dynamic shared-library source warning was excluded explicitly,
@@ -145,9 +145,10 @@ Git/source metadata, and an embedded config exactly matching historical
 for the existing CLI-upload-from-`web` workflow: in that mode Root Directory `.`
 means the uploaded `web` directory and is not a configuration failure. Changing
 it to `web` could create `web/web`, so the earlier settings-correction conclusion
-is superseded. Vercel promotion remains `BLOCK` only until an exact immutable
-`6839e760` candidate build proves `npm ci`, Next.js 16.3.3, TypeScript and Product
-routes before promotion. Evidence:
+is superseded. At that checkpoint Vercel promotion remained blocked until an
+exact immutable `6839e760` candidate build proved `npm ci`, Next.js 16.3.3,
+TypeScript and Product routes. The later Preview evidence below closes only that
+build-evidence gap. Evidence:
 `backend/docs/product_opportunities_v37_vercel_deployment_mode_20260827T175000Z.json`.
 
 The exact non-production candidate now has an immutable Preview artifact:

@@ -1,7 +1,17 @@
 # Product Opportunities v3.7 Rollout Runbook
 
-Status: local release candidate only. This document does not authorize a push,
-production database write, VPS deployment, timer enablement, or budget increase.
+Status: exact local candidate plus non-production Preview qualified. Production
+rollout is not authorized, the additive v63 schema is not installed, and real
+Admission/Tracking history does not yet exist. This document does not authorize
+a push, production database write, VPS deployment, Vercel promotion, timer
+enablement, or budget increase.
+
+Current decision: code, manifest, Linux unit preflight and immutable Preview are
+PASS. Product launch remains NOT LIVE. The next privileged sequence is Stage 0
+read-only recheck -> Stage 1 additive schema -> Stage 2 one-product and <=20-row
+canaries -> Stage 3 backend/manual Tracking canary -> Stage 4 Web promotion ->
+Stage 5 Admission first, then Tracking timers. A later-stage PASS must never be
+used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
@@ -66,7 +76,7 @@ failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
 --audit-level=low` reported zero known vulnerabilities, and the built localhost
 site passed the executable Product-truth render verifier. The Product automation
-contract for the current manifest passed 23/23; the focused worker, automation,
+contract for the current manifest passed 24/24; the focused worker, automation,
 and admission group passed 59/59. These local gates do not authorize
 production rollout.
 
@@ -141,9 +151,10 @@ so Root Directory `.` is expected and must not be changed to `web` without
 contrary authoritative source metadata. The earlier configuration-mismatch
 interpretation is superseded by
 `backend/docs/product_opportunities_v37_vercel_deployment_mode_20260827T175000Z.json`.
-Promotion remains `BLOCK` for one narrower reason: no immutable deployment and
-build log yet exist for functional candidate `6839e760`, whose checked-in config
-requires `npm ci` and Next.js 16.3.3.
+At that checkpoint promotion remained blocked because no immutable deployment or
+build log existed for functional candidate `6839e760`, whose checked-in config
+requires `npm ci` and Next.js 16.3.3. The Preview evidence below supersedes that
+specific build-evidence gap; it does not authorize production rollout.
 
 The authorized non-production Preview closed that build gate at
 `2026-08-27T23:45:11Z`. Deployment `dpl_CAungjKNgdCrcHnxXtPuTeFbtQvV` is READY

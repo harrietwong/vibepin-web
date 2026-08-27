@@ -1213,7 +1213,7 @@ TypeScript = PASS
 Web tests = PASS; 132/132 registry tests passed with zero failures after excluding unrelated Usage/Metering tests
 Web dependency security = PASS; clean npm ci installed 417 packages and npm audit --audit-level=low reported 0 known vulnerabilities with Next.js 16.3.3 and the reviewed lockfile
 local rendered Product truth = PASS; the built localhost candidate passed the executable Product-truth verifier
-release manifest contract = PASS; the current 6839e760 manifest/automation contract passed 23/23
+release manifest contract = PASS; the current 6839e760 manifest/automation contract passed 24/24
 shell wrappers = PASS; ShellCheck 0.11.0 passed the exact 6839e760 Git blobs for cloud_lib, Product Supply, Product Opportunity Admission and Product Tracking, excluding only the intentional dynamic-source SC1091 diagnostic; all six unit blobs and four wrapper blobs match the release-manifest SHA-256 values, and the focused systemd/worker/automation/admission group passed 156/156; exact systemd-analyze verify for the not-yet-installed candidate units remains a deployment-host gate
 
 candidate systemd units = PASS for pre-install host verification; 2026-08-27T23:45:11Z 在 VPS `/tmp` 中暂存六个精确 unit，SHA-256 全部等于 manifest；直接 host verify 只因 Admission/Tracking wrapper 尚未部署到 `/opt` 而退出 1，在隔离替代根加入同提交的四个 wrapper 与最小 target 桩后，systemd 255 verify 退出 0 且无输出。临时目录已清理，未写 `/etc`/`/opt`、未 reload、未启动、未改 timer。证据为 `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`

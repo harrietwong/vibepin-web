@@ -222,7 +222,10 @@ def test_web_deploy_uses_the_reviewed_lockfile_without_reresolving() -> None:
     assert "current CLI-upload mode" in RUNBOOK
     assert "Root Directory `.`" in RUNBOOK
     assert "invalid `web/web` boundary" in RUNBOOK
-    assert "Promotion remains `BLOCK`" in RUNBOOK
+    assert "The Preview evidence below supersedes that" in RUNBOOK
+    assert "specific build-evidence gap" in RUNBOOK
+    assert "it does not authorize production rollout" in RUNBOOK
+    assert "Promotion remains `BLOCK`" not in RUNBOOK
 
 
 def test_exact_platform_preflight_is_non_production_and_auditable() -> None:
