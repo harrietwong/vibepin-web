@@ -1206,17 +1206,18 @@ Digital today / 7d / 14d / 30d / full metric = 0 / 0 / 0 / 0 / 0
 当前隔离候选验证：
 
 ```text
-release topology = PASS for the local Product-only candidate; functional commit 351e47912ce44fc34728097041dbfdd95889081a is based directly on production remote b22930ebe73847cf35bc44be789414902ae6b599, all 72 changed paths belong to the exact 76-artifact Product manifest, and the remaining 4 manifest dependencies are byte-identical to that base; the superseded 99efabc whole-tree candidate must not be deployed because it also carries unrelated Usage/Metering production files
-backend = full suite PASS; 877 passed, 2 live-credential tests skipped, 77 subtests passed from the clean Product-only committed state
+release topology = PASS for the local Product-only candidate; functional commit 6839e7609ddff3f1fe288c48a42918e105a75fc9 descends from production remote b22930ebe73847cf35bc44be789414902ae6b599 and remains bounded by the exact 76-artifact Product manifest; the superseded 99efabc whole-tree candidate must not be deployed because it also carries unrelated Usage/Metering production files
+backend = full suite PASS; 898 passed, 2 live-credential tests skipped, 77 subtests passed from the clean Product-only committed state
 production build = PASS, 70 static pages generated from the Product-only candidate
 TypeScript = PASS
 Web tests = PASS; 132/132 registry tests passed with zero failures after excluding unrelated Usage/Metering tests
 Web dependency security = PASS; clean npm ci installed 417 packages and npm audit --audit-level=low reported 0 known vulnerabilities with Next.js 16.3.3 and the reviewed lockfile
 local rendered Product truth = PASS; the built localhost candidate passed the executable Product-truth verifier
-release manifest contract = PASS; the current 351e479 manifest/automation contract passed 20/20
-shell wrappers = PASS; ShellCheck passed the exact 351e479 Git blobs for cloud_lib, Product Supply, Product Opportunity Admission and Product Tracking, excluding only the intentional dynamic-source SC1091 diagnostic; exact systemd-analyze verify for the not-yet-installed candidate units remains a deployment-host gate
+release manifest contract = PASS; the current 6839e760 manifest/automation contract passed 23/23
+shell wrappers = PASS; ShellCheck 0.11.0 passed the exact 6839e760 Git blobs for cloud_lib, Product Supply, Product Opportunity Admission and Product Tracking, excluding only the intentional dynamic-source SC1091 diagnostic; all six unit blobs and four wrapper blobs match the release-manifest SHA-256 values, and the focused systemd/worker/automation/admission group passed 156/156; exact systemd-analyze verify for the not-yet-installed candidate units remains a deployment-host gate
 
 candidate systemd units = NEEDS VPS EVIDENCE; 2026-08-27T17:10:44Z 的只读检查证明现有 Supply service/timer 可以被 systemd 255 解析，但其 SHA-256 均不等于候选，Admission/Tracking 四个 unit 尚不存在，因此旧 unit 的 verify PASS 不得冒充候选通过。正式安装前必须对六个候选 unit 的精确暂存字节执行 SHA-256 与 systemd-analyze verify；证据为 `backend/docs/product_opportunities_v37_systemd_evidence_gap_20260827T171044Z.json`
+local candidate systemd boundary = PASS; 2026-08-27T17:40:00Z 已证明六个 unit 与四个 wrapper 的提交 blob SHA-256 全部等于 6839e760 manifest，四个 wrapper 的精确 LF Git blob 通过 ShellCheck，聚焦自动化测试 156/156；该本地 PASS 不得替代 VPS 的 systemd-analyze，证据为 `backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`
 production data readiness = BLOCK; the 2026-08-27T12:10:42Z GET-only pre-Supply audit found 123 technical migration candidates but only 25 in the reviewed automatic-Admission scope (18 Physical / 7 Digital), and all 25 had zero today/G7/G14/G30/full-metric coverage; discovery inventory exists but launch-ready trend intelligence does not
 first complete permanent-timer Product Supply attempt = BLOCK; invocation b0f7bda39ad64aaf8f5e28f9da4c0e5d scanned 100/100 and wrote zero dirty rows, but one render failure made resultTrust partial and the strict scheduled audit exited 1; this receipt is ineligible for automatic Admission
 daily capacity contract = PASS in candidate code; Product Supply scans 100 Source Pins and may write 0-50 legacy discovery rows across atomic batches of at most 20, while Product Tracking independently covers up to 2,499 unique active Primary Pins and at most 5,000 provider requests per day; 20 is not a per-day Product limit

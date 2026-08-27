@@ -84,6 +84,15 @@ exact. The installed Supply service/timer parse successfully, but their hashes
 installed-unit PASS cannot be reused for the candidate. Evidence:
 `backend/docs/product_opportunities_v37_systemd_evidence_gap_20260827T171044Z.json`.
 
+The current committed candidate was rechecked locally at
+`2026-08-27T17:40:00Z`: all six unit blobs and four wrapper blobs match the
+release-manifest SHA-256 values, ShellCheck 0.11.0 passed all four exact LF Git
+blobs (only intentional SC1091 excluded), and the focused automation group
+passed 156/156. This qualifies the local bytes but does not replace Linux-host
+verification. The exact six unit blobs must still be staged read-only on the VPS
+and pass SHA-256 plus `systemd-analyze verify` before installation. Evidence:
+`backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`.
+
 The Web deployment config is part of this exact boundary and must use
 `installCommand: npm ci`. Replacing it with `npm install`, omitting the lockfile,
 or reusing an unverified `node_modules` tree invalidates the dependency-security

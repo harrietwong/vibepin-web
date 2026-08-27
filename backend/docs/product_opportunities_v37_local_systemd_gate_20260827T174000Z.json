@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-27T17:40:00Z",
+  "auditMode": "local_committed_blob_read_only",
+  "candidateFunctionalTip": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
+  "candidateDocsTipBeforeThisReport": "1955a254",
+  "manifest": "backend/docs/product_opportunities_v37_release_manifest_6839e76.json",
+  "gitBlobSha256MatchesManifest": {
+    "backend/deploy/systemd/vibepin-product-supply.service": "51f78a4eb235d6c5b13f83cf727173f3b3427a6ff7c863e2024657e8b9312a20",
+    "backend/deploy/systemd/vibepin-product-supply.timer": "9b046ec96db1b2861f087d2f8c51f910661f72c7455a1b2fd91fbdc320068e1a",
+    "backend/deploy/systemd/vibepin-product-opportunity-admission.service": "7be37e3b0606cadc01c874ca19fc7f97050489ad3113d40c24b6b666aabeea22",
+    "backend/deploy/systemd/vibepin-product-opportunity-admission.timer": "554d6ba4e0362b691aae9c334091999e1c2a5e0b282ee2273d947282a663be4c",
+    "backend/deploy/systemd/vibepin-product-tracking.service": "b8621d95a22e1dd89057c97efba7d26417f191e4568e4083fd9dd7154e76e74f",
+    "backend/deploy/systemd/vibepin-product-tracking.timer": "7739fc1c637e4016e902edb252847d44163e0fe80effd084000b3f1e24e474a5",
+    "backend/scripts/cloud_lib.sh": "63a410a23fe0f547194ad6224b6e2dd5d82c7e7ef162a573b0f62a936010e3a0",
+    "backend/scripts/cloud_run_product_supply.sh": "361dccde1e4a0764f700f8c0f35cb1262a3e63a0de0832ad02ff967a6a2b4b37",
+    "backend/scripts/cloud_run_product_opportunity_admission.sh": "07b76b8655018007a89a79f28fe2be0eea99b4948d9d7209ebba680f10cffc32",
+    "backend/scripts/cloud_run_product_tracking.sh": "a09ed648e6a63a1e38e70f471e9c6ab9b1372839fbf8b510e3df348beae1599f"
+  },
+  "shellCheck": {
+    "version": "0.11.0",
+    "input": "exact LF Git blobs, not CRLF Windows checkout files",
+    "files": 4,
+    "excludedDiagnostics": ["SC1091"],
+    "result": "PASS"
+  },
+  "focusedAutomationTests": {
+    "command": "py -m pytest backend/tests/test_cloud_runner_prep.py backend/tests/test_product_supply_cutover_v37.py backend/tests/test_product_opportunity_admission_pipeline.py backend/tests/test_product_opportunity_automation_contract.py -q",
+    "result": "156 passed",
+    "exitCode": 0
+  },
+  "verdict": "LOCAL_PASS_VPS_VERIFY_REQUIRED",
+  "remainingHostGate": "stage these exact six unit blobs on the VPS, compare SHA-256, and run systemd-analyze verify before installation",
+  "vpsFileWritten": false,
+  "unitInstalled": false,
+  "daemonReloaded": false,
+  "timerChanged": false,
+  "serviceStarted": false
+}
