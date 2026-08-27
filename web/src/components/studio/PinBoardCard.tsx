@@ -15,10 +15,9 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
-import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle, Sparkles, Pencil } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle, Sparkles } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { hasPersistFailure, retryPersist, subscribe as subscribeDrafts } from "@/lib/pinDraftStore";
 import { getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
@@ -81,12 +80,6 @@ function scheduledTimeLabel(d: PinDraft): string {
   const [h, m] = t.split(":");
   const hh = Number(h); const ampm = hh >= 12 ? "PM" : "AM"; const h12 = hh % 12 === 0 ? 12 : hh % 12;
   return `${h12}:${String(Number(m ?? 0)).padStart(2, "0")} ${ampm}`;
-}
-// Deep link into the Plan view inside the canonical Create Pins workspace.
-// (same "?modal=publish&pinId=…" contract the post-OAuth restore flow already parses —
-// no new mechanism; /app/plan is now only a param-preserving redirect to this URL.)
-function planDeepLink(draftId: string): string {
-  return `/app/studio?view=plan&modal=publish&pinId=${encodeURIComponent(draftId)}`;
 }
 // "Was scheduled: <time>" — reads the ISO snapshot WP-B captures right before a
 // failed publish clears the live schedule fields. The timestamp is formatted with the
@@ -275,6 +268,26 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
 
   const boardName = useCallback((id: string) => boards.find(b => b.id === id)?.name ?? "", [boards]);
 
+  /**
+   * The card's REAL save state (PRD §3), not a decorative tick.
+   *
+   * "Saving…" is the debounce window — the merchant's keystrokes are in memory and
+   * not yet written. "Saved" is the settled state. "Couldn't save" reads the store's
+   * own `hasPersistFailure()`, which is set when the localStorage write throws
+   * (quota/private mode): edits survive in memory, so the honest line is a retry
+   * offer, not a lie either way. The old card rendered a hardcoded green "Saved"
+   * unconditionally, which said "Saved" loudest exactly when nothing was.
+   */
+  const [pendingSave, setPendingSave] = useState(false);
+  const [persistFailed, setPersistFailed] = useState(false);
+  useEffect(() => {
+    const sync = () => setPersistFailed(hasPersistFailure());
+    sync();
+    return subscribeDrafts(sync);
+  }, []);
+  const retrySave = useCallback(() => { retryPersist(); setPersistFailed(hasPersistFailure()); }, []);
+  const saveState: "saved" | "saving" | "failed" = persistFailed ? "failed" : pendingSave ? "saving" : "saved";
+
   const persistNow = useCallback((f: PinFieldsValue) => {
     props.onPersist(draft.id, {
       title: f.title,
@@ -300,26 +313,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   }, [persistNow]);
 
   useEffect(() => () => { if (timer.current) { clearTimeout(timer.current); persistNow(pendingRef.current); } }, [persistNow]);
-
-  /**
-   * The card's REAL save state (PRD §3), not a decorative tick.
-   *
-   * "Saving…" is the debounce window — the merchant's keystrokes are in memory and
-   * not yet written. "Saved" is the settled state. "Couldn't save" reads the store's
-   * own `hasPersistFailure()`, which is set when the localStorage write throws
-   * (quota/private mode): edits survive in memory, so the honest line is a retry
-   * offer, not a lie either way. The old card rendered a hardcoded green "Saved"
-   * unconditionally, which said "Saved" loudest exactly when nothing was.
-   */
-  const [pendingSave, setPendingSave] = useState(false);
-  const [persistFailed, setPersistFailed] = useState(false);
-  useEffect(() => {
-    const sync = () => setPersistFailed(hasPersistFailure());
-    sync();
-    return subscribeDrafts(sync);
-  }, []);
-  const retrySave = useCallback(() => { retryPersist(); setPersistFailed(hasPersistFailure()); }, []);
-  const saveState: "saved" | "saving" | "failed" = persistFailed ? "failed" : pendingSave ? "saving" : "saved";
 
   const handleChange = useCallback((patch: Partial<PinFieldsValue>) => {
     selfEdit.current = true;
@@ -374,8 +367,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     setConfirmPublish(false);
     props.onPublish(draft.id, options);
   }, [flush, props, draft.id, destinationError]);
-  const expand = useCallback(() => props.onSetActive(draft.id), [props, draft.id]);
-  const collapse = useCallback(() => { flush(); props.onSetActive(null); }, [flush, props]);
+  const collapse = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
   /** Enter/leave the card-local edit form. Leaving always flushes pending edits. */
   const startEditing = useCallback(() => { setEditing(true); props.onSetActive(draft.id); }, [props, draft.id]);
   const stopEditing = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
@@ -875,6 +867,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           {/* Draft cards edit inline (PRD §1). Scheduled/Posted stay compact until the
               merchant presses Edit, which opens the SAME form via the expanded card. */}
           {compactFields && (
+          <>
           <label style={{ ...labelStyle, display: "flex", flexDirection: "column", gap: 5 }}>
             {tr("studioBoard.card.fields.title")}
             <input data-testid="board-card-title" value={fields.title} disabled={publishing || generating}
@@ -893,6 +886,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               onChange={event => handleChange({ websiteUrl: event.target.value })} placeholder="https://"
               style={{ ...fieldStyle, fontSize: 11.5, minHeight: 34, padding: "7px 9px" }} />
           </label>
+          </>
           )}
           <div data-testid="card-publish-to" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -1142,7 +1136,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             />
             <button type="button" data-testid="card-generate-ai-image" onClick={doGenerateAiImage}
               style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "3px 5px", borderRadius: 6, border: "none", background: "transparent", color: BUI.purple, fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
-              <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.expanded.generateAiImage")}
+              <Layers style={{ width: 12, height: 12 }} /> {tr("studioBoard.card.regenerateImage")}
             </button>
           </div>
         </div>
@@ -1239,19 +1233,20 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             publish / Move to Unscheduled instead of Schedule (retrying does not
             reuse the old slot). Everything else keeps the original Schedule CTA. */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: `1px solid ${BUI.border}`, paddingTop: 12 }}>
-          <span data-testid="card-autosave" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: BUI.textSec }}>
-            <Check style={{ width: 12, height: 12, color: BUI.success }} /> {tr("studioBoard.expanded.saved")}
-          </span>
+          <span data-testid="card-autosave">{saveStateLine}</span>
           <div style={{ flex: 1 }} />
-          {scheduled ? (
+          {/* While editing a Scheduled/Posted Content the primary action is Publish —
+              a fresh publish of what is on screen (onlyPending:false), so an edit that
+              was made specifically to fix a live Pin actually reaches every platform. */}
+          {(scheduled || posted) ? (
             <>
-              <span data-testid="card-scheduled-label" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: BUI.textSec }}>
-                <CalendarClock style={{ width: 14, height: 14 }} /> {schedLabel ? tr("studioBoard.expanded.scheduledForPrefix").replace("{time}", schedLabel) : tr("studioBoard.expanded.scheduled")}
-              </span>
-              <Link data-testid="card-open-in-plan" href={planDeepLink(draft.id)}
-                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, textDecoration: "none" }}>
-                {tr("studioBoard.expanded.openInPlan")}
-              </Link>
+              <button type="button" data-testid="card-done" onClick={stopEditing} style={secondaryBtn}>
+                {tr("studioBoard.actions.done")}
+              </button>
+              <button type="button" data-testid="card-publish" onClick={() => doPublish({ onlyPending: false })} disabled={publishing}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                {publishing ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
+              </button>
             </>
           ) : failed ? (
             isPublishFailure ? (
@@ -1262,7 +1257,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                 </button>
                 <button type="button" data-testid="card-try-again" onClick={() => props.onTryAgain(draft)} disabled={publishing}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
-                  {publishing ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : null} {tr("studioBoard.expanded.retryPublish")}
+                  {publishing ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : null} {tr("studioBoard.actions.retry")}
                 </button>
               </>
             ) : (
