@@ -105,6 +105,13 @@ export type ContentDraftLike = {
   postedAt?: string;
   publishError?: string;
   publishErrorCode?: string;
+  /**
+   * What KIND of failure `publishError` describes. Read here (not just by the
+   * lifecycle predicates) because a `publishError` with no `failureType` is old
+   * dirty data, not a publish failure — see `contentDestinationResults`.
+   */
+  failureType?: string;
+  errorCategory?: string;
   /** The Pinterest connection this Content is pinned to (PRD §14). */
   targetConnectionId?: string;
   targetAccountLabel?: string;
@@ -224,6 +231,27 @@ function trimmed(v: unknown): string | undefined {
 }
 
 /**
+ * Whether a legacy `publishError` describes a REAL publish failure.
+ *
+ * A draft carrying `publishError` and nothing else is old dirty data — the field was
+ * once written for states that were never a publish attempt (and never cleared on
+ * success). The fan-out lineage made that explicit: "有 publishError 但无 failureType
+ * → 不计入" (scripts/test-publish-failure-consistency.ts). Synthesising a failed
+ * Pinterest row from such a draft would resurrect exactly that miscount through the
+ * destination reader — `isActionablePublishFailure` trusts a failed destination row
+ * over the legacy fields, so the row would override the very rule that excludes it.
+ *
+ * A failure written by any code path we ship carries at least one corroborating field:
+ * `failureType: "publish"` (the drawer / cron / publishContent), or an error
+ * code/category from the classifier. One of those is required here.
+ */
+function isRealPublishFailure(draft: ContentDraftLike): boolean {
+  return draft.failureType === "publish"
+    || !!trimmed(draft.publishErrorCode)
+    || !!trimmed(draft.errorCategory);
+}
+
+/**
  * THE reader for per-destination publish outcomes — the only one.
  *
  * Stored rows win. A draft with none (every publish before this model existed) is
@@ -250,7 +278,7 @@ export function contentDestinationResults(draft: ContentDraftLike): DestinationP
       postUrl: trimmed(draft.remotePinUrl) ?? (trimmed(draft.remotePinId) ? `https://www.pinterest.com/pin/${draft.remotePinId}/` : undefined),
       publishedAt: trimmed(draft.postedAt),
     });
-  } else if (draft.publishError) {
+  } else if (draft.publishError && isRealPublishFailure(draft)) {
     results.push({
       destinationId: pinterestKey, provider: "pinterest", socialConnectionId: pinterestConnection,
       accountLabel: trimmed(draft.targetAccountLabel), boardId: trimmed(draft.boardId), boardName: trimmed(draft.boardName),
