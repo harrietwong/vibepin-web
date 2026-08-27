@@ -2,11 +2,18 @@
  * Authenticated Creem checkout session (POST /api/billing/creem/checkout).
  *
  * Two things can be bought here:
- *   { kind: "plan", plan, interval }                — a subscription plan
- *   { kind: "extra_account", interval, units }      — N extra connectable social
- *     accounts (a shared any-platform pool), available only ON a paid plan.
+ *   { kind: "plan", plan, interval }        — a subscription plan
+ *   { kind: "extra_account", units }        — N extra connectable social accounts
+ *     (a shared any-platform pool), available only ON a paid plan.
  * `kind` may be omitted; it defaults to "plan" so the pricing page's existing body
  * keeps working unchanged.
+ *
+ * The add-on's billing interval is NOT a client choice (决策 A): it FOLLOWS the
+ * buyer's main plan, derived server-side from the subscription that grants that plan
+ * (`getActivePlanInterval`). A yearly-plan user buys slots yearly, a monthly-plan
+ * user monthly. Any `interval` in an extra_account body is ignored — otherwise a
+ * monthly subscriber could be sold a yearly-billed add-on that renews on a different
+ * date than everything else they pay for.
  *
  * Turns a signed-in buyer's choice into a hosted Creem checkout URL. The
  * product id comes ONLY from the server-side CREEM_PRODUCT_* map (a client can
@@ -23,15 +30,18 @@
  *   - 401 when unauthenticated.
  *   - 400 on a bad/missing plan or interval (plan ∈ starter|pro|business;
  *     interval ∈ month|year — "free" is rejected), a bad kind, or units out of range.
+ *     `interval` is required for kind=plan ONLY; extra_account never reads it.
  *   - 403 { error: "paid_plan_required", userMessage } when a Free user tries to buy
  *     extra account slots — the add-on tops up a plan, it does not replace one.
  *   - 500 { error: "plan_not_configured" } when the plan/interval has no
  *     CREEM_PRODUCT_* env mapping (config error — logged).
  *   - 500 { error: "addon_not_configured" } when the extra-account product id is
- *     not set for the requested interval.
+ *     not set for the derived interval and cannot fall back to monthly.
  *   - 502 { error: "checkout_failed" } on any Creem upstream failure (detail
  *     logged server-side only).
- *   - 200 { url } with the hosted checkout URL on success.
+ *   - 200 { url } with the hosted checkout URL on success. An extra_account
+ *     response also carries { interval } — the interval it actually charged, so the
+ *     client can say what it did (including after the yearly→monthly fallback).
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -41,7 +51,8 @@ import { createServerClient } from "@/lib/supabase";
 import { creemProductIdFor, extraAccountProductIdFor } from "@/lib/server/creem/creemProducts";
 import { createCheckoutSession } from "@/lib/server/creem/creemClient";
 import { assertBillingModeUsable, getBillingMode } from "@/lib/server/creem/billingMode";
-import { resolvePlan } from "@/lib/server/entitlements";
+import { getActivePlanInterval, resolvePlan } from "@/lib/server/entitlements";
+import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 import type { PlanKey } from "@/lib/pricingPlans";
 
 export const runtime = "nodejs";
@@ -121,13 +132,14 @@ export async function POST(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "invalid_kind" }, { status: 400 });
   }
   const kind = rawKind as CheckoutKind;
-  const interval = (body as { interval?: unknown }).interval;
-  if (typeof interval !== "string" || !INTERVALS.includes(interval as Interval)) {
-    return NextResponse.json({ error: "invalid_interval" }, { status: 400 });
-  }
 
   let productId: string | null;
   let units = 1;
+  /**
+   * The interval actually charged. For a plan it is the buyer's choice; for the
+   * add-on it is derived from their plan below and reported back in the response.
+   */
+  let chargedInterval: Interval;
 
   if (kind === "extra_account") {
     const rawUnits = (body as { units?: unknown }).units ?? 1;
@@ -157,10 +169,33 @@ export async function POST(req: NextRequest): Promise<Response> {
       );
     }
 
-    productId = extraAccountProductIdFor(interval as Interval);
+    // 决策 A: the add-on follows the plan's billing interval — never the body.
+    // A null (plan held via the app_metadata cache or the email whitelist, or a
+    // lookup failure) means we have no evidence of a yearly plan, so: monthly.
+    const planInterval = (await getActivePlanInterval(uid)) ?? "month";
+
+    productId = extraAccountProductIdFor(planInterval);
+    if (!productId && planInterval === "year") {
+      // A configured monthly add-on with no yearly twin must not block the sale.
+      // Charge monthly and SAY SO in the response — silently billing yearly-priced
+      // slots monthly (or vice versa) is the failure worth avoiding.
+      const monthly = extraAccountProductIdFor("month");
+      if (monthly) {
+        console.warn(
+          "[billing/creem/checkout] CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY unset — " +
+            "charging the yearly-plan buyer monthly for extra account slots.",
+        );
+        productId = monthly;
+        chargedInterval = "month";
+      } else {
+        chargedInterval = planInterval;
+      }
+    } else {
+      chargedInterval = planInterval;
+    }
     if (!productId) {
       console.error(
-        `[billing/creem/checkout] no CREEM_PRODUCT_EXTRA_ACCOUNT mapping for interval=${interval}.`,
+        `[billing/creem/checkout] no CREEM_PRODUCT_EXTRA_ACCOUNT mapping for interval=${planInterval}.`,
       );
       return NextResponse.json({ error: "addon_not_configured" }, { status: 500 });
     }
@@ -169,6 +204,13 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (typeof plan !== "string" || !PAID_PLANS.includes(plan as PaidPlan)) {
       return NextResponse.json({ error: "invalid_plan" }, { status: 400 });
     }
+    // Only a PLAN checkout reads the body's interval — the buyer is choosing it on
+    // the pricing page. (The add-on branch above never gets here.)
+    const interval = (body as { interval?: unknown }).interval;
+    if (typeof interval !== "string" || !INTERVALS.includes(interval as Interval)) {
+      return NextResponse.json({ error: "invalid_interval" }, { status: 400 });
+    }
+    chargedInterval = interval as Interval;
 
     // product_id ONLY from the server-side env map.
     productId = creemProductIdFor(plan as PaidPlan, interval as Interval);
@@ -197,7 +239,16 @@ export async function POST(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "checkout_failed" }, { status: 502 });
   }
 
-  const successUrl = `${safeSuccessOrigin(req)}/welcome`;
+  // 决策 B: an add-on buyer came from Settings → Social accounts to connect one
+  // more account, and that is where the purchase has to put them back — /welcome is
+  // the onboarding page for someone who just bought a PLAN, and it drops an existing
+  // customer several clicks away from the thing they were doing. `?addon=success`
+  // lets the panel acknowledge the purchase and re-read the allowance.
+  const origin = safeSuccessOrigin(req);
+  const successUrl =
+    kind === "extra_account"
+      ? `${origin}${SETTINGS_SOCIAL_PATH}?addon=success`
+      : `${origin}/welcome`;
 
   try {
     const { checkoutUrl } = await createCheckoutSession({
@@ -207,10 +258,20 @@ export async function POST(req: NextRequest): Promise<Response> {
       successUrl,
       // `kind` rides along so the webhook (and any later audit) can tell an add-on
       // purchase from a plan purchase without re-deriving it from the product id.
-      metadata: { userId: uid, kind },
+      // `returnTo` is traceability only — nothing reads it to decide anything.
+      metadata:
+        kind === "extra_account"
+          ? { userId: uid, kind, returnTo: "settings_social" }
+          : { userId: uid, kind },
       units,
     });
-    return NextResponse.json({ url: checkoutUrl });
+    // The add-on response reports the interval it charged (see 决策 A + the yearly
+    // fallback). A plan response is unchanged: { url }.
+    return NextResponse.json(
+      kind === "extra_account"
+        ? { url: checkoutUrl, interval: chargedInterval }
+        : { url: checkoutUrl },
+    );
   } catch (err) {
     console.error("[billing/creem/checkout] Creem checkout failed:", (err as Error).message);
     return NextResponse.json({ error: "checkout_failed" }, { status: 502 });

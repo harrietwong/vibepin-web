@@ -48,9 +48,19 @@ export class BillingRefusedError extends Error {
 
 type CheckoutBody =
   | { kind: "plan"; plan: PaidPlan; interval: BillingInterval }
-  | { kind: "extra_account"; interval: BillingInterval; units: number };
+  | { kind: "extra_account"; units: number };
 
-async function postCheckout(body: CheckoutBody): Promise<string> {
+/** What a checkout call resolves to: the hosted URL, plus what was charged. */
+export type CheckoutStarted = {
+  url: string;
+  /**
+   * The interval the server actually charged. Only the add-on reports it (the
+   * server derives it from the plan), so it is undefined for a plan checkout.
+   */
+  interval?: BillingInterval;
+};
+
+async function postCheckout(body: CheckoutBody): Promise<CheckoutStarted> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   const res = await fetch("/api/billing/creem/checkout", {
@@ -69,9 +79,9 @@ async function postCheckout(body: CheckoutBody): Promise<string> {
     if (err.userMessage) throw new BillingRefusedError(err.userMessage);
     throw new Error(`checkout endpoint returned ${res.status}`);
   }
-  const json = (await res.json()) as { url?: string };
+  const json = (await res.json()) as { url?: string; interval?: BillingInterval };
   if (!json.url) throw new Error("checkout endpoint returned no url");
-  return json.url;
+  return { url: json.url, interval: json.interval };
 }
 
 /**
@@ -84,17 +94,22 @@ export async function startCreemCheckout(
   plan: PaidPlan,
   interval: BillingInterval,
 ): Promise<string> {
-  return postCheckout({ kind: "plan", plan, interval });
+  return (await postCheckout({ kind: "plan", plan, interval })).url;
 }
 
 /**
  * Start a checkout for N extra account slots (1 slot = 1 extra connectable social
  * account on any platform). Paid plans only — a Free user gets a
  * BillingRefusedError carrying the message to show them.
+ *
+ * There is deliberately NO interval parameter (决策 A): the add-on is billed on the
+ * same interval as the buyer's main plan, derived server-side. A client that could
+ * name the interval could also name the wrong one — and the price shown next to this
+ * button would then be a guess rather than a promise. The resolved interval comes
+ * back on the result for display.
  */
 export async function startExtraAccountCheckout(
   units: number = 1,
-  interval: BillingInterval = "month",
-): Promise<string> {
-  return postCheckout({ kind: "extra_account", interval, units });
+): Promise<CheckoutStarted> {
+  return postCheckout({ kind: "extra_account", units });
 }

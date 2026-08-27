@@ -4,6 +4,9 @@ import { deriveAccountBillingSummary } from "../src/lib/accountSummary";
 import * as accountSummaryModule from "../src/lib/accountSummary";
 import { formatEnglishDateTime } from "../src/lib/dateTimeFormat";
 import { accountUiState } from "../src/lib/social/accountUiState";
+import { socialPanelMessages } from "../src/lib/i18n/messages/en/socialPanel";
+import zhCN from "../src/lib/i18n/messages/zh-CN";
+import zhTW from "../src/lib/i18n/messages/zh-TW";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -122,6 +125,52 @@ test("Social accounts panel drives Pinterest state + actions (no dedicated Pinte
   // The retired panel's internal access-tier wording must not reappear customer-side.
   assert.doesNotMatch(social, /Standard Access/);
   assert.doesNotMatch(social, /limited_access/);
+});
+
+test("Extra-slot CTA quotes the interval the buyer will actually be billed on", () => {
+  // Decision A. Slots follow the plan's billing interval, so the button cannot
+  // hardcode one price: a yearly subscriber shown "$7 / month" is quoted a price
+  // they will never pay. The client also must not CHOOSE the interval -- the server
+  // derives it -- so the checkout call takes no interval argument any more.
+  assert.match(social, /socialPanel\.limit\.addSlotMonthly/);
+  assert.match(social, /socialPanel\.limit\.addSlotYearly/);
+  assert.match(social, /planInterval === "year"/);
+  assert.match(social, /EXTRA_ACCOUNT_PRICE_USD\.yearlyPerMonth/);
+  assert.match(social, /startExtraAccountCheckout\(1\)/);
+  assert.doesNotMatch(social, /startExtraAccountCheckout\(1,/);
+  // The old single-price composition must be gone, or the yearly buyer keeps
+  // seeing the monthly number next to it.
+  assert.doesNotMatch(social, /tr\("socialPanel\.limit\.addSlot"\)/);
+  for (const key of ["socialPanel.limit.addSlotMonthly", "socialPanel.limit.addSlotYearly"]) {
+    assert.ok(socialPanelMessages[key as keyof typeof socialPanelMessages], `en missing ${key}`);
+    assert.ok((zhCN as Record<string, string>)[key], `zh-CN missing ${key}`);
+    assert.ok((zhTW as Record<string, string>)[key], `zh-TW missing ${key}`);
+    // Both variants must carry the price placeholder the panel substitutes.
+    assert.match(socialPanelMessages[key as keyof typeof socialPanelMessages], /\{price\}/);
+  }
+});
+
+test("?addon=success is consumed, stripped, and answered with a notice + one re-read", () => {
+  // Decision B. Creem returns a slot buyer HERE, not to /welcome. The flag is read
+  // and then removed from the URL exactly like every other OAuth-return flag, so a
+  // refresh cannot re-fire the notice.
+  assert.match(social, /params\.get\("addon"\) !== "success"/);
+  assert.match(social, /setAddonPurchased\(true\)/);
+  assert.match(social, /router\.replace\(SETTINGS_SOCIAL_PATH\)/);
+  assert.match(social, /data-testid="social-addon-success"/);
+  // The webhook that provisions the slot can land after the redirect: re-read once
+  // more a few seconds later. ONE retry -- a polling loop would not make the webhook
+  // arrive any sooner and would hammer the endpoint.
+  assert.match(social, /setTimeout\(\(\) => \{ void load\(\); \}, 5000\)/);
+  assert.doesNotMatch(social, /setInterval\(/);
+  // The banner must retire itself on the SERVER's allowance, not on "we saw the
+  // flag" -- the money is not what unblocks the connect, the provisioned slot is.
+  assert.match(social, /allowance\.slotsAvailable > 0\) setAccountLimitReached\(false\)/);
+  for (const key of ["socialPanel.addon.successTitle", "socialPanel.addon.successBody", "socialPanel.addon.dismiss"]) {
+    assert.ok(socialPanelMessages[key as keyof typeof socialPanelMessages], `en missing ${key}`);
+    assert.ok((zhCN as Record<string, string>)[key], `zh-CN missing ${key}`);
+    assert.ok((zhTW as Record<string, string>)[key], `zh-TW missing ${key}`);
+  }
 });
 
 test("English date formatting is deterministic", () => {
