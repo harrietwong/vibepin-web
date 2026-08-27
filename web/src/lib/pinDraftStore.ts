@@ -946,6 +946,100 @@ export function replaceMedia(
   return writeMedia(id, draft, next);
 }
 
+/**
+ * Split media OUT of one Content into a separate Content per item (PRD §13).
+ *
+ * The escape hatch for a media set a platform will not take as one post. Pinterest
+ * caps carousels at five and refuses mixed aspect ratios; when the merchant's six
+ * images or their odd-shaped one break that, the choices are "crop it" (a tool that
+ * does not exist yet) and "publish it on its own". This is the second one.
+ *
+ * The split items LEAVE the source — that is the whole point: the source is left with
+ * a set the platform accepts, rather than with the same problem plus some copies of
+ * it elsewhere. `copyMedia` is the non-destructive sibling for drag-to-share.
+ *
+ * What the new Contents inherit is what makes them the same POST, differently framed:
+ * title, description, website URL and the destination intent (`scheduledDestinations`
+ * plus the legacy Pinterest board fields the due-time worker still reads). What they
+ * must NOT inherit is anything about a specific publish ATTEMPT — result rows, remote
+ * pin ids, failure fields — or a schedule. They are created unscheduled on purpose:
+ * the merchant asked for separate posts, not for N posts firing into the same slot.
+ *
+ * Invariants:
+ *   - the source always keeps ≥1 item. Splitting "everything" keeps media[0], because
+ *     a Content with no media is not a Content; it is a broken card.
+ *   - ids requested that this Content does not have are ignored, not an error — the
+ *     card's notice can name an item a concurrent edit has already removed.
+ *   - each new Content gets FRESH media ids. Reusing an id across Contents would make
+ *     two different posts' items indistinguishable to every id-keyed path there is.
+ *
+ * Returns the created drafts (empty when nothing was splittable), so the caller can
+ * report how many separate posts it made.
+ */
+export function splitContentMedia(id: string, mediaIds?: readonly string[]): PinDraft[] {
+  const draft = getDraft(id);
+  if (!draft) return [];
+  const current = contentMedia(draft);
+  if (current.length < 2) return [];
+
+  const requested = mediaIds?.length
+    ? current.filter(item => mediaIds.includes(item.id))
+    // No selection = split every item off its own way, which still has to leave the
+    // source with its cover.
+    : current;
+  // Never the last one standing: whatever the request covers, media[0] stays put when
+  // it would otherwise empty the Content.
+  const splitting = requested.length >= current.length
+    ? requested.filter(item => item.id !== current[0].id)
+    : requested;
+  if (!splitting.length) return [];
+
+  const now = new Date().toISOString();
+  const created: PinDraft[] = [];
+  for (const item of splitting) {
+    const child = createBoardDraft({
+      imageUrl: item.url,
+      // createBoardDraft mints the id, so the media id must be minted against it —
+      // hence the two-step (create, then write the media with the real content id).
+      source: draft.source === "ai_generated_from_upload" ? "ai_generated_from_upload" : "uploaded_image",
+      title: draft.title || undefined,
+      description: draft.description || undefined,
+      altText: item.altText || draft.altText || undefined,
+      destinationUrl: draft.destinationUrl || undefined,
+      tags: draft.tags,
+      keyword: draft.keyword || undefined,
+      category: draft.category || undefined,
+      parentDraftId: draft.id,
+    });
+    const written = updateDraft(child.id, {
+      media: [{
+        ...item,
+        id: mediaId(child.contentId || child.id, 0),
+        ...(item.altText ? {} : (draft.altText ? { altText: draft.altText } : {})),
+      }],
+      coverMediaId: undefined, // writeMedia's normalization sets it from media[0]
+      // The destination intent, re-captured now: it is this Content's own record from
+      // here on, and a stale capturedAt would misdate it.
+      ...(draft.scheduledDestinations?.length
+        ? { scheduledDestinations: draft.scheduledDestinations.map(d => ({ ...d, capturedAt: now })) }
+        : {}),
+      boardId: draft.boardId,
+      boardName: draft.boardName,
+      ...(draft.targetConnectionId ? { targetConnectionId: draft.targetConnectionId } : {}),
+      ...(draft.targetAccountLabel ? { targetAccountLabel: draft.targetAccountLabel } : {}),
+    });
+    created.push(written ?? child);
+  }
+
+  // The source loses exactly what left. writeMedia re-derives the cover from media[0],
+  // so splitting the cover off promotes its neighbour rather than leaving a dangling
+  // coverMediaId.
+  const remaining = current.filter(item => !splitting.some(gone => gone.id === item.id));
+  writeMedia(id, draft, remaining);
+
+  return created;
+}
+
 /** Mark a Generating placeholder as failed (per-result or whole-run failure). */
 export function failGeneratedDraft(id: string): PinDraft | null {
   return updateDraft(id, { generationStatus: "failed" });

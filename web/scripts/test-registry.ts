@@ -166,6 +166,11 @@ export const STUDIO: string[] = [
   // WS-B2a 2026-08-27: cover ≡ media[0], load-time normalization of stale covers,
   // in-place media replacement, and the per-platform issue attribution.
   "test-content-media-model",
+  // WS-C2 2026-08-27: the card's media compatibility notice (which platform refuses
+  // this set, which thumbnails are at fault, and when to stay silent) and the
+  // "Publish separately" split that is §13's answer while the crop tool is deferred.
+  "test-media-notice",
+  "test-split-content-media",
   // Create Pins card view model (WS-C1, PRD 0826 §3–§6, §20): variant per lifecycle,
   // the "1 / N" cover counter, per-destination result rows, and the partial-success
   // rule (posted + needs attention → Retry, not Publish).

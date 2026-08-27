@@ -339,6 +339,84 @@ async function main(): Promise<void> {
   assert.equal(out.blocked, "not_found");
 });
 
+  console.log("\n=== retry semantics: a Retry with nothing pending sends nothing ===");
+
+  // The bug this pins: `targets = pending.length ? pending : destinations` turned a
+  // Retry on a fully published Content into a republish of EVERY destination — a
+  // duplicate post from the one option whose entire purpose is preventing them.
+  await test("onlyPending with every destination already published calls no platform and changes no row", async () => {
+  const draft = seedDraft({
+    id: "retry-none",
+    destinations: [
+      { provider: "pinterest", socialConnectionId: PIN_CONN },
+      { provider: "instagram", socialConnectionId: IG_CONN },
+    ],
+    destinationResults: [
+      { destinationId: `pinterest:${PIN_CONN}`, provider: "pinterest", socialConnectionId: PIN_CONN, status: "published", submittedAt: NOW, publishedAt: NOW, remoteId: "pin-old", postUrl: "https://www.pinterest.com/pin/pin-old/" },
+      { destinationId: `instagram:${IG_CONN}`, provider: "instagram", socialConnectionId: IG_CONN, status: "published", submittedAt: NOW, publishedAt: NOW, remoteId: "ig-old", postUrl: "https://instagram.com/p/ig-old" },
+    ],
+  });
+  const before = JSON.stringify(pinDraftStore.getDraft(draft.id)!.destinationResults);
+  const { deps, pinCalls, socialCalls } = makeDeps();
+  const out = await publishContent(draft.id, { onlyPending: true, deps });
+
+  assert.equal(out.nothingToRetry, true, "the outcome says so explicitly");
+  assert.equal(out.blocked, undefined, "nothingToRetry is NOT a blocked reason — callers toast blocked as an error");
+  assert.equal(pinCalls.length, 0, "Pinterest must not be called again");
+  assert.equal(socialCalls.length, 0, "the social dispatcher must not be called again");
+  assert.equal(out.published.length, 0, "nothing was published by THIS attempt");
+  assert.equal(out.failed.length, 0);
+  assert.equal(out.results.length, 2, "the prior rows are still reported");
+  assert.equal(
+    JSON.stringify(pinDraftStore.getDraft(draft.id)!.destinationResults), before,
+    "no stored row may change — not even a submittedAt bump",
+  );
+});
+
+  await test("onlyPending:false on the same fully published Content re-sends every destination", async () => {
+  const draft = seedDraft({
+    id: "republish",
+    destinations: [
+      { provider: "pinterest", socialConnectionId: PIN_CONN },
+      { provider: "instagram", socialConnectionId: IG_CONN },
+    ],
+    destinationResults: [
+      { destinationId: `pinterest:${PIN_CONN}`, provider: "pinterest", socialConnectionId: PIN_CONN, status: "published", submittedAt: NOW, publishedAt: NOW, remoteId: "pin-old", postUrl: "https://www.pinterest.com/pin/pin-old/" },
+      { destinationId: `instagram:${IG_CONN}`, provider: "instagram", socialConnectionId: IG_CONN, status: "published", submittedAt: NOW, publishedAt: NOW, remoteId: "ig-old", postUrl: "https://instagram.com/p/ig-old" },
+    ],
+  });
+  const { deps, pinCalls, socialCalls } = makeDeps();
+  const out = await publishContent(draft.id, { onlyPending: false, deps });
+
+  assert.equal(out.nothingToRetry, undefined, "an explicit republish is never 'nothing to retry'");
+  assert.equal(pinCalls.length, 1, "Pinterest gets the new content");
+  assert.equal(socialCalls.length, 1, "the social dispatcher gets the new content");
+  assert.equal(out.published.length, 2, "both destinations published again");
+  // The superseded rows describe posts still live on the platform, so they are kept.
+  const stored = pinDraftStore.getDraft(draft.id)!;
+  assert.equal(stored.previousResults?.length, 2, "the replaced published rows are kept as history");
+});
+
+  await test("onlyPending with ONE destination pending sends only that one", async () => {
+  const draft = seedDraft({
+    id: "retry-partial",
+    destinations: [
+      { provider: "pinterest", socialConnectionId: PIN_CONN },
+      { provider: "instagram", socialConnectionId: IG_CONN },
+    ],
+    destinationResults: [
+      { destinationId: `pinterest:${PIN_CONN}`, provider: "pinterest", socialConnectionId: PIN_CONN, status: "published", submittedAt: NOW, publishedAt: NOW, remoteId: "pin-old", postUrl: "https://www.pinterest.com/pin/pin-old/" },
+      { destinationId: `instagram:${IG_CONN}`, provider: "instagram", socialConnectionId: IG_CONN, status: "failed", submittedAt: NOW, errorMessage: "Instagram rejected the post." },
+    ],
+  });
+  const { deps, pinCalls, socialCalls } = makeDeps();
+  const out = await publishContent(draft.id, { onlyPending: true, deps });
+
+  assert.equal(out.nothingToRetry, undefined, "there WAS something to retry");
+  assert.equal(pinCalls.length, 0, "the published destination is not re-sent");
+  assert.equal(socialCalls.length, 1, "only the failed destination is retried");
+});
+
   console.log("\n=== the reader sees stored rows, and legacy drafts still read ===");
 
   await test("a legacy draft with only the old fields still yields per-destination results", () => {
