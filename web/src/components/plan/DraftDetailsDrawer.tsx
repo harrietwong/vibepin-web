@@ -30,6 +30,7 @@ import { PinTitleSection } from "@/components/pin-details/PinTitleSection";
 import { PinAltTextSection } from "@/components/pin-details/PinAltTextSection";
 import { toast } from "sonner";
 import type { PinDraft, SocialPostRef } from "@/lib/pinDraftStore";
+import type { DestinationPublishResult } from "@/lib/contentDraftModel";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
 import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
@@ -240,6 +241,11 @@ export function PinDetailsModal({
   // early return: declared below it, the hook count changes between renders and
   // React tears the tree down (error #310).
   const [liveSocialPosts, setLiveSocialPosts] = useState<SocialPostRef[] | null>(null);
+  // The per-destination rows the fan-out actually recorded, for the same reason and
+  // with the same lifetime as liveSocialPosts above. These are the ONLY place a
+  // FAILED destination exists: socialPosts[] records successes, so a drawer reading
+  // just the legacy fields could show a partial failure only as a missing row.
+  const [liveDestinationResults, setLiveDestinationResults] = useState<DestinationPublishResult[] | null>(null);
   // One publish = one toast. Pinterest and the social fan-out complete at
   // different moments, but the merchant clicked once; sharing a toast id lets the
   // later result replace the earlier line with a combined one.
@@ -681,6 +687,7 @@ export function PinDetailsModal({
     );
     // Scoped to one publish: never carry another Pin's live posts into this one.
     setLiveSocialPosts(null);
+    setLiveDestinationResults(null);
     setIsRedirectingToPinterest(false);
     // The Pin's pinned publish target, straight off the draft. A blank one is NOT
     // adopted here: opening a drawer must not silently decide (and persist) where an
@@ -1199,7 +1206,10 @@ export function PinDetailsModal({
       // Mirror the derived socialPosts into local state: the `draft` prop does not
       // re-render for a store write, and this drawer is usually still open.
       const stored = pinDraftStore.getDraft(activeDraft.id);
-      if (stored) setLiveSocialPosts(stored.socialPosts ?? []);
+      if (stored) {
+        setLiveSocialPosts(stored.socialPosts ?? []);
+        setLiveDestinationResults(stored.destinationResults ?? []);
+      }
 
       const pinterestRow = outcome.published.find(r => r.provider === "pinterest");
       if (pinterestRow) {
@@ -1227,24 +1237,20 @@ export function PinDetailsModal({
       const failedNow = outcome.failed.filter(r => destinations.some(d => d.id === r.destinationId));
       if (outcome.published.length) {
         const names = outcome.published.map(r => platformName(r.provider)).join(t("pinDetails.listSeparator"));
-        const withLink = outcome.published.find(r => r.postUrl);
         // One publish, one toast: a combined line naming every destination that
         // received it, under the shared id, replacing the loading spinner.
+        //
+        // No action button (PRD 0809 §V). It linked whichever destination happened to
+        // be first with a permalink and called it "View Pin" — Pinterest's noun — so a
+        // publish that reached three platforms offered exactly one of them, misnamed.
+        // Per-destination "View on {platform}" actions render in Publish results just
+        // below, and unlike a toast they survive a refresh: a toast is immediate
+        // feedback, never the record.
         toast.success(
           outcome.published.length === 1 && outcome.published[0].provider === "pinterest"
             ? t("pinDetails.toast.publishSuccess")
             : `${t("pinDetails.toast.publishSuccess")} ${t("pinDetails.toast.alsoPublishedPrefix")}${names}`,
-          {
-            id: PUBLISH_TOAST_ID,
-            ...(withLink?.postUrl
-              ? {
-                  action: {
-                    label: withLink.provider === "pinterest" ? t("pinDetails.viewPin") : viewOnLabel(withLink.provider),
-                    onClick: () => window.open(withLink.postUrl as string, "_blank", "noopener,noreferrer"),
-                  },
-                }
-              : {}),
-          },
+          { id: PUBLISH_TOAST_ID },
         );
         setPublishError(null);
       }
@@ -1599,6 +1605,10 @@ export function PinDetailsModal({
                         // and never re-renders for a store write, so a Facebook /
                         // Instagram post that landed afterwards was missing here.
                         socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
+                        // Stored rows win in contentDestinationResults, and they are
+                        // the only carrier of a FAILED destination. Omitting them is
+                        // how a partial failure rendered here as an all-published set.
+                        destinationResults: liveDestinationResults ?? activeDraft.destinationResults,
                       })}
                     />
                   </div>
@@ -1940,6 +1950,9 @@ export function PinDetailsModal({
               // Same reason as above: the just-finished fan-out wins over the
               // snapshot the drawer opened with.
               socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
+              // Same reason as the summary above: without these a destination that
+              // failed in the publish that just ran has no row to render at all.
+              destinationResults: liveDestinationResults ?? activeDraft.destinationResults,
             });
             return rows.length ? (
               <div data-testid="draft-publish-success">
@@ -1950,9 +1963,14 @@ export function PinDetailsModal({
         </div>
 
         {/* ── State-based footer (compact; Publish is never the only action).
-            Hidden entirely for a published Pin: the read-only view's single action
-            is "View on Pinterest" in the summary, and the header X closes. ── */}
-        {!isPosted && (
+            Hidden entirely once this Content has published — whether it arrived posted
+            or published in this drawer just now. Its single action used to be one
+            "View Pin" pointing at Pinterest no matter which platforms received the
+            post (PRD 0809 §V); the per-destination "View on {platform}" actions in
+            Publish results above replace it, and the header X closes. A publish that
+            delivered NOTHING leaves `result` null, so the failure path below — the
+            error line, Contact support, Publish now — is untouched. ── */}
+        {!isPosted && !result?.pinUrl && (
         <div style={{ flexShrink: 0, borderTop: `1px solid ${UI.border}`, padding: "10px 16px", background: UI.card }}>
           {publishError && !result && !trialAccess && (
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, margin: "0 0 8px" }}>
@@ -1992,11 +2010,7 @@ export function PinDetailsModal({
               <span data-testid="draft-cta-helper" style={{ fontSize: 10.5, color: UI.textMuted }}>{scheduleHelper}</span>
             )}
             <div style={{ flex: 1 }} />
-            {result?.pinUrl ? (
-                <a data-testid="draft-cta-view-pin" href={result.pinUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
-                  <ExternalLink size={13} /> {t("pinDetails.viewPin")}
-                </a>
-            ) : isFailed ? (
+            {isFailed ? (
               <>
                 <button
                   type="button"

@@ -184,8 +184,13 @@ test("published: read-only content preview uses plain text, never inputs", () =>
 
 test("published: footer (bottom Close / Publish now / Update schedule) is hidden", () => {
   const i = drawer.indexOf("State-based footer");
-  const gate = drawer.slice(i, i + 400);
-  assert(/\{!isPosted && \(/.test(gate), "footer must be gated on !isPosted");
+  const gate = drawer.slice(i, i + 900);
+  // Stricter than before, and a wider window because the gate now carries its reason:
+  // the footer is hidden for an already-posted Pin AND for one that just published in
+  // this drawer, because its action there was the single Pinterest-shaped "View Pin"
+  // that PRD 0809 §V replaces with per-destination links in Publish results.
+  assert(/\{!isPosted && !result\?\.pinUrl && \(/.test(gate),
+    "footer must be gated on !isPosted AND on a publish that completed here");
   assert(!drawer.includes('data-testid="draft-publish-close"'), "bottom Close button must be gone (header X closes)");
 });
 

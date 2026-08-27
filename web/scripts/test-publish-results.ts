@@ -88,6 +88,21 @@ test("the drawer no longer renders a single Pinterest-only view link", () => {
     "the one global View Pin must be replaced by per-destination actions");
   assert(drawer.includes("PublishResults"), "the drawer must render per-destination results");
 });
+test("the footer CTA and the toast action no longer link Pinterest on everyone's behalf", () => {
+  // Both survived the per-destination rewrite: a footer <a data-testid="draft-cta-view-pin">
+  // labelled t("pinDetails.viewPin"), and a toast action that opened whichever destination
+  // happened to be first with a permalink under the same Pinterest noun. A publish that
+  // reached three platforms therefore offered exactly one of them, misnamed.
+  const drawer = readFileSync("src/components/plan/DraftDetailsDrawer.tsx", "utf8");
+  assert(!drawer.includes('data-testid="draft-cta-view-pin"'),
+    "the global footer View Pin must be gone");
+  assert(!drawer.includes('t("pinDetails.viewPin")'),
+    "nothing may still render the Pinterest-only View Pin label");
+  assert(!drawer.includes("const withLink = outcome.published.find"),
+    "the toast must not pick one arbitrary destination to link");
+  assert(drawer.includes("{ id: PUBLISH_TOAST_ID },"),
+    "the success toast keeps its shared id and drops the action — the results block is the record");
+});
 
 console.log("\n=== rendered once, never twice ===");
 test("a published Pin shows Publish results ONCE, not once per render site", () => {
