@@ -60,8 +60,9 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
+    functional = "881c359a97671c040f6d01fdd0d37dee5d30b9f0"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
+    source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
     manifest_name = "product_opportunities_v37_release_manifest_58598b4.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
@@ -78,7 +79,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
         "58598b4d51504738bcf54cfa400bae2a296b7659"
     )
     assert manifest["launchTaxonomyCommit"] == launch_taxonomy
-    assert manifest["sourceProvenanceAliasCommit"] == functional
+    assert manifest["sourceProvenanceAliasCommit"] == source_alias
     assert manifest["trackingScheduleHardeningCommit"] == (
         "01dcb539460bd282cb1542afa1ea4992f1f34659"
     )

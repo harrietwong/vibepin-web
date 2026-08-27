@@ -5,7 +5,7 @@ production database write, VPS deployment, timer enablement, or budget increase.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62`, and exact
+functional tip `881c359a97671c040f6d01fdd0d37dee5d30b9f0`, and exact
 76-artifact Product boundary
 `backend/docs/product_opportunities_v37_release_manifest_58598b4.json`.
 Earlier branch pointers and manifests are chronological evidence only.

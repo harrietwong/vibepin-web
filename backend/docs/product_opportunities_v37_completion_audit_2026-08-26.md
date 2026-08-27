@@ -15,7 +15,7 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62`; and its exact Product boundary is
+`881c359a97671c040f6d01fdd0d37dee5d30b9f0`; and its exact Product boundary is
 the 76-artifact
 `backend/docs/product_opportunities_v37_release_manifest_58598b4.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
@@ -27,6 +27,10 @@ Physical/Digital family. Wedding is therefore not collapsed into Physical.
 Follow-up `5b5f98c` admits the real production `jewelry` source label as
 physical provenance and normalizes it to the existing Jewelry & Accessories
 business category without changing discovery quotas.
+The automatic Product Supply allocation remains the PRD-approved
+29 Fashion / 22 Women's Fashion / 29 Home Decor / 20 Digital Products mix.
+Wedding and Jewelry source capacity is planning evidence only and is not part
+of this release's scheduled allocation.
 The read-only production evidence is archived at
 `backend/docs/product_opportunities_v37_classify_chain_drift_20260827T131825Z.json`:
 the automatic 2026-08-27 chain exited 2 because the deployed worker had zero
@@ -247,8 +251,8 @@ to production.
   Digital. A declared family that conflicts with the source bucket is rejected.
   This broad family mapping never invents the finer merchant Product Type.
 - Production's currently reviewed 100-Pin Product Supply receipt is still the
-  Physical-only 36/28/36 mix. A local candidate now reallocates the same 100-Pin
-  budget to 29 Fashion / 22 Women's Fashion / 29 Home Decor / 20 Digital
+  Physical-only 36/28/36 mix. The PRD-approved candidate reallocates the same
+  100-Pin budget to 29 Fashion / 22 Women's Fashion / 29 Home Decor / 20 Digital
   Products, keeps the 50-per-run and 20-per-atomic-batch caps, and explicitly
   opts in only `digital-products` while Beauty remains excluded. Admission uses
   the same exact receipt mix. Production read-only inventory proves 4,724 recent
@@ -265,7 +269,8 @@ to production.
   exact-ID canary through the current merchant-evidence gate.
 - A production read-only source-selection rehearsal then applied the real
   already-scraped exclusion set (492 Source Pin IDs) without opening Pinterest.
-  It selected exactly 100 unique Pins at 29/22/29/20, with 100/100 source
+  The earlier Digital-only rehearsal selected exactly 100 unique Pins at
+  29/22/29/20, with 100/100 source
   keywords and images and zero category shortfall. Digital had 303 candidates
   before exclusion and 297 after exclusion, so its 20-Pin quota did not depend
   on re-admitting a spent Pin; `repeatScrapeFallbackUsed=false`. This closes
@@ -630,7 +635,7 @@ to production.
   2026-08-27 23:03:44 Asia/Shanghai. That run still requires a complete receipt,
   exact inserted-ID readback, lock and orphan-process audit.
 - That next production run still uses the already deployed Physical-only
-  36/28/36 mix. The local 29/22/29/20 Digital candidate is not deployed and must
+  36/28/36 mix. The local 29/22/29/20 Digital launch candidate is not deployed and must
   receive its own dry-run/canary before it can replace production or feed v3.7
   Admission.
 - Commit `b4403b9` makes that distinction explicit in the release runbook and
@@ -852,6 +857,16 @@ deployed 36/28/36 schedule and the local 29/22/29/20 candidate were not changed.
 Gifts and Jewelry/Accessories remain evidence-backed merchant subtypes until a
 real source bucket and a separately reviewed allocation exist; the UI must not
 claim those filters are populated merely because the PRD names them.
+
+A later production inventory corrected the source-label assumption above:
+Pinterest acquisition stores Jewelry as `jewelry`, not
+`jewelry-accessories`. Commit `5b5f98c` admits that immutable source label as
+Physical provenance. A GET-only planning query after excluding all 492
+previously scraped Source Pins found 25 Jewelry and 120 Wedding candidates still
+available. The current PRD does not assign either source bucket a Product Supply
+quota, so this capacity is not launch authorization and the scheduled candidate
+remains 29/22/29/20. Gifts still has no dedicated acquisition bucket and remains
+merchant-Product-Type evidence driven.
 
 Functional candidate `6eff0e4` closes the first taxonomy/provenance boundary
 without choosing a user-facing single- versus multi-category model. Manifest
