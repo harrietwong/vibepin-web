@@ -181,6 +181,102 @@ async def job_classify(ctx: dict, *, opp_limit: int = 2000) -> None:
     ctx["stats"] = {**classify_stats, **opp_stats}
 
 
+async def job_classify_chain(
+    ctx: dict,
+    *,
+    since_hours: int = 26,
+    opp_limit: int = 2000,
+) -> None:
+    """Run the three local classify stages with dependency-safe propagation.
+
+    Reference and product-signal classification are independent, so both are
+    attempted. Opportunity regeneration depends on both and is deferred if
+    either upstream stage fails. The final exception makes systemd surface a
+    failed chain instead of a false green partial run.
+    """
+    import json
+    import time as _time
+    from datetime import datetime, timedelta, timezone
+
+    steps: list[dict] = []
+    since = (datetime.now(tz=timezone.utc) - timedelta(hours=since_hours)).isoformat()
+
+    def _run_step(name: str, fn) -> dict:
+        rec = {"step": name, "status": "ok", "elapsedSec": 0.0, "stats": {}}
+        started = _time.monotonic()
+        try:
+            rec["stats"] = fn() or {}
+        except Exception as exc:  # noqa: BLE001 - preserve the independent stage
+            import traceback
+
+            rec["status"] = "failed"
+            rec["error"] = str(exc)
+            _log(f"   ✗ {name} FAILED: {exc}")
+            traceback.print_exc()
+        rec["elapsedSec"] = round(_time.monotonic() - started, 1)
+        steps.append(rec)
+        return rec
+
+    def _step_reference() -> dict:
+        from classify_reference_pins import run as classify_pins  # noqa: E402
+        from trend_seed_pipeline import P0_CATEGORIES  # noqa: E402
+
+        _log(f"── chain 1/3: reference classify (since_hours={since_hours}) ──")
+        return classify_pins(
+            reclassify_all=False,
+            min_saves=500,
+            limit=5000,
+            since=since,
+            categories=sorted(P0_CATEGORIES),
+        ) or {}
+
+    def _step_products() -> dict:
+        from classify_product_signals import run as classify_products  # noqa: E402
+
+        _log(f"── chain 2/3: product-signal classify (since_hours={since_hours}) ──")
+        return classify_products(
+            reclassify_all=False,
+            limit=5000,
+            since=since,
+        ) or {}
+
+    reference = _run_step("reference_classify", _step_reference)
+    products = _run_step("product_signal_classify", _step_products)
+
+    if reference["status"] == "ok" and products["status"] == "ok":
+        def _step_opportunities() -> dict:
+            from generate_opportunities import run as generate  # noqa: E402
+
+            _log("── chain 3/3: opportunities regen (full) ──")
+            return generate(category=None, limit=opp_limit, dry_run=False) or {}
+
+        _run_step("opportunities_regen", _step_opportunities)
+    else:
+        reasons = []
+        if reference["status"] != "ok":
+            reasons.append("reference_classify failed")
+        if products["status"] != "ok":
+            reasons.append("product_signal_classify failed")
+        steps.append({
+            "step": "opportunities_regen",
+            "status": "deferred",
+            "elapsedSec": 0.0,
+            "stats": {},
+            "reason": "; ".join(reasons) + " — derived table not recomputed",
+        })
+        _log(f"── chain 3/3: opportunities regen DEFERRED ({'; '.join(reasons)}) ──")
+
+    ctx["stats"] = {
+        "chain": steps,
+        "sinceHours": since_hours,
+        "chainOk": all(step["status"] == "ok" for step in steps),
+    }
+    print(json.dumps(ctx["stats"], indent=2, ensure_ascii=False, default=str))
+    if not ctx["stats"]["chainOk"]:
+        failed = [step["step"] for step in steps if step["status"] != "ok"]
+        raise RuntimeError(f"classify-chain incomplete: {', '.join(failed)}")
+
+
 async def job_classify_references_scoped(ctx: dict, *, since_hours: int, category: str | None = None) -> None:
     """Scoped reference-pin classification only — for recently-crawled (e.g. bootstrap)
     pins. Classifies pin_samples scraped within `since_hours`, restricted to the given
@@ -591,6 +687,19 @@ async def run_job(args: argparse.Namespace) -> int:
         _log("Job 'stl' completed.")
         return 0
 
+    if args.job == "classify-chain":
+        with pipeline_job("classify-chain", created_by=args.created_by) as ctx:
+            if ctx.get("skipped"):
+                _log("Job 'classify-chain' skipped — lock 'classify-chain' held.")
+                return 0
+            await job_classify_chain(
+                ctx,
+                since_hours=args.since_hours or 26,
+                opp_limit=args.limit or 2000,
+            )
+        _log("Job 'classify-chain' completed.")
+        return 0
+
     if args.job == "seed-bootstrap":
         if not args.file:
             _log("seed-bootstrap requires --file <path>")
@@ -679,7 +788,7 @@ async def run_job(args: argparse.Namespace) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="VibePin cloud pipeline worker")
-    job_choices = list(JOB_HANDLERS.keys()) + ["smoke", "seed-report", "trend-provider-health", "seed-bootstrap", "stl", "harvest-outbound-products", "product-supply-expand", "product-related-pins"]
+    job_choices = list(JOB_HANDLERS.keys()) + ["smoke", "seed-report", "trend-provider-health", "seed-bootstrap", "stl", "harvest-outbound-products", "product-supply-expand", "product-related-pins", "classify-chain"]
     ap.add_argument("--job", required=True, choices=job_choices,
                     help="Pipeline job to run (smoke = deployment verification)")
     ap.add_argument("--limit-keywords", type=int, default=80,
