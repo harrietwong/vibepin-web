@@ -805,8 +805,13 @@ function PublishingTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() =>
   // Pinterest account changes. Without the account id this would list the boards of
   // whichever account the server picks by default — a different account's boards.
   useEffect(() => {
-    if (!pinterestConnectionId) { setBoards([]); return; }
     let alive = true;
+    if (!pinterestConnectionId) {
+      // No account chosen ⇒ no boards. Cleared asynchronously so the effect never
+      // sets state during the same commit that scheduled it.
+      Promise.resolve().then(() => { if (alive) setBoards([]); });
+      return () => { alive = false; };
+    }
     fetchPinterestBoards(undefined, undefined, pinterestConnectionId)
       .then(result => { if (alive) setBoards(result.items.map(b => ({ id: b.id, name: b.name }))); })
       .catch(() => { if (alive) setBoards([]); });
