@@ -1294,6 +1294,10 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
           results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") });
         } else if (outcome.blocked) {
           results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") });
+        } else if (outcome.nothingToRetry) {
+          // Every destination already published: a Retry has nothing to send. That is
+          // not a failure — reporting it as one would tell the merchant a live Pin broke.
+          results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioBoard.toast.nothingToRetry") });
         } else if (outcome.published.length) {
           const pinterest = outcome.published.find(r => r.provider === "pinterest");
           results.push({ pinId: p.pinId, title, status: "published", url: pinterest?.postUrl ?? outcome.published[0].postUrl ?? undefined });

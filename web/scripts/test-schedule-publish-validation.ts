@@ -123,7 +123,8 @@ async function main() {
   });
   await test("5/6c. DraftDetailsDrawer.handlePublish persists current field state, then reads the SAME state for the payload (single source, no second read)", () => {
     const src = readFileSync(join(root, "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
-    const start = src.indexOf("async function handlePublish() {");
+    // The drawer's Publish / Retry both land here; the retry flag only changes onlyPending.
+    const start = src.indexOf("async function handlePublish(retry: boolean) {");
     const end = src.indexOf("\n  const destMissing = !destinationUrl.trim();", start); // next top-level statement after handlePublish
     assert.ok(start > -1 && end > start, "handlePublish body bounds not found");
     const body = src.slice(start, end);
