@@ -123,6 +123,17 @@ project presence, not Root Directory or build-log contents. Current-candidate
 evidence is recorded in
 `backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T170544Z.json`.
 
+Authenticated Vercel CLI 58.4.0 subsequently returned the authoritative values
+at `2026-08-27T17:36:28Z`. The project currently uses Root Directory `.`, an
+`npm install` install command and Node.js 24.x. Its latest Ready production build
+ran `npm install` and Next.js 16.2.6; it predates the current 16.3.3 candidate.
+This replaces the former observation gap with a concrete release failure: the
+platform does not match the reviewed `web` / `npm ci` boundary and there is no
+immutable build log for functional candidate `6839e760`. Vercel promotion is
+therefore `BLOCK` until a separately authorized settings correction and exact
+candidate deployment are read back successfully. Evidence:
+`backend/docs/product_opportunities_v37_vercel_platform_block_20260827T173628Z.json`.
+
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure
 rule test, registry and full TypeScript gate pass, and the built full candidate

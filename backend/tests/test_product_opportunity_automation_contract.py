@@ -213,6 +213,10 @@ def test_web_deploy_uses_the_reviewed_lockfile_without_reresolving() -> None:
     assert "Root Directory is `web`" in RUNBOOK
     assert "candidate build log must show `npm ci`" in RUNBOOK
     assert "Next.js 16.3.3" in RUNBOOK
+    assert "currently reports Root Directory `.`" in RUNBOOK
+    assert "install command" in RUNBOOK
+    assert "`npm install`" in RUNBOOK
+    assert "Promotion is therefore `BLOCK`" in RUNBOOK
 
 
 def test_release_manifest_keeps_create_pin_null_title_contract_together() -> None:

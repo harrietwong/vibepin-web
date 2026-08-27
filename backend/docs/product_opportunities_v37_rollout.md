@@ -109,6 +109,17 @@ values could be read. The updated gap is
 `backend/docs/product_opportunities_v37_vercel_evidence_gap_20260827T170544Z.json`;
 the promotion stop remains unchanged.
 
+The platform values were finally read back with authenticated Vercel CLI 58.4.0
+at `2026-08-27T17:36:28Z`. This closes the observation gap but fails the release
+gate: project `web` currently reports Root Directory `.`, install command
+`npm install`, and the latest Ready production deployment used Next.js 16.2.6.
+Those values contradict the reviewed `web` / `npm ci` / Next.js 16.3.3 release
+boundary, and no immutable deployment exists for functional candidate
+`6839e7609ddff3f1fe288c48a42918e105a75fc9`. Promotion is therefore `BLOCK`,
+not `NEEDS EVIDENCE`. Do not change Vercel settings or deploy until that
+platform mutation is separately authorized. Exact evidence:
+`backend/docs/product_opportunities_v37_vercel_platform_block_20260827T173628Z.json`.
+
 The latest GET-only pre-Supply data-quality baseline is
 `backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
 It originally proved 123 technical migration candidates and 25 reviewed
