@@ -223,10 +223,17 @@ export function contentDestinations(draft: ContentDraftLike): PublishDestination
           socialConnectionId: d.socialConnectionId,
         };
         if (d.accountLabel) dest.accountLabel = d.accountLabel;
-        // Pinterest's board lives on the draft; the intent copy can lag an edit.
+        // Each Pinterest entry has its OWN board. The draft-level board is a fallback
+        // ONLY for the entry that IS the draft's legacy target (where the intent copy
+        // can lag an edit to the board field) or for a legacy entry naming no account.
+        // Applying it to every entry would hand a second account the FIRST account's
+        // board id — a board it does not own, so the Pin either fails or, worse, lands
+        // somewhere the merchant never chose.
         if (p === "pinterest") {
-          const boardId = d.boardId || draft.boardId;
-          const boardName = d.boardName || draft.boardName;
+          const target = draft.targetConnectionId?.trim();
+          const own = !d.socialConnectionId || (!!target && d.socialConnectionId === target);
+          const boardId = d.boardId || (own ? draft.boardId : undefined);
+          const boardName = d.boardName || (own ? draft.boardName : undefined);
           if (boardId) dest.boardId = boardId;
           if (boardName) dest.boardName = boardName;
         } else {

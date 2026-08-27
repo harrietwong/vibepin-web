@@ -205,7 +205,12 @@ async function main() {
   await test("10. publish-due cron route calls publishPinForUser — the same validate/truncate path as manual publish", () => {
     const src = readFileSync(join(root, "src/app/api/cron/publish-due/route.ts"), "utf8");
     assert.match(src, /import \{ publishPinForUser \} from "@\/lib\/server\/pinterest\/publishPin"/);
-    assert.match(src, /await publishPinForUser\(input\)/);
+    // Matched by CALL, not by argument name (the same reasoning as 10b below): the cron
+    // publishes each Pinterest destination with its OWN account and board, so the input
+    // is built per destination. What must not change is that it still goes through
+    // publishPinForUser — pinning the old `(input)` spelling would fail on that refactor
+    // while a genuine bypass of the validate/truncate path slipped through.
+    assert.match(src, /await publishPinForUser\(/);
   });
   await test("10b. publishPinForUser validates image/link BEFORE ever calling Pinterest (same order for manual + cron callers)", () => {
     const src = readFileSync(join(root, "src/lib/server/pinterest/publishPin.ts"), "utf8");

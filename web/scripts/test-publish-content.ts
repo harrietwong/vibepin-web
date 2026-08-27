@@ -68,7 +68,7 @@ const NOW = "2026-08-27T10:00:00.000Z";
 function seedDraft(opts: {
   id: string;
   mediaCount?: number;
-  destinations?: Array<{ provider: string; socialConnectionId: string }>;
+  destinations?: Array<{ provider: string; socialConnectionId: string; boardId?: string; boardName?: string }>;
   destinationResults?: PinDraft["destinationResults"];
 }): PinDraft {
   storage.clear();
@@ -355,6 +355,68 @@ async function main(): Promise<void> {
   assert.equal(results[0].status, "published");
   assert.equal(results[0].accountLabel, "@legacy", "the account that received it is not lost");
   assert.equal(results[0].postUrl, "https://www.pinterest.com/pin/pin-legacy/", "permalink reconstructed from the id");
+});
+
+
+  console.log("\n=== several accounts on one platform (WS-B3) ===");
+
+  await test("two Pinterest accounts each get their own publishPin call, with their own board", async () => {
+  const draft = seedDraft({
+    id: "multi-pin",
+    destinations: [
+      { provider: "pinterest", socialConnectionId: PIN_CONN, boardId: "board-1", boardName: "Home decor" },
+      { provider: "pinterest", socialConnectionId: "conn-pin-2", boardId: "board-2", boardName: "Kitchen" },
+    ],
+  });
+  const { deps, pinCalls } = makeDeps();
+  const out = await publishContent(draft.id, { deps });
+
+  assert.equal(pinCalls.length, 2, "one publish per account, not one for the platform");
+  assert.deepEqual(pinCalls.map(c => c.connectionId), [PIN_CONN, "conn-pin-2"]);
+  assert.deepEqual(pinCalls.map(c => c.boardId), ["board-1", "board-2"],
+    "each account publishes to ITS board - a shared board id belongs to the other account");
+  assert.equal(out.published.filter(r => r.provider === "pinterest").length, 2);
+  const ids = out.results.map(r => r.destinationId);
+  assert.ok(ids.includes("pinterest:" + PIN_CONN) && ids.includes("pinterest:conn-pin-2"),
+    "two accounts stay distinguishable in the durable rows: " + JSON.stringify(ids));
+});
+
+  await test("a second Pinterest account with no board of its own is refused, not sent to the first account's board", async () => {
+  const draft = seedDraft({
+    id: "multi-pin-noboard",
+    destinations: [
+      { provider: "pinterest", socialConnectionId: PIN_CONN, boardId: "board-1" },
+      { provider: "pinterest", socialConnectionId: "conn-pin-2" },
+    ],
+  });
+  const { deps, pinCalls } = makeDeps();
+  const out = await publishContent(draft.id, { deps });
+
+  assert.equal(pinCalls.length, 1, "only the account that HAS a board is dispatched");
+  assert.equal(pinCalls[0].boardId, "board-1");
+  const refused = out.results.find(r => r.destinationId === "pinterest:conn-pin-2");
+  assert.equal(refused?.status, "failed");
+  assert.equal(refused?.errorCode, "missing_board");
+  assert.equal(out.published.length, 1, "the account that could publish still did");
+});
+
+  await test("two Instagram accounts are BOTH dispatched, each named by its own connection", async () => {
+  const draft = seedDraft({
+    id: "multi-ig",
+    destinations: [
+      { provider: "instagram", socialConnectionId: IG_CONN },
+      { provider: "instagram", socialConnectionId: "conn-ig-2" },
+    ],
+  });
+  const { deps, socialCalls } = makeDeps();
+  const out = await publishContent(draft.id, { deps });
+
+  assert.equal(socialCalls.length, 1, "one fan-out call carries both accounts");
+  assert.deepEqual(socialCalls[0].destinations.map(d => d.socialConnectionId), [IG_CONN, "conn-ig-2"],
+    "the server needs each account explicitly - guessing is the wrong-account defect");
+  assert.equal(out.published.filter(r => r.provider === "instagram").length, 2);
+  const ids = out.results.map(r => r.destinationId);
+  assert.ok(ids.includes("instagram:" + IG_CONN) && ids.includes("instagram:conn-ig-2"), JSON.stringify(ids));
 });
 
   console.log(`\n${pass} passed, ${fail} failed`);
