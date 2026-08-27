@@ -53,7 +53,12 @@ import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivatio
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
 import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
-import { publishContent } from "@/lib/studio/publishContent";
+import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
+import {
+  partitionBulkPublish, summarizeDeleteImpact, summarizeBulkPublish,
+  type BulkPublishOutcomeRow, type BulkPublishSummary,
+} from "@/lib/studio/bulkActions";
+import { BulkPublishSheet, BulkDeleteConfirm, blockerText } from "@/components/studio/BulkActionSheets";
 import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
@@ -972,12 +977,108 @@ export function StudioBoard() {
   }, [aiDrawer, defaultDestinationsForNewContent, tr]);
 
 
-  const handleDelete = useCallback((d: PinDraft) => {
-    if (typeof window !== "undefined" && !window.confirm(tr("studioBoard.confirm.deleteDraft"))) return;
-    if (d.source === "ai_generated_from_upload") track("generation_deleted", { draftId: d.id });
-    pinDraftStore.deleteDraft(d.id); toast.success(tr("studioBoard.toast.draftDeleted"));
-    setSelectedIds(previous => { const next = new Set(previous); next.delete(d.id); return next; });
-  }, [tr]);
+  // ── Bulk actions (PRD §19/§30) ──────────────────────────────────────────────
+  // Deletion is confirmed through ONE dialog for both the bulk bar and a single card:
+  // the bare window.confirm this replaced said "cannot be undone" about a Posted Pin,
+  // which reads as "your live Pinterest post is going away" — the opposite of what
+  // happens. `pendingDeleteIds` is the queue; a single card is a queue of one.
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
+  const [bulkPublishOpen, setBulkPublishOpen] = useState(false);
+  const [bulkPublishProgress, setBulkPublishProgress] = useState<{ current: number; total: number } | null>(null);
+  const [bulkPublishSummary, setBulkPublishSummary] = useState<BulkPublishSummary | null>(null);
+
+  const selectedDrafts = useMemo(
+    () => allItems.filter(item => selectedIds.has(item.draft.id)).map(item => item.draft),
+    [allItems, selectedIds],
+  );
+  const deleteImpact = useMemo(() => {
+    if (!pendingDeleteIds) return null;
+    const byId = new Map(allItems.map(item => [item.draft.id, item.draft]));
+    const drafts = pendingDeleteIds
+      .map(id => byId.get(id) ?? pinDraftStore.getDraft(id))
+      .filter((d): d is PinDraft => !!d);
+    return summarizeDeleteImpact(drafts);
+  }, [pendingDeleteIds, allItems]);
+
+  const handleDelete = useCallback((d: PinDraft) => { setPendingDeleteIds([d.id]); }, []);
+
+  const runDelete = useCallback(() => {
+    if (!deleteImpact) return;
+    // Unschedule BEFORE deleting: a scheduled Content whose row disappears while its
+    // slot still exists is a job pointing at nothing at due time.
+    for (const id of deleteImpact.unscheduleIds) pinDraftStore.removeFromWeeklyPlan(id);
+    for (const id of deleteImpact.ids) {
+      const draft = pinDraftStore.getDraft(id);
+      if (draft?.source === "ai_generated_from_upload") track("generation_deleted", { draftId: id });
+      pinDraftStore.deleteDraft(id);
+    }
+    const deleted = deleteImpact.ids;
+    setSelectedIds(previous => {
+      const next = new Set(previous);
+      for (const id of deleted) next.delete(id);
+      return next;
+    });
+    setPendingDeleteIds(null);
+    toast.success(deleted.length === 1
+      ? tr("studioBoard.toast.draftDeleted")
+      : tr("studioBoard.bulk.toast.deleted").replace("{n}", String(deleted.length)).replace("{plural}", deleted.length === 1 ? "" : "s"));
+  }, [deleteImpact, tr]);
+
+  const bulkPublishPartition = useMemo(
+    () => partitionBulkPublish(selectedDrafts, { untitled: tr("studioBoard.bulk.untitled") }),
+    [selectedDrafts, tr],
+  );
+
+  const runBulkPublish = useCallback(async () => {
+    // Exactly the `ready` set the sheet showed — never a freshly recomputed one. A
+    // partition computed a second time could differ (a sibling tab published one), and
+    // the merchant would have confirmed a different action than the one performed.
+    const targets = bulkPublishPartition.ready;
+    if (!targets.length) return;
+    setBulkPublishProgress({ current: 0, total: targets.length });
+    const rows: BulkPublishOutcomeRow[] = [];
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      setBulkPublishProgress({ current: i + 1, total: targets.length });
+      // Sequential, and through publishContent so the shared per-draft in-flight lock
+      // still protects against a card publish racing this loop.
+      const outcome = await publishContent(target.id, { onlyPending: true });
+      if (outcome.blocked === "locked") {
+        rows.push({ id: target.id, title: target.title, status: "skipped", message: tr("studioBoard.bulkPublish.alreadyPublishing") });
+      } else if (outcome.blocked) {
+        // Something changed between the sheet and now — report the current reason
+        // rather than a generic failure.
+        const blockers = explainPublishBlockers(pinDraftStore.getDraft(target.id) ?? { id: target.id, imageUrl: "" });
+        rows.push({
+          id: target.id, title: target.title, status: "skipped",
+          message: blockers.map(b => blockerText(tr, b)).join(" ") || tr("studioBoard.blocker.unknown"),
+        });
+      } else if (outcome.published.length) {
+        rows.push({
+          id: target.id, title: target.title, status: "published",
+          publishedProviders: Array.from(new Set(outcome.published.map(r => r.provider))),
+        });
+      } else {
+        // Never a bare "Publish failed": the destination's own reason is what the
+        // merchant can act on, and publishContent always records one.
+        rows.push({
+          id: target.id, title: target.title, status: "failed",
+          message: outcome.failed.map(r => r.errorMessage).find(Boolean) || tr("studioBoard.blocker.unknown"),
+        });
+      }
+    }
+    setBulkPublishSummary(summarizeBulkPublish(rows));
+    setBulkPublishProgress(null);
+  }, [bulkPublishPartition, tr]);
+
+  const closeBulkPublish = useCallback(() => {
+    // Only a completed run clears the selection: a cancelled sheet leaves the merchant
+    // exactly where they were.
+    if (bulkPublishSummary) setSelectedIds(new Set());
+    setBulkPublishOpen(false);
+    setBulkPublishSummary(null);
+    setBulkPublishProgress(null);
+  }, [bulkPublishSummary]);
   const handleArchive = useCallback((d: PinDraft) => {
     pinDraftStore.archiveDraft(d.id); toast.success(tr("studioBoard.toast.archived"));
     setSelectedIds(previous => { const next = new Set(previous); next.delete(d.id); return next; });
@@ -1201,19 +1302,36 @@ export function StudioBoard() {
                 {tr("studioBoard.selectProduct")}
               </button>
             )}
+            {/* Bulk bar (PRD §19): count · Edit · Publish · Delete · Clear. Deliberately
+                lightweight — no embedded forms; Edit opens the batch workspace. Edit is
+                available for ONE selected Pin too: gating it at ≥2 made a merchant
+                deselect-and-reselect to reach the same editor. "Select all" spans the
+                current filter result only, which is what the merchant can see. */}
             {selectedIds.size > 0 && (
-              <div data-testid="board-selection-toolbar" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 800, color: BUI.text }}>{selectedIds.size} selected</span>
-                <button type="button" onClick={() => setSelectedIds(new Set(items.map(item => item.draft.id)))}
-                  style={{ border: 0, background: "none", color: BUI.purple, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>Select all</button>
-                <button type="button" onClick={() => setSelectedIds(new Set())}
-                  style={{ border: 0, background: "none", color: BUI.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>Clear</button>
-                {selectedIds.size >= 2 && (
-                  <button type="button" data-testid="board-batch-edit" onClick={() => setBatchEditOpen(true)}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
-                    <Rows3 style={{ width: 13, height: 13 }} /> Batch edit
-                  </button>
-                )}
+              <div data-testid="bulk-bar" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <span data-testid="bulk-selected-count" style={{ fontSize: 11.5, fontWeight: 800, color: BUI.text }}>
+                  {tr("studioBoard.bulk.selectedCount").replace("{n}", String(selectedIds.size))}
+                </span>
+                <button type="button" data-testid="bulk-select-all" onClick={() => setSelectedIds(new Set(items.map(item => item.draft.id)))}
+                  style={{ border: 0, background: "none", color: BUI.purple, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
+                  {tr("studioBoard.bulk.selectAll")}
+                </button>
+                <button type="button" data-testid="bulk-edit" onClick={() => setBatchEditOpen(true)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                  <Rows3 style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulk.edit")}
+                </button>
+                <button type="button" data-testid="bulk-publish" onClick={() => { setBulkPublishSummary(null); setBulkPublishProgress(null); setBulkPublishOpen(true); }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                  {tr("studioBoard.bulk.publish")}
+                </button>
+                <button type="button" data-testid="bulk-delete" onClick={() => setPendingDeleteIds(Array.from(selectedIds))}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: "#dc2626", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                  {tr("studioBoard.bulk.delete")}
+                </button>
+                <button type="button" data-testid="bulk-clear" onClick={() => setSelectedIds(new Set())}
+                  style={{ border: 0, background: "none", color: BUI.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
+                  {tr("studioBoard.bulk.clearSelection")}
+                </button>
               </div>
             )}
           </div>
@@ -1416,6 +1534,24 @@ export function StudioBoard() {
         // callback is only the queue/refresh signal it always should have been.
         onPublishComplete={() => { /* results are written by publishContent */ }}
       />
+      {bulkPublishOpen && (
+        <BulkPublishSheet
+          tr={tr}
+          partition={bulkPublishPartition}
+          progress={bulkPublishProgress}
+          summary={bulkPublishSummary}
+          onConfirm={() => { void runBulkPublish(); }}
+          onClose={closeBulkPublish}
+        />
+      )}
+      {deleteImpact && (
+        <BulkDeleteConfirm
+          tr={tr}
+          impact={deleteImpact}
+          onConfirm={runDelete}
+          onClose={() => setPendingDeleteIds(null)}
+        />
+      )}
       {pendingUploadFiles && (
         <div data-testid="multi-upload-modal" role="dialog" aria-modal="true" aria-labelledby="multi-upload-title"
           style={{ position: "fixed", inset: 0, zIndex: 360, background: "rgba(15,23,42,0.42)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>

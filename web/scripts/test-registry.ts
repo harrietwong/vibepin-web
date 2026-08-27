@@ -170,6 +170,10 @@ export const STUDIO: string[] = [
   // the "1 / N" cover counter, per-destination result rows, and the partial-success
   // rule (posted + needs attention → Retry, not Publish).
   "test-card-lifecycle-view",
+  // Bulk operations on the Create Pins board (WS-F, PRD 0826 §19/§30): the
+  // publish partition (fully-published items must never be re-sent), the
+  // per-lifecycle delete impact, and the result summary's reason contract.
+  "test-bulk-actions",
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",
