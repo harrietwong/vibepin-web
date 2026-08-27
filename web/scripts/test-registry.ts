@@ -46,6 +46,8 @@ export const CORE: string[] = [
   "test-pinterest-client-dedupe",
   "test-published-pin-summary",
   "test-social-provider-status",
+  // Insights (per-connection analytics contract + honest-language page gate)
+  "test-insights-mvp",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
   "test-admin-account-kind",

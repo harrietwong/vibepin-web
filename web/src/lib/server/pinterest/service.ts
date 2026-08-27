@@ -256,6 +256,86 @@ export type CreatedPin = {
   url: string;
 };
 
+export type PinterestOrganicMetricName =
+  | "IMPRESSION"
+  | "ENGAGEMENT"
+  | "SAVE"
+  | "PIN_CLICK"
+  | "OUTBOUND_CLICK"
+  | "OUTBOUND_CLICK_RATE"
+  | "TOTAL_COMMENTS"
+  | "TOTAL_REACTIONS";
+
+export type PinterestOrganicMetricMap = Partial<Record<PinterestOrganicMetricName, number>> &
+  Record<string, number | undefined>;
+
+export type PinterestOrganicAnalyticsSlice = {
+  daily_metrics?: Array<{
+    date?: string;
+    data_status?: string;
+    metrics?: PinterestOrganicMetricMap;
+  }>;
+  summary_metrics?: PinterestOrganicMetricMap;
+};
+
+export type PinterestAccountAnalyticsResponse = Record<string, PinterestOrganicAnalyticsSlice>;
+
+/**
+ * `/pins/analytics` returns one entry per requested Pin id, then one entry per
+ * app split (normally `ALL`). Keep both levels flexible because Pinterest uses
+ * map-shaped response objects rather than a fixed property name.
+ */
+export type PinterestBulkPinAnalyticsResponse = Record<
+  string,
+  Record<string, PinterestOrganicAnalyticsSlice>
+>;
+
+export type PinterestTopPinsResponse = {
+  pins?: Array<{
+    pin_id?: string;
+    metrics?: PinterestOrganicMetricMap;
+    data_status?: Record<string, string> | string;
+  }>;
+  date_availability?: {
+    is_realtime?: boolean;
+    latest_available_timestamp?: number;
+  };
+  sort_by?: string;
+};
+
+export type PinterestPinMetadata = {
+  id: string;
+  title: string | null;
+  description: string | null;
+  link: string | null;
+  createdAt: string | null;
+  imageUrl: string | null;
+  mediaType: string | null;
+};
+
+function parsePinMetadata(item: Record<string, unknown>): PinterestPinMetadata | null {
+  if (typeof item.id !== "string") return null;
+  const media = item.media && typeof item.media === "object"
+    ? item.media as Record<string, unknown>
+    : {};
+  const images = media.images && typeof media.images === "object"
+    ? media.images as Record<string, unknown>
+    : {};
+  const imageCandidates = Object.values(images)
+    .filter(value => value && typeof value === "object")
+    .map(value => (value as Record<string, unknown>).url)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  return {
+    id: item.id,
+    title: typeof item.title === "string" && item.title ? item.title : null,
+    description: typeof item.description === "string" && item.description ? item.description : null,
+    link: typeof item.link === "string" && item.link ? item.link : null,
+    createdAt: typeof item.created_at === "string" ? item.created_at : null,
+    imageUrl: imageCandidates[0] ?? null,
+    mediaType: typeof media.media_type === "string" ? media.media_type : null,
+  };
+}
+
 const REFRESH_SKEW_MS = 60_000; // refresh if the access token expires within 60s
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -647,6 +727,134 @@ export class PinterestClient {
         privacy: typeof b.privacy === "string" ? b.privacy : undefined,
       }));
     return { items, bookmark: data.bookmark ?? null };
+  }
+
+  /** Organic account totals and daily rows for the selected UTC date range. */
+  async getOrganicAccountAnalytics(
+    startDate: string,
+    endDate: string,
+    metrics: PinterestOrganicMetricName[],
+  ): Promise<PinterestAccountAnalyticsResponse> {
+    const qs = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+      from_claimed_content: "BOTH",
+      pin_format: "ALL",
+      app_types: "ALL",
+      content_type: "ORGANIC",
+      source: "YOUR_PINS",
+      metric_types: metrics.join(","),
+      split_field: "NO_SPLIT",
+    });
+    return this.request<PinterestAccountAnalyticsResponse>(
+      `/user_account/analytics?${qs.toString()}`,
+      { method: "GET" },
+    );
+  }
+
+  /** Top 50 organic Pins for a range. Pinterest currently caps this endpoint at 50. */
+  async getOrganicTopPins(
+    startDate: string,
+    endDate: string,
+    metrics: PinterestOrganicMetricName[],
+  ): Promise<PinterestTopPinsResponse> {
+    const qs = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+      sort_by: "IMPRESSION",
+      from_claimed_content: "BOTH",
+      pin_format: "ALL",
+      app_types: "ALL",
+      content_type: "ORGANIC",
+      source: "YOUR_PINS",
+      metric_types: metrics.join(","),
+      num_of_pins: "50",
+    });
+    return this.request<PinterestTopPinsResponse>(
+      `/user_account/analytics/top_pins?${qs.toString()}`,
+      { method: "GET" },
+    );
+  }
+
+  /**
+   * Organic analytics for known Pin ids. Pinterest accepts up to 100 ids in one
+   * request; callers own batching so this method never silently drops content.
+   */
+  async getOrganicPinsAnalytics(
+    pinIds: string[],
+    startDate: string,
+    endDate: string,
+    metrics: PinterestOrganicMetricName[],
+  ): Promise<PinterestBulkPinAnalyticsResponse> {
+    if (pinIds.length === 0) return {};
+    if (pinIds.length > 100) {
+      throw new PinterestApiError(
+        "Pinterest Pin analytics accepts at most 100 Pin ids per request",
+        400,
+        "too_many_pin_ids",
+      );
+    }
+    const qs = new URLSearchParams({
+      pin_ids: pinIds.join(","),
+      start_date: startDate,
+      end_date: endDate,
+      app_types: "ALL",
+      metric_types: metrics.join(","),
+    });
+    return this.request<PinterestBulkPinAnalyticsResponse>(
+      `/pins/analytics?${qs.toString()}`,
+      { method: "GET" },
+    );
+  }
+
+  /** Organic analytics for one owned Pin. Used when the beta bulk endpoint is restricted. */
+  async getOrganicPinAnalytics(
+    pinId: string,
+    startDate: string,
+    endDate: string,
+    metrics: PinterestOrganicMetricName[],
+  ): Promise<PinterestAccountAnalyticsResponse> {
+    const qs = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+      app_types: "ALL",
+      metric_types: metrics.join(","),
+    });
+    return this.request<PinterestAccountAnalyticsResponse>(
+      `/pins/${encodeURIComponent(pinId)}/analytics?${qs.toString()}`,
+      { method: "GET" },
+    );
+  }
+
+  /** Pin metadata used to pair top-Pin metrics with a recognisable image and title. */
+  async listPinMetadata(bookmark?: string): Promise<{
+    items: PinterestPinMetadata[];
+    bookmark: string | null;
+  }> {
+    const qs = new URLSearchParams({ page_size: "100" });
+    if (bookmark) qs.set("bookmark", bookmark);
+    const data = await this.request<{ items?: unknown[]; bookmark?: string | null }>(
+      `/pins?${qs.toString()}`,
+      { method: "GET" },
+    );
+    const items = (data.items ?? [])
+      .map(item => parsePinMetadata(item as Record<string, unknown>))
+      .filter((item): item is PinterestPinMetadata => item !== null);
+    return { items, bookmark: data.bookmark ?? null };
+  }
+
+  /** Fetch one owned Pin so older Top Pins can still show their real thumbnail. */
+  async getPinMetadata(pinId: string): Promise<PinterestPinMetadata | null> {
+    try {
+      const data = await this.request<Record<string, unknown>>(
+        `/pins/${encodeURIComponent(pinId)}`,
+        { method: "GET" },
+      );
+      return parsePinMetadata(data);
+    } catch (error) {
+      if (error instanceof PinterestApiError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   /**

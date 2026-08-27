@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Sparkles, Clock,
-  BarChart2, Compass, ShoppingBag, Settings, Target,
+  BarChart2, Compass, ShoppingBag, Settings, Target, Activity,
   User, CreditCard, HelpCircle, LogOut, Moon, Sun, Monitor, Share2,
 } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -52,6 +52,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "keyword-trends", href: "/app/trends",               icon: BarChart2,     labelKey: "nav.keywordTrends",  matchFn: (p) => p === "/app/trends" || p.startsWith("/app/trends/") },
   { id: "viral-pins",     href: "/app/discover",             icon: Compass,       labelKey: "nav.pinIdeas",       matchFn: (p) => p === "/app/discover" || p.startsWith("/app/discover/") },
   { id: "product-ideas",  href: "/app/products",             icon: ShoppingBag,   labelKey: "nav.productIdeas",   matchFn: (p) => p === "/app/products" || p.startsWith("/app/products/") },
+  { id: "insights",       href: "/app/insights",             icon: Activity,      label: "Insights",             matchFn: (p) => p === "/app/insights" || p.startsWith("/app/insights/") },
   // NOTE: Internal admin pages (/app/admin, /app/admin/visual-review) are
   // intentionally NOT surfaced in the client sidebar — access them by direct
   // URL only. Do not add Admin / Visual Review nav entries here, even

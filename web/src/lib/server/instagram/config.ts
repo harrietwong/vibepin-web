@@ -44,16 +44,24 @@ export const INSTAGRAM_GRAPH_ROOT_URL = "https://graph.instagram.com";
  *                                         profile (user_id, username, account_type)
  *   instagram_business_content_publish  — publish posts to the connected IG account
  *
- * We deliberately do NOT request instagram_business_manage_insights,
- * instagram_business_manage_comments, or instagram_business_manage_messages — none
- * of those product features exist yet, and requesting them only bloats App Review
- * and the consent screen. We NEVER request any Facebook pages_* / ads_* /
+ *   instagram_business_manage_insights  — read account and media performance for
+ *                                         the connected professional account
+ *
+ * We deliberately do NOT request instagram_business_manage_comments or
+ * instagram_business_manage_messages. We NEVER request Facebook pages_* / ads_* /
  * business_management scopes here — this flow never touches a Facebook Page.
  */
+export const INSTAGRAM_INSIGHTS_SCOPE = "instagram_business_manage_insights" as const;
+
 export const INSTAGRAM_SCOPES = [
   "instagram_business_basic",
   "instagram_business_content_publish",
+  INSTAGRAM_INSIGHTS_SCOPE,
 ] as const;
+
+export function hasInstagramInsightsScope(scopes: readonly string[] | null | undefined): boolean {
+  return new Set(scopes ?? []).has(INSTAGRAM_INSIGHTS_SCOPE);
+}
 
 /** Comma-joined scope string for the authorize request. */
 export function instagramScopeString(): string {

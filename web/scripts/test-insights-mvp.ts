@@ -1,0 +1,209 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  attachDiagnoses,
+  fillDailyRange,
+  summarizeDays,
+  trafficRate,
+} from "../src/lib/insights/businessRules";
+import type { InsightsContent } from "../src/lib/insights/types";
+
+let passed = 0;
+async function test(name: string, fn: () => void | Promise<void>) {
+  await fn();
+  passed += 1;
+  console.log(`✓ ${name}`);
+}
+
+async function main() {
+process.env.NEXT_PUBLIC_SUPABASE_URL ||= "https://example.supabase.co";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= "test-anon-key";
+const { PinterestClient } = await import("../src/lib/server/pinterest/service");
+
+await test("traffic rate uses outbound clicks divided by impressions", () => {
+  assert.equal(trafficRate(25, 1_000), 0.025);
+  assert.equal(trafficRate(null, 1_000), null);
+  assert.equal(trafficRate(0, 0), null);
+});
+
+await test("30-day heatmap fills missing dates without fabricating unavailable metrics", () => {
+  const rows = fillDailyRange([{
+    date: "2026-08-02",
+    views: 100,
+    interactions: 9,
+    saves: 3,
+    shares: 0,
+    websiteClicks: null,
+    trafficRate: null,
+  }], "2026-08-01", "2026-08-03", false);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].websiteClicks, null);
+  assert.equal(rows[1].views, 100);
+  assert.equal(rows[2].websiteClicks, null);
+});
+
+await test("Pinterest summary keeps clicks and computes a user-facing rate", () => {
+  const summary = summarizeDays([{
+    date: "2026-08-01",
+    views: 200,
+    interactions: 20,
+    saves: 8,
+    shares: 0,
+    websiteClicks: 6,
+    trafficRate: .03,
+  }, {
+    date: "2026-08-02",
+    views: 300,
+    interactions: 30,
+    saves: 12,
+    shares: 0,
+    websiteClicks: 9,
+    trafficRate: .03,
+  }], true);
+  assert.equal(summary.views, 500);
+  assert.equal(summary.websiteClicks, 15);
+  assert.equal(summary.trafficRate, .03);
+});
+
+await test("zero outbound clicks never receives a positive traffic diagnosis", () => {
+  const content: InsightsContent[] = [{
+    id: "pin-zero-clicks",
+    title: "High-view Pin",
+    imageUrl: null,
+    postUrl: null,
+    publishedAt: null,
+    format: "image",
+    metrics: {
+      views: 500,
+      interactions: 10,
+      saves: 10,
+      shares: 0,
+      websiteClicks: 0,
+      trafficRate: 0,
+    },
+    websiteClickAvailability: "pin_level",
+    diagnosis: "",
+  }];
+  const diagnosed = attachDiagnoses("pinterest", content);
+  assert.match(diagnosed[0].diagnosis, /进网站的人偏少/);
+  assert.doesNotMatch(diagnosed[0].diagnosis, /把人带进网站/);
+});
+
+await test("diagnosis never assigns Instagram profile-link taps to an image", () => {
+  const content: InsightsContent[] = [{
+    id: "ig-1",
+    title: "Post",
+    imageUrl: null,
+    postUrl: null,
+    publishedAt: null,
+    format: "image",
+    metrics: {
+      views: 500,
+      interactions: 40,
+      saves: 12,
+      shares: 5,
+      websiteClicks: null,
+      trafficRate: null,
+    },
+    websiteClickAvailability: "unavailable",
+    diagnosis: "",
+  }];
+  const diagnosed = attachDiagnoses("instagram", content);
+  assert.equal(diagnosed[0].metrics.websiteClicks, null);
+  assert.match(diagnosed[0].diagnosis, /收藏|分享/);
+});
+
+await test("Pinterest client requests account, bulk Pin analytics and Pin metadata endpoints", async () => {
+  const requested: string[] = [];
+  const client = PinterestClient.forTest({
+    accessToken: "token",
+    hooks: {
+      fetchImpl: async input => {
+        const url = String(input);
+        requested.push(url);
+        if (url.includes("/analytics/top_pins")) {
+          return new Response(JSON.stringify({ pins: [{ pin_id: "123", metrics: { IMPRESSION: 10 } }] }), { status: 200 });
+        }
+        if (url.includes("/pins/analytics?")) {
+          return new Response(JSON.stringify({
+            "123": { ALL: { daily_metrics: [], summary_metrics: { IMPRESSION: 10, OUTBOUND_CLICK: 2 } } },
+          }), { status: 200 });
+        }
+        if (url.includes("/user_account/analytics?")) {
+          return new Response(JSON.stringify({ all: { daily_metrics: [], summary_metrics: {} } }), { status: 200 });
+        }
+        if (url.endsWith("/pins/123")) {
+          return new Response(JSON.stringify({
+            id: "123",
+            title: "Recovered older Pin",
+            media: { media_type: "image", images: { "600x": { url: "https://i.pinimg.com/older.jpg" } } },
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          items: [{
+            id: "123",
+            title: "A useful Pin",
+            created_at: "2026-08-01T00:00:00Z",
+            media: { media_type: "image", images: { "600x": { url: "https://i.pinimg.com/a.jpg" } } },
+          }],
+          bookmark: null,
+        }), { status: 200 });
+      },
+    },
+  });
+  const metrics = ["IMPRESSION", "SAVE", "OUTBOUND_CLICK"] as const;
+  await client.getOrganicAccountAnalytics("2026-08-01", "2026-08-30", [...metrics]);
+  await client.getOrganicTopPins("2026-08-01", "2026-08-30", [...metrics]);
+  const bulk = await client.getOrganicPinsAnalytics(["123"], "2026-08-01", "2026-08-30", [...metrics]);
+  const pins = await client.listPinMetadata();
+  const recovered = await client.getPinMetadata("123");
+  assert.equal(pins.items[0].title, "A useful Pin");
+  assert.equal(pins.items[0].imageUrl, "https://i.pinimg.com/a.jpg");
+  assert.equal(recovered?.imageUrl, "https://i.pinimg.com/older.jpg");
+  assert.equal(bulk["123"].ALL.summary_metrics?.OUTBOUND_CLICK, 2);
+  assert(requested.some(url => url.endsWith("/pins/123")));
+  assert(requested.some(url => url.includes("/pins/analytics?") && url.includes("pin_ids=123")));
+  assert(requested.some(url => url.includes("source=YOUR_PINS")));
+  assert(requested.some(url => url.includes("sort_by=IMPRESSION")));
+});
+
+await test("Insights stays a single simple page with honest platform language", () => {
+  const page = readFileSync(join(process.cwd(), "src/app/app/insights/page.tsx"), "utf8");
+  const layout = readFileSync(join(process.cwd(), "src/app/app/layout.tsx"), "utf8");
+  const instagramConfig = readFileSync(join(process.cwd(), "src/lib/server/instagram/config.ts"), "utf8");
+  const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
+  const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/vibepinPublishedPins.ts"), "utf8");
+  const pinMetadataRoute = readFileSync(join(process.cwd(), "src/app/api/insights/pinterest-pins/route.ts"), "utf8");
+  assert.match(layout, /href: "\/app\/insights"/);
+  assert.match(page, /Last 30 days/);
+  assert.match(page, /Went to website/);
+  assert.match(page, /Not available/);
+  assert.match(page, /freshAccessToken/);
+  assert.match(page, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(page, /\/api\/insights\/pinterest-pins\?ids=/);
+  assert.match(dashboard, /DASHBOARD_LOAD_TIMEOUT_MS = 20_000/);
+  assert.match(dashboard, /PIN_SINGLE_ANALYTICS_CONCURRENCY = 20/);
+  assert.match(dashboard, /getOrganicPinAnalytics/);
+  // Insights must read analytics through the NAMED connection. On the multi-account
+  // lineage `forUser()` resolves whichever row is "active", so a two-account user
+  // would silently see one account's numbers under the other account's header.
+  assert.match(dashboard, /forConnection\(/);
+  assert.doesNotMatch(dashboard, /forUser\(/);
+  assert.match(dashboard, /listVibePinPublishedPinterestPins/);
+  assert.match(provenance, /payload\.remotePinId/);
+  assert.match(provenance, /if \(!pinId\) return null/);
+  assert.match(page, /All \$\{dashboard\.content\.length\} Pins verified from VibePin publish records/);
+  assert.match(pinMetadataRoute, /MAX_IDS = 10/);
+  assert.match(pinMetadataRoute, /CONCURRENCY = 5/);
+  assert.doesNotMatch(page, /Overview[\s\S]*Pins[\s\S]*Analytics[\s\S]*Boards[\s\S]*Audience/);
+  assert.match(instagramConfig, /instagram_business_manage_insights/);
+});
+
+console.log(`\n${passed} Insights MVP tests passed.`);
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
