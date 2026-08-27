@@ -7,6 +7,9 @@
  * (`/api/social/connections` via socialClient + the shared connections cache), so those
  * three surfaces can never disagree about which accounts exist. No bespoke fetch.
  *
+ * Disconnected rows are filtered out here (see PUBLISHABLE_STATUSES): the shared endpoint
+ * now lists them for Settings, but a dead account is not a publish target.
+ *
  * Order is the server's: created_at ascending, so `fallback` (index 0) is the account
  * `pickDefaultConnection` resolves for a user-scoped call. That makes an adopt-once on the
  * client land on exactly the row the server would have used on its own — the pre-v59
@@ -38,8 +41,20 @@ function toTargetable(row: SocialConnection): PinterestTargetConnection {
   return { ...row, username: row.providerAccountUsername ?? row.providerAccountName ?? null };
 }
 
+/**
+ * Statuses a publish target may be in. A WHITELIST on purpose: `/api/social/connections`
+ * is the Settings listing too, so since PRD 0805 §11 it also carries the merchant’s
+ * DISCONNECTED rows (kept so they can be reconnected or removed). Those must not reach
+ * this hook — it feeds the account picker, the adopt-once `fallback` a Pin pins itself
+ * to, and `retryBlockReason`, whose whole job is to STOP a retry whose target is no
+ * longer in this list. A blacklist would let a future status leak through by default.
+ */
+const PUBLISHABLE_STATUSES: ReadonlySet<string> = new Set(["connected", "expired"]);
+
 function pinterestAccountsOf(platforms: PlatformConnectionSummary[]): PinterestTargetConnection[] {
-  return (platforms.find(p => p.provider === "pinterest")?.accounts ?? []).map(toTargetable);
+  return (platforms.find(p => p.provider === "pinterest")?.accounts ?? [])
+    .filter(a => PUBLISHABLE_STATUSES.has(a.connectionStatus))
+    .map(toTargetable);
 }
 
 export type UsePinterestConnections = {

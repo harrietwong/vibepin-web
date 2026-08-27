@@ -23,12 +23,16 @@
  * the branch that would add a row asks, which means an at-limit user can always
  * still repair an existing connection.
  *
- * ── ONLY ACTIVE CONNECTIONS COUNT ──────────────────────────────────────────────
- * This module used to count EVERY row for the provider, including the
- * `connection_status='not_connected'`, token-less rows a disconnect leaves behind.
- * That made the limit a one-way ratchet: a user at their limit who disconnected A
- * and tried to connect B was refused forever. Counting is now the same
- * active-only predicate Pinterest has always used (see accountAllowance.ts).
+ * ── EVERY ROW HELD COUNTS ──────────────────────────────────────────────────────
+ * A slot is occupied by every account row the user holds, connected or not. That is
+ * the product rule, not an implementation detail (PRD 0805 §11): Disconnect keeps
+ * the account — it stays in Settings with a Reconnect — and keeps its slot; REMOVE
+ * hard-deletes the row and is the only action that gives the slot back.
+ *
+ * This is not the old ratchet returning. Back then a disconnect left a row nobody
+ * could see or delete, so the seat was lost forever; now the row is visible on every
+ * platform and Remove frees it. The counting rule and the Remove action are two
+ * halves of one decision — see accountAllowance.ts.
  *
  * ── GRANDFATHERING ────────────────────────────────────────────────────────────
  * Nothing is revoked. Accounts connected before this shipped stay connected even
@@ -70,7 +74,7 @@ export async function canConnectAnotherAccount(
     resolvePlanFn: deps?.resolvePlanFn,
     // A caller that supplies its own count knows about ONE provider. Feed exactly
     // that (null = uncountable → fail open) instead of touching the DB.
-    countActive: countExisting
+    countConnections: countExisting
       ? async (id: string) => {
           const count = await countExisting(id, provider);
           return count === null ? null : { [provider]: count };
@@ -85,7 +89,7 @@ export async function canConnectAnotherAccount(
     // accounted for in `allowed`) are not folded in, so the refusal keeps naming
     // the plan's own number.
     limit: allowance.included ?? 0,
-    current: allowance.active,
+    current: allowance.held,
     plan: allowance.plan,
   };
 }
