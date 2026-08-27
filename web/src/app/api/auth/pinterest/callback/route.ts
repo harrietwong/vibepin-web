@@ -252,7 +252,7 @@ export async function GET(req: NextRequest) {
     if (addsAnAccount) {
       let overLimit = false;
       try {
-        const quota = evaluateAccountQuota(await resolvePlan(uid), activeCount);
+        const quota = await evaluateAccountQuota(uid, await resolvePlan(uid), activeCount);
         overLimit = !quota.canAddAccount;
         if (overLimit) {
           console.warn(
