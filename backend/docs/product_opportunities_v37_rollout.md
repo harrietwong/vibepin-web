@@ -5,19 +5,22 @@ production database write, VPS deployment, timer enablement, or budget increase.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `01dcb539460bd282cb1542afa1ea4992f1f34659`, and exact
+functional tip `58598b4d51504738bcf54cfa400bae2a296b7659`, and exact
 76-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_01dcb53.json`.
+`backend/docs/product_opportunities_v37_release_manifest_58598b4.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 This candidate supersedes `99efabc` for deployment topology. That earlier tree
 was functionally qualified but sat on a local integration base containing
 Usage/Metering production changes not present in the production remote. Because
 Vercel promotes a whole tree, its exact Product manifest could not prevent those
-unrelated files from shipping. `01dcb53` reconstructs the same Product boundary
+unrelated files from shipping. `58598b4` reconstructs the same Product boundary
 directly on `b22930e`: it inherits the Product implementation from `351e479` and
-adds only the Tracking schedule hardening and its contract evidence. The same 72
-production paths differ and every one is listed in the 76-artifact
+the Tracking schedule hardening from `01dcb53`. It also restores the
+`classify-chain` worker route required by the already-installed Crawl OnSuccess
+wrapper, fixing the production version mismatch observed on 2026-08-27 without
+changing its unit, timer, or wrapper. The same 72 production paths differ and
+every one is listed in the 76-artifact
 manifest; the remaining four manifest dependencies are already byte-identical
 on the remote base. No provider/write budget changed. No Usage/Metering production
 file or migration is included.

@@ -1,7 +1,8 @@
 {
   "schemaVersion": 2,
-  "candidateCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
-  "integrationCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
+  "candidateCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
+  "integrationCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
+  "classifyChainRepairCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
   "trackingScheduleHardeningCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
   "trackingFailurePropagationCommit": "351e47912ce44fc34728097041dbfdd95889081a",
   "primarySwitchProofCommit": "351e47912ce44fc34728097041dbfdd95889081a",
@@ -37,9 +38,9 @@
     },
     {
       "path": "backend/run_worker.py",
-      "gitBlobSha1": "614ec325ef5237913672c167fab84e8406e675b3",
-      "sha256": "2d0013fe000b6e87b907070d48d6e596ddaa63f78d4f33998e59e63c4f130077",
-      "bytes": 37665
+      "gitBlobSha1": "6af5801762f213cb1a310012c6f4e077a73622dc",
+      "sha256": "f498f2632e40cce926eb68e6c68b05d2fe5727baf8cdd06f39341bc9cbc57bdc",
+      "bytes": 41819
     },
     {
       "path": "backend/shop_the_look_expand.py",
