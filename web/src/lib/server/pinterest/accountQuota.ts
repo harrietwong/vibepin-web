@@ -18,10 +18,11 @@
  * numbers are never copied.
  *
  * Counting rule (fixed, not negotiable per call site):
- *   used  = active connections — non-disconnected, token-bearing rows, the same
- *           predicate listActiveConnections uses. A DISCONNECTED row does NOT count.
- *           If it did, the cap would become a one-way ratchet: a user who disconnects
- *           to swap accounts could never connect again.
+ *   used  = every Pinterest row the user holds, whatever its status. A DISCONNECTED
+ *           row DOES count: Disconnect keeps the account (it stays in Settings with a
+ *           Reconnect) and keeps its slot; only Remove — a hard delete — frees one
+ *           (PRD 0805 §11). Reconnecting a disconnected row adds nothing, because
+ *           that row was already counted.
  *   limit = PLAN_ENTITLEMENTS[plan].connectedAccountsPerPlatform; `null` = uncapped.
  *           Purchased extra slots do NOT change this number — they are counted in
  *           `canAddAccount`, so the limit shown/logged stays the plan's own figure.
@@ -42,7 +43,7 @@ import {
 const PROVIDER = "pinterest";
 
 export type AccountQuota = {
-  /** Active connections the user already holds. */
+  /** Account rows the user already holds, disconnected ones included. */
   used: number;
   /** Max allowed on their plan; null = uncapped. Excludes purchased extra slots. */
   limit: number | null;
@@ -58,15 +59,15 @@ export type AccountQuota = {
  * the rule is testable without a DB. The full decision (which also spends purchased
  * slots) is `evaluateAllowance` in accountAllowance.ts.
  */
-export function canAddAccount(limit: number | null, activeCount: number): boolean {
+export function canAddAccount(limit: number | null, heldCount: number): boolean {
   if (limit === null) return true;
-  return activeCount < limit;
+  return heldCount < limit;
 }
 
 /** Project an allowance verdict onto the quota shape this module's callers speak. */
-function toQuota(allowance: AccountAllowance, activeCount: number): AccountQuota {
+function toQuota(allowance: AccountAllowance, heldCount: number): AccountQuota {
   return {
-    used: activeCount,
+    used: heldCount,
     limit: allowance.included,
     plan: allowance.plan,
     canAddAccount: allowance.allowed,
@@ -74,9 +75,9 @@ function toQuota(allowance: AccountAllowance, activeCount: number): AccountQuota
 }
 
 /**
- * Same decision from an already-known plan + active count — used by the OAuth
- * callback, which counted the user's Pinterest rows itself while it was reading them
- * for the connect decision.
+ * Same decision from an already-known plan + row count — used by the OAuth callback,
+ * which counted the user's Pinterest rows itself while it was reading them for the
+ * connect decision.
  *
  * It is async now: the shared-pool rule needs the OTHER platforms' counts and the
  * purchased-slot total, which the callback does not hold. That is one extra query on
@@ -86,19 +87,19 @@ function toQuota(allowance: AccountAllowance, activeCount: number): AccountQuota
 export async function evaluateAccountQuota(
   uid: string,
   plan: PlanKey,
-  activeCount: number,
+  heldCount: number,
   deps?: AllowanceDeps,
 ): Promise<AccountQuota> {
   const allowance = await evaluateAccountAllowance(uid, PROVIDER, {
     ...deps,
     plan,
-    activeOverride: { provider: PROVIDER, count: activeCount },
+    countOverride: { provider: PROVIDER, count: heldCount },
   });
-  return toQuota(allowance, activeCount);
+  return toQuota(allowance, heldCount);
 }
 
 /**
- * Resolve the user's plan and count their active Pinterest connections.
+ * Resolve the user's plan and count the Pinterest rows they hold.
  *
  * The reads are independent, so they run together inside the allowance module: the
  * connect POST handler is an instrumented hot path (click → redirect latency), and
@@ -109,5 +110,5 @@ export async function getPinterestAccountQuota(
   deps?: AllowanceDeps,
 ): Promise<AccountQuota> {
   const allowance = await evaluateAccountAllowance(uid, PROVIDER, deps);
-  return toQuota(allowance, allowance.active);
+  return toQuota(allowance, allowance.held);
 }
