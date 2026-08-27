@@ -100,7 +100,7 @@ async function main() {
       // `let` is allowed here (not just `const`): the board auto-adopt fix
       // reassigns `d` after re-reading the store. What matters for this
       // contract is that the draft is READ FRESH at call time, not closed over.
-      /const handlePublish = useCallback\(async \(id: string\) => \{\s*\n\s*(?:const|let) d = pinDraftStore\.getDraft\(id\); if \(!d\) return;/,
+      /const handlePublish = useCallback\(async \(id: string,?[^)]*\) => \{\s*\n\s*(?:const|let) d = pinDraftStore\.getDraft\(id\); if \(!d\) return;/,
       "handlePublish must read the store fresh, not a closed-over draft",
     );
   });
@@ -110,10 +110,16 @@ async function main() {
     // schedule or publish a half-recorded intent), then flush, then act. The ORDER is
     // what matters: flush() must land before the handler re-reads the store.
     assert.match(src, /const doSchedule = useCallback\(\(\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onSchedule\(draft\.id\);/);
-    assert.match(src, /const doPublish = useCallback\(\(\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onPublish\(draft\.id\);/);
+    // doPublish now carries the publish SCOPE ({ onlyPending }) and closes the
+    // confirm before dispatching. The invariant is unchanged: the destination guard
+    // and the synchronous flush both run BEFORE onPublish is called.
+    assert.match(src, /const doPublish = useCallback\(\(options\?: \{ onlyPending\?: boolean \}\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*setConfirmPublish\(false\);\s*\n\s*props\.onPublish\(draft\.id, options\);/);
     // flush() must be a SYNCHRONOUS persistNow call (not merely clearing the debounce
     // timer) so the store write has landed before onSchedule/onPublish re-reads it.
-    assert.match(src, /const flush = useCallback\(\(\) => \{\s*\n?\s*if \(timer\.current\) \{ clearTimeout\(timer\.current\); timer\.current = null; persistNow\(pendingRef\.current\); \}/);
+    assert.match(src, // flush also settles the card's save-state line now, so the body spans several
+    // lines. What this pins is unchanged: the pending debounce is cancelled and the
+    // edit persisted SYNCHRONOUSLY, before any schedule/publish leaves the card.
+    /const flush = useCallback\(\(\) => \{\s*\n?\s*if \(timer\.current\) \{\s*\n?\s*clearTimeout\(timer\.current\); timer\.current = null;\s*\n?\s*persistNow\(pendingRef\.current\);/);
   });
   await test("5/6c. DraftDetailsDrawer.handlePublish persists current field state, then reads the SAME state for the payload (single source, no second read)", () => {
     const src = readFileSync(join(root, "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
@@ -152,7 +158,9 @@ async function main() {
     // still guarded by the shared registry, and a caller that loses the race is told.
     assert.match(shared, /if \(!beginPublish\(draftId\)\) \{/);
     assert.match(shared, /endPublish\(draftId\);/);
-    assert.match(studio, /await publishContent\(id, \{ onlyPending: true \}\)/);
+    // The Studio card's default is still Retry semantics; a republish of an edited
+    // Posted Content overrides it explicitly, so the scope is a parameter now.
+    assert.match(studio, /await publishContent\(id, \{ onlyPending: options\?\.onlyPending \?\? true \}\)/);
     assert.match(studio, /outcome\.blocked === "locked"/, "the card honours the lock's verdict");
     assert.match(batch, /await publishContent\(p\.pinId, \{ onlyPending: true \}\)/);
     assert.match(batch, /outcome\.blocked === "locked"/);
@@ -269,7 +277,10 @@ async function main() {
     // The publish itself (and the shared lock it takes) moved into publishContent, so
     // the boundary the length gate must precede is now the call to it. Same invariant:
     // an over-limit title is refused BEFORE anything is sent or locked.
-    const fn = src.match(/const handlePublish = useCallback\(async \(id: string\) => \{[\s\S]*?await publishContent\(id,/);
+    // The signature also carries the publish SCOPE now ({ onlyPending }), so the match
+    // is on the parameter list opening rather than an exact one-argument signature —
+    // the invariant under test is the ORDER of the gate, not the arity.
+    const fn = src.match(/const handlePublish = useCallback\(async \(id: string,?[^)]*\) => \{[\s\S]*?await publishContent\(id,/);
     assert.ok(fn, "handlePublish body up to the publishContent call not found");
     assert.match(fn![0], /const lenErrors = pinFieldErrors/);
   });
