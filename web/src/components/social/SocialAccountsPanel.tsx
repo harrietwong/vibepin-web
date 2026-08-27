@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
 import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
@@ -1050,7 +1050,7 @@ const ACCOUNT_ACTION_STYLE: Record<AccountRowAction, { border: string; backgroun
 };
 
 const ACCOUNT_ACTION_ICON: Record<AccountRowAction, typeof RefreshCw> = {
-  disconnect: LinkIcon,
+  disconnect: Unlink,
   reconnect: RefreshCw,
   remove: Trash2,
 };
