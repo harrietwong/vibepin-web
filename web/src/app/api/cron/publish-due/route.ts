@@ -50,6 +50,8 @@ import {
   destinationPublishInput,
   describeThrown,
   owedDestinations,
+  failedRowsForUnattempted,
+  didNotCompleteMessage,
 } from "./publishDueLogic";
 
 export const runtime = "nodejs";
@@ -293,8 +295,12 @@ export async function GET(req: Request): Promise<Response> {
       // Runs BEFORE the persist so a fan-out crash cannot leave the Content marked
       // posted with no record of the platforms that were still owed.
       if (extras.length) {
+        // The job id must outlive the try: when the fan-out throws, the attempt still
+        // has to be finalized with the failure rows below. A job row left in
+        // `publishing` forever reads as a publish that is still in flight.
+        let jobId: string | null = null;
         try {
-          const jobId = await createPublishJob(
+          jobId = await createPublishJob(
             db,
             row.vibepin_user_id,
             typeof row.draft_id === "string" ? row.draft_id : null,
@@ -310,11 +316,32 @@ export async function GET(req: Request): Promise<Response> {
             altText: input.altText,
           });
           outcomes.push(...fanned);
-          if (jobId) await recordOutcomes(db, jobId, outcomes);
+          // Defensive: an owed destination the fan-out returned no row for is not
+          // "nothing happened", it is "nobody knows" — and silence there reads to the
+          // merchant as a platform that was never even selected.
+          const unreported = failedRowsForUnattempted(extras, didNotCompleteMessage, fanned);
+          outcomes.push(...unreported);
+          if (unreported.length && !firstFailure) {
+            firstFailure = { message: unreported[0].error ?? "Publish failed" };
+          }
         } catch (fanErr) {
           // A fan-out failure must never undo a Pinterest publish that already
-          // succeeded, so it is logged and the Content still completes as posted.
-          console.error("[cron/publish-due] fan-out:", (fanErr as Error).message);
+          // succeeded — but it must never be silent either. Before this, a throw was
+          // logged and nothing else: the owed Instagram/Facebook destinations got no
+          // result row at all, so the Content was marked posted from the Pinterest
+          // result and the merchant had no way to learn the other platforms never
+          // went out. Every owed destination now gets a failed row carrying the reason.
+          const described = describeThrown(fanErr);
+          console.error("[cron/publish-due] fan-out:", described.message);
+          outcomes.push(...failedRowsForUnattempted(extras, described.message));
+          if (!firstFailure) firstFailure = described;
+        }
+        // Recording the attempt must not itself become the reason a delivered publish
+        // is reported as failed: its errors are logged, never thrown to the row's catch.
+        try {
+          if (jobId) await recordOutcomes(db, jobId, outcomes);
+        } catch (recErr) {
+          console.error("[cron/publish-due] record outcomes:", (recErr as Error).message);
         }
       }
 

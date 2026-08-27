@@ -15,7 +15,8 @@ import { toProxyUrl } from "@/lib/imageProxy";
 // Intent resolution. Both modules are pure and import-safe (no Supabase client built at
 // module load), which is what keeps this file runnable under bare `tsx`.
 import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
-import { pendingDestinations } from "@/lib/social/publishRules";
+import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
+import { isSocialProvider, platformName, type SocialProvider } from "@/lib/social/platforms";
 import type { ScheduledDestination } from "@/lib/pinDraftStore";
 
 /** A claim is reclaimable if it was never taken, or the worker that took it is
@@ -250,6 +251,58 @@ export function mergeDestinationResults(
     });
   const fresh = new Set(rows.map(r => r.destinationId));
   return [...prior.filter(r => !fresh.has(r?.destinationId)), ...rows];
+}
+
+/** The reason a destination that was owed produced no result of its own. */
+export function didNotCompleteMessage(provider: SocialProvider): string {
+  return `Publishing to ${platformName(provider)} did not complete.`;
+}
+
+/**
+ * Failed result rows for owed destinations that the fan-out never reported on.
+ *
+ * Two ways a destination can end up with no row: `fanOutDestinations` THREW (one
+ * unhandled error and every remaining platform is lost at once), or it returned fewer
+ * rows than it was given. Both used to be silent — the Content was marked posted from
+ * the Pinterest result and the merchant was never told Instagram had not gone out. A
+ * missing row does not mean "nothing happened", it means "nobody knows", and the only
+ * honest rendering of that is a failure the merchant can see and retry.
+ *
+ * `attempted` is whatever DID report (the fan-out's return value), keyed the same way
+ * the rest of the pipeline keys destinations — provider + account — so a partial
+ * result set only gets rows for the accounts genuinely missing from it. Pinterest
+ * entries are never included: they are dispatched by their own loop, which always
+ * records a row.
+ */
+export function failedRowsForUnattempted(
+  extras: readonly ScheduledDestination[],
+  message: string | ((provider: SocialProvider) => string),
+  attempted: readonly DestinationOutcomeLike[] = [],
+): DestinationOutcome[] {
+  const key = (provider: string, id: unknown) =>
+    `${provider}:${typeof id === "string" && id.trim() ? id.trim() : ""}`;
+  const seen = new Set(attempted.map(o => key(o.provider, o.socialConnectionId)));
+  const rows: DestinationOutcome[] = [];
+  for (const d of extras) {
+    // Pinterest is dispatched by the per-destination loop, which always leaves a row.
+    if (!isSocialProvider(d.provider) || d.provider === "pinterest") continue;
+    const k = key(d.provider, d.socialConnectionId);
+    if (seen.has(k)) continue;
+    seen.add(k); // a duplicated entry must not produce two identical failure rows
+    const row: DestinationOutcome = {
+      provider: d.provider,
+      status: "failed",
+      socialConnectionId: typeof d.socialConnectionId === "string" && d.socialConnectionId.trim()
+        ? d.socialConnectionId.trim()
+        : null,
+      error: (typeof message === "function" ? message(d.provider) : message)
+        || didNotCompleteMessage(d.provider),
+    };
+    // Name the account the merchant chose, so a two-account platform says WHICH one.
+    if (d.accountLabel) row.accountName = d.accountLabel;
+    rows.push(row);
+  }
+  return rows;
 }
 
 /**
