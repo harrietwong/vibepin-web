@@ -112,8 +112,13 @@ test("Social accounts panel drives Pinterest state + actions (no dedicated Pinte
   assert.match(social, /accountUiState/);
   assert.match(social, /social-account-state-/);
   assert.match(social, /social-connect-/);
-  assert.match(social, /social-reconnect-/);
-  assert.match(social, /social-disconnect-/);
+  // Reconnect and Disconnect moved from the platform card to the ACCOUNT ROW
+  // (PRD 0809 §II): with two accounts connected, a platform-level "Disconnect
+  // Pinterest" could not say which one it meant — and in fact disconnected both.
+  // The CTAs still exist, keyed by connection id instead of by provider.
+  assert.match(social, /social-account-\$\{action\}-\$\{account\.id\}/);
+  assert.match(social, /accountRowActions\(state\)/);
+  assert.doesNotMatch(social, /social-disconnect-\$\{summary\.provider\}/);
   // The retired panel's internal access-tier wording must not reappear customer-side.
   assert.doesNotMatch(social, /Standard Access/);
   assert.doesNotMatch(social, /limited_access/);

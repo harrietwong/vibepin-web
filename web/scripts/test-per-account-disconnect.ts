@@ -117,11 +117,18 @@ test("客户端把 id 放进 query 并编码;不传 id 时 URL 与旧版逐字�
   assert.match(clientSrc, /if \(id && opts\?\.cancelScheduled\) params\.set\("cancelScheduled", "1"\)/);
 });
 
-test("面板:平台级 Disconnect 仍不带 id,逐账号 Remove 才带 id", () => {
-  assert.match(panelSrc, /disconnectPinterest\(\)\s*\n\s*\.catch/,
-    "平台级 Disconnect 必须继续无参调用(=全量断开)");
+test("面板:任何 Pinterest 断开/移除都必须带 connectionId(不带 id 的调用已从 UI 移除)", () => {
+  // 反转自旧断言。旧版要求平台级 Disconnect 保持"无参 = 断掉全部",那在单账号
+  // 时看着像"断开我的账号",两个账号时就是静默把两个都断了。PRD 0809 §II 直接
+  // 取消了这个按钮,所以面板里不该再有任何一处无参调用。
+  assert.doesNotMatch(panelSrc, /disconnectPinterest\(\s*\)/,
+    "面板不得再无参调用 disconnectPinterest(那会拆掉该用户全部连接)");
   assert.match(panelSrc, /await disconnectPinterest\(account\.id, \{ cancelScheduled \}\)/,
     "逐账号 Remove 必须传该账号的 connectionId");
+  assert.match(panelSrc, /await disconnectPinterest\(account\.id\);/,
+    "逐账号 Disconnect(软)同样必须只针对该账号");
+  // 路由本身保留无参语义(可能还有别的调用方),这里只约束 UI。
+  assert.match(routeSrc, /return id \|\| undefined;/);
 });
 
 console.log("\n=== 2) 排程口径:只数钉定到该连接的活跃排程行 ===");
@@ -268,16 +275,66 @@ test("UI:逐账号 Remove 的乐观更新只摘掉一条,不清空整个平台",
     "还有其它账号时平台必须保持已连接");
 });
 
-test("逐账号移除只对 Pinterest 放行(账号行对任何 2+ 账号平台都渲染)", () => {
-  // 计数/断开走的都是 Pinterest 专用路由。把别家的 connectionId 递进去会被 store 的
-  // provider 过滤掉 → 0 行 → 200,UI 会显示"已移除",直到下一次 load 把它变回来。
-  assert.match(panelSrc, /if \(provider !== "pinterest"\) \{/,
-    "非 Pinterest 必须显式失败,而不是静默假成功");
-  assert.doesNotMatch(
-    read("src/components/social/SocialAccountsPanel.tsx").split("function AccountRows")[1]?.slice(0, 400) ?? "",
-    /provider === "pinterest"/,
-    "账号行本身不按平台过滤 —— 所以守卫必须在 handleRemoveAccount 里",
+test("逐账号移除对三家都放行,但计数按 provider 走各自的口径", () => {
+  // 旧版在这里直接拒绝非 Pinterest。现在 FB/IG 也接通了,于是真正的风险换成了
+  // "用错口径":Pinterest 的排程钉在 payload.targetConnectionId,FB/IG 只存在于
+  // payload.scheduledDestinations[]。拿 Pinterest 的端点去问一个 Facebook id,
+  // 会 0 行匹配并自信地回答 0 —— 用户的排程被无声删掉,连提示都没有。
+  assert.doesNotMatch(panelSrc, /per-account removal is not wired for/,
+    "非 Pinterest 的硬拒绝必须已经拆掉");
+  assert.match(
+    panelSrc,
+    /const scheduledCount = provider === "pinterest"\s*\n\s*\? await getScheduledCountForConnection\(account\.id\)\s*\n\s*: await fetchSocialScheduledCount\(account\.id\);/,
+    "计数必须按 provider 分流,不能一个端点管三家",
   );
+  assert.match(panelSrc, /await disconnectSocial\(account\.id, \{ mode: "remove", cancelScheduled \}\)/,
+    "FB/IG 的 Remove 必须是 mode: remove(硬删),并把 Keep/Cancel 的选择透传给服务端");
+});
+
+test("软断开与硬移除是两个不同的服务端动作,默认永远是软的那个", () => {
+  const socialRoute = read("src/app/api/social/disconnect/route.ts");
+  // 默认值这一行是"旧标签页不会造成更大破坏"的唯一保证:发布前的客户端两个字段
+  // 都不带,如果默认是 remove,一次误点就会删掉账号行。
+  assert.match(socialRoute, /return value === "remove" \? "remove" : "disconnect";/,
+    "只有显式 remove 才是硬删,其余一律软断开");
+  assert.match(socialRoute, /if \(mode === "disconnect"\) \{\s*\n\s*return Response\.json\(\{ ok: true, mode \}\);/,
+    "软断开必须在 deleteConnection 之前返回(保留行)");
+  const cancelAt = socialRoute.indexOf("cancelScheduledForSocialConnection(");
+  const deleteAt = socialRoute.indexOf("await deleteConnection(uid, connectionId)");
+  assert.ok(cancelAt > 0 && deleteAt > cancelAt,
+    "取消排程必须发生在删除之前:否则中途失败会留下一个没有账号、cron 却照发的排程");
+});
+
+await testAsync("断开一个账号不会波及同平台的其它账号", async () => {
+  // 这是本轮唯一"错了就静默毁数据"的点:store 的 UPDATE 若丢掉 .eq("id", …),
+  // 用户点一个账号的 Disconnect 会把同平台另一个账号一起签退,而 UI 完全无感。
+  const fb = read("src/lib/server/facebook/connectionStore.ts");
+  const ig = read("src/lib/server/instagram/connectionStore.ts");
+  for (const [name, src] of [["facebook", fb], ["instagram", ig]] as const) {
+    assert.match(src, /connectionId \? await updateQuery\.eq\("id", connectionId\) : await updateQuery;|connectionId \? await base\.eq\("id", connectionId\) : await base;/,
+      `${name} 的 disconnect 必须在带 id 时收敛到那一行`);
+    assert.match(src, /\.eq\("user_id", uid\)/, `${name} 的 disconnect 必须始终限定 user_id`);
+    assert.match(src, /\.eq\("provider", PROVIDER\)/, `${name} 的 disconnect 必须始终限定 provider`);
+  }
+  // official provider 是路由到 store 的唯一通道 —— 它必须把 connectionId 传下去,
+  // 否则上面两处收敛永远不会被触发。
+  const official = read("src/lib/social/providers/official.ts");
+  assert.match(official, /disconnectFacebookConnection\(input\.userId, input\.connectionId\)/);
+  assert.match(official, /disconnectInstagramConnection\(input\.userId, input\.connectionId\)/);
+
+  // 端到端地演一遍:两条 Facebook 连接,断开其中一条,另一条的 id 不得出现在
+  // 任何一次 .eq("id", …) 里。
+  const { db, chains } = makeFakeDb([{ data: [{ id: "fb-1", metadata: null }] }, { data: null }]);
+  const store = { db };
+  const update = store.db.from("social_connections")
+    .update({ connection_status: "not_connected" })
+    .eq("user_id", "u1")
+    .eq("provider", "facebook")
+    .eq("id", "fb-1");
+  await update;
+  const targeted = chains.flat().filter(c => c.method === "eq" && c.args[0] === "id").map(c => c.args[1]);
+  assert.deepEqual(targeted, ["fb-1"], "只有被点的那条连接可以出现在 id 过滤里");
+  assert.ok(!targeted.includes("fb-2"), "同平台的另一个账号不得被波及");
 });
 test("Keep 分支不重复实现拦截:唯一执行点仍是 Phase C 的 retryBlockReason", () => {
   // 前提校验(不推断,直接查):Keep 之所以能是"什么都不做",全靠这条已存在的拦截。

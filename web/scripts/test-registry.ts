@@ -56,6 +56,7 @@ export const CORE: string[] = [
   "test-publish-capability",
   "test-publish-results",
   "test-per-account-disconnect",
+  "test-settings-account-actions",
   // Facebook Page OAuth
   "test-facebook-pages",
   // AI copy / creative intelligence
