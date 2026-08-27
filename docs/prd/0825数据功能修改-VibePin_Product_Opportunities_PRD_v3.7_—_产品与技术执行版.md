@@ -1161,6 +1161,8 @@ Digital today / 7d / 14d / 30d / full metric = 0 / 0 / 0 / 0 / 0
 
 后续静态定位确认，该 Pin 为 Home Decor Source Pin `1127518456800539414`，关键词为 `kids room decor ideas`。整 Pin 内部存在多个 Playwright 默认等待，并且旧实现最多串行读取、点击 10 个通用 tab；这些等待的累计预算可以耗尽 120 秒总墙钟。候选 `f93a29a993594605bffed9115119e8210a6bfcf1` 没有提高 120 秒总预算，也没有放宽零渲染失败门禁，而是将可选 DOM 探测分别限制在 5–8 秒、通用 tab 最多处理 4 个，并在报告中保留精确超时阶段。该修复的本地聚焦回归为 264 passed / 35 subtests；仍须由后续永久 timer 自动运行证明 `renderFailureCount=0`，本次 BLOCK 报告本身不得改判。
 
+同一报告还证明当前主要产量瓶颈不是 50 行安全上限，而是商家图证据覆盖：13 个商家候选全部因缺少可证明的商家商品图被拒绝，其中 5 个为 HTTP 403；8 个 Amazon PDP 返回 200，7 个已经能够证明名称来自页面，但旧抽取器仍未读到商品主图。候选 `6839e7609ddff3f1fe288c48a42918e105a75fc9` 仅新增 Amazon 商品页中明确标识的 `landingImage` / `imgBlkFront` 主图证据，优先页面声明的最大尺寸；非 Amazon 同名元素、Pinterest 托管图、Source Pin/卡片图及任意未标识页面图片仍拒绝。完整证据为 `backend/docs/product_supply_merchant_image_gap_20260828T003013+0800.json`；本地全后端为 898 passed / 2 skipped，真实提升仍必须由后续永久 timer 证明。
+
 ### 19.3 自动准入候选实现状态
 
 隔离候选已补齐 Product Supply 与 v3.7 之间的自动准入编排，但本节不表示已部署或已启用：

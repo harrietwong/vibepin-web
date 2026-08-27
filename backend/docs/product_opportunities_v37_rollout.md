@@ -5,9 +5,9 @@ production database write, VPS deployment, timer enablement, or budget increase.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `f93a29a993594605bffed9115119e8210a6bfcf1`, and exact
+functional tip `6839e7609ddff3f1fe288c48a42918e105a75fc9`, and exact
 76-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_f93a29a.json`.
+`backend/docs/product_opportunities_v37_release_manifest_6839e76.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -16,6 +16,14 @@ failure gate. It bounds optional Playwright DOM probes to 5-8 seconds, limits
 generic tab probing to four tabs, and persists the exact timeout stage in the
 report. A subsequent automatic run is still required before the receipt can be
 accepted for Admission.
+
+The same receipt exposed a separate yield problem: all 13 merchant-page
+candidates failed the required merchant-image gate. Five were honest 403 blocks;
+eight Amazon PDPs returned 200, and seven of those had page-proven names, but the
+old extractor did not read Amazon's literal primary-image element. Candidate
+`6839e76` adds only that conservative page-evidence path; it does not accept
+arbitrary page images or any Pinterest/card image. Evidence:
+`backend/docs/product_supply_merchant_image_gap_20260828T003013+0800.json`.
 
 This candidate supersedes `99efabc` for deployment topology. That earlier tree
 was functionally qualified but sat on a local integration base containing
@@ -52,7 +60,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 895 tests with 2
+committed Product-only state, the full backend suite passed 898 tests with 2
 live-only skips and 77 subtests, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit

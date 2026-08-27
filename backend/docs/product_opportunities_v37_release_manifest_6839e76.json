@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "candidateCommit": "f93a29a993594605bffed9115119e8210a6bfcf1",
-  "integrationCommit": "f93a29a993594605bffed9115119e8210a6bfcf1",
+  "candidateCommit": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
+  "integrationCommit": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
   "launchTaxonomyCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
   "sourceProvenanceAliasCommit": "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62",
   "classifyChainRepairCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
@@ -100,9 +100,9 @@
     },
     {
       "path": "backend/supply_core.py",
-      "gitBlobSha1": "deea08c56bd89e040f2c8e09c47f8363d6913237",
-      "sha256": "8a6f79f45080985780a28022d2631fd205d904f2f804ea4e6868e1562f3eab7f",
-      "bytes": 53326
+      "gitBlobSha1": "34a9182773eb52045136940b722a15cba4613c23",
+      "sha256": "d6fc392f38ef28c9181db91fcff2b11d50577fa109262b9747833f03d0684911",
+      "bytes": 55823
     },
     {
       "path": "backend/tools/t2_harvest.py",

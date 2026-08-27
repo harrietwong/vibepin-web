@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "auditMode": "read_only",
+  "sourceReport": "/opt/vibepin/backend/logs/product_supply_expand_shop_the_look_latest.json",
+  "sourceReportSha256": "8adde3fda53fdcb0cf8fa92ee33a6227fd7db0020d94ac8df55a9fd6384dff80",
+  "sourceInvocationId": "b0f7bda39ad64aaf8f5e28f9da4c0e5d",
+  "candidateFunctionalTip": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
+  "merchantDiscoveryCandidates": 13,
+  "merchantDiscovered": 0,
+  "merchantDiscoveryFailures": 13,
+  "domains": {
+    "amazon.com": 8,
+    "etsy.com": 2,
+    "sewingbyzikra.etsy.com": 1,
+    "teepublic.com": 1,
+    "ebay.com": 1
+  },
+  "httpStatus": {"200": 8, "403": 5},
+  "detailFetchStatus": {"available": 7, "not_found": 1, "blocked": 5},
+  "admissionFailureReason": {"missing_verified_merchant_image": 13},
+  "amazonEvidence": {
+    "http200": 8,
+    "detailAvailable": 7,
+    "nameFoundInPageTrue": 7,
+    "merchantImageFound": 0,
+    "interpretation": "The merchant page was readable and name-proven for seven Amazon PDPs, but the extractor did not read Amazon's literal primary-image element. This is an extraction coverage gap, not permission to reuse Pinterest/card imagery."
+  },
+  "candidateChange": {
+    "scope": "Amazon PDP HTML only",
+    "acceptedEvidence": [
+      "img#landingImage data-a-dynamic-image",
+      "img#landingImage data-old-hires/src",
+      "img#imgBlkFront data-a-dynamic-image",
+      "img#imgBlkFront data-old-hires/src"
+    ],
+    "selection": "largest page-declared dynamic-image dimensions",
+    "stillRejected": [
+      "the same markup on non-Amazon domains",
+      "Pinterest-hosted image URLs",
+      "Source Pin or Pinterest card images",
+      "arbitrary page images without the primary-product element identity"
+    ]
+  },
+  "localVerification": {
+    "focusedTests": "163 passed",
+    "fullBackend": "898 passed, 2 skipped",
+    "productionReplay": "NOT RUN; requires an authorized deployment and later permanent-timer receipt"
+  },
+  "productionMutation": false
+}

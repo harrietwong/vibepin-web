@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`f93a29a993594605bffed9115119e8210a6bfcf1`; and its exact Product boundary is
+`6839e7609ddff3f1fe288c48a42918e105a75fc9`; and its exact Product boundary is
 the 76-artifact
-`backend/docs/product_opportunities_v37_release_manifest_f93a29a.json`. This tip
+`backend/docs/product_opportunities_v37_release_manifest_6839e76.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -42,12 +42,12 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 895 passed with 2 live-only skips and 77
+and contract-test state: backend 898 passed with 2 live-only skips and 77
 subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
 the Product-truth render verifier; and the manifest/automation contract passed
-22/22, while the focused worker, automation, and admission group passed 59/59.
+23/23, while the focused worker, automation, and admission group passed 59/59.
 ShellCheck also passed the exact `351e479` Git blobs for `cloud_lib.sh`,
 Product Supply, Product Opportunity Admission and Product Tracking wrappers;
 the intentional dynamic shared-library source warning was excluded explicitly,
@@ -683,6 +683,17 @@ probes. Candidate `f93a29a` gives those optional probes smaller independent
 budgets, caps generic tabs at four, and reports the exact timeout stage. It does
 not turn this failed receipt into a pass; a later permanent-timer run must still
 produce zero render failures.
+
+The zero-write funnel also has a measured merchant-image coverage gap. All 13
+merchant candidates were rejected for missing verified images: five pages were
+blocked with HTTP 403, while all eight Amazon PDPs returned 200; seven Amazon
+pages were otherwise detail-available and name-proven. Candidate `6839e76`
+conservatively reads only Amazon's explicitly identified primary-product image
+element and still rejects non-Amazon lookalikes, Pinterest-hosted URLs and all
+Pin/card images. This may improve safe yield but is not production-proven until a
+later authorized permanent-timer receipt. Evidence:
+`backend/docs/product_supply_merchant_image_gap_20260828T003013+0800.json`.
+
 Immutable evidence:
 `backend/docs/product_supply_automatic_run_audit_20260828T003013+0800.json`.
 
