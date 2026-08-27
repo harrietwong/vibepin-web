@@ -66,6 +66,15 @@ STL_PIN_TIMEOUT_ENV = "STL_PIN_TIMEOUT_SECONDS"
 STL_PIN_TIMEOUT_DEFAULT_SECONDS = 120
 STL_PIN_TIMEOUT_MIN_SECONDS = 30
 STL_PIN_TIMEOUT_MAX_SECONDS = 300
+# Optional DOM probes must consume only a small part of the whole-Pin budget.
+# Playwright's default timeout is 30 seconds; using it repeatedly for body/tab
+# inspection can otherwise exhaust the 120-second hard wall without identifying
+# which probe stalled.
+STL_DOM_PROBE_TIMEOUT_SECONDS = 5
+STL_DOM_EVAL_TIMEOUT_SECONDS = 8
+STL_TAB_LABEL_TIMEOUT_SECONDS = 1.5
+STL_TAB_CLICK_TIMEOUT_MS = 2_500
+STL_MAX_TABS_PER_PIN = 4
 
 
 def _stl_goto_timeout_ms() -> int:
@@ -714,6 +723,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     network_before = len(state.get("network") or [])
     responses_before = int(state.get("productJsonResponses") or 0)
 
+    state["_pinStage"] = "navigation"
     try:
         await page.goto(source_url, wait_until="domcontentloaded",
                         timeout=_stl_goto_timeout_ms())
@@ -726,41 +736,69 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     page_url = page.url.lower()
     if "/login" in page_url or "/signup" in page_url:
         return {"source": source, "issue": "login_wall", "candidates": [], "elapsedSec": round(time.monotonic()-started, 2)}
+    state["_pinStage"] = "post_navigation"
     await asyncio.sleep(2.2)
+    state["_pinStage"] = "body_probe"
     try:
-        body_text = ((await page.locator("body").inner_text()) or "")[:10_000].lower()
+        body_text = ((await asyncio.wait_for(
+            page.locator("body").inner_text(),
+            timeout=STL_DOM_PROBE_TIMEOUT_SECONDS,
+        )) or "")[:10_000].lower()
         if "captcha" in body_text or "verify you are human" in body_text:
             return {"source": source, "issue": "captcha", "candidates": [], "elapsedSec": round(time.monotonic()-started, 2)}
     except Exception:
         body_text = ""
+    state["_pinStage"] = "dismiss_overlays"
     try:
-        await page.evaluate("""() => { document.querySelectorAll('[data-test-id*=Signup i],[class*=SignupModal],[aria-modal=true]').forEach(e=>e.remove()); document.body.style.overflow=''; }""")
+        await asyncio.wait_for(
+            page.evaluate("""() => { document.querySelectorAll('[data-test-id*=Signup i],[class*=SignupModal],[aria-modal=true]').forEach(e=>e.remove()); document.body.style.overflow=''; }"""),
+            timeout=STL_DOM_PROBE_TIMEOUT_SECONDS,
+        )
     except Exception:
         pass
+    state["_pinStage"] = "scroll"
     for _ in range(5):
-        await page.mouse.wheel(0, 2200)
+        try:
+            await asyncio.wait_for(
+                page.mouse.wheel(0, 2200), timeout=STL_DOM_PROBE_TIMEOUT_SECONDS
+            )
+        except Exception:
+            # Scrolling is an optional discovery aid. A stuck wheel command must
+            # not masquerade as exhaustion of the whole-Pin wall clock.
+            break
         await asyncio.sleep(0.8)
 
+    state["_pinStage"] = "page_content"
     try:
-        html = await page.content()
+        html = await asyncio.wait_for(
+            page.content(), timeout=STL_DOM_PROBE_TIMEOUT_SECONDS
+        )
     except Exception:
         html = ""
     shop_detected = bool(STL_TEXT.search(html))
 
     tab_count = 0
+    state["_pinStage"] = "tab_discovery"
     try:
-        tabs = await page.query_selector_all('[data-test-id="shopping-tab"], [data-test-id*="shopping-tab" i], [role="tab"]')
+        tabs = await asyncio.wait_for(
+            page.query_selector_all('[data-test-id="shopping-tab"], [data-test-id*="shopping-tab" i], [role="tab"]'),
+            timeout=STL_DOM_PROBE_TIMEOUT_SECONDS,
+        )
         tab_count = len(tabs)
-        for tab in tabs[:10]:
+        for tab in tabs[:STL_MAX_TABS_PER_PIN]:
+            state["_pinStage"] = "tab_label"
             try:
-                label = ((await tab.inner_text()) or "").strip()[:80]
+                label = ((await asyncio.wait_for(
+                    tab.inner_text(), timeout=STL_TAB_LABEL_TIMEOUT_SECONDS
+                )) or "").strip()[:80]
             except Exception:
                 label = ""
             state["chip_label"] = label or None
             if label:
                 chip_labels.append(label)
+            state["_pinStage"] = "tab_click"
             try:
-                await tab.click(timeout=2500)
+                await tab.click(timeout=STL_TAB_CLICK_TIMEOUT_MS)
                 shop_tab_clicked = True
                 await asyncio.sleep(1.0)
             except Exception:
@@ -768,10 +806,12 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     except Exception:
         pass
     state["chip_label"] = None
+    state["_pinStage"] = "post_tabs"
     await asyncio.sleep(1.0)
 
+    state["_pinStage"] = "dom_cards"
     try:
-        dom_cards = await page.evaluate(r"""() => {
+        dom_cards = await asyncio.wait_for(page.evaluate(r"""() => {
           const nodes = Array.from(document.querySelectorAll(
             '[data-test-id*="product" i], [data-test-id*="shop" i], [data-test-id*="lockup" i]'
           )).slice(0, 100);
@@ -783,7 +823,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
             return {index, href: a ? a.href : null, title: text || null,
                     image_url: img ? img.src : null, price};
           });
-        }""")
+        }"""), timeout=STL_DOM_EVAL_TIMEOUT_SECONDS)
     except Exception as exc:
         # Never swallow this: an evaluate() failure means we did NOT look for
         # cards, which is not the same as "there are no cards".
@@ -807,6 +847,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
                 "chip_label": None,
             })
 
+    state["_pinStage"] = "prepare_candidates"
     prepared = [
         _prepare_candidate(c, source, index=i, shop_detected=shop_detected or bool(state.get("network")), shop_tab_clicked=shop_tab_clicked)
         for i, c in enumerate(raw_candidates)
@@ -829,6 +870,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     if render_failure and not issue:
         issue = "render_failure_or_unauthenticated"
 
+    state["_pinStage"] = "complete"
     return {
         "source": source,
         "issue": issue,
@@ -864,6 +906,7 @@ async def _extract_source_pin_bounded(
             "candidates": [],
             "pageSkeleton": False,
             "renderFailure": True,
+            "timeoutStage": str(state.get("_pinStage") or "unknown"),
             "elapsedSec": round(time.monotonic() - started, 2),
         }
 
@@ -1396,7 +1439,18 @@ def _build_report(
         "issues": dict(issues),
         "captchaCount": issues.get("captcha", 0),
         "loginWallCount": issues.get("login_wall", 0),
-        "timeoutCount": sum(v for k, v in issues.items() if str(k).startswith("goto_timeout")),
+        "timeoutCount": sum(
+            v for k, v in issues.items()
+            if str(k).startswith(("goto_timeout", "pin_timeout:"))
+        ),
+        "pinTimeoutCount": sum(
+            v for k, v in issues.items() if str(k).startswith("pin_timeout:")
+        ),
+        "pinTimeoutStages": dict(Counter(
+            str(pin.get("timeoutStage") or "unknown")
+            for pin in per_pin
+            if str(pin.get("issue") or "").startswith("pin_timeout:")
+        )),
         "blockCount": sum(v for k, v in issues.items() if "block" in str(k)),
         # Write-plan projections (always present; projectedUpdateCount must be 0)
         "projectedInsertCount": preflight["projectedInsertCount"],
@@ -1488,6 +1542,7 @@ def _build_report(
             "domEvalError": pin.get("domEvalError"),
             "pageSkeleton": pin.get("pageSkeleton", False),
             "renderFailure": pin.get("renderFailure", False),
+            "timeoutStage": pin.get("timeoutStage"),
             "elapsedSec": pin.get("elapsedSec"),
         } for pin in per_pin],
         "writes": {"pin_products": 0},

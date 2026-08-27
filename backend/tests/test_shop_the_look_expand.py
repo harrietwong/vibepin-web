@@ -125,7 +125,8 @@ class TestNetworkExtraction(unittest.TestCase):
 
 class TestPerPinHardTimeout(unittest.TestCase):
     def test_complete_pin_extraction_is_bounded(self):
-        async def never_finishes(*_args, **_kwargs):
+        async def never_finishes(_page, _source, state):
+            state["_pinStage"] = "tab_label"
             await asyncio.sleep(60)
 
         source = {"pin_id": "slow", "category": "fashion", "save_count": 1}
@@ -136,6 +137,60 @@ class TestPerPinHardTimeout(unittest.TestCase):
         self.assertEqual(result["issue"], "pin_timeout:1s")
         self.assertTrue(result["renderFailure"])
         self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["timeoutStage"], "tab_label")
+
+    def test_stalled_generic_tabs_are_individually_bounded_and_capped(self):
+        clicks = 0
+
+        class Locator:
+            async def inner_text(self):
+                return "normal pin body"
+
+        class Mouse:
+            async def wheel(self, _x, _y):
+                return None
+
+        class Tab:
+            async def inner_text(self):
+                await asyncio.sleep(60)
+
+            async def click(self, timeout=None):
+                nonlocal clicks
+                clicks += 1
+
+        class Page:
+            url = "https://www.pinterest.com/pin/slow-tabs/"
+            mouse = Mouse()
+
+            async def goto(self, *_args, **_kwargs):
+                return None
+
+            def locator(self, _selector):
+                return Locator()
+
+            async def evaluate(self, _script):
+                return []
+
+            async def content(self):
+                return "<html>Shop the Pin</html>"
+
+            async def query_selector_all(self, _selector):
+                return [Tab() for _ in range(10)]
+
+        async def no_sleep(_seconds):
+            return None
+
+        state = {"productJsonResponses": 0}
+        with patch.object(stl.asyncio, "sleep", no_sleep), patch.object(
+            stl, "STL_TAB_LABEL_TIMEOUT_SECONDS", 0.001
+        ):
+            result = asyncio.run(stl._extract_source_pin(
+                Page(), {"pin_id": "slow-tabs", "category": "fashion"}, state
+            ))
+
+        self.assertEqual(result["tabCount"], 10)
+        self.assertEqual(clicks, stl.STL_MAX_TABS_PER_PIN)
+        self.assertEqual(state["_pinStage"], "complete")
 
     def test_timeout_configuration_is_fail_closed(self):
         with patch.dict(os.environ, {stl.STL_PIN_TIMEOUT_ENV: "301"}):
