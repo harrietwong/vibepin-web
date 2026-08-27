@@ -27,14 +27,13 @@ import { createServerClient } from "@/lib/supabase";
 import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
-import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
 import {
   createPublishJob,
   fanOutDestinations,
   pinterestOutcomeRow,
   recordOutcomes,
 } from "@/lib/social/publishFanout";
-import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
+import type { DestinationOutcome } from "@/lib/social/publishRules";
 import {
   recordPublishEvent,
   recordFailedPublishEvent,
@@ -50,6 +49,9 @@ import {
   payloadAfterFailure,
   destinationPublishInput,
   describeThrown,
+  owedDestinations,
+  failedRowsForUnattempted,
+  didNotCompleteMessage,
 } from "./publishDueLogic";
 
 export const runtime = "nodejs";
@@ -205,19 +207,16 @@ export async function GET(req: Request): Promise<Response> {
         metadata: { source: "scheduled-cron" },
       });
 
-      // ── The destinations this Content was scheduled to ────────────────────────
+      // ── The destinations this Content still owes ──────────────────────────────
       // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
       // here, so it behaves exactly as it did before: no extra platforms are ever
-      // invented for it, and exactly one Pinterest publish happens.
-      const intent = resolveScheduledDestinations(row.payload as Parameters<typeof resolveScheduledDestinations>[0]);
-      // What is still owed. A row re-claimed after a stale lock (this route is
-      // at-least-once by construction — see the header) must not re-publish the
-      // account that already succeeded; `pendingDestinations` is keyed by ACCOUNT,
-      // so two accounts on one platform retry independently.
-      const priorResults = Array.isArray(row.payload.destinationResults)
-        ? (row.payload.destinationResults as Array<{ provider: string; status: string; socialConnectionId?: string | null }>)
-        : [];
-      const owed = pendingDestinations(intent, priorResults);
+      // invented for it, and exactly one Pinterest publish happens. A row re-claimed
+      // after a stale lock (this route is at-least-once by construction — see the
+      // header) must not re-publish an account that already succeeded, which is why
+      // this is what is OWED and not what was intended. It is the same helper
+      // `payloadToPublishInput` consults to decide whether a board is required, so the
+      // two can never disagree about which platforms this run is for.
+      const owed = owedDestinations(row.payload);
       const pinterestTargets = owed.filter(d => d.provider === "pinterest");
       const extras = owed.filter(d => d.provider !== "pinterest");
       const legacyTarget = typeof row.payload.targetConnectionId === "string" ? row.payload.targetConnectionId.trim() : "";
@@ -296,8 +295,12 @@ export async function GET(req: Request): Promise<Response> {
       // Runs BEFORE the persist so a fan-out crash cannot leave the Content marked
       // posted with no record of the platforms that were still owed.
       if (extras.length) {
+        // The job id must outlive the try: when the fan-out throws, the attempt still
+        // has to be finalized with the failure rows below. A job row left in
+        // `publishing` forever reads as a publish that is still in flight.
+        let jobId: string | null = null;
         try {
-          const jobId = await createPublishJob(
+          jobId = await createPublishJob(
             db,
             row.vibepin_user_id,
             typeof row.draft_id === "string" ? row.draft_id : null,
@@ -313,11 +316,32 @@ export async function GET(req: Request): Promise<Response> {
             altText: input.altText,
           });
           outcomes.push(...fanned);
-          if (jobId) await recordOutcomes(db, jobId, outcomes);
+          // Defensive: an owed destination the fan-out returned no row for is not
+          // "nothing happened", it is "nobody knows" — and silence there reads to the
+          // merchant as a platform that was never even selected.
+          const unreported = failedRowsForUnattempted(extras, didNotCompleteMessage, fanned);
+          outcomes.push(...unreported);
+          if (unreported.length && !firstFailure) {
+            firstFailure = { message: unreported[0].error ?? "Publish failed" };
+          }
         } catch (fanErr) {
           // A fan-out failure must never undo a Pinterest publish that already
-          // succeeded, so it is logged and the Content still completes as posted.
-          console.error("[cron/publish-due] fan-out:", (fanErr as Error).message);
+          // succeeded — but it must never be silent either. Before this, a throw was
+          // logged and nothing else: the owed Instagram/Facebook destinations got no
+          // result row at all, so the Content was marked posted from the Pinterest
+          // result and the merchant had no way to learn the other platforms never
+          // went out. Every owed destination now gets a failed row carrying the reason.
+          const described = describeThrown(fanErr);
+          console.error("[cron/publish-due] fan-out:", described.message);
+          outcomes.push(...failedRowsForUnattempted(extras, described.message));
+          if (!firstFailure) firstFailure = described;
+        }
+        // Recording the attempt must not itself become the reason a delivered publish
+        // is reported as failed: its errors are logged, never thrown to the row's catch.
+        try {
+          if (jobId) await recordOutcomes(db, jobId, outcomes);
+        } catch (recErr) {
+          console.error("[cron/publish-due] record outcomes:", (recErr as Error).message);
         }
       }
 

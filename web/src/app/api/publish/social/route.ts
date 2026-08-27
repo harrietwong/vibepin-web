@@ -36,6 +36,11 @@ import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import { isSocialProvider, platformName, PLATFORMS, type SocialProvider } from "@/lib/social/platforms";
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
+import {
+  resolveDestinationConnection,
+  connectAccountMessage,
+  chooseAccountMessage,
+} from "@/lib/social/server/resolveDestinationConnection";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
@@ -122,14 +127,29 @@ export async function POST(req: Request) {
       continue;
     }
 
-    const requestedId =
-      typeof (raw as { socialConnectionId?: unknown }).socialConnectionId === "string"
-        ? ((raw as { socialConnectionId: string }).socialConnectionId)
-        : null;
+    // WHICH account this destination means. Falling back to "the first connected
+    // account" — what this route used to do for a destination that named none —
+    // publishes to an account the merchant never chose as soon as two are connected,
+    // and they only find out by seeing the post appear there.
     const summary = byProvider.get(provider);
-    const connection: SocialConnection | null = requestedId
-      ? await findConnection(uid, requestedId)
-      : summary?.accounts.find(a => a.connectionStatus === "connected") ?? null;
+    const choice = resolveDestinationConnection(summary, raw as { socialConnectionId?: unknown });
+    if (choice.kind === "none" || choice.kind === "ambiguous") {
+      outcomes.push({
+        provider,
+        status: "failed",
+        socialConnectionId: null,
+        // Refused BEFORE the provider is called: an ambiguous destination must not
+        // publish anywhere at all. Asking is recoverable; the wrong audience is not.
+        error: choice.kind === "none" ? connectAccountMessage(provider) : chooseAccountMessage(provider),
+      });
+      continue;
+    }
+    // An explicitly named account is resolved through the user-scoped lookup, so an
+    // id belonging to someone else resolves to nothing rather than publishing across
+    // a workspace boundary.
+    const connection: SocialConnection | null = choice.kind === "explicit"
+      ? await findConnection(uid, choice.connectionId)
+      : choice.connection;
 
     if (!connection || connection.connectionStatus !== "connected") {
       outcomes.push({

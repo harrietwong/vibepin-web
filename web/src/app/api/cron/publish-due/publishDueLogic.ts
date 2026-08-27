@@ -12,6 +12,12 @@
 import { mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 // Pure URL resolution — no browser globals, safe on the server.
 import { toProxyUrl } from "@/lib/imageProxy";
+// Intent resolution. Both modules are pure and import-safe (no Supabase client built at
+// module load), which is what keeps this file runnable under bare `tsx`.
+import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
+import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
+import { isSocialProvider, platformName, type SocialProvider } from "@/lib/social/platforms";
+import type { ScheduledDestination } from "@/lib/pinDraftStore";
 
 /** A claim is reclaimable if it was never taken, or the worker that took it is
  *  presumed dead (claim older than this window). Matches the SQL the route runs. */
@@ -67,7 +73,15 @@ function readMediaUrls(payload: Record<string, unknown>): string[] {
 
 export interface DuePublishInput {
   uid: string;
-  boardId: string;
+  /**
+   * The Pinterest board this Content publishes into — ABSENT when no Pinterest
+   * destination is owed. A Content scheduled only to Instagram/Facebook has no board
+   * and never needed one; requiring it here is what made such a schedule fail with
+   * "Missing image or board" without a single platform it named being attempted.
+   * `destinationPublishInput` re-resolves the board per Pinterest entry and refuses an
+   * entry that has none, so nothing ever reaches Pinterest boardless.
+   */
+  boardId?: string;
   /** The cover image — `imageUrls[0]`, kept for callers on the single-image contract. */
   imageUrl: string;
   /**
@@ -97,6 +111,44 @@ export interface DuePublishInput {
  * exactly the pre-v59 behaviour, and the adoption is written back by payloadAfterSuccess /
  * payloadAfterFailure.
  */
+export function owedDestinations(payload: Record<string, unknown>): ScheduledDestination[] {
+  const intent = resolveScheduledDestinations(payload as Parameters<typeof resolveScheduledDestinations>[0]);
+  // What already happened, so a row re-claimed after a stale lock does not re-publish an
+  // account that already succeeded. `pendingDestinations` keys that by ACCOUNT, so two
+  // accounts on one platform retry independently.
+  const prior = Array.isArray(payload.destinationResults)
+    ? (payload.destinationResults as Array<{ provider: string; status: string; socialConnectionId?: string | null }>)
+    : [];
+  if (intent.length) return pendingDestinations(intent, prior);
+
+  // ── The draft that names no account at all ────────────────────────────────────
+  // `resolveScheduledDestinations` can only derive intent from a PINNED target, so a
+  // draft with a board but no `targetConnectionId` — every Pin scheduled before
+  // adopt-once wrote one back — resolves to nothing. Once destinations drove the
+  // publish, "nothing owed" made such a row leave the due scan as completed after
+  // being metered, publishing absolutely nothing. It used to publish through
+  // `publishPinForUser` on the DEFAULT connection and adopt it, so that is what is
+  // owed: one Pinterest destination naming no account.
+  //
+  // The empty `socialConnectionId` is the point, not an oversight — it is what makes
+  // `destinationPublishInput` leave `connectionId` unset, so the publish resolves the
+  // default account and the route's adopt-once branch pins it. It is also why the
+  // stored result row keys as `pinterest:legacy`, exactly as it always did.
+  const boardId = firstString(payload.boardId);
+  if (!boardId) return []; // nothing to publish INTO — payloadToPublishInput refuses it
+  // A stale re-claim must not double-post the Pin this row already published.
+  if (prior.some(r => r.provider === "pinterest" && r.status === "published")) return [];
+  const legacy: ScheduledDestination = {
+    provider: "pinterest",
+    socialConnectionId: "",
+    boardId,
+    capturedAt: new Date().toISOString(),
+  };
+  const boardName = firstString(payload.boardName);
+  if (boardName) legacy.boardName = boardName;
+  return [legacy];
+}
+
 export function payloadToPublishInput(uid: string, payload: Record<string, unknown>): DuePublishInput | null {
   // A multi-image Content stores its whole media set in `payload.media`, in display
   // order, with the cover first. Older/single-image drafts have no `media` at all —
@@ -104,15 +156,31 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
   const mediaUrls = readMediaUrls(payload);
   const storedImage = mediaUrls[0] || firstString(payload.imageUrl, payload.sourceImageUrl);
   const boardId = firstString(payload.boardId);
-  // A board is still required, but it may live on a Pinterest ENTRY rather than on the
-  // draft: a Content whose only Pinterest destination carries its own board has no
-  // legacy `payload.boardId` at all, and refusing it here would fail a publish that is
-  // perfectly well specified. `destinationPublishInput` re-checks per entry, so an
-  // entry that genuinely has no board is still refused — just individually.
+  // A board may live on a Pinterest ENTRY rather than on the draft: a Content whose only
+  // Pinterest destination carries its own board has no legacy `payload.boardId` at all,
+  // and refusing it here would fail a publish that is perfectly well specified.
+  // `destinationPublishInput` re-checks per entry, so an entry that genuinely has no
+  // board is still refused — just individually.
   const anyEntryBoard = Array.isArray(payload.scheduledDestinations)
     && (payload.scheduledDestinations as Array<Record<string, unknown>>)
       .some(d => d && typeof d === "object" && d.provider === "pinterest" && firstString(d.boardId));
-  if (!storedImage || (!boardId && !anyEntryBoard)) return null;
+  // WHETHER a board is required at all: only when nothing but Pinterest is still owed.
+  //
+  //   - nothing owed (a legacy draft carrying no intent at all) ⇒ every() is true ⇒
+  //     required, i.e. byte-for-byte the behaviour this function always had.
+  //   - Pinterest-only intent (explicit, or derived from the legacy pinned target) ⇒
+  //     required, unchanged.
+  //   - the Content names Instagram/Facebook and NO Pinterest ⇒ NOT required. This is
+  //     the fix: such a Content has no board, never needed one, and used to die here
+  //     with "Missing image or board" without a single named platform being attempted.
+  //   - mixed (Pinterest + Instagram) with no board anywhere ⇒ not required at the
+  //     CONTENT level: the boardless Pinterest entry is refused individually by
+  //     `destinationPublishInput` and gets its own failure row, while Instagram — which
+  //     needs no board — still goes out. Failing the whole Content would punish a
+  //     destination that is perfectly well specified for a defect on a different one.
+  const boardRequired = owedDestinations(payload).every(d => d.provider === "pinterest");
+  if (!storedImage) return null;
+  if (boardRequired && !boardId && !anyEntryBoard) return null;
   // Resolve to the absolute public URL, exactly as the Publish-now path does
   // (DraftDetailsDrawer passes the image through toProxyUrl before publishing).
   //
@@ -130,7 +198,9 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
   const imageUrls = (mediaUrls.length ? mediaUrls : [storedImage]).map(toProxyUrl);
   return {
     uid,
-    boardId,
+    // Omitted rather than "" when there is none, so the type tells the truth: a
+    // Pinterest publish is only ever built through `destinationPublishInput`.
+    boardId: boardId || undefined,
     imageUrl: imageUrls[0],
     imageUrls,
     title: firstString(payload.title) || undefined,
@@ -141,6 +211,13 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
     connectionId: firstString(payload.targetConnectionId) || undefined,
   };
 }
+
+/**
+ * A Pinterest-ready publish input: the Content's fields with a board RESOLVED. Only
+ * `destinationPublishInput` mints one, which is why nothing can reach Pinterest without
+ * a board even though `DuePublishInput.boardId` is optional.
+ */
+export type PinterestPublishInput = DuePublishInput & { boardId: string };
 
 /** One destination's outcome, in the shape the fan-out layer already produces. */
 export type DestinationOutcomeLike = {
@@ -201,6 +278,58 @@ export function mergeDestinationResults(
     });
   const fresh = new Set(rows.map(r => r.destinationId));
   return [...prior.filter(r => !fresh.has(r?.destinationId)), ...rows];
+}
+
+/** The reason a destination that was owed produced no result of its own. */
+export function didNotCompleteMessage(provider: SocialProvider): string {
+  return `Publishing to ${platformName(provider)} did not complete.`;
+}
+
+/**
+ * Failed result rows for owed destinations that the fan-out never reported on.
+ *
+ * Two ways a destination can end up with no row: `fanOutDestinations` THREW (one
+ * unhandled error and every remaining platform is lost at once), or it returned fewer
+ * rows than it was given. Both used to be silent — the Content was marked posted from
+ * the Pinterest result and the merchant was never told Instagram had not gone out. A
+ * missing row does not mean "nothing happened", it means "nobody knows", and the only
+ * honest rendering of that is a failure the merchant can see and retry.
+ *
+ * `attempted` is whatever DID report (the fan-out's return value), keyed the same way
+ * the rest of the pipeline keys destinations — provider + account — so a partial
+ * result set only gets rows for the accounts genuinely missing from it. Pinterest
+ * entries are never included: they are dispatched by their own loop, which always
+ * records a row.
+ */
+export function failedRowsForUnattempted(
+  extras: readonly ScheduledDestination[],
+  message: string | ((provider: SocialProvider) => string),
+  attempted: readonly DestinationOutcomeLike[] = [],
+): DestinationOutcome[] {
+  const key = (provider: string, id: unknown) =>
+    `${provider}:${typeof id === "string" && id.trim() ? id.trim() : ""}`;
+  const seen = new Set(attempted.map(o => key(o.provider, o.socialConnectionId)));
+  const rows: DestinationOutcome[] = [];
+  for (const d of extras) {
+    // Pinterest is dispatched by the per-destination loop, which always leaves a row.
+    if (!isSocialProvider(d.provider) || d.provider === "pinterest") continue;
+    const k = key(d.provider, d.socialConnectionId);
+    if (seen.has(k)) continue;
+    seen.add(k); // a duplicated entry must not produce two identical failure rows
+    const row: DestinationOutcome = {
+      provider: d.provider,
+      status: "failed",
+      socialConnectionId: typeof d.socialConnectionId === "string" && d.socialConnectionId.trim()
+        ? d.socialConnectionId.trim()
+        : null,
+      error: (typeof message === "function" ? message(d.provider) : message)
+        || didNotCompleteMessage(d.provider),
+    };
+    // Name the account the merchant chose, so a two-account platform says WHICH one.
+    if (d.accountLabel) row.accountName = d.accountLabel;
+    rows.push(row);
+  }
+  return rows;
 }
 
 /**
@@ -452,10 +581,10 @@ export function destinationPublishInput(
   destination: { socialConnectionId?: string | null; boardId?: string | null },
   /** The draft's legacy target — the only entry the draft-level board belongs to. */
   legacyTargetConnectionId: string,
-): DuePublishInput | null {
+): PinterestPublishInput | null {
   const own = typeof destination.boardId === "string" ? destination.boardId.trim() : "";
   const id = typeof destination.socialConnectionId === "string" ? destination.socialConnectionId.trim() : "";
-  const boardId = own || (!id || id === legacyTargetConnectionId ? base.boardId : "");
+  const boardId = own || (!id || id === legacyTargetConnectionId ? base.boardId ?? "" : "");
   if (!boardId) return null;
   return { ...base, boardId, connectionId: id || base.connectionId };
 }
