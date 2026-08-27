@@ -84,12 +84,17 @@ function str(v: unknown): string {
  * writes, because the account-sync engine writes raw server JSON straight into the
  * same localStorage key — a half-record from an older/newer client must degrade to
  * "no default" rather than reach draft creation as a destination pointing nowhere.
- * One entry per provider: the last one wins, so a duplicated payload can't produce
- * two conflicting defaults for the same platform.
+ *
+ * SEVERAL entries per provider are allowed — a merchant with two Pinterest accounts
+ * may want new content to default to both. Deduping is by ACCOUNT
+ * (`${provider}:${socialConnectionId}`, last one wins), so a duplicated payload still
+ * cannot produce two conflicting defaults for the same account, while two different
+ * accounts on one platform both survive. Keying on the provider alone silently
+ * discarded the second account.
  */
 export function sanitizeDefaultDestinations(raw: unknown): DefaultDestination[] {
   if (!Array.isArray(raw)) return [];
-  const byProvider = new Map<SocialProvider, DefaultDestination>();
+  const byAccount = new Map<string, DefaultDestination>();
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const r = item as Record<string, unknown>;
@@ -103,9 +108,9 @@ export function sanitizeDefaultDestinations(raw: unknown): DefaultDestination[] 
     if (boardId) entry.boardId = boardId;
     if (boardName) entry.boardName = boardName;
     if (accountLabel) entry.accountLabel = accountLabel;
-    byProvider.set(r.provider, entry);
+    byAccount.set(`${r.provider}:${socialConnectionId}`, entry);
   }
-  return [...byProvider.values()];
+  return [...byAccount.values()];
 }
 
 function ok(): boolean { return typeof window !== "undefined"; }

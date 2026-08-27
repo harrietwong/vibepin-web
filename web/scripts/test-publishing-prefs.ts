@@ -130,13 +130,41 @@ async function main(): Promise<void> {
     assert.deepEqual(out, [{ provider: "pinterest", socialConnectionId: "c1" }]);
   });
 
-  await test("sanitizer: one default per platform — a duplicated payload cannot produce two", () => {
+  await test("sanitizer: SEVERAL accounts on one platform are all kept (WS-B3)", () => {
+    // Each account is its own destination, so new content may default to both. Keying
+    // the dedupe on the provider silently discarded the second account.
     const out = sanitizeDefaultDestinations([
-      { provider: "pinterest", socialConnectionId: "c1" },
-      { provider: "pinterest", socialConnectionId: "c2" },
+      { provider: "pinterest", socialConnectionId: "c1", boardId: "b1" },
+      { provider: "pinterest", socialConnectionId: "c2", boardId: "b2" },
+      { provider: "instagram", socialConnectionId: "ig1" },
+    ]);
+    assert.equal(out.length, 3);
+    assert.deepEqual(out.filter(d => d.provider === "pinterest").map(d => d.boardId), ["b1", "b2"],
+      "each Pinterest default keeps its own board");
+  });
+
+  await test("sanitizer: the same ACCOUNT twice still collapses to one", () => {
+    const out = sanitizeDefaultDestinations([
+      { provider: "pinterest", socialConnectionId: "c1", boardId: "b1" },
+      { provider: "pinterest", socialConnectionId: "c1", boardId: "b2" },
     ]);
     assert.equal(out.length, 1);
-    assert.equal(out[0].socialConnectionId, "c2", "the last entry wins");
+    assert.equal(out[0].boardId, "b2", "the last entry for that account wins");
+  });
+
+  await test("createBoardDraft seeds every default, and mirrors the FIRST Pinterest one", () => {
+    const draft = pinDraftStore.createBoardDraft({
+      imageUrl: "https://cdn.test/x.jpg",
+      source: "uploaded_image",
+      defaultDestinations: [
+        { provider: "pinterest", socialConnectionId: "c1", boardId: "b1", boardName: "One" },
+        { provider: "pinterest", socialConnectionId: "c2", boardId: "b2", boardName: "Two" },
+        { provider: "instagram", socialConnectionId: "ig1" },
+      ],
+    });
+    assert.equal(draft.scheduledDestinations?.length, 3, "all three defaults seed the new Content");
+    assert.equal(draft.targetConnectionId, "c1");
+    assert.equal(draft.boardId, "b1", "the legacy mirror follows the first Pinterest default");
   });
 
   // ── §12 migration off the old browser key ────────────────────────────────────

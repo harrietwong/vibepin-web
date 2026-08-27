@@ -786,43 +786,57 @@ function PublishingTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() =>
   const { t } = useLocale();
   const [prefs, setPrefs] = useState<PublishingPrefs>(() => defaultPublishingPrefs());
   const { platforms, loading: platformsLoading } = useConnectedPlatforms();
-  const [boards, setBoards] = useState<{ id: string; name: string }[]>([]);
+  /** Boards per Pinterest connection id — they belong to one account each. */
+  const [boards, setBoards] = useState<Record<string, { id: string; name: string }[]>>({});
 
   // Adopt a pre-prefs multi-upload answer before painting, so the radio shows what
   // Create Pins would actually do rather than a misleading "Ask every time".
   useEffect(() => { setPrefs(migrateMultiUploadMode()); }, []);
 
-  const defaultsByProvider = useMemo(() => {
-    const map = new Map<SocialProvider, DefaultDestination>();
-    for (const d of prefs.defaultDestinations) map.set(d.provider, d);
+  /**
+   * The defaults, keyed by ACCOUNT. Several accounts on one platform may each be a
+   * default — a merchant with two Pinterest accounts can have new content seeded to
+   * both — so this is no longer one entry per provider.
+   */
+  const defaultsById = useMemo(() => {
+    const map = new Map<string, DefaultDestination>();
+    for (const d of prefs.defaultDestinations) map.set(d.socialConnectionId, d);
     return map;
   }, [prefs.defaultDestinations]);
 
-  const pinterestDefault = defaultsByProvider.get("pinterest");
-  const pinterestConnectionId = pinterestDefault?.socialConnectionId;
+  // Every Pinterest account that is currently a default needs its own board list:
+  // boards belong to one account, so one shared list would offer the wrong boards.
+  const pinterestConnectionIds = useMemo(
+    () => prefs.defaultDestinations.filter(d => d.provider === "pinterest").map(d => d.socialConnectionId).sort().join(","),
+    [prefs.defaultDestinations],
+  );
 
-  // Boards are per-account, so the board list is refetched whenever the chosen
-  // Pinterest account changes. Without the account id this would list the boards of
-  // whichever account the server picks by default — a different account's boards.
   useEffect(() => {
     let alive = true;
-    if (!pinterestConnectionId) {
+    const ids = pinterestConnectionIds ? pinterestConnectionIds.split(",") : [];
+    if (!ids.length) {
       // No account chosen ⇒ no boards. Cleared asynchronously so the effect never
       // sets state during the same commit that scheduled it.
-      Promise.resolve().then(() => { if (alive) setBoards([]); });
+      Promise.resolve().then(() => { if (alive) setBoards({}); });
       return () => { alive = false; };
     }
-    fetchPinterestBoards(undefined, undefined, pinterestConnectionId)
-      .then(result => { if (alive) setBoards(result.items.map(b => ({ id: b.id, name: b.name }))); })
-      .catch(() => { if (alive) setBoards([]); });
+    void Promise.all(ids.map(async id => {
+      try {
+        const result = await fetchPinterestBoards(undefined, undefined, id);
+        return [id, result.items.map(b => ({ id: b.id, name: b.name }))] as const;
+      } catch {
+        return [id, []] as const;
+      }
+    })).then(entries => { if (alive) setBoards(Object.fromEntries(entries)); });
     return () => { alive = false; };
-  }, [pinterestConnectionId]);
+  }, [pinterestConnectionIds]);
 
   function patch(p: Partial<PublishingPrefs>) { setPrefs(prev => ({ ...prev, ...p })); }
 
-  function setDestination(provider: SocialProvider, next: DefaultDestination | null) {
+  /** Add, replace or remove ONE account's default. Other accounts are untouched. */
+  function setDestination(connectionId: string, next: DefaultDestination | null) {
     setPrefs(prev => {
-      const rest = prev.defaultDestinations.filter(d => d.provider !== provider);
+      const rest = prev.defaultDestinations.filter(d => d.socialConnectionId !== connectionId);
       return { ...prev, defaultDestinations: next ? [...rest, next] : rest };
     });
   }
@@ -945,57 +959,61 @@ function PublishingTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() =>
           // A platform with no connected account offers nothing to default TO. Showing
           // an empty dropdown would read as "no default chosen" rather than "connect first".
           if (!accounts.length) return null;
-          const chosen = defaultsByProvider.get(provider);
           return (
             <div key={provider} style={{ padding: "10px 0", borderBottom: `1px solid ${UI.border}` }}>
               <span style={labelCss}>{platformName(provider)}</span>
-              <select
-                data-testid={`publishing-default-account-${provider}`}
-                value={chosen?.socialConnectionId ?? ""}
-                onChange={e => {
-                  const id = e.target.value;
-                  if (!id) { setDestination(provider, null); return; }
-                  const account = accounts.find(a => a.id === id);
-                  const label = account?.providerAccountUsername ?? account?.providerAccountName ?? undefined;
-                  // Switching account drops the board: a board id belongs to one account
-                  // and means nothing — or worse, something else — on another.
-                  setDestination(provider, {
-                    provider,
-                    socialConnectionId: id,
-                    ...(label ? { accountLabel: label } : {}),
-                  });
-                }}
-                style={selectCss}
-              >
-                <option value="">{t("publishing.defaultDestinationNone")}</option>
-                {accounts.map(a => (
-                  <option key={a.id} value={a.id}>
-                    {a.providerAccountUsername ?? a.providerAccountName ?? a.id}
-                  </option>
-                ))}
-              </select>
+              {/* One checkbox per connected account, not one select per platform: each
+                  account is its own destination, so new content may default to several
+                  accounts on the same platform. */}
+              {accounts.map(a => {
+                const chosen = defaultsById.get(a.id);
+                const label = a.providerAccountUsername ?? a.providerAccountName ?? a.id;
+                return (
+                  <div key={a.id} style={{ padding: "4px 0" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: UI.text, cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        data-testid={`publishing-default-account-${provider}-${a.id}`}
+                        checked={!!chosen}
+                        onChange={e => {
+                          if (!e.target.checked) { setDestination(a.id, null); return; }
+                          setDestination(a.id, {
+                            provider,
+                            socialConnectionId: a.id,
+                            ...(label ? { accountLabel: label } : {}),
+                          });
+                        }}
+                      />
+                      {label}
+                    </label>
 
-              {provider === "pinterest" && chosen ? (
-                <div style={{ marginTop: 8 }}>
-                  <span style={labelCss}>{t("publishing.defaultBoard")}</span>
-                  <select
-                    data-testid="publishing-default-board"
-                    value={chosen.boardId ?? ""}
-                    onChange={e => {
-                      const boardId = e.target.value;
-                      const board = boards.find(b => b.id === boardId);
-                      setDestination(provider, {
-                        ...chosen,
-                        ...(boardId ? { boardId, boardName: board?.name ?? "" } : { boardId: undefined, boardName: undefined }),
-                      });
-                    }}
-                    style={selectCss}
-                  >
-                    <option value="">{t("publishing.defaultBoardNone")}</option>
-                    {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
-                </div>
-              ) : null}
+                    {/* Each ticked Pinterest account picks its OWN board — a board id
+                        belongs to one account and means nothing, or something else,
+                        on another. Unticking drops it with the account. */}
+                    {provider === "pinterest" && chosen ? (
+                      <div style={{ margin: "6px 0 0 24px" }}>
+                        <span style={labelCss}>{t("publishing.defaultBoard")}</span>
+                        <select
+                          data-testid={`publishing-default-board-${a.id}`}
+                          value={chosen.boardId ?? ""}
+                          onChange={e => {
+                            const boardId = e.target.value;
+                            const board = (boards[a.id] ?? []).find(b => b.id === boardId);
+                            setDestination(a.id, {
+                              ...chosen,
+                              ...(boardId ? { boardId, boardName: board?.name ?? "" } : { boardId: undefined, boardName: undefined }),
+                            });
+                          }}
+                          style={selectCss}
+                        >
+                          <option value="">{t("publishing.defaultBoardNone")}</option>
+                          {(boards[a.id] ?? []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        </select>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
