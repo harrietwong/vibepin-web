@@ -144,6 +144,14 @@ export type InsightReportSummary = {
 
 /** The body. Reading one marks it viewed, which is also what freezes it. */
 export type InsightReportDetail = InsightReportSummary & {
+  /**
+   * The connected account this report is about.
+   *
+   * The client needs it so "Generate based on this insight" can send the follow-up
+   * Pin to the SAME account, without depending on a localStorage draft that a new
+   * device or a cleared cache does not have.
+   */
+  connectionId: string;
   evidenceHash: string;
   ruleVersion: string | null;
   keywordSetVersion: number | null;

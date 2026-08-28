@@ -58,6 +58,8 @@ export const CORE: string[] = [
   "test-insights-reports",
   // Insights → Create Pins prefill (builder shape, immutability, destination seed)
   "test-insights-prefill",
+  // Prefill handoff into the DEFAULT board Studio (seed mapping, consume-once, destination)
+  "test-studio-prefill-handoff",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
   "test-admin-account-kind",

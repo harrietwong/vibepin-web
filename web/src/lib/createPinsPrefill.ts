@@ -279,6 +279,15 @@ export function buildPrefillFromWeeklyPlan(item: {
  * lives where the locale does and passes text already rendered. Nothing here reads
  * a catalogue, so the builder stays pure and testable.
  *
+ * The connecting FRAME below ("Create a new Pinterest Pin for...", "Change exactly one
+ * variable...") is deliberately English in every locale, and is not a missing
+ * translation. It is a generation brief: it is read by the image model, which is
+ * prompted in English, and a user who edits it is editing model input. Translating the
+ * frame while the caller's clauses stay in the user's language would produce a
+ * half-translated prompt that generates worse images than a consistently English one.
+ * If this ever becomes a user-facing display string rather than a prompt, move the
+ * frame into i18n keys and have the caller pass the rendered sentences.
+ *
  * Pure: the input is only read, never written to.
  */
 export function buildPrefillFromInsight(input: {

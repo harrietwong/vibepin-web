@@ -138,6 +138,13 @@ type WriteOutcome = "unchanged" | "created" | "versioned" | "unavailable";
 
 type StoredRow = {
   id: string;
+  /**
+   * Which connected account this report is about. Surfaced to the client because a
+   * follow-up Pin must publish to THIS account: without it the only source of a
+   * destination was the local draft, so clearing a browser or switching device hid
+   * the generate action entirely (or worse, would have guessed an account).
+   */
+  connection_id: string;
   kind: InsightReportKind;
   period_key: string;
   subject_content_id: string | null;
@@ -419,7 +426,7 @@ function summaryOf(row: StoredRow): InsightReportSummary | null {
 }
 
 const ROW_COLUMNS =
-  "id,kind,period_key,subject_content_id,subject_draft_id,version,evidence_hash,evidence_snapshot,rule_version,keyword_set_version,narrative_status,generated_at,viewed_at";
+  "id,connection_id,kind,period_key,subject_content_id,subject_draft_id,version,evidence_hash,evidence_snapshot,rule_version,keyword_set_version,narrative_status,generated_at,viewed_at";
 
 /**
  * This user's current reports, newest first.
@@ -505,6 +512,7 @@ export async function readReport(uid: string, reportId: string): Promise<Insight
   return {
     ...summary,
     viewedAt,
+    connectionId: row.connection_id,
     evidenceHash: row.evidence_hash,
     ruleVersion: row.rule_version,
     keywordSetVersion: row.keyword_set_version,

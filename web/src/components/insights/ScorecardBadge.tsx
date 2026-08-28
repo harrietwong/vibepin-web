@@ -126,16 +126,24 @@ function scorecardVariable(flags: Evidence[] | undefined): RecommendationVariabl
 /**
  * "Generate based on this insight", on one Pin.
  *
- * The draft is the source of truth for WHERE a follow-up would publish: the scorecard
- * row deliberately does not carry a connection id, and the draft that produced the Pin
- * already records the account it went to. A Pin published before the app recorded that
- * (`targetConnectionId` absent) gets no button rather than a guessed account — sending
- * a regeneration to the wrong profile is worse than not offering it.
+ * WHERE a follow-up publishes comes from the REPORT, not the browser. The report row
+ * records the connection it was generated for, so the account is known on any device.
+ * The local draft is consulted only for the extras it alone has — the source image and
+ * the board the Pin actually went to — and its target wins when present, because a
+ * draft that recorded its own account is the more specific fact.
+ *
+ * Keying this on the local draft (as it first did) meant a cleared cache, a second
+ * device, or a pruned store hid the button while the server still had the scorecard.
+ * The button now disappears only when the report itself names no account, which is the
+ * one case where offering it would mean guessing a profile to publish to.
  */
-function GenerateFromScorecard({ content, tr }: { content: ScorecardReportContent; tr: Translate }) {
+function GenerateFromScorecard(
+  { content, reportConnectionId, tr }:
+  { content: ScorecardReportContent; reportConnectionId: string | null; tr: Translate },
+) {
   const draftId = content.subject.draftId;
   const draft = draftId ? pinDraftStore.getDraft(draftId) : null;
-  const connectionId = readStoredTarget(draft);
+  const connectionId = readStoredTarget(draft) || reportConnectionId || "";
   if (!connectionId) return null;
 
   const variable = scorecardVariable(content.flags);
@@ -286,7 +294,7 @@ function ScorecardModal({ reportId, onClose, tr }: { reportId: string; onClose: 
               {renderText(content.sampleCaveat, tr)}
             </p>
 
-            <GenerateFromScorecard content={content} tr={tr} />
+            <GenerateFromScorecard content={content} reportConnectionId={detail?.connectionId ?? null} tr={tr} />
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 11, color: "var(--app-text-muted)" }}>
