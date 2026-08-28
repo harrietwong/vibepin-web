@@ -6,12 +6,6 @@
   "database": "vibepin_v37_replay",
   "confirmationBinding": "LOCAL-V37-ROLLBACK-ONLY:127.0.0.1:55437:vibepin_v37_replay",
   "serverVersionNum": "170011",
-  "portableRuntime": {
-    "distribution": "EDB PostgreSQL 17.11 Windows x64 binaries linked by postgresql.org",
-    "archiveSha256": "6eabdf00d2893713b75db4336a23c3fdf505f056e217ec6e2e95d901750cfea3",
-    "systemInstall": false,
-    "registeredService": false
-  },
   "canonicalSqlSha256": {
     "backend/db/migrate_v63_product_opportunities_v1.sql": "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
     "backend/db/rollback_v63_product_opportunities_v1.sql": "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
@@ -86,7 +80,20 @@
   "verdict": "PASS",
   "cleanup": {
     "userTables": 0,
-    "fixtureRoles": 0,
+    "fixtureRoles": 0
+  },
+  "evidenceProvenance": {
+    "harnessGeneratedFields": "schemaVersion through cleanup.fixtureRoles",
+    "operatorAppendedFields": [
+      "operatorLifecycleEvidence"
+    ],
+    "operatorLifecycleIsNotEmittedByReplayHarness": true
+  },
+  "operatorLifecycleEvidence": {
+    "distribution": "EDB PostgreSQL 17.11 Windows x64 binaries linked by postgresql.org",
+    "archiveSha256": "6eabdf00d2893713b75db4336a23c3fdf505f056e217ec6e2e95d901750cfea3",
+    "systemInstall": false,
+    "registeredService": false,
     "databaseDropped": true,
     "serverStoppedAt": "2026-08-28T08:48:13.646Z",
     "pgIsReadyAfterStopExitCode": 2,

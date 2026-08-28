@@ -29,7 +29,7 @@ metric history or a disabled timer is live.
 
 ## Current validation
 
-- Backend: `1010 passed`, `2` credential-gated skips, zero failures.
+- Backend: `1011 passed`, `2` credential-gated skips, zero failures.
 - Admission/migration focused group: `132/132`.
 - Exact release automation contract: `30/30`.
 - Product Web checks rerun from the current tree: v3.7 contract, access,
@@ -52,8 +52,9 @@ metric history or a disabled timer is live.
   PASS. A production SELECT-only probe captured the real message-only API
   wrapper; `a299a17` now parses only that anchored format or an unambiguous
   structured pair and requires exact HTTP 400 / `55P03` for the lock challenger.
-  The native replay finished with zero rows, locks, sessions, v63 objects,
-  fixture roles/tables and a stopped server. Isolated Supabase test-project
+  The harness finished with zero rows, locks, sessions, v63 objects and fixture
+  roles/tables; separately labelled operator evidence records database drop and
+  server stop. Isolated Supabase test-project
   execution is still required for the Management API multi-session path.
 
 ## Data quality decision

@@ -43,7 +43,7 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 1010 passed with 2 live-only skips; Web 132/132
+and contract-test state: backend 1011 passed with 2 live-only skips; Web 132/132
 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -155,7 +155,9 @@ An isolated native PostgreSQL 17.11 replay then applied the exact migration,
 passed the 10/18/9/3/4/91/44 schema contract, exercised two-session uniqueness
 and authenticated/anon RLS, received the exact rollback sentinel, preserved
 zero Product/Saved rows, released every advisory lock/session, rolled the schema
-back to zero v63 objects, removed every fixture and stopped the server. A
+back to zero v63 objects and removed every in-database fixture. Separately
+labelled operator lifecycle evidence records that the fixed replay database was
+dropped, the temporary server was stopped and `pg_isready` returned no response. A
 production SELECT-only version probe confirmed PostgreSQL 17.6, matching the
 replay major version. Native PostgreSQL reported 158 broad catalog-query rows
 where PGlite reports 238; the exact versioned schema contract, not that

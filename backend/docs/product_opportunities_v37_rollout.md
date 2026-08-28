@@ -74,7 +74,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 1010 tests with 2
+committed Product-only state, the full backend suite passed 1011 tests with 2
 live-only skips, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
@@ -504,8 +504,10 @@ native sessions proved the active-identity partial unique lock; two fixed fake
 auth users proved per-user RLS, direct authenticated-write denial and anon-read
 denial; the exact `P0001` sentinel rolled back every Product/Evidence/Saved row.
 Before/after counts were identical, advisory locks and extra sessions were zero,
-exact schema rollback left zero v63 objects, legacy fixtures were unchanged,
-fixture roles/tables were removed, and the server was stopped. Native
+exact schema rollback left zero v63 objects, legacy fixtures were unchanged and
+the harness removed its fixture roles/tables. Separate operator lifecycle
+commands then dropped the fixed replay database, stopped the temporary server
+and verified `pg_isready` exit 2. Native
 PostgreSQL returned 158 broad catalog-query rows rather than PGlite's 238 while
 both passed the authoritative 10/18/9/3/4/91/44 contract; no production gate
 may assert the simulator-specific 238 count. Evidence:
@@ -515,9 +517,11 @@ and
 This closes native PostgreSQL concurrency/RLS semantics locally, not the
 Supabase Management API multi-session platform path.
 
-The native replay is repository-contained and accepts only explicit loopback
-hosts. It requires a fresh PostgreSQL 17 database and an already-started local
-server; it never reads Supabase credentials:
+The database replay command is repository-contained and accepts only literal
+loopback IPs. It requires a fresh PostgreSQL 17 database and an already-started
+local server; it never reads Supabase credentials. Download/init/start and the
+post-replay database drop/server stop are operator lifecycle actions outside the
+harness and are explicitly labelled as such in the receipt:
 
 ```powershell
 py backend/tests/postgres_v37/replay_product_opportunity_postgres_v37.py `
@@ -572,7 +576,8 @@ The Stage 1 baseline and post-apply verifier were executed against the exact
 migration in PGlite and repeated in native PostgreSQL 17. The post-apply
 contract proves 10 relations, 18 exact RPC/
 trigger functions, 9 enabled triggers, 3 Saved Products RLS policies, 4 unique
-indexes, 28 critical constraints, 44 grant facts, empty new tables, and unchanged
+indexes, 91 returned constraint facts (including the 28 named critical
+constraints checked by the verifier), 44 grant facts, empty new tables, and unchanged
 legacy row counts plus stable whole-table content checksums. Evidence:
 `backend/docs/product_opportunities_v37_stage1_verifier_pglite_20260828T050657Z.json`.
 

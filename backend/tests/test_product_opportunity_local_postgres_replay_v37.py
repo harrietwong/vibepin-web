@@ -10,6 +10,9 @@ import pytest
 
 BACKEND = Path(__file__).parents[1]
 SCRIPT = BACKEND / "tests" / "postgres_v37" / "replay_product_opportunity_postgres_v37.py"
+EVIDENCE = (
+    BACKEND / "docs" / "product_opportunities_v37_local_postgres_replay_20260828T084744Z.json"
+)
 SPEC = importlib.util.spec_from_file_location("local_postgres_replay_v37_under_test", SCRIPT)
 assert SPEC and SPEC.loader
 replay = importlib.util.module_from_spec(SPEC)
@@ -87,3 +90,17 @@ def test_cleanup_removes_only_the_isolated_replay_fixtures() -> None:
     assert "DROP TABLE pin_products" in replay.CLEANUP_SQL
     assert "DROP SCHEMA auth CASCADE" in replay.CLEANUP_SQL
     assert "DROP ROLE authenticated" in replay.CLEANUP_SQL
+
+
+def test_receipt_separates_harness_output_from_operator_lifecycle_evidence() -> None:
+    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
+    assert evidence["cleanup"] == {"userTables": 0, "fixtureRoles": 0}
+    assert evidence["evidenceProvenance"] == {
+        "harnessGeneratedFields": "schemaVersion through cleanup.fixtureRoles",
+        "operatorAppendedFields": ["operatorLifecycleEvidence"],
+        "operatorLifecycleIsNotEmittedByReplayHarness": True,
+    }
+    lifecycle = evidence["operatorLifecycleEvidence"]
+    assert lifecycle["databaseDropped"] is True
+    assert lifecycle["pgIsReadyAfterStopExitCode"] == 2
+    assert "operatorLifecycleEvidence" not in SCRIPT.read_text(encoding="utf-8")

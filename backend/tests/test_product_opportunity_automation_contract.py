@@ -155,7 +155,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert functional in COMPLETION_MATRIX
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "1010 tests" in RUNBOOK
+    assert "1011 tests" in RUNBOOK
     assert "Web registry passed 132/132" in RUNBOOK
     assert "migration-contract group passed 132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
