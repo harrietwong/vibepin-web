@@ -604,6 +604,39 @@ export function payloadAfterFailure(
 }
 
 /**
+ * Mark a Content posted from the destination rows it already carries.
+ *
+ * Only ever fills gaps, and only from facts already stored. `postedAt` takes the
+ * newest `publishedAt` among the published rows — NOT the current time: a bookkeeping
+ * pass that stamps itself would claim the Content published the moment a later cron
+ * run happened to look at it, which is wrong on the card and wrong in analytics.
+ */
+function backfillPostedFromResults(next: Record<string, unknown>): void {
+  const rows = Array.isArray(next.destinationResults)
+    ? (next.destinationResults as Array<Record<string, unknown>>)
+    : [];
+  const published = rows.filter(r => r && r.status === "published");
+  if (!published.length) return;
+
+  if (!firstString(next.postedAt)) {
+    const times = published.map(r => firstString(r.publishedAt)).filter(Boolean).sort();
+    if (times.length) next.postedAt = times[times.length - 1];
+  }
+  const pin = published.find(r => r.provider === "pinterest");
+  if (pin) {
+    if (!firstString(next.remotePinId) && firstString(pin.remoteId)) next.remotePinId = pin.remoteId;
+    if (!firstString(next.remotePinUrl) && firstString(pin.postUrl)) next.remotePinUrl = pin.postUrl;
+  }
+  next.generationStatus = "completed";
+  // A post exists. Whatever an earlier attempt's Content-level banner said, it is no
+  // longer what happened — the same clearing the anyPublished branch does.
+  delete next.publishError;
+  delete next.failureType;
+  delete next.errorCategory;
+  delete next.publishErrorCode;
+}
+
+/**
  * Drop the payload's scheduling fields, so lifecycle stops deriving "scheduled".
  *
  * One helper rather than four copies: a clearing site that is added but not gated by
@@ -704,7 +737,13 @@ export function payloadAfterOutcomes(
   // Nothing was ATTEMPTED because nothing was still owed — every destination had
   // already published on an earlier attempt (a stale-claim re-run). That is a
   // completed Content, not a failure: it just needs to leave the due scan.
+  //
+  // It may also need to be MARKED posted. Results are written incrementally now, so
+  // the run that published may have died before it could write `postedAt` — the
+  // destination rows say the post exists and the legacy fields say nothing happened.
+  // This run finishes that job from the rows themselves.
   if (!attempted.length) {
+    backfillPostedFromResults(next);
     if (clearSchedule) clearScheduleFields(next);
     return next;
   }

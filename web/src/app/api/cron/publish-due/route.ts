@@ -269,6 +269,40 @@ export async function GET(req: Request): Promise<Response> {
       // Posted Content the merchant re-scheduled owes nothing, and the run "completes"
       // it by clearing the slot they just chose.
       const owedFor = { scheduledAt: row.scheduled_at };
+
+      // ── The destinations this Content still owes ──────────────────────────────
+      // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
+      // here, so it behaves exactly as it did before: no extra platforms are ever
+      // invented for it, and exactly one Pinterest publish happens. A row re-claimed
+      // after a stale lock (this route is at-least-once by construction — see the
+      // header) must not re-publish an account that already succeeded, which is why
+      // this is what is OWED and not what was intended.
+      //
+      // Computed BEFORE the publish input, and that order is load-bearing.
+      // `payloadToPublishInput` asks "does this Content need a Pinterest board?" by
+      // checking that every OWED destination is Pinterest — and `every()` over an
+      // EMPTY set is true. So a Content with nothing left to publish is treated as
+      // needing a board, and an Instagram-only one (which has none, and never needed
+      // one) came back null. That used to be unreachable; since results are persisted
+      // incrementally it is not. Publish to Instagram, die before the final persist,
+      // and the stale re-claim owes nothing, gets null here, and records a Content
+      // that really did publish as "Missing image or board".
+      const owed = owedDestinations(row.payload, owedFor);
+      const priorResults = Array.isArray(row.payload.destinationResults)
+        ? (row.payload.destinationResults as unknown[])
+        : [];
+
+      if (!owed.length && priorResults.length) {
+        // Nothing to publish and a record of what already did: this run is finishing
+        // an earlier one's work, not attempting anything. Complete the Content from
+        // its own stored rows — no publish input, no provider, no failure. Metering is
+        // skipped deliberately: nothing is delivered here, and the charge for this
+        // (draft_id, scheduled_at) was already taken by the run that published.
+        await persistOutcomes(io, row, []);
+        skipped++;
+        continue;
+      }
+
       const input = payloadToPublishInput(row.vibepin_user_id, row.payload, owedFor);
       if (!input) {
         // Unpublishable payload (missing image/board): record a content failure, don't call Pinterest.
@@ -300,16 +334,9 @@ export async function GET(req: Request): Promise<Response> {
         metadata: { source: "scheduled-cron" },
       });
 
-      // ── The destinations this Content still owes ──────────────────────────────
-      // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
-      // here, so it behaves exactly as it did before: no extra platforms are ever
-      // invented for it, and exactly one Pinterest publish happens. A row re-claimed
-      // after a stale lock (this route is at-least-once by construction — see the
-      // header) must not re-publish an account that already succeeded, which is why
-      // this is what is OWED and not what was intended. It is the same helper
-      // `payloadToPublishInput` consults to decide whether a board is required, so the
-      // two can never disagree about which platforms this run is for.
-      const owed = owedDestinations(row.payload, owedFor);
+      // Both reads of the owed set — this one and `payloadToPublishInput`'s
+      // board requirement — take the same `owedFor`, so they can never disagree about
+      // which platforms this run is for.
       const pinterestTargets = owed.filter(d => d.provider === "pinterest");
       const extras = owed.filter(d => d.provider !== "pinterest");
       const legacyTarget = typeof row.payload.targetConnectionId === "string" ? row.payload.targetConnectionId.trim() : "";

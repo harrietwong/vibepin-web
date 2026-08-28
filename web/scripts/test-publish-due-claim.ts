@@ -917,9 +917,9 @@ test("payloadToPublishInput: boardRequired reads the SAME owed set", () => {
     "owed again, and no board is required for Instagram");
   // The reverse proves the two really share one owed set: with nothing owed, every()
   // is vacuously true, a board IS required, and this board-less Content is refused.
-  // (That is the rule as it has always been for a stale re-claim, unchanged here — a
-  // row whose destinations have all published no longer reaches this code by any
-  // other route.)
+  // The function keeps that rule; the ROUTE no longer asks it in this case — see the
+  // "nothing owed" completion path above, which is what stops a Content that really
+  // published from being recorded as "Missing image or board".
   assert.equal(payloadToPublishInput("u", payload, { scheduledAt: RECLAIMED }), null,
     "if boardRequired read a different owed set, these two could not disagree");
 });
@@ -952,6 +952,117 @@ test("the route threads the row's schedule into BOTH owed calls", () => {
     "or a re-scheduled Instagram-only Content is refused for a board it never needed");
   assert.match(routeSrc, /owedDestinations\(row\.payload, owedFor\)/,
     "the schedule is what makes a prior publish stale — without it, rescheduling is a no-op");
+});
+
+// ── a Content with nothing left to publish must not be recorded as FAILED ────
+// `payloadToPublishInput` decides "does this Content need a Pinterest board?" with
+// `owed.every(d => d.provider === "pinterest")` — and every() over an EMPTY set is
+// true. So a Content with nothing owed reads as needing a board, and an
+// Instagram-only one (which has none, and never needed one) comes back null.
+//
+// That was unreachable until results began being persisted incrementally. Now: publish
+// to Instagram, die before the final persist, and the stale re-claim owes nothing,
+// gets null, and writes "Missing image or board" over a Content that really published.
+const IG_ONLY = {
+  imageUrl: "https://cdn/x.jpg",
+  scheduledDestinations: [{ provider: "instagram", socialConnectionId: "ig_A", capturedAt: RECLAIMED }],
+};
+const IG_PUBLISHED_ROW = {
+  destinationId: "instagram:ig_A", provider: "instagram", socialConnectionId: "ig_A",
+  status: "published", remoteId: "ig-1", postUrl: "https://ig/1",
+  publishedAt: "2026-07-01T08:00:05.000Z",
+};
+
+test("(a) IG-only already published for this schedule: nothing owed, and it is NOT unpublishable", () => {
+  const payload = { ...IG_ONLY, destinationResults: [IG_PUBLISHED_ROW] };
+  assert.deepEqual(owedDestinations(payload, { scheduledAt: RECLAIMED }), [],
+    "the account published for THIS schedule — re-sending is the double post");
+  // This is the trap the route must not walk into any more.
+  assert.equal(payloadToPublishInput("u", payload, { scheduledAt: RECLAIMED }), null,
+    "board-required over an empty owed set — which is why the route must not ask");
+});
+
+test("(a) the route completes such a row from its own rows, before building any input", () => {
+  const owedAt = routeSrc.indexOf("const owed = owedDestinations(row.payload, owedFor);");
+  const inputAt = routeSrc.indexOf("const input = payloadToPublishInput(");
+  assert.ok(owedAt > 0 && inputAt > 0);
+  assert.ok(owedAt < inputAt,
+    "the owed set must be known BEFORE the publish input, or a finished Content is called unpublishable");
+  const between = routeSrc.slice(owedAt, inputAt);
+  assert.match(between, /if \(!owed\.length && priorResults\.length\) \{/,
+    "nothing owed plus a result history means finishing an earlier run, not attempting anything");
+  assert.match(between, /await persistOutcomes\(io, row, \[\]\);/,
+    "it must finalize through the existing nothing-owed path");
+  assert.ok(!/publishPinForUser|fanOutDestinations|consumeScheduledPost/.test(between),
+    "no provider call and no second charge on a run that publishes nothing");
+});
+
+test("(a) completing it marks the Content posted, from the time it really published", () => {
+  const after = payloadAfterOutcomes(
+    { ...IG_ONLY, destinationResults: [IG_PUBLISHED_ROW], scheduledDate: "2026-07-01", plannedAt: "2026-07-01T08:00" },
+    [], NOW_ISO,
+  );
+  assert.equal(after.publishError, undefined, "a Content that published is not a failure");
+  assert.equal(after.postedAt, "2026-07-01T08:00:05.000Z",
+    "the row knows WHEN it published — stamping this run's clock would date it to a bookkeeping pass");
+  assert.equal(after.scheduledDate, "", "and it leaves the due scan");
+  assert.equal(after.plannedAt, "");
+});
+
+test("(a) a Pinterest row backfills the legacy permalink fields too", () => {
+  const after = payloadAfterOutcomes({ destinationResults: [POSTED_JULY] }, [], NOW_ISO);
+  assert.equal(after.remotePinId, "pin-1");
+  assert.equal(after.remotePinUrl, "https://pin/1");
+  assert.equal(after.postedAt, "2026-07-01T09:00:00.000Z");
+});
+
+test("(a) an existing postedAt is never overwritten by the backfill", () => {
+  const after = payloadAfterOutcomes(
+    { destinationResults: [POSTED_JULY], postedAt: "2026-06-01T00:00:00.000Z" }, [], NOW_ISO);
+  assert.equal(after.postedAt, "2026-06-01T00:00:00.000Z");
+});
+
+test("(a) nothing owed and NOTHING published ⇒ no posted framing invented", () => {
+  const after = payloadAfterOutcomes({
+    destinationResults: [{ destinationId: "instagram:ig_A", provider: "instagram", status: "failed", errorMessage: "Token expired" }],
+  }, [], NOW_ISO);
+  assert.equal(after.postedAt, undefined, "a failed row is not a post");
+  assert.equal(after.scheduledDate, "", "it still leaves the due scan");
+});
+
+test("(b) the same Content whose prior row FAILED is owed again", () => {
+  const payload = {
+    ...IG_ONLY,
+    destinationResults: [{ destinationId: "instagram:ig_A", provider: "instagram", socialConnectionId: "ig_A", status: "failed", errorMessage: "Token expired" }],
+  };
+  const owed = owedDestinations(payload, { scheduledAt: RECLAIMED });
+  assert.equal(owed.length, 1, "a failed destination is still owed — the re-attempt is the point");
+  assert.equal(owed[0].provider, "instagram");
+  const input = payloadToPublishInput("u", payload, { scheduledAt: RECLAIMED });
+  assert.ok(input, "and Instagram still needs no board");
+  assert.equal(input!.boardId, undefined);
+});
+
+test("(c) a legacy board-only Content with nothing published still requires its board", () => {
+  const boardless = { imageUrl: "https://cdn/x.jpg" };
+  assert.deepEqual(owedDestinations(boardless, { scheduledAt: RECLAIMED }), [],
+    "no board and no intent ⇒ nothing to publish INTO");
+  assert.equal(payloadToPublishInput("u", boardless, { scheduledAt: RECLAIMED }), null,
+    "and with no result history the route still records the content failure it always did");
+  // With a board it is owed, exactly as before.
+  const withBoard = { imageUrl: "https://cdn/x.jpg", boardId: "b-A" };
+  assert.equal(owedDestinations(withBoard, { scheduledAt: RECLAIMED }).length, 1);
+  assert.equal(payloadToPublishInput("u", withBoard, { scheduledAt: RECLAIMED })?.boardId, "b-A");
+});
+
+test("(c) the completion path needs a result history — an empty payload still fails", () => {
+  // The guard is `!owed.length && priorResults.length`. Without the second half, a
+  // genuinely unpublishable Content would silently "complete" having published nothing.
+  const at = routeSrc.indexOf("if (!owed.length && priorResults.length) {");
+  assert.ok(at > 0);
+  assert.match(routeSrc, /const priorResults = Array\.isArray\(row\.payload\.destinationResults\)/);
+  assert.ok(routeSrc.indexOf("Missing image or board — cannot publish") > at,
+    "a payload with no image and no history must still reach the content-failure path");
 });
 
 // ── the run's DESTINATION deadline (Codex #2) ────────────────────────────────
