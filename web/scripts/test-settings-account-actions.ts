@@ -14,6 +14,11 @@
  *  3. Reconnect 不许再钉死在 accounts[0]。第二个账号进入 needs_reconnect 时,
  *     UI 上根本没有能修它的入口(点了会去修第一个)。错配横幅的重试同理。
  *
+ *  5. 断开不等于消失。Disconnect 在每个平台都保留账号行(列为 Disconnected,
+ *     就地 Reconnect),而且它继续占着套餐额度;Remove 才是硬删,也是唯一能把
+ *     slot 拿回来的动作(PRD 0805 §11)。之前 Pinterest 是个例外:断开后行从列表里
+ *     消失,额度却还按 token 算 —— 用户看不见它,也就无法把它移除。
+ *
  *  4. 多目的地排程只能取消被移除的那一条腿。一个同时发 Pinterest 和 Facebook 的
  *     Content,移除 Facebook 账号并选"取消排程"后,Pinterest 那条必须还在;
  *     反过来,destinations 清空却留着 scheduled_at 更糟 —— resolveScheduledDestinations
@@ -84,7 +89,20 @@ const {
   countScheduledForSocialConnection,
   cancelScheduledForSocialConnection,
 } = await import("../src/lib/server/social/scheduledForSocialConnection");
+const { summarizeConnectionList } = await import("../src/lib/social/server/socialConnectionStore");
 const { en } = await import("../src/lib/i18n/messages");
+
+/** A minimal Pinterest connection row in the client-safe shape the listing returns. */
+function conn(id: string, status: "connected" | "not_connected" | "expired") {
+  return {
+    id, provider: "pinterest" as const, workspaceId: null,
+    providerAccountId: "pid-" + id, providerAccountName: "Studio " + id,
+    providerAccountUsername: id, providerAccountAvatarUrl: null,
+    connectionStatus: status, authProvider: "official" as const,
+    externalConnectionId: null, scopes: ["boards:read", "pins:read", "pins:write"],
+    tokenExpiresAt: null, metadata: null, createdAt: null, updatedAt: null,
+  };
+}
 
 const panelSrc = read("src/components/social/SocialAccountsPanel.tsx");
 const clientSrc = read("src/lib/social/socialClient.ts");
@@ -395,6 +413,105 @@ await testAsync("单行写回失败只跳过该行", async () => {
   ];
   const { db } = makeFakeDb([{ data: rows }, { error: { code: "XX000", message: "boom" } }, { data: null }]);
   assert.equal(await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z"), 1);
+});
+
+console.log("\n=== 5) 断开的行留在列表里,并且继续占额度(PRD 0805 §11) ===");
+
+test("Settings 列表与发布侧读的是两个入口,只有前者包含已断开的行", () => {
+  const store = read("src/lib/social/server/socialConnectionStore.ts");
+  // 默认仍是活跃只读:发布路径(publish/social、destinations/validate、
+  // findConnection 的 legacy 合成 id)都走它,不能因为改了一个默认值就静默看到死账号。
+  assert.match(store, /export async function listConnectionsForSettings\(uid: string\): Promise<SocialConnection\[\]>/,
+    "Settings 列表必须是单独的入口,不是被拓宽的 listConnections");
+  assert.match(store, /includeDisconnected/, "包含与否必须是显式开关");
+  const listingRoute = read("src/app/api/social/connections/route.ts");
+  assert.match(listingRoute, /listConnectionsForSettings\(uid\)/, "只有 Settings 列表路由用它");
+  for (const p of [
+    "src/app/api/publish/social/route.ts",
+    "src/app/api/publish/destinations/validate/route.ts",
+  ]) {
+    assert.ok(!read(p).includes("listConnectionsForSettings"),
+      p + " 是发布侧,不得读含已断开行的列表");
+  }
+});
+
+test("已断开的 Pinterest 行带着身份返回(不是掩码占位符),但永不带 token", () => {
+  const store = read("src/lib/social/server/socialConnectionStore.ts");
+  // toSafeStatus 对已断开的行返回 account: null —— 那是发布侧投影。
+  // 列表要回答的是"这是谁",所以走 toAccountIdentity。
+  assert.match(store, /const account = toAccountIdentity\(row\);/,
+    "否则每一行都会渲染成 Pinterest account ••••xxxx");
+  const pinterestStore = read("src/lib/server/pinterest/connectionStore.ts");
+  assert.match(pinterestStore, /export function toAccountIdentity\(row: PinterestConnectionRow\): ConnectionAccount/);
+  // 身份投影只能拿到这几个字段;任何 token 列都不得出现在它里面。
+  const idx = pinterestStore.indexOf("export function toAccountIdentity(");
+  const body = pinterestStore.slice(idx, pinterestStore.indexOf("}", pinterestStore.indexOf("return {", idx)));
+  assert.ok(!/token/i.test(body), "身份投影里不得出现任何 token 字段");
+});
+
+test("已断开的行读作 not_connected → disconnected → Reconnect · Remove", () => {
+  // Pinterest 的已断开行与 FB/IG 的软断开行报同一个状态,因此三家在 Settings 里
+  // 长得一模一样 —— 这正是本次要消除的不对称。
+  const state = accountRowState({ connectionStatus: "not_connected", scopes: [] }, "pinterest");
+  assert.equal(state, "disconnected");
+  assert.deepEqual([...accountRowActions(state)], ["reconnect", "remove"]);
+});
+
+test("平台头部的 N 个账号把已断开的也数进去,但 connected 仍然看得清", () => {
+  const summaries = summarizeConnectionList([
+    conn("live", "connected"),
+    conn("dead", "not_connected"),
+  ]);
+  const pinterest = summaries.find(s => s.provider === "pinterest");
+  assert.equal(pinterest?.accountCount, 2, "占着额度的行必须看得见,否则用户无法把 slot 拿回来");
+  assert.equal(pinterest?.connected, true, "connected 只看现在能不能发");
+  const allDead = summarizeConnectionList([conn("dead", "not_connected")])
+    .find(s => s.provider === "pinterest");
+  assert.equal(allDead?.accountCount, 1);
+  assert.equal(allDead?.connected, false, "全部断开时平台不得声称已连接");
+});
+
+test("Pinterest Remove 是硬删:走 mode=remove,且缺 connectionId 直接 400", () => {
+  const route = read("src/app/api/pinterest/disconnect/route.ts");
+  assert.match(route, /url\.searchParams\.get\("mode"\) === "remove"/,
+    "只有显式的 mode=remove 才能是破坏性那个动作");
+  assert.match(route, /if \(remove && !connectionId\)/, "不点名就不得硬删");
+  assert.match(route, /status: 400/, "静默降级成软断开会报告已移除,而 slot 还占着");
+  const cancelAt = route.indexOf("cancelScheduledForConnection(");
+  const deleteAt = route.indexOf("await deleteConnection(uid, connectionId)");
+  assert.ok(cancelAt > 0 && deleteAt > cancelAt, "取消排程必须在删除之前");
+  // 软断开仍是默认分支:旧标签页不带 mode 时只会做可逆的那个。
+  assert.match(route, /await disconnect\(uid, connectionId\);/);
+  const store = read("src/lib/server/pinterest/connectionStore.ts");
+  const delIdx = store.indexOf("export async function deleteConnection(");
+  assert.ok(delIdx > 0, "Pinterest 侧必须真的有一条硬删路径");
+  const delBody = store.slice(delIdx, delIdx + 600);
+  for (const scope of ['.eq("user_id", uid)', '.eq("provider", PROVIDER)', '.eq("id", connectionId)']) {
+    assert.ok(delBody.includes(scope), "硬删必须同时限定 " + scope);
+  }
+});
+
+test("发布侧的读取方仍然只认能发的账号", () => {
+  // 共享的 /api/social/connections 现在也带已断开的行,所以每个消费者都必须自己
+  // 过滤。usePinterestConnections 是其中最危险的一个:它的输出同时喂给账号选择器、
+  // adopt-once 的 fallback 和 retryBlockReason。
+  const hook = read("src/hooks/usePinterestConnections.ts");
+  assert.match(hook, /PUBLISHABLE_STATUSES\.has\(a\.connectionStatus\)/,
+    "hook 必须过滤掉已断开的行,否则 target_disconnected 拦截会形同虚设");
+  assert.match(hook, /new Set\(\["connected", "expired"\]\)/,
+    "白名单而不是黑名单:将来新增的状态默认不能发");
+  for (const [p, needle] of [
+    ["src/components/social/PublishDestinations.tsx", 'accounts.filter(a => a.connectionStatus === "connected")'],
+    ["src/components/studio/StudioBoard.tsx", 'accounts.filter(a => a.connectionStatus === "connected")'],
+    ["src/components/settings/SettingsModal.tsx", 'filter(a => a.connectionStatus === "connected")'],
+    ["src/app/api/publish/destinations/validate/route.ts", 'find(a => a.connectionStatus === "connected")'],
+  ] as const) {
+    assert.ok(read(p).includes(needle), p + " 必须只取 connected 的账号");
+  }
+  // 排程写入的唯一入口也自带同一判定(PinBoardCard / 抽屉都经过它)。
+  assert.ok(read("src/lib/social/scheduledDestinations.ts")
+    .includes('accounts.filter(a => a.connectionStatus === "connected")'),
+    "resolveScheduledAccount 必须自己就拦住已断开的账号");
 });
 
 console.log(`\n${passed} 项断言全部通过。`);

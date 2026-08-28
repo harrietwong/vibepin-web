@@ -86,6 +86,28 @@ async function main() {
     assert.equal(store.toSafeStatus(row("a", { scopes: ["boards:read"] })).needsReconnect, true);
   });
 
+  console.log("\n=== toAccountIdentity:身份在断开后仍然成立 ===");
+  test("已断开 / 无 token 的行仍报得出它是谁(Settings 列表要用),且不含密文", () => {
+    for (const r of [
+      row("a", { disconnected_at: "2026-01-03T00:00:00Z", access_token_encrypted: null }),
+      row("a", { access_token_encrypted: null }),
+    ]) {
+      const id = store.toAccountIdentity(r);
+      assert.equal(id.id, "pid-a");
+      assert.equal(id.username, "@a");
+      assert.ok(!JSON.stringify(id).includes("enc"), "身份投影不得带出密文");
+    }
+  });
+  test("toSafeStatus 与 toAccountIdentity 分工不变:前者答能不能发,后者答是谁", () => {
+    const dead = row("a", { disconnected_at: "2026-01-03T00:00:00Z", access_token_encrypted: null });
+    assert.equal(store.toSafeStatus(dead).account, null, "发布侧仍然什么都拿不到");
+    assert.equal(store.toAccountIdentity(dead).id, "pid-a", "列表侧仍然认得出这一行");
+  });
+  test("一条活跃行上,两个投影给出同一个身份(只有一份定义)", () => {
+    const live = row("a");
+    assert.deepEqual(store.toSafeStatus(live).account, store.toAccountIdentity(live));
+  });
+
   console.log("\n=== CAS 签名面(connection 粒度) ===");
   test("updateTokens / markNeedsReconnect / getConnectionById 均以 connectionId 为首参(类型层面)", () => {
     assert.equal(typeof store.updateTokens, "function");
