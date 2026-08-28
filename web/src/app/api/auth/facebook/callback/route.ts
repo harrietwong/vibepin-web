@@ -58,7 +58,12 @@ import {
   restorePreviousPage,
   type ManagedPage,
 } from "@/lib/server/facebook/service";
-import { upsertFacebookConnection, getStoredFacebookSelection } from "@/lib/server/facebook/connectionStore";
+import {
+  upsertFacebookConnection,
+  getStoredFacebookSelection,
+  getFacebookReconnectTarget,
+} from "@/lib/server/facebook/connectionStore";
+import { decideReconnect } from "@/lib/server/social/reconnectIdentity";
 import { missingRequiredScopes } from "@/lib/server/facebook/config";
 import { ConnectionLimitError } from "@/lib/server/social/connectionLimit";
 
@@ -76,13 +81,26 @@ function fbDebug(...parts: unknown[]): void {
   console.log("[facebook-oauth-debug]", ...parts);
 }
 
-function redirectAfterOAuth(req: NextRequest, status: string, returnTo = SOCIAL_SETTINGS_PATH): NextResponse {
+function redirectAfterOAuth(
+  req: NextRequest,
+  status: string,
+  returnTo = SOCIAL_SETTINGS_PATH,
+  /**
+   * Extra query params for the Settings panel. Used by `account_mismatch` to name
+   * both accounts (`expected` / `got`) so the banner can be specific without
+   * another round trip — the same contract the Pinterest callback uses.
+   */
+  extra?: Record<string, string | null | undefined>,
+): NextResponse {
   const url = req.nextUrl.clone();
   const target = new URL(returnTo, req.nextUrl.origin);
   url.pathname = target.pathname;
   url.search = target.search;
   url.hash = target.hash;
   url.searchParams.set("facebook", status);
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (value) url.searchParams.set(key, value);
+  }
   const res = NextResponse.redirect(url);
   // Both OAuth cookies are single-use — clear on every outcome.
   res.cookies.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 });
@@ -173,6 +191,47 @@ export async function GET(req: NextRequest) {
     return redirectAfterOAuth(req, "profile_failed", verdict.returnTo);
   }
 
+  // ── Reconnect identity gate (Codex #5) ──────────────────────────────────────
+  // A Reconnect names the row it is repairing; that id rode here inside the sealed
+  // OAuth state. If a DIFFERENT Facebook user just authorized, NOTHING may be
+  // written — not the token, not a new row. Before this, the store fell back to
+  // identity matching, found no row for the new account and INSERTED one: a slot
+  // spent on an account the merchant never meant to add, while the account they
+  // were repairing stayed disconnected, with nothing on screen saying so.
+  //
+  // Placed BEFORE the missing-scopes branch on purpose — that branch writes too, so
+  // checking after it would still persist a mismatched authorization.
+  let reconnectTargetId: string | null = null;
+  if (verdict.reconnectConnectionId) {
+    let target;
+    try {
+      target = await getFacebookReconnectTarget(uid, verdict.reconnectConnectionId);
+    } catch (readErr) {
+      // Reading the merchant's own row failed. Writing blind is exactly the
+      // overwrite this gate exists to prevent, so refuse.
+      console.error("[Facebook OAuth Callback] reconnect target read failed:", (readErr as Error).message);
+      return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
+    }
+    const decision = decideReconnect({
+      reconnectTargetId: verdict.reconnectConnectionId,
+      target,
+      authorizedAccountId: fbUser.id,
+      authorizedLabel: fbUser.name,
+    });
+    if (decision.action === "reject") {
+      fbDebug(`account_mismatch — nothing written (expected=${decision.expectedLabel ?? "?"})`);
+      return redirectAfterOAuth(req, "account_mismatch", verdict.returnTo, {
+        expected: decision.expectedLabel,
+        got: decision.gotLabel,
+      });
+    }
+    // Names the row every upsert below must land on. Load-bearing for a target row
+    // that never recorded a facebookUserId: the store's identity rule only adopts a
+    // LONE unidentified row, so a merchant with two Facebook rows would otherwise
+    // get a duplicate insert instead of the repair they asked for.
+    reconnectTargetId = decision.targetConnectionId;
+  }
+
   const missing = missingRequiredScopes(grantedScopes);
   if (missing.length > 0) {
     fbDebug(
@@ -193,7 +252,7 @@ export async function GET(req: NextRequest) {
         state: "reconnect_required",
         pages: [],
         selected: null,
-      });
+      }, reconnectTargetId);
     } catch (persistErr) {
       console.error("[Facebook OAuth Callback] persist (reconnect) failed:", (persistErr as Error).message);
       return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
@@ -270,7 +329,7 @@ export async function GET(req: NextRequest) {
             state: "connected",
             pages: [restored],
             selected: { pageId: restored.pageId, pageName: restored.pageName },
-          });
+          }, reconnectTargetId);
         } catch (persistErr) {
           console.error(
             "[Facebook OAuth Callback] persist (auto-restore) failed:",
@@ -295,7 +354,7 @@ export async function GET(req: NextRequest) {
           pages: [],
           selected: null,
           lastKnownPage: previous,
-        });
+        }, reconnectTargetId);
       } catch (persistErr) {
         console.error(
           "[Facebook OAuth Callback] persist (restore-failed) failed:",
@@ -320,7 +379,7 @@ export async function GET(req: NextRequest) {
         state: "page_discovery_empty",
         pages: [],
         selected: null,
-      });
+      }, reconnectTargetId);
     } catch (persistErr) {
       // A plan ceiling is a user-actionable outcome, not a failure to report as
       // broken storage — surface it distinctly so the UI can offer disconnect/upgrade.
@@ -374,7 +433,7 @@ export async function GET(req: NextRequest) {
       state: chosen ? "connected" : "page_selection_required",
       pages,
       selected,
-    });
+    }, reconnectTargetId);
   } catch (persistErr) {
     if (persistErr instanceof ConnectionLimitError) {
       return redirectAfterOAuth(req, "account_limit", verdict.returnTo);

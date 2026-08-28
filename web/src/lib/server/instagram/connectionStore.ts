@@ -101,6 +101,13 @@ export type InstagramConnectionMetadata = {
 export async function upsertInstagramConnection(
   uid: string,
   input: UpsertInstagramInput,
+  /**
+   * The row a Reconnect was aimed at (sealed into the OAuth state, re-read by the
+   * callback against this user's own rows). Given, the write lands on THAT row —
+   * the UPDATE branch, so it never consumes a plan slot. Omitted, the identity rule
+   * below decides exactly as before.
+   */
+  targetConnectionId?: string | null,
 ): Promise<void> {
   const now = new Date().toISOString();
   const accessTokenEncrypted = cipher.encrypt(input.accessToken);
@@ -125,11 +132,25 @@ export async function upsertInstagramConnection(
 
   type IgRow = { id: string; metadata?: Record<string, unknown> | null; provider_account_id?: string | null };
   const allRows = (rows as IgRow[] | null) ?? [];
-  const existing =
+  const byIdentity =
     allRows.find(r => r.provider_account_id && r.provider_account_id === input.accountId) ??
     // A row predating multi-account (no id recorded): adopt it rather than
     // leaving it orphaned beside a new one.
     (allRows.length === 1 && !allRows[0].provider_account_id ? allRows[0] : null);
+  // A Reconnect may name the row it is repairing. It is honoured ONLY when that
+  // row's recorded identity is absent or the SAME account, so the identity rule
+  // above stays the source of truth and the target can only select among this
+  // user's own rows (they are already filtered by user_id + provider, so a forged
+  // id matches nothing). Without this, reconnecting a row that never recorded an
+  // account id, on a user who has two Instagram rows, would fall through to INSERT
+  // — a duplicate row that also eats a plan slot (Codex #5).
+  const targetRow = targetConnectionId
+    ? allRows.find(r => r.id === targetConnectionId) ?? null
+    : null;
+  const existing =
+    targetRow && (!targetRow.provider_account_id || targetRow.provider_account_id === input.accountId)
+      ? targetRow
+      : byIdentity;
 
   if (readError && !isMissingTable(readError.code)) {
     console.error("[instagram] read connection:", readError.message);
@@ -188,6 +209,55 @@ export async function upsertInstagramConnection(
     console.error("[instagram] insert connection:", error.message);
     throw new Error("Instagram connection could not be saved");
   }
+}
+
+/**
+ * The identity of the row a Reconnect was aimed at, for the OAuth callback's
+ * "is this the same account?" check (Codex #5).
+ *
+ * SECURITY: the id comes from the sealed OAuth state, but it is still only ever an
+ * ADDITIONAL filter on top of `user_id` + `provider` — it can never reach another
+ * merchant's connection. Returns null when the row is gone (removed in another
+ * tab), which the callback treats as a plain connect.
+ *
+ * The compared field is `provider_account_id`: unlike Facebook's — which switches
+ * to the Page id once a Page is chosen — Instagram's stays the IG account id for
+ * the life of the row, and it is the very key `upsertInstagramConnection` matches
+ * on, so the check and the write can never disagree.
+ *
+ * Throws on storage errors — the callback must refuse rather than write blind.
+ */
+export async function getInstagramReconnectTarget(
+  uid: string,
+  connectionId: string,
+): Promise<{ connectionId: string; accountId: string | null; label: string | null } | null> {
+  if (!connectionId) return null;
+  const { data, error } = await db()
+    .from(TABLE)
+    .select("id, provider_account_id, provider_account_username, provider_account_name")
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .eq("id", connectionId);
+
+  if (error) {
+    if (isMissingTable(error.code)) throw new Error("Instagram connection storage is not set up");
+    console.error("[instagram] read reconnect target:", error.message);
+    throw new Error("Instagram connection storage is unavailable");
+  }
+
+  type TargetRow = {
+    id: string;
+    provider_account_id?: string | null;
+    provider_account_username?: string | null;
+    provider_account_name?: string | null;
+  };
+  const row = ((data as TargetRow[] | null) ?? []).find(r => Boolean(r?.id));
+  if (!row) return null;
+  return {
+    connectionId: row.id,
+    accountId: row.provider_account_id ?? null,
+    label: row.provider_account_username ?? row.provider_account_name ?? null,
+  };
 }
 
 /**
