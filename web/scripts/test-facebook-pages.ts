@@ -12,10 +12,15 @@
  *   5. a declined pages_show_list caught by missingRequiredScopes
  *   6. a Graph OAuthException (HTTP 400 + error body) raised as FacebookApiError
  *   7. a genuinely empty data array returned as []
+ *
+ * Plus the MULTI-ACCOUNT storage contract (E1a-01), exercised for real against a
+ * faked Supabase: with two Facebook rows the store must act on the row the caller
+ * NAMES, and must refuse — never guess — when no row is named.
  */
 
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import Module from "node:module";
 // Type-only: erased at compile time, so it cannot trigger the module's
 // import-time env reads (the runtime module is still loaded dynamically in main).
 import type { FacebookApiError } from "../src/lib/server/facebook/service";
@@ -32,6 +37,59 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
 // Keep the diagnostic fbDebug logging quiet during the test run. NODE_ENV is typed
 // read-only, so assign through an index signature (the value is what matters).
 (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+
+// ── Faked Supabase for the connection store ──────────────────────────────────
+// The store builds its client through `createServerClient()` at call time, so
+// intercepting the module gives a real behavioural seam: we can assert WHICH row
+// a write landed on, not merely that the source mentions an id. Installed before
+// any dynamic import below.
+type FakeRow = Record<string, unknown> & { id: string };
+type FakeOp = {
+  op: "select" | "update" | "insert";
+  eq: Array<[string, unknown]>;
+  matched: string[];
+};
+let fakeRows: FakeRow[] = [];
+let fakeOps: FakeOp[] = [];
+
+function fakeServerClient() {
+  return {
+    from(_table: string) {
+      const eq: Array<[string, unknown]> = [];
+      let op: FakeOp["op"] = "select";
+      let payload: Record<string, unknown> | undefined;
+      const settle = () => {
+        // Every recorded .eq() is applied — so a query that DROPPED .eq("user_id")
+        // would visibly match rows it must not see.
+        const matched = fakeRows.filter(r => eq.every(([col, val]) => r[col] === val));
+        if (op === "update" && payload) for (const row of matched) Object.assign(row, payload);
+        fakeOps.push({ op, eq: [...eq], matched: matched.map(r => r.id) });
+        return Promise.resolve({
+          data: op === "select" ? matched.map(r => ({ ...r })) : null,
+          error: null,
+        });
+      };
+      const builder: Record<string, unknown> = {
+        select: () => builder,
+        update: (p: Record<string, unknown>) => { op = "update"; payload = p; return builder; },
+        insert: (p: Record<string, unknown>) => { op = "insert"; payload = p; return settle(); },
+        eq: (col: string, val: unknown) => { eq.push([col, val]); return builder; },
+        then: (ok: (v: unknown) => unknown, err?: (e: unknown) => unknown) => settle().then(ok, err),
+      };
+      return builder;
+    },
+  };
+}
+
+const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown })._load;
+(Module as unknown as { _load: (...a: unknown[]) => unknown })._load = function (
+  this: unknown, request: string, parent: unknown, isMain: boolean
+) {
+  if (request.endsWith("/lib/supabase") || request.endsWith("@/lib/supabase")) {
+    return { createServerClient: fakeServerClient, createClient: fakeServerClient };
+  }
+  return origLoad.call(this, request, parent, isMain);
+} as never;
 
 export {};
 
@@ -532,15 +590,21 @@ async function main() {
   );
 
   await test("upsert resolves the row by Facebook account id, not by provider alone", async () => {
+    // The rule now lives in pickRowForFacebookUser, shared with every read, so a
+    // read and the write that follows it can never resolve to different rows.
     assert(
-      storeSrc.includes("facebookUserIdOf(r) === input.accountId"),
-      "the existing row must be matched on metadata.facebook.facebookUserId",
+      storeSrc.includes("facebookUserIdOf(r) === facebookUserId"),
+      "the row must be matched on metadata.facebook.facebookUserId",
+    );
+    assert(
+      storeSrc.includes("pickRowForFacebookUser(allRows, input.accountId)"),
+      "upsert must reuse the shared identity rule, not a private copy of it",
     );
   });
 
   await test("a legacy row with no recorded account id is adopted, not orphaned", async () => {
     assert(
-      storeSrc.includes("allRows.length === 1 && !facebookUserIdOf(allRows[0])"),
+      storeSrc.includes("rows.length === 1 && !facebookUserIdOf(rows[0])"),
       "a single pre-multi-account row is reused rather than duplicated",
     );
   });
@@ -568,6 +632,291 @@ async function main() {
     assert(
       storeSrc.includes("connectionId?: string"),
       "getSelectedPageToken must accept the target connection id",
+    );
+  });
+
+  // -- Multi-account storage (BEHAVIOURAL, against the faked Supabase) --------
+  // E1a-01: four store reads used `.maybeSingle()`, which PostgREST fails outright
+  // once a user holds two Facebook rows -- so connecting a SECOND account broke
+  // BOTH (page selection, token lookup, manual connect, stored selection). These
+  // run the real store functions and assert which row was read and written.
+  const store = await import("../src/lib/server/facebook/connectionStore");
+  const { createTokenCipher } = await import("../src/lib/server/crypto");
+  // Same env var the store uses, so fixtures decrypt with the store's own key.
+  const testCipher = createTokenCipher("FACEBOOK_TOKEN_ENC_KEY");
+
+  const UID = "user-under-test";
+
+  /** One social_connections row for `UID`, carrying one candidate Page. */
+  function fbRow(id: string, fbUserId: string | null, pageId: string): FakeRow {
+    return {
+      id,
+      user_id: UID,
+      provider: "facebook",
+      connection_status: "connected",
+      access_token_encrypted: testCipher.encrypt(`USER-TOKEN-${id}`),
+      metadata: {
+        facebook: {
+          authMethod: "facebook_login",
+          connectionState: "page_selection_required",
+          facebookUserId: fbUserId,
+          facebookUserName: `fb-user-${id}`,
+          selectedPageId: null,
+          selectedPageName: null,
+          selectedPageTokenEncrypted: null,
+          lastKnownPageId: null,
+          lastKnownPageName: null,
+          candidatePages: [
+            {
+              pageId,
+              pageName: `Page ${pageId}`,
+              canPublish: true,
+              source: "discovered",
+              pageAccessTokenEncrypted: testCipher.encrypt(`PAGE-TOKEN-${pageId}`),
+            },
+          ],
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      },
+    };
+  }
+
+  /** Reset the faked table. Two rows = the multi-account case that used to break. */
+  function seed(rows: FakeRow[]) {
+    fakeRows = rows;
+    fakeOps = [];
+  }
+
+  const fbMeta = (id: string): Record<string, unknown> =>
+    (fakeRows.find(r => r.id === id)!.metadata as { facebook: Record<string, unknown> }).facebook;
+
+  async function expectThrow(fn: () => Promise<unknown>, message: string, what: string) {
+    let thrown: Error | null = null;
+    try { await fn(); } catch (e) { thrown = e as Error; }
+    assert(thrown !== null, `${what}: expected a throw, got a value`);
+    assertEq(thrown!.message, message, `${what}: error message`);
+  }
+
+  await test("selectFacebookPage: two rows + connectionId writes ONLY the named row", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    const result = await store.selectFacebookPage(UID, "page-b", "row-B");
+    assertEq(result.pageId, "page-b", "returns the selected Page");
+    assertEq(fbMeta("row-B").selectedPageId, "page-b", "the named row is the one selected");
+    assertEq(fbMeta("row-A").selectedPageId, null, "the other account must not be touched");
+    const updates = fakeOps.filter(o => o.op === "update");
+    assertEq(updates.length, 1, "exactly one row written");
+    assertEq(updates[0].matched.join(","), "row-B", "the write matched only the named row");
+  });
+
+  await test("selectFacebookPage: two rows + NO id fails closed and writes nothing", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    await expectThrow(
+      () => store.selectFacebookPage(UID, "page-a"),
+      "MULTIPLE_FACEBOOK_CONNECTIONS",
+      "several accounts and no target",
+    );
+    assertEq(fakeOps.filter(o => o.op === "update").length, 0, "nothing may be written");
+    assertEq(fbMeta("row-A").selectedPageId, null, "row A untouched");
+    assertEq(fbMeta("row-B").selectedPageId, null, "row B untouched");
+  });
+
+  await test("selectFacebookPage: one row + no id still works (pre-multi-account contract)", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a")]);
+    const result = await store.selectFacebookPage(UID, "page-a");
+    assertEq(result.pageId, "page-a", "the sole row is used, exactly as before");
+    assertEq(fbMeta("row-A").selectedPageId, "page-a", "selection persisted");
+  });
+
+  await test("every Facebook query stays scoped to the owner, even when an id is given", async () => {
+    // connectionId arrives in a REQUEST BODY. If it ever REPLACED the owner filter
+    // instead of narrowing it, a forged id would reach another user's connection.
+    // So: user_id on every statement, no exceptions. `provider` is additionally
+    // required on the READS (they scan the user's rows); the write is keyed by
+    // primary key + user_id, where a provider filter would add nothing.
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    await store.selectFacebookPage(UID, "page-b", "row-B");
+    assert(fakeOps.length > 0, "the call must actually have touched the table");
+    for (const op of fakeOps) {
+      const cols = op.eq.map(([c]) => c);
+      assert(cols.includes("user_id"), `${op.op} dropped the user_id filter`);
+      if (op.op === "select") {
+        assert(cols.includes("provider"), "a read dropped the provider filter");
+      } else {
+        assert(cols.includes("id"), `${op.op} must be keyed by the row id`);
+      }
+    }
+    const reads = fakeOps.filter(o => o.op === "select");
+    assert(
+      reads.some(o => o.eq.some(([c, v]) => c === "id" && v === "row-B")),
+      "the read must additionally narrow to the named connection id",
+    );
+  });
+
+  await test("a connectionId belonging to ANOTHER user resolves to nothing", async () => {
+    // The id is caller-supplied, so the decisive test is a real id owned by
+    // someone else: the owner filter must make it match zero rows.
+    const foreign = fbRow("row-X", "fb-X", "page-x");
+    foreign.user_id = "someone-else";
+    seed([fbRow("row-A", "fb-A", "page-a"), foreign]);
+    await expectThrow(
+      () => store.selectFacebookPage(UID, "page-x", "row-X"),
+      "No Facebook connection to select a Page for",
+      "forged connection id",
+    );
+    assertEq(fakeOps.filter(o => o.op === "update").length, 0, "nothing may be written");
+    assertEq(fbMeta("row-X").selectedPageId, null, "the other user's row is untouched");
+  });
+
+  await test("getFacebookUserToken: two rows + id decrypts THAT row's token", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    assertEq(await store.getFacebookUserToken(UID, "row-B"), "USER-TOKEN-row-B", "row-B token");
+    assertEq(await store.getFacebookUserToken(UID, "row-A"), "USER-TOKEN-row-A", "row-A token");
+  });
+
+  await test("getFacebookUserToken: two rows + no id THROWS (never reads as 'not connected')", async () => {
+    // Returning null here would render "Connect Facebook first" to a customer who
+    // has TWO Facebook accounts connected -- a plainly false statement.
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    await expectThrow(
+      () => store.getFacebookUserToken(UID),
+      "MULTIPLE_FACEBOOK_CONNECTIONS",
+      "token lookup with several accounts",
+    );
+  });
+
+  await test("getFacebookUserToken: one row + no id returns the token (unchanged)", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a")]);
+    assertEq(await store.getFacebookUserToken(UID), "USER-TOKEN-row-A", "sole row's token");
+  });
+
+  await test("connectFacebookPageManually: two rows + id attaches to the named account", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    const result = await store.connectFacebookPageManually(
+      UID,
+      { pageId: "page-manual", pageName: "Manually named Page", pageAccessToken: "PAGE-TOKEN-manual", tasks: [] },
+      "row-A",
+    );
+    assertEq(result.pageId, "page-manual", "returns the attached Page");
+    assertEq(fbMeta("row-A").selectedPageId, "page-manual", "attached to the named account");
+    assertEq(fbMeta("row-B").selectedPageId, null, "the other account is untouched");
+  });
+
+  await test("connectFacebookPageManually: two rows + no id fails closed", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    await expectThrow(
+      () => store.connectFacebookPageManually(
+        UID,
+        { pageId: "page-manual", pageName: null, pageAccessToken: "t", tasks: [] },
+        undefined,
+      ),
+      "MULTIPLE_FACEBOOK_CONNECTIONS",
+      "manual connect with several accounts",
+    );
+    assertEq(fakeOps.filter(o => o.op === "update").length, 0, "nothing may be written");
+  });
+
+  await test("getStoredFacebookSelection: scoped by facebookUserId reads that account", async () => {
+    // The OAuth callback's identity: mid-callback the row may not exist yet, so
+    // there is no connection id to pass. Restoring the OTHER account's Page would
+    // hand this Facebook user a Page they may not administer.
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    fbMeta("row-A").selectedPageId = "page-a";
+    fbMeta("row-A").selectedPageName = "Page A";
+    fbMeta("row-B").selectedPageId = "page-b";
+    fbMeta("row-B").selectedPageName = "Page B";
+    const a = await store.getStoredFacebookSelection(UID, { facebookUserId: "fb-A" });
+    const b = await store.getStoredFacebookSelection(UID, { facebookUserId: "fb-B" });
+    assertEq(a?.pageId, "page-a", "fb-A's own prior Page");
+    assertEq(b?.pageId, "page-b", "fb-B's own prior Page");
+  });
+
+  await test("getStoredFacebookSelection: unknown facebookUserId returns null, never a guess", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    fbMeta("row-A").selectedPageId = "page-a";
+    const restored = await store.getStoredFacebookSelection(UID, { facebookUserId: "fb-NEW" });
+    assertEq(restored, null, "a first-time connect must not inherit another account's Page");
+  });
+
+  await test("getStoredFacebookSelection: two rows + no target fails closed", async () => {
+    seed([fbRow("row-A", "fb-A", "page-a"), fbRow("row-B", "fb-B", "page-b")]);
+    await expectThrow(
+      () => store.getStoredFacebookSelection(UID),
+      "MULTIPLE_FACEBOOK_CONNECTIONS",
+      "stored selection with several accounts",
+    );
+  });
+
+  await test("getStoredFacebookSelection: one row + no target works (unchanged)", async () => {
+    seed([fbRow("row-A", null, "page-a")]);
+    fbMeta("row-A").selectedPageId = "page-a";
+    fbMeta("row-A").selectedPageName = "Page A";
+    const restored = await store.getStoredFacebookSelection(UID);
+    assertEq(restored?.pageId, "page-a", "the sole row is used, exactly as before");
+  });
+
+  // -- Caller contract: every caller NAMES the row it acts on -----------------
+  // Fixing only the store would leave the bug reachable: a caller that still omits
+  // the id gets the fail-closed error instead of the right row.
+  await test("every Facebook store caller threads the connection id", async () => {
+    const readSrc = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
+
+    const selectRoute = readSrc("../src/app/api/integrations/facebook/select-page/route.ts");
+    assert(
+      selectRoute.includes("selectFacebookPage(uid, pageId, connectionId)"),
+      "select-page must forward the connection id",
+    );
+    assert(
+      selectRoute.includes("connectionId = rawConnectionId || undefined"),
+      'an empty connectionId must become undefined -- .eq("id", "") matches nothing',
+    );
+
+    const connectRoute = readSrc("../src/app/api/integrations/facebook/connect-page/route.ts");
+    assert(
+      connectRoute.includes("getFacebookUserToken(uid, connectionId)"),
+      "connect-page must read the token of the named account",
+    );
+    assert(
+      connectRoute.includes("connectFacebookPageManually(uid, page, connectionId)"),
+      "connect-page must attach the Page to the named account",
+    );
+    assert(
+      connectRoute.includes("MULTIPLE_FACEBOOK_CONNECTIONS"),
+      "connect-page must map the fail-closed error to its own code, not to 'no connection'",
+    );
+
+    const callback = readSrc("../src/app/api/auth/facebook/callback/route.ts");
+    assertEq(
+      callback.split("getStoredFacebookSelection(uid, { facebookUserId: fbUser.id })").length - 1,
+      2,
+      "both callback restore paths must scope the read to the Facebook user re-authing",
+    );
+    assert(
+      !callback.includes("getStoredFacebookSelection(uid)"),
+      "no unscoped restore read may remain",
+    );
+
+    const panel = readSrc("../src/components/social/SocialAccountsPanel.tsx");
+    assert(
+      panel.includes("body: JSON.stringify({ pageId, connectionId: account.id })"),
+      "the Page picker must post the id of the account it is rendered for",
+    );
+    assert(
+      panel.includes("<FacebookManualPageForm connectionId={account.id}"),
+      "the manual-Page form must carry the account it belongs to",
+    );
+    assert(
+      panel.includes("summary.accounts.map(acc => ("),
+      "the panel must render one Facebook detail block per account, not accounts[0]",
+    );
+    assert(
+      !panel.includes("readFacebookMeta(summary)"),
+      "reading accounts[0] made the second account's picker unreachable",
+    );
+
+    const official = readSrc("../src/lib/social/providers/official.ts");
+    assert(
+      official.includes("getSelectedPageToken(userId, input.connection?.id)"),
+      "publishing must name the account it publishes as",
     );
   });
 
