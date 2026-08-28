@@ -1,26 +1,31 @@
 import "server-only";
 
 import {
-  attachDiagnoses,
   emptyMetrics,
   fillDailyRange,
   finiteMetric,
+  attachDiagnoses,
   summarizeDays,
-  trafficRate,
   utcDateDaysAgo,
 } from "@/lib/insights/businessRules";
+import {
+  ACCOUNT_CONTENT_ROW_LIMIT,
+  buildPinterestInsights,
+  type CollectionSources,
+  type LiveAnalyticsSlice,
+} from "@/lib/insights/collectionDashboard";
 import type {
   InsightsContent,
   InsightsDashboard,
   InsightsDay,
   InsightsPlatform,
+  InsightsScope,
 } from "@/lib/insights/types";
 import {
   PinterestApiError,
   PinterestClient,
-  type PinterestBulkPinAnalyticsResponse,
+  type PinterestAccountAnalyticsResponse,
   type PinterestOrganicAnalyticsSlice,
-  type PinterestOrganicMetricMap,
 } from "@/lib/server/pinterest/service";
 import { hasInstagramInsightsScope } from "@/lib/server/instagram/config";
 import { getInstagramAccessToken } from "@/lib/server/instagram/connectionStore";
@@ -35,12 +40,18 @@ import {
 import { listConnections } from "@/lib/social/server/socialConnectionStore";
 import type { SocialConnection } from "@/lib/social/types";
 import { listVibePinPublishedPinterestPins } from "./vibepinPublishedPins";
-import { attributePinToConnection } from "./collectorLogic";
 import { ownerConnectionsForPins } from "./collectorStore";
+import {
+  loadAccountMetrics,
+  loadContentMetrics,
+  loadLatestFinishedRun,
+  loadLatestRun,
+  loadRegistry,
+} from "./insightsReadStore";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const DASHBOARD_LOAD_TIMEOUT_MS = 20_000;
-const PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT = 60;
+/** Parallel single-Pin analytics calls on the fallback path only. */
 const PIN_SINGLE_ANALYTICS_CONCURRENCY = 20;
 const dashboardCache = new Map<string, { at: number; value: InsightsDashboard }>();
 
@@ -61,59 +72,12 @@ async function withDashboardTimeout<T>(promise: Promise<T>): Promise<T> {
   }
 }
 
-function readMetric(metrics: PinterestOrganicMetricMap | undefined, key: string): number {
-  return finiteMetric(metrics?.[key]);
-}
-
-function pinAnalyticsSlice(
-  response: PinterestBulkPinAnalyticsResponse,
-  pinId: string,
-): PinterestOrganicAnalyticsSlice | null {
-  const byApp = response[pinId];
-  if (!byApp || typeof byApp !== "object") return null;
-  return byApp.ALL ?? Object.values(byApp).find(value => value && typeof value === "object") ?? null;
-}
-
-function summarizePinterestSlice(slice: PinterestOrganicAnalyticsSlice | null): PinterestOrganicMetricMap {
-  if (!slice) return {};
-  if (slice.summary_metrics) return slice.summary_metrics;
-  const summary: PinterestOrganicMetricMap = {};
-  for (const row of slice.daily_metrics ?? []) {
-    for (const [key, value] of Object.entries(row.metrics ?? {})) {
-      summary[key] = finiteMetric(summary[key]) + finiteMetric(value);
-    }
-  }
-  return summary;
-}
-
-async function loadVerifiedPinterestAnalytics(
-  client: PinterestClient,
-  pinIds: string[],
-  startDate: string,
-  endDate: string,
-  metrics: Parameters<PinterestClient["getOrganicPinsAnalytics"]>[3],
-): Promise<{ response: PinterestBulkPinAnalyticsResponse; available: boolean }> {
-  if (pinIds.length === 0) return { response: {}, available: true };
-
-  const response: PinterestBulkPinAnalyticsResponse = {};
-  // Pinterest's bulk endpoint is a restricted beta and this app is not entitled
-  // to it. The stable single-Pin endpoint returns the same response shape. Keep
-  // calls bounded by the documented org-analytics allowance and run them in
-  // parallel chunks so the first dashboard load stays responsive.
-  const fallbackIds = pinIds.slice(0, PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT);
-  for (let index = 0; index < fallbackIds.length; index += PIN_SINGLE_ANALYTICS_CONCURRENCY) {
-    const chunk = fallbackIds.slice(index, index + PIN_SINGLE_ANALYTICS_CONCURRENCY);
-    const settled = await Promise.allSettled(chunk.map(pinId => client.getOrganicPinAnalytics(
-      pinId,
-      startDate,
-      endDate,
-      metrics,
-    )));
-    settled.forEach((result, resultIndex) => {
-      if (result.status === "fulfilled") response[chunk[resultIndex]] = result.value;
-    });
-  }
-  return { response, available: Object.keys(response).length > 0 };
+/** The single-Pin analytics response is keyed by app type ("ALL", "WEB", …), not by
+ *  Pin id. `ALL` is the total; any other key alone would silently report one surface
+ *  as if it were the whole. */
+function organicSlice(response: PinterestAccountAnalyticsResponse): PinterestOrganicAnalyticsSlice | null {
+  if (!response || typeof response !== "object") return null;
+  return response.ALL ?? Object.values(response).find(value => value && typeof value === "object") ?? null;
 }
 
 function mediaFormat(mediaType: string | null): InsightsContent["format"] {
@@ -132,6 +96,7 @@ function titleFromCaption(caption: string | null, fallback: string): string {
 
 function emptyDashboard(
   platform: InsightsPlatform,
+  scope: InsightsScope,
   state: InsightsDashboard["connectionState"],
   startDate: string,
   endDate: string,
@@ -140,6 +105,7 @@ function emptyDashboard(
   const websiteClicksAvailable = platform === "pinterest";
   return {
     platform,
+    scope,
     connectionState: state,
     account: null,
     range: { startDate, endDate, days: 30 },
@@ -153,192 +119,76 @@ function emptyDashboard(
         ? "Pinterest reports outbound clicks per Pin. A click means someone left Pinterest — it does not prove the page finished loading."
         : "A normal Instagram feed image has no clickable caption link. Only account-level profile link taps are available, and they cannot be assigned to one image.",
     },
+    collection: null,
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
     warning,
   };
 }
 
-async function buildPinterestDashboard(
+/**
+ * The readers the Pinterest dashboard is built from.
+ *
+ * Nine of the ten touch our own database. The tenth, `loadLiveAnalytics`, is the
+ * only path to Pinterest, and it constructs the client lazily on purpose:
+ * `PinterestClient.forConnection` can itself refresh an access token, so building it
+ * eagerly would put a Pinterest round trip on every page load — including the
+ * collected path that is supposed to make none. For the same reason the account name
+ * comes from the stored connection row rather than `getCurrentPinterestUser()`,
+ * which this file used to call on every request.
+ */
+function pinterestSources(
   uid: string,
   connection: SocialConnection,
+  siblingConnectionIds: string[],
   startDate: string,
   endDate: string,
-  /** Every Pinterest connection this user holds. Scopes the registry ownership
-   *  lookup to their own accounts — a Pin's owner is only meaningful among them. */
-  siblingConnectionIds: string[] = [connection.id],
-): Promise<InsightsDashboard> {
-  const [client, provenance] = await Promise.all([
-    PinterestClient.forConnection(uid, connection.id),
-    listVibePinPublishedPinterestPins(uid),
-  ]);
-  const metrics = [
-    "IMPRESSION",
-    "SAVE",
-    "PIN_CLICK",
-    "OUTBOUND_CLICK",
-    "TOTAL_COMMENTS",
-    "TOTAL_REACTIONS",
-  ] as const;
-  const account = await client.getCurrentPinterestUser().catch(() => ({
-      id: connection.providerAccountId,
-      username: connection.providerAccountUsername,
-      accountType: null,
-    }));
-  // `remotePinId` is written only after Pinterest confirms a successful
-  // publish. Use the complete VibePin provenance set as the source of truth;
-  // intersecting with the first page of Pinterest-owned Pins silently dropped
-  // older VibePin posts from Insights.
-  //
-  // With several connected accounts, a Pin belongs to the connection it was
-  // published through (`targetConnectionId`, adopt-once PRD §14). Without this
-  // filter every account's dashboard would list every account's Pins, so the
-  // All-accounts view would repeat each Pin once per account and this account's
-  // token would return no metrics for the other account's Pins — reported as
-  // "Pinterest has not returned metrics yet" rather than as the mis-attribution
-  // it really is.
-  //
-  // Drafts published before targets were recorded carry no attribution of their
-  // own. The v64 content registry answers for them: the account whose own token
-  // listed a Pin is the account that owns it, which is real evidence rather than
-  // a guess. Only when the registry has no row yet — collection has not run, or
-  // the migration is not applied here — does a Pin fall back to being visible on
-  // every card, where the owning account is still the only one that returns
-  // metrics for it.
-  const allPublished = Array.from(provenance.pins.values());
-  const legacyPinIds = allPublished
-    .filter(item => item.targetConnectionId === null)
-    .map(item => item.pinId);
-  // One query for every unattributed Pin, not one per Pin. A registry that is not
-  // there yet resolves to an empty map, so this never breaks the dashboard.
-  const registryOwners = legacyPinIds.length > 0
-    ? await ownerConnectionsForPins(siblingConnectionIds, legacyPinIds).catch(() => new Map<string, string>())
-    : new Map<string, string>();
-  const published = allPublished.filter(item => attributePinToConnection(
-    item.targetConnectionId,
-    registryOwners.get(item.pinId) ?? null,
-    connection.id,
-  ));
-  const analyticsResult = await loadVerifiedPinterestAnalytics(
-    client,
-    published.map(item => item.pinId),
-    startDate,
-    endDate,
-    [...metrics],
-  );
-
-  const analytics = analyticsResult.response;
-  const slices = new Map(published.map(item => [item.pinId, pinAnalyticsSlice(analytics, item.pinId)]));
-  const byDate = new Map<string, InsightsDay>();
-  for (const slice of slices.values()) {
-    for (const row of slice?.daily_metrics ?? []) {
-      if (typeof row.date !== "string") continue;
-      const current = byDate.get(row.date) ?? {
-        date: row.date,
-        views: 0,
-        interactions: 0,
-        saves: 0,
-        shares: 0,
-        websiteClicks: 0,
-        trafficRate: null,
-      };
-      const views = readMetric(row.metrics, "IMPRESSION");
-      const saves = readMetric(row.metrics, "SAVE");
-      const clicks = readMetric(row.metrics, "OUTBOUND_CLICK");
-      const pinClicks = readMetric(row.metrics, "PIN_CLICK");
-      const comments = readMetric(row.metrics, "TOTAL_COMMENTS");
-      const reactions = readMetric(row.metrics, "TOTAL_REACTIONS");
-      current.views += views;
-      current.saves += saves;
-      current.websiteClicks = (current.websiteClicks ?? 0) + clicks;
-      current.interactions += saves + clicks + pinClicks + comments + reactions;
-      current.trafficRate = trafficRate(current.websiteClicks, current.views);
-      byDate.set(row.date, current);
-    }
-  }
-  const daily = fillDailyRange(Array.from(byDate.values()), startDate, endDate, true);
-
-  const rawContent: InsightsContent[] = published
-    .map((record): InsightsContent => {
-      const slice = slices.get(record.pinId) ?? null;
-      const pinMetrics = summarizePinterestSlice(slice);
-      const views = readMetric(pinMetrics, "IMPRESSION");
-      const saves = readMetric(pinMetrics, "SAVE");
-      const clicks = readMetric(pinMetrics, "OUTBOUND_CLICK");
-      const pinClicks = readMetric(pinMetrics, "PIN_CLICK");
-      const comments = readMetric(pinMetrics, "TOTAL_COMMENTS");
-      const reactions = readMetric(pinMetrics, "TOTAL_REACTIONS");
-      return {
-        id: record.pinId,
-        title: record.title || `VibePin Pin ${record.pinId.slice(-6)}`,
-        imageUrl: record.imageUrl,
-        postUrl: record.postUrl,
-        publishedAt: record.publishedAt ?? null,
-        format: mediaFormat(record.mediaType),
-        metrics: {
-          views,
-          interactions: saves + clicks + pinClicks + comments + reactions,
-          saves,
-          shares: 0,
-          websiteClicks: clicks,
-          trafficRate: trafficRate(clicks, views),
-        },
-        metricsAvailable: slice !== null,
-        websiteClickAvailability: "pin_level",
-        diagnosis: "",
-      };
-    })
-    .sort((a, b) => {
-      const clickDiff = (b.metrics.websiteClicks ?? -1) - (a.metrics.websiteClicks ?? -1);
-      if (clickDiff !== 0) return clickDiff;
-      return (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
-    });
-
-  const summary = rawContent
-    .filter(item => item.metricsAvailable !== false)
-    .reduce((total, item) => ({
-      views: total.views + item.metrics.views,
-      interactions: total.interactions + item.metrics.interactions,
-      saves: total.saves + item.metrics.saves,
-      shares: total.shares + item.metrics.shares,
-      websiteClicks: (total.websiteClicks ?? 0) + (item.metrics.websiteClicks ?? 0),
-      trafficRate: null,
-    }), emptyMetrics(0));
-  summary.trafficRate = trafficRate(summary.websiteClicks, summary.views);
-
-  const missingAnalytics = rawContent.filter(item => item.metricsAvailable === false).length;
-  const missingImages = rawContent.filter(item => !item.imageUrl).length;
-  let warning: string | null = null;
-  if (!provenance.storageAvailable) {
-    warning = "VibePin publish records are temporarily unavailable. To avoid mixing in Pins we cannot verify, none are shown here.";
-  } else if (published.length === 0) {
-    warning = "No VibePin content has a confirmed Pinterest publish record yet. Images without a publish record are never shown here.";
-  } else if (!analyticsResult.available || missingAnalytics > 0) {
-    warning = `Pinterest has not returned official metrics for ${missingAnalytics || published.length} of ${published.length} published VibePin Pins yet. Those rows show — instead of a number.`;
-  } else if (missingImages > 0) {
-    warning = `${missingImages} confirmed VibePin Pins have no local thumbnail yet. VibePin keeps fetching them from Pinterest.`;
-  }
-
+): CollectionSources {
   return {
-    platform: "pinterest",
-    connectionState: "ready",
-    account: {
-      id: account.id ?? connection.providerAccountId ?? connection.id,
-      name: account.username ? `@${account.username}` : connection.providerAccountName ?? "Pinterest",
-      username: account.username,
+    loadLatestFinishedRun: () => loadLatestFinishedRun(connection.id),
+    loadLatestRun: () => loadLatestRun(connection.id),
+    loadAccountMetrics: (from, to) => loadAccountMetrics(connection.id, from, to),
+    loadRegistry: limit => loadRegistry(connection.id, limit),
+    loadContentMetrics: (pinIds, options) => loadContentMetrics(connection.id, pinIds, options),
+    loadProvenance: async () => {
+      const result = await listVibePinPublishedPinterestPins(uid);
+      return { pins: Array.from(result.pins.values()), storageAvailable: result.storageAvailable };
     },
-    range: { startDate, endDate, days: 30 },
-    summary,
-    daily,
-    content: attachDiagnoses("pinterest", rawContent),
-    availability: {
-      views: "pin_level",
-      websiteClicks: "pin_level",
-      message: "Shows every Pin with a confirmed VibePin publish record; drafts without one never appear here. \"Went to site\" means someone left Pinterest — it does not prove the page finished loading.",
+    // Scoped to the connections of this user, so ownership can never be probed
+    // across accounts. A registry that is not there yet resolves to an empty map.
+    loadRegistryOwners: pinIds => ownerConnectionsForPins(siblingConnectionIds, pinIds)
+      .catch(() => new Map<string, string>()),
+    loadLiveAnalytics: async pinIds => {
+      const slices = new Map<string, LiveAnalyticsSlice | null>();
+      if (pinIds.length === 0) return slices;
+      const client = await PinterestClient.forConnection(uid, connection.id);
+      const metrics = [
+        "IMPRESSION",
+        "SAVE",
+        "PIN_CLICK",
+        "OUTBOUND_CLICK",
+        "TOTAL_COMMENTS",
+        "TOTAL_REACTIONS",
+      ] as const;
+      // Pinterest's bulk endpoint is a restricted beta this app is not entitled to;
+      // the stable single-Pin endpoint returns the same shape one Pin at a time.
+      for (let index = 0; index < pinIds.length; index += PIN_SINGLE_ANALYTICS_CONCURRENCY) {
+        const chunk = pinIds.slice(index, index + PIN_SINGLE_ANALYTICS_CONCURRENCY);
+        const settled = await Promise.allSettled(chunk.map(pinId => client.getOrganicPinAnalytics(
+          pinId,
+          startDate,
+          endDate,
+          [...metrics],
+        )));
+        settled.forEach((result, resultIndex) => {
+          const pinId = chunk[resultIndex];
+          slices.set(pinId, result.status === "fulfilled"
+            ? organicSlice(result.value)
+            : null);
+        });
+      }
+      return slices;
     },
-    latestAvailableAt: null,
-    syncedAt: new Date().toISOString(),
-    warning,
   };
 }
 
@@ -349,7 +199,7 @@ async function buildInstagramDashboard(
   endDate: string,
 ): Promise<InsightsDashboard> {
   if (!hasInstagramInsightsScope(connection.scopes)) {
-    const dashboard = emptyDashboard("instagram", "needs_reconnect", startDate, endDate, null);
+    const dashboard = emptyDashboard("instagram", "vibepin", "needs_reconnect", startDate, endDate, null);
     dashboard.account = {
       id: connection.providerAccountId ?? connection.id,
       name: connection.providerAccountName ?? connection.providerAccountUsername ?? "Instagram",
@@ -362,7 +212,7 @@ async function buildInstagramDashboard(
   const token = await getInstagramAccessToken(uid, connection.id);
   const userId = token?.userId ?? connection.providerAccountId;
   if (!token?.accessToken || !userId) {
-    const dashboard = emptyDashboard("instagram", "needs_reconnect", startDate, endDate, null);
+    const dashboard = emptyDashboard("instagram", "vibepin", "needs_reconnect", startDate, endDate, null);
     dashboard.warning = "This Instagram authorization is no longer valid. Please reconnect the account.";
     return dashboard;
   }
@@ -447,6 +297,7 @@ async function buildInstagramDashboard(
   const failedMedia = metricResults.filter(result => result.status === "rejected").length;
   return {
     platform: "instagram",
+    scope: "vibepin",
     connectionState: "ready",
     account: {
       id: userId,
@@ -462,6 +313,7 @@ async function buildInstagramDashboard(
       websiteClicks: "account_level",
       message: "Profile link taps are an account total for the last 30 days and cannot be attributed to one feed image. Image rows show only official media interactions.",
     },
+    collection: null,
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
     warning: failedMedia > 0
@@ -474,9 +326,13 @@ export async function getInsightsDashboard(
   uid: string,
   platform: InsightsPlatform,
   connectionId?: string | null,
+  scope: InsightsScope = "vibepin",
 ): Promise<InsightsDashboard> {
   const startDate = utcDateDaysAgo(29);
   const endDate = utcDateDaysAgo(0);
+  // Instagram has no collection layer and no second scope; asking for one must not
+  // silently return Pinterest-shaped emptiness under an Instagram header.
+  const effectiveScope: InsightsScope = platform === "pinterest" ? scope : "vibepin";
   let connection: SocialConnection | null = null;
   try {
     const connections = (await listConnections(uid)).filter(item => item.provider === platform);
@@ -485,9 +341,9 @@ export async function getInsightsDashboard(
       ?? connections[0]
       ?? null;
 
-    if (!connection) return emptyDashboard(platform, "not_connected", startDate, endDate, null);
+    if (!connection) return emptyDashboard(platform, effectiveScope, "not_connected", startDate, endDate, null);
     if (connection.connectionStatus !== "connected") {
-      const dashboard = emptyDashboard(platform, "needs_reconnect", startDate, endDate, null);
+      const dashboard = emptyDashboard(platform, effectiveScope, "needs_reconnect", startDate, endDate, null);
       dashboard.account = {
         id: connection.providerAccountId ?? connection.id,
         name: connection.providerAccountName ?? connection.providerAccountUsername ?? platform,
@@ -496,13 +352,30 @@ export async function getInsightsDashboard(
       return dashboard;
     }
 
-    const cacheKey = `${uid}:${platform}:${connection.id}:${startDate}:${endDate}`;
+    const cacheKey = `${uid}:${platform}:${connection.id}:${effectiveScope}:${startDate}:${endDate}`;
     const cached = dashboardCache.get(cacheKey);
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
 
+    const activeConnection = connection;
     const dashboard = await withDashboardTimeout(platform === "pinterest"
-      ? buildPinterestDashboard(uid, connection, startDate, endDate, connections.map(item => item.id))
-      : buildInstagramDashboard(uid, connection, startDate, endDate));
+      ? buildPinterestInsights({
+        scope: effectiveScope,
+        connection: {
+          id: activeConnection.id,
+          providerAccountId: activeConnection.providerAccountId,
+          providerAccountName: activeConnection.providerAccountName,
+          providerAccountUsername: activeConnection.providerAccountUsername,
+        },
+        startDate,
+        endDate,
+      }, pinterestSources(
+        uid,
+        activeConnection,
+        connections.map(item => item.id),
+        startDate,
+        endDate,
+      ))
+      : buildInstagramDashboard(uid, activeConnection, startDate, endDate));
     dashboardCache.set(cacheKey, { at: Date.now(), value: dashboard });
     return dashboard;
   } catch (error) {
@@ -511,6 +384,7 @@ export async function getInsightsDashboard(
       && error.status === 403;
     const dashboard = emptyDashboard(
       platform,
+      effectiveScope,
       isBusinessGate ? "business_account_required" : "unavailable",
       startDate,
       endDate,
@@ -526,3 +400,5 @@ export async function getInsightsDashboard(
     return dashboard;
   }
 }
+
+export { ACCOUNT_CONTENT_ROW_LIMIT };

@@ -57,6 +57,26 @@ export const insightsMessages = {
   "insights.weekday.fri": "Fri",
   "insights.weekday.sat": "Sat",
 
+  // ── Scope (Pinterest only) ──
+  //    Two readings of the same account, never mixed: the VibePin publish whitelist,
+  //    and everything the collector has registered for the account.
+  "insights.scope.label": "View",
+  "insights.scope.vibepin": "Published via VibePin",
+  "insights.scope.account": "Your account (all Pins)",
+  "insights.scope.accountHelp": "Every Pin registered on this account, including Pins published outside VibePin.",
+
+  // ── Data state (v64 collection layer) ──
+  //    A number with no collection time behind it is a number nobody can check.
+  "insights.collection.dataUpdated": "Data updated {time}",
+  "insights.collection.liveSample": "Nightly collection has not run for this account yet — showing a live sample.",
+  "insights.collection.awaitingFirstRun": "Nightly collection has not run for this account yet. This view fills in after the first run.",
+  "insights.collection.skipped": "The last collection run stopped early: {reason}",
+  "insights.collection.reason.rateLimited": "Pinterest rate limit reached",
+  "insights.collection.reason.budgetExhausted": "the daily call budget was used up",
+  "insights.collection.reason.deadline": "the run ran out of time",
+  "insights.collection.reason.noPermission": "a permission is missing on this account",
+  "insights.collection.reason.other": "reason not recorded",
+
   // ── Content table ──
   "insights.content.title": "Content performance",
   "insights.content.helpPinterest": "All {count} Pins verified from VibePin publish records. Metrics cover the selected 30 days.",
@@ -76,7 +96,15 @@ export const insightsMessages = {
   "insights.content.colPost": "Post",
   "insights.content.filterAccount": "Filter by account",
   "insights.content.filterAllAccounts": "All accounts",
+  "insights.content.helpAccount": "All {count} Pins registered on this account. Numbers come from the nightly collection.",
+  "insights.content.emptyAccountTitle": "No Pins registered yet",
+  "insights.content.emptyAccountBody": "Pins appear here once the nightly collection has read this account.",
   "insights.content.awaitingPinterest": "Awaiting Pinterest",
+  "insights.content.notCollected": "Not collected yet",
+  "insights.content.noPermission": "Permission needed",
+  "insights.content.stale": "Not confirmed in the latest collection run",
+  "insights.content.originVibePin": "VibePin",
+  "insights.content.originPinterest": "Pinterest",
   "insights.content.notAvailableForFeedImages": "Not available for feed images",
   "insights.content.openPost": "Open post",
   "insights.content.previewUnavailable": "Published Pin — preview unavailable",
@@ -93,6 +121,11 @@ export const insightsMessages = {
   "insights.diagnosis.tooEarly": "It has views, but not enough data yet. Let more collect before judging.",
   "insights.diagnosis.noData": "Not enough data yet. Numbers start building up here after you publish.",
   "insights.diagnosis.awaitingMetrics": "Confirmed published by VibePin. Pinterest has not returned metrics for this image yet.",
+  //    The three ways "no numbers" happens, kept apart because each needs a
+  //    different action: reconnect, wait for the next run, or wait for Pinterest.
+  "insights.diagnosis.awaitingPlatform": "Pinterest has not returned metrics for this Pin yet.",
+  "insights.diagnosis.notCollected": "Not collected yet. Numbers appear after the next nightly collection.",
+  "insights.diagnosis.noPermission": "VibePin cannot read numbers for this Pin. Reconnect the account to restore access.",
 
   // ── Connection / empty states ──
   "insights.state.businessRequired": "Pinterest Business account needed",

@@ -125,6 +125,28 @@ export function diagnoseContent(
     : "insights.diagnosis.noData";
 }
 
+/**
+ * The line shown for a row that has no numbers.
+ *
+ * "No numbers" is four different situations and they call for four different
+ * actions, which is the entire reason the v64 ledger records a status per
+ * measurement instead of just writing rows when it has them:
+ *   - `no_permission`  the token cannot read this. Reconnecting fixes it.
+ *   - `not_collected`  we have not spent a call on it yet. Waiting fixes it.
+ *   - `not_returned`   Pinterest answered without the metric. Only time fixes it,
+ *                      and for a Pin we did not publish the wording must not claim
+ *                      a VibePin publish record.
+ * Collapsing them into one "no data yet" is what turns an analytics page into
+ * something nobody trusts.
+ */
+function missingMetricsDiagnosis(item: InsightsContent): string {
+  if (item.metricsState === "no_permission") return "insights.diagnosis.noPermission";
+  if (item.metricsState === "not_collected") return "insights.diagnosis.notCollected";
+  return item.origin === "pinterest"
+    ? "insights.diagnosis.awaitingPlatform"
+    : "insights.diagnosis.awaitingMetrics";
+}
+
 export function attachDiagnoses(
   platform: InsightsPlatform,
   content: InsightsContent[],
@@ -133,7 +155,7 @@ export function attachDiagnoses(
   return content.map(item => ({
     ...item,
     diagnosis: item.metricsAvailable === false
-      ? "insights.diagnosis.awaitingMetrics"
+      ? missingMetricsDiagnosis(item)
       : diagnoseContent(platform, item.metrics, cohort),
   }));
 }
