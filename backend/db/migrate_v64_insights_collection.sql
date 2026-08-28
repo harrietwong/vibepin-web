@@ -63,11 +63,22 @@
 -- collected data with it. vibepin_user_id is carried alongside for user-scoped reads
 -- and cascades from auth.users.
 --
--- RLS is deliberately NOT enabled: these tables are written and read only by the
--- server through the service-role key (collector cron + server-side dashboard), the
--- same posture as the other collection-side tables in this schema. No anon or
--- authenticated client ever selects from them directly. If that ever changes, RLS
--- must be added in the same change that exposes them — not afterwards.
+-- RLS is enabled on every table, with NO policies. That combination is the point:
+-- the service role bypasses RLS entirely (so the collector cron and the server-side
+-- dashboard are unaffected), while a table with RLS on and zero policies denies every
+-- row to anon and authenticated — including a client holding a valid user JWT that
+-- goes straight at PostgREST and skips /api/insights/**. This is the house convention
+-- for server-owned tables (see `generation_jobs` in the v5x migrations).
+--
+-- Saying "only the server reads this" in a comment is not an access control. The
+-- deny is what makes the paid gate and the per-connection scoping enforceable rather
+-- than merely intended, and it has to hold on the day someone points a Supabase
+-- client at these relations without reading this file.
+--
+-- The two views carry `security_invoker = on` (PG15+) for the same reason: a view is
+-- otherwise executed with its OWNER's rights, which would let it read
+-- metric_observation past that table's RLS and hand back exactly the rows the table
+-- refuses. With security_invoker the caller's own (absent) permissions decide.
 
 -- ── 1. Collection ledger (referenced by metric_observation — created first) ──
 CREATE TABLE IF NOT EXISTS collection_run (
@@ -85,6 +96,9 @@ CREATE TABLE IF NOT EXISTS collection_run (
   skipped_reason text,
   error text
 );
+
+-- RLS on, no policies: service role bypasses; anon/authenticated get nothing.
+ALTER TABLE collection_run ENABLE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS collection_run_conn
   ON collection_run (connection_id, started_at DESC);
@@ -113,6 +127,8 @@ CREATE TABLE IF NOT EXISTS metric_observation (
   CHECK ((status = 'ok') = (metric_value IS NOT NULL))
 );
 
+ALTER TABLE metric_observation ENABLE ROW LEVEL SECURITY;
+
 -- One observation per metric per run: makes the collector's inserts safely
 -- retryable (ON CONFLICT DO NOTHING) without inventing duplicate history.
 -- The coalesce sentinels are collision-proof only because of the checks above.
@@ -134,6 +150,10 @@ CREATE OR REPLACE VIEW metric_latest_status AS
   ORDER BY connection_id, scope, platform_content_id, metric_name, period, period_date,
            observed_at DESC, id DESC;
 
+-- A view runs with its owner's rights unless told otherwise; security_invoker makes
+-- it obey the caller's, so it cannot hand back rows metric_observation's RLS denies.
+ALTER VIEW metric_latest_status SET (security_invoker = on);
+
 -- Latest observation per key that actually carries a value. Kept separate from
 -- metric_latest_status on purpose: joining them lets a caller distinguish "no value
 -- ever" from "had a value, latest attempt failed". id DESC breaks ties within the
@@ -145,6 +165,8 @@ CREATE OR REPLACE VIEW metric_latest_value AS
   WHERE status = 'ok'
   ORDER BY connection_id, scope, platform_content_id, metric_name, period, period_date,
            observed_at DESC, id DESC;
+
+ALTER VIEW metric_latest_value SET (security_invoker = on);
 
 -- ── 3. Content registry and full-scan cursor ─────────────────────────────────
 CREATE TABLE IF NOT EXISTS content_registry (
@@ -170,6 +192,8 @@ CREATE TABLE IF NOT EXISTS content_registry (
   PRIMARY KEY (connection_id, platform_content_id)
 );
 
+ALTER TABLE content_registry ENABLE ROW LEVEL SECURITY;
+
 CREATE TABLE IF NOT EXISTS registry_cursor (
   connection_id uuid PRIMARY KEY REFERENCES social_connections(id) ON DELETE CASCADE,
   -- NULL = no full scan in progress. A non-null bookmark is where the next page resumes.
@@ -182,6 +206,8 @@ CREATE TABLE IF NOT EXISTS registry_cursor (
   -- reconcile before the scan counts as complete.
   reconciliation_pending boolean NOT NULL DEFAULT false
 );
+
+ALTER TABLE registry_cursor ENABLE ROW LEVEL SECURITY;
 
 -- ── 4. Fixed measurement points ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS pin_task (
@@ -206,6 +232,8 @@ CREATE TABLE IF NOT EXISTS pin_task (
   CHECK (window_until > due_at)
 );
 
+ALTER TABLE pin_task ENABLE ROW LEVEL SECURITY;
+
 -- Partial index on exactly the claim query: pending tasks of one connection in
 -- execution order. Excluding done/cancelled keeps it small as history accumulates.
 CREATE INDEX IF NOT EXISTS pin_task_pick
@@ -214,15 +242,15 @@ CREATE INDEX IF NOT EXISTS pin_task_pick
 -- ── 5. Ownership documentation ───────────────────────────────────────────────
 COMMENT ON TABLE collection_run IS
   'Insights collection ledger (v64). One row per attempt to collect from a platform '
-  'for one connection. Service-role only; no RLS.';
+  'for one connection. Service-role only; RLS on with no policies (anon/authenticated denied).';
 COMMENT ON TABLE metric_observation IS
   'Insights raw observations (v64). APPEND-ONLY — never UPDATE or DELETE; read through '
-  'metric_latest_status / metric_latest_value. Service-role only; no RLS.';
+  'metric_latest_status / metric_latest_value. Service-role only; RLS on with no policies (anon/authenticated denied).';
 COMMENT ON TABLE content_registry IS
   'Insights content registry (v64). Durable proof of which connection owns a Pin. '
-  'source_endpoint=''vibepin_publish'' must never be downgraded. Service-role only; no RLS.';
+  'source_endpoint=''vibepin_publish'' must never be downgraded. Service-role only; RLS on with no policies (anon/authenticated denied).';
 COMMENT ON TABLE registry_cursor IS
-  'Insights full-scan cursor (v64). Resumable position of the /pins scan. Service-role only; no RLS.';
+  'Insights full-scan cursor (v64). Resumable position of the /pins scan. Service-role only; RLS on with no policies (anon/authenticated denied).';
 COMMENT ON TABLE pin_task IS
   'Insights fixed measurement points t1/t7/t30 (v64). Windowed: expired pending tasks are '
-  'cancelled, never carried forward. Service-role only; no RLS.';
+  'cancelled, never carried forward. Service-role only; RLS on with no policies (anon/authenticated denied).';

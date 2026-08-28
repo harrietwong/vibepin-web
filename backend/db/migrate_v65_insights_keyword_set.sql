@@ -63,10 +63,28 @@
 -- table: one user may hold several Pinterest accounts and each has its own market.
 -- Disconnecting an account takes its keyword sets with it.
 --
--- RLS is deliberately NOT enabled: this table is written and read only by the server
--- through the service-role key, the same posture as the v64 collection tables. No
--- anon or authenticated client selects from it directly. If that ever changes, RLS
--- must be added in the same change that exposes it — not afterwards.
+-- RLS is enabled on every table below, with NO policies — the same posture v64 uses,
+-- and for the same reason. The service role bypasses RLS, so the cron generators and
+-- the server-side readers are unaffected; anon and authenticated get nothing, even
+-- going straight at PostgREST with a valid user JWT and skipping /api/insights/**.
+--
+-- For `insight_report` this is not housekeeping. The row carries `evidence_snapshot`,
+-- the findings and the recommendations — the entire paid deliverable. Without the
+-- deny, the plan gate enforced in the read endpoint is a suggestion: anyone can read
+-- any connection's report from the client. A comment saying "server-only" does not
+-- stop a select; RLS with zero policies does.
+
+-- ── v64 amendment: the registry remembers the Pin's image ───────────────────
+-- The dashboard needs a thumbnail. It used to fetch one per Pin from Pinterest at
+-- page time, which is exactly the outbound call the collection layer exists to
+-- remove — and it is a call nobody budgets for, because the page has no ledger.
+-- The collector already sees `media.images` on every Pin it lists, so the URL is
+-- free there and costs one column here. When it is NULL the UI shows a placeholder;
+-- a missing thumbnail is a cosmetic loss, an unbudgeted API call is not.
+ALTER TABLE content_registry ADD COLUMN IF NOT EXISTS image_url text;
+
+COMMENT ON COLUMN content_registry.image_url IS
+  'Best available Pin image URL, captured by the collector. NULL renders a placeholder — the page never fetches one.';
 
 CREATE TABLE IF NOT EXISTS account_keyword_set (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -87,6 +105,9 @@ CREATE TABLE IF NOT EXISTS account_keyword_set (
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (connection_id, version)
 );
+
+-- RLS on, no policies: service role bypasses; anon/authenticated get nothing.
+ALTER TABLE account_keyword_set ENABLE ROW LEVEL SECURITY;
 
 COMMENT ON TABLE account_keyword_set IS
   'Versioned phrase list per Pinterest connection, built from trend_keywords + keyword_expansions. Never built from the account''s own Pin text (see migration header).';
@@ -126,9 +147,10 @@ CREATE INDEX IF NOT EXISTS idx_account_keyword_set_connection_version
 -- ── Why a trigger and not a code rule ───────────────────────────────────────
 -- Once a report has been sent or viewed, its content columns are closed. A code-level
 -- rule would hold until the day someone writes a "backfill the narrative" script at
--- 2am; the trigger holds then too. Note precisely what it does NOT block: status,
--- viewed_at and sent_at are bookkeeping, not content, and both marking a report read
--- and superseding an already-read report must keep working.
+-- 2am; the trigger holds then too. Note precisely what it does NOT block: `status`,
+-- so superseding an already-read report keeps working. `viewed_at` and `sent_at` are
+-- bookkeeping but not free: each is a one-way latch (NULL → timestamp, once), because
+-- they are what closes the content columns and a clearable latch is no latch.
 
 CREATE TABLE IF NOT EXISTS insight_report (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -176,6 +198,9 @@ CREATE TABLE IF NOT EXISTS insight_report (
     CHECK ((kind = 'weekly') = (subject_content_id IS NULL))
 );
 
+-- RLS on, no policies. This row is the paid deliverable; see the header.
+ALTER TABLE insight_report ENABLE ROW LEVEL SECURITY;
+
 COMMENT ON TABLE insight_report IS
   'Frozen weekly / T+7 / T+30 reports per Pinterest connection. Versioned, and immutable after send or view (see insight_report_guard).';
 COMMENT ON COLUMN insight_report.evidence_snapshot IS
@@ -204,6 +229,24 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $fn$
 BEGIN
+  -- ── Monotonic timestamps, checked before anything else ────────────────────
+  -- viewed_at and sent_at are one-way latches: NULL → timestamp, once. They are the
+  -- switch that closes the content columns below, so if they could be changed or
+  -- cleared the freeze would be trivially defeatable — set viewed_at back to NULL,
+  -- rewrite the findings, set it again. Nothing legitimate ever needs to move them:
+  -- the read endpoint marks a first view, the sender marks a send, and neither event
+  -- happens twice for the same row.
+  IF OLD.viewed_at IS NOT NULL AND NEW.viewed_at IS DISTINCT FROM OLD.viewed_at THEN
+    RAISE EXCEPTION
+      'insight_report % already has viewed_at; it may only go NULL → timestamp, never change or clear', OLD.id
+      USING ERRCODE = '23514';
+  END IF;
+  IF OLD.sent_at IS NOT NULL AND NEW.sent_at IS DISTINCT FROM OLD.sent_at THEN
+    RAISE EXCEPTION
+      'insight_report % already has sent_at; it may only go NULL → timestamp, never change or clear', OLD.id
+      USING ERRCODE = '23514';
+  END IF;
+
   -- Not sent and not viewed: still a private artefact, the generator may rewrite it.
   IF OLD.sent_at IS NULL AND OLD.viewed_at IS NULL THEN
     RETURN NEW;
@@ -241,6 +284,107 @@ CREATE TRIGGER insight_report_guard
   BEFORE UPDATE ON insight_report
   FOR EACH ROW EXECUTE FUNCTION insight_report_guard();
 
+-- ── Regeneration, in one transaction ────────────────────────────────────────
+-- The versioning contract cannot be honoured by a client doing supersede-then-insert.
+-- The partial unique index allows one `current` row per identity, so the old row must
+-- be retired before the new one lands — and between those two statements the identity
+-- has NO current row. A crash, a timeout or a transient insert failure in that window
+-- leaves it permanently broken: the next run reads no current row, picks version 1,
+-- and collides with the original v1 in the full unique index. Forever.
+--
+-- So the decision and both writes happen here, inside one transaction, behind a row
+-- lock. `for update` on the current row serialises concurrent generators instead of
+-- letting them race the index; the hash is re-read under that lock, so an identical
+-- regeneration is a no-op decided on fresh data rather than on a value read earlier.
+--
+-- The version comes from max(version) over ALL statuses, not from the current row.
+-- That is what heals an identity a previous crash left with only superseded rows:
+-- there is no current row to read a version from, but the history still knows how far
+-- the numbering got, so the repair inserts max+1 and the identity becomes usable again
+-- rather than colliding on version 1 every time it is retried.
+--
+-- SECURITY DEFINER with execute revoked from anon/authenticated: the function writes
+-- rows those roles cannot even read (RLS above), so it must not be callable by them.
+CREATE OR REPLACE FUNCTION insight_report_regenerate(p jsonb)
+RETURNS insight_report
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $fn$
+DECLARE
+  v_connection_id uuid := (p->>'connection_id')::uuid;
+  v_user_id       uuid := (p->>'vibepin_user_id')::uuid;
+  v_kind          text := p->>'kind';
+  v_subject       text := p->>'subject_content_id';   -- NULL for weekly
+  v_period_key    text := p->>'period_key';
+  v_hash          text := p->>'evidence_hash';
+  v_current       insight_report;
+  v_has_current   boolean := false;
+  v_next_version  int;
+  v_result        insight_report;
+BEGIN
+  IF v_connection_id IS NULL OR v_user_id IS NULL OR v_kind IS NULL
+     OR v_period_key IS NULL OR v_hash IS NULL THEN
+    RAISE EXCEPTION 'insight_report_regenerate: connection_id, vibepin_user_id, kind, period_key and evidence_hash are required'
+      USING ERRCODE = '22023';
+  END IF;
+
+  -- Lock the identity's current row, if it has one. FOR UPDATE is what makes the
+  -- read-decide-write below atomic against a second generator.
+  SELECT * INTO v_current
+  FROM insight_report
+  WHERE connection_id = v_connection_id
+    AND kind = v_kind
+    AND coalesce(subject_content_id, '') = coalesce(v_subject, '')
+    AND period_key = v_period_key
+    AND status = 'current'
+  FOR UPDATE;
+  -- FOUND is clobbered by the next query, so the fact is captured now.
+  v_has_current := FOUND;
+
+  -- Same evidence, same report. A re-run is not an event.
+  IF v_has_current AND v_current.evidence_hash = v_hash THEN
+    RETURN v_current;
+  END IF;
+
+  -- max over EVERY status, so an identity left with only superseded rows continues
+  -- its numbering instead of retrying version 1 against the unique index.
+  SELECT coalesce(max(version), 0) + 1 INTO v_next_version
+  FROM insight_report
+  WHERE connection_id = v_connection_id
+    AND kind = v_kind
+    AND coalesce(subject_content_id, '') = coalesce(v_subject, '')
+    AND period_key = v_period_key;
+
+  IF v_has_current THEN
+    UPDATE insight_report SET status = 'superseded' WHERE id = v_current.id;
+  END IF;
+
+  INSERT INTO insight_report (
+    vibepin_user_id, connection_id, kind, subject_content_id, subject_draft_id,
+    period_key, version, evidence_snapshot, evidence_hash, evidence_version,
+    rule_version, keyword_set_version, narrative_status, status
+  ) VALUES (
+    v_user_id, v_connection_id, v_kind, v_subject, p->>'subject_draft_id',
+    v_period_key, v_next_version,
+    coalesce(p->'evidence_snapshot', '{}'::jsonb), v_hash, p->>'evidence_version',
+    p->>'rule_version',
+    CASE WHEN p->>'keyword_set_version' IS NULL THEN NULL
+         ELSE (p->>'keyword_set_version')::int END,
+    coalesce(p->>'narrative_status', 'template'), 'current'
+  )
+  RETURNING * INTO v_result;
+
+  RETURN v_result;
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION insight_report_regenerate(jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION insight_report_regenerate(jsonb) FROM anon, authenticated;
+
+COMMENT ON FUNCTION insight_report_regenerate(jsonb) IS
+  'Atomic report regeneration: locks the identity''s current row, no-ops on an equal evidence_hash, otherwise supersedes it and inserts version max+1. Service role only.';
+
 -- ── Feedback ────────────────────────────────────────────────────────────────
 -- One thumb per user per report, and the primary key says so: a second click is an
 -- UPDATE of an opinion, not a second vote. This is the only signal that can tell a
@@ -253,6 +397,8 @@ CREATE TABLE IF NOT EXISTS insight_report_feedback (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (report_id, vibepin_user_id)
 );
+
+ALTER TABLE insight_report_feedback ENABLE ROW LEVEL SECURITY;
 
 COMMENT ON TABLE insight_report_feedback IS
   'Thumbs up/down per report per user. Primary key (report_id, vibepin_user_id): a changed mind is an update, not a second vote.';
@@ -280,6 +426,8 @@ CREATE TABLE IF NOT EXISTS insight_email_send (
   error text,
   UNIQUE (connection_id, email_kind, batch_key)
 );
+
+ALTER TABLE insight_email_send ENABLE ROW LEVEL SECURITY;
 
 COMMENT ON TABLE insight_email_send IS
   'Send ledger for Insights emails. id is the provider idempotency key; the row is claimed before the send so a crash cannot produce a second email.';
