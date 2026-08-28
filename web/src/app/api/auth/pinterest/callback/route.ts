@@ -176,10 +176,11 @@ export async function GET(req: NextRequest) {
     const tIdentity = performance.now();
     let account: AuthorizedAccount;
     let existing: ExistingConnection[];
-    // Active = the same predicate listActiveConnections uses (not disconnected AND
-    // token-bearing). Derived from the rows we already read, so the quota re-check
-    // below costs no extra Pinterest/DB round trip.
-    let activeCount = 0;
+    // Slots are held by every row the user has on this provider, whatever its
+    // status (PRD 0805 §11: Disconnect keeps the account and its slot, Remove frees
+    // it). Derived from the rows we already read, so the quota re-check below costs
+    // no extra Pinterest/DB round trip.
+    let heldCount = 0;
     try {
       const [identity, rows] = await Promise.all([
         fetchAccountIdentity(tokens.accessToken),
@@ -189,7 +190,7 @@ export async function GET(req: NextRequest) {
       // We do NOT guess: with no id, decideConnect can only match an unidentified row
       // (or create), and a reconnect aimed at an identified row is refused below.
       account = identity ?? { id: null, username: null, accountType: null };
-      activeCount = rows.filter(r => !r.disconnected_at && !!r.access_token_encrypted).length;
+      heldCount = rows.length;
       existing = rows.map((r): ExistingConnection => ({
         connectionId: r.id,
         accountId: r.pinterest_user_id,
@@ -236,23 +237,24 @@ export async function GET(req: NextRequest) {
     // slot while this one is away at Pinterest, so the write side has to be the
     // authority. `decideConnect` stays a pure decision — the quota lives here.
     //
-    // Which decisions add an active account:
-    //   create                  → +1 active → blocked at the cap.
-    //   update && revived       → reviving a DISCONNECTED row. Disconnected rows are
-    //                             not counted as used, so bringing one back is also
-    //                             +1 active. Blocked, deliberately: allowing it would
-    //                             let a capped user hold unlimited accounts by
-    //                             disconnecting and re-authorizing in rotation.
-    //   update && !revived      → repairing an already-active row → count unchanged →
-    //                             always allowed (this is Reconnect).
+    // Which decisions add a row:
+    //   create             → a NEW row → +1 held → blocked at the cap.
+    //   update (any kind)  → writes an EXISTING row, revived or not → count unchanged
+    //                        → always allowed. This is Reconnect, and it includes
+    //                        reviving a DISCONNECTED row: that row never stopped
+    //                        holding its slot, so bringing it back consumes nothing.
+    //                        Gating it (as this did while disconnected rows were
+    //                        uncounted) would now strand an at-limit merchant with a
+    //                        slot they occupy but are not allowed to repair — their
+    //                        only way out is Remove, which deletes the row and frees
+    //                        the slot.
     // Fails OPEN on an unexpected error: a tokens-in-hand authorization must not be
     // thrown away because an entitlement read hiccuped.
-    const addsAnAccount =
-      decision.action === "create" || (decision.action === "update" && decision.revived);
+    const addsAnAccount = decision.action === "create";
     if (addsAnAccount) {
       let overLimit = false;
       try {
-        const quota = await evaluateAccountQuota(uid, await resolvePlan(uid), activeCount);
+        const quota = await evaluateAccountQuota(uid, await resolvePlan(uid), heldCount);
         overLimit = !quota.canAddAccount;
         if (overLimit) {
           console.warn(

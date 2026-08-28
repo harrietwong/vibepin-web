@@ -3,7 +3,8 @@
  *
  * DELETE disconnects the authenticated user's Pinterest account: invalidates stored
  * tokens and marks the connection disconnected. Non-sensitive metadata rows are
- * preserved (the row stays, tokens are nulled, disconnected_at set).
+ * preserved (the row stays, tokens are nulled, disconnected_at set). With
+ * `?mode=remove&connectionId=…` it instead DELETES that one row (see below).
  *
  * Idempotent: safe to call repeatedly. `disconnect()` is a 0-or-more-row UPDATE, so
  * calling it when there is no connection (or an already-disconnected one) is a
@@ -31,10 +32,27 @@
  * without asking. `?cancelScheduled=1` on the DELETE is the "Cancel those schedules"
  * branch of that dialog; the "Keep" branch passes nothing, because Phase C's
  * `target_disconnected` retry block is already what stops those Pins at publish time.
+ *
+ * ── `?mode=remove`: Disconnect and Remove stop being the same call ────────────
+ * Default (`mode` absent or anything else) is the SOFT disconnect this route has
+ * always done: tokens invalidated, row kept, `disconnected_at` stamped. The row now
+ * STAYS in Settings as a "Disconnected" account with a Reconnect — and it goes on
+ * holding its plan slot (PRD 0805 §11).
+ *
+ * `?mode=remove` is the HARD delete: the row is gone, and that is the only action
+ * that frees the slot. Before this, Remove reused the soft path and only LOOKED like
+ * a delete because a disconnected Pinterest row dropped out of the listing — the slot
+ * stayed spent, invisibly.
+ *
+ * A remove REQUIRES `connectionId` (400 without it). The un-narrowed call means
+ * "every live connection of this user", which as a soft disconnect is the legacy
+ * Settings button and as a hard delete would be a mass deletion no button asks for.
+ * Refusing is deliberate: silently downgrading it to a soft disconnect would report
+ * "removed" while the account and its slot survived.
  */
 
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
-import { disconnect } from "@/lib/server/pinterest/connectionStore";
+import { deleteConnection, disconnect } from "@/lib/server/pinterest/connectionStore";
 import {
   cancelScheduledForConnection,
   countScheduledForConnection,
@@ -72,18 +90,33 @@ export async function DELETE(req: Request) {
   const uid = await getUserIdFromBearerOrCookies(req);
   if (!uid) return unauthorized();
 
+  const url = new URL(req.url);
   const connectionId = readConnectionId(req);
-  const cancelScheduled = new URL(req.url).searchParams.get("cancelScheduled") === "1";
+  const cancelScheduled = url.searchParams.get("cancelScheduled") === "1";
+  // Only the exact string "remove" is the destructive action — a stale client that
+  // sends nothing (or something unrecognised) gets the reversible one.
+  const remove = url.searchParams.get("mode") === "remove";
+
+  if (remove && !connectionId) {
+    return Response.json(
+      { ok: false, error: "connectionId is required to remove an account" },
+      { status: 400 },
+    );
+  }
 
   try {
     let cancelledScheduled = 0;
-    // Cancel BEFORE disconnecting: if the request dies half-way, the worse outcome is
-    // schedules cleared on a still-connected account (visible, recoverable) rather than
-    // a removed account leaving live rows the cron keeps picking up.
+    // Cancel BEFORE disconnecting/removing: if the request dies half-way, the worse
+    // outcome is schedules cleared on a still-connected account (visible, recoverable)
+    // rather than a removed account leaving live rows the cron keeps picking up.
     if (connectionId && cancelScheduled) {
       cancelledScheduled = await cancelScheduledForConnection(
         createServerClient(), uid, connectionId, new Date().toISOString(),
       );
+    }
+    if (remove && connectionId) {
+      await deleteConnection(uid, connectionId);
+      return Response.json({ ok: true, removed: true, disconnected: true, cancelledScheduled });
     }
     await disconnect(uid, connectionId);
     return Response.json({ ok: true, disconnected: true, cancelledScheduled });

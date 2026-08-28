@@ -115,6 +115,9 @@ test("客户端把 id 放进 query 并编码;不传 id 时 URL 与旧版逐字�
   assert.match(clientSrc, /`\/api\/pinterest\/disconnect\$\{qs \? `\?\$\{qs\}` : ""\}`/);
   // cancelScheduled 只在有 id 时才可能被带上:全量断开不该顺手清排程。
   assert.match(clientSrc, /if \(id && opts\?\.cancelScheduled\) params\.set\("cancelScheduled", "1"\)/);
+  // mode=remove 同理:硬删只能点名一条行。不带 id 的移除就是批量删除,
+  // 产品里没有任何按钮是这个意思。
+  assert.match(clientSrc, /if \(id && opts\?\.mode === "remove"\) params\.set\("mode", "remove"\)/);
 });
 
 test("面板:任何 Pinterest 断开/移除都必须带 connectionId(不带 id 的调用已从 UI 移除)", () => {
@@ -123,8 +126,8 @@ test("面板:任何 Pinterest 断开/移除都必须带 connectionId(不带 id �
   // 取消了这个按钮,所以面板里不该再有任何一处无参调用。
   assert.doesNotMatch(panelSrc, /disconnectPinterest\(\s*\)/,
     "面板不得再无参调用 disconnectPinterest(那会拆掉该用户全部连接)");
-  assert.match(panelSrc, /await disconnectPinterest\(account\.id, \{ cancelScheduled \}\)/,
-    "逐账号 Remove 必须传该账号的 connectionId");
+  assert.match(panelSrc, /await disconnectPinterest\(account\.id, \{ cancelScheduled, mode: "remove" \}\)/,
+    "逐账号 Remove 必须传该账号的 connectionId,并且是 mode=remove 的硬删 —— 软断开会把行留下来继续占额度");
   assert.match(panelSrc, /await disconnectPinterest\(account\.id\);/,
     "逐账号 Disconnect(软)同样必须只针对该账号");
   // 路由本身保留无参语义(可能还有别的调用方),这里只约束 UI。

@@ -8,9 +8,20 @@
  * Response:
  *   {
  *     platforms:   PlatformConnectionSummary[]  // one per platform, in catalog order
- *     connections: SocialConnection[]           // flat list of connected accounts
+ *     connections: SocialConnection[]           // flat list of the accounts held
  *     plan:        "free" | "starter" | "pro" | "business"
  *   }
+ *
+ * DISCONNECTED accounts are included (PRD 0805 §11). Disconnect keeps the row on
+ * every platform and it goes on holding the merchant’s plan slot, so Settings has to
+ * show it — as "Disconnected", with Reconnect and Remove. Remove is the hard delete
+ * and the only action that frees the slot.
+ *
+ * This is the ONE listing that includes them. Publish-side readers (publish/social,
+ * publish/destinations/validate) call the plain `listConnections`, which is still
+ * active-only. Clients that read THIS endpoint for a publish decision filter on
+ * `connectionStatus === "connected"` themselves — PublishDestinations, StudioBoard,
+ * SettingsModal and usePinterestConnections all do.
  *
  * `plan` is here so the Settings panel can offer the right action when a connect is
  * refused: a paid user can buy an extra account slot, a Free user can only upgrade.
@@ -20,7 +31,7 @@
  */
 
 import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
-import { listConnections, summarizeConnectionList } from "@/lib/social/server/socialConnectionStore";
+import { listConnectionsForSettings, summarizeConnectionList } from "@/lib/social/server/socialConnectionStore";
 import { resolvePlan } from "@/lib/server/entitlements";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +46,7 @@ export async function GET(req: Request) {
 
   try {
     const [connections, plan] = await Promise.all([
-      listConnections(uid),
+      listConnectionsForSettings(uid),
       resolvePlan(uid).catch(() => "free" as const),
     ]);
     const platforms = summarizeConnectionList(connections);

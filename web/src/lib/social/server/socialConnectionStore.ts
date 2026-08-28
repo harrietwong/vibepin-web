@@ -7,12 +7,22 @@
  *     same SocialConnection shape, so the UI sees one consistent model.
  *   - Only ever return client-safe projections — token ciphertext never leaves
  *     this module.
+ *   - Keep ONE listing rule per audience: `listConnections` (the default) answers
+ *     with accounts that can publish right now, which is what every publish-side
+ *     caller means; `listConnectionsForSettings` also returns the merchant’s
+ *     DISCONNECTED rows, because those still hold a plan slot and only Remove
+ *     frees it (PRD 0805 §11).
  *   - Degrade gracefully when the v32 tables have not been applied yet (missing
  *     table → treated as "no rows", never a 500).
  */
 
 import { createServerClient } from "@/lib/supabase";
-import { listActiveConnections, toSafeStatus } from "@/lib/server/pinterest/connectionStore";
+import {
+  listActiveConnections,
+  listConnections as listPinterestRows,
+  toAccountIdentity,
+  toSafeStatus,
+} from "@/lib/server/pinterest/connectionStore";
 import { getSocialProvider } from "../providers";
 import {
   PLATFORMS,
@@ -283,7 +293,10 @@ export async function savePinterestDefaultBoard(
  * same table as everyone else's, it carries the same kind of id, and callers can
  * point at one account out of several.
  */
-async function readPinterestConnections(uid: string): Promise<SocialConnection[]> {
+async function readPinterestConnections(
+  uid: string,
+  opts?: ListConnectionsOptions,
+): Promise<SocialConnection[]> {
   let rows;
   try {
     // EVERY usable Pinterest account, not just the default one. A Pin's publish target
@@ -292,7 +305,9 @@ async function readPinterestConnections(uid: string): Promise<SocialConnection[]
     // unanswerable. Order is created_at ascending, so index 0 is the account
     // pickDefaultConnection resolves for a user-scoped call: the client's fallback
     // matches the server's without duplicating the rule.
-    rows = await listActiveConnections(uid);
+    rows = opts?.includeDisconnected
+      ? await listPinterestRows(uid)
+      : await listActiveConnections(uid);
   } catch {
     // Pinterest storage errors shouldn't sink the whole social view.
     return [];
@@ -301,32 +316,48 @@ async function readPinterestConnections(uid: string): Promise<SocialConnection[]
   const out: SocialConnection[] = [];
   for (const row of rows) {
     const safe = toSafeStatus(row);
-    if (!safe.connected) continue;
-    const status: ConnectionStatus = safe.needsReconnect ? "expired" : "connected";
+    // Publish-side reads keep the old rule: only rows that can publish right now.
+    if (!safe.connected && !opts?.includeDisconnected) continue;
+    // A row that was NEVER connected is not an account. `savePinterestDefaultBoard`
+    // inserts a metadata-only placeholder (no token, no disconnected_at, no account
+    // id) to remember a default board; listing it would show the merchant a
+    // "Disconnected" row for an account that never existed, named by a mask.
+    if (!safe.connected && !row.disconnected_at && !row.pinterest_user_id) continue;
+    // A disconnected row reports the same status Facebook/Instagram write for theirs
+    // ("not_connected" + no token), so `accountUiState` reads all three as the one
+    // customer-visible state: Disconnected, with a Reconnect.
+    const status: ConnectionStatus = !safe.connected
+      ? "not_connected"
+      : safe.needsReconnect ? "expired" : "connected";
+    // Identity survives a disconnect (toAccountIdentity), because the row does: the
+    // merchant must see WHICH account they are about to reconnect or remove.
+    const account = toAccountIdentity(row);
     // Metadata (incl. the default board) is per-account, read by this row's id.
     const metadata = await readPinterestMetadata(uid, row.id);
-    if (safe.account?.accountType) metadata.accountType = safe.account.accountType;
+    if (account.accountType) metadata.accountType = account.accountType;
     out.push({
       id: row.id,
       provider: "pinterest",
       workspaceId: null,
-      providerAccountId: safe.account?.id ?? null,
+      providerAccountId: account.id ?? null,
       // Use the STORED display name (Pinterest business_name) — synthesising "@username"
       // here discarded it, so a merchant saw "@5522278466b6972" for an account actually
       // called "harrietstudio". Fall back to @username only when there is no display name.
       providerAccountName:
-        safe.account?.businessName
-        || (safe.account?.username ? `@${safe.account.username}` : null),
-      providerAccountUsername: safe.account?.username ?? null,
-      providerAccountAvatarUrl: safe.account?.avatarUrl ?? null,
+        account.businessName
+        || (account.username ? `@${account.username}` : null),
+      providerAccountUsername: account.username ?? null,
+      providerAccountAvatarUrl: account.avatarUrl ?? null,
       connectionStatus: status,
       authProvider: "official",
       externalConnectionId: null,
-      scopes: safe.scopes,
+      // Scopes are the ones the dead row last held; a disconnected row is never
+      // scope-judged (accountUiState skips the scope check for not_connected).
+      scopes: safe.connected ? safe.scopes : (row.scopes ?? []),
       tokenExpiresAt: null,
       metadata,
       createdAt: row.created_at ?? null,
-      updatedAt: safe.lastSyncedAt,
+      updatedAt: safe.connected ? safe.lastSyncedAt : (row.updated_at || null),
     });
   }
   return out;
@@ -369,10 +400,23 @@ async function readProviderConnections(uid: string): Promise<SocialConnection[]>
   }
 }
 
+/**
+ * Whether rows the merchant has DISCONNECTED are part of the answer.
+ *
+ * Off by default, and that default is the contract: every publish-side reader
+ * (publish/social, destinations/validate, findConnection’s legacy synthetic id)
+ * calls the plain form and must keep seeing only accounts that can publish now.
+ * Settings is the one surface that asks for them — see listConnectionsForSettings.
+ */
+export type ListConnectionsOptions = { includeDisconnected?: boolean };
+
 /** Full list of connected accounts across every provider, safe to send to the client. */
-export async function listConnections(uid: string): Promise<SocialConnection[]> {
+export async function listConnections(
+  uid: string,
+  opts?: ListConnectionsOptions,
+): Promise<SocialConnection[]> {
   const [pinterest, stored, provider] = await Promise.all([
-    readPinterestConnections(uid),
+    readPinterestConnections(uid, opts),
     readStoredConnections(uid),
     readProviderConnections(uid),
   ]);
@@ -387,6 +431,27 @@ export async function listConnections(uid: string): Promise<SocialConnection[]> 
     merged.set(c.id, c);
   }
   return [...pinterest, ...merged.values()];
+}
+
+/**
+ * The Settings listing: every account row the merchant HOLDS, disconnected ones
+ * included (PRD 0805 §11).
+ *
+ * Disconnect keeps the row on every platform now, so the row has to stay visible —
+ * it still occupies the merchant’s plan slot, and Remove (a hard delete) is the only
+ * way to free it. A row they cannot see is a slot they cannot get back.
+ *
+ * Facebook/Instagram never needed this branch: their disconnect leaves the row in
+ * `social_connections` with `connection_status = not_connected`, and the generic
+ * reader has always returned it. Pinterest’s rows were the asymmetry — they
+ * vanished from Settings the moment they were disconnected.
+ *
+ * Deliberately a SEPARATE entry point rather than a widened `listConnections`:
+ * the publish paths must not silently start seeing dead accounts because someone
+ * changed a default.
+ */
+export async function listConnectionsForSettings(uid: string): Promise<SocialConnection[]> {
+  return listConnections(uid, { includeDisconnected: true });
 }
 
 /** Per-platform summary for all four platforms (connected + not-connected). */
@@ -404,6 +469,10 @@ export function summarizeConnectionList(connections: SocialConnection[]): Platfo
       provider,
       status: primary?.connectionStatus ?? "not_connected",
       connected: usable.length > 0,
+      // Every row the merchant holds on this platform — a disconnected account is
+      // still an account, and still holds its plan slot until it is removed. (For
+      // the publish-side callers the two numbers are identical: they never see a
+      // disconnected row in the first place.)
       accountCount: accounts.length,
       accountName:
         primary?.providerAccountName ?? primary?.providerAccountUsername ?? null,

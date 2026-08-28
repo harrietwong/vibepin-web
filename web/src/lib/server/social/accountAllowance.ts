@@ -8,30 +8,36 @@
  * one platform and miss the other.
  *
  * ── THE RULE (design doc §1) ──────────────────────────────────────────────────
- *   allowed(P) ⇔ active(P) < included(plan)
- *                OR  Σ_Q max(0, active(Q) − included(plan)) < purchasedSlots
+ *   allowed(P) ⇔ held(P) < included(plan)
+ *                OR  Σ_Q max(0, held(Q) − included(plan)) < purchasedSlots
  *
  * Read it as: every platform first spends the accounts its plan includes; anything
  * ABOVE the included number on ANY platform draws from one shared pool of purchased
  * slots. 1 slot = 1 extra connectable account on any platform. There is no cap on
  * how many slots may be bought.
  *
- * ── WHAT COUNTS AS "ACTIVE" ───────────────────────────────────────────────────
- * Exactly Pinterest's `listActiveConnections` predicate: `disconnected_at IS NULL
- * AND access_token_encrypted IS NOT NULL`. All three disconnect paths (Pinterest,
- * Facebook, Instagram) null the token columns, so a token-less row is a disconnect
- * leftover on every provider — even the two that never write `disconnected_at`.
+ * ── WHAT OCCUPIES A SLOT (owner decision, 2026-08-27) ─────────────────────────
+ * EVERY row the user holds for the provider, whatever its connection status. No
+ * filter on `disconnected_at`, on the token column, or on `connection_status`.
  *
- * This is the bug fix the pool rides in on: `connectionLimit.countConnections` used
- * to count EVERY row for the provider, so a user at their limit who disconnected A
- * and tried to connect B was refused forever (the dead row still held the slot).
- * A disconnected row does not consume anything.
+ * This follows the product rule, not the other way round (PRD 0805 §11): Disconnect
+ * keeps the account — the row stays, listed in Settings as "Disconnected" with a
+ * Reconnect — and it goes on occupying its slot; REMOVE is a hard delete and the
+ * only action that frees one. So "how many rows exist" IS "how many slots are spent".
  *
- * Deliberately NOT filtered on `connection_status`: Facebook's "authorized, Page
- * not chosen yet" states map to the DB-legal status `not_connected` while still
- * holding a token. Those rows are real, live authorizations a user can see and
- * remove, so they count — excluding them would let one user open unlimited parallel
- * pending Facebook flows.
+ * The ratchet this module was born to fix stays fixed, by the other half of the same
+ * decision: the way out is Remove, which deletes the row, and after it the count
+ * drops. Counting rows without offering a delete would be the old bug; the two
+ * halves ship together and neither is safe alone.
+ *
+ * Two consequences worth stating, because they are load-bearing elsewhere:
+ *   - Reviving a disconnected row (Reconnect) adds NOTHING — that row already held
+ *     its slot. The Pinterest callback therefore gates only `create`; gating a
+ *     revive would strand an at-limit user with a slot they occupy but may not
+ *     repair.
+ *   - Facebook's "authorized, Page not chosen yet" row (status `not_connected`,
+ *     token held) counted before and still counts. It always was a real row a user
+ *     can see and remove.
  *
  * ── PURCHASED SLOTS ───────────────────────────────────────────────────────────
  * Truth = access-granting `creem_subscriptions` rows whose product is the add-on
@@ -48,7 +54,9 @@
  *     migrated) → 0 slots, NOT fail-open: degrading to "the plan's own ceiling" is
  *     the safe direction, whereas failing open there would silently disable the
  *     ceiling for everyone.
- * Reconnect never reaches here: only the branch that would ADD a row asks.
+ * Reconnect never reaches here: only the branch that would ADD a row asks — and
+ * under the row-counting rule a reconnect (of a live OR a disconnected row) adds
+ * nothing, because the row is already counted.
  */
 
 import { createServerClient } from "@/lib/supabase";
@@ -68,15 +76,15 @@ import { normalizeUnits } from "@/lib/server/creem/creemStore";
 const CONNECTIONS_TABLE = "social_connections";
 const SUBSCRIPTIONS_TABLE = "creem_subscriptions";
 
-/** provider → number of ACTIVE connections the user holds on it. */
-export type ActiveCountsByProvider = Readonly<Record<string, number>>;
+/** provider → number of connection ROWS the user holds on it (any status). */
+export type ConnectionCountsByProvider = Readonly<Record<string, number>>;
 
 /** Everything the rule needs, with no IO left in it. */
 export type AllowanceSnapshot = {
   plan: PlanKey;
   /** Accounts per platform the PLAN includes; null = uncapped. */
   included: number | null;
-  activeByProvider: ActiveCountsByProvider;
+  connectionsByProvider: ConnectionCountsByProvider;
   /** Extra slots bought as an add-on (shared across every platform). */
   purchasedSlots: number;
 };
@@ -98,8 +106,8 @@ export type AccountAllowance = {
   provider: string;
   plan: PlanKey;
   included: number | null;
-  /** Active connections on THIS provider. */
-  active: number;
+  /** Accounts HELD on this provider — disconnected rows included. */
+  held: number;
   purchasedSlots: number;
   /** Sum over all providers of the accounts held above the included number. */
   slotsInUse: number;
@@ -112,15 +120,15 @@ export type AllowanceDeps = {
   /** Pre-resolved plan — for callers that already have it (the OAuth callback). */
   plan?: PlanKey;
   resolvePlanFn?: (uid: string) => Promise<PlanKey>;
-  /** Active counts for every provider. `null` = unavailable → fail open. */
-  countActive?: (uid: string) => Promise<ActiveCountsByProvider | null>;
+  /** Row counts for every provider. `null` = unavailable → fail open. */
+  countConnections?: (uid: string) => Promise<ConnectionCountsByProvider | null>;
   /**
    * An authoritative count for ONE provider, supplied by a caller that just read
    * the rows itself (the Pinterest callback). It overrides whatever the grouped
    * query returned for that provider, and stands in for the whole map when the
    * grouped query is unavailable.
    */
-  activeOverride?: { provider: string; count: number };
+  countOverride?: { provider: string; count: number };
   purchasedSlots?: (uid: string) => Promise<number>;
 };
 
@@ -140,8 +148,8 @@ export function evaluateAllowance(
   snapshot: AllowanceSnapshot,
   provider: string,
 ): AccountAllowance {
-  const { plan, included, activeByProvider, purchasedSlots } = snapshot;
-  const active = activeByProvider[provider] ?? 0;
+  const { plan, included, connectionsByProvider, purchasedSlots } = snapshot;
+  const held = connectionsByProvider[provider] ?? 0;
 
   if (included === null) {
     return {
@@ -150,7 +158,7 @@ export function evaluateAllowance(
       provider,
       plan,
       included,
-      active,
+      held,
       purchasedSlots,
       slotsInUse: 0,
       slotsAvailable: purchasedSlots,
@@ -159,7 +167,7 @@ export function evaluateAllowance(
 
   // Only accounts ABOVE the plan's included number draw from the pool — and they
   // draw from it on every platform at once, which is what makes the pool shared.
-  const slotsInUse = Object.values(activeByProvider).reduce(
+  const slotsInUse = Object.values(connectionsByProvider).reduce(
     (sum, count) => sum + Math.max(0, count - included),
     0,
   );
@@ -169,13 +177,13 @@ export function evaluateAllowance(
     provider,
     plan,
     included,
-    active,
+    held,
     purchasedSlots,
     slotsInUse,
     slotsAvailable,
   };
 
-  if (active < included) return { allowed: true, reason: "included" as const, ...base };
+  if (held < included) return { allowed: true, reason: "included" as const, ...base };
   if (slotsAvailable > 0) return { allowed: true, reason: "extra_slot" as const, ...base };
   return { allowed: false, reason: "limit_reached" as const, ...base };
 }
@@ -183,23 +191,30 @@ export function evaluateAllowance(
 // ── IO ────────────────────────────────────────────────────────────────────────
 
 /**
- * ACTIVE connections per provider, in ONE query. Returns null when the count is
- * unavailable (missing table / DB error) so callers can fail open rather than
- * guess. Never selects the token ciphertext — only tests it for NULL server-side.
+ * Connection ROWS per provider, in ONE query. Returns null when the count is
+ * unavailable (missing table / DB error) so callers can fail open rather than guess.
+ *
+ * Deliberately UNFILTERED. A disconnected row is still an account the merchant holds
+ * — it is listed in Settings, it can be reconnected, and it occupies its slot until
+ * they Remove it (PRD 0805 §11). Re-adding a not-disconnected / has-a-token filter
+ * here would hand out a slot the row is still holding, so the ceiling could be
+ * exceeded by disconnecting instead of removing. test-account-allowance.ts asserts
+ * those two predicates are absent from this file, so this comment may not name them
+ * verbatim either.
+ *
+ * Never selects the token ciphertext — the column is not read at all now.
  */
-export async function countActiveConnectionsByProvider(
+export async function countConnectionsByProvider(
   uid: string,
-): Promise<ActiveCountsByProvider | null> {
+): Promise<ConnectionCountsByProvider | null> {
   const { data, error } = await createServerClient()
     .from(CONNECTIONS_TABLE)
     .select("provider")
-    .eq("user_id", uid)
-    .is("disconnected_at", null)
-    .not("access_token_encrypted", "is", null);
+    .eq("user_id", uid);
 
   if (error) {
     if (!isMissingTable(error.code)) {
-      console.error("[social] count active connections:", error.message);
+      console.error("[social] count connections:", error.message);
     }
     return null;
   }
@@ -284,11 +299,11 @@ export async function getAllowanceSnapshot(
     deps?.plan !== undefined
       ? Promise.resolve(deps.plan)
       : (deps?.resolvePlanFn ?? resolvePlan)(uid),
-    (deps?.countActive ?? countActiveConnectionsByProvider)(uid),
+    (deps?.countConnections ?? countConnectionsByProvider)(uid),
     (deps?.purchasedSlots ?? getPurchasedExtraSlots)(uid),
   ]);
 
-  const override = deps?.activeOverride;
+  const override = deps?.countOverride;
   // No counts at all: a caller that counted one provider itself still has enough
   // to enforce that provider's own ceiling — strictly better than failing open.
   if (counts === null) {
@@ -296,19 +311,19 @@ export async function getAllowanceSnapshot(
     return {
       plan,
       included: getPlanEntitlements(plan).connectedAccountsPerPlatform,
-      activeByProvider: { [override.provider]: override.count },
+      connectionsByProvider: { [override.provider]: override.count },
       purchasedSlots,
     };
   }
 
-  const activeByProvider = override
+  const connectionsByProvider = override
     ? { ...counts, [override.provider]: override.count }
     : counts;
 
   return {
     plan,
     included: getPlanEntitlements(plan).connectedAccountsPerPlatform,
-    activeByProvider,
+    connectionsByProvider,
     purchasedSlots,
   };
 }
@@ -321,7 +336,7 @@ function unavailable(provider: string, plan: PlanKey): AccountAllowance {
     provider,
     plan,
     included: null,
-    active: 0,
+    held: 0,
     purchasedSlots: 0,
     slotsInUse: 0,
     slotsAvailable: 0,

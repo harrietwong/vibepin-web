@@ -1570,11 +1570,10 @@ export function SocialAccountsPanel() {
     setBusyAccountId(account.id);
     try {
       if (provider === "pinterest") {
-        // Pinterest's DELETE is already the soft form (tokens nulled, row kept with
-        // disconnected_at set). Known asymmetry: the row then drops out of the
-        // Settings list, because readPinterestConnections only surfaces live
-        // connections. That read path is untouched here on purpose — changing it
-        // would also change the publish pickers and the plan-limit count.
+        // Pinterest's default DELETE is the soft form (tokens nulled, row kept with
+        // disconnected_at set) — no `mode`, so it can never be the hard delete. The
+        // row stays listed as "Disconnected" with a Reconnect, and keeps its plan
+        // slot until the merchant presses Remove (PRD 0805 §11).
         await disconnectPinterest(account.id);
       } else {
         await disconnectSocial(account.id, { mode: "disconnect" });
@@ -1663,7 +1662,10 @@ export function SocialAccountsPanel() {
 
     try {
       if (provider === "pinterest") {
-        await disconnectPinterest(account.id, { cancelScheduled });
+        // mode: "remove" is what makes this a DELETE rather than the soft disconnect
+        // below. Without it the row would survive as a "Disconnected" account and go
+        // on holding the merchant’s plan slot — the exact thing Remove is for.
+        await disconnectPinterest(account.id, { cancelScheduled, mode: "remove" });
       } else {
         await disconnectSocial(account.id, { mode: "remove", cancelScheduled });
       }

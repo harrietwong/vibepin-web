@@ -550,17 +550,24 @@ export const PINTEREST_DISCONNECTED_EVENT = "vp:pinterest_disconnected";
  * a connectionId; the "Keep" answer passes nothing, because a kept Pin is already
  * blocked at publish time by the `target_disconnected` retry reason.
  *
- * Both ride in the query string: DELETE request bodies are unreliable across proxies
- * and fetch implementations.
+ * `mode: "remove"` is the HARD delete behind the row’s Remove button — the row is
+ * deleted and its plan slot is freed. The default stays SOFT: the account keeps its
+ * row and shows as "Disconnected" with a Reconnect, still holding its slot
+ * (PRD 0805 §11). Remove is only sent WITH a connectionId; the server refuses an
+ * un-narrowed one rather than mass-deleting.
+ *
+ * All three ride in the query string: DELETE request bodies are unreliable across
+ * proxies and fetch implementations.
  */
 export async function disconnectPinterest(
   connectionId?: string | null,
-  opts?: { cancelScheduled?: boolean },
+  opts?: { cancelScheduled?: boolean; mode?: "disconnect" | "remove" },
 ): Promise<void> {
   const params = new URLSearchParams();
   const id = typeof connectionId === "string" ? connectionId.trim() : "";
   if (id) params.set("connectionId", id);
   if (id && opts?.cancelScheduled) params.set("cancelScheduled", "1");
+  if (id && opts?.mode === "remove") params.set("mode", "remove");
   const qs = params.toString();
 
   // keepalive: callers are optimistic (UI flips before this settles) — the request
