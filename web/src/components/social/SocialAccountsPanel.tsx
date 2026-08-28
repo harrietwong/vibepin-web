@@ -1361,26 +1361,35 @@ function AccountRows({
  * the Remove happens straight away — a dialog that only ever has one sensible answer
  * is noise.
  *
- * Two answers, deliberately not three:
- *  · Keep — the Pins stay scheduled. Nothing extra is built for this: a Pin whose
- *    target is gone is already stopped at publish time with `target_disconnected`
- *    (Phase C), so "Keep" is genuinely the do-nothing branch.
- *  · Cancel schedules — un-schedules them server-side before the removal.
- * Re-assigning them to another account is a separate feature, not a checkbox here.
+ * Two answers (PRD 0805 §11 — 有未来排程时禁止直接移除):
+ *  · Cancel those schedules and remove — un-schedules them server-side, then the
+ *    account goes. The only path that actually removes anything.
+ *  · Keep the account — abort. Nothing is sent; the account and its schedules both
+ *    stay exactly as they were.
+ *
+ * There is deliberately NO "keep the schedules but delete the account" option any
+ * more. It used to exist and leaned on Phase C's publish-time `target_disconnected`
+ * block to stop the orphaned Pins — but an account with live schedules must never be
+ * deleted without cancelling them (Codex #1), and the server now enforces exactly
+ * that: a remove without `cancelScheduled` is refused with 409 `schedules_exist`.
+ * Leaving the option on screen would have been a button that could only ever fail,
+ * re-opening this same dialog forever.
+ *
+ * Re-assigning them to another account is V1.2, not a checkbox here.
  */
 function RemoveAccountDialog({
   accountLabel,
   scheduledCount,
   busy,
-  onKeep,
   onCancelSchedules,
   onDismiss,
 }: {
   accountLabel: string;
   scheduledCount: number;
   busy: boolean;
-  onKeep: () => void;
+  /** Cancel the schedules, then remove — the only branch that deletes anything. */
   onCancelSchedules: () => void;
+  /** Keep the account: abort the removal. Nothing is sent to the server. */
   onDismiss: () => void;
 }) {
   const { t: tr } = useLocale();
@@ -1400,13 +1409,13 @@ function RemoveAccountDialog({
         {tr("socialPanel.removeDialog.title")}
       </p>
       <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
-        {`${accountLabel}${tr("socialPanel.removeDialog.bodyPrefix")}${scheduledCount}${tr("socialPanel.removeDialog.bodySuffix")}`}
+        {`${accountLabel}${tr("socialPanel.removeDialog.bodyPrefix")}${scheduledCount}${tr("socialPanel.removeDialog.bodySuffixV2")}`}
       </p>
       <div style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <button
           type="button"
-          data-testid="pinterest-remove-keep"
-          onClick={onKeep}
+          data-testid="pinterest-remove-cancel-schedules"
+          onClick={onCancelSchedules}
           disabled={busy}
           style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -1416,12 +1425,12 @@ function RemoveAccountDialog({
             cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
           }}
         >
-          {tr("socialPanel.removeDialog.keep")}
+          {`${tr("socialPanel.removeDialog.cancelPrefix")}${scheduledCount}${tr("socialPanel.removeDialog.cancelSuffix")}`}
         </button>
         <button
           type="button"
-          data-testid="pinterest-remove-cancel-schedules"
-          onClick={onCancelSchedules}
+          data-testid="pinterest-remove-dismiss"
+          onClick={onDismiss}
           disabled={busy}
           style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -1431,21 +1440,7 @@ function RemoveAccountDialog({
             cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
           }}
         >
-          {tr("socialPanel.removeDialog.cancelSchedules")}
-        </button>
-        <button
-          type="button"
-          data-testid="pinterest-remove-dismiss"
-          onClick={onDismiss}
-          disabled={busy}
-          style={{
-            padding: "8px 12px", borderRadius: 10,
-            border: "1px solid transparent", background: "transparent",
-            color: UI.textMuted, fontSize: 12, fontWeight: 600,
-            cursor: busy ? "not-allowed" : "pointer",
-          }}
-        >
-          {tr("socialPanel.removeDialog.dismiss")}
+          {tr("socialPanel.removeDialog.keepAccount")}
         </button>
       </div>
     </div>
@@ -2013,20 +2008,17 @@ export function SocialAccountsPanel() {
           accountLabel={pendingRemoval.label}
           scheduledCount={pendingRemoval.scheduledCount}
           busy={busyAccountId === pendingRemoval.account.id}
-          onKeep={() => {
-            const { account } = pendingRemoval;
-            setPendingRemoval(null);
-            setBusyAccountId(account.id);
-            // Keep = do nothing extra. Those Pins stay scheduled and are stopped at
-            // publish time by the existing target_disconnected block.
-            void removeAccount(account.provider, account, false).finally(() => setBusyAccountId(null));
-          }}
           onCancelSchedules={() => {
             const { account } = pendingRemoval;
             setPendingRemoval(null);
             setBusyAccountId(account.id);
             void removeAccount(account.provider, account, true).finally(() => setBusyAccountId(null));
           }}
+          // "Keep the account" — abort. Nothing is sent, so the account and every
+          // schedule through it stay exactly as they were. There is no longer a
+          // branch that removes an account while leaving its schedules alive: the
+          // server refuses that with 409 schedules_exist, so a button offering it
+          // could only ever bounce back into this same dialog.
           onDismiss={() => setPendingRemoval(null)}
         />
       )}

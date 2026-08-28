@@ -214,6 +214,30 @@ test("Reconnect 绑定的是该行的 connection id,不是 accounts[0]", () => {
   assert.match(panelSrc, /setReconnectTargetId\(account\.id\)/);
 });
 
+test("有排程时的对话框只给两条路:取消并移除、保留账号(PRD 0805 §11)", () => {
+  // 第三个选项("保留排程,但把账号删了")已经取消。产品上它违反 §11;
+  // 工程上它现在必然撞服务端的 409 schedules_exist,于是只会弹回同一个对话框。
+  assert.doesNotMatch(panelSrc, /data-testid="pinterest-remove-keep"/,
+    "旧的「保留排程」按钮必须整个移除,不是禁用");
+  assert.doesNotMatch(panelSrc, /onKeep/, "对应的回调也不该留着");
+  assert.match(panelSrc, /data-testid="pinterest-remove-cancel-schedules"/, "取消并移除还在");
+  assert.match(panelSrc, /data-testid="pinterest-remove-dismiss"/, "保留账号 = 关掉对话框");
+
+  // 唯一会真的删的调用必须带 true。
+  assert.match(panelSrc, /removeAccount\(account\.provider, account, true\)/);
+  assert.doesNotMatch(panelSrc, /removeAccount\(account\.provider, account, false\)/,
+    "对话框里不得再有 cancelScheduled:false 的移除");
+
+  // 文案:正文和主按钮都要说清"必须先取消",且主按钮带数目。
+  const en = read("src/lib/i18n/messages/en/socialPanel.ts");
+  for (const k of ["bodySuffixV2", "cancelPrefix", "cancelSuffix", "keepAccount"]) {
+    assert.ok(en.includes(`"socialPanel.removeDialog.${k}"`), `en 目录缺 ${k}`);
+  }
+  assert.match(panelSrc, /socialPanel\.removeDialog\.bodySuffixV2/,
+    "正文必须用新文案 —— 旧的还在承诺那个已删掉的选项");
+  assert.match(panelSrc, /socialPanel\.removeDialog\.keepAccount/);
+});
+
 test("移除被拒时面板说出服务端那句话，并把行放回去（Codex #6）", () => {
   // 服务端 409 带的是一句可执行的话（"N 条排程没能取消，账号未移除"）。
   // 面板原来 catch 掉一切、只弹一句通用失败，于是商家看到"移除失败"、行又还在，

@@ -117,10 +117,21 @@ export const socialPanelMessages = {
   //    Composed as: "<account><bodyPrefix><count><bodySuffix>".
   "socialPanel.removeDialog.title": "This account still has scheduled Pins",
   "socialPanel.removeDialog.bodyPrefix": " has ",
+  // bodySuffix / keep / cancelSchedules describe the THREE-option dialog that no
+  // longer exists (PRD 0805 §11: 有未来排程时禁止直接移除). They are kept only so the
+  // 18 locale catalogs that still carry translations of them stay valid keys; the
+  // dialog renders bodySuffixV2 / cancelPrefix+cancelSuffix / keepAccount, which are
+  // new keys and therefore fall back to this English everywhere rather than showing
+  // an accurate-looking translation of a promise the product no longer keeps.
   "socialPanel.removeDialog.bodySuffix":
     " Pin(s) scheduled to publish through it. Keep them scheduled (they'll stop until you connect the account again), or cancel those schedules now.",
   "socialPanel.removeDialog.keep": "Keep them scheduled",
   "socialPanel.removeDialog.cancelSchedules": "Cancel those schedules",
+  "socialPanel.removeDialog.bodySuffixV2":
+    " Pin(s) scheduled to publish through it. An account can't be removed while it still has scheduled posts — cancel them and remove it, or keep the account.",
+  "socialPanel.removeDialog.cancelPrefix": "Cancel ",
+  "socialPanel.removeDialog.cancelSuffix": " scheduled and remove",
+  "socialPanel.removeDialog.keepAccount": "Keep the account",
   "socialPanel.removeDialog.dismiss": "Don't remove",
 
   // ── Toasts ──

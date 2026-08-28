@@ -266,6 +266,40 @@ await test("Pinterest 软断开(不带 mode)不查排程,保持原有行为", as
   assert.deepEqual(log, ["softDisconnect"], "软断开不查排程,也永远不删行");
 });
 
+console.log("\n=== 4) 面板与这套契约对得上(PRD 0805 §11) ===");
+
+await test("面板没有任何一条路径会在有排程时发 cancelScheduled:false", async () => {
+  // 这是"规则 #1 + 对话框"能自洽的前提。服务端拒绝"有排程还不取消就删",
+  // 所以客户端只要还留着那种调用,就等于留了一个永远弹回同一个对话框的死循环。
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const panel = readFileSync(
+    join(process.cwd(), "src/components/social/SocialAccountsPanel.tsx"), "utf8",
+  );
+
+  // 对话框里唯一会删的分支必须带 true。
+  assert.ok(
+    panel.includes("removeAccount(account.provider, account, true)"),
+    "「取消排程并移除」必须发 cancelScheduled:true",
+  );
+  // 而且对话框里不能再有 false 的那一条。
+  assert.ok(
+    !panel.includes("removeAccount(account.provider, account, false)"),
+    "对话框不得再有「保留排程但移除账号」——服务端会用 409 schedules_exist 拒绝它",
+  );
+  // false 仅剩的合法用处:预查确认了 0 条,直接删。
+  const zeroAt = panel.indexOf("await removeAccount(provider, account, false)");
+  assert.ok(zeroAt > 0, "计数为 0 的直通路径要保留");
+  const before = panel.slice(Math.max(0, zeroAt - 700), zeroAt);
+  assert.ok(
+    before.includes("if (scheduledCount > 0) {") && before.includes("return;"),
+    "cancelScheduled:false 只能出现在'确认没有排程'之后",
+  );
+
+  // Keep = 关掉对话框,不发请求。
+  assert.ok(!panel.includes("onKeep"), "Keep 现在就是 onDismiss,不该再有独立的 onKeep");
+});
+
 console.log(`\n${passed} 项断言全部通过。`);
 }
 
