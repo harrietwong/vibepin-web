@@ -50,13 +50,14 @@ export const PRICING_TIERS: PricingTier[] = [
       "Limited AI Pin generation",
       "1 account on 1 platform",
       "5 scheduled posts / month",
-      "10 AI image credits / month",
+      "10 AI images / month",
+      "20 AI text generations / month",
     ],
     previewBullets: [
       "Limited high-save products, trending Pins, and keyword ideas",
       "1 account on 1 platform",
       "5 scheduled posts / month",
-      "10 AI image credits / month",
+      "10 AI images / month",
     ],
     cta: "Get started free",
     ctaHref: "/signup?plan=free",
@@ -70,7 +71,8 @@ export const PRICING_TIERS: PricingTier[] = [
     bullets: [
       "1 account per platform",
       "150 scheduled posts / month",
-      "150 AI image credits / month",
+      "150 AI images / month",
+      "500 AI text generations / month",
       "High-save products, trending Pins, and keyword ideas",
       "AI Pin generation",
       "AI titles, descriptions, and hashtags",
@@ -79,7 +81,7 @@ export const PRICING_TIERS: PricingTier[] = [
     previewBullets: [
       "1 account per platform",
       "150 scheduled posts / month",
-      "150 AI image credits / month",
+      "150 AI images / month",
       "High-save products, trending Pins, and keyword ideas",
       "Publish to Pinterest, Instagram, TikTok, and Facebook",
     ],
@@ -99,7 +101,8 @@ export const PRICING_TIERS: PricingTier[] = [
     bullets: [
       "2 accounts per platform",
       "300 scheduled posts / month",
-      "800 AI image credits / month",
+      "800 AI images / month",
+      "2,000 AI text generations / month",
       "High-save products, trending Pins, and keyword ideas",
       "Batch generation",
       "Batch edit",
@@ -111,7 +114,7 @@ export const PRICING_TIERS: PricingTier[] = [
     previewBullets: [
       "2 accounts per platform",
       "300 scheduled posts / month",
-      "800 AI image credits / month",
+      "800 AI images / month",
       "Batch generation and batch edit",
       "Product and affiliate workflows",
     ],
@@ -133,7 +136,8 @@ export const PRICING_TIERS: PricingTier[] = [
     bullets: [
       "3 accounts per platform",
       "Unlimited scheduled posts",
-      "3,000 AI image credits / month",
+      "3,000 AI images / month",
+      "10,000 AI text generations / month",
       "High-save products, trending Pins, and keyword ideas",
       "Batch generation and batch edit",
       "Product and affiliate workflows",
@@ -144,7 +148,7 @@ export const PRICING_TIERS: PricingTier[] = [
     previewBullets: [
       "3 accounts per platform",
       "Unlimited scheduled posts",
-      "3,000 AI image credits / month",
+      "3,000 AI images / month",
       "Product-level analytics",
       "Priority support",
     ],
@@ -212,13 +216,21 @@ export const COMPARISON_SECTIONS: ComparisonSection[] = [
     title: "AI Creation",
     rows: [
       {
-        label: "AI image credits",
+        label: "AI images",
         // Derived → "10 / month"/"150 / month"/"800 / month"/"3,000 / month".
         values: allowanceRowValues("monthlyAiImages", formatMonthlyAllowance),
       },
       { label: "AI Pin generation", values: ["Limited", "✓", "✓", "✓"] },
-      { label: "AI titles, descriptions, and hashtags", values: ["Limited", "✓", "✓", "✓"] },
-      { label: "Batch generation", values: ["—", "Limited", "✓", "✓"] },
+      {
+        label: "AI titles, descriptions, and hashtags",
+        // Derived → "20 / month"/"500 / month"/"2,000 / month"/"10,000 / month".
+        values: allowanceRowValues("monthlyAiTextGenerations", formatMonthlyAllowance),
+      },
+      {
+        label: "Batch generation",
+        note: "Batch generation uses your AI image allowance — each image counts once.",
+        values: ["✓", "✓", "✓", "✓"],
+      },
       { label: "Batch edit", values: ["—", "Limited", "✓", "✓"] },
       { label: "Priority generation", values: ["—", "—", "✓", "✓"] },
     ],
@@ -278,9 +290,9 @@ export const PRICING_FAQ: PricingFaqItem[] = [
       "Yes. Paid plans support publishing to Pinterest, Instagram, TikTok, and Facebook. Free users have limited publishing access.",
   },
   {
-    question: "What are AI image credits?",
+    question: "What are AI images?",
     answer:
-      "AI image credits are used when generating images. Standard generations usually use fewer credits, while higher-quality or premium model generations may use more.",
+      "Each successfully generated image uses one AI image from your monthly allowance. Failed generations are not counted.",
   },
   {
     question: "What does Limited discovery mean on the Free plan?",
