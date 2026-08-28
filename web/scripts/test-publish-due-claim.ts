@@ -28,12 +28,27 @@ import {
   owedDestinations,
 } from "../src/app/api/cron/publish-due/publishDueLogic";
 import { pendingDestinations } from "../src/lib/social/publishRules";
+import {
+  mergeOutcomesIntoRow,
+  writeFailure,
+  writeOutcomes,
+} from "../src/app/api/cron/publish-due/persistRow";
 import { buildScheduledAt, buildScheduleColumns, SCHEDULE_COLUMN_KEYS } from "../src/app/api/pin-drafts/promote";
 
 let passed = 0, failed = 0;
-function test(name: string, fn: () => void): void {
-  try { fn(); passed++; console.log(`  OK ${name}`); }
-  catch (e) { failed++; console.log(`  FAIL ${name}\n     ${(e as Error).stack ?? (e as Error).message}`); }
+/** Async cases are queued and awaited at the end, so `tsx` needs no top-level await. */
+const pending: Array<Promise<void>> = [];
+function test(name: string, fn: () => void | Promise<void>): void {
+  const ok = () => { passed++; console.log(`  OK ${name}`); };
+  const bad = (e: unknown) => {
+    failed++;
+    console.log(`  FAIL ${name}\n     ${(e as Error).stack ?? (e as Error).message}`);
+  };
+  try {
+    const result = fn();
+    if (result instanceof Promise) pending.push(result.then(ok, bad));
+    else ok();
+  } catch (e) { bad(e); }
 }
 
 const NOW = Date.parse("2026-07-11T12:00:00.000Z");
@@ -528,6 +543,7 @@ test("payloadAfterSuccess: the Pinterest-only path archives the superseded Pin t
 // platform's kill time, and it is checked BEFORE a row is claimed — a claimed row we
 // are killed before persisting is re-published 10 minutes later (a real double post).
 const routeSrc = readFileSync("src/app/api/cron/publish-due/route.ts", "utf8");
+const persistSrc = readFileSync("src/app/api/cron/publish-due/persistRow.ts", "utf8");
 
 test("CLAIM_BUDGET_MS leaves headroom under maxDuration", () => {
   const declared = /export const maxDuration = (\d+)/.exec(routeSrc);
@@ -566,12 +582,6 @@ test("each row is claimed on ITS own clock, so a late claim keeps a full lock", 
   // With claiming interleaved a row can be claimed minutes into the run; stamping it
   // with the start of the run would shorten its 10-minute lock by exactly that much.
   assert.match(routeSrc, /const claimIso = new Date\(\)\.toISOString\(\);/);
-  assert.match(routeSrc, /const rowNowIso = new Date\(\)\.toISOString\(\);/,
-    "and its persist must carry a current updatedAt, or a mid-run client edit wins the LWW merge");
-  // Declaring it is not using it. The MAIN outcome persist — the one that runs after a
-  // real publish — is where a start-of-run stamp loses the LWW merge to a mid-run edit
-  // that still carries scheduled_at, and the Pin goes out twice.
-  assert.match(routeSrc, /persistOutcomes\(db, row, outcomes, rowNowIso/);
   const loopBody = routeSrc.slice(
     routeSrc.indexOf("for (const candidate of candidates) {"),
     routeSrc.indexOf("if (deferred > 0) {"),
@@ -579,6 +589,217 @@ test("each row is claimed on ITS own clock, so a late claim keeps a full lock", 
   assert.ok(!/[^w], nowIso/.test(loopBody),
     "no call inside the row loop may still take the start-of-run clock");
 });
+
+test("no persist carries a clock captured before the publish", () => {
+  // This supersedes the row-clock fix (a per-ROW stamp taken at claim time). Even that
+  // is already stale by the time a slow publish returns: it is older than an edit the
+  // merchant made while their Content was going out, so the client's LWW merge pushes
+  // that edit back — scheduledDate, plannedAt and all — and the Pin publishes twice.
+  // The only stamp that cannot lose is one taken at WRITE time.
+  assert.ok(!/rowNowIso/.test(routeSrc),
+    "a clock captured at claim time is stale by the time the persist runs");
+  assert.ok(!/payloadAfter(Outcomes|Failure)\(/.test(routeSrc),
+    "the route must not build a payload itself — persistRow re-reads the row first");
+  assert.match(persistSrc, /const nowIso = new Date\(\)\.toISOString\(\);/,
+    "the timestamp must be taken between the re-read and the write");
+});
+
+test("every persist merges onto the RE-READ payload, never the claimed snapshot", () => {
+  // The claimed snapshot is minutes old by the time a publish returns. Writing it back
+  // does not merge the results into the merchant's draft, it REPLACES their draft.
+  const at = persistSrc.indexOf("async function readMergeWrite(");
+  assert.ok(at > 0, "there must be one read-merge-write path, not one per call site");
+  const body = persistSrc.slice(at, persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
+  assert.match(body, /const \{ snapshot, error \} = await io\.read\(row\);/,
+    "it must re-read the row");
+  assert.ok(body.indexOf("io.read(row)") < body.indexOf("io.update(row"),
+    "the read must precede the write");
+  assert.match(body, /if \(!snapshot\) return \{ error: null, gone: true \};/,
+    "a row deleted during the publish must not be re-created from this run's copy");
+  // Structural, not stylistic: the row REFERENCE carries no payload at all, so there
+  // is no stale copy for a persist to reach for even by accident.
+  const ref = persistSrc.slice(
+    persistSrc.indexOf("export interface DueRowRef"),
+    persistSrc.indexOf("export interface RowSnapshot"),
+  );
+  assert.ok(ref.length > 0 && !/payload/.test(ref),
+    "DueRowRef must identify the row and its claimed schedule — never carry its payload");
+});
+
+test("the schedule clears only when it is still the one this run claimed", () => {
+  assert.match(persistSrc, /const scheduleUnchanged = \(snapshot\.scheduled_at \?\? null\) === \(row\.scheduled_at \?\? null\);/,
+    "rescheduling during a publish must not be silently cancelled by that publish");
+  assert.match(persistSrc, /const clearSchedule = !options\.deferred && scheduleUnchanged;/);
+  assert.match(persistSrc, /\.\.\.\(clearSchedule \? \{ scheduled_at: null \} : \{\}\)/,
+    "when it must not clear, the column is OMITTED — never written back from this run's copy");
+  assert.match(persistSrc, /publish_claimed_at: null/,
+    "the claim is released either way, so the next run can finish what is still owed");
+});
+
+test("each destination's outcome is stored the moment it is known", () => {
+  // Between a provider's ack and the end of the row sat every remaining destination.
+  // A kill in that window lost the record of a post that really exists — and the next
+  // run, owing it again, published it a second time.
+  assert.match(routeSrc, /const persistOne = async \(outcome: DestinationOutcome\): Promise<void> => \{/);
+  assert.match(routeSrc, /await mergeOutcomesIntoRow\(io, row, \[outcome\]\)/,
+    "one outcome, merged onto the row as it is now");
+  assert.match(routeSrc, /onOutcome: persistOne/,
+    "the fan-out must report each destination as it finishes, not the batch at the end");
+  const pinterestLoop = routeSrc.slice(
+    routeSrc.indexOf("for (const destination of pinterestTargets) {"),
+    routeSrc.indexOf("// Every attempted Pinterest destination was blocked"),
+  );
+  assert.ok(!/outcomes\.push\(/.test(pinterestLoop),
+    "a Pinterest outcome collected without being stored is one a process death loses");
+  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 5,
+    "every branch of the Pinterest loop must go through the recorder");
+  const incremental = persistSrc.slice(persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
+  const upToFinal = incremental.slice(0, incremental.indexOf("export interface FinalWriteOptions"));
+  assert.ok(!/scheduled_at|publish_claimed_at|postedAt/.test(upToFinal),
+    "the incremental write records results ONLY — the Content is not finished yet");
+});
+
+// ── the merge rules, against a fake row store ────────────────────────────────
+// persistRow.ts reaches the database through two injected functions precisely so the
+// rules above can be executed rather than pattern-matched.
+
+type Stored = { payload: Record<string, unknown>; scheduled_at: string | null; publish_claimed_at: string | null };
+function fakeStore(initial: Stored) {
+  const state: Stored = { ...initial, payload: { ...initial.payload } };
+  const writes: Array<Record<string, unknown>> = [];
+  const io = {
+    read: async () => ({ snapshot: { ...state, payload: { ...state.payload } }, error: null }),
+    update: async (_row: unknown, values: Record<string, unknown>) => {
+      writes.push(values);
+      if ("payload" in values) state.payload = values.payload as Record<string, unknown>;
+      if ("scheduled_at" in values) state.scheduled_at = values.scheduled_at as string | null;
+      return { error: null };
+    },
+  };
+  return { io, state, writes };
+}
+const CLAIMED_AT = "2026-07-11T09:00:00.000Z";
+const REF = { vibepin_user_id: "u1", draft_id: "d1", scheduled_at: CLAIMED_AT };
+const PIN_OK = {
+  provider: "pinterest", status: "published", socialConnectionId: "pin_A",
+  externalPostId: "pin-9", externalPostUrl: "https://pin/9",
+} as const;
+
+test("merge: an edit made DURING the publish survives, and gets the results", async () => {
+  // The exact data loss: the merchant retitles their Content while it is going out.
+  // The old persist wrote back the payload it had claimed minutes earlier.
+  const { io, state, writes } = fakeStore({
+    payload: { title: "edited while publishing", updatedAt: "2026-07-11T11:59:00.000Z" },
+    scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  await mergeOutcomesIntoRow(io, REF, [PIN_OK]);
+  assert.equal(state.payload.title, "edited while publishing", "their edit must not be overwritten");
+  const rows = state.payload.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].postUrl, "https://pin/9", "and the publish that happened is recorded");
+  assert.equal(writes.length, 1);
+  assert.ok(!("scheduled_at" in writes[0]) && !("publish_claimed_at" in writes[0]),
+    "an incremental write touches results only");
+});
+
+test("merge: the stamp is newer than the edit, so the client's LWW takes the server row", async () => {
+  const edited = new Date(Date.now() - 1000).toISOString();
+  const { io, state } = fakeStore({
+    payload: { title: "t", updatedAt: edited }, scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  await mergeOutcomesIntoRow(io, REF, [PIN_OK]);
+  assert.ok(String(state.payload.updatedAt) > edited,
+    "a stamp older than the browser's copy loses the merge — and the client pushes the schedule back");
+});
+
+test("final: a schedule the merchant changed mid-publish is kept, results and all", async () => {
+  const { io, state, writes } = fakeStore({
+    payload: { scheduledDate: "2026-08-01", plannedAt: "2026-08-01T10:00" },
+    scheduled_at: "2026-08-01T10:00:00.000Z", // rescheduled while publishing
+    publish_claimed_at: CLAIMED_AT,
+  });
+  await writeOutcomes(io, REF, [PIN_OK]);
+  assert.ok(!("scheduled_at" in writes[0]),
+    "the column must be omitted — this run never read the slot they just chose");
+  assert.equal(state.payload.scheduledDate, "2026-08-01", "their new schedule stands");
+  assert.equal(state.payload.postedAt !== undefined, true, "and the publish is still recorded");
+  assert.equal(writes[0].publish_claimed_at, null, "the claim is released regardless");
+});
+
+test("final: an unchanged schedule clears exactly as it always did", async () => {
+  const { io, state, writes } = fakeStore({
+    payload: { scheduledDate: "2026-07-11", plannedAt: "2026-07-11T09:00" },
+    scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  await writeOutcomes(io, REF, [PIN_OK]);
+  assert.equal(writes[0].scheduled_at, null);
+  assert.equal(state.payload.scheduledDate, "");
+  assert.equal(state.payload.plannedAt, "");
+});
+
+test("final: a deferred row keeps its schedule even when nothing changed", async () => {
+  const { io, state, writes } = fakeStore({
+    payload: { scheduledDate: "2026-07-11", plannedAt: "2026-07-11T09:00" },
+    scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  const deferredIg = {
+    provider: "instagram", status: "pending", socialConnectionId: "ig_A", error: "Deferred",
+  } as const;
+  await writeOutcomes(io, REF, [PIN_OK, deferredIg], { deferred: true });
+  assert.ok(!("scheduled_at" in writes[0]), "Instagram has not gone out — the Content is still due");
+  assert.equal(state.payload.scheduledDate, "2026-07-11");
+  assert.equal(state.payload.remotePinUrl, "https://pin/9", "the Pin that did publish keeps its permalink");
+});
+
+test("final: the incremental row it already wrote is not archived as superseded", async () => {
+  // The final persist re-reads, so it sees its OWN incremental row as the prior one.
+  // Archiving that would put the live Pin in previousResults as well — "Earlier
+  // publishes" listing a post nothing has replaced.
+  const { io, state } = fakeStore({
+    payload: {}, scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  await mergeOutcomesIntoRow(io, REF, [PIN_OK]);
+  await writeOutcomes(io, REF, [PIN_OK]);
+  assert.equal(state.payload.previousResults, undefined,
+    "the same post recorded twice is one post, not a supersession");
+  assert.equal((state.payload.destinationResults as unknown[]).length, 1);
+});
+
+test("final: a genuinely superseded post IS archived, even after an incremental write", async () => {
+  const { io, state } = fakeStore({
+    payload: { destinationResults: [PUBLISHED_PIN] }, scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  await mergeOutcomesIntoRow(io, REF, [PIN_OK]);
+  await writeOutcomes(io, REF, [PIN_OK]);
+  const previous = state.payload.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous?.length, 1, "the Pin that is still live on Pinterest keeps its permalink");
+  assert.equal(previous[0].postUrl, "https://pin/1");
+});
+
+test("failure: a row deleted mid-publish is not resurrected", async () => {
+  let updates = 0;
+  const io = {
+    read: async () => ({ snapshot: null, error: null }),
+    update: async () => { updates++; return { error: null }; },
+  };
+  const outcome = await writeOutcomes(io, REF, [PIN_OK]);
+  assert.equal(outcome.gone, true);
+  assert.equal(updates, 0, "writing would re-create a Content the merchant threw away");
+});
+
+test("failure: the failure persist also merges onto the re-read payload", async () => {
+  const { io, state } = fakeStore({
+    payload: { title: "edited while failing", scheduledDate: "2026-07-11" },
+    scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  await writeFailure(io, REF, { message: "Reconnect your Pinterest account.", code: "needs_reconnect" });
+  assert.equal(state.payload.title, "edited while failing");
+  assert.equal(state.payload.publishError, "Reconnect your Pinterest account.");
+  assert.equal(state.payload.errorCategory, "auth");
+  assert.equal(state.payload.scheduledDate, "");
+});
+
+
 
 test("a deferred row is reported, never silently dropped", () => {
   assert.match(routeSrc, /deferred\+\+/, "deferred rows must be counted");
@@ -613,7 +834,7 @@ test("RUN_DEADLINE_MS leaves room for a destination to finish AND persist", () =
 test("the route bounds the run and passes that bound INTO the fan-out", () => {
   assert.match(routeSrc, /const deadlineMs = startedMs \+ RUN_DEADLINE_MS;/,
     "the deadline must be absolute and measured from the top of the run");
-  assert.match(routeSrc, /fanOutDestinations\([\s\S]{0,600}\{ deadlineMs \}\)/,
+  assert.match(routeSrc, /fanOutDestinations\([\s\S]{0,700}\{ deadlineMs,/,
     "a deadline the fan-out never receives bounds nothing — the fan-out is where the time goes");
   const pinterestLoop = routeSrc.slice(
     routeSrc.indexOf("for (const destination of pinterestTargets) {"),
@@ -635,11 +856,9 @@ test("a fully deferred row is released, not written — and never marked failed"
 });
 
 test("a deferred persist omits scheduled_at instead of clearing it", () => {
-  const at = routeSrc.indexOf("async function persistOutcomes(");
-  const body = routeSrc.slice(at, routeSrc.indexOf("async function persistFailure("));
-  assert.match(body, /options\?\.deferred \? \{\} : \{ scheduled_at: null \}/,
+  assert.match(persistSrc, /const clearSchedule = !options\.deferred && scheduleUnchanged;/,
     "clearing the schedule of a Content whose destinations have not gone out is the lost publish");
-  assert.match(body, /publish_claimed_at: null/,
+  assert.match(persistSrc, /publish_claimed_at: null/,
     "the claim is still released — the next run must be able to finish the job");
 });
 
@@ -707,5 +926,7 @@ test("persistOutcomes retries once and then logs the outcomes it could not store
 });
 
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+Promise.all(pending).then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+});

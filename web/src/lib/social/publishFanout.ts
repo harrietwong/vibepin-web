@@ -235,6 +235,16 @@ export interface FanOutOptions {
    * Omitted ⇒ no deadline, i.e. the behaviour every caller had before.
    */
   deadlineMs?: number;
+  /**
+   * Called with each destination's outcome the moment it is known, before the next
+   * destination starts.
+   *
+   * The caller persists it there. Waiting for the whole batch to return means every
+   * post already made is unrecorded for as long as the destinations after it take —
+   * and a process killed in that window republishes them all. A throwing callback is
+   * logged and ignored: a bookkeeping failure must not cost a destination its outcome.
+   */
+  onOutcome?: (outcome: DestinationOutcome, destination: ScheduledDestination) => void | Promise<void>;
 }
 
 export async function fanOutDestinations(
@@ -249,17 +259,25 @@ export async function fanOutDestinations(
     // Belt and braces: `dispatchDestination` already resolves rather than rejects for
     // everything it can see. This catch covers what it cannot — and it is the reason
     // the invariant above holds no matter how that function is later changed.
+    let outcome: DestinationOutcome;
     try {
-      outcomes.push(
+      outcome =
         // Checked per destination, immediately before dispatch, because that is where
         // the time actually goes: the check that mattered was made once at the top of
         // the row, and three Instagram accounts later the run was past the ceiling.
         hasTimeForDestination(Date.now(), options?.deadlineMs)
           ? await dispatchDestination(uid, destination, post)
-          : deferredOutcome(destination),
-      );
+          : deferredOutcome(destination);
     } catch (err) {
-      outcomes.push(isolationFailure(destination, err));
+      outcome = isolationFailure(destination, err);
+    }
+    outcomes.push(outcome);
+    if (options?.onOutcome) {
+      try {
+        await options.onOutcome(outcome, destination);
+      } catch (err) {
+        console.error("[publishFanout] onOutcome:", (err as Error).message);
+      }
     }
   }
   return outcomes;

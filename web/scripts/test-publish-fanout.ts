@@ -162,6 +162,8 @@ const publishes: string[] = [];
 const lookupThrows = new Set<string>();
 /** Connection ids whose PUBLISH must throw. */
 const publishThrows = new Set<string>();
+/** Observed at the moment a publish starts — used to prove reporting is incremental. */
+let onPublish: ((id: string) => void) | null = null;
 
 const loader = Module as unknown as {
   _load: (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -183,6 +185,7 @@ loader._load = function (this: unknown, request: string, parent: unknown, isMain
       getSocialProviderById: () => ({
         publishPost: async ({ connection }: { connection: { id: string } }) => {
           publishes.push(connection.id);
+          onPublish?.(connection.id);
           if (publishThrows.has(connection.id)) throw new Error(`publish exploded for ${connection.id}`);
           return { ok: true, externalPostId: `post-${connection.id}`, externalPostUrl: `https://x/${connection.id}` };
         },
@@ -307,6 +310,46 @@ async function main(): Promise<void> {
       hasTimeForDestination(now, now + DESTINATION_RESERVE_MS - 1) === false);
     check("no deadline at all ⇒ unbounded, exactly the old behaviour",
       hasTimeForDestination(now, undefined) === true);
+  }
+
+  section("each outcome is handed back before the next destination starts");
+
+  {
+    // A batch that reports only at the end leaves every post it already made
+    // unrecorded for as long as the rest take — and a kill in that window republishes
+    // them. The callback fires between destinations, which is what lets the caller
+    // store each one immediately.
+    lookupThrows.clear(); publishThrows.clear(); publishes.length = 0;
+    const seen: string[] = [];
+    /** What the recorder had already been told when each publish started. */
+    const witnessed: Record<string, string[]> = {};
+    onPublish = (id: string) => { witnessed[id] = [...seen]; };
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-a"), social("facebook", "conn-b")], POST,
+      { onOutcome: (o: DestinationOutcome) => { seen.push(`${o.socialConnectionId}:${o.status}`); } });
+    onPublish = null;
+    check("every destination reported exactly once, in order",
+      seen.join(",") === "conn-a:published,conn-b:published", JSON.stringify(seen));
+    check("destination #1's outcome was already delivered before #2 was dispatched",
+      (witnessed["conn-b"] ?? []).join(",") === "conn-a:published",
+      JSON.stringify(witnessed));
+    check("and the returned batch still holds them all",
+      outcomes.length === 2);
+  }
+
+  {
+    // Bookkeeping is not allowed to cost a destination its publish.
+    lookupThrows.clear(); publishThrows.clear(); publishes.length = 0;
+    let threw: unknown = null;
+    let outcomes: DestinationOutcome[] = [];
+    try {
+      outcomes = await fanOutDestinations("u1",
+        [social("instagram", "conn-a"), social("facebook", "conn-b")], POST,
+        { onOutcome: () => { throw new Error("persist exploded"); } });
+    } catch (e) { threw = e; }
+    check("a throwing onOutcome never rejects the batch or stops the next destination",
+      threw === null && outcomes.length === 2 && publishes.join(",") === "conn-a,conn-b",
+      `threw=${String(threw)} publishes=${JSON.stringify(publishes)}`);
   }
 
   {

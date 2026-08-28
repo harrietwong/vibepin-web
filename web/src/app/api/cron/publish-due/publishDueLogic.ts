@@ -340,6 +340,12 @@ export function mergeDestinationResults(
  * worth keeping, and a row replaced by a FAILED re-attempt is kept too — the earlier
  * post is still live regardless of how the retry went.
  */
+/** Do two result rows describe the SAME post on the platform? */
+function samePost(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const field = (r: Record<string, unknown>, k: string) => (typeof r?.[k] === "string" ? r[k] : "");
+  return field(a, "remoteId") === field(b, "remoteId") && field(a, "postUrl") === field(b, "postUrl");
+}
+
 export function supersededDestinationResults(
   payload: Record<string, unknown>,
   outcomes: readonly DestinationOutcomeLike[],
@@ -348,11 +354,24 @@ export function supersededDestinationResults(
   const history = Array.isArray(payload.previousResults)
     ? (payload.previousResults as Array<Record<string, unknown>>)
     : [];
+  const rows = outcomeRows(outcomes, nowIso);
+  // A destination's outcome is now written TWICE: once incrementally, the moment the
+  // provider answers, and again by the final persist (which re-reads, so it sees its
+  // own incremental row as the "prior" one). Without this filter the second write
+  // would archive the post it had just recorded — the live Pin would appear in BOTH
+  // destinationResults and previousResults, and "Earlier publishes" would list a post
+  // that was never superseded by anything. A prior row is only superseded when the
+  // fresh row describes a DIFFERENT post.
+  const freshByDestination = new Map(rows.map(r => [r.destinationId, r]));
+  const prior = priorDestinationResults(payload).filter(r => {
+    const fresh = freshByDestination.get(r?.destinationId);
+    return !fresh || !samePost(r, fresh);
+  });
   // Cast at the boundary only: these are the stored result rows, typed loosely here
   // because a cron payload is whatever the client last synced.
   return supersededResults(
-    priorDestinationResults(payload) as unknown as DestinationPublishResult[],
-    outcomeRows(outcomes, nowIso) as unknown as DestinationPublishResult[],
+    prior as unknown as DestinationPublishResult[],
+    rows as unknown as DestinationPublishResult[],
     history as unknown as DestinationPublishResult[],
   ) as unknown as Array<Record<string, unknown>>;
 }
@@ -361,8 +380,12 @@ export function supersededDestinationResults(
  * Write BOTH halves of the result record: what happened now, and the live posts this
  * attempt superseded. Every payloadAfter* transform goes through here so no path can
  * record one without the other.
+ *
+ * Exported because the incremental writer (persistRow.ts) applies a single outcome to
+ * a freshly re-read payload and must use the SAME merge — a second, simpler one would
+ * be a second answer to "what does this Content's result set look like now".
  */
-function applyDestinationResults(
+export function applyDestinationResults(
   next: Record<string, unknown>,
   payload: Record<string, unknown>,
   outcomes: readonly DestinationOutcomeLike[],
@@ -519,7 +542,9 @@ export function payloadAfterFailure(
    * stays untargeted and adopts on the next try.
    */
   connectionId?: string | null,
+  options?: OutcomePersistOptions,
 ): Record<string, unknown> {
+  const clearSchedule = options?.clearSchedule !== false;
   const next = { ...withAdoptedTarget(payload, connectionId) };
   // Bump payload.updatedAt (same reason as payloadAfterSuccess — see comment there):
   // the client's LWW merge compares this field, so it must match the row's updated_at.
@@ -551,13 +576,25 @@ export function payloadAfterFailure(
   next.failureType = "publish";
   next.errorCategory = mapPublishErrorToCategory(fail.code, fail.message);
   if (fail.code) next.publishErrorCode = fail.code;
-  if (previousScheduled) next.previousScheduledTime = previousScheduled;
+  if (clearSchedule && previousScheduled) next.previousScheduledTime = previousScheduled;
 
   // Drop it out of the due scan; the "failed" lifecycle comes from publishError.
+  // Unless the merchant rescheduled while this attempt was running — then the slot
+  // they just chose is theirs, and the failure is recorded without cancelling it.
+  if (clearSchedule) clearScheduleFields(next);
+  return next;
+}
+
+/**
+ * Drop the payload's scheduling fields, so lifecycle stops deriving "scheduled".
+ *
+ * One helper rather than four copies: a clearing site that is added but not gated by
+ * `clearSchedule` is exactly the bug this option exists to prevent.
+ */
+function clearScheduleFields(next: Record<string, unknown>): void {
   next.scheduledDate = "";
   next.scheduledTime = "";
   next.plannedAt = "";
-  return next;
 }
 
 /** How a persist should treat the Content's schedule. */
@@ -569,6 +606,15 @@ export interface OutcomePersistOptions {
    * failed while a destination it named has not been attempted.
    */
   deferred?: boolean;
+  /**
+   * May this persist clear the scheduling fields? Default true.
+   *
+   * False when the merchant RESCHEDULED while the Content was publishing: the row's
+   * `scheduled_at` is no longer the one this run claimed, so clearing it would silently
+   * cancel a slot they had just chosen. Their schedule stands; the results are recorded
+   * beside it.
+   */
+  clearSchedule?: boolean;
 }
 
 /**
@@ -615,6 +661,7 @@ export function payloadAfterOutcomes(
   // `pending` joins `skipped` here: neither was attempted, and counting a deferred
   // destination as an attempt would resolve the Content — posted or failed — on the
   // strength of a publish that has not happened.
+  const clearSchedule = options?.clearSchedule !== false;
   const attempted = outcomes.filter(o => o.status !== "skipped" && o.status !== "pending");
   const publishedPinterest = attempted.find(o => o.provider === "pinterest" && o.status === "published");
   const anyPublished = attempted.some(o => o.status === "published");
@@ -640,9 +687,7 @@ export function payloadAfterOutcomes(
   // already published on an earlier attempt (a stale-claim re-run). That is a
   // completed Content, not a failure: it just needs to leave the due scan.
   if (!attempted.length) {
-    next.scheduledDate = "";
-    next.scheduledTime = "";
-    next.plannedAt = "";
+    if (clearSchedule) clearScheduleFields(next);
     return next;
   }
 
@@ -652,9 +697,7 @@ export function payloadAfterOutcomes(
     if (publishedPinterest?.externalPostUrl) next.remotePinUrl = publishedPinterest.externalPostUrl;
     next.generationStatus = "completed";
     // Clear scheduling so lifecycle derives "posted" and the row is no longer due.
-    next.scheduledDate = "";
-    next.scheduledTime = "";
-    next.plannedAt = "";
+    if (clearSchedule) clearScheduleFields(next);
     delete next.publishError;
     delete next.failureType;
     delete next.errorCategory;
@@ -671,10 +714,8 @@ export function payloadAfterOutcomes(
   next.failureType = "publish";
   next.errorCategory = mapPublishErrorToCategory(failureCode, message);
   if (failureCode) next.publishErrorCode = failureCode;
-  if (previousScheduled) next.previousScheduledTime = previousScheduled;
-  next.scheduledDate = "";
-  next.scheduledTime = "";
-  next.plannedAt = "";
+  if (clearSchedule && previousScheduled) next.previousScheduledTime = previousScheduled;
+  if (clearSchedule) clearScheduleFields(next);
   return next;
 }
 
