@@ -297,6 +297,142 @@ function consumeCalls(): RpcCall[] {
     assert.equal(parsed!.route, "publish_social");
   });
 
+  // ── The midnight-relay fix (Codex round 2, Medium) ────────────────────────────
+  await test("MIDNIGHT REGRESSION: bucket relayed -> the pins route (23:59:59 UTC) and the social route (00:00:01 UTC next day) derive the IDENTICAL key for the same Content", async () => {
+    const draftId = "pd_midnight_relay_1";
+    const originalNow = Date.now;
+    try {
+      Date.now = () => Date.parse("2026-08-28T23:59:59.000Z");
+      const pinsRes = await pinsPOST(req({
+        draftId, boardId: "b", imageUrl: "https://i/midnight.png", title: "t",
+      }));
+      assert.equal(pinsRes.status, 201, "the pins call itself must succeed");
+      const pinsBody = await pinsRes.json() as { meteringBucket?: string };
+      assert.ok(pinsBody.meteringBucket, "the pins route must mint and return a bucket");
+      const pinsCalls = consumeCalls();
+      assert.equal(pinsCalls.length, 1);
+      const keyFromPinsRoute = pinsCalls[0].args.p_idempotency_key;
+
+      rpcCalls.length = 0; // isolate the social route's call below
+      Date.now = () => Date.parse("2026-08-29T00:00:01.000Z");
+      const socialRes = await POST(req({
+        postId: draftId,
+        post: { imageUrls: ["https://example.com/midnight.png"] },
+        destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+        meteringBucket: pinsBody.meteringBucket,
+      }));
+      assert.equal(socialRes.status, 200);
+      const socialCalls = consumeCalls();
+      assert.equal(socialCalls.length, 1);
+      const keyFromSocialRoute = socialCalls[0].args.p_idempotency_key;
+
+      assert.equal(
+        keyFromPinsRoute, keyFromSocialRoute,
+        "the relayed bucket must make the two keys identical despite the UTC-midnight straddle",
+      );
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  await test("MIDNIGHT REGRESSION, documented WITHOUT the relay: the same straddle but no meteringBucket sent -> the two routes derive DIFFERENT keys (exactly the double-charge the relay prevents)", async () => {
+    const draftId = "pd_midnight_no_relay_1";
+    const originalNow = Date.now;
+    try {
+      Date.now = () => Date.parse("2026-08-28T23:59:59.000Z");
+      await pinsPOST(req({
+        draftId, boardId: "b", imageUrl: "https://i/midnight2.png", title: "t",
+      }));
+      const pinsCalls = consumeCalls();
+      assert.equal(pinsCalls.length, 1);
+      const keyFromPinsRoute = pinsCalls[0].args.p_idempotency_key;
+
+      rpcCalls.length = 0;
+      Date.now = () => Date.parse("2026-08-29T00:00:01.000Z");
+      await POST(req({
+        postId: draftId,
+        post: { imageUrls: ["https://example.com/midnight2.png"] },
+        destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+        // no meteringBucket -- this route falls back to computing its own bucket
+      }));
+      const socialCalls = consumeCalls();
+      assert.equal(socialCalls.length, 1);
+      const keyFromSocialRoute = socialCalls[0].args.p_idempotency_key;
+
+      assert.notEqual(
+        keyFromPinsRoute, keyFromSocialRoute,
+        "without the relay, a UTC-midnight straddle computes two different buckets for one Content -- this is the exact defect the relay fixes",
+      );
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  await test("an out-of-window relayed bucket ('2020-01-01') is ignored -- the key equals the route's own-date key", async () => {
+    const draftId = "pd_out_of_window_1";
+    await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/a.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    }));
+    const ownKey = consumeCalls()[0].args.p_idempotency_key;
+
+    rpcCalls.length = 0;
+    await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/a.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+      meteringBucket: "2020-01-01",
+    }));
+    const relayedKey = consumeCalls()[0].args.p_idempotency_key;
+
+    assert.equal(ownKey, relayedKey, "an out-of-window bucket must be rejected, falling back to the route's own bucket");
+  });
+
+  await test("malformed relayed buckets ('2026-8-1', 123, '') are all ignored -- same key as no relay at all", async () => {
+    const draftId = "pd_malformed_1";
+    await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/b.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    }));
+    const ownKey = consumeCalls()[0].args.p_idempotency_key;
+
+    for (const bad of ["2026-8-1", 123, ""]) {
+      rpcCalls.length = 0;
+      await POST(req({
+        postId: draftId,
+        post: { imageUrls: ["https://example.com/b.png"] },
+        destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+        meteringBucket: bad,
+      }));
+      const key = consumeCalls()[0].args.p_idempotency_key;
+      assert.equal(key, ownKey, `malformed bucket ${JSON.stringify(bad)} must be ignored, not accepted as a valid override`);
+    }
+  });
+
+  await test("a rejected relayed bucket logs a structured usage_meter_bucket_rejected line (never blocks the publish)", async () => {
+    const originalWarn = console.warn;
+    const lines: string[] = [];
+    console.warn = ((msg?: unknown) => { lines.push(String(msg)); }) as typeof console.warn;
+    try {
+      const res = await POST(req({
+        postId: "pd_bucket_reject_log_1",
+        post: { imageUrls: ["https://example.com/c.png"] },
+        destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+        meteringBucket: "2020-01-01",
+      }));
+      assert.equal(res.status, 200, "a rejected bucket must never fail the publish");
+    } finally {
+      console.warn = originalWarn;
+    }
+    const parsed = lines
+      .map(l => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+      .find(l => l?.event === "usage_meter_bucket_rejected");
+    assert.ok(parsed, `expected a usage_meter_bucket_rejected log line, saw: ${JSON.stringify(lines)}`);
+    assert.equal(parsed!.route, "publish_social");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);
 })();

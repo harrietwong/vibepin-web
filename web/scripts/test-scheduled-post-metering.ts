@@ -90,6 +90,59 @@ async function load(mode: string) {
     assert.equal(a, b, "two immediate publishes of one draft the same day are one action");
   });
 
+  // ── The server-minted bucket override (the midnight-relay fix) ───────────────
+  await test("deriveScheduledPostKey with a bucketOverride uses it INSTEAD of computing its own", async () => {
+    const m = await load("shadow");
+    const withOverride = m.deriveScheduledPostKey("u-1", "pd_x", undefined, "2020-01-01");
+    // Compare against a key manually built from the same salted-hash contract by
+    // driving `immediateBucketForNow` to report that exact date, so this assertion
+    // does not depend on today's real UTC date.
+    const asIfToday = m.deriveScheduledPostKey("u-1", "pd_x", undefined, m.immediateBucketForNow(Date.parse("2020-01-01T12:00:00.000Z")));
+    assert.equal(withOverride, asIfToday, "the override IS the bucket the key is built from");
+  });
+
+  await test("a real scheduledAtIso always wins over a bucketOverride — the override only applies on the immediate path", async () => {
+    const m = await load("shadow");
+    const withScheduledAt = m.deriveScheduledPostKey("u-1", "pd_x", "2026-08-01T09:00:00.000Z", "2020-01-01");
+    const withoutOverride = m.deriveScheduledPostKey("u-1", "pd_x", "2026-08-01T09:00:00.000Z");
+    assert.equal(withScheduledAt, withoutOverride, "a scheduled key must ignore an override — it is never on the immediate path");
+  });
+
+  // ── isAcceptableImmediateBucket — the validation gate for a client-relayed bucket ──
+  await test("isAcceptableImmediateBucket: yesterday / today / tomorrow (relative to nowMs) are all accepted", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2026-08-14", nowMs), true, "yesterday");
+    assert.equal(m.isAcceptableImmediateBucket("2026-08-15", nowMs), true, "today");
+    assert.equal(m.isAcceptableImmediateBucket("2026-08-16", nowMs), true, "tomorrow");
+  });
+
+  await test("isAcceptableImmediateBucket: ±2 days is rejected — the window is exactly one day either side", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2026-08-13", nowMs), false, "two days in the past");
+    assert.equal(m.isAcceptableImmediateBucket("2026-08-17", nowMs), false, "two days in the future");
+  });
+
+  await test("isAcceptableImmediateBucket: malformed strings are rejected", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2026-8-15", nowMs), false, "unpadded month");
+    assert.equal(m.isAcceptableImmediateBucket("2026-08-1", nowMs), false, "unpadded day");
+    assert.equal(m.isAcceptableImmediateBucket("20260815", nowMs), false, "no separators");
+    assert.equal(m.isAcceptableImmediateBucket("", nowMs), false, "empty string");
+    assert.equal(m.isAcceptableImmediateBucket("not-a-date", nowMs), false, "not a date at all");
+  });
+
+  await test("isAcceptableImmediateBucket: non-string candidates are rejected", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket(123, nowMs), false, "number");
+    assert.equal(m.isAcceptableImmediateBucket(null, nowMs), false, "null");
+    assert.equal(m.isAcceptableImmediateBucket(undefined, nowMs), false, "undefined");
+    assert.equal(m.isAcceptableImmediateBucket({}, nowMs), false, "object");
+  });
+
   // Cross-route parity (pins path vs. social path deriving the identical key for
   // the same Content) is proven at the real-route level in
   // test-social-only-metering.ts, which loads BOTH actual route modules and

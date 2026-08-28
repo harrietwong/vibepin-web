@@ -26,6 +26,10 @@ export type PinterestClientError = Error & {
   pinterestCode?: string;
   /** HTTP status from the internal API route (useful for fallback messages). */
   httpStatus?: number;
+  /** /api/pinterest/pins's typed-failure body relays its server-minted immediate-publish
+   *  bucket even on failure, so a caller that proceeds to publish this Content's other
+   *  (social) destinations can still relay it. Present only on a publishPin() rejection. */
+  meteringBucket?: string;
 };
 
 export type PinterestAccount = { id: string | null; username: string | null; accountType: string | null };
@@ -61,6 +65,11 @@ export type PublishResult = {
   /** The connection this Pin published through — pinned onto the draft as its target
    *  when it had none yet (adopt-once, PRD §14). Absent in sandbox mode. */
   connectionId?: string;
+  /** Server-minted immediate-publish UTC date bucket (meterScheduledPost.ts). Relayed
+   *  to /api/publish/social by callers that proceed to fan out to social destinations,
+   *  so the two requests for the same Content never bucket differently across a UTC
+   *  midnight straddle. */
+  meteringBucket?: string;
 };
 
 function currentReturnTo(): string {
@@ -200,6 +209,8 @@ type ParsedError = {
   needsReconnect?: boolean;
   pinterestCode?: string;
   httpStatus: number;
+  /** Only present when the failing route is /api/pinterest/pins's typed-failure body. */
+  meteringBucket?: string;
 };
 
 async function parseErrorResponse(res: Response): Promise<ParsedError> {
@@ -215,6 +226,7 @@ async function parseErrorResponse(res: Response): Promise<ParsedError> {
       needsReconnect: body?.needsReconnect === true,
       pinterestCode: typeof body?.pinterestCode === "string" ? body.pinterestCode : undefined,
       httpStatus,
+      meteringBucket: typeof body?.meteringBucket === "string" ? body.meteringBucket : undefined,
     };
   } catch {
     return {
@@ -231,6 +243,7 @@ function toClientError(body: ParsedError): PinterestClientError {
   err.needsReconnect = body.needsReconnect;
   err.pinterestCode = body.pinterestCode;
   err.httpStatus = body.httpStatus;
+  err.meteringBucket = body.meteringBucket;
   return err;
 }
 

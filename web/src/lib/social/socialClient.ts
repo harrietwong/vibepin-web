@@ -142,6 +142,11 @@ export async function publishToSocial(input: {
   productId?: string;
   post: SocialPostPayload;
   destinations: DestinationInput[];
+  /** Server-minted immediate-publish UTC date bucket relayed from a pinterest call
+   *  for this SAME Content (meterScheduledPost.ts). The server independently
+   *  validates it (isAcceptableImmediateBucket) before trusting it — this client
+   *  never asserts it is honored. */
+  meteringBucket?: string;
 }): Promise<SocialPublishResult> {
   const res = await fetch("/api/publish/social", {
     method: "POST",
