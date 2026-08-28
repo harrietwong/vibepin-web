@@ -50,6 +50,8 @@ export const CORE: string[] = [
   "test-insights-mvp",
   // Insights collection layer (budget, measurement windows, status mapping, provenance)
   "test-insights-collector",
+  // Insights read path (collection-layer reads, status precedence, zero-call gate)
+  "test-insights-read",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
   "test-admin-account-kind",

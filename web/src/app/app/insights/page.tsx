@@ -17,10 +17,12 @@ import {
 } from "lucide-react";
 import type {
   InsightsApiResponse,
+  InsightsCollectionState,
   InsightsContent,
   InsightsDashboard,
   InsightsDay,
   InsightsPlatform,
+  InsightsScope,
 } from "@/lib/insights/types";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { freshAccessToken, refreshSessionOnce } from "@/lib/supabaseBrowser";
@@ -43,6 +45,18 @@ type InsightsAccountOption = {
 /** Sentinel for the side-by-side view. Never a real connection id. */
 const ALL_ACCOUNTS = "__all__";
 const ACCOUNT_STORAGE_KEY = "vibepin.insights.pinterestAccount";
+const SCOPE_STORAGE_KEY = "vibepin.insights.scope";
+
+/**
+ * Thumbnails asked of Pinterest per account, per view.
+ *
+ * The account scope lists up to 200 registry rows and the registry keeps no image
+ * URL, so an uncapped hydration pass would issue ~20 metadata requests per page
+ * view — reintroducing through a side door exactly the per-Pin traffic the
+ * collection layer was built to remove. A missing thumbnail costs a placeholder;
+ * a spent rate-limit budget costs the next collection run.
+ */
+const HYDRATION_LIMIT = 20;
 
 const WEEKDAY_KEYS = [
   "insights.weekday.sun",
@@ -151,6 +165,43 @@ function formatRate(value: number | null): string {
   return `${(value * 100).toFixed(value >= .1 ? 1 : 2)}%`;
 }
 
+/**
+ * Why a row has no numbers.
+ *
+ * "No data" is four situations with four different fixes: reconnect the account,
+ * wait for tonight's run, wait for Pinterest, or read the number we do have.
+ * Collapsing them into one grey dash is how an analytics page stops being trusted,
+ * so the v64 status travels all the way to the cell.
+ */
+function missingMetricsKey(item: InsightsContent): string {
+  if (item.metricsState === "no_permission") return "insights.content.noPermission";
+  if (item.metricsState === "not_collected") return "insights.content.notCollected";
+  return "insights.content.awaitingPinterest";
+}
+
+/** The collector records machine tokens; nobody should be shown "rate_limited".
+ *  An unrecognised token gets the generic line rather than being printed raw. */
+function collectionReasonKey(reason: string): string {
+  if (reason === "rate_limited") return "insights.collection.reason.rateLimited";
+  if (reason === "budget_exhausted" || reason === "daily_budget_exhausted") {
+    return "insights.collection.reason.budgetExhausted";
+  }
+  if (reason === "deadline") return "insights.collection.reason.deadline";
+  if (reason === "no_permission") return "insights.collection.reason.noPermission";
+  return "insights.collection.reason.other";
+}
+
+function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function metricValue(day: InsightsDay, metric: HeatMetric): number {
   if (metric === "websiteClicks") return day.websiteClicks ?? 0;
   return day[metric];
@@ -160,6 +211,81 @@ function clicksPer100(dashboard: InsightsDashboard): string {
   return dashboard.summary.trafficRate == null
     ? "—"
     : (dashboard.summary.trafficRate * 100).toFixed(1);
+}
+
+/**
+ * When these numbers were collected, and whether the last attempt finished.
+ *
+ * A dashboard that prints figures without saying when they were measured cannot be
+ * checked by the person reading it: "0 clicks" and "nobody has looked since
+ * Tuesday" render identically. `collection` carries that fact out of the run
+ * ledger, so the page can state it instead of implying a freshness it cannot
+ * vouch for.
+ */
+function DataState({
+  collection,
+  className,
+  tr,
+}: {
+  collection: InsightsCollectionState | null;
+  className: string;
+  tr: Translate;
+}) {
+  if (!collection) return null;
+  const reasonKey = collection.skippedReason ? collectionReasonKey(collection.skippedReason) : null;
+  const updated = collection.mode === "collected" && collection.dataUpdatedAt
+    ? fill(tr("insights.collection.dataUpdated"), { time: formatDateTime(collection.dataUpdatedAt) })
+    : null;
+  const pending = collection.mode === "live_sample"
+    ? tr("insights.collection.liveSample")
+    : collection.mode === "awaiting_first_run"
+      ? tr("insights.collection.awaitingFirstRun")
+      : null;
+  if (!updated && !pending && !reasonKey) return null;
+  return (
+    <div className={className}>
+      {updated ? <span>{updated}</span> : null}
+      {pending ? <span className={styles.dataStateWarn}>{pending}</span> : null}
+      {reasonKey ? <span>{fill(tr("insights.collection.skipped"), { reason: tr(reasonKey) })}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * The two readings of one account, side by side in the header.
+ *
+ * Deliberately a toggle rather than two pages: they answer the same question about
+ * different sets of Pins, and a user who cannot see that the set changed will read
+ * one set's numbers as the other's.
+ */
+function ScopeToggle({
+  scope,
+  setScope,
+  tr,
+}: {
+  scope: InsightsScope;
+  setScope: (next: InsightsScope) => void;
+  tr: Translate;
+}) {
+  const options: Array<[InsightsScope, string]> = [
+    ["vibepin", tr("insights.scope.vibepin")],
+    ["account", tr("insights.scope.account")],
+  ];
+  return (
+    <div className={styles.scopeToggle} role="group" aria-label={tr("insights.scope.label")}>
+      {options.map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          className={`${styles.toggleButton} ${scope === value ? styles.toggleButtonActive : ""}`}
+          onClick={() => setScope(value)}
+          aria-pressed={scope === value}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function MetricCard({
@@ -376,12 +502,15 @@ function ContentRow({
   item,
   platform,
   accountLabel,
+  showOrigin,
   tr,
 }: {
   item: InsightsContent;
   platform: InsightsPlatform;
   /** Present only in the All-accounts view, where a row's owner is not obvious. */
   accountLabel: string | null;
+  /** Only the account scope mixes VibePin Pins with Pins published elsewhere. */
+  showOrigin: boolean;
   tr: Translate;
 }) {
   const metricsAvailable = item.metricsAvailable !== false;
@@ -414,6 +543,18 @@ function ContentRow({
             {/* diagnosis is an i18n KEY: the rule runs on the server, where there
                 is no locale, so the choice of language is made here. */}
             <div className={styles.diagnosis}>{tr(item.diagnosis)}</div>
+            {/* A value whose newest collection attempt came back empty. Still shown
+                — it is a real measurement — but never as today's number. */}
+            {item.metricsState === "stale"
+              ? <div className={styles.staleFlag}>{tr("insights.content.stale")}</div>
+              : null}
+            {showOrigin && item.origin ? (
+              <span className={`${styles.originChip} ${item.origin === "pinterest" ? styles.originChipPlatform : ""}`}>
+                {tr(item.origin === "vibepin"
+                  ? "insights.content.originVibePin"
+                  : "insights.content.originPinterest")}
+              </span>
+            ) : null}
           </div>
         </div>
       </td>
@@ -422,9 +563,13 @@ function ContentRow({
       <td>{metricsAvailable ? formatNumber(platform === "pinterest" ? item.metrics.saves : item.metrics.saves + item.metrics.shares) : "—"}</td>
       <td>
         {!metricsAvailable
-          ? <span className={styles.mutedMetric}>{tr("insights.content.awaitingPinterest")}</span>
+          ? <span className={styles.mutedMetric}>{tr(missingMetricsKey(item))}</span>
           : item.metrics.websiteClicks == null
-          ? <span className={styles.mutedMetric}>{tr("insights.content.notAvailableForFeedImages")}</span>
+          // A Pinterest row with a null click count means the metric was not
+          // returned, not that clicks are unmeasurable — only feed images are that.
+          ? <span className={styles.mutedMetric}>{tr(item.websiteClickAvailability === "unavailable"
+            ? "insights.content.notAvailableForFeedImages"
+            : "insights.content.awaitingPinterest")}</span>
           : <span className={styles.positiveMetric}>{formatNumber(item.metrics.websiteClicks)}</span>}
       </td>
       <td>{metricsAvailable ? formatRate(item.metrics.trafficRate) : "—"}</td>
@@ -450,6 +595,7 @@ type ContentTableRow = {
 function ContentTable({
   rows,
   platform,
+  scope,
   totalPinCount,
   hydratedPins,
   accounts,
@@ -458,6 +604,7 @@ function ContentTable({
 }: {
   rows: ContentTableRow[];
   platform: InsightsPlatform;
+  scope: InsightsScope;
   totalPinCount: number;
   hydratedPins: Record<string, HydratedPinMetadata>;
   /** Accounts offered in the row filter. Empty in single-account mode. */
@@ -467,6 +614,7 @@ function ContentTable({
 }) {
   const [accountFilter, setAccountFilter] = useState<string>(ALL_ACCOUNTS);
   const isPinterest = platform === "pinterest";
+  const accountScope = isPinterest && scope === "account";
   const visibleRows = accountFilter === ALL_ACCOUNTS
     ? rows
     : rows.filter(row => row.accountId === accountFilter);
@@ -477,9 +625,11 @@ function ContentTable({
         <div>
           <h2 className={styles.panelTitle}>{tr("insights.content.title")}</h2>
           <p className={styles.panelHelp}>
-            {isPinterest
-              ? fill(tr("insights.content.helpPinterest"), { count: totalPinCount })
-              : tr("insights.content.helpInstagram")}
+            {!isPinterest
+              ? tr("insights.content.helpInstagram")
+              : accountScope
+                ? fill(tr("insights.content.helpAccount"), { count: totalPinCount })
+                : fill(tr("insights.content.helpPinterest"), { count: totalPinCount })}
           </p>
         </div>
         {showAccountColumn && accounts.length > 1 ? (
@@ -501,8 +651,16 @@ function ContentTable({
       {visibleRows.length === 0 ? (
         <div className={styles.empty} style={{ minHeight: 190 }}>
           <div>
-            <h2>{tr(isPinterest ? "insights.content.emptyPinterestTitle" : "insights.content.emptyInstagramTitle")}</h2>
-            <p>{tr(isPinterest ? "insights.content.emptyPinterestBody" : "insights.content.emptyInstagramBody")}</p>
+            <h2>{tr(!isPinterest
+              ? "insights.content.emptyInstagramTitle"
+              : accountScope
+                ? "insights.content.emptyAccountTitle"
+                : "insights.content.emptyPinterestTitle")}</h2>
+            <p>{tr(!isPinterest
+              ? "insights.content.emptyInstagramBody"
+              : accountScope
+                ? "insights.content.emptyAccountBody"
+                : "insights.content.emptyPinterestBody")}</p>
           </div>
         </div>
       ) : (
@@ -532,6 +690,7 @@ function ContentTable({
                   item={displayItem}
                   platform={row.platform}
                   accountLabel={showAccountColumn ? row.accountLabel : null}
+                  showOrigin={accountScope}
                   tr={tr}
                 />
               );
@@ -638,6 +797,7 @@ function AccountSummaryCard({
               <span className={styles.accountStatValue}>{clicksPer100(dashboard)}</span>
             </div>
           </div>
+          <DataState collection={dashboard.collection} className={styles.cardDataState} tr={tr} />
           {dashboard.warning || dashboard.availability.message ? (
             <p className={styles.accountCardNote}>
               {dashboard.warning || dashboard.availability.message}
@@ -654,9 +814,15 @@ function AccountSummaryCard({
  * each failure) isolated: SWR dedupes and runs them in parallel, and a rejected
  * account surfaces on its own card instead of failing the page.
  */
-function useAccountDashboard(platform: InsightsPlatform, connectionId: string | null) {
+function useAccountDashboard(
+  platform: InsightsPlatform,
+  connectionId: string | null,
+  scope: InsightsScope,
+) {
   return useSWR<InsightsApiResponse>(
-    connectionId ? `/api/insights?platform=${platform}&connectionId=${encodeURIComponent(connectionId)}&v=8` : null,
+    connectionId
+      ? `/api/insights?platform=${platform}&connectionId=${encodeURIComponent(connectionId)}&scope=${scope}&v=9`
+      : null,
     insightsFetcher,
     { revalidateOnFocus: false, keepPreviousData: false, shouldRetryOnError: false },
   );
@@ -665,15 +831,17 @@ function useAccountDashboard(platform: InsightsPlatform, connectionId: string | 
 function AccountCardLoader({
   account,
   platform,
+  scope,
   tr,
   onLoaded,
 }: {
   account: InsightsAccountOption;
   platform: InsightsPlatform;
+  scope: InsightsScope;
   tr: Translate;
   onLoaded: (accountId: string, dashboard: InsightsDashboard | null) => void;
 }) {
-  const { data, error, isLoading } = useAccountDashboard(platform, account.id);
+  const { data, error, isLoading } = useAccountDashboard(platform, account.id, scope);
   const dashboard = data?.dashboard ?? null;
 
   useEffect(() => {
@@ -697,6 +865,7 @@ export default function InsightsPage() {
   const tr = t as unknown as Translate;
   const [platform, setPlatform] = useState<InsightsPlatform>("pinterest");
   const [selectedAccount, setSelectedAccount] = useState<string>(ALL_ACCOUNTS);
+  const [scope, setScope] = useState<InsightsScope>("vibepin");
   const [hydratedPins, setHydratedPins] = useState<Record<string, HydratedPinMetadata>>({});
   // Dashboards collected from the per-account cards, so the merged content
   // table and the stacked heatmap reuse the same fetches the cards already made.
@@ -713,14 +882,29 @@ export default function InsightsPage() {
   const multiAccount = platform === "pinterest" && accounts.length > 1;
   const allAccountsView = multiAccount && selectedAccount === ALL_ACCOUNTS;
 
+  // Instagram has one reading only. Leaving a stored "account" scope selected while
+  // the user switches platform would request a scope the server ignores and label
+  // the result with a heading that promises something else.
+  const effectiveScope: InsightsScope = platform === "pinterest" ? scope : "vibepin";
+
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(ACCOUNT_STORAGE_KEY);
       if (stored) setSelectedAccount(stored);
+      const storedScope = window.localStorage.getItem(SCOPE_STORAGE_KEY);
+      if (storedScope === "account" || storedScope === "vibepin") setScope(storedScope);
     } catch {
       // A blocked localStorage must never keep Insights from rendering.
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SCOPE_STORAGE_KEY, scope);
+    } catch {
+      // Persisting the last view is a convenience, never a requirement.
+    }
+  }, [scope]);
 
   useEffect(() => {
     try {
@@ -741,7 +925,7 @@ export default function InsightsPage() {
   const singleConnectionId = multiAccount && selectedAccount !== ALL_ACCOUNTS ? selectedAccount : null;
   const singleQuery = `/api/insights?platform=${platform}${
     singleConnectionId ? `&connectionId=${encodeURIComponent(singleConnectionId)}` : ""
-  }&v=8`;
+  }&scope=${effectiveScope}&v=9`;
   const { data, error, isLoading: loading } = useSWR<InsightsApiResponse>(
     allAccountsView ? null : singleQuery,
     insightsFetcher,
@@ -809,7 +993,10 @@ export default function InsightsPage() {
       return readyEntries
         .map(({ account, dashboard: accountDashboard }) => ({
           connectionId: account.id,
-          ids: accountDashboard.content.filter(item => !item.imageUrl).map(item => item.id),
+          ids: accountDashboard.content
+            .filter(item => !item.imageUrl)
+            .map(item => item.id)
+            .slice(0, HYDRATION_LIMIT),
         }))
         .filter(target => target.ids.length > 0);
     }
@@ -817,7 +1004,10 @@ export default function InsightsPage() {
     // Without a known owning account we cannot ask for previews honestly, so we
     // skip hydration and keep the placeholder rather than guess an account.
     if (!activeConnectionId) return [];
-    const ids = dashboard.content.filter(item => !item.imageUrl).map(item => item.id);
+    const ids = dashboard.content
+      .filter(item => !item.imageUrl)
+      .map(item => item.id)
+      .slice(0, HYDRATION_LIMIT);
     return ids.length > 0 ? [{ connectionId: activeConnectionId, ids }] : [];
   }, [platform, allAccountsView, readyEntries, dashboard, activeConnectionId]);
 
@@ -873,6 +1063,9 @@ export default function InsightsPage() {
             <p className={styles.subtitle}>{subtitle}</p>
           </div>
           <div className={styles.controls}>
+            {platform === "pinterest"
+              ? <ScopeToggle scope={scope} setScope={setScope} tr={tr} />
+              : null}
             <label>
               <span className="sr-only">{tr("insights.platformLabel")}</span>
               <select
@@ -930,7 +1123,10 @@ export default function InsightsPage() {
           <>
             <div className={styles.notice}>
               <MousePointerClick size={16} style={{ flex: "0 0 auto", marginTop: 1 }} />
-              <span>{tr("insights.accounts.allHelp")}</span>
+              <span>
+                {tr("insights.accounts.allHelp")}
+                {effectiveScope === "account" ? ` ${tr("insights.scope.accountHelp")}` : ""}
+              </span>
             </div>
             <div className={styles.accountCards}>
               {accounts.map(account => (
@@ -938,6 +1134,7 @@ export default function InsightsPage() {
                   key={account.id}
                   account={account}
                   platform={platform}
+                  scope={effectiveScope}
                   tr={tr}
                   onLoaded={handleAccountLoaded}
                 />
@@ -949,6 +1146,7 @@ export default function InsightsPage() {
                 <ContentTable
                   rows={mergedRows}
                   platform={platform}
+                  scope={effectiveScope}
                   totalPinCount={mergedRows.length}
                   hydratedPins={hydratedPins}
                   accounts={readyEntries.map(entry => entry.account)}
@@ -971,6 +1169,7 @@ export default function InsightsPage() {
                 {dashboard.warning ? ` ${dashboard.warning}` : ""}
               </span>
             </div>
+            <DataState collection={dashboard.collection} className={styles.dataState} tr={tr} />
             {ready ? (
               <>
                 <DashboardMetrics dashboard={dashboard} tr={tr} />
@@ -978,6 +1177,7 @@ export default function InsightsPage() {
                 <ContentTable
                   rows={singleRows}
                   platform={dashboard.platform}
+                  scope={dashboard.scope}
                   totalPinCount={dashboard.content.length}
                   hydratedPins={hydratedPins}
                   accounts={[]}

@@ -483,3 +483,55 @@
   .heatCell { transition: none; }
   .skeleton { animation: none; }
 }
+
+/* ── Scope toggle + data state (v64 collection layer) ─────────────────────── */
+.scopeToggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+  background: var(--app-inset);
+}
+
+.dataState {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  margin: -8px 0 16px;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.dataStateWarn { color: var(--app-warning, #f59e0b); font-weight: 750; }
+
+.cardDataState {
+  margin: 8px 0 0;
+  color: var(--app-text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.originChip {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  margin-top: 5px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(124, 58, 237, .13);
+  color: var(--app-text-sec);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.originChipPlatform { background: var(--app-inset); }
+
+.staleFlag {
+  margin-top: 3px;
+  color: var(--app-warning, #f59e0b);
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.35;
+}

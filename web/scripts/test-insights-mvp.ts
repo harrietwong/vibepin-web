@@ -243,7 +243,12 @@ await test("Insights attributes each Pin to the account that published it", () =
   // Attribution precedence: the draft's own recorded target, then the v64 content
   // registry (the account whose token listed the Pin owns it), and only with neither
   // does a legacy Pin stay visible on every account rather than vanishing.
-  assert.match(dashboard, /attributePinToConnection\(/);
+  //
+  // The rule itself moved into the pure read layer so it can be exercised directly
+  // (see test-insights-read.ts); dashboard.ts still supplies the cross-account
+  // registry lookup it depends on, which is the half that needs a database.
+  const collectionRead = readFileSync(join(process.cwd(), "src/lib/insights/collectionDashboard.ts"), "utf8");
+  assert.match(collectionRead, /export function attributePin\(/);
   assert.match(dashboard, /ownerConnectionsForPins\(/);
 });
 
