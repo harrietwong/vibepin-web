@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`3ae8b995683b8c361be95ce96550c601e60d486b`; and its exact Product boundary is
-the 77-artifact
-`backend/docs/product_opportunities_v37_release_manifest_3ae8b99.json`. This tip
+`187765fb9a0d8b1c00c3b505d483ed86aeacae59`; and its exact Product boundary is
+the 80-artifact
+`backend/docs/product_opportunities_v37_release_manifest_187765f.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -42,12 +42,12 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 917 passed with 2 live-only skips and 77
+and contract-test state: backend 935 passed with 2 live-only skips and 77
 subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
 the Product-truth render verifier; and the manifest/automation contract passed
-29/29, while the latest focused systemd/worker/automation/admission group passed
+30/30, while the latest focused systemd/worker/automation/admission group passed
 156/156. ShellCheck also passed the exact current-candidate Git blobs for `cloud_lib.sh`,
 Product Supply, Product Opportunity Admission and Product Tracking wrappers;
 the intentional dynamic shared-library source warning was excluded explicitly,
@@ -56,7 +56,7 @@ production endpoint was used, and no push, deployment, database write or timer
 mutation occurred.
 
 The six unit blobs and four wrapper blobs also match their exact SHA-256 entries
-in `product_opportunities_v37_release_manifest_3ae8b99.json`. This local evidence
+in `product_opportunities_v37_release_manifest_187765f.json`. This local evidence
 is frozen in
 `backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`;
 it does not substitute for staging those six exact unit bytes on the VPS and
@@ -89,6 +89,22 @@ decision. Evidence:
 `backend/docs/product_opportunities_v37_stage1_backup_inventory_20260828T031821Z.json`
 and
 `backend/docs/product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json`.
+
+Commit `187765f` closes the remaining post-apply false-success gap. A versioned
+pre-apply query captures legacy row counts plus stable full-table content
+checksums and confirms zero v63 catalog matches. The post-apply query reads back
+10 relations, 18 exact function signatures/security modes, 9 enabled triggers,
+3 RLS policies, 4 critical unique indexes, critical constraints, 44 table/
+function/sequence privilege facts and every new-table row count. The verifier
+requires an exact baseline-receipt SHA and refuses a receipt older than 15
+minutes. Exact PGlite migration/readback validation passed with zero violations.
+A production GET-only performance receipt completed in 8.2 seconds with 4,115
+Products, 34,213 snapshots and zero v63 matches; it is not valid for a future
+apply because the live snapshot table had already grown by 140 since Stage 0.
+Evidence:
+`backend/docs/product_opportunities_v37_stage1_verifier_pglite_20260828T041312Z.json`
+and
+`backend/docs/product_opportunities_v37_stage1_legacy_baseline_20260828T041242Z.json`.
 
 The historical integration candidate is
 `codex/product-v37-security-deps`. Its prequalified integration base

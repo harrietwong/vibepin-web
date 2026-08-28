@@ -1,6 +1,6 @@
 {
   "audited_at": "2026-08-28T03:26:57.862Z",
-  "candidate_functional_tip": "3ae8b995683b8c361be95ce96550c601e60d486b",
+  "candidate_functional_tip": "187765fb9a0d8b1c00c3b505d483ed86aeacae59",
   "engine": "PGlite 0.5.8 PostgreSQL-compatible in-memory runtime",
   "migration_file": "backend/db/migrate_v63_product_opportunities_v1.sql",
   "migration_git_blob_sha256": "035308eaa9e5ac6dda247f5554b268824649ebfe261a4e77439a3493769350a6",

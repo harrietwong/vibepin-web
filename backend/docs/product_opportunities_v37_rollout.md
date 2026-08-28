@@ -18,9 +18,9 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `3ae8b995683b8c361be95ce96550c601e60d486b`, and exact
-77-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_3ae8b99.json`.
+functional tip `187765fb9a0d8b1c00c3b505d483ed86aeacae59`, and exact
+80-artifact Product boundary
+`backend/docs/product_opportunities_v37_release_manifest_187765f.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -48,7 +48,7 @@ the Tracking schedule hardening from `01dcb53`. It also restores the
 `classify-chain` worker route required by the already-installed Crawl OnSuccess
 wrapper, fixing the production version mismatch observed on 2026-08-27 without
 changing its unit, timer, or wrapper. The same 72 production paths differ and
-every one is listed in the 77-artifact
+every one is listed in the 80-artifact
 manifest; the remaining four manifest dependencies are already byte-identical
 on the remote base. No provider/write budget changed. No Usage/Metering production
 file or migration is included.
@@ -73,13 +73,13 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 917 tests with 2
+committed Product-only state, the full backend suite passed 935 tests with 2
 live-only skips and 77 subtests, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
 --audit-level=low` reported zero known vulnerabilities, and the built localhost
 site passed the executable Product-truth render verifier. The Product automation
-contract for the current manifest passed 29/29; the focused worker, automation,
+contract for the current manifest passed 30/30; the focused worker, automation,
 and admission group passed 59/59. These local gates do not authorize
 production rollout.
 
@@ -259,6 +259,9 @@ these exact files from that commit, not from a dirty working tree:
 - `backend/db/migrate_v63_product_opportunities_v1.sql`
 - `backend/db/rollback_v63_product_opportunities_v1.sql`
 - `backend/scripts/run_migration.py`
+- `backend/scripts/audit_product_opportunity_schema_v37.py`
+- `backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql`
+- `backend/docs/product_opportunities_v37_stage1_post_apply_query_v1.sql`
 - `backend/.env.example`
 - `backend/deploy/systemd/vibepin-product-supply.service`
 - `backend/run_worker.py`
@@ -467,12 +470,41 @@ matching catalog objects and zero Product/Evidence/Saved/Snapshot rows; complete
 rollback left zero matching objects. This did not access production. Evidence:
 `backend/docs/product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json`.
 
-`run_migration.py` is part of the 77-artifact boundary. Apply now fails before
+The Stage 1 baseline and post-apply verifier were executed against the exact
+migration in PGlite. The post-apply contract proves 10 relations, 18 exact RPC/
+trigger functions, 9 enabled triggers, 3 Saved Products RLS policies, 4 unique
+indexes, 28 critical constraints, 44 grant facts, empty new tables, and unchanged
+legacy row counts plus stable whole-table content checksums. Evidence:
+`backend/docs/product_opportunities_v37_stage1_verifier_pglite_20260828T041312Z.json`.
+
+A production GET-only baseline performance run at `2026-08-28T04:12:48Z`
+returned 4,115 legacy Products, 34,213 snapshots, stable content checksums and
+zero v63 matches in 8.2 seconds. The earlier Stage 0 baseline had 34,073
+snapshots, so this 140-row increase proves that an old count cannot be reused at
+cutover. This receipt is demonstration evidence only and will be stale by the
+actual apply. Evidence:
+`backend/docs/product_opportunities_v37_stage1_legacy_baseline_20260828T041242Z.json`.
+
+`run_migration.py` and the verifier are part of the 80-artifact boundary. Apply now fails before
 the Management API unless the operator explicitly supplies the target project,
 the same expected target, the canonical Git-blob SQL SHA-256, and a confirmation
 string binding both. CRLF/CR checkouts are normalized to repository LF before
 hashing and submission, so Windows checkout bytes cannot silently create a
-different evidence identity. The reviewed future migration command is:
+different evidence identity. Immediately before an authorized apply, first
+capture a fresh baseline and bind its exact receipt bytes:
+
+```powershell
+$baseline = "docs/product_opportunities_v37_stage1_legacy_baseline_cutover.json"
+py scripts/audit_product_opportunity_schema_v37.py baseline `
+  --project-ref jaxteelkecvlozdrdoog `
+  --expected-project-ref jaxteelkecvlozdrdoog `
+  --expected-query-sha256 3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c `
+  --candidate-sha 187765fb9a0d8b1c00c3b505d483ed86aeacae59 `
+  --output $baseline
+$baselineSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $baseline).Hash.ToLower()
+```
+
+The reviewed future migration command is:
 
 ```powershell
 py scripts/run_migration.py --apply `
@@ -485,6 +517,24 @@ py scripts/run_migration.py --apply `
 
 Do not run that command until the user separately authorizes the production
 schema write and the immediately-preceding Stage 0/backup refresh is green.
+After the migration transaction returns success, run the read-only verifier
+before any admission, Web promotion or timer change:
+
+```powershell
+py scripts/audit_product_opportunity_schema_v37.py post-apply `
+  --project-ref jaxteelkecvlozdrdoog `
+  --expected-project-ref jaxteelkecvlozdrdoog `
+  --expected-query-sha256 2c482caca84b779dd60d94be8f0f7010162701fea5d0abfa3d773328d69c8b43 `
+  --candidate-sha 187765fb9a0d8b1c00c3b505d483ed86aeacae59 `
+  --baseline-receipt $baseline `
+  --expected-baseline-sha256 $baselineSha `
+  --max-baseline-age-seconds 900 `
+  --output docs/product_opportunities_v37_stage1_post_apply_cutover.json
+```
+
+Any catalog, grant, RPC signature, RLS, new-table emptiness, legacy count or
+legacy content-checksum difference is `BLOCK`. The verifier preserves its raw
+catalog/security contract in the receipt instead of reporting only a green flag.
 
 1. Take the normal production database backup and prove it can be located before
    applying SQL.
@@ -494,7 +544,9 @@ schema write and the immediately-preceding Stage 0/backup refresh is green.
 3. Read back table constraints, partial unique indexes, RLS policies, grants,
    catalog view, admission RPC, observation RPC, Primary-switch RPC, and exact
    admission rollback RPC.
-4. Verify all new tables are empty and existing legacy row counts are unchanged.
+4. Verify all new tables are empty and existing legacy row counts and stable
+   whole-table content checksums are unchanged from a receipt no older than 15
+   minutes.
 5. Keep both family metric UI flags false.
 
 Exit condition: schema exists, legacy data is byte/logically unchanged, and no

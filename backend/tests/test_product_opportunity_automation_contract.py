@@ -20,7 +20,7 @@ COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_3ae8b99.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_187765f.json"
 )
 FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
     ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
@@ -76,6 +76,20 @@ STAGE1_PGLITE = json.loads(
         / "product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json"
     ).read_text(encoding="utf-8")
 )
+STAGE1_LEGACY_BASELINE = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_stage1_legacy_baseline_20260828T041242Z.json"
+    ).read_text(encoding="utf-8")
+)
+STAGE1_VERIFIER_PGLITE = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_stage1_verifier_pglite_20260828T041312Z.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def _matches_sql_like_pattern(value: str, pattern: str) -> bool:
@@ -112,15 +126,15 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "3ae8b995683b8c361be95ce96550c601e60d486b"
+    functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
-    manifest_name = "product_opportunities_v37_release_manifest_3ae8b99.json"
+    manifest_name = "product_opportunities_v37_release_manifest_187765f.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "917 tests" in RUNBOOK
+    assert "935 tests" in RUNBOOK
     assert "59/59" in RUNBOOK
     assert "132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
@@ -138,7 +152,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert manifest["productionRemoteBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     assert manifest["prequalifiedIntegrationBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     paths = [item["path"] for item in manifest["artifacts"]]
-    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 77
+    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 80
     assert manifest["liveProductTruthGateCommit"] == core_functional
     assert "web/src/app/api/generate/route.ts" in paths
     assert "web/src/lib/server/generationModeration.ts" in paths
@@ -150,6 +164,9 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert "web/scripts/test-product-live-truth-verifier.ts" in paths
     assert "web/scripts/verify-product-truth-url.ts" in paths
     assert "backend/scripts/run_migration.py" in paths
+    assert "backend/scripts/audit_product_opportunity_schema_v37.py" in paths
+    assert "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql" in paths
+    assert "backend/docs/product_opportunities_v37_stage1_post_apply_query_v1.sql" in paths
 
     assert subprocess.run(
         [
@@ -174,7 +191,7 @@ def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
 
 
 def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> None:
-    functional = "3ae8b995683b8c361be95ce96550c601e60d486b"
+    functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     artifacts = {item["path"]: item for item in manifest["artifacts"]}
 
@@ -199,6 +216,39 @@ def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> N
     assert STAGE1_PGLITE["rollback_git_blob_sha256"] == artifacts[
         "backend/db/rollback_v63_product_opportunities_v1.sql"
     ]["sha256"]
+
+
+def test_stage1_post_apply_verifier_is_manifest_bound_and_truthful() -> None:
+    functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
+    manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+
+    assert STAGE1_LEGACY_BASELINE["candidate_sha"] == functional
+    assert STAGE1_LEGACY_BASELINE["project_ref"] == "jaxteelkecvlozdrdoog"
+    assert STAGE1_LEGACY_BASELINE["http_status"] == 201
+    assert STAGE1_LEGACY_BASELINE["mutation"] is False
+    assert STAGE1_LEGACY_BASELINE["verdict"] == "PASS"
+    baseline = STAGE1_LEGACY_BASELINE["baseline"]
+    assert baseline["legacy_products"] == 4115
+    assert baseline["legacy_snapshots"] == 34213
+    assert baseline["v63_matching_object_count"] == 0
+    assert re.fullmatch(r"[0-9a-f]{32}", baseline["legacy_products_md5"])
+    assert re.fullmatch(r"[0-9a-f]{32}", baseline["legacy_snapshots_md5"])
+
+    assert STAGE1_VERIFIER_PGLITE["candidate_functional_tip"] == functional
+    assert STAGE1_VERIFIER_PGLITE["production_access"] is False
+    assert STAGE1_VERIFIER_PGLITE["production_mutation"] is False
+    assert STAGE1_VERIFIER_PGLITE["verdict"] == "PASS"
+    baseline_query = "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql"
+    post_query = "backend/docs/product_opportunities_v37_stage1_post_apply_query_v1.sql"
+    assert STAGE1_VERIFIER_PGLITE["baseline_query"]["sha256"] == artifacts[
+        baseline_query
+    ]["sha256"]
+    assert STAGE1_VERIFIER_PGLITE["post_apply_query"]["sha256"] == artifacts[
+        post_query
+    ]["sha256"]
+    assert STAGE1_VERIFIER_PGLITE["post_apply_query"]["new_table_row_counts_all_zero"] is True
+    assert STAGE1_VERIFIER_PGLITE["post_apply_query"]["legacy_counts_and_hashes_unchanged"] is True
 
 
 def test_first_complete_automatic_supply_attempt_is_not_misreported_as_pass() -> None:
