@@ -60,6 +60,7 @@ export const CORE: string[] = [
   "test-per-account-disconnect",
   "test-social-reconnect-identity",
   "test-settings-account-actions",
+  "test-remove-schedule-guard",
   // Facebook Page OAuth
   "test-facebook-pages",
   // AI copy / creative intelligence

@@ -382,12 +382,14 @@ await testAsync("断开一个账号不会波及同平台的其它账号", async 
   assert.match(official, /disconnectFacebookConnection\(input\.userId, input\.connectionId\)/);
   assert.match(official, /disconnectInstagramConnection\(input\.userId, input\.connectionId\)/);
 
+  // 撤销现在包成 revokeAtProvider():两种模式把它放在序列的不同位置(软断开立刻撤销;
+  // 硬移除要等取消成功之后 —— Codex #2)。点名连接这件事本身没变。
   // 路由必须把 connectionId 交给 provider.disconnect —— 这是上面那些收敛能被
   // 触发的唯一前提。少了这一行,store 侧写得再对也永远走"全平台清空"分支。
   const socialRoute = read("src/app/api/social/disconnect/route.ts");
   assert.match(
     socialRoute,
-    /await getSocialProviderById\(connection\.authProvider\)\.disconnect\(\{\s*\n\s*userId: uid,\s*\n\s*connectionId,/,
+    /const revokeAtProvider = \(\) => getSocialProviderById\(connection\.authProvider\)\.disconnect\(\{\s*\n\s*userId: uid,\s*\n\s*connectionId,/,
     "路由必须按连接点名,不能只报 provider",
   );
   // 反向守卫:store 里不得存在"带了 id 却仍然全表更新"的写法。

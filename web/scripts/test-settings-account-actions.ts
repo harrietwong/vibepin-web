@@ -208,7 +208,9 @@ test("移除被拒时面板说出服务端那句话，并把行放回去（Codex
   // 无从判断到底发生了什么、该不该重试。
   const removeAt = panelSrc.indexOf("async function removeAccount(");
   assert.ok(removeAt > 0);
-  const body = panelSrc.slice(removeAt, removeAt + 2400);
+  // 窗口要盖住整个 catch:它现在按 code 分三支(schedules_exist / schedule_check_failed
+  // / 其余),通用兜底那句被推到了 3000 字符开外。
+  const body = panelSrc.slice(removeAt, removeAt + 4200);
   // 服务端的话优先,通用文案只作兜底。错误现在是带 code 的类型化对象
   // (schedules_exist 要重开对话框、schedule_check_failed 要单独的文案),
   // 所以取的是 err.message 而不是 (e as Error).message —— 意图不变。
@@ -217,6 +219,22 @@ test("移除被拒时面板说出服务端那句话，并把行放回去（Codex
     "必须优先弹服务端的 userMessage，通用文案只作兜底",
   );
   assert.ok(!body.includes("} catch {"), "不能再把错误整个丢掉");
+  // schedules_exist 不是"失败",是服务端把 Keep/Cancel 的决定交回来了(Codex #1)。
+  // 面板必须用服务端那个计数重开同一个对话框 —— 那是删除当刻唯一为真的数字。
+  assert.ok(
+    body.includes('if (err.code === "schedules_exist")') && body.includes("setPendingRemoval({"),
+    "schedules_exist 必须重开 Keep/Cancel 对话框,而不是弹一句失败",
+  );
+  assert.ok(
+    body.includes("typeof err.scheduledCount === \"number\" ? err.scheduledCount : 0"),
+    "对话框显示的必须是服务端的计数,不是面板自己那个预估",
+  );
+  // 读不到排程 ≠ 没有排程:服务端什么都没删,面板要说清楚并把行留着。
+  assert.ok(
+    body.includes('err.code === "schedule_check_failed"')
+      && body.includes('tr("socialPanel.toast.scheduleCheckFailed")'),
+    "schedule_check_failed 要有自己的文案,不能混进通用失败",
+  );
   // 行本身由 finally 里的 load() 从服务端重新取回 —— 乐观删除因此被撤销。
   assert.ok(body.includes("await load();"), "失败后必须重新拉一次服务端真相，把行放回去");
 });
