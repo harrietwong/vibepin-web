@@ -1,4 +1,14 @@
 import type { InsightsDiagnosis } from "./recommendations";
+import type { INSIGHTS_DIAGNOSIS_LOCKED } from "./paidGate";
+
+/**
+ * What the `diagnosis` field of a dashboard may be: the real reading, the paid-gate
+ * placeholder, or nothing to say. See InsightsDashboard.diagnosis for which is which.
+ */
+export type InsightsDiagnosisPayload =
+  | InsightsDiagnosis
+  | typeof INSIGHTS_DIAGNOSIS_LOCKED
+  | null;
 
 export type InsightsPlatform = "pinterest" | "instagram";
 
@@ -124,13 +134,18 @@ export type InsightsDashboard = {
   /**
    * The evidence-engine read on this account: headline, findings, Keep/Change/Test.
    *
-   * Null wherever there is nothing to reason about — Instagram (no collection layer),
-   * an unusable connection, and the state before the first collection run in the
-   * account scope. Null is not "no problems found": that answer is a diagnosis with
-   * the fallback headline and an empty findings list, and the page must be able to
-   * tell the two apart.
+   * Three distinguishable answers, and the page must tell them apart.
+   *
+   * `null` — there is nothing to reason about: Instagram (no collection layer), an
+   * unusable connection, the state before the first collection run in the account
+   * scope. Null is NOT "no problems found": that answer is a diagnosis carrying the
+   * fallback headline and an empty findings list.
+   *
+   * `{ locked: true }` — the reading exists and this plan is not entitled to it
+   * (lib/insights/paidGate.ts). The placeholder is the entire payload; no headline,
+   * finding, recommendation or evidence value travels with it.
    */
-  diagnosis: InsightsDiagnosis | null;
+  diagnosis: InsightsDiagnosisPayload;
   latestAvailableAt: string | null;
   syncedAt: string;
   warning: string | null;

@@ -235,4 +235,14 @@ export const insightsMessages = {
   "insights.diagnosisPanel.variable.keyword": "Keywords",
   "insights.diagnosisPanel.variable.format": "Format",
   "insights.diagnosisPanel.variable.link": "Destination link",
+
+  // -- Paid gate --
+  //    What a free plan sees INSTEAD of the reading. The wording says what is
+  //    withheld (the reading) and what is not (the numbers, and the collection that
+  //    keeps running), because a paywall that is vague about its own edges reads as
+  //    a broken page rather than a choice.
+  "insights.locked.chip": "Paid plans",
+  "insights.locked.headline": "The read on your account is part of Starter and above.",
+  "insights.locked.body": "Your numbers stay yours and keep being collected every night, so upgrading gives you a diagnosis with the history already behind it - not an empty page and a month of waiting.",
+  "insights.locked.cta": "See plans",
 } as const;

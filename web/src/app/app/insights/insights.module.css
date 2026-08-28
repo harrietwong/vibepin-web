@@ -687,3 +687,21 @@
 .diagnosisPanelCard .diagnosisList { font-size: 11px; }
 .diagnosisPanelCard .recommendation { font-size: 11px; }
 .diagnosisPanelCard .diagnosisCaveat { font-size: 10px; }
+
+/* The one control on a locked panel. Deliberately a link and not a button: it
+   navigates to the pricing page, and a button that navigates is a lie to anyone
+   reading the page with a keyboard or a screen reader. */
+.lockedCta {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: var(--app-accent, #7c3aed);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.lockedCta:hover { filter: brightness(1.08); }

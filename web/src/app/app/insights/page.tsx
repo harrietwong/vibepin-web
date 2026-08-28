@@ -15,13 +15,15 @@ import {
   MousePointerClick,
   Share2,
 } from "lucide-react";
-import type { I18nText, InsightsDiagnosis } from "@/lib/insights/recommendations";
+import type { I18nText } from "@/lib/insights/recommendations";
+import { isDiagnosisLocked } from "@/lib/insights/paidGate";
 import type {
   InsightsApiResponse,
   InsightsCollectionState,
   InsightsContent,
   InsightsDashboard,
   InsightsDay,
+  InsightsDiagnosisPayload,
   InsightsPlatform,
   InsightsScope,
 } from "@/lib/insights/types";
@@ -526,11 +528,27 @@ function DiagnosisPanel({
   variant,
   tr,
 }: {
-  diagnosis: InsightsDiagnosis | null;
+  diagnosis: InsightsDiagnosisPayload;
   variant: "full" | "card";
   tr: Translate;
 }) {
   if (!diagnosis) return null;
+  // The gate is server-side: a locked payload has no headline, no findings and no
+  // evidence to hide. What is rendered here is the placeholder itself, not a
+  // censored version of a reading the browser was nevertheless sent.
+  if (isDiagnosisLocked(diagnosis)) {
+    return (
+      <section className={`${styles.diagnosisPanel} ${variant === "card" ? styles.diagnosisPanelCard : ""}`}>
+        <header className={styles.diagnosisHeader}>
+          <h2 className={styles.diagnosisTitle}>{tr("insights.diagnosisPanel.title")}</h2>
+          <span className={styles.diagnosisChip}>{tr("insights.locked.chip")}</span>
+        </header>
+        <p className={styles.diagnosisHeadline}>{tr("insights.locked.headline")}</p>
+        <p className={styles.diagnosisMuted}>{tr("insights.locked.body")}</p>
+        <Link className={styles.lockedCta} href="/pricing">{tr("insights.locked.cta")}</Link>
+      </section>
+    );
+  }
   const confidenceKey = `insights.diagnosisPanel.confidence.${diagnosis.confidence}`;
   return (
     <section className={`${styles.diagnosisPanel} ${variant === "card" ? styles.diagnosisPanelCard : ""}`}>

@@ -17,6 +17,20 @@
  *                              (metered for analytics, never enforced this round).
  *   - connectedPlatforms:     Connected platforms — 1 / 4 / 4 / 4
  *   - accountsPerPlatform:    Accounts per platform — 1 / 1 / 2 / 3
+ *   - insightsDiagnosis:      NOT a number and NOT from the pricing table — a
+ *                             capability decided for the Insights diagnosis
+ *                             (2026-08-28): free false, Starter and above true.
+ *                             It is written here rather than inferred from a plan
+ *                             rank so that "is this user entitled to a diagnosis"
+ *                             has exactly one answer, in the file every other
+ *                             entitlement answer comes from. pricingPlans.ts is
+ *                             deliberately NOT touched: every COMPARISON_SECTIONS
+ *                             row today is a "<n> / month" allowance cell, and a
+ *                             yes/no capability row would need a second cell shape
+ *                             plus marketing copy for a feature whose page has not
+ *                             shipped. Advertising is a separate decision from
+ *                             entitlement, and the consistency test only pairs the
+ *                             numeric rows, so the two files stay in agreement.
  *
  * A `null` limit means "no cap / undefined" — checkAllowance treats it as always
  * allowed. `accountsPerPlatform` IS enforced (Phase D): the Pinterest connect start
@@ -40,6 +54,22 @@ export type PlanEntitlements = {
    * lib/server/pinterest/accountQuota.ts; null = uncapped.
    */
   accountsPerPlatform: number | null;
+  /**
+   * May this plan receive the Insights DIAGNOSIS — headline, findings,
+   * recommendations, evidence, weekly reports and scorecards?
+   *
+   * A boolean, not a quota: the thing being withheld is a reading of the account,
+   * and half a reading is not a smaller reading, it is a wrong one. ENFORCED
+   * server-side in lib/insights/paidGate.ts + the /api/insights routes; the free
+   * payload carries no diagnosis fields at all rather than fields the client is
+   * asked not to render.
+   *
+   * What is NOT gated: collection. A free user's Pins keep being collected every
+   * night, so the day they upgrade they get a diagnosis with history behind it
+   * instead of an empty page and a 30-day wait — the metrics themselves are also
+   * still returned, because those are the user's own numbers.
+   */
+  insightsDiagnosis: boolean;
 };
 
 export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
@@ -49,6 +79,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     monthlyAiTextGenerations: null,
     connectedPlatforms: 1,
     accountsPerPlatform: 1,
+    insightsDiagnosis: false,
   },
   starter: {
     monthlyAiImages: 150,
@@ -56,6 +87,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     monthlyAiTextGenerations: null,
     connectedPlatforms: 4,
     accountsPerPlatform: 1,
+    insightsDiagnosis: true,
   },
   pro: {
     monthlyAiImages: 800,
@@ -63,6 +95,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     monthlyAiTextGenerations: null,
     connectedPlatforms: 4,
     accountsPerPlatform: 2,
+    insightsDiagnosis: true,
   },
   business: {
     monthlyAiImages: 3000,
@@ -70,6 +103,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     monthlyAiTextGenerations: null,
     connectedPlatforms: 4,
     accountsPerPlatform: 3,
+    insightsDiagnosis: true,
   },
 };
 

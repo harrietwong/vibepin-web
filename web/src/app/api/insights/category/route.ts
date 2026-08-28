@@ -6,6 +6,8 @@ import {
   writeConnectionCategory,
 } from "@/lib/server/insights/keywordSetStore";
 import { invalidateInsightsCache } from "@/lib/server/insights/dashboard";
+import { resolvePlan } from "@/lib/server/entitlements";
+import { insightsDiagnosisAllowed, INSIGHTS_DIAGNOSIS_LOCKED } from "@/lib/insights/paidGate";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +64,14 @@ export async function PATCH(req: Request) {
   try {
     const uid = await getUserIdFromSameOriginSession(req);
     if (!uid) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+    // The category exists to aim the diagnosis. On a plan that receives no diagnosis
+    // there is nothing to aim, and accepting the write would store a preference whose
+    // only visible effect is one the user cannot see.
+    const plan = await resolvePlan(uid).catch(() => "free" as const);
+    if (!insightsDiagnosisAllowed(plan)) {
+      return Response.json({ ...INSIGHTS_DIAGNOSIS_LOCKED, error: "Upgrade required" }, { status: 403 });
+    }
 
     const body = await req.json().catch(() => null) as { connectionId?: unknown; category?: unknown } | null;
     const connectionId = typeof body?.connectionId === "string" ? body.connectionId.trim() : "";

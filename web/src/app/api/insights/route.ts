@@ -1,5 +1,7 @@
 import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
 import { getInsightsDashboard } from "@/lib/server/insights/dashboard";
+import { resolvePlan } from "@/lib/server/entitlements";
+import { shapeDashboardForPlan } from "@/lib/insights/paidGate";
 import type { InsightsPlatform, InsightsScope } from "@/lib/insights/types";
 
 export const dynamic = "force-dynamic";
@@ -32,9 +34,15 @@ export async function GET(req: Request) {
 
     const connectionId = url.searchParams.get("connectionId");
     const scope = readScope(url.searchParams.get("scope"));
-    const dashboard = await getInsightsDashboard(uid, platform, connectionId, scope);
+    // The plan is resolved server-side and the payload is SHAPED by it — the client
+    // is never sent a diagnosis with a flag asking it not to look. A free plan gets
+    // the same metrics and the same rows; what it does not get is the reading.
+    const [dashboard, plan] = await Promise.all([
+      getInsightsDashboard(uid, platform, connectionId, scope),
+      resolvePlan(uid).catch(() => "free" as const),
+    ]);
     return Response.json(
-      { dashboard },
+      { dashboard: shapeDashboardForPlan(dashboard, plan) },
       { headers: { "Cache-Control": "private, max-age=0, must-revalidate" } },
     );
   } catch (error) {
