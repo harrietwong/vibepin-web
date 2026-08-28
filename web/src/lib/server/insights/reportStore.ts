@@ -32,7 +32,6 @@ import { utcDateDaysAgo } from "@/lib/insights/businessRules";
 import {
   readConnectionEvidence,
   type CollectionSources,
-  type LiveAnalyticsSlice,
 } from "@/lib/insights/collectionDashboard";
 import {
   buildScorecardReport,
@@ -77,7 +76,12 @@ export const REPORT_LIST_LIMIT = 20;
 
 type PostgrestErrorish = { code?: string; message?: string } | null;
 
-/** v65 is not applied everywhere yet; an absent relation is a normal answer. */
+/** v65 is not applied everywhere yet; an absent relation is a normal answer.
+ *
+ *  PGRST202 / 42883 are here for the same reason the relation codes are: the write
+ *  path is now an RPC, and on a database without v65 the FUNCTION is missing rather
+ *  than the table. Without these two codes the "degrades to invisible" promise in
+ *  this file's header would hold for reads and break for writes. */
 function isMissingSchemaError(error: PostgrestErrorish): boolean {
   if (!error) return false;
   const message = error.message ?? "";
@@ -85,12 +89,12 @@ function isMissingSchemaError(error: PostgrestErrorish): boolean {
     || error.code === "PGRST205"
     || error.code === "42703"
     || error.code === "PGRST204"
+    || error.code === "PGRST202"
+    || error.code === "42883"
     || message.includes("Could not find the table")
-    || (message.includes("relation") && message.includes("does not exist"));
-}
-
-function isUniqueViolation(error: PostgrestErrorish): boolean {
-  return error?.code === "23505";
+    || message.includes("Could not find the function")
+    || (message.includes("relation") && message.includes("does not exist"))
+    || (message.includes("function") && message.includes("does not exist"));
 }
 
 // ── Sources: the ledger, and only the ledger ─────────────────────────────────
@@ -125,10 +129,6 @@ function reportSources(
     },
     loadRegistryOwners: pinIds => ownerConnectionsForPins(siblingConnectionIds, pinIds)
       .catch(() => new Map<string, string>()),
-    // Never called: `readConnectionEvidence` returns null before the live fallback,
-    // and a report must not exist that was built from a live sample. The empty map
-    // is here to satisfy the shared source contract, not as a fallback.
-    loadLiveAnalytics: async () => new Map<string, LiveAnalyticsSlice | null>(),
   };
 }
 
@@ -183,20 +183,28 @@ async function readCurrentRow(
 /**
  * Store one generated report, honouring the versioning contract.
  *
- * Supersede-then-insert, in that order, because the partial unique index allows only
- * one `current` row per identity — inserting first would collide with the row we are
- * about to retire. There is no transaction available through this client, so the
- * window between the two writes is real: it is closed by the unique index, and a
- * collision is retried ONCE against a re-read of the current row. A second failure is
- * raised rather than looped, because two concurrent generators mean something
- * upstream is wrong and a retry storm would hide it.
+ * The two writes this needs — retire the current row, insert its successor — cannot
+ * both be done from here. The partial unique index allows exactly one `current` row
+ * per identity, so the old one must be retired first, and between those two
+ * statements the identity has NO current row. Supabase's REST client has no
+ * transaction, so that window was real: a crash, a timeout or one transient insert
+ * failure inside it left the identity permanently broken. The next run would read no
+ * current row, choose version 1, and collide with the original v1 in the full unique
+ * index — every time, forever, with no path back except manual repair.
+ *
+ * So the decision and both writes moved into `insight_report_regenerate` (v65), one
+ * transaction behind a `for update` lock on the current row. What is left here is the
+ * cheap short-circuit: an unchanged hash is decided from a plain read, so the common
+ * case (a re-run that changes nothing) never takes the lock. The RPC re-checks the
+ * hash under that lock anyway, so a concurrent generator that slips between the read
+ * and the call still gets the right answer — this is an optimisation, not the
+ * correctness argument.
  */
 async function storeReport(
   db: ReturnType<typeof createServerClient>,
   uid: string,
   connectionId: string,
   record: InsightReportRecord,
-  attempt = 0,
 ): Promise<{ outcome: WriteOutcome; id: string | null }> {
   const { row: current, available } = await readCurrentRow(db, connectionId, record);
   if (!available) return { outcome: "unavailable", id: null };
@@ -204,49 +212,44 @@ async function storeReport(
   const decision = regenerationDecision(current, record.evidenceHash);
   if (decision.action === "noop") return { outcome: "unchanged", id: current?.id ?? null };
 
-  if (decision.supersedeId) {
-    const { error } = await db
-      .from(REPORT_TABLE)
-      .update({ status: "superseded" })
-      .eq("id", decision.supersedeId)
-      .eq("status", "current");
-    if (error && !isMissingSchemaError(error)) {
-      throw new Error(`insight_report supersede failed: ${error.message}`);
-    }
-  }
-
-  const { data, error } = await db
-    .from(REPORT_TABLE)
-    .insert({
-      vibepin_user_id: uid,
+  const { data, error } = await db.rpc("insight_report_regenerate", {
+    p: {
       connection_id: connectionId,
+      vibepin_user_id: uid,
       kind: record.kind,
       subject_content_id: record.subjectContentId,
       subject_draft_id: record.subjectDraftId,
       period_key: record.periodKey,
-      version: decision.version,
       evidence_snapshot: record.snapshot,
       evidence_hash: record.evidenceHash,
       evidence_version: record.evidenceVersion,
       rule_version: record.ruleVersion,
       keyword_set_version: record.keywordSetVersion,
       narrative_status: "template",
-      status: "current",
-    })
-    .select("id")
-    .maybeSingle();
+    },
+  });
 
   if (error) {
     if (isMissingSchemaError(error)) return { outcome: "unavailable", id: null };
-    if (isUniqueViolation(error) && attempt === 0) {
-      return storeReport(db, uid, connectionId, record, attempt + 1);
-    }
-    throw new Error(`insight_report insert failed: ${error.message}`);
+    throw new Error(`insight_report regenerate failed: ${error.message}`);
   }
 
+  // The function returns the row it settled on — which is the row that already
+  // existed when a concurrent generator wrote the same evidence first. Reading the
+  // outcome from the RETURNED row rather than from our earlier decision is what keeps
+  // the counts honest in that case.
+  const row = (Array.isArray(data) ? data[0] : data) as
+    { id?: unknown; version?: unknown; evidence_hash?: unknown } | null;
+  if (!row) return { outcome: "unavailable", id: null };
+
+  const version = Number(row.version);
+  const unchanged = String(row.evidence_hash) === record.evidenceHash
+    && current !== null
+    && current.id === String(row.id);
+
   return {
-    outcome: decision.supersedeId ? "versioned" : "created",
-    id: data ? String(data.id) : null,
+    outcome: unchanged ? "unchanged" : version > 1 ? "versioned" : "created",
+    id: String(row.id),
   };
 }
 
