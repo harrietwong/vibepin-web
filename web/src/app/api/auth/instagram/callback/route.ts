@@ -199,6 +199,12 @@ export async function GET(req: NextRequest) {
       return redirectAfterOAuth(req, "account_mismatch", verdict.returnTo, {
         expected: decision.expectedLabel,
         got: decision.gotLabel,
+        // The row being repaired, so the banner's retry names it (Codex #3). The
+        // panel's state cannot survive the full-page OAuth navigation, and without
+        // this the banner guessed accounts[0] — which for a second Instagram
+        // account is the wrong row every time. The panel still verifies the id is
+        // in its current connection list before acting on it.
+        target: verdict.reconnectConnectionId,
       });
     }
     // Names the row the upsert must land on. Load-bearing for a target row that

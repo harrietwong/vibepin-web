@@ -33,6 +33,46 @@ async function readError(res: Response, fallback: string): Promise<string> {
   }
 }
 
+/**
+ * A refusal the CALLER has to act on differently, not just show.
+ *
+ * A plain `Error(message)` was enough while every failure meant the same thing
+ * ("tell the merchant"). The remove route now refuses for reasons that carry a
+ * next step - `schedules_exist` opens the keep/cancel dialog with the server's
+ * count; `schedule_check_failed` keeps the row and asks for a retry - and neither
+ * is reachable if the body is flattened to a string on the way out.
+ */
+export type SocialClientError = Error & {
+  /** The route's machine-readable `code`, when it sent one. */
+  code?: string;
+  /** Present on `schedules_exist`: the count taken server-side at delete time. */
+  scheduledCount?: number;
+  httpStatus?: number;
+};
+
+/**
+ * Build the typed error from a failed response, keeping `code`/`scheduledCount`
+ * alongside the human message.
+ */
+async function toSocialClientError(res: Response, fallback: string): Promise<SocialClientError> {
+  let body: Record<string, unknown> | null = null;
+  try {
+    body = await res.json() as Record<string, unknown> | null;
+  } catch {
+    body = null;
+  }
+  const message = typeof body?.error === "string" && body.error
+    ? body.error
+    : typeof body?.userMessage === "string" && body.userMessage
+      ? body.userMessage
+      : fallback;
+  const err = new Error(message) as SocialClientError;
+  if (typeof body?.code === "string") err.code = body.code;
+  if (typeof body?.scheduledCount === "number") err.scheduledCount = body.scheduledCount;
+  err.httpStatus = res.status;
+  return err;
+}
+
 async function fetchSocialApi(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(input, init);
@@ -139,7 +179,9 @@ export async function disconnectSocial(
       ...(mode === "remove" && opts?.cancelScheduled ? { cancelScheduled: true } : {}),
     }),
   });
-  if (!res.ok) throw new Error(await readError(res, "Could not disconnect account"));
+  // Typed, not flattened: `schedules_exist` and `schedule_check_failed` each have a
+  // different next step in the panel, and both need the body to survive the throw.
+  if (!res.ok) throw await toSocialClientError(res, "Could not disconnect account");
   return res.json();
 }
 

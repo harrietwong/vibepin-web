@@ -308,12 +308,47 @@ test("GET 只在带 connectionId 时查排程,否则直接回 0", () => {
   assert.match(routeSrc, /countScheduledForConnection\(createServerClient\(\), uid, connectionId\)/);
 });
 
-test("UI:0 条不弹框直接移除;>0 才弹 Keep / Cancel 两选一(不做 Reassign)", () => {
+test("UI:0 条不弹框直接移除;>0 弹「取消并移除 / 保留账号」(不做 Reassign)", () => {
   assert.match(panelSrc, /if \(scheduledCount > 0\) \{/);
   assert.match(panelSrc, /setPendingRemoval\(\{ account, label, scheduledCount \}\)/);
-  assert.match(panelSrc, /removeAccount\(account\.provider, account, false\)/, "Keep = 不取消排程");
-  assert.match(panelSrc, /removeAccount\(account\.provider, account, true\)/, "Cancel = 取消排程");
+  assert.match(panelSrc, /removeAccount\(account\.provider, account, true\)/,
+    "对话框里唯一真的会删的分支 = 先取消排程");
   assert.doesNotMatch(panelSrc, /[Rr]eassign/, "Reassign 属二期,不应出现在本轮 UI");
+
+  // PRD 0805 §11:有未来排程时禁止直接移除。"Keep" 保的是账号,不是排程 ——
+  // 旧的第三个选项("保留排程但把账号删了")已经不存在了。它不只是产品上不想要:
+  // 服务端现在会用 409 schedules_exist 拒绝它,所以那个按钮只可能一路弹回同一个
+  // 对话框。这条断言守的就是"面板里不再有任何一处会撞上那个 409"。
+  const zeroAt = panelSrc.indexOf("await removeAccount(provider, account, false)");
+  assert.ok(zeroAt > 0, "计数为 0 的那条直通路径仍然要在");
+  const before = panelSrc.slice(Math.max(0, zeroAt - 700), zeroAt);
+  assert.ok(
+    before.includes("if (scheduledCount > 0) {") && before.includes("return;"),
+    "cancelScheduled=false 只能出现在'已经确认没有排程'之后(其余情况必被服务端拒绝)",
+  );
+  // 全局只此一处 false —— 对话框那条 Keep 分支必须已经删干净。
+  const falseCalls = panelSrc.split("removeAccount(account.provider, account, false)").length - 1;
+  assert.equal(falseCalls, 0, "对话框不得再有'保留排程但移除账号'的调用");
+});
+
+test("对话框只剩两个动作:取消并移除、保留账号(Keep 不再发任何请求)", () => {
+  // Keep 现在就是 onDismiss:纯粹关掉对话框。它和"取消并移除"共用一个组件,
+  // 所以最容易复发的错误是有人把 onKeep 加回来、再接到 removeAccount 上。
+  assert.doesNotMatch(panelSrc, /onKeep/, "onKeep 已经不存在,别再接回来");
+  assert.match(panelSrc, /data-testid="pinterest-remove-cancel-schedules"/);
+  assert.match(panelSrc, /data-testid="pinterest-remove-dismiss"/);
+  assert.doesNotMatch(panelSrc, /data-testid="pinterest-remove-keep"/,
+    "第三个选项的按钮必须消失,而不是留在那里禁用");
+  // 主按钮要把数目说出来:"取消 3 条排程并移除" 比 "取消这些排程" 更难点错。
+  assert.match(panelSrc, /socialPanel\.removeDialog\.cancelPrefix/);
+  assert.match(panelSrc, /socialPanel\.removeDialog\.keepAccount/);
+  const en = read("src/lib/i18n/messages/en/socialPanel.ts");
+  for (const k of ["cancelPrefix", "cancelSuffix", "keepAccount", "bodySuffixV2"]) {
+    assert.ok(en.includes(`"socialPanel.removeDialog.${k}"`), `en 目录缺 ${k}`);
+  }
+  // 正文不能再承诺那个已经不存在的选项。
+  assert.doesNotMatch(panelSrc, /removeDialog\.bodySuffix"/,
+    "正文必须换成 bodySuffixV2 —— 旧文案还在说'可以保留排程'");
 });
 
 test("UI:逐账号 Remove 的乐观更新只摘掉一条,不清空整个平台", () => {
@@ -346,8 +381,13 @@ test("软断开与硬移除是两个不同的服务端动作,默认永远是软�
   // 都不带,如果默认是 remove,一次误点就会删掉账号行。
   assert.match(socialRoute, /return value === "remove" \? "remove" : "disconnect";/,
     "只有显式 remove 才是硬删,其余一律软断开");
-  assert.match(socialRoute, /if \(mode === "disconnect"\) \{\s*\n\s*return Response\.json\(\{ ok: true, mode \}\);/,
-    "软断开必须在 deleteConnection 之前返回(保留行)");
+  // 软断开分支自己撤销凭据后立刻返回:行保留,永远走不到 deleteConnection。
+  // (硬移除的撤销被挪到了取消之后 —— Codex #2,见下面的顺序断言。)
+  assert.match(
+    socialRoute,
+    /if \(mode === "disconnect"\) \{\s*\n\s*await revokeAtProvider\(\);\s*\n\s*return Response\.json\(\{ ok: true, mode \}\);/,
+    "软断开必须在 deleteConnection 之前返回(保留行)",
+  );
   const cancelAt = socialRoute.indexOf("cancelScheduledForSocialConnection(");
   const deleteAt = socialRoute.indexOf("await deleteConnection(uid, connectionId)");
   assert.ok(cancelAt > 0 && deleteAt > cancelAt,
@@ -377,12 +417,14 @@ await testAsync("断开一个账号不会波及同平台的其它账号", async 
   assert.match(official, /disconnectFacebookConnection\(input\.userId, input\.connectionId\)/);
   assert.match(official, /disconnectInstagramConnection\(input\.userId, input\.connectionId\)/);
 
+  // 撤销现在包成 revokeAtProvider():两种模式把它放在序列的不同位置(软断开立刻撤销;
+  // 硬移除要等取消成功之后 —— Codex #2)。点名连接这件事本身没变。
   // 路由必须把 connectionId 交给 provider.disconnect —— 这是上面那些收敛能被
   // 触发的唯一前提。少了这一行,store 侧写得再对也永远走"全平台清空"分支。
   const socialRoute = read("src/app/api/social/disconnect/route.ts");
   assert.match(
     socialRoute,
-    /await getSocialProviderById\(connection\.authProvider\)\.disconnect\(\{\s*\n\s*userId: uid,\s*\n\s*connectionId,/,
+    /const revokeAtProvider = \(\) => getSocialProviderById\(connection\.authProvider\)\.disconnect\(\{\s*\n\s*userId: uid,\s*\n\s*connectionId,/,
     "路由必须按连接点名,不能只报 provider",
   );
   // 反向守卫:store 里不得存在"带了 id 却仍然全表更新"的写法。
@@ -391,12 +433,14 @@ await testAsync("断开一个账号不会波及同平台的其它账号", async 
       `${name} 的 disconnect 不得存在无过滤的写路径`);
   }
 });
-test("Keep 分支不重复实现拦截:唯一执行点仍是 Phase C 的 retryBlockReason", () => {
-  // 前提校验(不推断,直接查):Keep 之所以能是"什么都不做",全靠这条已存在的拦截。
+test("软断开后的排程不重复实现拦截:唯一执行点仍是 Phase C 的 retryBlockReason", () => {
+  // 这条拦截原本是"保留排程但移除账号"那个选项的兜底。那个选项已经没有了
+  // (PRD 0805 §11),但拦截本身仍然是必需的:软断开会留下行,它的排程到点还是会
+  // 被 cron 捞起来,必须在发布时被挡住。前提校验不靠推断,直接查。
   const publishTarget = read("src/lib/studio/publishTarget.ts");
   assert.match(publishTarget, /export type RetryBlockReason = "target_disconnected"/);
   assert.match(publishTarget, /if \(!input\.active\.some\(c => c\.id === stored\)\) return "target_disconnected";/,
-    "目标不在活跃连接里就必须被拦住 —— Keep 分支依赖这一行");
+    "目标不在活跃连接里就必须被拦住 —— 软断开的行依赖这一行");
   // 面板只在注释里提到它,不得自己再实现一遍判定逻辑。
   assert.doesNotMatch(
     panelSrc.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ""),

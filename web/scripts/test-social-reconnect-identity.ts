@@ -110,6 +110,21 @@ function assertEq(a: unknown, b: unknown, msg: string) {
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
+/**
+ * Source with comments removed.
+ *
+ * Needed because several assertions below say "this pattern must NOT appear" — and
+ * the comments explaining why it was removed naturally quote the very pattern. A
+ * prose mention is not a code path.
+ */
+function stripComments(src: string): string {
+  const block = String.raw`/\*[\s\S]*?\*/`;
+  // The newline is written as a two-character escape for the RegExp
+  // constructor; a raw newline inside the class works but reads like a typo.
+  const line = "//[^\n]*";
+  return src.replace(new RegExp(block + "|" + line, "g"), "");
+}
+
 /** Fake token — never a real credential. */
 const TOKEN = "TEST-TOKEN-not-a-real-credential";
 
@@ -482,8 +497,12 @@ async function main() {
   });
 
   await test("the banner's CTAs act on the mismatched platform, not always Pinterest", () => {
-    assert(panel.includes("void handleConnect(accountMismatch.provider, target);"),
-      "Sign in to the original restarts a RECONNECT on the same row");
+    // 变量名从 `target` 变成 `resolvedReconnectTarget`:重试指向的不再是"记得的 id",
+    // 而是"在当前连接列表里核验过还存在的那一行"(Codex #3)。语义没变:还是重连同一行。
+    assert(
+      panel.includes("void handleConnect(accountMismatch.provider, resolvedReconnectTarget);"),
+      "Sign in to the original restarts a RECONNECT on the same row",
+    );
     assert(panel.includes("void handleConnect(accountMismatch.provider);"),
       "Add as a new account is a PLAIN connect (so the plan gate applies)");
     assert(!panel.includes('void handleConnect("pinterest", target)'), "the hard-coded provider must be gone");
@@ -517,6 +536,103 @@ async function main() {
     for (const t of ["signin-original", "add-new", "dismiss"]) {
       assert(panel.includes("data-testid={`${provider}-mismatch-" + t + "`}"), t);
     }
+  });
+
+  // ── Codex #3: the target survives the OAuth round trip ─────────────────────
+  // Connect is a FULL-PAGE navigation. The panel's `reconnectTargetId` state does
+  // not survive it, so on the way back the mismatch banner had no idea which row was
+  // being repaired and fell back to `accounts[0]`. For a merchant fixing their
+  // SECOND Instagram account that is the wrong row every single time — and the retry
+  // then re-authorizes against an account they never chose.
+  console.log("\n=== 5) the reconnect target rides back with the refusal ===");
+
+  await test("all three mismatch redirects carry target=<connectionId>", () => {
+    const pinCb = read("src/app/api/auth/pinterest/callback/route.ts");
+
+    // FB/IG hand it to the shared redirect helper, which only sets truthy values —
+    // so a plain (non-reconnect) connect never grows a stray empty param.
+    for (const [name, src] of [["facebook", fbCb], ["instagram", igCb]] as const) {
+      const at = src.indexOf('redirectAfterOAuth(req, "account_mismatch"');
+      assert(at > 0, `${name}: mismatch redirect not found`);
+      const block = src.slice(at, at + 900);
+      assert(block.includes("target: verdict.reconnectConnectionId"),
+        `${name}: the refusal must name the row being repaired`);
+    }
+
+    // Pinterest builds its URL by hand, so it sets the param directly.
+    assert(
+      pinCb.includes('url.searchParams.set("target", verdict.reconnectConnectionId)'),
+      "pinterest: the refusal must carry the target too",
+    );
+    // Guard: only when there IS one. A plain connect has no target, and an empty
+    // `target=` would be an id the panel then has to reject at every use site.
+    assert(
+      pinCb.includes('if (verdict.reconnectConnectionId) url.searchParams.set("target"'),
+      "pinterest must not emit an empty target on a plain connect",
+    );
+  });
+
+  await test("the panel restores the target from the flag, for all three providers", () => {
+    // Once per provider handler — and BEFORE router.replace strips the query.
+    const restores = panel.split('setReconnectTargetId(params.get("target"))').length - 1;
+    assert(restores === 3, `expected 3 target restores (fb/pinterest/instagram), found ${restores}`);
+    for (const provider of ["facebook", "pinterest", "instagram"]) {
+      const at = panel.indexOf(`provider: "${provider}",\n        expected: params.get("expected")`);
+      assert(at > 0, `${provider}: mismatch handler not found`);
+      const block = panel.slice(at, at + 900);
+      const restoreAt = block.indexOf('setReconnectTargetId(params.get("target"))');
+      const stripAt = block.indexOf("router.replace(SETTINGS_SOCIAL_PATH)");
+      assert(restoreAt > 0, `${provider}: must restore the target from the URL`);
+      assert(stripAt > restoreAt,
+        `${provider}: the target must be read BEFORE the query is stripped`);
+    }
+  });
+
+  await test("the target is verified against the live list, never trusted blind", () => {
+    // The id is the user's own and was validated server-side, but the row can be
+    // removed in another tab while the flow is away — and as far as this component
+    // is concerned the query string is untrusted input.
+    const at = panel.indexOf("const resolvedReconnectTarget = useMemo(");
+    assert(at > 0, "the resolved target must be derived, not read straight from state");
+    const block = panel.slice(at, at + 700);
+    assert(
+      block.includes("platform?.accounts.some(a => a.id === reconnectTargetId)"),
+      "the id must be matched against the CURRENT connection list",
+    );
+    assert(block.includes("? reconnectTargetId : null"),
+      "an id that is not in the list must resolve to null, not to some other row");
+  });
+
+  await test("an unknown target disables the retry — it never falls back to accounts[0]", () => {
+    // This is the whole defect. `accounts[0]` is a guess that looks like an answer.
+    const at = panel.indexOf("<AccountMismatchNotice");
+    assert(at > 0, "the mismatch banner must still be rendered");
+    const block = panel.slice(at, at + 1600);
+    assert(block.includes("canSignInToOriginal={!!resolvedReconnectTarget}"),
+      "the button's enablement must come from the RESOLVED target");
+    assert(block.includes("if (!resolvedReconnectTarget) return;"),
+      "with no resolved target the handler must do nothing at all");
+    assert(block.includes("void handleConnect(accountMismatch.provider, resolvedReconnectTarget)"),
+      "the retry must aim at the resolved row");
+    // 只看代码:注释里正解释着“曾经回退到 accounts[0]”,那句话本身不是回退。
+    const code = stripComments(block);
+    assert(!/accounts\[0\]/.test(code),
+      "the accounts[0] fallback must be gone from the mismatch CTA");
+
+    // And the button itself must actually be disabled + explain why.
+    const btnAt = panel.indexOf("data-testid={`${provider}-mismatch-signin-original`}");
+    assert(btnAt > 0, "the retry button must still exist");
+    const btn = panel.slice(btnAt, btnAt + 700);
+    assert(btn.includes("disabled={signInDisabled}"), "the retry must be disabled, not just inert");
+    assert(btn.includes('tr("socialPanel.mismatch.targetUnknown")'),
+      "a disabled button with no explanation is a dead end");
+    assert(
+      panel.includes("const signInDisabled = busy || !canSignInToOriginal;"),
+      "disabled = busy OR unresolvable",
+    );
+
+    const en = read("src/lib/i18n/messages/en/socialPanel.ts");
+    assert(en.includes('"socialPanel.mismatch.targetUnknown"'), "the explanation needs a real key");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);

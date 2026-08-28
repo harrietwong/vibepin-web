@@ -196,10 +196,46 @@ test("Reconnect 绑定的是该行的 connection id,不是 accounts[0]", () => {
   // 错配横幅的重试同样不能回落到第一个账号 —— 否则修第二个账号的人会被送去修第一个。
   // 平台名从横幅自己的 provider 来:Facebook/Instagram 也会触发这条横幅了,
   // 写死 pinterest 会让在 FB 上错配的人被送去重连 Pinterest(Codex #5)。
+  // 这条断言原来盯着的是 `reconnectTargetId ?? platform?.accounts[0]?.id ?? null`,
+  // 也就是它自己标题里说"不能有"的那个回落 —— 只是当时还留着当兜底。Codex #3 把它
+  // 彻底删了:目标要么在当前连接列表里被核验到,要么按钮直接禁用。
   assert.match(panelSrc, /const platform = summaries\?\.find\(s => s\.provider === accountMismatch\.provider\);/);
-  assert.match(panelSrc, /const target = reconnectTargetId \?\? platform\?\.accounts\[0\]\?\.id \?\? null;/);
-  assert.match(panelSrc, /void handleConnect\(accountMismatch\.provider, target\);/);
+  assert.match(
+    panelSrc,
+    /return platform\?\.accounts\.some\(a => a\.id === reconnectTargetId\) \? reconnectTargetId : null;/,
+    "目标必须在当前连接列表里核验过才算数",
+  );
+  assert.match(panelSrc, /canSignInToOriginal=\{!!resolvedReconnectTarget\}/,
+    "核验不到就不能让人点");
+  assert.match(panelSrc, /if \(!resolvedReconnectTarget\) return;/,
+    "没有核验过的目标时,重试必须什么都不做,而不是猜一个");
+  // 变量名换成了 resolvedReconnectTarget(核验过的那一行);语义不变:重连同一行。
+  assert.match(panelSrc, /void handleConnect\(accountMismatch\.provider, resolvedReconnectTarget\);/);
   assert.match(panelSrc, /setReconnectTargetId\(account\.id\)/);
+});
+
+test("有排程时的对话框只给两条路:取消并移除、保留账号(PRD 0805 §11)", () => {
+  // 第三个选项("保留排程,但把账号删了")已经取消。产品上它违反 §11;
+  // 工程上它现在必然撞服务端的 409 schedules_exist,于是只会弹回同一个对话框。
+  assert.doesNotMatch(panelSrc, /data-testid="pinterest-remove-keep"/,
+    "旧的「保留排程」按钮必须整个移除,不是禁用");
+  assert.doesNotMatch(panelSrc, /onKeep/, "对应的回调也不该留着");
+  assert.match(panelSrc, /data-testid="pinterest-remove-cancel-schedules"/, "取消并移除还在");
+  assert.match(panelSrc, /data-testid="pinterest-remove-dismiss"/, "保留账号 = 关掉对话框");
+
+  // 唯一会真的删的调用必须带 true。
+  assert.match(panelSrc, /removeAccount\(account\.provider, account, true\)/);
+  assert.doesNotMatch(panelSrc, /removeAccount\(account\.provider, account, false\)/,
+    "对话框里不得再有 cancelScheduled:false 的移除");
+
+  // 文案:正文和主按钮都要说清"必须先取消",且主按钮带数目。
+  const en = read("src/lib/i18n/messages/en/socialPanel.ts");
+  for (const k of ["bodySuffixV2", "cancelPrefix", "cancelSuffix", "keepAccount"]) {
+    assert.ok(en.includes(`"socialPanel.removeDialog.${k}"`), `en 目录缺 ${k}`);
+  }
+  assert.match(panelSrc, /socialPanel\.removeDialog\.bodySuffixV2/,
+    "正文必须用新文案 —— 旧的还在承诺那个已删掉的选项");
+  assert.match(panelSrc, /socialPanel\.removeDialog\.keepAccount/);
 });
 
 test("移除被拒时面板说出服务端那句话，并把行放回去（Codex #6）", () => {
@@ -208,12 +244,33 @@ test("移除被拒时面板说出服务端那句话，并把行放回去（Codex
   // 无从判断到底发生了什么、该不该重试。
   const removeAt = panelSrc.indexOf("async function removeAccount(");
   assert.ok(removeAt > 0);
-  const body = panelSrc.slice(removeAt, removeAt + 2400);
+  // 窗口要盖住整个 catch:它现在按 code 分三支(schedules_exist / schedule_check_failed
+  // / 其余),通用兜底那句被推到了 3000 字符开外。
+  const body = panelSrc.slice(removeAt, removeAt + 4200);
+  // 服务端的话优先,通用文案只作兜底。错误现在是带 code 的类型化对象
+  // (schedules_exist 要重开对话框、schedule_check_failed 要单独的文案),
+  // 所以取的是 err.message 而不是 (e as Error).message —— 意图不变。
   assert.ok(
-    body.includes('toast.error((e as Error).message || tr("socialPanel.toast.accountRemoveFailed"))'),
+    body.includes('toast.error(err.message || tr("socialPanel.toast.accountRemoveFailed"))'),
     "必须优先弹服务端的 userMessage，通用文案只作兜底",
   );
   assert.ok(!body.includes("} catch {"), "不能再把错误整个丢掉");
+  // schedules_exist 不是"失败",是服务端把 Keep/Cancel 的决定交回来了(Codex #1)。
+  // 面板必须用服务端那个计数重开同一个对话框 —— 那是删除当刻唯一为真的数字。
+  assert.ok(
+    body.includes('if (err.code === "schedules_exist")') && body.includes("setPendingRemoval({"),
+    "schedules_exist 必须重开 Keep/Cancel 对话框,而不是弹一句失败",
+  );
+  assert.ok(
+    body.includes("typeof err.scheduledCount === \"number\" ? err.scheduledCount : 0"),
+    "对话框显示的必须是服务端的计数,不是面板自己那个预估",
+  );
+  // 读不到排程 ≠ 没有排程:服务端什么都没删,面板要说清楚并把行留着。
+  assert.ok(
+    body.includes('err.code === "schedule_check_failed"')
+      && body.includes('tr("socialPanel.toast.scheduleCheckFailed")'),
+    "schedule_check_failed 要有自己的文案,不能混进通用失败",
+  );
   // 行本身由 finally 里的 load() 从服务端重新取回 —— 乐观删除因此被撤销。
   assert.ok(body.includes("await load();"), "失败后必须重新拉一次服务端真相，把行放回去");
 });

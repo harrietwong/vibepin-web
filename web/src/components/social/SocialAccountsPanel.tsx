@@ -14,7 +14,7 @@
  * platforms are structurally ready and show a clear "setup pending" state.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
@@ -920,6 +920,7 @@ function AccountMismatchNotice({
   expected,
   got,
   busy,
+  canSignInToOriginal,
   onSignInToOriginal,
   onAddAsNew,
   onDismiss,
@@ -928,6 +929,13 @@ function AccountMismatchNotice({
   expected: string | null;
   got: string | null;
   busy: boolean;
+  /**
+   * False when we cannot say WHICH row the merchant was repairing (Codex #3): the
+   * target did not come back from the callback, or it names a connection that is no
+   * longer in the list. The retry is then disabled rather than aimed at a guess —
+   * guessing meant `accounts[0]`, which silently repaired the wrong account.
+   */
+  canSignInToOriginal: boolean;
   onSignInToOriginal: () => void;
   onAddAsNew: () => void;
   onDismiss: () => void;
@@ -936,6 +944,8 @@ function AccountMismatchNotice({
   const expectedLabel = mismatchAccountLabel(
     provider, expected, tr("socialPanel.mismatch.theOriginalAccount"),
   );
+  // Busy OR unresolvable target — both mean the retry button must not act.
+  const signInDisabled = busy || !canSignInToOriginal;
   const gotLabel = mismatchAccountLabel(
     provider, got, tr("socialPanel.mismatch.aDifferentAccount"),
   );
@@ -963,13 +973,14 @@ function AccountMismatchNotice({
           type="button"
           data-testid={`${provider}-mismatch-signin-original`}
           onClick={onSignInToOriginal}
-          disabled={busy}
+          disabled={signInDisabled}
+          title={canSignInToOriginal ? undefined : tr("socialPanel.mismatch.targetUnknown")}
           style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             padding: "8px 14px", borderRadius: 10,
             border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.14)",
             color: UI.warning, fontSize: 12, fontWeight: 700,
-            cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+            cursor: signInDisabled ? "not-allowed" : "pointer", opacity: signInDisabled ? 0.6 : 1,
           }}
         >
           <RefreshCw size={13} /> {tr("socialPanel.mismatch.signInPrefix")}{expectedLabel}
@@ -1350,26 +1361,35 @@ function AccountRows({
  * the Remove happens straight away — a dialog that only ever has one sensible answer
  * is noise.
  *
- * Two answers, deliberately not three:
- *  · Keep — the Pins stay scheduled. Nothing extra is built for this: a Pin whose
- *    target is gone is already stopped at publish time with `target_disconnected`
- *    (Phase C), so "Keep" is genuinely the do-nothing branch.
- *  · Cancel schedules — un-schedules them server-side before the removal.
- * Re-assigning them to another account is a separate feature, not a checkbox here.
+ * Two answers (PRD 0805 §11 — 有未来排程时禁止直接移除):
+ *  · Cancel those schedules and remove — un-schedules them server-side, then the
+ *    account goes. The only path that actually removes anything.
+ *  · Keep the account — abort. Nothing is sent; the account and its schedules both
+ *    stay exactly as they were.
+ *
+ * There is deliberately NO "keep the schedules but delete the account" option any
+ * more. It used to exist and leaned on Phase C's publish-time `target_disconnected`
+ * block to stop the orphaned Pins — but an account with live schedules must never be
+ * deleted without cancelling them (Codex #1), and the server now enforces exactly
+ * that: a remove without `cancelScheduled` is refused with 409 `schedules_exist`.
+ * Leaving the option on screen would have been a button that could only ever fail,
+ * re-opening this same dialog forever.
+ *
+ * Re-assigning them to another account is V1.2, not a checkbox here.
  */
 function RemoveAccountDialog({
   accountLabel,
   scheduledCount,
   busy,
-  onKeep,
   onCancelSchedules,
   onDismiss,
 }: {
   accountLabel: string;
   scheduledCount: number;
   busy: boolean;
-  onKeep: () => void;
+  /** Cancel the schedules, then remove — the only branch that deletes anything. */
   onCancelSchedules: () => void;
+  /** Keep the account: abort the removal. Nothing is sent to the server. */
   onDismiss: () => void;
 }) {
   const { t: tr } = useLocale();
@@ -1389,13 +1409,13 @@ function RemoveAccountDialog({
         {tr("socialPanel.removeDialog.title")}
       </p>
       <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
-        {`${accountLabel}${tr("socialPanel.removeDialog.bodyPrefix")}${scheduledCount}${tr("socialPanel.removeDialog.bodySuffix")}`}
+        {`${accountLabel}${tr("socialPanel.removeDialog.bodyPrefix")}${scheduledCount}${tr("socialPanel.removeDialog.bodySuffixV2")}`}
       </p>
       <div style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <button
           type="button"
-          data-testid="pinterest-remove-keep"
-          onClick={onKeep}
+          data-testid="pinterest-remove-cancel-schedules"
+          onClick={onCancelSchedules}
           disabled={busy}
           style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -1405,12 +1425,12 @@ function RemoveAccountDialog({
             cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
           }}
         >
-          {tr("socialPanel.removeDialog.keep")}
+          {`${tr("socialPanel.removeDialog.cancelPrefix")}${scheduledCount}${tr("socialPanel.removeDialog.cancelSuffix")}`}
         </button>
         <button
           type="button"
-          data-testid="pinterest-remove-cancel-schedules"
-          onClick={onCancelSchedules}
+          data-testid="pinterest-remove-dismiss"
+          onClick={onDismiss}
           disabled={busy}
           style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -1420,21 +1440,7 @@ function RemoveAccountDialog({
             cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
           }}
         >
-          {tr("socialPanel.removeDialog.cancelSchedules")}
-        </button>
-        <button
-          type="button"
-          data-testid="pinterest-remove-dismiss"
-          onClick={onDismiss}
-          disabled={busy}
-          style={{
-            padding: "8px 12px", borderRadius: 10,
-            border: "1px solid transparent", background: "transparent",
-            color: UI.textMuted, fontSize: 12, fontWeight: 600,
-            cursor: busy ? "not-allowed" : "pointer",
-          }}
-        >
-          {tr("socialPanel.removeDialog.dismiss")}
+          {tr("socialPanel.removeDialog.keepAccount")}
         </button>
       </div>
     </div>
@@ -1472,6 +1478,14 @@ export function SocialAccountsPanel() {
    * Kept so the mismatch banner's "Sign in to <account>" retries the SAME row. It
    * used to hard-code `accounts[0]`, which meant a merchant repairing their second
    * account was silently redirected to repair their first.
+   *
+   * Set from TWO places, and the second is the load-bearing one (Codex #3): the
+   * Reconnect click sets it, but connect is a full-page navigation, so by the time
+   * the callback redirects back this component has remounted and the state is null.
+   * Every mismatch redirect therefore carries `?target=<connectionId>`, and the
+   * three flag handlers below restore it from there. It is only ever USED after
+   * being matched against the live connection list — the id is the user's own and
+   * was validated server-side, but a row can be removed while the flow is away.
    */
   const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(null);
   /**
@@ -1510,6 +1524,23 @@ export function SocialAccountsPanel() {
   const [busyAccountId, setBusyAccountId] = useState<string | null>(null);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
 
+
+  /**
+   * The reconnect target, but only if it is REAL right now (Codex #3).
+   *
+   * `reconnectTargetId` is either a click we remember or an id the callback handed
+   * back in the query. Neither proves the row still exists on the platform the
+   * banner is about: it may have been removed in another tab, and the query value —
+   * though the server validated it as the user's own — is untrusted input as far as
+   * this component is concerned. Resolving it against the CURRENT list makes
+   * "unknown target" a state the UI can render (a disabled retry) instead of a
+   * silent redirect to the wrong account.
+   */
+  const resolvedReconnectTarget = useMemo(() => {
+    if (!accountMismatch || !reconnectTargetId) return null;
+    const platform = summaries?.find(s => s.provider === accountMismatch.provider);
+    return platform?.accounts.some(a => a.id === reconnectTargetId) ? reconnectTargetId : null;
+  }, [accountMismatch, reconnectTargetId, summaries]);
 
   /** This panel's binding of accountLabelFor — the rows use the same function. */
   const labelForAccount = useCallback(
@@ -1568,6 +1599,11 @@ export function SocialAccountsPanel() {
         expected: params.get("expected"),
         got: params.get("got"),
       });
+      // Restore WHICH row was being repaired before router.replace strips the query
+      // (Codex #3). Without it the banner's retry has no target and falls back to a
+      // guess. Verified against the live list at click time, not here — `summaries`
+      // may still be loading when this flag arrives.
+      setReconnectTargetId(params.get("target"));
       router.replace(SETTINGS_SOCIAL_PATH);
       return;
     }
@@ -1617,6 +1653,11 @@ export function SocialAccountsPanel() {
         expected: params.get("expected"),
         got: params.get("got"),
       });
+      // Restore WHICH row was being repaired before router.replace strips the query
+      // (Codex #3). Without it the banner's retry has no target and falls back to a
+      // guess. Verified against the live list at click time, not here — `summaries`
+      // may still be loading when this flag arrives.
+      setReconnectTargetId(params.get("target"));
       router.replace(SETTINGS_SOCIAL_PATH);
       return;
     }
@@ -1661,6 +1702,11 @@ export function SocialAccountsPanel() {
         expected: params.get("expected"),
         got: params.get("got"),
       });
+      // Restore WHICH row was being repaired before router.replace strips the query
+      // (Codex #3). Without it the banner's retry has no target and falls back to a
+      // guess. Verified against the live list at click time, not here — `summaries`
+      // may still be loading when this flag arrives.
+      setReconnectTargetId(params.get("target"));
       router.replace(SETTINGS_SOCIAL_PATH);
       return;
     }
@@ -1827,8 +1873,15 @@ export function SocialAccountsPanel() {
    * Remove ONE account (Phase D ③).
    *
    * Asks the server what is still scheduled through that account first. Nothing
-   * scheduled ⇒ remove immediately; otherwise hand the decision to the user rather
-   * than quietly stranding work they planned.
+   * scheduled ⇒ try the remove; otherwise hand the decision to the user rather than
+   * quietly stranding work they planned.
+   *
+   * This count is a CONVENIENCE, not the authority (Codex #1). It opens the dialog
+   * without a round trip through a refusal, but a 0 here no longer authorises
+   * anything: the count can fail (answering 0), or be taken before the merchant
+   * schedules something in another tab. The remove route re-checks on its own and
+   * refuses with `schedules_exist` / `schedule_check_failed`, which `removeAccount`
+   * below turns into the same dialog and the same kept row.
    *
    * Wired for every platform now, but the count is asked of the RIGHT route per
    * provider rather than one route for all. Pinterest's scheduled口径 is the legacy
@@ -1895,12 +1948,34 @@ export function SocialAccountsPanel() {
       }
       toast.success(tr("socialPanel.toast.accountRemoved"));
     } catch (e) {
-      // The server refuses the removal when it could not cancel the schedules the
-      // merchant asked it to (409 schedule_cancel_failed) and says how many — that
-      // sentence is far more actionable than a generic failure, and it is the only
-      // thing that explains why the row is still here after the `load()` below
-      // puts it back.
-      toast.error((e as Error).message || tr("socialPanel.toast.accountRemoveFailed"));
+      const err = e as { code?: string; message?: string; scheduledCount?: number };
+
+      // The server checked, found live schedules, and refused (409 schedules_exist).
+      // That is not an error the merchant caused — it is the keep/cancel decision,
+      // arriving from the authority rather than from our pre-count. Reopen the SAME
+      // dialog on the SERVER's number: it was taken at the moment of the delete, so
+      // it is the only count that was ever true. The `load()` below restores the row
+      // the optimistic update removed, and the dialog acts on the account object we
+      // still hold here rather than on that refreshed state.
+      if (err.code === "schedules_exist") {
+        setPendingRemoval({
+          account,
+          label: labelForAccount(provider, account),
+          scheduledCount: typeof err.scheduledCount === "number" ? err.scheduledCount : 0,
+        });
+      } else if (err.code === "schedule_check_failed") {
+        // The server could not read the schedules at all, so it deleted nothing.
+        // Say so and keep the row: retrying is the entire remedy, and a generic
+        // failure would leave the merchant wondering whether it half-happened.
+        toast.error(err.message || tr("socialPanel.toast.scheduleCheckFailed"));
+      } else {
+        // Everything else, including the removal refused because the schedules the
+        // merchant asked to cancel could not all be cancelled (409
+        // schedule_cancel_failed), which says how many — far more actionable than a
+        // generic failure, and the only thing that explains why the row is still
+        // here after the `load()` below puts it back.
+        toast.error(err.message || tr("socialPanel.toast.accountRemoveFailed"));
+      }
     } finally {
       notifyConnectionsChanged();
       await load(); // the server is the truth either way — restores the row on failure
@@ -1933,20 +2008,17 @@ export function SocialAccountsPanel() {
           accountLabel={pendingRemoval.label}
           scheduledCount={pendingRemoval.scheduledCount}
           busy={busyAccountId === pendingRemoval.account.id}
-          onKeep={() => {
-            const { account } = pendingRemoval;
-            setPendingRemoval(null);
-            setBusyAccountId(account.id);
-            // Keep = do nothing extra. Those Pins stay scheduled and are stopped at
-            // publish time by the existing target_disconnected block.
-            void removeAccount(account.provider, account, false).finally(() => setBusyAccountId(null));
-          }}
           onCancelSchedules={() => {
             const { account } = pendingRemoval;
             setPendingRemoval(null);
             setBusyAccountId(account.id);
             void removeAccount(account.provider, account, true).finally(() => setBusyAccountId(null));
           }}
+          // "Keep the account" — abort. Nothing is sent, so the account and every
+          // schedule through it stay exactly as they were. There is no longer a
+          // branch that removes an account while leaving its schedules alive: the
+          // server refuses that with 409 schedules_exist, so a button offering it
+          // could only ever bounce back into this same dialog.
           onDismiss={() => setPendingRemoval(null)}
         />
       )}
@@ -1957,15 +2029,20 @@ export function SocialAccountsPanel() {
           expected={accountMismatch.expected}
           got={accountMismatch.got}
           busy={busyProvider === accountMismatch.provider}
+          // The retry is offered only when we know exactly which row to repair.
+          // The id has to still BE there: it survived the OAuth round trip in the
+          // query, but the row itself could have been removed in another tab while
+          // the merchant was away at the provider.
+          canSignInToOriginal={!!resolvedReconnectTarget}
           onSignInToOriginal={() => {
             // Retry the SAME repair: still a reconnect, so a second wrong account is
             // refused again rather than quietly taking over the connection.
-            // The row the merchant actually pressed Reconnect on. Falling back to
-            // accounts[0] (as this once did) would redirect someone repairing their
-            // SECOND account into repairing their first.
-            const platform = summaries?.find(s => s.provider === accountMismatch.provider);
-            const target = reconnectTargetId ?? platform?.accounts[0]?.id ?? null;
-            void handleConnect(accountMismatch.provider, target);
+            //
+            // `resolvedReconnectTarget` or nothing. This once fell back to
+            // accounts[0], which sent a merchant repairing their SECOND account into
+            // repairing their first — the button is disabled instead of guessing.
+            if (!resolvedReconnectTarget) return;
+            void handleConnect(accountMismatch.provider, resolvedReconnectTarget);
           }}
           onAddAsNew={() => {
             // Deliberately NOT a reconnect: this is the user accepting the account
