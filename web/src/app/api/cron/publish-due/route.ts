@@ -168,9 +168,13 @@ export async function GET(req: Request): Promise<Response> {
       continue;
     }
 
+    // Stamped NOW, not at the top of the run: with claiming interleaved, a row can be
+    // claimed minutes in, and a start-of-run stamp would shorten its 10-minute lock by
+    // exactly that much — another worker could steal a row still being published.
+    const claimIso = new Date().toISOString();
     const { data: won, error: claimError } = await db
       .from(TABLE)
-      .update({ publish_claimed_at: nowIso })
+      .update({ publish_claimed_at: claimIso })
       .eq("vibepin_user_id", candidate.vibepin_user_id)
       .eq("draft_id", candidate.draft_id)
       .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
@@ -188,6 +192,11 @@ export async function GET(req: Request): Promise<Response> {
     }
     const row = won[0] as DueRow;
     claimedCount++;
+    // This row's own clock. payload.updatedAt is what the client's LWW merge compares,
+    // so a persist stamped with the START of a long run could lose to an edit the
+    // merchant made while the run was still going — and that edit carries the old
+    // scheduled_at, which would re-publish the Pin.
+    const rowNowIso = new Date().toISOString();
 
     // Per-row publish attempt: one publishAttemptId ties this row's attempted →
     // succeeded/failed events. boardId comes from the stored payload (may be "" if the
@@ -207,7 +216,7 @@ export async function GET(req: Request): Promise<Response> {
         // Unpublishable payload (missing image/board): record a content failure, don't call Pinterest.
         // NO metering here — the contract charges only actions that really attempt
         // delivery, and this row never reaches Pinterest.
-        await persistFailure(db, row, { message: "Missing image or board — cannot publish", code: "bad_request" }, nowIso);
+        await persistFailure(db, row, { message: "Missing image or board — cannot publish", code: "bad_request" }, rowNowIso);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "bad_request",
           message: "Missing image or board — cannot publish",
@@ -374,7 +383,7 @@ export async function GET(req: Request): Promise<Response> {
       if (!outcomes.length) {
         // Nothing was owed at all (every destination had already published on an
         // earlier attempt). Clear the schedule so the row leaves the due scan.
-        await persistOutcomes(db, row, [], nowIso, null);
+        await persistOutcomes(db, row, [], rowNowIso, null);
         skipped++;
         continue;
       }
@@ -423,7 +432,7 @@ export async function GET(req: Request): Promise<Response> {
       // ONE row failed (via mapPublishErrorToCategory → auth/transient) and move on —
       // a single expired account never aborts the batch, and no retry storm (scheduling
       // is cleared so the row leaves the due scan).
-      await persistFailure(db, row, describeThrown(err), nowIso);
+      await persistFailure(db, row, describeThrown(err), rowNowIso);
       void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, err);
       failed++;
     }

@@ -541,7 +541,7 @@ test("CLAIM_BUDGET_MS leaves headroom under maxDuration", () => {
 
 test("the budget is checked BEFORE each claim, not after", () => {
   const budgetAt = routeSrc.indexOf("CLAIM_BUDGET_MS");
-  const claimAt = routeSrc.indexOf("publish_claimed_at: nowIso");
+  const claimAt = routeSrc.indexOf("publish_claimed_at: claimIso");
   assert.ok(budgetAt > 0 && claimAt > 0, "both the budget check and the claim must exist");
   assert.ok(routeSrc.lastIndexOf("CLAIM_BUDGET_MS") < claimAt,
     "checking the budget after claiming would leave the claimed row exposed to the kill");
@@ -552,12 +552,20 @@ test("the budget is checked BEFORE each claim, not after", () => {
 test("claiming and publishing are interleaved, so the budget can actually fire", () => {
   // Claiming every row up front takes milliseconds — a budget check there could never
   // be true, which is how a guard ships dead. One loop: check → claim → publish.
-  const claimAt = routeSrc.indexOf("publish_claimed_at: nowIso");
+  const claimAt = routeSrc.indexOf("publish_claimed_at: claimIso");
   const publishAt = routeSrc.indexOf("await publishPinForUser(");
   assert.ok(claimAt > 0 && publishAt > claimAt, "the publish must follow the claim in the SAME loop");
   const between = routeSrc.slice(claimAt, publishAt);
   assert.ok(!/for \(const row of claimed\)/.test(between),
     "a second loop over pre-claimed rows means the time check cannot defer anything");
+});
+
+test("each row is claimed on ITS own clock, so a late claim keeps a full lock", () => {
+  // With claiming interleaved a row can be claimed minutes into the run; stamping it
+  // with the start of the run would shorten its 10-minute lock by exactly that much.
+  assert.match(routeSrc, /const claimIso = new Date\(\)\.toISOString\(\);/);
+  assert.match(routeSrc, /const rowNowIso = new Date\(\)\.toISOString\(\);/,
+    "and its persist must carry a current updatedAt, or a mid-run client edit wins the LWW merge");
 });
 
 test("a deferred row is reported, never silently dropped", () => {
