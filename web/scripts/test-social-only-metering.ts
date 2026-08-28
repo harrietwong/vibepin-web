@@ -80,18 +80,30 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
   if (request.endsWith("/lib/supabase") || request.endsWith("@/lib/supabase")) {
     return { createServerClient: fakeSupabaseClient, createClient: fakeSupabaseClient };
   }
-  // /api/publish/social imports ONLY getUserIdFromBearer today. getUserIdFromCookies
-  // is faked alongside it defensively (both real exports of this module) so a future
-  // import the route adds does not silently resolve to undefined -- the exact trap
-  // ce81e826 fixed for the AI-provider routes, which faked a DIFFERENT pair
-  // (getUserIdFromBearerOrCookies / getUserIdFromSameOriginSession) because those are
-  // the exports THOSE routes import. This route imports neither of those two -- grepped
-  // across route.ts, publishFanout.ts, socialConnectionStore.ts, providers/index.ts;
-  // getUserIdFromBearer is the only authUser import in this route's call graph.
+  // /api/publish/social imports getUserIdFromBearer; /api/pinterest/pins (loaded below,
+  // for the cross-route key-parity check) imports getUserIdFromBearerOrCookies. Both
+  // are faked here to the SAME owner so a future import either route adds does not
+  // silently resolve to undefined -- the exact trap ce81e826 fixed for the AI-provider
+  // routes, which faked a DIFFERENT pair (getUserIdFromBearerOrCookies /
+  // getUserIdFromSameOriginSession) because those are the exports THOSE routes import.
   if (request === "@/lib/server/authUser" || request.endsWith("/lib/server/authUser")) {
     return {
       getUserIdFromBearer: async () => OWNER,
       getUserIdFromCookies: async () => null,
+      getUserIdFromBearerOrCookies: async () => OWNER,
+    };
+  }
+  // /api/pinterest/pins delegates the actual Pinterest call to publishPinForUser --
+  // faked here to a deterministic success so the cross-route key-parity check below
+  // never makes a real network call and never depends on Pinterest credentials.
+  if (request === "@/lib/server/pinterest/publishPin" || request.endsWith("/lib/server/pinterest/publishPin")) {
+    return {
+      publishPinForUser: async () => ({
+        ok: true,
+        pin: { id: "p1", url: "https://pin/1" },
+        board: { id: "b", name: "Board" },
+        environment: "sandbox",
+      }),
     };
   }
   // socialConnectionStore.ts reads Pinterest rows through this aliased import. Faked to
@@ -129,6 +141,8 @@ function consumeCalls(): RpcCall[] {
 
   const mod = await import("../src/app/api/publish/social/route");
   const { POST } = mod as { POST: (r: Request) => Promise<Response> };
+  const pinsMod = await import("../src/app/api/pinterest/pins/route");
+  const { POST: pinsPOST } = pinsMod as { POST: (r: Request) => Promise<Response> };
   const { deriveScheduledPostKey } = await import("../src/lib/server/usage/meterScheduledPost");
 
   await test("a social-only publish (no Pinterest destination) charges exactly ONE unit, keyed like the pins route would key the SAME Content", async () => {
@@ -149,7 +163,7 @@ function consumeCalls(): RpcCall[] {
     assert.equal(calls[0].args.p_quantity, 1);
   });
 
-  await test("a publish that ALSO targets Pinterest makes ZERO consume calls from this route (the pins route already charged the identical key)", async () => {
+  await test("a publish that ALSO targets Pinterest still makes exactly ONE consume call from this route, keyed identically to the pins route (the shared idempotency key — not a client-trusted destination flag — is what prevents a double charge)", async () => {
     const draftId = "pd_with_pinterest_1";
     await POST(req({
       postId: draftId,
@@ -159,7 +173,24 @@ function consumeCalls(): RpcCall[] {
         { provider: "facebook", socialConnectionId: "conn-fb-1" },
       ],
     }));
-    assert.equal(consumeCalls().length, 0, "must not double-charge a Content that also went to Pinterest");
+    const calls = consumeCalls();
+    assert.equal(calls.length, 1, "this route must always attempt a consume when postId is present, regardless of destinations");
+    assert.equal(calls[0].args.p_idempotency_key, deriveScheduledPostKey(OWNER, draftId));
+  });
+
+  await test("when the ledger reports the consume as already-charged (replayed: true — simulating the pins route having charged first), the route still proceeds without error", async () => {
+    rpcBehaviour = () => ({ data: { ok: true, replayed: true }, error: null });
+    const draftId = "pd_replayed_1";
+    const res = await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/img5.png"] },
+      destinations: [
+        { provider: "pinterest", socialConnectionId: "conn-pin-1" },
+        { provider: "facebook", socialConnectionId: "conn-fb-1" },
+      ],
+    }));
+    assert.equal(res.status, 200, "a replayed consume must never fail the publish");
+    assert.equal(consumeCalls().length, 1, "the route still attempts exactly one consume call");
   });
 
   await test("no draft identity on the request -> zero consume calls and a usage_meter_skipped log line, never a collide-prone key", async () => {
@@ -195,6 +226,37 @@ function consumeCalls(): RpcCall[] {
     const body = await res.json() as { destinations: unknown[] };
     assert.ok(Array.isArray(body.destinations), "the publish result is still returned");
     assert.equal(consumeCalls().length, 1, "the attempt was still made exactly once, it just failed open");
+  });
+
+  await test("cross-route parity: /api/pinterest/pins and /api/publish/social derive the BYTE-IDENTICAL idempotency key for the same Content (this is what actually prevents the double charge, not a client-trusted destination flag)", async () => {
+    const draftId = "draft-X";
+
+    await pinsPOST(req({
+      draftId,
+      boardId: "b",
+      imageUrl: "https://i/x.png",
+      title: "t",
+    }));
+    const pinsCalls = consumeCalls();
+    assert.equal(pinsCalls.length, 1, "the pins route must consume exactly once for this publish");
+    const keyFromPinsRoute = pinsCalls[0].args.p_idempotency_key;
+
+    rpcCalls.length = 0; // isolate the social route's call from the pins route's above
+
+    await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/img6.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    }));
+    const socialCalls = consumeCalls();
+    assert.equal(socialCalls.length, 1, "the social route must consume exactly once for this publish");
+    const keyFromSocialRoute = socialCalls[0].args.p_idempotency_key;
+
+    assert.equal(
+      keyFromPinsRoute, keyFromSocialRoute,
+      "both real routes must derive the identical key for the same (uid, draftId) — this shared key, " +
+      "collapsed by the ledger's UNIQUE(user_id, idempotency_key), is the actual double-charge guard",
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
