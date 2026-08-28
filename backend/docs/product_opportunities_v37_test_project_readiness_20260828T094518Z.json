@@ -1,0 +1,79 @@
+{
+  "evidenceType": "isolated-supabase-test-project-readiness",
+  "observedAt": "2026-08-28T09:45:18.308805Z",
+  "candidateCommit": "d0a3e6644c1e4ea43c90cdab84235cbc1dfc151d",
+  "networkAccess": true,
+  "databaseMutation": false,
+  "productionDatabaseAccess": false,
+  "projectInventory": {
+    "httpStatus": 200,
+    "accountProjectCount": 4,
+    "nonProductionProjectCount": 3,
+    "inactiveNonProductionProjectCount": 2,
+    "healthyNonProductionProjectCount": 1
+  },
+  "selectedProject": {
+    "refPrefix": "snulmw",
+    "refSha256": "341bc9f4b583916b416959433caf4dddb5bbc7b1a607c898652ad128e8594f5a",
+    "productionRefSha256": "2275cd70c0c10e31883345a949bb7887e9befb8d8f1e44a90f447cc1e4acdab6",
+    "isProduction": false,
+    "sameOrganizationAsProduction": true,
+    "status": "ACTIVE_HEALTHY",
+    "region": "ca-central-1",
+    "createdAt": "2026-07-22T06:20:40.079644Z",
+    "undisclosedNameEnvironmentHints": [
+      "vibepin",
+      "test"
+    ],
+    "projectNameDisclosed": false
+  },
+  "readOnlyDatabaseProbe": {
+    "httpStatus": 201,
+    "querySha256": "71418e00ac21665c4a02641be51fe356a818ac02a43824154cb5cf45305bce9a",
+    "serverVersionNum": "170006",
+    "authUserCount": 19,
+    "publicUserTableCount": 22,
+    "userIdentityRead": false,
+    "businessRowRead": false
+  },
+  "v37CatalogProbe": {
+    "httpStatus": 201,
+    "queryPath": "backend/docs/product_opportunities_v37_catalog_query_v1.sql",
+    "querySha256": "1d0ff2369649f4f01f42be2f55abb6a4b85d24e93c365afd05ebe2dbabb6f035",
+    "matchingObjectCount": 0
+  },
+  "migrationPrerequisiteProbe": {
+    "observedAt": "2026-08-28T09:55:48.831919Z",
+    "httpStatus": 201,
+    "querySha256": "65ba98430e9f73f7aeb7a4f55a11cf18e8913defd4a0e51cd6b2c11349b75b53",
+    "authUsersRelation": true,
+    "authUidFunction": true,
+    "anonymousRole": true,
+    "authenticatedRole": true,
+    "pgcryptoAvailable": true,
+    "pgcryptoInstalled": true,
+    "legacyPinProductsRelation": false,
+    "legacyPinSaveSnapshotsRelation": false
+  },
+  "productionLegacyBaselineCompatibilityProbe": {
+    "observedAt": "2026-08-28T09:55:48.831919Z",
+    "httpStatus": 400,
+    "queryPath": "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql",
+    "querySha256": "3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c",
+    "postgresCode": "42P01",
+    "missingRelation": "public.pin_products",
+    "businessRowRead": false,
+    "interpretation": "The project is suitable for the isolated Supabase platform canary but cannot stand in for production legacy-integrity verification."
+  },
+  "readiness": {
+    "samePostgresqlMajorAsProduction": true,
+    "hasTwoUsersForRollbackOnlyRlsProbe": true,
+    "v37SchemaAbsentBeforeTest": true,
+    "suitableForIsolatedMigrationAndRollbackCanary": true,
+    "suitableForProductionLegacyIntegrityReplay": false,
+    "migrationExecuted": false,
+    "canaryExecuted": false,
+    "authorizationStillRequired": true
+  },
+  "verdict": "PASS_READ_ONLY_PREFLIGHT_ONLY"
+}
