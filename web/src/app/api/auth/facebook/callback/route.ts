@@ -243,7 +243,11 @@ export async function GET(req: NextRequest) {
     // and never reaches the restore path — we never guess.
     let previous: { pageId: string; pageName: string | null } | null = null;
     try {
-      previous = await getStoredFacebookSelection(uid);
+      // Scoped to THIS Facebook user: with two Facebook accounts connected, an
+      // unscoped read would restore the other account's Page — one this user may
+      // not even administer. Mid-callback the row may not exist yet, so the
+      // Facebook user id (not a connection id) is the only identity available.
+      previous = await getStoredFacebookSelection(uid, { facebookUserId: fbUser.id });
     } catch {
       previous = null; // storage hiccup → behave like a first connect
     }
@@ -340,7 +344,9 @@ export async function GET(req: NextRequest) {
   let restoredChoice: ManagedPage | null = null;
   if (!single) {
     try {
-      const previous = await getStoredFacebookSelection(uid);
+      // Same scoping as the page_discovery_empty path above: restore only the
+      // Page THIS Facebook user previously chose.
+      const previous = await getStoredFacebookSelection(uid, { facebookUserId: fbUser.id });
       if (previous) {
         restoredChoice = pages.find(p => p.pageId === previous.pageId) ?? null;
         if (restoredChoice) {

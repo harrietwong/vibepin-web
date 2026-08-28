@@ -1,10 +1,15 @@
--- Migration v63: creem_subscriptions.units
+-- Migration v66: creem_subscriptions.units
 --
--- NUMBER: v62 is the highest migrate_v*.sql on disk in this worktree AND in every
--- sibling worktree (checked: wt-mc-cron-0827, wt-mc-results-0827,
--- wt-mc-settings-0827, wt-multichannel-0827, "Pinterest flow"). v60/v61 were held
--- by in-flight drafts when v62 was written; nothing on disk claims them now, but
--- this file does not reuse them — a number that was ever drafted stays burned.
+-- NUMBER: renumbered v63 -> v66 on 2026-08-27 because v63 was DOUBLE-BOOKED — the
+-- v3.7 product-opportunities line already owns backend/db/migrate_v63_product_opportunities_v1.sql
+-- (in git history, not in this worktree, which is exactly why the on-disk scan
+-- that picked v63 missed it). v64/v65 are held by the Insights worktree
+-- (D:/wt/insights-on-live: migrate_v64_insights_collection.sql,
+-- migrate_v65_insights_keyword_set.sql), so v66 is the first free number.
+--
+-- Taking a number requires checking BOTH: every sibling worktree on disk AND
+-- `git log --all -- "backend/db/migrate_v*.sql"`. v60/v61 were held by in-flight
+-- drafts when v62 was written and stay burned — a number ever drafted is not reused.
 --
 -- WHY
 -- The "extra account slots" add-on is one Creem subscription with a QUANTITY: one
@@ -30,7 +35,7 @@
 -- until it is applied.
 --
 -- STATUS: NOT APPLIED. Apply with
---   python backend/scripts/run_migration.py --file backend/db/migrate_v63_creem_subscription_units.sql --apply
+--   python backend/scripts/run_migration.py --file backend/db/migrate_v66_creem_subscription_units.sql --apply
 -- against the intended project ref (production is jaxteelkecvlozdrdoog).
 
 alter table creem_subscriptions

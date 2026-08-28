@@ -330,12 +330,22 @@ const mkRow = (scopes: string[]) => ({
   created_at: "", updated_at: "", disconnected_at: null, token_version: 0,
 });
 
-await test("toSafeStatus: production-scope connection (no boards:write) is usable, NOT needsReconnect", () => {
-  // boards:write is no longer requested or required in production. A connection with
-  // the publish floor (boards:read + pins:read + pins:write) must stay usable.
-  const safe = connectionStore.toSafeStatus(mkRow(["boards:read", "pins:read", "pins:write"]));
+await test("toSafeStatus: full production scopes => usable, NOT needsReconnect", () => {
+  // The floor is exactly what publishing needs, boards:write included.
+  const safe = connectionStore.toSafeStatus(
+    mkRow(["boards:read", "boards:write", "pins:read", "pins:write"]),
+  );
   assertEq(safe.connected, true, "still connected");
-  assertEq(safe.needsReconnect, false, "production floor met => no reconnect");
+  assertEq(safe.needsReconnect, false, "publish floor met => no reconnect");
+});
+
+await test("toSafeStatus: connection without boards:write DOES need reconnect", () => {
+  // The regression this pins: boards:write was missing from the required list while
+  // PRODUCTION_SCOPES requested it, so a connection that could not publish at all
+  // (POST /pins → 401 "Missing: ['boards:write']") was reported as fully connected.
+  const safe = connectionStore.toSafeStatus(mkRow(["boards:read", "pins:read", "pins:write"]));
+  assertEq(safe.connected, true, "the row still exists");
+  assertEq(safe.needsReconnect, true, "missing boards:write => reconnect required");
 });
 
 await test("toSafeStatus: connection missing a required scope (pins:write) DOES need reconnect", () => {

@@ -52,7 +52,7 @@ export type CreemSubscriptionRow = {
   billing_interval: string | null;
   current_period_end: string | null;
   scheduled_cancel: boolean;
-  /** Quantity on the Creem subscription (migrate_v63). 1 for every plan. */
+  /** Quantity on the Creem subscription (migrate_v66, renumbered from v63). 1 for every plan. */
   units: number;
   last_event_at: string | null;
   created_at: string;

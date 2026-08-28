@@ -40,11 +40,25 @@ export const PINTEREST_SCOPES = PRODUCTION_SCOPES;
 export const PINTEREST_SCOPE_STRING = PRODUCTION_SCOPES.join(",");
 
 // Scopes REQUIRED for a connection to be usable (drives reconnect gating). This is
-// the publish-capability floor — boards:write is NOT required (it is not requested
-// in production), so an existing production-scope connection is never marked
-// needs_reconnect for lacking it.
+// the publish-capability floor, so it has to match what publishing ACTUALLY needs:
+// `boards:write` IS required — POST /pins rejects a token without it with 401 code 3
+// "Missing: ['boards:write']" (see the PRODUCTION_SCOPES note above), and
+// PRODUCTION_SCOPES has requested it all along.
+//
+// An earlier revision of this list omitted it and explained that boards:write "is not
+// requested in production". It was requested; the comment was simply wrong, and the
+// mismatch was worse than a stale note: a connection lacking the scope satisfied
+// hasRequiredPinterestScopes(), was shown as Connected, and then failed EVERY publish
+// with nothing in the UI saying why. Listing it here makes such a connection
+// needsReconnect (connectionStore.toSafeStatus) and renders needs_reconnect through
+// accountUiState's missing-scope rule — a state a reconnect genuinely fixes.
+//
+// Mirrored (deliberately duplicated, not imported — that module is client-bundled) by
+// REQUIRED_PINTEREST_SCOPES_UI in lib/social/accountUiState.ts;
+// scripts/test-account-ui-state.ts asserts the two lists stay identical.
 export const PINTEREST_REQUIRED_SCOPES = [
   "boards:read",
+  "boards:write",
   "pins:read",
   "pins:write",
 ] as const;
@@ -213,8 +227,9 @@ export function buildAuthorizeUrl(env: PinterestEnv, state: string): string {
     client_id: env.appId,
     redirect_uri: env.redirectUri,
     response_type: "code",
-    // Environment-aware: production requests the minimum (no boards:write); sandbox
-    // keeps boards:write for the demo-board helper.
+    // Environment-aware. BOTH sets include boards:write — POST /pins needs it, so it
+    // is not optional in production either; the sandbox set is identical and also
+    // covers the demo-board helper.
     scope: pinterestScopeString(),
     state,
   });

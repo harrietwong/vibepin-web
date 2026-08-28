@@ -31,6 +31,7 @@ import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
 import {
   connectFacebookPageManually,
   getFacebookUserToken,
+  MULTIPLE_FACEBOOK_CONNECTIONS,
 } from "@/lib/server/facebook/connectionStore";
 import { FacebookApiError, fetchPageById } from "@/lib/server/facebook/service";
 
@@ -122,10 +123,22 @@ export async function POST(req: Request) {
 
   let rawPageId = "";
   let rawPageUrl = "";
+  // WHICH connected Facebook account this Page is being added to. Always an
+  // ADDITIONAL filter on top of the row's owner (the store keeps
+  // `.eq("user_id", uid)`), so a forged id can never reach another user's row.
+  let connectionId: string | undefined;
   try {
-    const body = (await req.json()) as { pageId?: unknown; pageUrl?: unknown };
+    const body = (await req.json()) as {
+      pageId?: unknown;
+      pageUrl?: unknown;
+      connectionId?: unknown;
+    };
     rawPageId = typeof body.pageId === "string" ? body.pageId.trim() : "";
     rawPageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim() : "";
+    // "" → undefined: `.eq("id", "")` matches zero rows, which would look like
+    // "no Facebook connection" instead of failing loudly.
+    const rawConnectionId = typeof body.connectionId === "string" ? body.connectionId.trim() : "";
+    connectionId = rawConnectionId || undefined;
   } catch {
     // Malformed body → both stay empty and fall through to the 400 below.
   }
@@ -168,9 +181,21 @@ export async function POST(req: Request) {
   // ── Resolve the user token (server-side only) ────────────────────────────────
   let userToken: string | null;
   try {
-    userToken = await getFacebookUserToken(uid);
+    userToken = await getFacebookUserToken(uid, connectionId);
   } catch (err) {
-    console.error("[facebook/connect-page] token read failed:", (err as Error).message);
+    const message = (err as Error).message;
+    if (message === MULTIPLE_FACEBOOK_CONNECTIONS) {
+      // Distinct from "no connection": telling a customer who has TWO Facebook
+      // accounts to "connect Facebook first" would be plainly wrong.
+      return Response.json(
+        {
+          error: "Several Facebook accounts are connected — reopen Settings and add the Page from the account you mean",
+          code: "multiple_facebook_connections",
+        },
+        { status: 409 },
+      );
+    }
+    console.error("[facebook/connect-page] token read failed:", message);
     return Response.json(
       { error: "Facebook connection is unavailable", code: "storage_unavailable" },
       { status: 500 },
@@ -186,7 +211,7 @@ export async function POST(req: Request) {
   // ── Verify the Page against Graph, then persist ──────────────────────────────
   try {
     const page = await fetchPageById(userToken, pageId);
-    const result = await connectFacebookPageManually(uid, page);
+    const result = await connectFacebookPageManually(uid, page, connectionId);
     // Response carries ONLY display-safe fields — never a token.
     return Response.json({ ok: true, pageId: result.pageId, pageName: result.pageName });
   } catch (err) {
@@ -199,6 +224,15 @@ export async function POST(req: Request) {
       );
     }
     const message = (err as Error).message;
+    if (message === MULTIPLE_FACEBOOK_CONNECTIONS) {
+      return Response.json(
+        {
+          error: "Several Facebook accounts are connected — reopen Settings and add the Page from the account you mean",
+          code: "multiple_facebook_connections",
+        },
+        { status: 409 },
+      );
+    }
     if (message === "NO_FACEBOOK_CONNECTION") {
       return Response.json(
         { error: "Connect Facebook first, then add your Page", code: "no_facebook_connection" },
