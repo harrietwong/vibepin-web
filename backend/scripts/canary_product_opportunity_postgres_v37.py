@@ -49,7 +49,7 @@ EXPECTED_MIGRATION_SHA256 = (
 EXECUTION_MODE_ENV = "VIBEPIN_PRODUCT_STAGE2_CANARY_MODE"
 EXECUTION_MODE_VALUE = "production"
 ROLE_PASS_SENTINEL = "V37_ROLE_CANARY_PASS"
-HOLDER_SECONDS = 8
+HOLDER_SECONDS = 15
 CHALLENGER_LOCK_TIMEOUT_MS = 2_000
 READY_ATTEMPTS = 20
 READY_DELAY_SECONDS = 0.25
@@ -242,6 +242,24 @@ def _parse_ready(status: int, body: str) -> bool:
     return value
 
 
+def _parse_pg_error(body: str) -> tuple[str, str]:
+    """Return an exact PostgreSQL code/message pair from a structured API error."""
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Management API error response is not JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Management API error response is not an object")
+    nested = payload.get("error")
+    if isinstance(nested, dict):
+        payload = nested
+    code = payload.get("code", payload.get("error_code", payload.get("postgres_code")))
+    message = payload.get("message")
+    if not isinstance(code, str) or not isinstance(message, str):
+        raise RuntimeError("Management API error has no structured PostgreSQL code/message")
+    return code, message
+
+
 def _call(
     query: MgmtQuery,
     sql: str,
@@ -344,7 +362,18 @@ def execute_canary(
         project_ref=project_ref,
         label="role_isolation",
     )
-    if role_status in (200, 201) or role_body.count(ROLE_PASS_SENTINEL) != 1:
+    try:
+        role_code, role_message = _parse_pg_error(role_body)
+    except RuntimeError as parse_error:
+        raise RuntimeError(
+            "role-isolation probe did not return a structured rollback sentinel: "
+            f"HTTP {role_status} {role_body[:300]}"
+        ) from parse_error
+    if (
+        role_status in (200, 201)
+        or role_code != "P0001"
+        or role_message != ROLE_PASS_SENTINEL
+    ):
         raise RuntimeError(
             "role-isolation probe did not end in the exact rollback sentinel: "
             f"HTTP {role_status} {role_body[:300]}"

@@ -52,7 +52,7 @@ def valid_query(sql: str, *, label: str, **_: object) -> tuple[int, str]:
     if label == "concurrency_challenger":
         return 400, '{"message":"canceling statement due to lock timeout"}'
     if label == "role_isolation":
-        return 400, f'{{"message":"{canary.ROLE_PASS_SENTINEL}"}}'
+        return 400, json.dumps({"code": "P0001", "message": canary.ROLE_PASS_SENTINEL})
     raise AssertionError(label)
 
 
@@ -94,7 +94,7 @@ def test_execute_canary_accepts_only_exact_lock_and_role_sentinel() -> None:
         ("concurrency_challenger", (201, "[]"), "concurrent duplicate"),
         ("concurrency_challenger", (400, "other failure"), "concurrent duplicate"),
         ("role_isolation", (201, "[]"), "role-isolation"),
-        ("role_isolation", (400, "wrong sentinel"), "role-isolation"),
+        ("role_isolation", (400, '{"code":"P0001","message":"wrong sentinel"}'), "role-isolation"),
     ],
 )
 def test_execute_canary_fails_closed_on_ambiguous_results(
@@ -149,6 +149,49 @@ def test_execute_canary_rejects_any_post_probe_state_drift() -> None:
             query=query,
             sleep=lambda _: None,
         )
+
+
+def test_role_canary_rejects_failure_that_echoes_the_sentinel_sql() -> None:
+    echoed = canary._role_canary_sql(candidate())
+
+    def query(sql: str, *, label: str, **kwargs: object) -> tuple[int, str]:
+        if label == "role_isolation":
+            return 400, json.dumps({
+                "code": "42501",
+                "message": "permission boundary failed",
+                "query": echoed,
+            })
+        return valid_query(sql, label=label, **kwargs)
+
+    with pytest.raises(RuntimeError, match="exact rollback sentinel"):
+        canary.execute_canary(
+            candidate=candidate(),
+            manifest_sha256=MANIFEST_SHA,
+            token="fake-token",
+            project_ref="projectref",
+            query=query,
+            sleep=lambda _: None,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "not-json",
+        "[]",
+        '{"message":"V37_ROLE_CANARY_PASS"}',
+        '{"code":"P0001"}',
+    ],
+)
+def test_role_canary_requires_structured_postgres_code_and_message(body: str) -> None:
+    with pytest.raises(RuntimeError):
+        canary._parse_pg_error(body)
+
+
+def test_role_canary_accepts_nested_structured_postgres_error() -> None:
+    assert canary._parse_pg_error(
+        '{"error":{"code":"P0001","message":"V37_ROLE_CANARY_PASS"}}'
+    ) == ("P0001", canary.ROLE_PASS_SENTINEL)
 
 
 def test_execution_guard_requires_four_exact_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
