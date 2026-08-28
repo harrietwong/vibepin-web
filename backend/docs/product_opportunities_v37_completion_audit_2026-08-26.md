@@ -179,6 +179,14 @@ indexes are absent. Exact catalog readback through the approved migration channe
 therefore remains a Stage 0 requirement rather than being inferred from OpenAPI.
 Evidence: `backend/docs/product_opportunities_v37_schema_presence_audit_20260828T000833Z.json`.
 
+The remaining catalog gap was then closed through the approved Supabase
+Management API channel. A read-only `SELECT` over `pg_class`, `pg_proc`,
+`pg_trigger` and `pg_policies` returned HTTP 201 and zero matching v63 Product
+Opportunity relations, functions, triggers, policies or indexes in `public`.
+Stage 0 schema absence is therefore proven without relying on PostgREST exposure.
+No migration or other SQL mutation ran. Evidence:
+`backend/docs/product_opportunities_v37_catalog_audit_20260828T001649Z.json`.
+
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure
 rule test, registry and full TypeScript gate pass, and the built full candidate

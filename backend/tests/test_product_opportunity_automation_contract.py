@@ -53,6 +53,11 @@ STAGE0_SCHEMA_PRESENCE = json.loads(
         / "product_opportunities_v37_schema_presence_audit_20260828T000833Z.json"
     ).read_text(encoding="utf-8")
 )
+STAGE0_CATALOG = json.loads(
+    (
+        ROOT / "docs" / "product_opportunities_v37_catalog_audit_20260828T001649Z.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() -> None:
@@ -295,6 +300,26 @@ def test_latest_stage0_openapi_check_does_not_overclaim_catalog_absence() -> Non
     assert "PostgreSQL catalog readback" in audit["coverage_limit"]
     assert "Query PostgreSQL catalogs" in RUNBOOK
     assert "not only PostgREST OpenAPI" in RUNBOOK
+
+
+def test_latest_stage0_catalog_query_closes_hidden_object_gap_without_mutation() -> None:
+    audit = STAGE0_CATALOG
+    assert audit["method"] == (
+        "Supabase Management API read-only SELECT over PostgreSQL catalogs"
+    )
+    assert audit["mutation"] is False
+    assert audit["http_status"] == 201
+    assert audit["schemas_checked"] == ["public"]
+    assert audit["catalogs_checked"] == [
+        "pg_class",
+        "pg_proc",
+        "pg_trigger",
+        "pg_policies",
+    ]
+    assert audit["matching_object_count"] == 0
+    assert audit["matching_objects"] == []
+    assert "Current result: PASS for Stage 0" in RUNBOOK
+    assert "does not itself authorize applying the migration" in RUNBOOK
 
 
 def test_release_manifest_keeps_create_pin_null_title_contract_together() -> None:

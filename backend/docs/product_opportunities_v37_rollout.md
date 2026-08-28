@@ -7,10 +7,9 @@ a push, production database write, VPS deployment, Vercel promotion, timer
 enablement, or budget increase.
 
 Current decision: code, manifest, Linux unit preflight and immutable Preview are
-PASS. Product launch remains NOT LIVE. Stage 0 data and exposed-API schema checks
-are current, but exact PostgreSQL catalog readback is still required because
-PostgREST cannot see non-exposed objects. The next privileged sequence is Stage 0
-catalog recheck -> Stage 1 additive schema -> Stage 2 one-product and <=20-row
+PASS. Product launch remains NOT LIVE. Stage 0 data, exposed-API schema and exact
+PostgreSQL catalog checks are current and clean. The next privileged sequence is
+Stage 1 additive schema -> Stage 2 one-product and <=20-row
 canaries -> Stage 3 backend/manual Tracking canary -> Stage 4 Web promotion ->
 Stage 5 Admission first, then Tracking timers. A later-stage PASS must never be
 used to skip an earlier stage or its rollback receipt.
@@ -405,6 +404,13 @@ functions, triggers, policies and indexes are outside OpenAPI. Preserve
 and complete the catalog query through the approved migration channel before
 Stage 1 apply.
 
+That exact catalog query is now complete. At `2026-08-28T00:16:49Z`, a read-only
+Supabase Management API `SELECT` over `pg_class`, `pg_proc`, `pg_trigger` and
+`pg_policies` returned HTTP 201 and zero matching v63 Product Opportunity tables,
+views, functions, triggers, policies or indexes in `public`. No SQL mutation was
+executed. Evidence:
+`backend/docs/product_opportunities_v37_catalog_audit_20260828T001649Z.json`.
+
 1. Re-run the production audit script without mutation and preserve its JSON
    report. Reconcile totals with the PRD baseline instead of assuming 123
    candidates still exist.
@@ -425,6 +431,9 @@ Stage 1 apply.
 
 Exit condition: read-only evidence is archived and every artifact is tied to one
 clean candidate SHA.
+
+Current result: PASS for Stage 0. Production remains unchanged; this PASS permits
+review of Stage 1 but does not itself authorize applying the migration.
 
 ## Stage 1 — Additive database foundation
 
