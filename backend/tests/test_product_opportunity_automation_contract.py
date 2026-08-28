@@ -20,7 +20,7 @@ COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_0a0c20f.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_3ae8b99.json"
 )
 FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
     ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
@@ -112,15 +112,15 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "0a0c20f7404aca112052ebe649c6a7df6c6638b1"
+    functional = "3ae8b995683b8c361be95ce96550c601e60d486b"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
-    manifest_name = "product_opportunities_v37_release_manifest_0a0c20f.json"
+    manifest_name = "product_opportunities_v37_release_manifest_3ae8b99.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "914 tests" in RUNBOOK
+    assert "917 tests" in RUNBOOK
     assert "59/59" in RUNBOOK
     assert "132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
@@ -174,7 +174,7 @@ def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
 
 
 def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> None:
-    functional = "0a0c20f7404aca112052ebe649c6a7df6c6638b1"
+    functional = "3ae8b995683b8c361be95ce96550c601e60d486b"
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     artifacts = {item["path"]: item for item in manifest["artifacts"]}
 

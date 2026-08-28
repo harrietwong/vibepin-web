@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`0a0c20f7404aca112052ebe649c6a7df6c6638b1`; and its exact Product boundary is
+`3ae8b995683b8c361be95ce96550c601e60d486b`; and its exact Product boundary is
 the 77-artifact
-`backend/docs/product_opportunities_v37_release_manifest_0a0c20f.json`. This tip
+`backend/docs/product_opportunities_v37_release_manifest_3ae8b99.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -42,7 +42,7 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 914 passed with 2 live-only skips and 77
+and contract-test state: backend 917 passed with 2 live-only skips and 77
 subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -56,7 +56,7 @@ production endpoint was used, and no push, deployment, database write or timer
 mutation occurred.
 
 The six unit blobs and four wrapper blobs also match their exact SHA-256 entries
-in `product_opportunities_v37_release_manifest_0a0c20f.json`. This local evidence
+in `product_opportunities_v37_release_manifest_3ae8b99.json`. This local evidence
 is frozen in
 `backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`;
 it does not substitute for staging those six exact unit bytes on the VPS and
@@ -77,7 +77,10 @@ Stage 1 authorization review added an independently fail-closed schema apply
 boundary without applying it. Commit `0a0c20f` makes an explicit project ref,
 matching expected project ref, canonical Git-blob SQL SHA-256 and confirmation
 binding mandatory before the migration runner can call the Management API. Its
-10 guard/migration tests passed. A fresh in-memory PostgreSQL-compatible run
+follow-up `3ae8b99` also rejects a whitespace-only explicit target and UTF-8 BOM
+rather than silently falling back or changing blob identity, and proves the
+successful path submits only the canonical reviewed SQL. Its 13 guard tests and
+26 migration-contract tests passed. A fresh in-memory PostgreSQL-compatible run
 created the exact v63 schema with zero data rows and removed all 40 matching
 objects on complete rollback. A separate GET-only production inventory located
 seven completed physical backups, but PITR is disabled and restore was not

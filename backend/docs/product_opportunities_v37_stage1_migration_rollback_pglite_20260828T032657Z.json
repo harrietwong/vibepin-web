@@ -1,6 +1,6 @@
 {
   "audited_at": "2026-08-28T03:26:57.862Z",
-  "candidate_functional_tip": "0a0c20f7404aca112052ebe649c6a7df6c6638b1",
+  "candidate_functional_tip": "3ae8b995683b8c361be95ce96550c601e60d486b",
   "engine": "PGlite 0.5.8 PostgreSQL-compatible in-memory runtime",
   "migration_file": "backend/db/migrate_v63_product_opportunities_v1.sql",
   "migration_git_blob_sha256": "035308eaa9e5ac6dda247f5554b268824649ebfe261a4e77439a3493769350a6",
@@ -8,7 +8,7 @@
   "rollback_file": "backend/db/rollback_v63_product_opportunities_v1.sql",
   "rollback_git_blob_sha256": "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
   "rollback_windows_checkout_sha256": "7e280b4b88b95e3cc301ff161a7665e834fd94a7e87bd1469e5ea8e50bba14d1",
-  "line_ending_rule": "The execution guard canonicalizes UTF-8 CRLF/CR to repository LF before hashing and submission; canonical hashes equal the reviewed Git blobs.",
+  "line_ending_rule": "The execution guard rejects UTF-8 BOM and canonicalizes CRLF/CR to repository LF before hashing and submission; canonical hashes equal the reviewed Git blobs.",
   "required_relations_after_migration": {
     "product_opportunities": true,
     "product_opportunity_evidence": true,

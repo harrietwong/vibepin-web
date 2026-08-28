@@ -18,9 +18,9 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `0a0c20f7404aca112052ebe649c6a7df6c6638b1`, and exact
+functional tip `3ae8b995683b8c361be95ce96550c601e60d486b`, and exact
 77-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_0a0c20f.json`.
+`backend/docs/product_opportunities_v37_release_manifest_3ae8b99.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -73,7 +73,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 914 tests with 2
+committed Product-only state, the full backend suite passed 917 tests with 2
 live-only skips and 77 subtests, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
