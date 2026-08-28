@@ -74,7 +74,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 994 tests with 2
+committed Product-only state, the full backend suite passed 1010 tests with 2
 live-only skips, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
@@ -477,8 +477,8 @@ Evidence:
 `backend/docs/product_opportunities_v37_stage1_backup_inventory_20260828T031821Z.json`.
 
 The exact migration and rollback were also rerun in a fresh in-memory
-PGlite/PostgreSQL-compatible runtime with `pgcrypto`. Migration created 238
-matching catalog objects and zero new data rows; complete rollback left zero
+PGlite/PostgreSQL-compatible runtime with `pgcrypto`. PGlite reported 238
+matching catalog-query rows and zero new data rows; complete rollback left zero
 matching objects. Real transactions additionally prove empty admission rejection,
 multi-row atomic failure, valid one-row admission, history-preserving retirement,
 and retired/current identity coexistence. This did not access production. Evidence:
@@ -493,6 +493,41 @@ This is deliberately not concurrency or role-isolation evidence: PGlite runs in
 one process, and this harness inspects RLS policy/grant definitions rather than
 executing authenticated and anonymous sessions. The exact production post-apply
 verifier plus bounded concurrency/role canaries remain mandatory before rollout.
+The raw 238 count is PGlite-specific and is not a cross-engine release
+invariant; the versioned 10/18/9/3/4/91/44 post-apply contract is authoritative.
+
+The same exact migration/canary/rollback path was then executed against an
+isolated native PostgreSQL 17.11 server bound only to `127.0.0.1:55437`. A
+production SELECT-only version probe confirmed PostgreSQL 17.6, so the replay
+uses the same major version without reading any business row. Two independent
+native sessions proved the active-identity partial unique lock; two fixed fake
+auth users proved per-user RLS, direct authenticated-write denial and anon-read
+denial; the exact `P0001` sentinel rolled back every Product/Evidence/Saved row.
+Before/after counts were identical, advisory locks and extra sessions were zero,
+exact schema rollback left zero v63 objects, legacy fixtures were unchanged,
+fixture roles/tables were removed, and the server was stopped. Native
+PostgreSQL returned 158 broad catalog-query rows rather than PGlite's 238 while
+both passed the authoritative 10/18/9/3/4/91/44 contract; no production gate
+may assert the simulator-specific 238 count. Evidence:
+`backend/docs/product_opportunities_v37_local_postgres_replay_20260828T084744Z.json`
+and
+`backend/docs/product_opportunities_v37_production_postgres_version_probe_20260828T083053Z.json`.
+This closes native PostgreSQL concurrency/RLS semantics locally, not the
+Supabase Management API multi-session platform path.
+
+The native replay is repository-contained and accepts only explicit loopback
+hosts. It requires a fresh PostgreSQL 17 database and an already-started local
+server; it never reads Supabase credentials:
+
+```powershell
+py backend/tests/postgres_v37/replay_product_opportunity_postgres_v37.py `
+  --execute-local `
+  --psql <portable-pg17>/bin/psql.exe `
+  --host 127.0.0.1 --port <local-port> `
+  --user <local-superuser> --database vibepin_v37_replay `
+  --confirm "LOCAL-V37-ROLLBACK-ONLY:127.0.0.1:<local-port>:vibepin_v37_replay" `
+  --report-out <local-replay-receipt.json>
+```
 
 Commits `08c22a5` and `a299a17` add and harden the missing real-PostgreSQL gate
 without silently treating
@@ -516,8 +551,9 @@ fields, and also requires the challenger to return exact HTTP 400 / `55P03` /
 probe read no business row and performed no mutation; it is not concurrency or
 RLS execution evidence.
 The probe temporarily touches two existing user IDs inside the transaction but
-never returns those IDs and persists no row. Unit orchestration is PASS, but one
-execution against an isolated test project remains mandatory before any
+never returns those IDs and persists no row. Unit orchestration and native
+PostgreSQL 17 replay are PASS, but one execution through the Supabase Management
+API against an isolated test project remains mandatory before any
 production use; this runbook does not authorize that execution.
 
 ```powershell
@@ -533,7 +569,8 @@ py backend/scripts/canary_product_opportunity_postgres_v37.py `
 ```
 
 The Stage 1 baseline and post-apply verifier were executed against the exact
-migration in PGlite. The post-apply contract proves 10 relations, 18 exact RPC/
+migration in PGlite and repeated in native PostgreSQL 17. The post-apply
+contract proves 10 relations, 18 exact RPC/
 trigger functions, 9 enabled triggers, 3 Saved Products RLS policies, 4 unique
 indexes, 28 critical constraints, 44 grant facts, empty new tables, and unchanged
 legacy row counts plus stable whole-table content checksums. Evidence:

@@ -43,7 +43,7 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 994 passed with 2 live-only skips; Web 132/132
+and contract-test state: backend 1010 passed with 2 live-only skips; Web 132/132
 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -84,9 +84,9 @@ binding mandatory before the migration runner can call the Management API. Its
 follow-up `3ae8b99` also rejects a whitespace-only explicit target and UTF-8 BOM
 rather than silently falling back or changing blob identity, and proves the
 successful path submits only the canonical reviewed SQL. Its 13 guard tests and
-26 migration-contract tests passed. A fresh in-memory PostgreSQL-compatible run
-created the exact v63 schema with zero data rows and removed all 238 matching
-objects on complete rollback. A separate GET-only production inventory located
+26 migration-contract tests passed. A fresh in-memory PGlite run created the
+exact v63 schema with zero data rows and removed all 238 PGlite catalog-query
+rows on complete rollback. A separate GET-only production inventory located
 seven completed physical backups, but PITR is disabled and restore was not
 tested. These facts permit a production-write decision; they are not that
 decision. Evidence:
@@ -132,8 +132,9 @@ bindings, baseline/post-apply catalog contract, Admission transactions and full
 rollback. Its latest clean replay is
 `backend/docs/product_opportunities_v37_stage1_pglite_replay_20260828T061320Z.json`.
 Because PGlite is single-process and the harness inspects policy/grant catalog
-facts rather than authenticated/anonymous sessions, production concurrency and
-role isolation remain explicit bounded canary gates.
+facts rather than authenticated/anonymous sessions, it did not close native
+concurrency and role isolation. A later native PostgreSQL 17 replay closes those
+database semantics locally; the Supabase platform path remains a bounded gate.
 
 Commits `596d472`, `08c22a5` and `a299a17` turn those two gates into an exact rollback-only
 PostgreSQL canary. Its independent-session duplicate probe must block on the
@@ -150,8 +151,21 @@ the SQLSTATE embedded. `a299a17` safely normalizes that anchored wrapper, reject
 ambiguous extra fields and requires exact HTTP 400 / `55P03` lock-timeout
 semantics. Evidence:
 `backend/docs/product_opportunities_v37_management_api_error_shape_probe_20260828T073558Z.json`.
-Local orchestration is proven; actual PostgreSQL
-semantics still require one isolated test-project execution before production.
+An isolated native PostgreSQL 17.11 replay then applied the exact migration,
+passed the 10/18/9/3/4/91/44 schema contract, exercised two-session uniqueness
+and authenticated/anon RLS, received the exact rollback sentinel, preserved
+zero Product/Saved rows, released every advisory lock/session, rolled the schema
+back to zero v63 objects, removed every fixture and stopped the server. A
+production SELECT-only version probe confirmed PostgreSQL 17.6, matching the
+replay major version. Native PostgreSQL reported 158 broad catalog-query rows
+where PGlite reports 238; the exact versioned schema contract, not that
+engine-specific raw count, is the release invariant. Evidence:
+`backend/docs/product_opportunities_v37_local_postgres_replay_20260828T084744Z.json`
+and
+`backend/docs/product_opportunities_v37_production_postgres_version_probe_20260828T083053Z.json`.
+Database semantics are now proven locally; one isolated Supabase test-project
+execution is still required to prove the Management API multi-session platform
+path before production.
 
 The historical integration candidate is
 `codex/product-v37-security-deps`. Its prequalified integration base

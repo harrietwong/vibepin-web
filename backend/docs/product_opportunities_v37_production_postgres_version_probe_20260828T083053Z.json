@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-08-28T08:30:53.240412Z",
+  "projectRef": "jaxteelkecvlozdrdoog",
+  "operation": "Supabase Management API read-only PostgreSQL version probe",
+  "querySha256": "6cd98666e30458d202b3825305c81a9d39d1471d92812fc729f0920355f033e0",
+  "httpStatus": 201,
+  "serverVersion": "17.6",
+  "serverVersionNum": "170006",
+  "mutation": false,
+  "businessRowsRead": false,
+  "secretsLogged": false,
+  "verdict": "PASS: local replay major version 17 matches the production PostgreSQL major version"
+}
