@@ -102,29 +102,56 @@ function rowIo(db: ReturnType<typeof createServerClient>): RowIo {
     read: async row => {
       const { data, error } = await db
         .from(TABLE)
-        .select("payload, scheduled_at, publish_claimed_at")
+        // `updated_at` is read so the write can be made conditional on it — see the
+        // compare-and-set in `update` below.
+        .select("payload, scheduled_at, publish_claimed_at, updated_at")
         .eq("vibepin_user_id", row.vibepin_user_id)
         .eq("draft_id", row.draft_id)
         .maybeSingle();
       if (error) return { snapshot: null, error: error.message };
       if (!data) return { snapshot: null, error: null };
-      const r = data as { payload?: unknown; scheduled_at?: string | null; publish_claimed_at?: string | null };
+      const r = data as {
+        payload?: unknown; scheduled_at?: string | null;
+        publish_claimed_at?: string | null; updated_at?: string | null;
+      };
       return {
         snapshot: {
           payload: (r.payload && typeof r.payload === "object" ? r.payload : {}) as Record<string, unknown>,
           scheduled_at: r.scheduled_at ?? null,
           publish_claimed_at: r.publish_claimed_at ?? null,
+          // Passed through as the RAW string PostgREST returned. Parsing and re-
+          // formatting it would drop the microseconds Postgres keeps, and the filter
+          // below would then match nothing, ever.
+          updated_at: r.updated_at ?? null,
         },
         error: null,
       };
     },
-    update: async (row, values) => {
-      const { error } = await db
+    /**
+     * Compare-and-set: the write applies only while the row still looks like `observed`.
+     *
+     * Filtering on user + draft_id alone let a reschedule made between the merge's read
+     * and its write be overwritten — the run cleared a slot it had never seen. The two
+     * observed columns are what the merge decided from, so they are what it is
+     * conditional on. `select("draft_id")` makes PostgREST return the affected rows;
+     * none means the row moved, and persistRow re-merges onto the new one.
+     */
+    update: async (row, values, observed) => {
+      let q = db
         .from(TABLE)
         .update(values)
         .eq("vibepin_user_id", row.vibepin_user_id)
         .eq("draft_id", row.draft_id);
-      return { error: error ? error.message : null };
+      // `.eq` never matches NULL in SQL — an unscheduled row needs `.is`.
+      q = observed.scheduled_at === null
+        ? q.is("scheduled_at", null)
+        : q.eq("scheduled_at", observed.scheduled_at);
+      q = observed.updated_at === null
+        ? q.is("updated_at", null)
+        : q.eq("updated_at", observed.updated_at);
+      const { data, error } = await q.select("draft_id");
+      if (error) return { error: error.message, matched: false };
+      return { error: null, matched: Array.isArray(data) && data.length > 0 };
     },
   };
 }
