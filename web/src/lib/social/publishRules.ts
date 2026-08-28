@@ -67,11 +67,65 @@ export function rollUpJobStatus(outcomes: readonly DestinationOutcome[]): JobSta
  * meaning (a legacy row cannot say which account it was, and treating it as
  * account-specific would be the double-post it exists to prevent).
  */
+/** A stored result row, as much of it as the pending rule needs. */
+export type AttemptedResult = {
+  provider: string;
+  status: string;
+  socialConnectionId?: string | null;
+  publishedAt?: string | null;
+};
+
+/**
+ * Does this prior result close its destination for THIS schedule?
+ *
+ * "Already published" is not a property of a destination, it is a property of a
+ * destination AND a schedule. Reading it as the former is what made rescheduling a
+ * Posted Content do nothing at all: the results from the original publish were still
+ * on the payload, the cron therefore owed no destination, and it "completed" the row
+ * by clearing the slot the merchant had just chosen. Nothing published, nothing
+ * failed, no error — the schedule simply evaporated.
+ *
+ * So a published row closes its destination only when it was published FOR the
+ * schedule being processed (`publishedAt >= scheduledAt`), which is the stale-claim
+ * re-run this rule exists to protect. Published BEFORE the current `scheduled_at`, it
+ * describes an earlier publish, and the destination is owed again — the persist then
+ * archives the old row into `previousResults`, keeping its permalink.
+ *
+ * Every uncertain case resolves to "closed": no schedule given, an unparseable
+ * timestamp, or a row with no `publishedAt` at all (rows written before per-
+ * destination timestamps existed). Guessing the other way would double-post, and no
+ * behaviour of a legacy row changes.
+ */
+export function publishedForSchedule(
+  result: AttemptedResult,
+  scheduledAt?: string | null,
+): boolean {
+  if (result.status !== "published") return false;
+  if (!scheduledAt) return true;
+  const scheduledMs = Date.parse(scheduledAt);
+  if (Number.isNaN(scheduledMs)) return true;
+  const publishedAt = typeof result.publishedAt === "string" ? result.publishedAt.trim() : "";
+  if (!publishedAt) return true;
+  const publishedMs = Date.parse(publishedAt);
+  if (Number.isNaN(publishedMs)) return true;
+  return publishedMs >= scheduledMs;
+}
+
+export interface PendingOptions {
+  /**
+   * The schedule being processed. Given, a destination published BEFORE it is owed
+   * again (the merchant re-scheduled a Posted Content). Omitted, any prior `published`
+   * row closes its destination — the rule this function always had.
+   */
+  scheduledAt?: string | null;
+}
+
 export function pendingDestinations(
   intent: readonly ScheduledDestination[],
-  alreadyAttempted: readonly { provider: string; status: string; socialConnectionId?: string | null }[],
+  alreadyAttempted: readonly AttemptedResult[],
+  options?: PendingOptions,
 ): ScheduledDestination[] {
-  const published = alreadyAttempted.filter(r => r.status === "published");
+  const published = alreadyAttempted.filter(r => publishedForSchedule(r, options?.scheduledAt));
   const doneAccounts = new Set(
     published.filter(r => !!r.socialConnectionId).map(r => `${r.provider}:${r.socialConnectionId}`),
   );

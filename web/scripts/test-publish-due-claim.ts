@@ -27,7 +27,7 @@ import {
   describeThrown,
   owedDestinations,
 } from "../src/app/api/cron/publish-due/publishDueLogic";
-import { pendingDestinations } from "../src/lib/social/publishRules";
+import { pendingDestinations, publishedForSchedule } from "../src/lib/social/publishRules";
 import {
   mergeOutcomesIntoRow,
   writeFailure,
@@ -805,6 +805,153 @@ test("a deferred row is reported, never silently dropped", () => {
   assert.match(routeSrc, /deferred\+\+/, "deferred rows must be counted");
   assert.match(routeSrc, /claimed: claimedCount, published, failed, skipped, deferred/,
     "the count must reach the response so a run that keeps deferring is visible");
+});
+
+// ── rescheduling a Posted Content must republish (Codex #3) ──────────────────
+// "Already published" was read as a property of the DESTINATION. It is a property of
+// the destination AND the schedule. So a Posted Content the merchant re-scheduled owed
+// nothing at all: the cron cleared the slot they had just chosen, published nothing,
+// failed nothing, and reported nothing. The archival into previousResults — which is
+// what keeps the earlier post reachable — never ran either, because nothing replaced
+// anything.
+const POSTED_JULY = {
+  destinationId: "pinterest:pin_A", provider: "pinterest", socialConnectionId: "pin_A",
+  status: "published", remoteId: "pin-1", postUrl: "https://pin/1",
+  publishedAt: "2026-07-01T09:00:00.000Z",
+};
+const POSTED_IG = {
+  destinationId: "instagram:ig_A", provider: "instagram", socialConnectionId: "ig_A",
+  status: "published", remoteId: "ig-1", postUrl: "https://ig/1",
+  publishedAt: "2026-07-01T09:00:00.000Z",
+};
+const RESCHEDULED = "2026-08-01T10:00:00.000Z";   // after the original publish
+const RECLAIMED = "2026-07-01T08:00:00.000Z";     // the schedule that publish was FOR
+
+test("owedDestinations: a Posted Content re-scheduled later owes every destination", () => {
+  const payload = {
+    imageUrl: "https://cdn/x.jpg", boardId: "b-A",
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", capturedAt: "2026-07-01T00:00:00.000Z" },
+      { provider: "instagram", socialConnectionId: "ig_A", capturedAt: "2026-07-01T00:00:00.000Z" },
+    ],
+    destinationResults: [POSTED_JULY, POSTED_IG],
+  };
+  const owed = owedDestinations(payload, { scheduledAt: RESCHEDULED });
+  assert.equal(owed.length, 2, "both platforms were published in July — August is a new publish");
+  assert.deepEqual(owed.map(d => d.provider).sort(), ["instagram", "pinterest"]);
+});
+
+test("owedDestinations: a stale re-claim of THAT publish still owes nothing", () => {
+  // The protection that must not be lost: the run died after publishing, the claim
+  // went stale, and the row is taken again. `publishedAt` is after this row's
+  // scheduled_at, so it was published FOR this schedule.
+  const owed = owedDestinations({
+    imageUrl: "https://cdn/x.jpg", boardId: "b-A",
+    scheduledDestinations: [{ provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", capturedAt: RECLAIMED }],
+    destinationResults: [POSTED_JULY],
+  }, { scheduledAt: RECLAIMED });
+  assert.deepEqual(owed, [], "re-publishing here is the double post the rule exists to prevent");
+});
+
+test("owedDestinations: the partial case still retries only what did not go out", () => {
+  const owed = owedDestinations({
+    imageUrl: "https://cdn/x.jpg", boardId: "b-A",
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", capturedAt: RECLAIMED },
+      { provider: "instagram", socialConnectionId: "ig_A", capturedAt: RECLAIMED },
+    ],
+    destinationResults: [
+      POSTED_JULY,
+      { destinationId: "instagram:ig_A", provider: "instagram", socialConnectionId: "ig_A", status: "failed" },
+    ],
+  }, { scheduledAt: RECLAIMED });
+  assert.equal(owed.length, 1);
+  assert.equal(owed[0].provider, "instagram");
+});
+
+test("owedDestinations: a legacy Content can be re-scheduled too", () => {
+  // The board-only path had its own hard-coded "any published pinterest row ⇒ nothing
+  // owed", so without the same rule a legacy Posted Content could never republish.
+  const payload = {
+    imageUrl: "https://cdn/x.jpg", boardId: "b-A",
+    destinationResults: [{ destinationId: "pinterest:legacy", provider: "pinterest", status: "published", publishedAt: "2026-07-01T09:00:00.000Z" }],
+  };
+  assert.equal(owedDestinations(payload, { scheduledAt: RESCHEDULED }).length, 1,
+    "re-scheduled after that publish ⇒ owed again");
+  assert.deepEqual(owedDestinations(payload, { scheduledAt: RECLAIMED }), [],
+    "re-claimed for the schedule it already published for ⇒ still nothing owed");
+});
+
+test("owedDestinations: rows with no publishedAt keep their old meaning exactly", () => {
+  // Written before per-destination timestamps existed. There is no way to tell which
+  // schedule they belong to, and guessing "an earlier one" would double-post.
+  const legacyRow = { destinationId: "pinterest:pin_A", provider: "pinterest", socialConnectionId: "pin_A", status: "published" };
+  const payload = {
+    imageUrl: "https://cdn/x.jpg", boardId: "b-A",
+    scheduledDestinations: [{ provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", capturedAt: RECLAIMED }],
+    destinationResults: [legacyRow],
+  };
+  assert.deepEqual(owedDestinations(payload, { scheduledAt: RESCHEDULED }), []);
+  assert.deepEqual(owedDestinations(payload), [], "and with no schedule given at all");
+});
+
+test("publishedForSchedule: the boundary is the schedule instant itself", () => {
+  const row = { provider: "pinterest", status: "published", publishedAt: RECLAIMED };
+  assert.equal(publishedForSchedule(row, RECLAIMED), true, "published AT the schedule ⇒ for it");
+  assert.equal(publishedForSchedule({ ...row, publishedAt: "2026-07-01T07:59:59.999Z" }, RECLAIMED), false);
+  assert.equal(publishedForSchedule({ provider: "pinterest", status: "failed", publishedAt: RESCHEDULED }, RECLAIMED), false,
+    "only a published row can close a destination");
+  assert.equal(publishedForSchedule({ ...row, publishedAt: "not-a-date" }, RECLAIMED), true,
+    "an unreadable timestamp resolves to 'already done' — never to a second post");
+});
+
+test("payloadToPublishInput: boardRequired reads the SAME owed set", () => {
+  // A re-scheduled Instagram-only Content: owed again, and it needs no board. Reading
+  // a different owed set here would refuse it with "Missing image or board".
+  const payload = {
+    imageUrl: "https://cdn/x.jpg",
+    scheduledDestinations: [{ provider: "instagram", socialConnectionId: "ig_A", capturedAt: RECLAIMED }],
+    destinationResults: [POSTED_IG],
+  };
+  assert.ok(payloadToPublishInput("u", payload, { scheduledAt: RESCHEDULED }),
+    "owed again, and no board is required for Instagram");
+  // The reverse proves the two really share one owed set: with nothing owed, every()
+  // is vacuously true, a board IS required, and this board-less Content is refused.
+  // (That is the rule as it has always been for a stale re-claim, unchanged here — a
+  // row whose destinations have all published no longer reaches this code by any
+  // other route.)
+  assert.equal(payloadToPublishInput("u", payload, { scheduledAt: RECLAIMED }), null,
+    "if boardRequired read a different owed set, these two could not disagree");
+});
+
+test("republishing archives the earlier post instead of dropping its permalink", () => {
+  // End to end: owed again ⇒ published ⇒ the row describing the July Pin, still live
+  // on Pinterest, moves to previousResults rather than being overwritten.
+  const payload = {
+    imageUrl: "https://cdn/x.jpg", boardId: "b-A",
+    scheduledDestinations: [{ provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", capturedAt: "2026-07-01T00:00:00.000Z" }],
+    destinationResults: [POSTED_JULY],
+    scheduledDate: "2026-08-01",
+  };
+  const owed = owedDestinations(payload, { scheduledAt: RESCHEDULED });
+  assert.equal(owed.length, 1, "the destination must actually be attempted, or nothing supersedes anything");
+  const after = payloadAfterOutcomes(payload, [
+    { provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "pin-2", externalPostUrl: "https://pin/2" },
+  ], "2026-08-01T10:00:05.000Z");
+  const current = after.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(current.length, 1);
+  assert.equal(current[0].postUrl, "https://pin/2", "the card shows the Pin this run created");
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous?.length, 1);
+  assert.equal(previous[0].postUrl, "https://pin/1", "and the July Pin is still reachable");
+});
+
+test("the route threads the row's schedule into BOTH owed calls", () => {
+  assert.match(routeSrc, /const owedFor = \{ scheduledAt: row\.scheduled_at \};/);
+  assert.match(routeSrc, /payloadToPublishInput\(row\.vibepin_user_id, row\.payload, owedFor\)/,
+    "or a re-scheduled Instagram-only Content is refused for a board it never needed");
+  assert.match(routeSrc, /owedDestinations\(row\.payload, owedFor\)/,
+    "the schedule is what makes a prior publish stale — without it, rescheduling is a no-op");
 });
 
 // ── the run's DESTINATION deadline (Codex #2) ────────────────────────────────

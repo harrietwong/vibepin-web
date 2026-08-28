@@ -15,7 +15,13 @@ import { toProxyUrl } from "@/lib/imageProxy";
 // Intent resolution. Both modules are pure and import-safe (no Supabase client built at
 // module load), which is what keeps this file runnable under bare `tsx`.
 import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
-import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
+import {
+  pendingDestinations,
+  publishedForSchedule,
+  type AttemptedResult,
+  type DestinationOutcome,
+  type PendingOptions,
+} from "@/lib/social/publishRules";
 // The card path's history rule, reused verbatim so a scheduled republish and a manual
 // one keep the same "Earlier publishes" record. Pure + dependency-free (it only reads
 // mediaRules/scheduledDestinations, both import-safe), so it runs under bare `tsx`.
@@ -141,15 +147,19 @@ export interface DuePublishInput {
  * exactly the pre-v59 behaviour, and the adoption is written back by payloadAfterSuccess /
  * payloadAfterFailure.
  */
-export function owedDestinations(payload: Record<string, unknown>): ScheduledDestination[] {
+export function owedDestinations(
+  payload: Record<string, unknown>,
+  options?: PendingOptions,
+): ScheduledDestination[] {
   const intent = resolveScheduledDestinations(payload as Parameters<typeof resolveScheduledDestinations>[0]);
   // What already happened, so a row re-claimed after a stale lock does not re-publish an
   // account that already succeeded. `pendingDestinations` keys that by ACCOUNT, so two
-  // accounts on one platform retry independently.
+  // accounts on one platform retry independently — and by SCHEDULE, so a Posted Content
+  // the merchant re-scheduled publishes again instead of quietly losing its new slot.
   const prior = Array.isArray(payload.destinationResults)
-    ? (payload.destinationResults as Array<{ provider: string; status: string; socialConnectionId?: string | null }>)
+    ? (payload.destinationResults as AttemptedResult[])
     : [];
-  if (intent.length) return pendingDestinations(intent, prior);
+  if (intent.length) return pendingDestinations(intent, prior, options);
 
   // ── The draft that names no account at all ────────────────────────────────────
   // `resolveScheduledDestinations` can only derive intent from a PINNED target, so a
@@ -166,8 +176,10 @@ export function owedDestinations(payload: Record<string, unknown>): ScheduledDes
   // stored result row keys as `pinterest:legacy`, exactly as it always did.
   const boardId = firstString(payload.boardId);
   if (!boardId) return []; // nothing to publish INTO — payloadToPublishInput refuses it
-  // A stale re-claim must not double-post the Pin this row already published.
-  if (prior.some(r => r.provider === "pinterest" && r.status === "published")) return [];
+  // A stale re-claim must not double-post the Pin this row already published — but a
+  // Pin published for an EARLIER schedule must not block the one the merchant just
+  // set, or a legacy Content could never be re-scheduled at all. Same rule as above.
+  if (prior.some(r => r.provider === "pinterest" && publishedForSchedule(r, options?.scheduledAt))) return [];
   const legacy: ScheduledDestination = {
     provider: "pinterest",
     socialConnectionId: "",
@@ -179,7 +191,11 @@ export function owedDestinations(payload: Record<string, unknown>): ScheduledDes
   return [legacy];
 }
 
-export function payloadToPublishInput(uid: string, payload: Record<string, unknown>): DuePublishInput | null {
+export function payloadToPublishInput(
+  uid: string,
+  payload: Record<string, unknown>,
+  options?: PendingOptions,
+): DuePublishInput | null {
   // A multi-image Content stores its whole media set in `payload.media`, in display
   // order, with the cover first. Older/single-image drafts have no `media` at all —
   // they fall back to `imageUrl`, which is exactly what this function always read.
@@ -208,7 +224,9 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
   //     `destinationPublishInput` and gets its own failure row, while Instagram — which
   //     needs no board — still goes out. Failing the whole Content would punish a
   //     destination that is perfectly well specified for a defect on a different one.
-  const boardRequired = owedDestinations(payload).every(d => d.provider === "pinterest");
+  // The SAME owed set the route publishes from — `options` included, or a Content
+  // re-scheduled to Instagram alone could be refused for a board it does not need.
+  const boardRequired = owedDestinations(payload, options).every(d => d.provider === "pinterest");
   if (!storedImage) return null;
   if (boardRequired && !boardId && !anyEntryBoard) return null;
   // Resolve to the absolute public URL, exactly as the Publish-now path does

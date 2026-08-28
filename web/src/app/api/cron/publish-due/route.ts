@@ -264,7 +264,12 @@ export async function GET(req: Request): Promise<Response> {
     const rowStartedMs = Date.now();
     void recordPublishEvent(db, PUBLISH_EVENT_ATTEMPTED, eventBase);
     try {
-      const input = payloadToPublishInput(row.vibepin_user_id, row.payload);
+      // `scheduled_at` rides into both: what is owed depends on the schedule being
+      // processed, not on whether the destination has ever published. Without it, a
+      // Posted Content the merchant re-scheduled owes nothing, and the run "completes"
+      // it by clearing the slot they just chose.
+      const owedFor = { scheduledAt: row.scheduled_at };
+      const input = payloadToPublishInput(row.vibepin_user_id, row.payload, owedFor);
       if (!input) {
         // Unpublishable payload (missing image/board): record a content failure, don't call Pinterest.
         // NO metering here — the contract charges only actions that really attempt
@@ -304,7 +309,7 @@ export async function GET(req: Request): Promise<Response> {
       // this is what is OWED and not what was intended. It is the same helper
       // `payloadToPublishInput` consults to decide whether a board is required, so the
       // two can never disagree about which platforms this run is for.
-      const owed = owedDestinations(row.payload);
+      const owed = owedDestinations(row.payload, owedFor);
       const pinterestTargets = owed.filter(d => d.provider === "pinterest");
       const extras = owed.filter(d => d.provider !== "pinterest");
       const legacyTarget = typeof row.payload.targetConnectionId === "string" ? row.payload.targetConnectionId.trim() : "";
