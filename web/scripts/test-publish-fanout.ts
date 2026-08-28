@@ -20,6 +20,9 @@ import {
   rollUpJobStatus,
   pendingDestinations,
   pinterestOutcomeRow,
+  hasTimeForDestination,
+  DESTINATION_RESERVE_MS,
+  DEFERRED_OUT_OF_TIME,
   type DestinationOutcome,
 } from "../src/lib/social/publishRules";
 import type { ScheduledDestination } from "../src/lib/pinDraftStore";
@@ -254,6 +257,56 @@ async function main(): Promise<void> {
       && /Reconnect your/.test(outcomes[0].error ?? "")
       && outcomes[1].status === "published",
       JSON.stringify(outcomes));
+  }
+
+  section("the run's deadline defers a destination instead of half-publishing it");
+
+  {
+    // The whole point: NOT ONE provider call once the deadline is in reach. A post
+    // made with no time left to persist it is the double-post window — the process
+    // dies before the write, the claim goes stale, and the run ten minutes later
+    // sends it again.
+    lookupThrows.clear(); publishThrows.clear(); lookups.length = 0; publishes.length = 0;
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-a"), social("facebook", "conn-b")], POST,
+      { deadlineMs: Date.now() + 1_000 });
+    check("no provider was called once the deadline was in reach",
+      publishes.length === 0 && lookups.length === 0,
+      `publishes=${JSON.stringify(publishes)} lookups=${JSON.stringify(lookups)}`);
+    check("every deferred destination still gets exactly one outcome",
+      outcomes.length === 2
+      && outcomes.map(o => o.socialConnectionId).join(",") === "conn-a,conn-b");
+    check("a deferred destination is pending — not failed, not skipped",
+      outcomes.every(o => o.status === "pending"),
+      JSON.stringify(outcomes.map(o => o.status)));
+    check("and it says why, for the log",
+      outcomes.every(o => o.error === DEFERRED_OUT_OF_TIME));
+    check("a deferred destination is still owed, so a retry re-sends it",
+      pendingDestinations([social("instagram", "conn-a")],
+        outcomes.map(o => ({ provider: o.provider, status: o.status, socialConnectionId: o.socialConnectionId }))
+      ).length === 1,
+      "pendingDestinations excludes only `published` — a pending row must stay owed");
+  }
+
+  {
+    // A deadline far away changes nothing at all.
+    lookupThrows.clear(); publishThrows.clear(); publishes.length = 0;
+    const outcomes = await fanOutDestinations("u1", [social("instagram", "conn-a")], POST,
+      { deadlineMs: Date.now() + 10 * 60 * 1000 });
+    check("with time to spare the destination publishes exactly as before",
+      outcomes[0].status === "published" && publishes.join(",") === "conn-a");
+  }
+
+  {
+    // The boundary is DESTINATION_RESERVE_MS: a destination may only start if it can
+    // finish AND be persisted before the ceiling.
+    const now = 1_000_000;
+    check("exactly one reserve of headroom is still enough to start",
+      hasTimeForDestination(now, now + DESTINATION_RESERVE_MS) === true);
+    check("one millisecond less is not",
+      hasTimeForDestination(now, now + DESTINATION_RESERVE_MS - 1) === false);
+    check("no deadline at all ⇒ unbounded, exactly the old behaviour",
+      hasTimeForDestination(now, undefined) === true);
   }
 
   {

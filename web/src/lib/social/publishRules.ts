@@ -9,7 +9,7 @@
  * No I/O, no secrets, no DB. Import-safe everywhere.
  */
 
-import type { SocialProvider } from "./platforms";
+import { isSocialProvider, type SocialProvider } from "./platforms";
 import type { ScheduledDestination } from "../pinDraftStore";
 
 export type DestinationStatus = "pending" | "skipped" | "publishing" | "published" | "failed";
@@ -81,6 +81,63 @@ export function pendingDestinations(
   return intent.filter(d =>
     !doneProviders.has(d.provider)
     && !doneAccounts.has(`${d.provider}:${d.socialConnectionId}`));
+}
+
+/**
+ * ── The run's hard deadline ─────────────────────────────────────────────────
+ *
+ * The platform kills the cron invocation at `maxDuration` (300s). Killed BETWEEN a
+ * provider accepting a post and the result reaching the database, the row keeps its
+ * schedule and its claim; ten minutes later the claim goes stale, the row is
+ * re-claimed, and the post goes out A SECOND TIME. So the run must stop starting work
+ * with enough time left to finish and persist what it started.
+ *
+ * `CLAIM_BUDGET_MS` bounds when the run stops TAKING rows. It cannot bound a row
+ * already in hand: one Content with three Instagram accounts is three container polls
+ * of up to ~45s each, all inside a single claimed row. The deadline below is checked
+ * per DESTINATION, which is the only granularity at which the run can still stop
+ * without abandoning a post it already made.
+ */
+export const RUN_DEADLINE_MS = 270_000;
+
+/**
+ * Time reserved for one destination: it must be able to run to completion AND have
+ * its outcome persisted before the platform's ceiling. 50s covers the slowest single
+ * provider call we make (Instagram's container poll, ~45s) plus the write.
+ */
+export const DESTINATION_RESERVE_MS = 50_000;
+
+/** Why a destination has no result yet. Internal/diagnostic — see `deferredOutcome`. */
+export const DEFERRED_OUT_OF_TIME = "Deferred — out of time this run";
+
+/**
+ * Is there time to START another destination before the run's deadline?
+ *
+ * No deadline given ⇒ always true, so every caller that does not (yet) bound its run
+ * behaves exactly as it did before.
+ */
+export function hasTimeForDestination(nowMs: number, deadlineMs?: number): boolean {
+  if (typeof deadlineMs !== "number" || !Number.isFinite(deadlineMs)) return true;
+  return nowMs + DESTINATION_RESERVE_MS <= deadlineMs;
+}
+
+/**
+ * The outcome for a destination the run did not have time to start.
+ *
+ * `pending`, deliberately, and NOT `failed`: nothing was sent, nothing went wrong, and
+ * the merchant has nothing to fix. It is also not `skipped` — skipped means "we decided
+ * against it", and this destination is still owed. `pendingDestinations` excludes only
+ * `published`, so a pending destination is re-attempted by the next run and no other.
+ */
+export function deferredOutcome(destination: ScheduledDestination): DestinationOutcome {
+  return {
+    provider: (isSocialProvider(destination.provider) ? destination.provider : "pinterest") as SocialProvider,
+    status: "pending",
+    socialConnectionId: typeof destination.socialConnectionId === "string" && destination.socialConnectionId.trim()
+      ? destination.socialConnectionId.trim()
+      : null,
+    error: DEFERRED_OUT_OF_TIME,
+  };
 }
 
 /**

@@ -15,6 +15,8 @@ import { readFileSync } from "node:fs";
 import {
   CLAIM_BUDGET_MS,
   CLAIM_STALE_MS,
+  RUN_DEADLINE_MS,
+  DESTINATION_RESERVE_MS,
   isClaimable,
   staleClaimCutoffIso,
   payloadToPublishInput,
@@ -582,6 +584,109 @@ test("a deferred row is reported, never silently dropped", () => {
   assert.match(routeSrc, /deferred\+\+/, "deferred rows must be counted");
   assert.match(routeSrc, /claimed: claimedCount, published, failed, skipped, deferred/,
     "the count must reach the response so a run that keeps deferring is visible");
+});
+
+// ── the run's DESTINATION deadline (Codex #2) ────────────────────────────────
+// CLAIM_BUDGET_MS bounds when the run stops taking ROWS. It cannot bound the row it
+// already holds: one Content with three Instagram accounts is three ~45s container
+// polls inside a single claim. Killed part-way, the accounts that already published
+// keep the schedule and the claim, and are published AGAIN ten minutes later.
+
+test("RUN_DEADLINE_MS leaves room for a destination to finish AND persist", () => {
+  const declared = /export const maxDuration = (\d+)/.exec(routeSrc);
+  assert.ok(declared, "the route must declare maxDuration");
+  const ceilingMs = Number(declared![1]) * 1000;
+  assert.ok(RUN_DEADLINE_MS > 0 && RUN_DEADLINE_MS < ceilingMs,
+    `the deadline (${RUN_DEADLINE_MS}ms) must fall before the platform's kill (${ceilingMs}ms)`);
+  // A destination may only START at `deadline - DESTINATION_RESERVE_MS` and takes at
+  // most one reserve, so the LATEST it can finish is the deadline itself. What must be
+  // left after that is room to persist the outcome (the write plus its one retry) —
+  // being killed between the provider's ack and that write is the double post.
+  assert.ok(ceilingMs - RUN_DEADLINE_MS >= 20_000,
+    `too little room to persist after the last destination: ${ceilingMs - RUN_DEADLINE_MS}ms`);
+  assert.ok(DESTINATION_RESERVE_MS >= 45_000,
+    "the reserve must cover the slowest single provider call (Instagram's container poll)");
+  assert.ok(RUN_DEADLINE_MS > CLAIM_BUDGET_MS,
+    "the run must be allowed to finish the last row it was permitted to claim");
+});
+
+test("the route bounds the run and passes that bound INTO the fan-out", () => {
+  assert.match(routeSrc, /const deadlineMs = startedMs \+ RUN_DEADLINE_MS;/,
+    "the deadline must be absolute and measured from the top of the run");
+  assert.match(routeSrc, /fanOutDestinations\([\s\S]{0,600}\{ deadlineMs \}\)/,
+    "a deadline the fan-out never receives bounds nothing — the fan-out is where the time goes");
+  const pinterestLoop = routeSrc.slice(
+    routeSrc.indexOf("for (const destination of pinterestTargets) {"),
+    routeSrc.indexOf("await publishPinForUser("),
+  );
+  assert.match(pinterestLoop, /hasTimeForDestination\(Date\.now\(\), deadlineMs\)/,
+    "each Pinterest account is its own publish and its own share of the run's time");
+  assert.match(pinterestLoop, /deferredOutcome\(destination\)/);
+});
+
+test("a fully deferred row is released, not written — and never marked failed", () => {
+  const at = routeSrc.indexOf("if (pending.length && !reported.length) {");
+  assert.ok(at > 0, "the route must recognise a row where nothing was attempted");
+  const body = routeSrc.slice(at, at + 700);
+  assert.match(body, /await releaseClaim\(db, row\);/,
+    "the claim must be released or the row waits 10 minutes for nothing");
+  assert.ok(!/persistFailure|persistOutcomes/.test(body),
+    "nothing happened, so nothing may be written over the merchant's payload");
+});
+
+test("a deferred persist omits scheduled_at instead of clearing it", () => {
+  const at = routeSrc.indexOf("async function persistOutcomes(");
+  const body = routeSrc.slice(at, routeSrc.indexOf("async function persistFailure("));
+  assert.match(body, /options\?\.deferred \? \{\} : \{ scheduled_at: null \}/,
+    "clearing the schedule of a Content whose destinations have not gone out is the lost publish");
+  assert.match(body, /publish_claimed_at: null/,
+    "the claim is still released — the next run must be able to finish the job");
+});
+
+// The payload half of the same rule.
+const DEFER = { status: "pending", socialConnectionId: "ig_A", provider: "instagram", error: "Deferred" } as const;
+
+test("payloadAfterOutcomes(deferred): keeps the schedule, records what published", () => {
+  const after = payloadAfterOutcomes(
+    { scheduledDate: "2026-07-11", scheduledTime: "09:00", plannedAt: "2026-07-11T09:00" },
+    [
+      { provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "p1", externalPostUrl: "https://pin/1" },
+      DEFER,
+    ],
+    NOW_ISO,
+    null,
+    undefined,
+    { deferred: true },
+  );
+  assert.equal(after.scheduledDate, "2026-07-11", "the Content is still scheduled — Instagram has not gone out");
+  assert.equal(after.plannedAt, "2026-07-11T09:00");
+  assert.equal(after.postedAt, undefined, "a Content with a destination still owed is not posted");
+  assert.equal(after.publishError, undefined, "and it did not fail — nothing was sent to Instagram");
+  assert.equal(after.remotePinUrl, "https://pin/1",
+    "the Pin that DID publish must keep its permalink: the completing run no longer owes it");
+  const rows = after.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1, "the deferred destination gets no result row — nothing happened to record");
+  assert.equal(rows[0].destinationId, "pinterest:pin_A");
+  assert.equal(rows[0].status, "published");
+});
+
+test("payloadAfterOutcomes: a deferred destination is never recorded as FAILED", () => {
+  const after = payloadAfterOutcomes({}, [DEFER], NOW_ISO, null, undefined, { deferred: true });
+  assert.deepEqual(after.destinationResults, [],
+    "writing it as failed would tell the merchant a platform rejected a post nobody sent");
+  assert.equal(after.publishError, undefined);
+});
+
+test("payloadAfterOutcomes: with nothing deferred the schedule clears exactly as today", () => {
+  const after = payloadAfterOutcomes(
+    { scheduledDate: "2026-07-11", plannedAt: "2026-07-11T09:00" },
+    [{ provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "p1" },
+     { provider: "instagram", status: "failed", socialConnectionId: "ig_A", error: "Token expired" }],
+    NOW_ISO,
+  );
+  assert.equal(after.scheduledDate, "");
+  assert.equal(after.plannedAt, "");
+  assert.equal(after.postedAt, NOW_ISO);
 });
 
 // ── persist must never lose the record of a publish that happened ────────────

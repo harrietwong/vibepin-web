@@ -33,7 +33,9 @@ import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
 import {
   createPublishJob,
+  deferredOutcome,
   fanOutDestinations,
+  hasTimeForDestination,
   pinterestOutcomeRow,
   recordOutcomes,
 } from "@/lib/social/publishFanout";
@@ -48,10 +50,12 @@ import {
 } from "@/lib/server/publishEvents";
 import {
   CLAIM_BUDGET_MS,
+  RUN_DEADLINE_MS,
   staleClaimCutoffIso,
   payloadToPublishInput,
   payloadAfterOutcomes,
   payloadAfterFailure,
+  type OutcomePersistOptions,
   destinationPublishInput,
   describeThrown,
   owedDestinations,
@@ -118,6 +122,12 @@ export async function GET(req: Request): Promise<Response> {
   const startedMs = Date.now();
   const nowMs = startedMs;
   const nowIso = new Date(nowMs).toISOString();
+  // The instant after which no further DESTINATION may be started. The row budget
+  // below stops the run taking new work; this stops it starting work inside a row it
+  // already holds — a Content with three Instagram accounts is three ~45s container
+  // polls, and being killed part-way through means the accounts that already
+  // published are published again ten minutes later.
+  const deadlineMs = startedMs + RUN_DEADLINE_MS;
 
   // ── 1) SCAN due, live rows ───────────────────────────────────────────────────
   const { data: dueRows, error: scanError } = await db
@@ -267,6 +277,13 @@ export async function GET(req: Request): Promise<Response> {
       // two Pinterest accounts published to one of them and the second silently
       // never happened.
       for (const destination of pinterestTargets) {
+        if (!hasTimeForDestination(Date.now(), deadlineMs)) {
+          // Not a failure and not a skip: nothing was sent, and this destination is
+          // still owed. It keeps the Content scheduled (see the persist below) and the
+          // next run attempts it — and only it.
+          outcomes.push(deferredOutcome(destination));
+          continue;
+        }
         const perDestination = destinationPublishInput(input, destination, legacyTarget);
         if (!perDestination) {
           outcomes.push({
@@ -329,7 +346,14 @@ export async function GET(req: Request): Promise<Response> {
       // ── Fan out to the non-Pinterest destinations ─────────────────────────────
       // Runs BEFORE the persist so a fan-out crash cannot leave the Content marked
       // posted with no record of the platforms that were still owed.
-      if (extras.length) {
+      if (extras.length && !hasTimeForDestination(Date.now(), deadlineMs)) {
+        // Every extra will be deferred, so no ATTEMPT is made — and no attempt row is
+        // created. `customer360` and `adminOverview` read every `social_publish_jobs`
+        // row as publishing that really happened; a job whose every destination is
+        // pending would surface as activity that did not occur, and roll up to
+        // `failed` when finalized.
+        for (const destination of extras) outcomes.push(deferredOutcome(destination));
+      } else if (extras.length) {
         // The job id must outlive the try: when the fan-out throws, the attempt still
         // has to be finalized with the failure rows below. A job row left in
         // `publishing` forever reads as a publish that is still in flight.
@@ -349,7 +373,7 @@ export async function GET(req: Request): Promise<Response> {
             caption: input.description,
             destinationUrl: input.link,
             altText: input.altText,
-          });
+          }, { deadlineMs });
           outcomes.push(...fanned);
           // Defensive: an owed destination the fan-out returned no row for is not
           // "nothing happened", it is "nobody knows" — and silence there reads to the
@@ -388,10 +412,28 @@ export async function GET(req: Request): Promise<Response> {
         continue;
       }
 
+      // Destinations the run had no time to start. They are still owed, so the
+      // Content must keep its schedule — clearing it here is the "lost publish": the
+      // merchant chose three platforms, two went out, and the third silently never
+      // would have.
+      const pending = outcomes.filter(o => o.status === "pending");
+      const reported = outcomes.filter(o => o.status !== "pending" && o.status !== "skipped");
+      if (pending.length && !reported.length) {
+        // The run ran out of time before this row's FIRST destination. Nothing
+        // happened, so nothing is written: release the claim and leave the payload and
+        // scheduled_at exactly as they were, the same shape as the trial-access
+        // exemption above. A payload write here would only bump updatedAt and push a
+        // pointless LWW re-sync to every client.
+        await releaseClaim(db, row);
+        deferred++;
+        continue;
+      }
+
       // firstFailure carries the platform's stable CODE, which the outcome rows do not:
       // categorizing from the message alone would put a differently-worded
       // needs_reconnect in "transient" and offer the merchant the wrong fix.
-      await persistOutcomes(db, row, outcomes, rowNowIso, adoptedConnectionId, firstFailure?.code);
+      await persistOutcomes(db, row, outcomes, rowNowIso, adoptedConnectionId, firstFailure?.code,
+        { deferred: pending.length > 0 });
       const anyPublished = outcomes.some(o => o.status === "published");
       if (anyPublished) {
         const pin = outcomes.find(o => o.provider === "pinterest" && o.status === "published");
@@ -443,7 +485,7 @@ export async function GET(req: Request): Promise<Response> {
     // rate or lower DUE_LIMIT, and silence here would look like the rows never came due.
     console.warn(
       `[cron/publish-due] time budget spent after ${Date.now() - startedMs}ms — `
-      + `${deferred} due row(s) left unclaimed for the next run`,
+      + `${deferred} due row(s) left for the next run`,
     );
   }
   return json({ claimed: claimedCount, published, failed, skipped, deferred });
@@ -466,16 +508,21 @@ async function persistOutcomes(
   nowIso: string,
   connectionId?: string | null,
   failureCode?: string,
+  options?: OutcomePersistOptions,
 ): Promise<void> {
-  const payload = payloadAfterOutcomes(row.payload, outcomes, nowIso, connectionId, failureCode);
+  const payload = payloadAfterOutcomes(row.payload, outcomes, nowIso, connectionId, failureCode, options);
+  // A deferred row is still due. `scheduled_at` is omitted from the update entirely
+  // rather than written back, so nothing this run holds can overwrite a schedule the
+  // merchant changed while it was publishing.
+  const scheduleColumns = options?.deferred ? {} : { scheduled_at: null };
   const write = () => db
     .from(TABLE)
     .update({
       payload,
       status: typeof payload.status === "string" ? payload.status : null,
       updated_at: nowIso,
-      scheduled_at: null,       // no longer due
-      publish_claimed_at: null, // release the claim
+      ...scheduleColumns,
+      publish_claimed_at: null, // release the claim, so the next run can finish the job
     })
     .eq("vibepin_user_id", row.vibepin_user_id)
     .eq("draft_id", row.draft_id);

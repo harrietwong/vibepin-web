@@ -43,6 +43,16 @@ export const CLAIM_STALE_MS = 10 * 60 * 1000; // 10 minutes
  */
 export const CLAIM_BUDGET_MS = 200_000;
 
+/**
+ * The run's HARD deadline and the room reserved for one destination.
+ *
+ * Defined in publishRules (the fan-out enforces them destination by destination) and
+ * re-exported here so every bound this route runs under is readable in one place:
+ * CLAIM_BUDGET_MS stops it taking new ROWS, RUN_DEADLINE_MS stops it starting new
+ * DESTINATIONS. The batch limit bounds neither — it counts rows, not seconds.
+ */
+export { RUN_DEADLINE_MS, DESTINATION_RESERVE_MS } from "@/lib/social/publishRules";
+
 /** ISO timestamp of the stale-claim cutoff: claims at/after this are still "live". */
 export function staleClaimCutoffIso(nowMs: number): string {
   return new Date(nowMs - CLAIM_STALE_MS).toISOString();
@@ -275,8 +285,14 @@ function outcomeRows(
 ): Array<Record<string, unknown>> {
   return outcomes
     // `skipped` is "not attempted" — recording an outcome for it would claim
-    // something happened that did not.
-    .filter(o => o.status !== "skipped")
+    // something happened that did not. `pending` is "not attempted YET" (the run ran
+    // out of time before it): the mapping below has only two landing places, so a
+    // pending outcome would be written as FAILED — telling the merchant a platform
+    // rejected a post that was never sent, and inviting them to "retry" a publish
+    // the next run is going to make anyway. It also must not reach
+    // `supersededDestinationResults`, which would archive the live post this
+    // destination still has and drop it from the card.
+    .filter(o => o.status !== "skipped" && o.status !== "pending")
     .map(o => {
       const connectionId = typeof o.socialConnectionId === "string" && o.socialConnectionId.trim()
         ? o.socialConnectionId.trim()
@@ -544,6 +560,17 @@ export function payloadAfterFailure(
   return next;
 }
 
+/** How a persist should treat the Content's schedule. */
+export interface OutcomePersistOptions {
+  /**
+   * At least one destination was DEFERRED (the run's deadline arrived first).
+   *
+   * Record what happened, leave the Content scheduled: it is neither posted nor
+   * failed while a destination it named has not been attempted.
+   */
+  deferred?: boolean;
+}
+
 /**
  * The payload patch to persist after an attempt that had N destinations.
  *
@@ -578,15 +605,36 @@ export function payloadAfterOutcomes(
    * `publishErrorCode` degrades with it, so the caller passes it in.
    */
   failureCode?: string,
+  options?: OutcomePersistOptions,
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, adoptedConnectionId) };
   applyDestinationResults(next, payload, outcomes, nowIso);
   // The client's mergeServerDrafts LWW compares this field — see payloadAfterSuccess.
   next.updatedAt = nowIso;
 
-  const attempted = outcomes.filter(o => o.status !== "skipped");
+  // `pending` joins `skipped` here: neither was attempted, and counting a deferred
+  // destination as an attempt would resolve the Content — posted or failed — on the
+  // strength of a publish that has not happened.
+  const attempted = outcomes.filter(o => o.status !== "skipped" && o.status !== "pending");
   const publishedPinterest = attempted.find(o => o.provider === "pinterest" && o.status === "published");
   const anyPublished = attempted.some(o => o.status === "published");
+
+  // ── At least one destination was deferred ──────────────────────────────────
+  // The run ran out of time before it. Whatever DID happen is recorded — a Pin that
+  // published is a fact, and losing it is what makes the next run publish it twice —
+  // but the Content is neither posted nor failed: it is still scheduled, for the
+  // destinations that have not gone out. So the schedule stays, the claim is released
+  // by the caller, and the next run owes exactly the destinations still missing.
+  //
+  // `remotePinId`/`remotePinUrl` are captured here and not left to the completing run:
+  // by then this Pinterest destination has already published and is no longer owed, so
+  // its outcome is not in that run's set and the permalink would reach the legacy
+  // fields never. `postedAt` is NOT set — that is the completing run's to write.
+  if (options?.deferred) {
+    if (publishedPinterest?.externalPostId) next.remotePinId = publishedPinterest.externalPostId;
+    if (publishedPinterest?.externalPostUrl) next.remotePinUrl = publishedPinterest.externalPostUrl;
+    return next;
+  }
 
   // Nothing was ATTEMPTED because nothing was still owed — every destination had
   // already published on an earlier attempt (a stale-claim re-run). That is a

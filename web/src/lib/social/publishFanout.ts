@@ -30,7 +30,12 @@ import { findConnection } from "./server/socialConnectionStore";
 import { getSocialProviderById } from "./providers";
 import type { ScheduledDestination } from "../pinDraftStore";
 import type { SocialPostPayload } from "./types";
-import { rollUpJobStatus, type DestinationOutcome } from "./publishRules";
+import {
+  deferredOutcome,
+  hasTimeForDestination,
+  rollUpJobStatus,
+  type DestinationOutcome,
+} from "./publishRules";
 
 // The pure decision rules live in publishRules (importable without Supabase);
 // re-exported here so callers have one entry point for the execution layer.
@@ -218,10 +223,25 @@ function isolationFailure(
  * Sequential is still on purpose: these are third-party writes, and a merchant with
  * three connected platforms is not a throughput problem.
  */
+export interface FanOutOptions {
+  /**
+   * Absolute epoch-ms after which no further destination may be STARTED.
+   *
+   * Not a cancellation: a destination already in flight runs to completion (that is
+   * what `DESTINATION_RESERVE_MS` reserves room for). It stops the run from beginning
+   * work it cannot finish and persist before the platform kills the process — which
+   * is how a post that really went out ends up with no record and is sent again.
+   *
+   * Omitted ⇒ no deadline, i.e. the behaviour every caller had before.
+   */
+  deadlineMs?: number;
+}
+
 export async function fanOutDestinations(
   uid: string,
   destinations: readonly ScheduledDestination[],
   post: SocialPostPayload,
+  options?: FanOutOptions,
 ): Promise<DestinationOutcome[]> {
   const outcomes: DestinationOutcome[] = [];
   for (const destination of destinations) {
@@ -230,7 +250,14 @@ export async function fanOutDestinations(
     // everything it can see. This catch covers what it cannot — and it is the reason
     // the invariant above holds no matter how that function is later changed.
     try {
-      outcomes.push(await dispatchDestination(uid, destination, post));
+      outcomes.push(
+        // Checked per destination, immediately before dispatch, because that is where
+        // the time actually goes: the check that mattered was made once at the top of
+        // the row, and three Instagram accounts later the run was past the ceiling.
+        hasTimeForDestination(Date.now(), options?.deadlineMs)
+          ? await dispatchDestination(uid, destination, post)
+          : deferredOutcome(destination),
+      );
     } catch (err) {
       outcomes.push(isolationFailure(destination, err));
     }
