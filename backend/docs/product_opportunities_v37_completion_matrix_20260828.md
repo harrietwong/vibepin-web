@@ -42,6 +42,11 @@ metric history or a disabled timer is live.
 - Independent Claude Opus read-only review: `APPROVE`, no P0-P2 findings.
 - Production catalog SELECT at `2026-08-28T05:05:05Z`: zero matching v63
   objects, mutation false.
+- Stage 1 SQL proof is repository-replayable with lockfile-pinned PGlite 0.5.8:
+  `cd backend/tests/pglite_v37 && npm ci && npm test` reproduced the exact
+  10/18/9/3/4/91/44 contract, atomic Admission and zero-object rollback.
+  It does not prove production PostgreSQL concurrency or live role isolation;
+  those remain bounded production canary gates.
 
 ## Data quality decision
 

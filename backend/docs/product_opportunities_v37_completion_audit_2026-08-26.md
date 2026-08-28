@@ -125,6 +125,14 @@ The exact validation receipt is
 The changed Admission wrapper passed ShellCheck as an exact LF Git blob, but its
 post-change bytes have not yet been staged in the VPS `/tmp` systemd preflight.
 That pre-install host gate must therefore be refreshed before deployment.
+The Stage 1 SQL evidence is no longer report-only: the lockfile-pinned repository
+harness at `backend/tests/pglite_v37/verify-v63.mjs` reruns the canonical SQL hash
+bindings, baseline/post-apply catalog contract, Admission transactions and full
+rollback. Its latest clean replay is
+`backend/docs/product_opportunities_v37_stage1_pglite_replay_20260828T061320Z.json`.
+Because PGlite is single-process and the harness inspects policy/grant catalog
+facts rather than authenticated/anonymous sessions, production concurrency and
+role isolation remain explicit bounded canary gates.
 
 The historical integration candidate is
 `codex/product-v37-security-deps`. Its prequalified integration base

@@ -483,6 +483,16 @@ matching objects. Real transactions additionally prove empty admission rejection
 multi-row atomic failure, valid one-row admission, history-preserving retirement,
 and retired/current identity coexistence. This did not access production. Evidence:
 `backend/docs/product_opportunities_v37_stage1_migration_rollback_pglite_20260828T050657Z.json`.
+The exact run is now reproducible from the repository rather than depending on a
+temporary operator script: `cd backend/tests/pglite_v37 && npm ci && npm test`.
+The dependency is lockfile-pinned to PGlite 0.5.8; the harness binds all five SQL
+SHA-256 identities and reruns baseline, post-apply, admission and complete
+rollback assertions. Latest replay evidence:
+`backend/docs/product_opportunities_v37_stage1_pglite_replay_20260828T061320Z.json`.
+This is deliberately not concurrency or role-isolation evidence: PGlite runs in
+one process, and this harness inspects RLS policy/grant definitions rather than
+executing authenticated and anonymous sessions. The exact production post-apply
+verifier plus bounded concurrency/role canaries remain mandatory before rollout.
 
 The Stage 1 baseline and post-apply verifier were executed against the exact
 migration in PGlite. The post-apply contract proves 10 relations, 18 exact RPC/

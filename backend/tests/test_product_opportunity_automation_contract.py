@@ -93,6 +93,15 @@ STAGE1_VERIFIER_PGLITE = json.loads(
         / "product_opportunities_v37_stage1_verifier_pglite_20260828T050657Z.json"
     ).read_text(encoding="utf-8")
 )
+PGLITE_HARNESS_PATH = ROOT / "tests" / "pglite_v37" / "verify-v63.mjs"
+PGLITE_PACKAGE_LOCK_PATH = ROOT / "tests" / "pglite_v37" / "package-lock.json"
+PGLITE_REPLAY = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_stage1_pglite_replay_20260828T061320Z.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def _matches_sql_like_pattern(value: str, pattern: str) -> bool:
@@ -241,6 +250,27 @@ def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> N
     assert STAGE1_PGLITE["rollback_git_blob_sha256"] == artifacts[
         "backend/db/rollback_v63_product_opportunities_v1.sql"
     ]["sha256"]
+    harness = PGLITE_HARNESS_PATH.read_text(encoding="utf-8")
+    package_lock = json.loads(PGLITE_PACKAGE_LOCK_PATH.read_text(encoding="utf-8"))
+    assert STAGE1_PGLITE["replay_harness"] == (
+        "backend/tests/pglite_v37/verify-v63.mjs"
+    )
+    assert PGLITE_REPLAY["verdict"] == "PASS"
+    assert PGLITE_REPLAY["production_access"] is False
+    assert PGLITE_REPLAY["production_mutation"] is False
+    assert PGLITE_REPLAY["result"]["matchingCatalogObjectsAfterMigration"] == 238
+    assert PGLITE_REPLAY["result"]["matchingCatalogObjectsAfterCompleteRollback"] == 0
+    assert PGLITE_REPLAY["result"]["legacyCountsAndHashesUnchanged"] is True
+    assert len(PGLITE_REPLAY["limitations"]) == 3
+    assert "concurrent-writer" in PGLITE_REPLAY["limitations"][0]
+    assert "role-isolation" in PGLITE_REPLAY["limitations"][1]
+    assert len(PGLITE_REPLAY["required_production_followup"]) == 2
+    assert artifacts["backend/db/migrate_v63_product_opportunities_v1.sql"]["sha256"] in harness
+    assert artifacts["backend/db/rollback_v63_product_opportunities_v1.sql"]["sha256"] in harness
+    assert package_lock["packages"]["node_modules/@electric-sql/pglite"]["version"] == "0.5.8"
+    assert package_lock["packages"]["node_modules/@electric-sql/pglite"]["integrity"] == (
+        "sha512-n9tsbUOhwx2epK1V0ZG9Ar4SHWUju04dhmzZXiSBXwBoleOvIfals33NAaWgagQVAL4Rbvx/Ptsu3P+pA09f6Q=="
+    )
 
 
 def test_stage1_post_apply_verifier_is_manifest_bound_and_truthful() -> None:

@@ -2,6 +2,9 @@
   "audited_at": "2026-08-28T05:06:57Z",
   "candidate_functional_tip": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
   "engine": "PGlite 0.5.8 PostgreSQL-compatible in-memory runtime",
+  "replay_harness": "backend/tests/pglite_v37/verify-v63.mjs",
+  "replay_dependency_lock": "backend/tests/pglite_v37/package-lock.json",
+  "replay_command": "cd backend/tests/pglite_v37 && npm ci && npm test",
   "baseline_query": {
     "path": "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql",
     "sha256": "3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c",
