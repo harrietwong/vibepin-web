@@ -10,13 +10,14 @@ import {
   type ReferenceScoringInput,
   type ScoredReference,
 } from "@/lib/studio/referenceScoring";
-import { canonicalizeCategory, type P0Canonical } from "@/lib/studio/referenceCategory";
+import { canonicalizeCategory, inferP0Category, type P0Canonical } from "@/lib/studio/referenceCategory";
 import { stratifiedSample } from "@/lib/studio/referencePool";
 import {
   parseServeFields,
   defaultSeed,
   mergeRoundRobin,
   buildServed,
+  utcDayStart,
   type PoolMode,
 } from "@/lib/studio/referenceServe";
 import { recordAnalyticsEvents } from "@/lib/server/recordEvent";
@@ -152,44 +153,6 @@ const KEYWORD_CLUSTER_CAP = 2;
  *  holds DB values and contains `womens-fashion`, which canonicalizes into `fashion`). */
 const P0_CANONICALS: P0Canonical[] = ["fashion", "home-decor", "beauty", "digital-products"];
 
-// Keyword → P0 category inference. Used ONLY when the draft carries no category yet
-// (image analysis not finished). Without a category the query would pull a cross-category
-// pool ordered by popularity and surface off-topic pins (PRD §5.3 violation). Inferring the
-// category from the product title/summary scopes the pool so recommendations stay relevant.
-const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  "home-decor": ["decor", "home", "room", "wall", "art", "print", "poster", "frame", "rug",
-    "lamp", "shelf", "shelfie", "vase", "cushion", "pillow", "furniture", "table", "desk",
-    "chair", "sofa", "couch", "cabinet", "dresser", "storage", "bedroom", "living", "kitchen",
-    "bathroom", "entryway", "plant", "candle", "mirror", "curtain", "blanket", "throw",
-    "gallery", "interior", "apartment", "cozy", "aesthetic", "styling"],
-  "fashion": ["outfit", "outfits", "dress", "top", "shirt", "tee", "jeans", "pants", "jacket",
-    "coat", "skirt", "shoes", "sneakers", "boots", "heels", "bag", "handbag", "purse", "tote",
-    "accessory", "accessories", "jewelry", "bracelet", "necklace", "earrings", "ring", "watch",
-    "scarf", "hat", "sunglasses", "wear", "wardrobe", "streetwear", "lookbook", "fit"],
-  "beauty": ["makeup", "skincare", "cosmetic", "cosmetics", "lipstick", "foundation", "mascara",
-    "nail", "nails", "manicure", "hair", "hairstyle", "haircut", "vanity", "serum", "moisturizer",
-    "perfume", "beauty", "glow", "lashes", "brows", "eyeshadow", "blush"],
-  "digital-products": ["printable", "printables", "template", "templates", "planner", "digital",
-    "download", "downloadable", "ebook", "wallpaper", "svg", "canva", "spreadsheet", "worksheet",
-    "notion", "checklist"],
-};
-
-/** Infer a P0 category from free text (product title + image summary) by keyword hits.
- *  Returns undefined on no clear winner so the caller keeps its safe fallback. */
-function inferP0Category(text: string): string | undefined {
-  const words = new Set(text.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter(Boolean));
-  let best: string | undefined;
-  let bestHits = 0;
-  for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-    const hits = keywords.reduce((n, k) => n + (words.has(k) ? 1 : 0), 0);
-    if (hits > bestHits) { bestHits = hits; best = cat; }
-  }
-  // Two independent hits, not one: a lone coincidental word ("blush" in a bouquet listing,
-  // "art" in "nail art") must not pin the pool to a category. Below the bar the caller
-  // falls through to the unknown-category round-robin, which is the honest answer.
-  return bestHits >= 2 ? best : undefined;
-}
-
 type PostBody = {
   imageAnalysis?: {
     category?: string;
@@ -299,8 +262,7 @@ export async function POST(request: Request) {
   // Quantized to the UTC day: the sampler's freshness tiers (<=7d / <=30d) are relative to
   // `now`, so a per-request wall clock let rows cross a tier boundary between two calls with
   // the same daily seed and change the sample. Same UTC day => same tiers => same sample.
-  const wallClock = new Date();
-  const now = new Date(Date.UTC(wallClock.getUTCFullYear(), wallClock.getUTCMonth(), wallClock.getUTCDate()));
+  const now = utcDayStart(new Date());
   const fields = parseServeFields(body, { uuid: () => crypto.randomUUID() });
   const excluded = new Set(fields.excludeIds);
 

@@ -199,3 +199,14 @@ export function buildServed(args: {
     recommendationBasis: args.recommendationBasis,
   };
 }
+
+/**
+ * Start of the UTC day containing `date`. The route feeds THIS — not the wall clock — to
+ * the sampler: its freshness tiers (<=7d / <=30d) are relative to `now`, so a per-request
+ * clock let a row cross a tier boundary between two calls with the same daily seed and
+ * change the sample (live smoke: same seed, 2 of 9 ids drifted within minutes). Same UTC
+ * day => same tiers => same sample; the daily seed already rotates at the same boundary.
+ */
+export function utcDayStart(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}

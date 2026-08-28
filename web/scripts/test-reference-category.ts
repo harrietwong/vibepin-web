@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { canonicalizeCategory, type P0Canonical } from "../src/lib/studio/referenceCategory";
+import { canonicalizeCategory, inferP0Category, type P0Canonical } from "../src/lib/studio/referenceCategory";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -102,6 +102,21 @@ test("dbCategories is a fresh array (callers may mutate it for .in())", () => {
   const a = canonicalizeCategory("jewelry").dbCategories;
   a.push("mutated");
   assert.deepEqual(canonicalizeCategory("jewelry").dbCategories, FASHION_DB, "shared array leaked");
+});
+
+test("inferP0Category: two independent keyword hits are required (a lone word never pins a pool)", () => {
+  // "blush" alone is a beauty keyword; a bouquet listing must not become nail/hair inspiration.
+  assert.equal(inferP0Category("Blush Rose Bridal Bouquet romantic ivory ribbon"), undefined);
+  // "art" (home-decor) + "nail" (beauty): one hit each, no winner.
+  assert.equal(inferP0Category("nail art"), undefined);
+  assert.equal(inferP0Category(""), undefined);
+});
+
+test("inferP0Category: a genuine two-hit text still resolves", () => {
+  assert.equal(inferP0Category("cozy bedroom decor"), "home-decor");
+  assert.equal(inferP0Category("Almond press-on nails manicure"), "beauty");
+  assert.equal(inferP0Category("Notion weekly planner template"), "digital-products");
+  assert.equal(inferP0Category("summer outfit ideas with sunglasses"), "fashion");
 });
 
 console.log(`\n${passed} reference-category tests passed.`);

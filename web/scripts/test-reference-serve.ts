@@ -19,6 +19,7 @@
 
 import assert from "node:assert/strict";
 import {
+  utcDayStart,
   parseServeFields,
   defaultSeed,
   mergeRoundRobin,
@@ -322,6 +323,18 @@ test("buildServed: poolHash is order-independent, so two code paths compare equa
   assert.equal(a.poolHash, b.poolHash);
   const c = buildServed({ ...base, poolIds: ["x", "y", "w"] });
   assert.notEqual(a.poolHash, c.poolHash, "a different pool must be a different hash");
+});
+
+test("utcDayStart: quantizes to the UTC day so the sampler tiers cannot drift within a day", () => {
+  const a = utcDayStart(new Date("2026-08-28T00:00:01.000Z"));
+  const b = utcDayStart(new Date("2026-08-28T23:59:59.999Z"));
+  assert.equal(a.toISOString(), "2026-08-28T00:00:00.000Z");
+  assert.equal(a.getTime(), b.getTime(), "same UTC day must quantize to the same instant");
+  const c = utcDayStart(new Date("2026-08-29T00:00:00.000Z"));
+  assert.notEqual(a.getTime(), c.getTime(), "the next UTC day is a different instant");
+  // The seed and the tiers rotate on the same boundary.
+  assert.equal(defaultSeed("fashion", a), defaultSeed("fashion", new Date("2026-08-28T15:30:00.000Z")));
+  assert.notEqual(defaultSeed("fashion", a), defaultSeed("fashion", c));
 });
 
 console.log(`\n${passed} reference-serve tests passed.`);
