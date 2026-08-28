@@ -434,5 +434,89 @@ test("owedDestinations: a draft that DOES name an account is untouched by the le
   assert.equal(owed[0].socialConnectionId, "pin_A", "derived intent still wins — nothing synthetic is added");
 });
 
+// ── A1-1: a republish must not erase the post it replaces ────────────────────
+// A Content that was Posted, then edited and re-scheduled, publishes into the SAME
+// destination again. The card path has always kept the superseded row (with its
+// permalink) under previousResults; the cron dropped it, so the earlier Pin became
+// unreachable from the app only when the scheduler was the publisher.
+const PUBLISHED_PIN = {
+  destinationId: "pinterest:pin_A", provider: "pinterest", socialConnectionId: "pin_A",
+  status: "published", remoteId: "pin-1", postUrl: "https://pin/1",
+  publishedAt: "2026-07-01T09:00:00.000Z",
+};
+const NOW_ISO = "2026-07-11T12:00:00.000Z";
+
+test("payloadAfterOutcomes: a republish keeps the old permalink in previousResults", () => {
+  const after = payloadAfterOutcomes(
+    { destinationResults: [PUBLISHED_PIN], scheduledDate: "2026-07-11", plannedAt: "2026-07-11T09:00" },
+    [{ provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "pin-2", externalPostUrl: "https://pin/2" }],
+    NOW_ISO,
+  );
+  const rows = after.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1, "the destination still has exactly one CURRENT row");
+  assert.equal(rows[0].postUrl, "https://pin/2", "which is the Pin this run created");
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous.length, 1);
+  assert.equal(previous[0].postUrl, "https://pin/1", "the earlier Pin is still live — its permalink must survive");
+  assert.equal(previous[0].status, "published");
+});
+
+test("payloadAfterOutcomes: a first publish records no history at all", () => {
+  const after = payloadAfterOutcomes({}, [
+    { provider: "instagram", status: "published", socialConnectionId: "ig_A", externalPostId: "ig-1", externalPostUrl: "https://ig/1" },
+  ], NOW_ISO);
+  assert.equal(after.previousResults, undefined, "nothing was replaced, so nothing is archived");
+});
+
+test("payloadAfterOutcomes: an untouched destination is never archived", () => {
+  const after = payloadAfterOutcomes(
+    { destinationResults: [PUBLISHED_PIN] },
+    [{ provider: "instagram", status: "published", socialConnectionId: "ig_A", externalPostId: "ig-1" }],
+    NOW_ISO,
+  );
+  assert.equal(after.previousResults, undefined, "the Pinterest row was kept, not replaced");
+  const rows = after.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find(r => r.destinationId === "pinterest:pin_A")?.postUrl, "https://pin/1");
+});
+
+test("payloadAfterOutcomes: a FAILED re-attempt still archives the live post it replaced", () => {
+  const after = payloadAfterOutcomes(
+    { destinationResults: [PUBLISHED_PIN] },
+    [{ provider: "pinterest", status: "failed", socialConnectionId: "pin_A", error: "Reconnect your Pinterest account." }],
+    NOW_ISO,
+  );
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous?.length, 1, "the earlier Pin is still on Pinterest, however the retry went");
+  assert.equal(previous[0].postUrl, "https://pin/1");
+});
+
+test("payloadAfterOutcomes: history accumulates across republishes", () => {
+  const after = payloadAfterOutcomes(
+    {
+      destinationResults: [{ ...PUBLISHED_PIN, remoteId: "pin-2", postUrl: "https://pin/2" }],
+      previousResults: [PUBLISHED_PIN],
+    },
+    [{ provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "pin-3", externalPostUrl: "https://pin/3" }],
+    NOW_ISO,
+  );
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.deepEqual(previous.map(r => r.postUrl), ["https://pin/1", "https://pin/2"]);
+  assert.equal((after.destinationResults as Array<Record<string, unknown>>)[0].postUrl, "https://pin/3");
+});
+
+test("payloadAfterSuccess: the Pinterest-only path archives the superseded Pin too", () => {
+  const after = payloadAfterSuccess(
+    { destinationResults: [PUBLISHED_PIN], targetConnectionId: "pin_A" },
+    { id: "pin-2", url: "https://pin/2" },
+    NOW_ISO,
+  );
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous?.length, 1);
+  assert.equal(previous[0].postUrl, "https://pin/1");
+  assert.equal(after.remotePinUrl, "https://pin/2");
+});
+
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

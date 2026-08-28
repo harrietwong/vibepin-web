@@ -16,6 +16,10 @@ import { toProxyUrl } from "@/lib/imageProxy";
 // module load), which is what keeps this file runnable under bare `tsx`.
 import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
 import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
+// The card path's history rule, reused verbatim so a scheduled republish and a manual
+// one keep the same "Earlier publishes" record. Pure + dependency-free (it only reads
+// mediaRules/scheduledDestinations, both import-safe), so it runs under bare `tsx`.
+import { supersededResults, type DestinationPublishResult } from "@/lib/contentDraftModel";
 import { isSocialProvider, platformName, type SocialProvider } from "@/lib/social/platforms";
 import type { ScheduledDestination } from "@/lib/pinDraftStore";
 
@@ -242,15 +246,18 @@ export type DestinationOutcomeLike = {
  * Keyed `${provider}:${socialConnectionId ?? "legacy"}`, the same key the client uses,
  * so a retry updates the row it belongs to instead of appending a duplicate.
  */
-export function mergeDestinationResults(
-  payload: Record<string, unknown>,
+function priorDestinationResults(payload: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(payload.destinationResults)
+    ? (payload.destinationResults as Array<Record<string, unknown>>)
+    : [];
+}
+
+/** This attempt's rows, in the stored shape — the input to BOTH merges below. */
+function outcomeRows(
   outcomes: readonly DestinationOutcomeLike[],
   nowIso: string,
 ): Array<Record<string, unknown>> {
-  const prior = Array.isArray(payload.destinationResults)
-    ? (payload.destinationResults as Array<Record<string, unknown>>)
-    : [];
-  const rows = outcomes
+  return outcomes
     // `skipped` is "not attempted" — recording an outcome for it would claim
     // something happened that did not.
     .filter(o => o.status !== "skipped")
@@ -276,8 +283,62 @@ export function mergeDestinationResults(
       }
       return row;
     });
+}
+
+export function mergeDestinationResults(
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+): Array<Record<string, unknown>> {
+  const prior = priorDestinationResults(payload);
+  const rows = outcomeRows(outcomes, nowIso);
   const fresh = new Set(rows.map(r => r.destinationId));
   return [...prior.filter(r => !fresh.has(r?.destinationId)), ...rows];
+}
+
+/**
+ * The `published` rows this attempt REPLACES, appended to the Content's history.
+ *
+ * A Content that was Posted, then edited and re-scheduled, publishes again into the
+ * same destination — and `mergeDestinationResults` drops the row describing the post
+ * that is still live on the platform, taking its permalink with it. The card path has
+ * always kept it (`supersededResults` → `previousResults[]`, rendered as "Earlier
+ * publishes"); the cron did not, so the SAME Content lost history only when the
+ * scheduler published it. Same helper, same cap, same rule: only `published` rows are
+ * worth keeping, and a row replaced by a FAILED re-attempt is kept too — the earlier
+ * post is still live regardless of how the retry went.
+ */
+export function supersededDestinationResults(
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+): Array<Record<string, unknown>> {
+  const history = Array.isArray(payload.previousResults)
+    ? (payload.previousResults as Array<Record<string, unknown>>)
+    : [];
+  // Cast at the boundary only: these are the stored result rows, typed loosely here
+  // because a cron payload is whatever the client last synced.
+  return supersededResults(
+    priorDestinationResults(payload) as unknown as DestinationPublishResult[],
+    outcomeRows(outcomes, nowIso) as unknown as DestinationPublishResult[],
+    history as unknown as DestinationPublishResult[],
+  ) as unknown as Array<Record<string, unknown>>;
+}
+
+/**
+ * Write BOTH halves of the result record: what happened now, and the live posts this
+ * attempt superseded. Every payloadAfter* transform goes through here so no path can
+ * record one without the other.
+ */
+function applyDestinationResults(
+  next: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+): void {
+  next.destinationResults = mergeDestinationResults(payload, outcomes, nowIso);
+  const previous = supersededDestinationResults(payload, outcomes, nowIso);
+  if (previous.length) next.previousResults = previous;
 }
 
 /** The reason a destination that was owed produced no result of its own. */
@@ -369,7 +430,7 @@ export function payloadAfterSuccess(
   fanned?: readonly DestinationOutcomeLike[],
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, connectionId) };
-  next.destinationResults = mergeDestinationResults(payload, [
+  applyDestinationResults(next, payload, [
     {
       provider: "pinterest",
       status: "published",
@@ -433,7 +494,7 @@ export function payloadAfterFailure(
   next.updatedAt = nowIso;
   // The failed Pinterest destination gets a row of its own, carrying the reason, so the
   // card shows WHICH destination failed and why — not just a Content-level error.
-  next.destinationResults = mergeDestinationResults(payload, [{
+  applyDestinationResults(next, payload, [{
     provider: "pinterest",
     status: "failed",
     socialConnectionId: firstString(payload.targetConnectionId) || connectionId || null,
@@ -503,7 +564,7 @@ export function payloadAfterOutcomes(
   failureCode?: string,
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, adoptedConnectionId) };
-  next.destinationResults = mergeDestinationResults(payload, outcomes, nowIso);
+  applyDestinationResults(next, payload, outcomes, nowIso);
   // The client's mergeServerDrafts LWW compares this field — see payloadAfterSuccess.
   next.updatedAt = nowIso;
 
