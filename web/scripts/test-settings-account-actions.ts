@@ -196,9 +196,21 @@ test("Reconnect 绑定的是该行的 connection id,不是 accounts[0]", () => {
   // 错配横幅的重试同样不能回落到第一个账号 —— 否则修第二个账号的人会被送去修第一个。
   // 平台名从横幅自己的 provider 来:Facebook/Instagram 也会触发这条横幅了,
   // 写死 pinterest 会让在 FB 上错配的人被送去重连 Pinterest(Codex #5)。
+  // 这条断言原来盯着的是 `reconnectTargetId ?? platform?.accounts[0]?.id ?? null`,
+  // 也就是它自己标题里说"不能有"的那个回落 —— 只是当时还留着当兜底。Codex #3 把它
+  // 彻底删了:目标要么在当前连接列表里被核验到,要么按钮直接禁用。
   assert.match(panelSrc, /const platform = summaries\?\.find\(s => s\.provider === accountMismatch\.provider\);/);
-  assert.match(panelSrc, /const target = reconnectTargetId \?\? platform\?\.accounts\[0\]\?\.id \?\? null;/);
-  assert.match(panelSrc, /void handleConnect\(accountMismatch\.provider, target\);/);
+  assert.match(
+    panelSrc,
+    /return platform\?\.accounts\.some\(a => a\.id === reconnectTargetId\) \? reconnectTargetId : null;/,
+    "目标必须在当前连接列表里核验过才算数",
+  );
+  assert.match(panelSrc, /canSignInToOriginal=\{!!resolvedReconnectTarget\}/,
+    "核验不到就不能让人点");
+  assert.match(panelSrc, /if \(!resolvedReconnectTarget\) return;/,
+    "没有核验过的目标时,重试必须什么都不做,而不是猜一个");
+  // 变量名换成了 resolvedReconnectTarget(核验过的那一行);语义不变:重连同一行。
+  assert.match(panelSrc, /void handleConnect\(accountMismatch\.provider, resolvedReconnectTarget\);/);
   assert.match(panelSrc, /setReconnectTargetId\(account\.id\)/);
 });
 
