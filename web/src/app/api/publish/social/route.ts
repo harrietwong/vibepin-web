@@ -65,7 +65,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const postId = typeof body.postId === "string" ? body.postId : null;
+  const postId = typeof body.postId === "string" && body.postId.trim() ? body.postId.trim() : null;
   const productId = typeof body.productId === "string" ? body.productId : null;
   const rawPost = (body.post ?? {}) as Record<string, unknown>;
   const post: SocialPostPayload = {

@@ -259,6 +259,44 @@ function consumeCalls(): RpcCall[] {
     );
   });
 
+  await test("a padded postId (two-space-padded 'draft-X') derives the SAME key as the trimmed draftId -- trimming must match the pins route's, or a padded id would silently escape the replay collapse", async () => {
+    const res = await POST(req({
+      postId: "  draft-X  ",
+      post: { imageUrls: ["https://example.com/img7.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    }));
+    assert.equal(res.status, 200, "the route itself must not error");
+    const calls = consumeCalls();
+    assert.equal(calls.length, 1, "exactly one scheduled-post consume");
+    assert.equal(
+      calls[0].args.p_idempotency_key,
+      deriveScheduledPostKey(OWNER, "draft-X"),
+      "a padded postId must trim to the same key as the pins route's trimmed draftId for the same Content",
+    );
+  });
+
+  await test("a whitespace-only postId (three spaces) is treated as no draft identity -> zero consume calls and a usage_meter_skipped log line", async () => {
+    const originalWarn = console.warn;
+    const lines: string[] = [];
+    console.warn = ((msg?: unknown) => { lines.push(String(msg)); }) as typeof console.warn;
+    try {
+      await POST(req({
+        postId: "   ",
+        post: { imageUrls: ["https://example.com/img8.png"] },
+        destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+      }));
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(consumeCalls().length, 0, "must never charge a whitespace-only postId as if it were a stable identity");
+    const parsed = lines
+      .map(l => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+      .find(l => l?.event === "usage_meter_skipped");
+    assert.ok(parsed, `expected a usage_meter_skipped log line, saw: ${JSON.stringify(lines)}`);
+    assert.equal(parsed!.reason, "no_draft_identity");
+    assert.equal(parsed!.route, "publish_social");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);
 })();
