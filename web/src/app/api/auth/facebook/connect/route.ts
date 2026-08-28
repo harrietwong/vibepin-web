@@ -78,9 +78,11 @@ function loginRedirect(req: NextRequest, returnTo: string): NextResponse {
  * A `reconnect=<id>` flow is ALWAYS allowed through. Reconnect repairs an existing
  * row (the store's UPDATE branch, which never consults the limit) — refusing it at
  * the ceiling would leave an at-limit user permanently unable to fix a broken
- * connection. The id is only shape-checked here; it grants nothing, because the
- * store still decides insert-vs-update from the account that actually authorizes,
- * and the insert branch re-checks. So a forged id cannot create an over-limit row.
+ * connection. The id is only shape-checked here; it grants nothing, because it is
+ * re-read against THIS user's own rows in the callback (a forged or foreign id
+ * resolves to nothing and degrades to a plain connect), the callback refuses a
+ * different account outright, and the store's insert branch re-checks the limit.
+ * So a forged id cannot create an over-limit row.
  *
  * Fails OPEN on an unexpected error: an entitlement lookup that throws must not
  * become a connect outage. The persist-time check is the backstop.
@@ -139,11 +141,16 @@ function attachOAuthStateCookie(
   state: string,
   uid: string,
   returnTo: string,
+  reconnectConnectionId: string | null,
 ): NextResponse {
   try {
     res.cookies.set(
       OAUTH_STATE_COOKIE,
-      sealState(state, uid, returnTo),
+      // The reconnect target rides INSIDE the sealed cookie, never in the opaque
+      // `state` param handed to Facebook: the callback has to be able to trust it
+      // (it decides whether a different account is refused), and only the sealed
+      // cookie is tamper-evident.
+      sealState(state, uid, returnTo, reconnectConnectionId),
       stateCookieOptions(req.nextUrl.protocol === "https:"),
     );
     return res;
@@ -188,7 +195,7 @@ export async function GET(req: NextRequest) {
   // exact origin even if state validation later fails. Cleared by the callback.
   res.cookies.set(OAUTH_RETURN_COOKIE, returnTo, returnCookieOptions(req.nextUrl.protocol === "https:"));
   try {
-    return attachOAuthStateCookie(res, req, payload.state, uid, returnTo);
+    return attachOAuthStateCookie(res, req, payload.state, uid, returnTo, reconnectId);
   } catch (err) {
     if (err instanceof ConfigurationError) return configErrorResponse(req, err, false);
     return settingsRedirect(req, "config_error");
@@ -235,7 +242,7 @@ export async function POST(req: NextRequest) {
   const res = NextResponse.json({ url: payload.authorizeUrl });
   res.cookies.set(OAUTH_RETURN_COOKIE, returnTo, returnCookieOptions(req.nextUrl.protocol === "https:"));
   try {
-    return attachOAuthStateCookie(res, req, payload.state, uid, returnTo);
+    return attachOAuthStateCookie(res, req, payload.state, uid, returnTo, reconnectId);
   } catch (err) {
     if (err instanceof ConfigurationError) return configErrorResponse(req, err, true);
     return NextResponse.json({ error: "Facebook OAuth could not be started", code: "config_error" }, { status: 500 });

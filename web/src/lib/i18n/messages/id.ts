@@ -1786,7 +1786,7 @@ const id: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Tidak dapat memulai koneksi",
   "socialPanel.toast.disconnectedSuffix": " terputus",
   "socialPanel.toast.couldNotDisconnect": "Tidak dapat memutuskan",
-  "socialPanel.mismatch.title": "Itu akun Pinterest yang berbeda",
+  "socialPanel.mismatch.title": "Itu akun {platform} yang berbeda",
   "socialPanel.mismatch.bodyPrefix": "Anda masuk sebagai ",
   "socialPanel.mismatch.bodyMiddle": ", tetapi Anda sedang menghubungkan ulang ",
   "socialPanel.mismatch.bodySuffix": ". Tidak ada yang diubah — koneksi Anda yang ada tetap utuh. Pilih tindakan yang Anda inginkan.",

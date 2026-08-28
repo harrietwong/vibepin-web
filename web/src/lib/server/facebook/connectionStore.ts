@@ -163,6 +163,39 @@ function pickRowForFacebookUser<T extends FacebookRowBase>(
 }
 
 /**
+ * The row an upsert must write, given who authorized and (optionally) which row a
+ * Reconnect was aimed at.
+ *
+ * The explicit target is honoured ONLY when its recorded identity is compatible —
+ * absent (never synced) or the very same Facebook user. `pickRowForFacebookUser`
+ * therefore stays the source of truth for "which row means this account"; the
+ * target can select among the user's OWN rows, never override identity. A
+ * mismatched reconnect is refused in the callback before it ever reaches here, so
+ * falling back rather than throwing keeps this function total.
+ *
+ * Why an explicit target is needed at all: on a row that never recorded a
+ * facebookUserId, the identity rule only adopts a LONE unidentified row. A merchant
+ * with two Facebook rows reconnecting the unidentified one would otherwise fall
+ * through to INSERT — a duplicate row that also eats a plan slot.
+ */
+function pickRowForUpsert<T extends FacebookRowBase>(
+  rows: T[],
+  facebookUserId: string | null | undefined,
+  targetConnectionId: string | null | undefined,
+): T | null {
+  if (targetConnectionId) {
+    // `rows` is already narrowed to this user + provider, so an id that is forged
+    // or belongs to someone else simply matches nothing.
+    const target = rows.find(r => r.id === targetConnectionId);
+    if (target) {
+      const recorded = facebookUserIdOf(target);
+      if (!recorded || recorded === facebookUserId) return target;
+    }
+  }
+  return pickRowForFacebookUser(rows, facebookUserId);
+}
+
+/**
  * Read the ONE Facebook row a caller is acting on.
  *
  * SECURITY: `user_id` + `provider` are filtered unconditionally, and a
@@ -298,6 +331,13 @@ export type FacebookConnectionMetadata = {
 export async function upsertFacebookConnection(
   uid: string,
   input: UpsertFacebookInput,
+  /**
+   * The row a Reconnect was aimed at (sealed into the OAuth state, re-read by the
+   * callback against this user's own rows). Given, the write lands on THAT row —
+   * which is the UPDATE branch, so it never consumes a plan slot. Omitted, the
+   * identity rule decides exactly as before.
+   */
+  targetConnectionId?: string | null,
 ): Promise<void> {
   const now = new Date().toISOString();
   const accessTokenEncrypted = cipher.encrypt(input.accessToken);
@@ -350,8 +390,9 @@ export async function upsertFacebookConnection(
 
   const allRows = (rows as FacebookRowBase[] | null) ?? [];
   // Shared with every READ in this module (getStoredFacebookSelection's callback
-  // path), so the row this write lands on is the row those reads returned.
-  const existing = pickRowForFacebookUser(allRows, input.accountId);
+  // path), so the row this write lands on is the row those reads returned. A
+  // reconnect may additionally name the row it is repairing — see pickRowForUpsert.
+  const existing = pickRowForUpsert(allRows, input.accountId, targetConnectionId);
 
   if (readError && !isMissingTable(readError.code)) {
     console.error("[facebook] read connection:", readError.message);
@@ -759,6 +800,44 @@ export async function getStoredFacebookSelection(
   if (!pageId) return null;
   const pageName = fb.selectedPageId ? fb.selectedPageName : fb.lastKnownPageName;
   return { pageId, pageName: pageName ?? null };
+}
+
+/**
+ * The identity of the row a Reconnect was aimed at, for the OAuth callback's
+ * "is this the same account?" check (Codex #5).
+ *
+ * SECURITY: the id comes from the sealed OAuth state, but it is still only ever
+ * used to select among rows already filtered by `user_id` + `provider` — it can
+ * never reach another merchant's connection. Returns null when the row is gone
+ * (removed in another tab), which the callback treats as a plain connect.
+ *
+ * The compared field is `metadata.facebook.facebookUserId`, NOT
+ * `provider_account_id`: the latter switches to the Page id the moment a Page is
+ * selected, so comparing it against a Facebook USER id would report a mismatch on
+ * every properly-connected account. Same key `upsertFacebookConnection` matches on,
+ * so the check and the write can never disagree.
+ *
+ * Throws on storage errors — the callback must refuse rather than write blind.
+ */
+export async function getFacebookReconnectTarget(
+  uid: string,
+  connectionId: string,
+): Promise<{ connectionId: string; accountId: string | null; label: string | null } | null> {
+  if (!connectionId) return null;
+  const row = await resolveFacebookRow<{
+    id: string;
+    metadata?: Record<string, unknown> | null;
+    provider_account_name?: string | null;
+  }>(uid, "id, metadata, provider_account_name", { connectionId }, "reconnect target");
+  if (!row) return null;
+  const fb = (row.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  return {
+    connectionId: row.id,
+    accountId: facebookUserIdOf(row),
+    // Prefer the Facebook user's own name — the reconnect is about WHO signed in,
+    // not which Page they publish to; fall back to the row's display name.
+    label: fb?.facebookUserName ?? row.provider_account_name ?? null,
+  };
 }
 
 /**

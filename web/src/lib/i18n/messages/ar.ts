@@ -519,7 +519,7 @@ const ar: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "تعذّر بدء الاتصال",
   "socialPanel.toast.disconnectedSuffix": " تم قطع الاتصال",
   "socialPanel.toast.couldNotDisconnect": "تعذّر قطع الاتصال",
-  "socialPanel.mismatch.title": "هذا حساب Pinterest مختلف",
+  "socialPanel.mismatch.title": "هذا حساب {platform} مختلف",
   "socialPanel.mismatch.bodyPrefix": "لقد سجّلت الدخول باسم ",
   "socialPanel.mismatch.bodyMiddle": "، لكنك كنت تعيد ربط ",
   "socialPanel.mismatch.bodySuffix": ". لم يتغيّر أي شيء — اتصالك الحالي كما هو. اختر ما تريد فعله.",

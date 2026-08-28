@@ -143,7 +143,33 @@ export async function countScheduledForConnection(
 }
 
 /**
- * Un-schedule every Pin pinned to this connection. Returns how many rows were cleared.
+ * The outcome of a cancel, in enough detail for the caller to decide whether the
+ * account may now be deleted (Codex #6). Identical contract to the multi-platform
+ * module's `CancelScheduledOutcome`, deliberately — the two remove routes make the
+ * same decision and must not disagree about what "it worked" means.
+ *
+ * `cleared` alone was not enough: a read error was swallowed as "nothing is
+ * scheduled" and each failed update was logged and skipped, so the route deleted
+ * the connection anyway and told the merchant it had cancelled their schedules.
+ */
+export type CancelScheduledOutcome = {
+  /** Rows successfully un-scheduled. */
+  cleared: number;
+  /** Rows that matched but whose update FAILED. Any non-zero value blocks a delete. */
+  failed: number;
+  /**
+   * The candidate read itself failed, so `cleared`/`failed` describe nothing. A
+   * MISSING table/column is NOT a failure — the optional migration simply has not
+   * run and there is genuinely nothing scheduled.
+   */
+  readFailed: boolean;
+};
+
+/**
+ * Un-schedule every Pin pinned to this connection.
+ *
+ * Every matching row is still attempted even after one fails — a partial cancel is
+ * strictly better than stopping early, and the caller refuses the delete either way.
  *
  * Known and accepted for MVP: a row the cron has ALREADY claimed
  * (`publish_claimed_at` inside the 10-minute stale window) may still complete its
@@ -156,19 +182,20 @@ export async function cancelScheduledForConnection(
   uid: string,
   connectionId: string,
   nowIso: string,
-): Promise<number> {
-  if (!str(connectionId)) return 0;
+): Promise<CancelScheduledOutcome> {
+  if (!str(connectionId)) return { cleared: 0, failed: 0, readFailed: false };
   const { data, error } = await scheduledForConnectionQuery(
     db, uid, connectionId, "vibepin_user_id, draft_id, payload",
   );
   if (error) {
-    if (isMissingSchemaError(error)) return 0;
+    if (isMissingSchemaError(error)) return { cleared: 0, failed: 0, readFailed: false };
     console.error("[pinterest/disconnect] scheduled fetch failed:", error.message);
-    return 0;
+    return { cleared: 0, failed: 0, readFailed: true };
   }
 
   const rows = (Array.isArray(data) ? data : []) as ScheduledDraftRow[];
   let cleared = 0;
+  let failed = 0;
   for (const row of rows) {
     const { error: updateError } = await db
       .from(PIN_DRAFTS_TABLE)
@@ -182,9 +209,10 @@ export async function cancelScheduledForConnection(
       .eq("draft_id", row.draft_id);
     if (updateError) {
       console.error("[pinterest/disconnect] schedule cancel failed:", updateError.message);
+      failed++;
       continue;
     }
     cleared++;
   }
-  return cleared;
+  return { cleared, failed, readFailed: false };
 }

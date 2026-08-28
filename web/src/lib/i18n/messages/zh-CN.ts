@@ -1767,7 +1767,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "无法发起连接",
   "socialPanel.toast.disconnectedSuffix": " 已断开连接",
   "socialPanel.toast.couldNotDisconnect": "无法断开连接",
-  "socialPanel.mismatch.title": "这是另一个 Pinterest 账号",
+  "socialPanel.mismatch.title": "这是另一个 {platform} 账号",
   "socialPanel.mismatch.bodyPrefix": "你登录的是 ",
   "socialPanel.mismatch.bodyMiddle": ",但你要重新连接的是 ",
   "socialPanel.mismatch.bodySuffix": "。没有任何更改——你现有的连接保持原样。请选择要执行的操作。",

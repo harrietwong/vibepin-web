@@ -12,6 +12,11 @@
  *      A PERSONAL account is REJECTED (?instagram=personal_account) — VibePin
  *      supports only Business / Creator accounts. Nothing is persisted for a
  *      rejected account.
+ *   5b. If this flow was started as a Reconnect (the target connection id rides in
+ *      the sealed state), compare the Instagram account that just authorized with
+ *      the identity recorded on that row. A DIFFERENT account writes NOTHING and
+ *      redirects ?instagram=account_mismatch&expected=&got= — the same refusal
+ *      Pinterest and Facebook make.
  *   6. Encrypt + persist into social_connections (provider='instagram') as
  *      'connected'.
  *   7. Redirect back to returnTo (or the social settings page) with a status flag.
@@ -36,7 +41,11 @@ import {
   fetchInstagramProfile,
   isProfessionalAccount,
 } from "@/lib/server/instagram/service";
-import { upsertInstagramConnection } from "@/lib/server/instagram/connectionStore";
+import {
+  upsertInstagramConnection,
+  getInstagramReconnectTarget,
+} from "@/lib/server/instagram/connectionStore";
+import { decideReconnect } from "@/lib/server/social/reconnectIdentity";
 import { INSTAGRAM_SCOPES } from "@/lib/server/instagram/config";
 import { ConnectionLimitError } from "@/lib/server/social/connectionLimit";
 
@@ -61,13 +70,26 @@ function igDebug(record: {
   console.log("[instagram-oauth-debug]", JSON.stringify(record));
 }
 
-function redirectAfterOAuth(req: NextRequest, status: string, returnTo = SOCIAL_SETTINGS_PATH): NextResponse {
+function redirectAfterOAuth(
+  req: NextRequest,
+  status: string,
+  returnTo = SOCIAL_SETTINGS_PATH,
+  /**
+   * Extra query params for the Settings panel. Used by `account_mismatch` to name
+   * both accounts (`expected` / `got`) so the banner can be specific without
+   * another round trip — the same contract the Pinterest callback uses.
+   */
+  extra?: Record<string, string | null | undefined>,
+): NextResponse {
   const url = req.nextUrl.clone();
   const target = new URL(returnTo, req.nextUrl.origin);
   url.pathname = target.pathname;
   url.search = target.search;
   url.hash = target.hash;
   url.searchParams.set("instagram", status);
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (value) url.searchParams.set(key, value);
+  }
   const res = NextResponse.redirect(url);
   // Both OAuth cookies are single-use — clear on every outcome.
   res.cookies.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 });
@@ -144,6 +166,48 @@ export async function GET(req: NextRequest) {
     tokenExpiresAt: tokens.accessTokenExpiresAt ?? null,
   });
 
+  // ── Reconnect identity gate (Codex #5) ──────────────────────────────────────
+  // A Reconnect names the row it is repairing; that id rode here inside the sealed
+  // OAuth state. If a DIFFERENT Instagram account just authorized, NOTHING may be
+  // written — not the token, not a new row. Before this, the store fell back to
+  // identity matching, found no row for the new account and INSERTED one: a slot
+  // spent on an account the merchant never meant to add, while the account they
+  // were repairing stayed disconnected, with nothing on screen saying so.
+  //
+  // `profile.userId || tokens.userId` is the very expression the upsert stores as
+  // provider_account_id, so the check and the write can never compare different
+  // things.
+  const authorizedAccountId = profile.userId || tokens.userId;
+  let reconnectTargetId: string | null = null;
+  if (verdict.reconnectConnectionId) {
+    let target;
+    try {
+      target = await getInstagramReconnectTarget(uid, verdict.reconnectConnectionId);
+    } catch (readErr) {
+      // Reading the merchant's own row failed. Writing blind is exactly the
+      // overwrite this gate exists to prevent, so refuse.
+      console.error("[Instagram OAuth Callback] reconnect target read failed:", (readErr as Error).message);
+      return redirectAfterOAuth(req, "persist_failed", verdict.returnTo);
+    }
+    const decision = decideReconnect({
+      reconnectTargetId: verdict.reconnectConnectionId,
+      target,
+      authorizedAccountId,
+      authorizedLabel: profile.username ?? profile.name ?? null,
+    });
+    if (decision.action === "reject") {
+      return redirectAfterOAuth(req, "account_mismatch", verdict.returnTo, {
+        expected: decision.expectedLabel,
+        got: decision.gotLabel,
+      });
+    }
+    // Names the row the upsert must land on. Load-bearing for a target row that
+    // never recorded an account id: the store's identity rule only adopts a LONE
+    // unidentified row, so a merchant with two Instagram rows would otherwise get a
+    // duplicate insert instead of the repair they asked for.
+    reconnectTargetId = decision.targetConnectionId;
+  }
+
   // ── PERSONAL-account gate ─────────────────────────────────────────────────────
   // Content publishing requires a Business or Creator (MEDIA_CREATOR) account.
   // A PERSONAL (or unknown) account_type is rejected and NOTHING is persisted — we
@@ -162,12 +226,12 @@ export async function GET(req: NextRequest) {
       expiresAt: tokens.accessTokenExpiresAt,
       scopes,
       // Prefer the profile user_id; the token exchange user_id is the same account.
-      accountId: profile.userId || tokens.userId,
+      accountId: authorizedAccountId,
       username: profile.username,
       name: profile.name,
       accountType: profile.accountType,
       state: "connected",
-    });
+    }, reconnectTargetId);
   } catch (persistErr) {
     // A plan ceiling is user-actionable, not broken storage — surface it distinctly.
     if (persistErr instanceof ConnectionLimitError) {

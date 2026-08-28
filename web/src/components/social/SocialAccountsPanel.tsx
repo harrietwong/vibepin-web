@@ -886,14 +886,37 @@ function InstagramDetails({ summary }: { summary: PlatformConnectionSummary }) {
  */
 
 /**
- * PRD §10: the reconnect that landed on the wrong Pinterest account.
+ * Naming one account inside the mismatch banner.
+ *
+ * Pinterest and Instagram identify an account by @handle; a Facebook connection is
+ * named by the person or Page, where a leading "@" would just be wrong. Absent
+ * either way (a connection whose profile never synced), a neutral phrase beats
+ * printing "@null".
+ */
+function mismatchAccountLabel(
+  provider: SocialProvider,
+  value: string | null,
+  fallback: string,
+): string {
+  if (!value) return fallback;
+  return provider === "facebook" ? value : `@${value}`;
+}
+
+/**
+ * PRD §10 / Codex #5: the reconnect that landed on the wrong account.
  *
  * Nothing was written — the original connection is untouched and still publishing to
  * the account it always did. The user is offered the two things they could actually
  * have meant, named by account so the choice is unambiguous, and neither option is
  * pre-taken for them. Dismissing changes nothing either way.
+ *
+ * Raised for Pinterest, Facebook and Instagram alike: all three now refuse a
+ * reconnect that authorizes as a different account, so all three need the same
+ * decision surface. Only the title names the platform — the rest of the copy was
+ * already provider-neutral.
  */
 function AccountMismatchNotice({
+  provider,
   expected,
   got,
   busy,
@@ -901,6 +924,7 @@ function AccountMismatchNotice({
   onAddAsNew,
   onDismiss,
 }: {
+  provider: SocialProvider;
   expected: string | null;
   got: string | null;
   busy: boolean;
@@ -909,14 +933,16 @@ function AccountMismatchNotice({
   onDismiss: () => void;
 }) {
   const { t: tr } = useLocale();
-  // Usernames come from Pinterest and may be absent (a connection whose profile
-  // never synced). Fall back to a neutral phrase rather than printing "@null".
-  const expectedLabel = expected ? `@${expected}` : tr("socialPanel.mismatch.theOriginalAccount");
-  const gotLabel = got ? `@${got}` : tr("socialPanel.mismatch.aDifferentAccount");
+  const expectedLabel = mismatchAccountLabel(
+    provider, expected, tr("socialPanel.mismatch.theOriginalAccount"),
+  );
+  const gotLabel = mismatchAccountLabel(
+    provider, got, tr("socialPanel.mismatch.aDifferentAccount"),
+  );
 
   return (
     <div
-      data-testid="pinterest-account-mismatch"
+      data-testid={`${provider}-account-mismatch`}
       role="alert"
       style={{
         padding: "12px 14px",
@@ -926,7 +952,7 @@ function AccountMismatchNotice({
       }}
     >
       <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.warning }}>
-        {tr("socialPanel.mismatch.title")}
+        {tr("socialPanel.mismatch.title").replace("{platform}", PLATFORMS[provider].name)}
       </p>
       <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
         {tr("socialPanel.mismatch.bodyPrefix")}{gotLabel}{tr("socialPanel.mismatch.bodyMiddle")}{expectedLabel}
@@ -935,7 +961,7 @@ function AccountMismatchNotice({
       <div style={{ marginTop: 11, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <button
           type="button"
-          data-testid="pinterest-mismatch-signin-original"
+          data-testid={`${provider}-mismatch-signin-original`}
           onClick={onSignInToOriginal}
           disabled={busy}
           style={{
@@ -950,7 +976,7 @@ function AccountMismatchNotice({
         </button>
         <button
           type="button"
-          data-testid="pinterest-mismatch-add-new"
+          data-testid={`${provider}-mismatch-add-new`}
           onClick={onAddAsNew}
           disabled={busy}
           style={{
@@ -965,7 +991,7 @@ function AccountMismatchNotice({
         </button>
         <button
           type="button"
-          data-testid="pinterest-mismatch-dismiss"
+          data-testid={`${provider}-mismatch-dismiss`}
           onClick={onDismiss}
           style={{
             padding: "8px 12px", borderRadius: 10,
@@ -1425,11 +1451,15 @@ export function SocialAccountsPanel() {
   /** Only set while a connect click is redirecting the browser away — drives the button label. */
   const [connectingProvider, setConnectingProvider] = useState<SocialProvider | null>(null);
   /**
-   * A reconnect the server refused because a different Pinterest account authorized
-   * (PRD §10). Holds both usernames so the offer can name them; null when there is
-   * no pending decision.
+   * A reconnect the server refused because a different account authorized
+   * (PRD §10 / Codex #5). Holds the platform plus both account labels so the offer
+   * can name them; null when there is no pending decision. The provider is part of
+   * the state because all three live platforms can raise this now — without it the
+   * banner's two CTAs would always restart a PINTEREST flow.
    */
-  const [accountMismatch, setAccountMismatch] = useState<{ expected: string | null; got: string | null } | null>(null);
+  const [accountMismatch, setAccountMismatch] = useState<
+    { provider: SocialProvider; expected: string | null; got: string | null } | null
+  >(null);
   /**
    * A connect the server refused because the plan's account limit is used up
    * (PRD §9.2 / §18). Like the mismatch, nothing was written and the user has a real
@@ -1528,6 +1558,19 @@ export function SocialAccountsPanel() {
   useEffect(() => {
     const flag = params.get("facebook");
     if (!flag) return;
+    // A refused reconnect is NOT a toast, for the same reason as Pinterest's:
+    // nothing was written and the merchant has a real decision to make (sign in as
+    // the original account, or add the one that just authorized as a second
+    // account), so it stays on screen as a banner with both options.
+    if (flag === "account_mismatch") {
+      setAccountMismatch({
+        provider: "facebook",
+        expected: params.get("expected"),
+        got: params.get("got"),
+      });
+      router.replace(SETTINGS_SOCIAL_PATH);
+      return;
+    }
     // A plan-limit refusal is not a toast: nothing was written and the merchant
     // has a real choice (upgrade, or remove an account they no longer publish to).
     // Same banner Pinterest raises for `limit_reached` — the body and CTAs are
@@ -1545,7 +1588,12 @@ export function SocialAccountsPanel() {
     router.replace(SETTINGS_SOCIAL_PATH);
     // Refresh on both a completed connection and a pending Page choice so the card
     // flips to "connected" (or shows the Page picker) immediately.
-    if (flag === "connected" || flag === "select_page") { notifyConnectionsChanged(); void load(); }
+    if (flag === "connected" || flag === "select_page" || flag === "reconnected") {
+      // A successful authorization resolves any pending mismatch banner.
+      setAccountMismatch(null);
+      notifyConnectionsChanged();
+      void load();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
@@ -1565,6 +1613,7 @@ export function SocialAccountsPanel() {
     // banner with both options rather than vanishing after a few seconds.
     if (flag === "account_mismatch") {
       setAccountMismatch({
+        provider: "pinterest",
         expected: params.get("expected"),
         got: params.get("got"),
       });
@@ -1604,6 +1653,17 @@ export function SocialAccountsPanel() {
   useEffect(() => {
     const flag = params.get("instagram");
     if (!flag) return;
+    // A refused reconnect is NOT a toast — same contract as Pinterest/Facebook
+    // above: nothing was written, and the merchant has a real decision to make.
+    if (flag === "account_mismatch") {
+      setAccountMismatch({
+        provider: "instagram",
+        expected: params.get("expected"),
+        got: params.get("got"),
+      });
+      router.replace(SETTINGS_SOCIAL_PATH);
+      return;
+    }
     // A plan-limit refusal is not a toast: nothing was written and the merchant
     // has a real choice (upgrade, or remove an account they no longer publish to).
     // Same banner Pinterest raises for `limit_reached` — the body and CTAs are
@@ -1619,7 +1679,12 @@ export function SocialAccountsPanel() {
       notify(m.msg);
     }
     router.replace(SETTINGS_SOCIAL_PATH);
-    if (flag === "connected") { notifyConnectionsChanged(); void load(); }
+    if (flag === "connected") {
+      // A successful authorization resolves any pending mismatch banner.
+      setAccountMismatch(null);
+      notifyConnectionsChanged();
+      void load();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
@@ -1703,14 +1768,13 @@ export function SocialAccountsPanel() {
    * reconnected (PRD §10). It is remembered in state as well, so the mismatch
    * banner's retry names the same row instead of falling back to accounts[0].
    *
-   * Facebook and Instagram: their connect routes accept the reconnect id only to
-   * skip the start-time plan gate (shape-checked, it grants nothing), then run the
-   * ordinary OAuth for that provider. Re-authorizing an account already
-   * held is an UPDATE in both stores (they key the row on the provider account id),
-   * so it repairs the row and is never refused by the plan limit — but there is also
-   * no identity check, so authorizing as a DIFFERENT account adds a new row instead
-   * of repairing this one. Identity-aware repair for FB/IG is deliberately out of
-   * scope here.
+   * Facebook and Instagram behave the same way as of Codex #5: the id is sealed
+   * into their OAuth state, and their callbacks compare the account that actually
+   * authorized against the target row's recorded identity
+   * (metadata.facebook.facebookUserId / provider_account_id). Same account → an
+   * UPDATE of that exact row, which the plan limit never refuses. Different account
+   * → nothing is written at all and the mismatch banner above appears, instead of
+   * the silent extra row (and spent plan slot) this used to produce.
    */
   async function handleReconnectAccount(provider: SocialProvider, account: SocialConnection) {
     setReconnectTargetId(account.id);
@@ -1830,8 +1894,13 @@ export function SocialAccountsPanel() {
         await disconnectSocial(account.id, { mode: "remove", cancelScheduled });
       }
       toast.success(tr("socialPanel.toast.accountRemoved"));
-    } catch {
-      toast.error(tr("socialPanel.toast.accountRemoveFailed"));
+    } catch (e) {
+      // The server refuses the removal when it could not cancel the schedules the
+      // merchant asked it to (409 schedule_cancel_failed) and says how many — that
+      // sentence is far more actionable than a generic failure, and it is the only
+      // thing that explains why the row is still here after the `load()` below
+      // puts it back.
+      toast.error((e as Error).message || tr("socialPanel.toast.accountRemoveFailed"));
     } finally {
       notifyConnectionsChanged();
       await load(); // the server is the truth either way — restores the row on failure
@@ -1884,23 +1953,25 @@ export function SocialAccountsPanel() {
 
       {accountMismatch && (
         <AccountMismatchNotice
+          provider={accountMismatch.provider}
           expected={accountMismatch.expected}
           got={accountMismatch.got}
-          busy={busyProvider === "pinterest"}
+          busy={busyProvider === accountMismatch.provider}
           onSignInToOriginal={() => {
             // Retry the SAME repair: still a reconnect, so a second wrong account is
             // refused again rather than quietly taking over the connection.
             // The row the merchant actually pressed Reconnect on. Falling back to
             // accounts[0] (as this once did) would redirect someone repairing their
             // SECOND account into repairing their first.
-            const pinterest = summaries?.find(s => s.provider === "pinterest");
-            const target = reconnectTargetId ?? pinterest?.accounts[0]?.id ?? null;
-            void handleConnect("pinterest", target);
+            const platform = summaries?.find(s => s.provider === accountMismatch.provider);
+            const target = reconnectTargetId ?? platform?.accounts[0]?.id ?? null;
+            void handleConnect(accountMismatch.provider, target);
           }}
           onAddAsNew={() => {
             // Deliberately NOT a reconnect: this is the user accepting the account
-            // that authorized, so it goes down the plain Add path and gets its own row.
-            void handleConnect("pinterest");
+            // that authorized, so it goes down the plain Add path and gets its own
+            // row — subject to the plan gate, which a reconnect skips.
+            void handleConnect(accountMismatch.provider);
           }}
           onDismiss={() => setAccountMismatch(null)}
         />

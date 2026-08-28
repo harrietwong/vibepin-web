@@ -194,8 +194,28 @@ test("Reconnect 绑定的是该行的 connection id,不是 accounts[0]", () => {
   assert.match(panelSrc, /await handleConnect\(provider, account\.id\);/,
     "Reconnect 必须把这一行的 id 作为重连目标传下去");
   // 错配横幅的重试同样不能回落到第一个账号 —— 否则修第二个账号的人会被送去修第一个。
-  assert.match(panelSrc, /const target = reconnectTargetId \?\? pinterest\?\.accounts\[0\]\?\.id \?\? null;/);
+  // 平台名从横幅自己的 provider 来:Facebook/Instagram 也会触发这条横幅了,
+  // 写死 pinterest 会让在 FB 上错配的人被送去重连 Pinterest(Codex #5)。
+  assert.match(panelSrc, /const platform = summaries\?\.find\(s => s\.provider === accountMismatch\.provider\);/);
+  assert.match(panelSrc, /const target = reconnectTargetId \?\? platform\?\.accounts\[0\]\?\.id \?\? null;/);
+  assert.match(panelSrc, /void handleConnect\(accountMismatch\.provider, target\);/);
   assert.match(panelSrc, /setReconnectTargetId\(account\.id\)/);
+});
+
+test("移除被拒时面板说出服务端那句话，并把行放回去（Codex #6）", () => {
+  // 服务端 409 带的是一句可执行的话（"N 条排程没能取消，账号未移除"）。
+  // 面板原来 catch 掉一切、只弹一句通用失败，于是商家看到"移除失败"、行又还在，
+  // 无从判断到底发生了什么、该不该重试。
+  const removeAt = panelSrc.indexOf("async function removeAccount(");
+  assert.ok(removeAt > 0);
+  const body = panelSrc.slice(removeAt, removeAt + 2400);
+  assert.ok(
+    body.includes('toast.error((e as Error).message || tr("socialPanel.toast.accountRemoveFailed"))'),
+    "必须优先弹服务端的 userMessage，通用文案只作兜底",
+  );
+  assert.ok(!body.includes("} catch {"), "不能再把错误整个丢掉");
+  // 行本身由 finally 里的 load() 从服务端重新取回 —— 乐观删除因此被撤销。
+  assert.ok(body.includes("await load();"), "失败后必须重新拉一次服务端真相，把行放回去");
 });
 
 test("账号行对每个有账号的平台都渲染(单账号也有一行)", () => {
@@ -358,8 +378,9 @@ await testAsync("cancel:多目的地行保住排程,单目的地行才 scheduled
   ];
   const { db, chains } = makeFakeDb([{ data: rows }, { data: null }, { data: null }]);
   const now = "2026-08-27T10:00:00.000Z";
-  const cleared = await cancelScheduledForSocialConnection(db, "u1", "fb-1", now);
-  assert.equal(cleared, 2, "只改动真正涉及该账号的两行");
+  const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", now);
+  assert.deepEqual(outcome, { cleared: 2, failed: 0, readFailed: false },
+    "只改动真正涉及该账号的两行,且全部成功");
 
   const updates = chains.slice(1).map(calls => {
     const patch = (calls.find(c => c.method === "update")!.args[0]) as Record<string, unknown>;
@@ -412,13 +433,40 @@ await testAsync("destinations 清空时必须同时清 scheduled_at(否则 legac
     "destinations 清空却留着 scheduled_at,等于把取消变成一次静默的 Pinterest 发布");
 });
 
-await testAsync("单行写回失败只跳过该行", async () => {
+await testAsync("单行写回失败只跳过该行,但必须报告 failed(Codex #6)", async () => {
   const rows = [
     { vibepin_user_id: "u1", draft_id: "d1", payload: { scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-1", capturedAt: "x" }] } },
     { vibepin_user_id: "u1", draft_id: "d2", payload: { scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-1", capturedAt: "x" }] } },
   ];
   const { db } = makeFakeDb([{ data: rows }, { error: { code: "XX000", message: "boom" } }, { data: null }]);
-  assert.equal(await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z"), 1);
+  const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z");
+  assert.equal(outcome.cleared, 1, "一行失败不应吞掉另一行的成功");
+  // 剩下那一行仍然指向即将被删除的账号。只回 cleared 的话,这次调用与
+  // "只有一行需要清且清成功了"完全无法区分。
+  assert.equal(outcome.failed, 1, "失败的行必须出现在返回值里");
+  assert.equal(outcome.readFailed, false);
+});
+
+await testAsync("读取失败 ≠ 没有排程(Codex #6)", async () => {
+  const { db } = makeFakeDb([{ error: { code: "XX000", message: "connection reset" } }]);
+  const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z");
+  assert.deepEqual(outcome, { cleared: 0, failed: 0, readFailed: true });
+});
+
+await testAsync("缺表/缺列仍然是'确实没有排程',不是失败", async () => {
+  const { db } = makeFakeDb([{ error: { code: "PGRST205", message: "Could not find the table" } }]);
+  const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z");
+  assert.deepEqual(outcome, { cleared: 0, failed: 0, readFailed: false },
+    "可选迁移没跑不该把商家卡在无法移除账号上");
+});
+
+await testAsync("全部清干净时 failed=0,路由才被允许删除", async () => {
+  const rows = [
+    { vibepin_user_id: "u1", draft_id: "d1", payload: { scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-1", capturedAt: "x" }] } },
+  ];
+  const { db } = makeFakeDb([{ data: rows }, { data: null }]);
+  const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z");
+  assert.deepEqual(outcome, { cleared: 1, failed: 0, readFailed: false });
 });
 
 console.log("\n=== 5) 断开的行留在列表里,并且继续占额度(PRD 0805 §11) ===");
@@ -486,6 +534,10 @@ test("Pinterest Remove 是硬删:走 mode=remove,且缺 connectionId 直接 400"
   const cancelAt = route.indexOf("cancelScheduledForConnection(");
   const deleteAt = route.indexOf("await deleteConnection(uid, connectionId)");
   assert.ok(cancelAt > 0 && deleteAt > cancelAt, "取消排程必须在删除之前");
+  // 而且必须取消成功才准删(Codex #6):否则"已移除"是一句假话。
+  const guardAt = route.indexOf("cancelOutcome.readFailed || cancelOutcome.failed > 0");
+  assert.ok(guardAt > cancelAt && deleteAt > guardAt, "删除守卫必须夹在取消与删除之间");
+  assert.match(route, /code: "schedule_cancel_failed"/);
   // 软断开仍是默认分支:旧标签页不带 mode 时只会做可逆的那个。
   assert.match(route, /await disconnect\(uid, connectionId\);/);
   const store = read("src/lib/server/pinterest/connectionStore.ts");

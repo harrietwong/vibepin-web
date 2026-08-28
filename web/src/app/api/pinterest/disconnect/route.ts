@@ -62,6 +62,22 @@ import { createServerClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The customer-readable refusal when the schedules could not all be cancelled
+ * (Codex #6).
+ *
+ * It names a number because "something went wrong" gives the merchant nothing to
+ * check: they chose to cancel N scheduled posts, and they need to know the account
+ * is STILL THERE (so they can retry) rather than half-removed.
+ */
+function scheduleCancelFailedMessage(failed: number, readFailed: boolean): string {
+  if (readFailed) {
+    return "We couldn't check what's still scheduled through this account, so it was not removed. Please try again.";
+  }
+  const posts = failed === 1 ? "1 scheduled post" : `${failed} scheduled posts`;
+  return `We couldn't cancel ${posts}, so the account was not removed. Please try again.`;
+}
+
 /** The optional single-connection target. Empty/absent ⇒ user-wide disconnect. */
 function readConnectionId(req: Request): string | undefined {
   const raw = new URL(req.url).searchParams.get("connectionId");
@@ -109,12 +125,41 @@ export async function DELETE(req: Request) {
     // Cancel BEFORE disconnecting/removing: if the request dies half-way, the worse
     // outcome is schedules cleared on a still-connected account (visible, recoverable)
     // rather than a removed account leaving live rows the cron keeps picking up.
+    let cancelOutcome: { cleared: number; failed: number; readFailed: boolean } | null = null;
     if (connectionId && cancelScheduled) {
-      cancelledScheduled = await cancelScheduledForConnection(
+      cancelOutcome = await cancelScheduledForConnection(
         createServerClient(), uid, connectionId, new Date().toISOString(),
       );
+      cancelledScheduled = cancelOutcome.cleared;
     }
     if (remove && connectionId) {
+      // The cancel and the delete are ONE decision (Codex #6). A read error used to
+      // degrade to "nothing is scheduled" and a failed update was logged and
+      // skipped, so a transient DB failure deleted the account, reported success,
+      // and left Pins scheduled to a connection that no longer exists. Refuse the
+      // delete instead: the account stays, visible and retryable.
+      //
+      // Only the DELETE is gated. The soft disconnect below keeps the row, so a
+      // half-cancel there is recoverable and the publish-time target_disconnected
+      // block still stops those Pins.
+      if (cancelOutcome && (cancelOutcome.readFailed || cancelOutcome.failed > 0)) {
+        const userMessage = scheduleCancelFailedMessage(cancelOutcome.failed, cancelOutcome.readFailed);
+        console.error(
+          `[pinterest/disconnect] schedule cancel incomplete (cleared=${cancelOutcome.cleared}, failed=${cancelOutcome.failed}, readFailed=${cancelOutcome.readFailed}) — account kept`,
+        );
+        return Response.json(
+          {
+            ok: false,
+            code: "schedule_cancel_failed",
+            cleared: cancelOutcome.cleared,
+            failed: cancelOutcome.failed,
+            userMessage,
+            // `error` is what the client's parseErrorResponse surfaces as the message.
+            error: userMessage,
+          },
+          { status: 409 },
+        );
+      }
       await deleteConnection(uid, connectionId);
       return Response.json({ ok: true, removed: true, disconnected: true, cancelledScheduled });
     }
