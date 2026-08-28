@@ -40,6 +40,7 @@ import {
   buildScheduledDestinations,
   legacyPinterestMirror,
   resolveScheduledAccount,
+  withBoardOnPinterestEntry,
   type DestinationPick,
 } from "@/lib/social/scheduledDestinations";
 import type { SelectedAccount } from "@/components/social/PublishDestinations";
@@ -328,6 +329,19 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const saveState: "saved" | "saving" | "failed" = persistFailed ? "failed" : pendingSave ? "saving" : "saved";
 
   const persistNow = useCallback((f: PinFieldsValue) => {
+    const nextBoardId = f.boardId.trim();
+    const storedDestinations = draft.scheduledDestinations ?? [];
+    // The board is the one field on this form that is ALSO a publish destination:
+    // changing it here changes where this Content goes (owner decision, 2026-08-27).
+    // Writing only the legacy board left the stored Pinterest entry — what the due-time
+    // worker publishes to — on the old board, so the merchant read the new board off the
+    // card while the Pin went somewhere else.
+    //
+    // The rest of the intent is still one fact with one writer: nothing here is
+    // re-derived from picker state. `withBoardOnPinterestEntry` is a pure rewrite of the
+    // STORED entries, and it runs ONLY when the board actually changed — a title
+    // keystroke can never reach destinations.
+    const boardChanged = nextBoardId !== (draft.boardId ?? "").trim();
     props.onPersist(draft.id, {
       title: f.title,
       description: f.description,
@@ -336,11 +350,17 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       boardName: boardName(f.boardId),
       altText: f.altText,
       tags: parseTags(f.tags),
-      // Destinations are NOT written here. They are one fact with one writer
-      // (`persistDestinationSelection` below → `scheduledDestinations`), so a field
-      // edit can never quietly re-derive them from stale component state.
+      ...(boardChanged && storedDestinations.length
+        ? {
+            scheduledDestinations: withBoardOnPinterestEntry(
+              storedDestinations,
+              draft.targetConnectionId,
+              { boardId: nextBoardId, boardName: boardName(nextBoardId) },
+            ),
+          }
+        : {}),
     });
-  }, [props, draft.id, boardName]);
+  }, [props, draft.id, draft.boardId, draft.scheduledDestinations, draft.targetConnectionId, boardName]);
 
   const flush = useCallback(() => {
     if (timer.current) {

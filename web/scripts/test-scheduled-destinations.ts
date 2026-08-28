@@ -19,6 +19,7 @@ import {
   isUsableDestination,
   legacyPinterestMirror,
   scheduledProviders,
+  withBoardOnPinterestEntry,
 } from "../src/lib/social/scheduledDestinations";
 import { payloadAfterSuccess, payloadAfterFailure } from "../src/app/api/cron/publish-due/publishDueLogic";
 import type { PinDraft, ScheduledDestination } from "../src/lib/pinDraftStore";
@@ -256,6 +257,74 @@ section("N accounts per platform (WS-B3)");
   check("no Pinterest entry ⇒ the mirror is cleared, never left stale",
     legacyPinterestMirror([two[2]]).targetConnectionId === ""
       && legacyPinterestMirror([two[2]]).boardId === "");
+}
+
+// ── the card's board field IS a destination ──────────────────────────────────
+// Owner decision 2026-08-27: editing the Board on a Create Pins card is editing the
+// publish destination. These pin the rewrite the card performs — the bug it replaces
+// showed the merchant the NEW board while publishing the Pin to the OLD one.
+section("a board edit moves the entry it speaks for");
+{
+  const dest = (over: Partial<ScheduledDestination> = {}): ScheduledDestination => ({
+    provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", boardName: "Board A",
+    accountLabel: "@shopA", capturedAt: "2026-08-01T00:00:00.000Z", ...over,
+  });
+  const NEW = { boardId: "b-Z", boardName: "Board Z" };
+
+  // 1. Legacy Pin with no stored intent: the helper has nothing to rewrite, and the
+  // read-side derivation carries the new board on its own.
+  const legacyOnly = withBoardOnPinterestEntry(undefined, "conn-pinterest-A", NEW);
+  check("a draft with no stored intent gets no invented entry", legacyOnly.length === 0);
+  const derivedAfterEdit = resolveScheduledDestinations(
+    legacyDraft({ boardId: "b-Z", boardName: "Board Z" }),
+  );
+  check("legacy draft: the edited board is what the read side derives",
+    derivedAfterEdit.length === 1 && derivedAfterEdit[0].boardId === "b-Z",
+    JSON.stringify(derivedAfterEdit));
+
+  // 2. One Pinterest entry beside a non-Pinterest one.
+  const ig = { provider: "instagram", socialConnectionId: "ig_A", capturedAt: "2026-08-01T00:00:00.000Z" } as ScheduledDestination;
+  const mixed = [dest(), ig];
+  const rewritten = withBoardOnPinterestEntry(mixed, "pin_A", NEW);
+  check("the Pinterest entry takes the new board",
+    rewritten[0].boardId === "b-Z" && rewritten[0].boardName === "Board Z",
+    JSON.stringify(rewritten[0]));
+  check("the rest of that entry is untouched (account + capture time survive)",
+    rewritten[0].socialConnectionId === "pin_A" && rewritten[0].accountLabel === "@shopA"
+      && rewritten[0].capturedAt === "2026-08-01T00:00:00.000Z");
+  check("the Instagram entry is left exactly as it was", rewritten[1] === ig);
+  check("the input array is not mutated", mixed[0].boardId === "b-A");
+
+  // 3. Two Pinterest accounts: ONLY the one the card's target names may move. The other
+  // account's board is a different account's board — writing this one onto it is the
+  // wrong-destination bug in its worst form.
+  const twoPins = [dest({ socialConnectionId: "pin_A" }), dest({ socialConnectionId: "pin_B", boardId: "b-B", boardName: "Board B" })];
+  const onlyB = withBoardOnPinterestEntry(twoPins, "pin_B", NEW);
+  check("only the entry matching targetConnectionId changes",
+    onlyB[1].boardId === "b-Z" && onlyB[0].boardId === "b-A", JSON.stringify(onlyB));
+
+  // 4. No entry matches (or nothing to match on) ⇒ the FIRST Pinterest entry, which is
+  // the one legacyPinterestMirror mirrors, so the two never disagree.
+  const noMatch = withBoardOnPinterestEntry(twoPins, "pin_GONE", NEW);
+  check("with no matching account the FIRST Pinterest entry takes the board",
+    noMatch[0].boardId === "b-Z" && noMatch[1].boardId === "b-B", JSON.stringify(noMatch));
+  check("that is the same entry the legacy mirror follows",
+    legacyPinterestMirror(noMatch).boardId === "b-Z");
+  const noTarget = withBoardOnPinterestEntry(twoPins, "", NEW);
+  check("no target id at all still falls to the first Pinterest entry",
+    noTarget[0].boardId === "b-Z" && noTarget[1].boardId === "b-B");
+
+  // 5. Clearing the board clears it on the entry too — a cleared field must never leave
+  // the old board still stored as where this publishes.
+  const cleared = withBoardOnPinterestEntry(mixed, "pin_A", { boardId: "", boardName: "" });
+  check("clearing the board clears it on the entry",
+    cleared[0].boardId === undefined && cleared[0].boardName === undefined,
+    JSON.stringify(cleared[0]));
+
+  // 6. No Pinterest entry ⇒ nothing to rewrite; the legacy fields alone are correct.
+  const igOnly = withBoardOnPinterestEntry([ig], "pin_A", NEW);
+  check("an intent with no Pinterest entry is returned unchanged",
+    igOnly.length === 1 && igOnly[0] === ig);
 }
 
 console.log(`\nScheduled destinations: ${pass} passed, ${fail} failed\n`);
