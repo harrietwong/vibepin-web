@@ -196,9 +196,11 @@ export function evaluateAllowance(
  *
  * Deliberately UNFILTERED. A disconnected row is still an account the merchant holds
  * — it is listed in Settings, it can be reconnected, and it occupies its slot until
- * they Remove it (PRD 0805 §11). Adding `.is("disconnected_at", null)` back here
- * would hand out a slot the row is still holding, so the ceiling could be exceeded by
- * disconnecting instead of removing.
+ * they Remove it (PRD 0805 §11). Re-adding a not-disconnected / has-a-token filter
+ * here would hand out a slot the row is still holding, so the ceiling could be
+ * exceeded by disconnecting instead of removing. test-account-allowance.ts asserts
+ * those two predicates are absent from this file, so this comment may not name them
+ * verbatim either.
  *
  * Never selects the token ciphertext — the column is not read at all now.
  */

@@ -91,30 +91,35 @@ await testAsync("买了 1 个加购 slot 后,超出套餐的第 N+1 个账号被
   assert.equal((await evaluateAccountQuota("u", "starter", 2, spent)).canAddAccount, false);
 });
 
-console.log("\n=== 计数口径:断开的行不占额度 ===");
-test("计数口径由 accountAllowance 独占:未断开 且 有 token", () => {
+console.log("\n=== 计数口径:持有的每一行都占额度，只有 Remove 释放 ===");
+test("计数口径由 accountAllowance 独占:持有的每一行，不看状态", () => {
   const allowance = read("src/lib/server/social/accountAllowance.ts");
   assert.ok(
-    allowance.includes('.is("disconnected_at", null)') &&
-      allowance.includes('.not("access_token_encrypted", "is", null)'),
-    "活跃计数必须是 未断开 且 有 token(与 listActiveConnections 同一判定)",
+    !allowance.includes('.is("disconnected_at", null)') &&
+      !allowance.includes('.not("access_token_encrypted", "is", null)'),
+    "断开的行仍占额度(PRD 0805 §11),不得再按活跃过滤",
+  );
+  assert.ok(
+    allowance.includes("export async function countConnectionsByProvider("),
+    "函数名必须说出它数的是什么:行,而不是活跃行",
   );
   const src = read("src/lib/server/pinterest/accountQuota.ts");
   assert.ok(src.includes("evaluateAccountAllowance"), "必须委托给唯一实现,不得自己再数一遍");
-  assert.ok(!/\blistConnections\b/.test(src), "不得按全部连接计数,否则断开后无法重连");
+  assert.ok(!/\blistConnections\b/.test(src), "额度适配层不得自己读行,口径只能有一份");
 });
-test("listActiveConnections 的定义仍是 未断开 且 有 token", () => {
+test("listActiveConnections 仍是发布侧的定义(未断开 且 有 token)", () => {
   const store = read("src/lib/server/pinterest/connectionStore.ts");
   assert.ok(
     store.includes("filter(r => !r.disconnected_at && !!r.access_token_encrypted)"),
-    "计数口径变了就必须同步 callback 里那份内联的相同判定",
+    "额度口径变了,但发布侧 “现在能发” 的定义必须原样保留",
   );
 });
-test("callback 内联计数与 listActiveConnections 判定一致", () => {
+test("callback 内联计数 = 全部行(与额度口径一致,不多发一次 DB 请求)", () => {
   const cb = read("src/app/api/auth/pinterest/callback/route.ts");
+  assert.ok(cb.includes("heldCount = rows.length;"), "callback 必须数全部行");
   assert.ok(
-    cb.includes("rows.filter(r => !r.disconnected_at && !!r.access_token_encrypted).length"),
-    "callback 必须用同一判定,且不得再发一次 DB 请求",
+    !cb.includes("rows.filter(r => !r.disconnected_at && !!r.access_token_encrypted).length"),
+    "旧的 “只数活跃行” 必须消失,否则两套口径会静默分叉",
   );
 });
 
@@ -139,10 +144,14 @@ test("拒绝时不 seal state、不建授权 URL(不写任何状态)", () => {
 
 console.log("\n=== OAuth 回调:decision 之后复查,decideConnect 保持纯函数 ===");
 const cbSrc = read("src/app/api/auth/pinterest/callback/route.ts");
-test("create 与 revived 的 update 都算新增 → 受额度约束", () => {
+test("只有 create 算新增;复活一条已断开的行不再被拦", () => {
   assert.ok(
-    cbSrc.includes('decision.action === "create" || (decision.action === "update" && decision.revived)'),
-    "复活一条已断开的行会让活跃数 +1,必须同样拦截",
+    cbSrc.includes('const addsAnAccount = decision.action === "create";'),
+    "断开的行从未释放它的 slot,重连它不消耗任何额度",
+  );
+  assert.ok(
+    !cbSrc.includes('decision.action === "update" && decision.revived'),
+    "再拦 revived 会把满额用户困在 “占着 slot 却不允许修” 的死局里",
   );
 });
 test("拦截发生在 upsertConnection 之前(拒绝就是不写行)", () => {

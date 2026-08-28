@@ -9,7 +9,9 @@
  *      the design doc §5 (a Starter user with 1 included account per platform);
  *   2. the pool is SHARED across platforms — a slot spent on Pinterest is not
  *      available to Instagram;
- *   3. ACTIVE-only counting: a disconnected row holds nothing (the ratchet bug);
+ *   3. ROW counting: every account row the user holds occupies a slot, whatever its
+ *      connection status — Disconnect keeps the account and its slot, only Remove
+ *      (a hard delete) gives one back (PRD 0805 §11);
  *   4. fail-open on infrastructure trouble, but slots degrade to 0 rather than
  *      failing open — an unreadable add-on must not disable the ceiling;
  *   5. purchased slots = sum of `units` over ACCESS-GRANTING add-on subscriptions
@@ -55,11 +57,11 @@ type AllowanceModule = typeof import("../src/lib/server/social/accountAllowance"
 /** A snapshot in the shape the pure rule consumes. */
 function snapshot(
   included: number | null,
-  activeByProvider: Record<string, number>,
+  connectionsByProvider: Record<string, number>,
   purchasedSlots = 0,
   plan: "free" | "starter" | "pro" | "business" = "starter",
 ) {
-  return { plan, included, activeByProvider, purchasedSlots };
+  return { plan, included, connectionsByProvider, purchasedSlots };
 }
 
 (async () => {
@@ -104,7 +106,7 @@ function snapshot(
   await test("already OVER the ceiling: refused a new one, keeps the ones they have", () => {
     const v = evaluateAllowance(snapshot(1, { facebook: 5 }), "facebook");
     assert.equal(v.allowed, false);
-    assert.equal(v.active, 5, "the real count is reported, not clamped");
+    assert.equal(v.held, 5, "the real count is reported, not clamped");
     assert.equal(v.included, 1);
     // Nothing in the verdict asks anyone to disconnect — grandfathering is the
     // absence of a revoke, and this module never revokes.
@@ -152,43 +154,78 @@ function snapshot(
   await test("canceling the add-on refuses new accounts but revokes nothing", () => {
     const v = evaluateAllowance(snapshot(1, { pinterest: 2, instagram: 2 }, 0), "pinterest");
     assert.equal(v.allowed, false, "no more new accounts");
-    assert.equal(v.active, 2, "the four they already hold are untouched");
+    assert.equal(v.held, 2, "the four they already hold are untouched");
     assert.equal(v.slotsInUse, 2, "they are 2 over the included allowance");
   });
 
-  console.log("\n=== counting: only ACTIVE rows ===\n");
+  console.log("\n=== counting: every row held, until it is REMOVED ===\n");
 
-  await test("disconnected rows do not count — the query excludes them at the source", () => {
-    // Source-level on purpose: the exclusion is a PostgREST filter, so no pure
-    // function can prove it. This is the line that decides it.
+  await test("a disconnected row still occupies its slot — the query filters nothing", () => {
+    // Source-level on purpose: what the count includes is a PostgREST predicate, so
+    // no pure function can prove it. These are the filters that must NOT be there.
     const src = readFileSync("src/lib/server/social/accountAllowance.ts", "utf8");
     assert.ok(
-      src.includes('.is("disconnected_at", null)'),
-      "a disconnected row must not be counted (Pinterest writes disconnected_at)",
+      !src.includes('.is("disconnected_at", null)'),
+      "a disconnected row keeps its slot — excluding it would hand back a slot it still holds",
     );
     assert.ok(
-      src.includes('.not("access_token_encrypted", "is", null)'),
-      "a token-less row must not be counted (Facebook/Instagram disconnect nulls the token)",
+      !src.includes('.not("access_token_encrypted", "is", null)'),
+      "a token-less row (a soft-disconnected FB/IG account) keeps its slot too",
+    );
+    assert.ok(
+      src.includes("export async function countConnectionsByProvider("),
+      "the counting function is named for what it counts: rows, not active rows",
+    );
+    assert.ok(
+      !src.includes("countActiveConnectionsByProvider"),
+      "the old active-only name must not survive alongside the new rule",
     );
   });
 
-  await test("connectionLimit no longer counts every row for the provider", () => {
+  await test("disconnect then reconnect: the slot was never released, so nothing new is spent", async () => {
+    // A Starter (1 per platform) merchant who disconnects their only Pinterest row
+    // still holds it, so a NEW account is refused. Reconnecting THAT row never reaches
+    // this rule at all — it is an UPDATE (see the callback's addsAnAccount, asserted
+    // in test-account-quota.ts), which is what stops the count from becoming a trap.
+    const v = await evaluateAccountAllowance("u", "pinterest", {
+      plan: "starter",
+      countConnections: async () => ({ pinterest: 1 }),
+      purchasedSlots: async () => 0,
+    });
+    assert.equal(v.allowed, false, "a disconnected row is not a free seat");
+    assert.equal(v.held, 1);
+  });
+
+  await test("REMOVE frees the slot: the row leaves the table, so the count drops", async () => {
+    // The counting rule and the hard delete are two halves of one decision — Remove
+    // is the only action that changes this number.
+    const v = await evaluateAccountAllowance("u", "pinterest", {
+      plan: "starter",
+      countConnections: async () => ({ pinterest: 0 }),
+      purchasedSlots: async () => 0,
+    });
+    assert.equal(v.allowed, true, "after Remove the merchant can connect again");
+  });
+
+  await test("connectionLimit owns no count of its own — one rule, one query", () => {
     const src = readFileSync("src/lib/server/social/connectionLimit.ts", "utf8");
     assert.ok(
       !src.includes('{ count: "exact", head: true }'),
-      "the old count-everything query is gone; counting belongs to accountAllowance",
+      "counting belongs to accountAllowance; a second query here is a second rule",
     );
     assert.ok(src.includes("evaluateAccountAllowance"), "it delegates to the one rule");
   });
 
-  await test("swap an account at the limit: disconnect A, connect B → allowed", async () => {
-    // The disconnected row is gone from the counts, so the seat is free again.
+  await test("swap an account at the limit: REMOVE A, connect B → allowed", async () => {
+    // The way out of a full platform is Remove, not Disconnect: removing deletes the
+    // row, so it leaves the count. This is why counting every row is not the old
+    // one-way ratchet — then, nothing the user could do freed a seat.
     const v = await evaluateAccountAllowance("u", "facebook", {
       plan: "starter",
-      countActive: async () => ({ facebook: 0 }),
+      countConnections: async () => ({ facebook: 0 }),
       purchasedSlots: async () => 0,
     });
-    assert.equal(v.allowed, true, "this is the ratchet bug: it used to refuse forever");
+    assert.equal(v.allowed, true);
   });
 
   console.log("\n=== failure semantics ===\n");
@@ -196,7 +233,7 @@ function snapshot(
   await test("counts unavailable → fail OPEN (an outage must not block connecting)", async () => {
     const v = await evaluateAccountAllowance("u", "facebook", {
       plan: "free",
-      countActive: async () => null,
+      countConnections: async () => null,
       purchasedSlots: async () => 0,
     });
     assert.equal(v.allowed, true);
@@ -208,7 +245,7 @@ function snapshot(
       resolvePlanFn: async () => {
         throw new Error("entitlements unreachable");
       },
-      countActive: async () => ({ facebook: 9 }),
+      countConnections: async () => ({ facebook: 9 }),
       purchasedSlots: async () => 0,
     });
     assert.equal(v.allowed, true);
@@ -219,17 +256,17 @@ function snapshot(
     // must not hand out a free pass on the platform we DO know about.
     const v = await evaluateAccountAllowance("u", "pinterest", {
       plan: "starter",
-      countActive: async () => null,
-      activeOverride: { provider: "pinterest", count: 1 },
+      countConnections: async () => null,
+      countOverride: { provider: "pinterest", count: 1 },
       purchasedSlots: async () => 0,
     });
-    assert.equal(v.allowed, false, "1 active on a 1-account plan is still full");
+    assert.equal(v.allowed, false, "1 row held on a 1-account plan is still full");
   });
 
   await test("slots unavailable degrade to 0 — never to 'unlimited'", async () => {
     const v = await evaluateAccountAllowance("u", "facebook", {
       plan: "starter",
-      countActive: async () => ({ facebook: 1 }),
+      countConnections: async () => ({ facebook: 1 }),
       purchasedSlots: async () => 0, // what getPurchasedExtraSlots returns on error
     });
     assert.equal(v.allowed, false, "an unreadable add-on must not disable the ceiling");
