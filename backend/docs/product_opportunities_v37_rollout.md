@@ -6,8 +6,9 @@ Admission/Tracking history does not yet exist. This document does not authorize
 a push, production database write, VPS deployment, Vercel promotion, timer
 enablement, or budget increase.
 
-Current decision: code, manifest, Linux unit preflight and immutable Preview are
-PASS. Product launch remains NOT LIVE. Stage 0 data and exact PostgreSQL catalog
+Current decision: code, manifest, local ShellCheck and the unchanged Web Preview
+are PASS; exact current VPS staging/systemd verification remains pending. Product
+launch remains NOT LIVE. Stage 0 data and exact PostgreSQL catalog
 items are current and clean; production flags, candidate contamination and full
 test/build state must still be refreshed immediately before any Stage 1 apply.
 The next privileged sequence is
@@ -18,9 +19,9 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `187765fb9a0d8b1c00c3b505d483ed86aeacae59`, and exact
+functional tip `1946a68483f7ca225438d7a98c6f897ee7f088c5`, and exact
 80-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_187765f.json`.
+`backend/docs/product_opportunities_v37_release_manifest_1946a68.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -73,14 +74,14 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 935 tests with 2
-live-only skips and 77 subtests, the Web registry passed 132/132 with zero
+committed Product-only state, the full backend suite passed 966 tests with 2
+live-only skips, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
 --audit-level=low` reported zero known vulnerabilities, and the built localhost
 site passed the executable Product-truth render verifier. The Product automation
-contract for the current manifest passed 30/30; the focused worker, automation,
-and admission group passed 59/59. These local gates do not authorize
+contract for the current manifest passed 30/30; the focused Admission and
+migration-contract group passed 132/132. These local gates do not authorize
 production rollout.
 
 ShellCheck passed the exact functional-commit Git blobs for `cloud_lib.sh`,
@@ -90,6 +91,15 @@ The only excluded diagnostic was SC1091 for the intentional runtime-relative
 was suppressed. This closes local shell lint, but exact candidate systemd units
 still require `systemd-analyze verify` on a Linux host before deployment.
 
+After Admission hardening, the same four exact `1946a684` LF Git blobs were
+rechecked with ShellCheck 0.11.0 and all exited 0. The backend suite passed
+966/966 with two credential-gated skips, the focused Admission/migration group
+passed 132/132, and the exact release contract passed 30/30. Evidence:
+`backend/docs/product_opportunities_v37_admission_hardening_validation_20260828T055033Z.json`.
+Because the Admission wrapper is one of four artifacts changed after the earlier
+VPS `/tmp` preflight, that host receipt must be refreshed against `1946a684`
+before installation; it is not silently relabelled as current.
+
 The latest VPS read-only check at `2026-08-27T17:10:44Z` makes that boundary
 exact. The installed Supply service/timer parse successfully, but their hashes
 (`09d8f2ad...` / `4dfd713b...`) differ from the candidate (`51f78a4e...` /
@@ -97,7 +107,7 @@ exact. The installed Supply service/timer parse successfully, but their hashes
 installed-unit PASS cannot be reused for the candidate. Evidence:
 `backend/docs/product_opportunities_v37_systemd_evidence_gap_20260827T171044Z.json`.
 
-The current committed candidate was rechecked locally at
+The earlier `6839e760` committed candidate was rechecked locally at
 `2026-08-27T17:40:00Z`: all six unit blobs and four wrapper blobs match the
 release-manifest SHA-256 values, ShellCheck 0.11.0 passed all four exact LF Git
 blobs (only intentional SC1091 excluded), and the focused automation group
@@ -106,14 +116,16 @@ verification. The exact six unit blobs must still be staged read-only on the VPS
 and pass SHA-256 plus `systemd-analyze verify` before installation. Evidence:
 `backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`.
 
-The authorized host preflight closed this gate at `2026-08-27T23:45:11Z` without
+The authorized host preflight closed the `6839e760` gate at
+`2026-08-27T23:45:11Z` without
 installing anything. The VPS received the six exact candidate units under a
 random `/tmp` directory; every SHA-256 matched the manifest. A direct host verify
 parsed the units and failed only because the not-yet-deployed Admission/Tracking
 wrappers do not exist under `/opt`. An isolated `/tmp` alternate root containing
 the exact four candidate wrappers plus minimal target stubs then passed systemd
-255 verification with exit 0 and empty output. Cleanup was verified. This is the
-pre-install systemd PASS; it does not authorize copying to `/etc` or `/opt`,
+255 verification with exit 0 and empty output. Cleanup was verified. This is
+historical pre-install evidence for unchanged units, not a current `1946a684`
+wrapper hash receipt; it does not authorize copying to `/etc` or `/opt`,
 daemon-reload, starting services or changing timers. Evidence:
 `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
 
@@ -416,16 +428,16 @@ functions, triggers, policies and indexes are outside OpenAPI. Preserve
 and complete the catalog query through the approved migration channel before
 Stage 1 apply.
 
-The reproducible catalog query is now complete. At `2026-08-28T02:33:30Z`, the
+The reproducible catalog query is now complete. At `2026-08-28T05:05:05Z`, the
 versioned SQL `backend/docs/product_opportunities_v37_catalog_query_v1.sql` ran as
 a read-only Management API `SELECT` over `pg_class`, `pg_proc`, `pg_trigger`,
 `pg_policies` and `pg_constraint`. Its seven recorded patterns cover the v63
 tables, view, functions, triggers, policies, indexes, identity sequences and
 constraints—including the free-preview and active/Primary names missed by the
 earlier evidence format. It returned HTTP 201 and zero matches in `public`.
-The receipt binds the query SHA-256, migration SHA-256, production project ref
-and functional candidate SHA. No SQL mutation was executed. Evidence:
-`backend/docs/product_opportunities_v37_catalog_audit_20260828T023330Z.json`.
+The receipt binds the query SHA-256, canonical LF migration Git-blob SHA-256,
+production project ref and functional candidate SHA. No SQL mutation was executed. Evidence:
+`backend/docs/product_opportunities_v37_catalog_audit_20260828T050505Z.json`.
 
 1. Re-run the production audit script without mutation and preserve its JSON
    report. Reconcile totals with the PRD baseline instead of assuming 123
@@ -465,17 +477,19 @@ Evidence:
 `backend/docs/product_opportunities_v37_stage1_backup_inventory_20260828T031821Z.json`.
 
 The exact migration and rollback were also rerun in a fresh in-memory
-PGlite/PostgreSQL-compatible runtime with `pgcrypto`. Migration created 40
-matching catalog objects and zero Product/Evidence/Saved/Snapshot rows; complete
-rollback left zero matching objects. This did not access production. Evidence:
-`backend/docs/product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json`.
+PGlite/PostgreSQL-compatible runtime with `pgcrypto`. Migration created 238
+matching catalog objects and zero new data rows; complete rollback left zero
+matching objects. Real transactions additionally prove empty admission rejection,
+multi-row atomic failure, valid one-row admission, history-preserving retirement,
+and retired/current identity coexistence. This did not access production. Evidence:
+`backend/docs/product_opportunities_v37_stage1_migration_rollback_pglite_20260828T050657Z.json`.
 
 The Stage 1 baseline and post-apply verifier were executed against the exact
 migration in PGlite. The post-apply contract proves 10 relations, 18 exact RPC/
 trigger functions, 9 enabled triggers, 3 Saved Products RLS policies, 4 unique
 indexes, 28 critical constraints, 44 grant facts, empty new tables, and unchanged
 legacy row counts plus stable whole-table content checksums. Evidence:
-`backend/docs/product_opportunities_v37_stage1_verifier_pglite_20260828T041312Z.json`.
+`backend/docs/product_opportunities_v37_stage1_verifier_pglite_20260828T050657Z.json`.
 
 A production GET-only baseline performance run at `2026-08-28T04:12:48Z`
 returned 4,115 legacy Products, 34,213 snapshots, stable content checksums and
@@ -499,7 +513,7 @@ py scripts/audit_product_opportunity_schema_v37.py baseline `
   --project-ref jaxteelkecvlozdrdoog `
   --expected-project-ref jaxteelkecvlozdrdoog `
   --expected-query-sha256 3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c `
-  --candidate-sha 187765fb9a0d8b1c00c3b505d483ed86aeacae59 `
+  --candidate-sha 1946a68483f7ca225438d7a98c6f897ee7f088c5 `
   --output $baseline
 $baselineSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $baseline).Hash.ToLower()
 ```
@@ -511,8 +525,8 @@ py scripts/run_migration.py --apply `
   --sql db/migrate_v63_product_opportunities_v1.sql `
   --project-ref jaxteelkecvlozdrdoog `
   --expected-project-ref jaxteelkecvlozdrdoog `
-  --expected-sql-sha256 035308eaa9e5ac6dda247f5554b268824649ebfe261a4e77439a3493769350a6 `
-  --confirm APPLY:jaxteelkecvlozdrdoog:035308eaa9e5ac6dda247f5554b268824649ebfe261a4e77439a3493769350a6
+  --expected-sql-sha256 6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1 `
+  --confirm APPLY:jaxteelkecvlozdrdoog:6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1
 ```
 
 Do not run that command until the user separately authorizes the production
@@ -525,7 +539,7 @@ py scripts/audit_product_opportunity_schema_v37.py post-apply `
   --project-ref jaxteelkecvlozdrdoog `
   --expected-project-ref jaxteelkecvlozdrdoog `
   --expected-query-sha256 2c482caca84b779dd60d94be8f0f7010162701fea5d0abfa3d773328d69c8b43 `
-  --candidate-sha 187765fb9a0d8b1c00c3b505d483ed86aeacae59 `
+  --candidate-sha 1946a68483f7ca225438d7a98c6f897ee7f088c5 `
   --baseline-receipt $baseline `
   --expected-baseline-sha256 $baselineSha `
   --max-baseline-age-seconds 900 `
@@ -594,9 +608,28 @@ py scripts/run_migration.py --apply `
    row happened to be scanned first.
 3. Run `product_opportunity_admission.py --manifest <path>` first. Any rejected
    row blocks that apply batch; do not skip rows merely to reach a quantity.
-4. Start with one product, then at most one 20-row batch. Real apply additionally
-   requires `VIBEPIN_PRODUCT_ADMISSION_MODE=production` and
-   `VIBEPIN_PRODUCT_ADMISSION_CONFIRM=ADMIT_REVIEWED_PRODUCTS`.
+4. Start with one product, then at most one 20-row batch. Compute SHA-256 over the
+   exact manifest bytes and bind a manual apply to both that receipt and the exact
+   project. The manual command must include
+   `--expected-project-ref jaxteelkecvlozdrdoog` and
+   `--confirm ADMIT:jaxteelkecvlozdrdoog:<manifest_sha256>`, in addition to
+   `VIBEPIN_PRODUCT_ADMISSION_MODE=production`. A missing, malformed, stale or
+   different manifest/project binding fails before database contact. The automatic
+   pipeline retains its separate scheduled-run confirmation
+   `VIBEPIN_PRODUCT_ADMISSION_CONFIRM=ADMIT_REVIEWED_PRODUCTS` and also requires
+   `VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF=jaxteelkecvlozdrdoog`; its timer
+   origin and exact Supply report SHA provide the source-receipt binding.
+   A manual apply therefore has this exact shape (replace only the reviewed path
+   and the calculated hash; do not normalize or rewrite the manifest bytes):
+
+   ```powershell
+   $manifest = "<reviewed-manifest.json>"
+   $manifestSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash.ToLower()
+   $env:VIBEPIN_PRODUCT_ADMISSION_MODE = "production"
+   py product_opportunity_admission.py --manifest $manifest --apply `
+     --expected-project-ref jaxteelkecvlozdrdoog `
+     --confirm "ADMIT:jaxteelkecvlozdrdoog:$manifestSha"
+   ```
 5. Preserve the returned Product Opportunity IDs as the exact rollback receipt.
    The tool independently reads back the product, exactly one Primary Evidence,
    every expected Additional Evidence row, each row's provenance, and the exact

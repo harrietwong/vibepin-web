@@ -20,7 +20,7 @@ COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_187765f.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_1946a68.json"
 )
 FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
     ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
@@ -55,7 +55,7 @@ STAGE0_SCHEMA_PRESENCE = json.loads(
 )
 STAGE0_CATALOG = json.loads(
     (
-        ROOT / "docs" / "product_opportunities_v37_catalog_audit_20260828T023330Z.json"
+        ROOT / "docs" / "product_opportunities_v37_catalog_audit_20260828T050505Z.json"
     ).read_text(encoding="utf-8")
 )
 STAGE0_CATALOG_QUERY_PATH = (
@@ -73,7 +73,7 @@ STAGE1_PGLITE = json.loads(
     (
         ROOT
         / "docs"
-        / "product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json"
+        / "product_opportunities_v37_stage1_migration_rollback_pglite_20260828T050657Z.json"
     ).read_text(encoding="utf-8")
 )
 STAGE1_LEGACY_BASELINE = json.loads(
@@ -87,7 +87,7 @@ STAGE1_VERIFIER_PGLITE = json.loads(
     (
         ROOT
         / "docs"
-        / "product_opportunities_v37_stage1_verifier_pglite_20260828T041312Z.json"
+        / "product_opportunities_v37_stage1_verifier_pglite_20260828T050657Z.json"
     ).read_text(encoding="utf-8")
 )
 
@@ -95,6 +95,14 @@ STAGE1_VERIFIER_PGLITE = json.loads(
 def _matches_sql_like_pattern(value: str, pattern: str) -> bool:
     expression = re.escape(pattern.lower()).replace(r"%", ".*").replace(r"_", ".")
     return re.fullmatch(expression, value.lower()) is not None
+
+
+def _canonical_lf_sha256(path: Path) -> str:
+    payload = path.read_bytes()
+    if payload.startswith(b"\xef\xbb\xbf"):
+        raise AssertionError(f"UTF-8 BOM is forbidden for release SQL: {path}")
+    canonical = payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() -> None:
@@ -126,17 +134,17 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
+    functional = "1946a68483f7ca225438d7a98c6f897ee7f088c5"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
-    manifest_name = "product_opportunities_v37_release_manifest_187765f.json"
+    manifest_name = "product_opportunities_v37_release_manifest_1946a68.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "935 tests" in RUNBOOK
-    assert "59/59" in RUNBOOK
-    assert "132/132" in RUNBOOK
+    assert "966 tests" in RUNBOOK
+    assert "Web registry passed 132/132" in RUNBOOK
+    assert "migration-contract group passed 132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -191,11 +199,14 @@ def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
 
 
 def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> None:
-    functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
+    functional = "1946a68483f7ca225438d7a98c6f897ee7f088c5"
+    historical_functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     artifacts = {item["path"]: item for item in manifest["artifacts"]}
 
-    assert STAGE1_BACKUP["candidate_functional_tip"] == functional
+    # This inventory is historical readiness evidence only. It must be refreshed
+    # immediately before a production apply and must not be relabelled as current.
+    assert STAGE1_BACKUP["candidate_functional_tip"] == historical_functional
     assert STAGE1_BACKUP["project_ref"] == "jaxteelkecvlozdrdoog"
     assert STAGE1_BACKUP["http_status"] == 200
     assert STAGE1_BACKUP["mutation"] is False
@@ -210,6 +221,13 @@ def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> N
     assert STAGE1_PGLITE["production_mutation"] is False
     assert all(value == 0 for value in STAGE1_PGLITE["row_counts_after_migration"].values())
     assert STAGE1_PGLITE["matching_catalog_objects_after_complete_rollback"] == 0
+    assert STAGE1_PGLITE["transaction_proofs"] == {
+        "empty_batch_rejected_before_write": True,
+        "failed_multi_row_batch_atomic_zero_write": True,
+        "valid_single_admission_written": 1,
+        "history_preserving_rollback_retired": 1,
+        "retired_and_active_identity_coexistence": True,
+    }
     assert STAGE1_PGLITE["migration_git_blob_sha256"] == artifacts[
         "backend/db/migrate_v63_product_opportunities_v1.sql"
     ]["sha256"]
@@ -219,11 +237,14 @@ def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> N
 
 
 def test_stage1_post_apply_verifier_is_manifest_bound_and_truthful() -> None:
-    functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
+    functional = "1946a68483f7ca225438d7a98c6f897ee7f088c5"
+    historical_functional = "187765fb9a0d8b1c00c3b505d483ed86aeacae59"
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     artifacts = {item["path"]: item for item in manifest["artifacts"]}
 
-    assert STAGE1_LEGACY_BASELINE["candidate_sha"] == functional
+    # This GET-only baseline is intentionally retained as a stale demonstration
+    # receipt; a <=15-minute receipt is mandatory at the actual cutover.
+    assert STAGE1_LEGACY_BASELINE["candidate_sha"] == historical_functional
     assert STAGE1_LEGACY_BASELINE["project_ref"] == "jaxteelkecvlozdrdoog"
     assert STAGE1_LEGACY_BASELINE["http_status"] == 201
     assert STAGE1_LEGACY_BASELINE["mutation"] is False
@@ -461,7 +482,7 @@ def test_latest_stage0_catalog_query_closes_hidden_object_gap_without_mutation()
         "pg_constraint",
     ]
     assert audit["candidate_functional_tip"] == (
-        "6839e7609ddff3f1fe288c48a42918e105a75fc9"
+        "1946a68483f7ca225438d7a98c6f897ee7f088c5"
     )
     assert audit["project_ref"] == "jaxteelkecvlozdrdoog"
     assert audit["query_file"] == (
@@ -470,9 +491,9 @@ def test_latest_stage0_catalog_query_closes_hidden_object_gap_without_mutation()
     assert audit["query_sha256"] == hashlib.sha256(
         STAGE0_CATALOG_QUERY_PATH.read_bytes()
     ).hexdigest()
-    assert audit["migration_sha256"] == hashlib.sha256(
-        V63_MIGRATION_PATH.read_bytes()
-    ).hexdigest()
+    assert audit["migration_git_blob_sha256"] == _canonical_lf_sha256(
+        V63_MIGRATION_PATH
+    )
     assert audit["matching_object_count"] == 0
     assert audit["matching_objects"] == []
     assert "Current Stage 0 data/catalog result: PASS" in RUNBOOK

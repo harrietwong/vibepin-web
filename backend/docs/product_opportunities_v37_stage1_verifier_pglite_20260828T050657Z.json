@@ -1,0 +1,36 @@
+{
+  "audited_at": "2026-08-28T05:06:57Z",
+  "candidate_functional_tip": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
+  "engine": "PGlite 0.5.8 PostgreSQL-compatible in-memory runtime",
+  "baseline_query": {
+    "path": "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql",
+    "sha256": "3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c",
+    "legacy_products": 1,
+    "legacy_snapshots": 1,
+    "legacy_products_md5": "1a19625d13aa292d3b520459e3c124e7",
+    "legacy_snapshots_md5": "99db3bd23900450c100f283ce6d06e94",
+    "stable_content_hashes_present": true,
+    "v63_matching_object_count": 0
+  },
+  "post_apply_query": {
+    "path": "backend/docs/product_opportunities_v37_stage1_post_apply_query_v1.sql",
+    "sha256": "2c482caca84b779dd60d94be8f0f7010162701fea5d0abfa3d773328d69c8b43",
+    "relations": 10,
+    "functions": 18,
+    "triggers": 9,
+    "policies": 3,
+    "indexes": 4,
+    "constraints": 91,
+    "privilege_facts": 44,
+    "new_table_row_counts_all_zero": true,
+    "legacy_counts_and_hashes_unchanged": true
+  },
+  "validator": {
+    "path": "backend/scripts/audit_product_opportunity_schema_v37.py",
+    "verdict": "PASS",
+    "violations": []
+  },
+  "production_access": false,
+  "production_mutation": false,
+  "verdict": "PASS"
+}

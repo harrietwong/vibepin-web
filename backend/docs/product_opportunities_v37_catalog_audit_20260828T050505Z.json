@@ -1,0 +1,35 @@
+{
+  "audited_at": "2026-08-28T05:05:05.175434+00:00",
+  "candidate_functional_tip": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
+  "catalogs_checked": [
+    "pg_class",
+    "pg_proc",
+    "pg_trigger",
+    "pg_policies",
+    "pg_constraint"
+  ],
+  "conclusion": "No matching v63 Product Opportunity relation, function, trigger, policy, index, sequence or constraint exists in public.",
+  "http_status": 201,
+  "line_ending_rule": "The migration identity is the canonical LF Git blob SHA-256; Windows CRLF checkout bytes are not a release identity.",
+  "match_patterns": [
+    "%product_opportun%",
+    "%product_evidence%",
+    "%product_metric%",
+    "%product_free_preview%",
+    "%active_product%",
+    "%product_primary%",
+    "%saved_product%"
+  ],
+  "matching_object_count": 0,
+  "matching_objects": [],
+  "method": "Supabase Management API read-only SELECT over PostgreSQL catalogs",
+  "migration_file": "backend/db/migrate_v63_product_opportunities_v1.sql",
+  "migration_git_blob_sha256": "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
+  "mutation": false,
+  "project_ref": "jaxteelkecvlozdrdoog",
+  "query_file": "backend/docs/product_opportunities_v37_catalog_query_v1.sql",
+  "query_sha256": "1d0ff2369649f4f01f42be2f55abb6a4b85d24e93c365afd05ebe2dbabb6f035",
+  "schemas_checked": [
+    "public"
+  ]
+}

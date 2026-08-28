@@ -1,0 +1,41 @@
+{
+  "audited_at": "2026-08-28T05:06:57Z",
+  "candidate_functional_tip": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
+  "engine": "PGlite 0.5.8 PostgreSQL-compatible in-memory runtime",
+  "migration_file": "backend/db/migrate_v63_product_opportunities_v1.sql",
+  "migration_git_blob_sha256": "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
+  "migration_windows_checkout_sha256": "08d67ddf69870bb7b5e5e160724590014dd5a390acba48c1ded162210c50e835",
+  "rollback_file": "backend/db/rollback_v63_product_opportunities_v1.sql",
+  "rollback_git_blob_sha256": "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
+  "rollback_windows_checkout_sha256": "7e280b4b88b95e3cc301ff161a7665e834fd94a7e87bd1469e5ea8e50bba14d1",
+  "line_ending_rule": "Execution rejects UTF-8 BOM and canonicalizes CRLF/CR to repository LF before hashing and submission; canonical hashes equal the reviewed Git blobs.",
+  "required_relations_after_migration": {
+    "product_opportunities": true,
+    "product_opportunity_evidence": true,
+    "saved_product_opportunities": true,
+    "product_opportunity_catalog_v1": true
+  },
+  "row_counts_after_migration": {
+    "product_opportunities": 0,
+    "product_opportunity_evidence": 0,
+    "saved_product_opportunities": 0,
+    "product_evidence_snapshots": 0,
+    "product_evidence_switches": 0,
+    "product_family_calibrations": 0,
+    "product_free_preview_rank_history": 0,
+    "product_opportunity_release_gates": 0,
+    "product_opportunity_metric_snapshots": 0
+  },
+  "matching_catalog_objects_after_migration": 238,
+  "transaction_proofs": {
+    "empty_batch_rejected_before_write": true,
+    "failed_multi_row_batch_atomic_zero_write": true,
+    "valid_single_admission_written": 1,
+    "history_preserving_rollback_retired": 1,
+    "retired_and_active_identity_coexistence": true
+  },
+  "matching_catalog_objects_after_complete_rollback": 0,
+  "production_access": false,
+  "production_mutation": false,
+  "verdict": "PASS"
+}
