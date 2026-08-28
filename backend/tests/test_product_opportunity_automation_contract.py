@@ -19,6 +19,9 @@ RUNBOOK = (ROOT / "docs" / "product_opportunities_v37_rollout.md").read_text(enc
 COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
+COMPLETION_MATRIX = (
+    ROOT / "docs" / "product_opportunities_v37_completion_matrix_20260828.md"
+).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
     ROOT / "docs" / "product_opportunities_v37_release_manifest_1946a68.json"
 )
@@ -140,12 +143,16 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
     manifest_name = "product_opportunities_v37_release_manifest_1946a68.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
+    assert functional in COMPLETION_MATRIX
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
     assert "966 tests" in RUNBOOK
     assert "Web registry passed 132/132" in RUNBOOK
     assert "migration-contract group passed 132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
+    assert "Implementation PASS / Production NOT LIVE" in COMPLETION_MATRIX
+    assert "Production P0 BLOCK" in COMPLETION_MATRIX
+    assert "plan affects which products are accessible, not their facts" in COMPLETION_MATRIX
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["candidateCommit"] == functional

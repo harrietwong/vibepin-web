@@ -288,6 +288,11 @@ to production.
 
 ## What the candidate now proves
 
+The current requirement-by-requirement implementation/production split is frozen
+in `backend/docs/product_opportunities_v37_completion_matrix_20260828.md`. It is
+the concise current-state view; the chronological evidence below remains the
+detailed audit trail.
+
 | Requirement | Candidate evidence | Status |
 |---|---|---|
 | Stable Product identity | Canonical URL hash, one non-retired identity, history-preserving retirement | PASS |
