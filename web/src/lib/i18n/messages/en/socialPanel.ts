@@ -69,6 +69,8 @@ export const socialPanelMessages = {
   "socialPanel.mismatch.addPrefix": "Add ",
   "socialPanel.mismatch.addSuffix": " as a new account",
   "socialPanel.mismatch.dismiss": "Not now",
+  "socialPanel.mismatch.targetUnknown":
+    "We can't tell which account you were reconnecting. Open Settings and press Reconnect on that account again.",
   "socialPanel.mismatch.theOriginalAccount": "the original account",
   "socialPanel.mismatch.aDifferentAccount": "a different account",
 

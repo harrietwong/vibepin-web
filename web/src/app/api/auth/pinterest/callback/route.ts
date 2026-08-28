@@ -240,6 +240,12 @@ export async function GET(req: NextRequest) {
       const url = new URL(res.headers.get("location") ?? "/", req.nextUrl.origin);
       if (decision.expectedUsername) url.searchParams.set("expected", decision.expectedUsername);
       if (decision.gotUsername) url.searchParams.set("got", decision.gotUsername);
+      // The row being repaired rides back too (Codex #3), so "Sign in to the
+      // original" retries THAT connection instead of falling back to accounts[0].
+      // Connect is a full-page navigation, so the panel state that held it is gone.
+      // It is the user's own id, already validated on the way in; the panel checks
+      // it against the live connection list before using it.
+      if (verdict.reconnectConnectionId) url.searchParams.set("target", verdict.reconnectConnectionId);
       const out = NextResponse.redirect(url);
       out.cookies.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 });
       out.cookies.set(OAUTH_RETURN_COOKIE, "", { path: "/", maxAge: 0 });

@@ -14,7 +14,7 @@
  * platforms are structurally ready and show a clear "setup pending" state.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
@@ -920,6 +920,7 @@ function AccountMismatchNotice({
   expected,
   got,
   busy,
+  canSignInToOriginal,
   onSignInToOriginal,
   onAddAsNew,
   onDismiss,
@@ -928,6 +929,13 @@ function AccountMismatchNotice({
   expected: string | null;
   got: string | null;
   busy: boolean;
+  /**
+   * False when we cannot say WHICH row the merchant was repairing (Codex #3): the
+   * target did not come back from the callback, or it names a connection that is no
+   * longer in the list. The retry is then disabled rather than aimed at a guess —
+   * guessing meant `accounts[0]`, which silently repaired the wrong account.
+   */
+  canSignInToOriginal: boolean;
   onSignInToOriginal: () => void;
   onAddAsNew: () => void;
   onDismiss: () => void;
@@ -936,6 +944,8 @@ function AccountMismatchNotice({
   const expectedLabel = mismatchAccountLabel(
     provider, expected, tr("socialPanel.mismatch.theOriginalAccount"),
   );
+  // Busy OR unresolvable target — both mean the retry button must not act.
+  const signInDisabled = busy || !canSignInToOriginal;
   const gotLabel = mismatchAccountLabel(
     provider, got, tr("socialPanel.mismatch.aDifferentAccount"),
   );
@@ -963,13 +973,14 @@ function AccountMismatchNotice({
           type="button"
           data-testid={`${provider}-mismatch-signin-original`}
           onClick={onSignInToOriginal}
-          disabled={busy}
+          disabled={signInDisabled}
+          title={canSignInToOriginal ? undefined : tr("socialPanel.mismatch.targetUnknown")}
           style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             padding: "8px 14px", borderRadius: 10,
             border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.14)",
             color: UI.warning, fontSize: 12, fontWeight: 700,
-            cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+            cursor: signInDisabled ? "not-allowed" : "pointer", opacity: signInDisabled ? 0.6 : 1,
           }}
         >
           <RefreshCw size={13} /> {tr("socialPanel.mismatch.signInPrefix")}{expectedLabel}
@@ -1472,6 +1483,14 @@ export function SocialAccountsPanel() {
    * Kept so the mismatch banner's "Sign in to <account>" retries the SAME row. It
    * used to hard-code `accounts[0]`, which meant a merchant repairing their second
    * account was silently redirected to repair their first.
+   *
+   * Set from TWO places, and the second is the load-bearing one (Codex #3): the
+   * Reconnect click sets it, but connect is a full-page navigation, so by the time
+   * the callback redirects back this component has remounted and the state is null.
+   * Every mismatch redirect therefore carries `?target=<connectionId>`, and the
+   * three flag handlers below restore it from there. It is only ever USED after
+   * being matched against the live connection list — the id is the user's own and
+   * was validated server-side, but a row can be removed while the flow is away.
    */
   const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(null);
   /**
@@ -1510,6 +1529,23 @@ export function SocialAccountsPanel() {
   const [busyAccountId, setBusyAccountId] = useState<string | null>(null);
   // Forward-looking "Add another account" entry — off unless the workspace opts in.
 
+
+  /**
+   * The reconnect target, but only if it is REAL right now (Codex #3).
+   *
+   * `reconnectTargetId` is either a click we remember or an id the callback handed
+   * back in the query. Neither proves the row still exists on the platform the
+   * banner is about: it may have been removed in another tab, and the query value —
+   * though the server validated it as the user's own — is untrusted input as far as
+   * this component is concerned. Resolving it against the CURRENT list makes
+   * "unknown target" a state the UI can render (a disabled retry) instead of a
+   * silent redirect to the wrong account.
+   */
+  const resolvedReconnectTarget = useMemo(() => {
+    if (!accountMismatch || !reconnectTargetId) return null;
+    const platform = summaries?.find(s => s.provider === accountMismatch.provider);
+    return platform?.accounts.some(a => a.id === reconnectTargetId) ? reconnectTargetId : null;
+  }, [accountMismatch, reconnectTargetId, summaries]);
 
   /** This panel's binding of accountLabelFor — the rows use the same function. */
   const labelForAccount = useCallback(
@@ -1568,6 +1604,11 @@ export function SocialAccountsPanel() {
         expected: params.get("expected"),
         got: params.get("got"),
       });
+      // Restore WHICH row was being repaired before router.replace strips the query
+      // (Codex #3). Without it the banner's retry has no target and falls back to a
+      // guess. Verified against the live list at click time, not here — `summaries`
+      // may still be loading when this flag arrives.
+      setReconnectTargetId(params.get("target"));
       router.replace(SETTINGS_SOCIAL_PATH);
       return;
     }
@@ -1617,6 +1658,11 @@ export function SocialAccountsPanel() {
         expected: params.get("expected"),
         got: params.get("got"),
       });
+      // Restore WHICH row was being repaired before router.replace strips the query
+      // (Codex #3). Without it the banner's retry has no target and falls back to a
+      // guess. Verified against the live list at click time, not here — `summaries`
+      // may still be loading when this flag arrives.
+      setReconnectTargetId(params.get("target"));
       router.replace(SETTINGS_SOCIAL_PATH);
       return;
     }
@@ -1661,6 +1707,11 @@ export function SocialAccountsPanel() {
         expected: params.get("expected"),
         got: params.get("got"),
       });
+      // Restore WHICH row was being repaired before router.replace strips the query
+      // (Codex #3). Without it the banner's retry has no target and falls back to a
+      // guess. Verified against the live list at click time, not here — `summaries`
+      // may still be loading when this flag arrives.
+      setReconnectTargetId(params.get("target"));
       router.replace(SETTINGS_SOCIAL_PATH);
       return;
     }
@@ -1986,15 +2037,20 @@ export function SocialAccountsPanel() {
           expected={accountMismatch.expected}
           got={accountMismatch.got}
           busy={busyProvider === accountMismatch.provider}
+          // The retry is offered only when we know exactly which row to repair.
+          // The id has to still BE there: it survived the OAuth round trip in the
+          // query, but the row itself could have been removed in another tab while
+          // the merchant was away at the provider.
+          canSignInToOriginal={!!resolvedReconnectTarget}
           onSignInToOriginal={() => {
             // Retry the SAME repair: still a reconnect, so a second wrong account is
             // refused again rather than quietly taking over the connection.
-            // The row the merchant actually pressed Reconnect on. Falling back to
-            // accounts[0] (as this once did) would redirect someone repairing their
-            // SECOND account into repairing their first.
-            const platform = summaries?.find(s => s.provider === accountMismatch.provider);
-            const target = reconnectTargetId ?? platform?.accounts[0]?.id ?? null;
-            void handleConnect(accountMismatch.provider, target);
+            //
+            // `resolvedReconnectTarget` or nothing. This once fell back to
+            // accounts[0], which sent a merchant repairing their SECOND account into
+            // repairing their first — the button is disabled instead of guessing.
+            if (!resolvedReconnectTarget) return;
+            void handleConnect(accountMismatch.provider, resolvedReconnectTarget);
           }}
           onAddAsNew={() => {
             // Deliberately NOT a reconnect: this is the user accepting the account

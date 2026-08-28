@@ -1776,6 +1776,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.addPrefix": "将 ",
   "socialPanel.mismatch.addSuffix": " 添加为新账号",
   "socialPanel.mismatch.dismiss": "暂不",
+  "socialPanel.mismatch.targetUnknown": "无法确定你当时要重新连接的是哪个账号。请回到设置,在那个账号上重新点一次「重新连接」。",
   "socialPanel.mismatch.theOriginalAccount": "原账号",
   "socialPanel.mismatch.aDifferentAccount": "另一个账号",
   "socialPanel.limit.title": "已达到社交账号数量上限",

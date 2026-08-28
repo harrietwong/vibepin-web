@@ -752,6 +752,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "socialPanel.mismatch.addPrefix": "將 ",
   "socialPanel.mismatch.addSuffix": " 新增為新帳號",
   "socialPanel.mismatch.dismiss": "暫時不要",
+  "socialPanel.mismatch.targetUnknown": "無法確定你當時要重新連接的是哪個帳號。請回到設定，在那個帳號上重新點一次「重新連接」。",
   "socialPanel.mismatch.theOriginalAccount": "原帳號",
   "socialPanel.mismatch.aDifferentAccount": "另一個帳號",
   "socialPanel.limit.title": "已達到社群帳號數量上限",

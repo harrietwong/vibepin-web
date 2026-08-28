@@ -228,6 +228,14 @@ export async function GET(req: NextRequest) {
       return redirectAfterOAuth(req, "account_mismatch", verdict.returnTo, {
         expected: decision.expectedLabel,
         got: decision.gotLabel,
+        // The row the merchant was repairing, so "Sign in to the original" can
+        // retry THAT row (Codex #3). Connect is a full-page navigation, so the
+        // panel's React state is gone by the time this lands; without the id the
+        // banner fell back to accounts[0] and sent someone repairing their SECOND
+        // account into repairing their first. Safe to hand back: it is the user's
+        // own connection id, just read and compared above, and the panel re-checks
+        // it against the live list before using it.
+        target: verdict.reconnectConnectionId,
       });
     }
     // Names the row every upsert below must land on. Load-bearing for a target row
