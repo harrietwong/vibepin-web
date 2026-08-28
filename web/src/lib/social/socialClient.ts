@@ -147,9 +147,14 @@ export async function publishToSocial(input: {
    *  validates it (isAcceptableImmediateBucket + verifyImmediateBucket) before
    *  trusting it — this client never asserts it is honored. */
   meteringBucket?: string;
-  /** HMAC over (uid, postId, meteringBucket), relayed alongside it so the server can
-   *  authenticate the bucket instead of merely accepting its date shape. */
+  /** HMAC over (uid, postId, meteringBucket, meteringBucketMintedAt), relayed
+   *  alongside them so the server can authenticate the bucket instead of merely
+   *  accepting its date shape. */
   meteringBucketSig?: string;
+  /** The server instant meteringBucket+meteringBucketSig were minted at (Fix 5
+   *  relay-age binding) — the server's verification is bound to THIS value, not its
+   *  own "now". Always sent together with meteringBucketSig. */
+  meteringBucketMintedAt?: number;
 }): Promise<SocialPublishResult> {
   const res = await fetch("/api/publish/social", {
     method: "POST",

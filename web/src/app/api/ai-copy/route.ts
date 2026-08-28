@@ -334,6 +334,17 @@ export async function POST(req: Request) {
   }
 
   try {
+    // Force the lazy `cfg.textModel` getter now, unconditionally — BEFORE either
+    // generation branch below (fast-path cached-analysis text call OR vision-fallback
+    // analyzeAndWriteCopy) and before any provider/seam call. The fast path already
+    // reaches this getter inside generateCopyFromAnalysis, but the vision-fallback path
+    // (no cached analysis) never touches `.textModel` — analyzeAndWriteCopy only reads
+    // `.visionModel` — so in production with AI_COPY_TEXT_MODEL unset that branch used
+    // to slip past the fail-closed assertion added to visionServer.ts and still reach
+    // the provider. Reading it here for its throw-on-access side effect (in production,
+    // unset → CopyError "ai_copy_model_unset", 503) closes that gap for both branches;
+    // the caught CopyError below turns it into the intended 503 response.
+    void cfg.textModel;
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);
     mark("received");
 

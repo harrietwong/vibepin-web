@@ -24,12 +24,27 @@
  * case below proves this end-to-end through the REAL generateCopyFromAnalysis (the
  * one function that actually spends money on the text model), asserting the provider
  * network seam (fetch, inside chatJson) is never reached.
+ *
+ * ── ROUTE-LEVEL regression (Codex round-4 fix #1, 2026-08-28) ──────────────────
+ * The two cases above only prove the getter itself is fail-closed. They do NOT prove
+ * every call site actually reads it: the VISION-FALLBACK branch of POST /api/ai-copy
+ * (taken when the client has no cached analysis) built its prompt and called
+ * analyzeAndWriteCopy() without ever touching `.textModel` — that function only reads
+ * `.visionModel` — so in production with AI_COPY_TEXT_MODEL unset, a request with no
+ * cached analysis sailed straight past the guard and still reached the provider. The
+ * fast-path (cached-analysis) branch was never exposed because generateCopyFromAnalysis
+ * already reads `.textModel` internally. The fix forces the getter once, unconditionally,
+ * at the top of the route's try block — before either branch — so both are covered.
+ * These cases load the REAL route handler (Module._load fakes, same idiom as
+ * test-ai-copy-provider-boundary.ts) to prove it end-to-end at the HTTP boundary.
  */
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
 
 export {};
+
+import { Module } from "node:module";
 
 let passed = 0;
 let failed = 0;
@@ -70,6 +85,131 @@ async function withEnv<T>(overrides: Record<string, string | undefined>, fn: () 
       else process.env[k] = saved[k];
     }
   }
+}
+
+// -- Route-level fakes (Module._load), same idiom as test-ai-copy-provider-boundary --
+// Only the money-spending seams and the two auth exports are faked. `providerConfig`
+// is deliberately left as the REAL implementation (not stubbed to a fixed pair) so the
+// production/unset fail-closed behaviour under test is the real code path, not a mock.
+
+const routeSeen = {
+  chatJsonCalls: 0,
+  analyzeImageStructuredCalls: 0,
+  analyzeAndWriteCopyCalls: 0,
+  generateCopyFromAnalysisCalls: 0,
+  generateCopyFromAnalysisModels: [] as string[],
+};
+function resetRouteSeen() {
+  routeSeen.chatJsonCalls = 0;
+  routeSeen.analyzeImageStructuredCalls = 0;
+  routeSeen.analyzeAndWriteCopyCalls = 0;
+  routeSeen.generateCopyFromAnalysisCalls = 0;
+  routeSeen.generateCopyFromAnalysisModels = [];
+}
+
+const routeCopyStub = {
+  title: "A cozy handmade ceramic mug for slow mornings",
+  description: "A cozy handmade ceramic mug photographed on a linen surface, perfect for slow mornings at home.",
+  altText: "White ceramic mug on linen",
+  imageSummary: "A test image summary",
+  visibleObjects: ["mug"],
+  colors: ["white"],
+  style: "minimal",
+  keywords: ["ceramic mug"],
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const originalLoad = (Module as any)._load;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
+  if (request.includes("server/authUser")) {
+    return {
+      getUserIdFromBearerOrCookies: () => Promise.resolve("user-1"),
+      getUserIdFromSameOriginSession: () => Promise.resolve("user-1"),
+    };
+  }
+  if (request.includes("server/rateLimit")) {
+    // Real rateLimit hits a live Supabase client (slow, network-dependent) even on
+    // its fail-open path. Faked here purely for test speed/hermeticity — this fix
+    // does not touch rate limiting.
+    return {
+      consumeRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }),
+      RATE_LIMITED_ERROR: "rate_limited",
+      RATE_LIMITED_MESSAGE: "rate limited",
+    };
+  }
+  if (request.includes("ai-copy/keywordContext")) {
+    return {
+      retrievePinterestKeywords: async () => ({ queryTerms: [], candidates: [], recommended: [], rejected: [], poolSize: 0 }),
+    };
+  }
+  if (request.includes("ai-copy/visionServer")) {
+    // Wrap the REAL module: providerConfig, CopyError and every pure helper keep
+    // their real behaviour. Only the four provider-spend seams are replaced.
+    const real = originalLoad.call(this, request, parent, isMain);
+    return {
+      ...real,
+      fetchImageAsDataUrl: async () => ({ dataUrl: "data:image/png;base64,AAAA", bytes: 4, latencyMs: 1 }),
+      chatJson: async () => {
+        routeSeen.chatJsonCalls++;
+        return { title: "Refined title", description: "Refined description" };
+      },
+      analyzeImageStructured: async () => {
+        routeSeen.analyzeImageStructuredCalls++;
+        return { ...routeCopyStub };
+      },
+      analyzeAndWriteCopy: async () => {
+        routeSeen.analyzeAndWriteCopyCalls++;
+        return { ...routeCopyStub };
+      },
+      generateCopyFromAnalysis: async (a: { cfg: { textModel: string } }) => {
+        routeSeen.generateCopyFromAnalysisCalls++;
+        routeSeen.generateCopyFromAnalysisModels.push(a.cfg.textModel);
+        return { ...routeCopyStub };
+      },
+    };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+};
+
+const AI_COPY_ROUTE_SPEC = "../src/app/api/ai-copy/route";
+const AI_COPY_URL = "https://vibepin.co/api/ai-copy";
+
+async function loadAiCopyRoute(): Promise<{ POST: (req: Request) => Promise<Response> }> {
+  // Under tsx, dynamic imports resolve through the CJS require cache keyed on the
+  // resolved file path — evict it so each case re-evaluates the route (and therefore
+  // re-runs providerConfig() against whatever env withEnv has set for this case).
+  delete require.cache[require.resolve(AI_COPY_ROUTE_SPEC)];
+  return import(AI_COPY_ROUTE_SPEC) as Promise<{ POST: (req: Request) => Promise<Response> }>;
+}
+
+/** No `imageAnalysis.imageSummary` -> the route takes the VISION-FALLBACK branch. */
+function visionFallbackBody(): Record<string, unknown> {
+  return { draftId: "d1", imageUrl: "https://cdn.example/img.png", language: "en" };
+}
+
+/** A cached analysis present -> the route takes the FAST-PATH (text-only) branch. */
+function fastPathBody(): Record<string, unknown> {
+  return {
+    draftId: "d1",
+    imageUrl: "https://cdn.example/img.png",
+    language: "en",
+    imageAnalysis: { status: "ready", ...routeCopyStub },
+    recommendedKeywords: ["ceramic mug"],
+  };
+}
+
+async function postAiCopy(body: Record<string, unknown>) {
+  const route = await loadAiCopyRoute();
+  const res = await route.POST(
+    new Request(AI_COPY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer valid" },
+      body: JSON.stringify(body),
+    }),
+  );
+  const json = (await res.json()) as { ok?: boolean; error?: string };
+  return { res, json };
 }
 
 async function main() {
@@ -206,8 +346,91 @@ async function main() {
     });
   });
 
+  // -- ROUTE-LEVEL: the vision-fallback branch is covered too (fix #1) ------------
+
+  await test(
+    "ROUTE (vision-fallback, no cached analysis): production + unset -> 503 ai_copy_model_unset, ZERO provider calls",
+    async () => {
+      resetRouteSeen();
+      await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production" }, async () => {
+        const { res, json } = await postAiCopy(visionFallbackBody());
+        assertEq(res.status, 503, "http status");
+        assertEq(json.error, "ai_copy_model_unset", "error code");
+        assertEq(json.ok, false, "ok flag");
+      });
+      assertEq(routeSeen.analyzeAndWriteCopyCalls, 0, "analyzeAndWriteCopy never called");
+      assertEq(routeSeen.analyzeImageStructuredCalls, 0, "analyzeImageStructured never called");
+      assertEq(routeSeen.chatJsonCalls, 0, "chatJson never called");
+      assertEq(routeSeen.generateCopyFromAnalysisCalls, 0, "generateCopyFromAnalysis never called (fast path not taken)");
+    },
+  );
+
+  await test(
+    "ROUTE (fast path, cached analysis): production + unset -> 503 ai_copy_model_unset, ZERO provider calls",
+    async () => {
+      // The fast path was already covered indirectly (generateCopyFromAnalysis reads
+      // .textModel internally) — pinned here too so both branches have an explicit
+      // route-level case side by side.
+      resetRouteSeen();
+      await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production" }, async () => {
+        const { res, json } = await postAiCopy(fastPathBody());
+        assertEq(res.status, 503, "http status");
+        assertEq(json.error, "ai_copy_model_unset", "error code");
+      });
+      assertEq(routeSeen.generateCopyFromAnalysisCalls, 0, "generateCopyFromAnalysis never called");
+    },
+  );
+
+  await test("ROUTE (vision-fallback): production + AI_COPY_TEXT_MODEL set -> proceeds (200)", async () => {
+    resetRouteSeen();
+    await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production", AI_COPY_TEXT_MODEL: "prod-text-model-1" }, async () => {
+      const { res, json } = await postAiCopy(visionFallbackBody());
+      assertEq(res.status, 200, "http status");
+      assertEq(json.ok, true, "ok flag");
+    });
+    assertEq(routeSeen.analyzeAndWriteCopyCalls, 1, "vision-fallback seam reached exactly once");
+  });
+
+  await test("ROUTE (fast path): production + AI_COPY_TEXT_MODEL set -> proceeds (200)", async () => {
+    resetRouteSeen();
+    await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production", AI_COPY_TEXT_MODEL: "prod-text-model-1" }, async () => {
+      const { res, json } = await postAiCopy(fastPathBody());
+      assertEq(res.status, 200, "http status");
+      assertEq(json.ok, true, "ok flag");
+    });
+    assertEq(routeSeen.generateCopyFromAnalysisCalls, 1, "fast-path seam reached exactly once");
+    assertEq(routeSeen.generateCopyFromAnalysisModels[0], "prod-text-model-1", "the configured model was used");
+  });
+
+  await test("ROUTE (vision-fallback): non-production + unset -> proceeds with the hardcoded fallback (200)", async () => {
+    resetRouteSeen();
+    await withEnv({ LINAPI_KEY: "lin-abc" }, async () => {
+      // VERCEL_ENV unset => not production.
+      const { res, json } = await postAiCopy(visionFallbackBody());
+      assertEq(res.status, 200, "http status");
+      assertEq(json.ok, true, "ok flag");
+    });
+    assertEq(routeSeen.analyzeAndWriteCopyCalls, 1, "vision-fallback seam reached exactly once");
+  });
+
+  await test("ROUTE (fast path): non-production + unset -> proceeds with the hardcoded fallback (200)", async () => {
+    resetRouteSeen();
+    await withEnv({ LINAPI_KEY: "lin-abc" }, async () => {
+      const { res, json } = await postAiCopy(fastPathBody());
+      assertEq(res.status, 200, "http status");
+      assertEq(json.ok, true, "ok flag");
+    });
+    assertEq(routeSeen.generateCopyFromAnalysisCalls, 1, "fast-path seam reached exactly once");
+    assertEq(routeSeen.generateCopyFromAnalysisModels[0], "gemini-2.5-flash", "the hardcoded linapi fallback was used");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (Module as any)._load = originalLoad;
   if (failed > 0) process.exit(1);
 }
 
-main();
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

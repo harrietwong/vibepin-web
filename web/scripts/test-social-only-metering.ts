@@ -322,9 +322,10 @@ function consumeCalls(): RpcCall[] {
         draftId, boardId: "b", imageUrl: "https://i/midnight.png", title: "t",
       }));
       assert.equal(pinsRes.status, 201, "the pins call itself must succeed");
-      const pinsBody = await pinsRes.json() as { meteringBucket?: string; meteringBucketSig?: string };
+      const pinsBody = await pinsRes.json() as { meteringBucket?: string; meteringBucketSig?: string; meteringBucketMintedAt?: number };
       assert.ok(pinsBody.meteringBucket, "the pins route must mint and return a bucket");
       assert.ok(pinsBody.meteringBucketSig, "the pins route must also mint and return a signature over that bucket");
+      assert.ok(pinsBody.meteringBucketMintedAt, "and the mint instant the bucket+sig are bound to");
       const pinsCalls = consumeCalls();
       assert.equal(pinsCalls.length, 1);
       const keyFromPinsRoute = pinsCalls[0].args.p_idempotency_key;
@@ -337,6 +338,7 @@ function consumeCalls(): RpcCall[] {
         destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
         meteringBucket: pinsBody.meteringBucket,
         meteringBucketSig: pinsBody.meteringBucketSig,
+        meteringBucketMintedAt: pinsBody.meteringBucketMintedAt,
       }));
       assert.equal(socialRes.status, 200);
       const socialCalls = consumeCalls();
@@ -465,9 +467,10 @@ function consumeCalls(): RpcCall[] {
         draftId, boardId: "b", imageUrl: "https://i/midnight-thrown.png", title: "t",
       }));
       assert.equal(pinsRes.status, 500, "an unexpected thrown error maps to pinterestErrorResponse's catch-all 500");
-      const pinsBody = await pinsRes.json() as { meteringBucket?: string; meteringBucketSig?: string };
+      const pinsBody = await pinsRes.json() as { meteringBucket?: string; meteringBucketSig?: string; meteringBucketMintedAt?: number };
       assert.ok(pinsBody.meteringBucket, "even an UNTYPED (thrown) failure must relay the bucket it metered under");
       assert.ok(pinsBody.meteringBucketSig, "and the signature over that bucket");
+      assert.ok(pinsBody.meteringBucketMintedAt, "and the mint instant the bucket+sig are bound to");
       const pinsCalls = consumeCalls();
       assert.equal(pinsCalls.length, 1, "metering runs BEFORE the provider call, so a thrown failure still consumed one unit");
       const keyFromPinsRoute = pinsCalls[0].args.p_idempotency_key;
@@ -480,6 +483,7 @@ function consumeCalls(): RpcCall[] {
         destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
         meteringBucket: pinsBody.meteringBucket,
         meteringBucketSig: pinsBody.meteringBucketSig,
+        meteringBucketMintedAt: pinsBody.meteringBucketMintedAt,
       }));
       assert.equal(socialRes.status, 200);
       const socialCalls = consumeCalls();
@@ -496,7 +500,8 @@ function consumeCalls(): RpcCall[] {
   await test("a tampered bucket (a different in-window day, reusing a signature minted for another day) is rejected -- the key equals the route's own-date key", async () => {
     const draftId = "pd_tampered_bucket_1";
     const today = immediateBucketForNow();
-    const sigForToday = signImmediateBucket(OWNER, draftId, today);
+    const mintedAtMs = Date.now();
+    const sigForToday = signImmediateBucket(OWNER, draftId, today, mintedAtMs);
     const tomorrow = new Date(Date.parse(`${today}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
 
     const ownRes = await POST(req({
@@ -550,7 +555,8 @@ function consumeCalls(): RpcCall[] {
   await test("a signature minted for a DIFFERENT draftId is rejected even though the bucket itself is well-formed and in-window -- the key equals the route's own-date key", async () => {
     const draftId = "pd_wrong_draft_real_1";
     const today = immediateBucketForNow();
-    const sigForADifferentDraft = signImmediateBucket(OWNER, "pd_wrong_draft_OTHER", today);
+    const mintedAtMs = Date.now();
+    const sigForADifferentDraft = signImmediateBucket(OWNER, "pd_wrong_draft_OTHER", today, mintedAtMs);
 
     const ownRes = await POST(req({
       postId: draftId,

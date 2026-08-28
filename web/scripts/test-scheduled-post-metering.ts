@@ -21,6 +21,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
 process.env.USAGE_REQUEST_KEY_SALT = "test-salt";
 
 import assert from "node:assert";
+import crypto from "node:crypto";
 
 let passed = 0;
 let failed = 0;
@@ -108,120 +109,178 @@ async function load(mode: string) {
     assert.equal(withScheduledAt, withoutOverride, "a scheduled key must ignore an override — it is never on the immediate path");
   });
 
-  // ── isAcceptableImmediateBucket — the validation gate for a client-relayed bucket ──
-  await test("isAcceptableImmediateBucket: yesterday / today / tomorrow (relative to nowMs) are all accepted", async () => {
+  // -- classifyImmediateBucket -- strict bucket-format validation ----------------
+  await test("classifyImmediateBucket: a well-formed but unsigned bucket is bad_signature (no sig sent)", async () => {
     const m = await load("shadow");
     const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2026-08-14", nowMs), true, "yesterday");
-    assert.equal(m.isAcceptableImmediateBucket("2026-08-15", nowMs), true, "today");
-    assert.equal(m.isAcceptableImmediateBucket("2026-08-16", nowMs), true, "tomorrow");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2026-08-15", undefined, nowMs, nowMs), "bad_signature");
   });
 
-  await test("isAcceptableImmediateBucket: ±2 days is rejected — the window is exactly one day either side", async () => {
+  await test("classifyImmediateBucket: malformed strings are rejected before the signature is even checked", async () => {
     const m = await load("shadow");
     const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2026-08-13", nowMs), false, "two days in the past");
-    assert.equal(m.isAcceptableImmediateBucket("2026-08-17", nowMs), false, "two days in the future");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2026-8-1", "deadbeef", nowMs, nowMs), "malformed", "unpadded month/day");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", 123, "deadbeef", nowMs, nowMs), "malformed", "non-string candidate");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "", "deadbeef", nowMs, nowMs), "malformed", "empty string");
   });
 
-  await test("isAcceptableImmediateBucket: malformed strings are rejected", async () => {
-    const m = await load("shadow");
-    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2026-8-15", nowMs), false, "unpadded month");
-    assert.equal(m.isAcceptableImmediateBucket("2026-08-1", nowMs), false, "unpadded day");
-    assert.equal(m.isAcceptableImmediateBucket("20260815", nowMs), false, "no separators");
-    assert.equal(m.isAcceptableImmediateBucket("", nowMs), false, "empty string");
-    assert.equal(m.isAcceptableImmediateBucket("not-a-date", nowMs), false, "not a date at all");
-  });
-
-  await test("isAcceptableImmediateBucket: non-string candidates are rejected", async () => {
-    const m = await load("shadow");
-    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket(123, nowMs), false, "number");
-    assert.equal(m.isAcceptableImmediateBucket(null, nowMs), false, "null");
-    assert.equal(m.isAcceptableImmediateBucket(undefined, nowMs), false, "undefined");
-    assert.equal(m.isAcceptableImmediateBucket({}, nowMs), false, "object");
-  });
-
-  // ── Strict calendar validation (Codex round 3, Low) ──────────────────────────
+  // -- Strict calendar validation (Codex round 3, Low -- still enforced by classifyImmediateBucket) --
   // A naive regex+Date.parse pair lets "2026-02-30" or "2026-13-01" through:
   // JS's Date normalizes overflow fields FORWARD into a real (different) date
-  // instead of failing, so isAcceptableImmediateBucket must reject anything whose
+  // instead of failing, so classifyImmediateBucket must reject anything whose
   // own ISO round-trip does not equal the input string, on top of the regex.
-  await test("isAcceptableImmediateBucket: 2026-02-30 (calendar-invalid day) is rejected", async () => {
+  await test("classifyImmediateBucket: 2026-02-30 (calendar-invalid day) is malformed", async () => {
     const m = await load("shadow");
     const nowMs = Date.parse("2026-03-01T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2026-02-30", nowMs), false, "February never has a 30th");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2026-02-30", "deadbeef", nowMs, nowMs), "malformed", "February never has a 30th");
   });
 
-  await test("isAcceptableImmediateBucket: 2026-13-01 (calendar-invalid month) is rejected", async () => {
+  await test("classifyImmediateBucket: 2024-02-29 (real leap day) round-trips ok when correctly signed", async () => {
     const m = await load("shadow");
-    const nowMs = Date.parse("2027-01-01T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2026-13-01", nowMs), false, "there is no 13th month");
+    const mintedAtMs = Date.parse("2024-02-29T12:00:00.000Z");
+    const sig = m.signImmediateBucket("u-1", "pd_x", "2024-02-29", mintedAtMs);
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2024-02-29", sig, mintedAtMs, mintedAtMs), "ok", "2024 is a leap year -- Feb 29 is real");
   });
 
-  await test("isAcceptableImmediateBucket: 2024-02-29 (real leap day) is accepted when inside the window", async () => {
-    const m = await load("shadow");
-    const nowMs = Date.parse("2024-02-29T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2024-02-29", nowMs), true, "2024 is a leap year — Feb 29 is real");
-  });
-
-  await test("isAcceptableImmediateBucket: 2025-02-29 (2025 is NOT a leap year) is rejected", async () => {
+  await test("classifyImmediateBucket: 2025-02-29 (2025 is NOT a leap year) is malformed", async () => {
     const m = await load("shadow");
     const nowMs = Date.parse("2025-03-01T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2025-02-29", nowMs), false, "2025 has no Feb 29 — it normalizes forward to Mar 1");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2025-02-29", "deadbeef", nowMs, nowMs), "malformed", "2025 has no Feb 29 -- it normalizes forward to Mar 1");
   });
 
-  await test("isAcceptableImmediateBucket: month-end boundaries around now=2026-08-31 still accept the real neighboring dates", async () => {
+  // -- signImmediateBucket / verifyImmediateBucket (Codex round 4 -- mintedAt-bound) --
+  await test("signImmediateBucket/verifyImmediateBucket: round-trips across a UTC-midnight straddle within the relay window", async () => {
     const m = await load("shadow");
-    const nowMs = Date.parse("2026-08-31T12:00:00.000Z");
-    assert.equal(m.isAcceptableImmediateBucket("2026-09-01", nowMs), true, "tomorrow crosses into September");
-    assert.equal(m.isAcceptableImmediateBucket("2026-08-30", nowMs), true, "yesterday");
+    const mintedAtMs = Date.parse("2026-08-28T23:59:59.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs); // "2026-08-28" -- the mint instant's OWN date
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    const verifyAtMs = Date.parse("2026-08-29T00:00:01.000Z"); // 2s later, crossed midnight
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs, verifyAtMs), true, "a relay that straddles UTC midnight still resolves to the day it was minted on");
   });
 
-  // ── signImmediateBucket / verifyImmediateBucket (Codex round 3, Low) ─────────
-  await test("signImmediateBucket/verifyImmediateBucket: round-trips for the (userId, draftId, bucket) it was signed with", async () => {
+  await test("verifyImmediateBucket: the same genuine signature verified 20 hours later is stale", async () => {
     const m = await load("shadow");
-    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig), true);
+    const mintedAtMs = Date.parse("2026-08-28T23:59:59.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    const verifyAtMs = mintedAtMs + 20 * 60 * 60 * 1000; // 20 hours later
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs, verifyAtMs), false, "far past IMMEDIATE_BUCKET_MAX_RELAY_MS");
   });
 
-  await test("verifyImmediateBucket: a signature for a different bucket (tampered day) fails", async () => {
+  await test("verifyImmediateBucket: a mintedAt in the future beyond skew tolerance fails", async () => {
     const m = await load("shadow");
-    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-16", sig), false);
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    const verifyAtMs = mintedAtMs - 60_000; // "now" is a minute BEFORE the mint -- negative age
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs, verifyAtMs), false, "negative age (clock skew) is rejected as stale");
   });
 
-  await test("verifyImmediateBucket: a signature for a different draftId fails", async () => {
+  await test("verifyImmediateBucket: a tampered bucket (different day than what was signed) fails", async () => {
     const m = await load("shadow");
-    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_other", "2026-08-15", sig), false);
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-16", sig, mintedAtMs, mintedAtMs), false);
   });
 
-  await test("verifyImmediateBucket: a signature for a different userId fails", async () => {
+  await test("verifyImmediateBucket: a tampered mintedAtMs fails", async () => {
     const m = await load("shadow");
-    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
-    assert.equal(m.verifyImmediateBucket("u-2", "pd_x", "2026-08-15", sig), false);
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs + 1, mintedAtMs + 1), false, "the mintedAtMs bound into the sig was changed");
+  });
+
+  await test("verifyImmediateBucket: a signature minted for a different draftId fails", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_other", bucket, sig, mintedAtMs, mintedAtMs), false);
+  });
+
+  await test("verifyImmediateBucket: a signature minted for a different userId fails", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-2", "pd_x", bucket, sig, mintedAtMs, mintedAtMs), false);
   });
 
   await test("verifyImmediateBucket: missing/undefined/non-string signatures are rejected, never throw", async () => {
     const m = await load("shadow");
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", undefined), false);
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", null), false);
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", 123), false);
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", ""), false);
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, undefined, mintedAtMs, mintedAtMs), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, null, mintedAtMs, mintedAtMs), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, 123, mintedAtMs, mintedAtMs), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, "", mintedAtMs, mintedAtMs), false);
   });
 
   await test("verifyImmediateBucket: a shorter/longer or non-hex signature is rejected without throwing (timingSafeEqual length-mismatch guard)", async () => {
     const m = await load("shadow");
-    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
-    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig.slice(0, -2)));
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig.slice(0, -2)), false, "truncated signature must not verify");
-    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig + "00"));
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig + "00"), false, "extended signature must not verify");
-    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", "not-hex-at-all!!"));
-    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", "not-hex-at-all!!"), false, "non-hex garbage must not verify");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs) as string;
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", bucket, sig.slice(0, -2), mintedAtMs, mintedAtMs));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig.slice(0, -2), mintedAtMs, mintedAtMs), false, "truncated signature must not verify");
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", bucket, sig + "00", mintedAtMs, mintedAtMs));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig + "00", mintedAtMs, mintedAtMs), false, "extended signature must not verify");
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", bucket, "not-hex-at-all!!", mintedAtMs, mintedAtMs));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, "not-hex-at-all!!", mintedAtMs, mintedAtMs), false, "non-hex garbage must not verify");
   });
+
+  // -- deriveScheduledPostKey override path ----------------------------------------
+  await test("deriveScheduledPostKey: an override bucket is used verbatim on the immediate path", async () => {
+    const m = await load("shadow");
+    const withOverride = m.deriveScheduledPostKey("u-1", "pd_x", undefined, "2020-01-01");
+    const manual = crypto
+      .createHash("sha256")
+      .update(`test-salt|u-1|post:pd_x:2020-01-01`)
+      .digest("hex")
+      .slice(0, 48);
+    assert.equal(withOverride, manual, "the override is used verbatim, not re-derived");
+  });
+
+  await test("deriveScheduledPostKey: no override falls back to today's bucket (immediateBucketForNow())", async () => {
+    const m = await load("shadow");
+    const noOverride = m.deriveScheduledPostKey("u-1", "pd_x");
+    const today = m.deriveScheduledPostKey("u-1", "pd_x", undefined, m.immediateBucketForNow());
+    assert.equal(noOverride, today, "with no override, the key falls back to today's own bucket");
+  });
+
+  await test("deriveScheduledPostKey: the scheduledAt path is unchanged by the presence of an override", async () => {
+    const m = await load("shadow");
+    const withScheduledAt = m.deriveScheduledPostKey("u-1", "pd_x", "2026-08-01T09:00:00.000Z");
+    const manual = crypto
+      .createHash("sha256")
+      .update(`test-salt|u-1|post:pd_x:2026-08-01T09:00:00.000Z`)
+      .digest("hex")
+      .slice(0, 48);
+    assert.equal(withScheduledAt, manual, "scheduledAtIso always drives the bucket verbatim, override or not");
+  });
+
+  // -- production + default salt refuses to sign (Codex round 4, Fix 5) -----------
+  await test("signImmediateBucket: production with NEITHER USAGE_REQUEST_KEY_SALT nor SUPABASE_SERVICE_ROLE_KEY set returns null", async () => {
+    const savedSalt = process.env.USAGE_REQUEST_KEY_SALT;
+    const savedServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    delete process.env.USAGE_REQUEST_KEY_SALT;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.VERCEL_ENV = "production";
+    try {
+      const m = await load("shadow");
+      const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+      const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15", mintedAtMs);
+      assert.equal(sig, null, "production must refuse to sign with the public default salt");
+    } finally {
+      if (savedSalt === undefined) delete process.env.USAGE_REQUEST_KEY_SALT; else process.env.USAGE_REQUEST_KEY_SALT = savedSalt;
+      if (savedServiceKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = savedServiceKey;
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+    }
+  });
+
 
   // Cross-route parity (pins path vs. social path deriving the identical key for
   // the same Content) is proven at the real-route level in

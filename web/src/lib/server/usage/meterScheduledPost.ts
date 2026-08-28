@@ -22,7 +22,7 @@
  * second collapses into a replay under v55's UNIQUE(user_id, idempotency_key),
  * never a second unit.
  *
- * ── THE MIDNIGHT HAZARD AND THE BUCKET RELAY ────────────────────────────────────
+ * ── THE MIDNIGHT HAZARD AND THE BUCKET RELAY (mintedAt-bound, Codex round 4) ────
  * For an immediate ("publish now") multi-platform publish the client calls the
  * Pinterest route FIRST and the social route SECOND. Both derive an immediate
  * key from a UTC date bucket (below) computed independently at each call's own
@@ -30,14 +30,31 @@
  * instances with skewed clocks), the routes would compute DIFFERENT buckets for
  * the identical Content, the keys would differ, and the shared-key protection
  * above would not save them: a genuine double charge. So the Pinterest route
- * MINTS the bucket once, via `immediateBucketForNow()`, and returns it in its
- * response (success or typed failure); the client relays it to the social route
- * as `meteringBucket`, which passes it here as `deriveScheduledPostKey`'s
- * `bucketOverride` arg INSTEAD OF computing its own — but only once
- * `isAcceptableImmediateBucket` has validated it (a `YYYY-MM-DD` string, UTC,
- * within one day either side of that route's own "now"). A missing, malformed,
- * or out-of-window bucket is never trusted: the social route silently falls back
- * to computing its own date, exactly as it did before this relay existed.
+ * MINTS the bucket once, via `immediateBucketForNow()`, records the SAME instant
+ * as `meteringBucketMintedAt`, and returns both plus a signature binding all
+ * three (`userId`, `draftId`, `bucket`, `mintedAtMs`) in its response (success or
+ * typed failure); the client relays all three to the social route, which passes
+ * them here — but only once `verifyImmediateBucket` has proven the signature AND
+ * that the relay happened within `IMMEDIATE_BUCKET_MAX_RELAY_MS` of the mint AND
+ * that the bucket really is `immediateBucketForNow(mintedAtMs)` (the mint
+ * instant's OWN UTC date — this is what makes a UTC-midnight straddle safe: the
+ * day-binding check uses the FROZEN mint instant, never the verifying route's own
+ * "now", so a relay that crosses midnight still resolves to the day it was
+ * minted on, not the day it happened to arrive).
+ *
+ * This replaced an earlier design (`isAcceptableImmediateBucket`) that only
+ * checked the bucket was a real `YYYY-MM-DD` string within one calendar day of
+ * the VERIFYING route's own "now" — unsigned, unbound to a mint time, so any
+ * authenticated caller could hand the social route an accepted-but-unearned
+ * bucket (yesterday's, still inside the old ±1-day window) days after the fact,
+ * as long as they replayed it before that window rolled past. Binding the
+ * signature to a specific mint instant and bounding how long a relay may take
+ * closes both gaps: an unsigned/tampered bucket fails signature verification, and
+ * a genuinely-signed one that is simply too old (the relay took more than 15
+ * minutes) is rejected as stale — independent of what the calendar date happens
+ * to be. A missing, malformed, stale, or unauthenticated bucket is never trusted:
+ * the social route silently falls back to computing its own date, exactly as it
+ * did before this relay existed.
  *
  * ── IDEMPOTENCY KEY (why scheduled_at, not claim time) ─────────────────────────
  * The cron path is at-least-once: if the process dies after Pinterest creates the
@@ -77,7 +94,7 @@ export { usageMeteringMode, type UsageMeteringMode, usageEnforceFor, type UsageE
  * built from when no `scheduledAtIso` applies. Exported as its own pure function
  * (rather than inlined) so the Pinterest route can mint ONE bucket and hand it to
  * both its own key derivation and the client relay (see the module header), and so
- * `isAcceptableImmediateBucket` below can validate a relayed value against the
+ * `verifyImmediateBucket` below can validate a relayed value against the
  * SAME computation without duplicating the date-slicing logic.
  */
 export function immediateBucketForNow(nowMs: number = Date.now()): string {
@@ -97,7 +114,7 @@ export function immediateBucketForNow(nowMs: number = Date.now()): string {
  * effect on the immediate path (a real `scheduledAtIso` always wins — a scheduled
  * publish's key must stay tied to its schedule, never to when it happened to run).
  * Callers MUST validate an externally-supplied override with
- * `isAcceptableImmediateBucket` before passing it here — this function does not
+ * `verifyImmediateBucket` before passing it here — this function does not
  * re-validate it, so an unchecked value would let a caller mint an arbitrary key.
  */
 /**
@@ -108,6 +125,25 @@ export function immediateBucketForNow(nowMs: number = Date.now()): string {
  */
 function usageRequestSalt(): string {
   return process.env.USAGE_REQUEST_KEY_SALT ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "vibepin-usage";
+}
+
+/** True when neither real salt env var is set, so `usageRequestSalt()` fell all the
+ *  way through to the hardcoded `"vibepin-usage"` default — a value that is public
+ *  (it lives in this source file) and therefore not a secret at all. */
+function isUsingDefaultUsageSalt(): boolean {
+  return !process.env.USAGE_REQUEST_KEY_SALT && !process.env.SUPABASE_SERVICE_ROLE_KEY;
+}
+
+/** Emits `usage_meter_salt_default` at most once per process (Fix 5 below signs
+ *  nothing in production on the default salt, request after request — this must
+ *  not spam the log once per publish). */
+let saltDefaultLogged = false;
+function logSaltDefaultOnce(): void {
+  if (saltDefaultLogged) return;
+  saltDefaultLogged = true;
+  logEvent("usage_meter_salt_default", {
+    reason: "USAGE_REQUEST_KEY_SALT and SUPABASE_SERVICE_ROLE_KEY are both unset in production",
+  });
 }
 
 export function deriveScheduledPostKey(
@@ -127,32 +163,90 @@ export function deriveScheduledPostKey(
 }
 
 /**
- * Is `candidate` a trustworthy relayed immediate-publish bucket?
- *
- * True only when it is a `YYYY-MM-DD` string AND within ±1 UTC day of this call's
- * own `immediateBucketForNow(nowMs)` — i.e. exactly {yesterday, today, tomorrow}.
- * That window is deliberately narrow: it exists solely to absorb the pins-route
- * call and the social-route call landing a few seconds apart across a UTC-midnight
- * boundary (or a small clock skew between instances), not to let a client dictate
- * an arbitrary bucket. Anything wider would let a stale or forged value keep
- * matching long after it stopped describing "the other half of this same publish".
+ * How long a relayed immediate-publish bucket may take to travel from the pins
+ * route's mint (`signImmediateBucket`) to the social route's verify
+ * (`verifyImmediateBucket`) before it is treated as stale rather than a genuine
+ * same-publish relay. 15 minutes comfortably covers the pins call, the client's
+ * own round-trip, and the social call, while still being far too short for a
+ * signed bucket to be usefully replayed against a LATER, unrelated publish.
  */
-export function isAcceptableImmediateBucket(candidate: unknown, nowMs: number = Date.now()): candidate is string {
-  return classifyImmediateBucket(candidate, nowMs) === "ok";
+export const IMMEDIATE_BUCKET_MAX_RELAY_MS = 15 * 60 * 1000;
+
+/**
+ * Authenticates a relayed immediate-publish bucket (Codex round 4, Medium —
+ * supersedes the round-3 signature, which bound only (userId, draftId, bucket)
+ * and left a signed-but-unbound-in-time bucket reusable for up to two days
+ * against the old ±1-day calendar window).
+ *
+ * `signImmediateBucket` is computed once by the pins route right after it mints
+ * BOTH the bucket (`immediateBucketForNow()`) and the mint instant
+ * (`Date.now()`), and returns all three (bucket, mintedAtMs, sig) to the client.
+ * `verifyImmediateBucket` is what the social route runs before trusting a
+ * relayed bucket at all — see `classifyImmediateBucket` below for what it
+ * actually checks. Keyed with the SAME salt `deriveScheduledPostKey` already
+ * uses — no new secret to provision or rotate.
+ */
+/**
+ * Returns `null` — refuses to sign at all — when running in production
+ * (`VERCEL_ENV === "production"`) with NEITHER `USAGE_REQUEST_KEY_SALT` nor
+ * `SUPABASE_SERVICE_ROLE_KEY` set, i.e. `usageRequestSalt()` would otherwise sign
+ * with the hardcoded, publicly-readable `"vibepin-usage"` fallback (Codex round 4,
+ * Fix 5). Signing with a public string is not signing — anyone could forge a
+ * bucket the social route would then trust, defeating the whole point of
+ * `verifyImmediateBucket`. The pins route treats `null` as "omit sig AND
+ * mintedAt from the response" (the bucket itself may still be returned; the
+ * social route just falls back to its own date, same as any other rejected
+ * relay). Outside production the historical fallback behaviour is unchanged —
+ * local/dev/preview keep working with zero extra config.
+ */
+export function signImmediateBucket(userId: string, draftId: string, bucket: string, mintedAtMs: number): string | null {
+  if (process.env.VERCEL_ENV === "production" && isUsingDefaultUsageSalt()) {
+    logSaltDefaultOnce();
+    return null;
+  }
+  return crypto
+    .createHmac("sha256", usageRequestSalt())
+    .update(`${userId}|${draftId}|${bucket}|${mintedAtMs}`)
+    .digest("hex");
 }
 
 /**
- * Same acceptance rule as `isAcceptableImmediateBucket`, but keeps WHY a candidate
- * was refused distinguishable — callers that log a structured rejection (the social
- * route) need "the date doesn't exist / isn't a date at all" separate from "the date
- * is real but outside the relay window", and a single boolean throws that away.
- * `isAcceptableImmediateBucket` stays the boolean gate everywhere else so existing
- * callers are untouched.
+ * Classifies WHY a relayed (bucket, sig, mintedAtMs) triple is or is not
+ * trustworthy — the social route logs the reason on rejection, and a single
+ * boolean (see `verifyImmediateBucket` below) would throw that away.
+ *
+ *   malformed     — the bucket is not a real `YYYY-MM-DD` string, or mintedAtMs is
+ *                    not even a plausible timestamp — never reached the HMAC
+ *                    comparison at all.
+ *   bad_signature — the bucket/mintedAtMs are well-formed but sig is missing, not
+ *                    a hex string, or does not match the HMAC: the bucket,
+ *                    draftId, userId or mintedAtMs was tampered, the bucket was
+ *                    never signed by this server for this pair, or — Fix 5 — the
+ *                    pins route itself omitted the sig because it refused to sign
+ *                    with the unsafe default salt in production.
+ *   stale         — a GENUINE signature, but either the relay took longer than
+ *                    `IMMEDIATE_BUCKET_MAX_RELAY_MS` (or `nowMs` is somehow
+ *                    before `mintedAtMs`, i.e. clock skew beyond tolerance), or —
+ *                    defense in depth — the bucket is not the mint instant's OWN
+ *                    UTC date (`immediateBucketForNow(mintedAtMs)`). This is the
+ *                    check that REPLACES the old ±1-day calendar window: it binds
+ *                    "which day this counts as" to the frozen mint instant, not to
+ *                    whichever route happens to be asking, so a relay that
+ *                    straddles UTC midnight still resolves correctly (see the
+ *                    module header).
+ *   ok            — passed every check; the caller may trust the bucket.
+ *
+ * Never throws: any malformed/mistyped input classifies as `malformed` rather
+ * than throwing, exactly as the old regex+Date.parse gate did.
  */
 export function classifyImmediateBucket(
+  userId: string,
+  draftId: string,
   candidate: unknown,
+  sig: unknown,
+  mintedAtMs: unknown,
   nowMs: number = Date.now(),
-): "ok" | "malformed" | "out_of_window" {
+): "ok" | "malformed" | "bad_signature" | "stale" {
   if (typeof candidate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return "malformed";
   const candidateMs = Date.parse(`${candidate}T00:00:00.000Z`);
   if (Number.isNaN(candidateMs)) return "malformed";
@@ -161,53 +255,49 @@ export function classifyImmediateBucket(
   // of failing to parse, so the round-trip through ISO string comparison is the only
   // reliable check: a real date's own YYYY-MM-DD slice always equals its input.
   if (new Date(`${candidate}T00:00:00Z`).toISOString().slice(0, 10) !== candidate) return "malformed";
-  const todayMs = Date.parse(`${immediateBucketForNow(nowMs)}T00:00:00.000Z`);
-  const diffDays = Math.round((candidateMs - todayMs) / 86_400_000);
-  if (diffDays < -1 || diffDays > 1) return "out_of_window";
+  if (typeof mintedAtMs !== "number" || !Number.isFinite(mintedAtMs) || mintedAtMs <= 0) return "malformed";
+  // A missing/non-string/non-hex sig is a signature problem, not a bucket-format one --
+  // classified bad_signature (not malformed) so "no sig sent at all" (Fix 5, default-salt
+  // fail-closed) reads the same as "a sig was sent but does not verify".
+  if (typeof sig !== "string" || !/^[0-9a-f]+$/i.test(sig)) return "bad_signature";
+
+  const expectedSig = signImmediateBucket(userId, draftId, candidate, mintedAtMs);
+  // If THIS server would refuse to sign right now (Fix 5's unsafe-default-salt
+  // guard), it can never have produced a genuine sig for anything either — nothing
+  // this candidate is compared against could possibly be valid.
+  if (expectedSig === null) return "bad_signature";
+  let sigOk = false;
+  try {
+    const expected = Buffer.from(expectedSig, "hex");
+    const actual = Buffer.from(sig, "hex");
+    sigOk = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  } catch {
+    sigOk = false;
+  }
+  if (!sigOk) return "bad_signature";
+
+  const age = nowMs - mintedAtMs;
+  if (age < 0 || age > IMMEDIATE_BUCKET_MAX_RELAY_MS) return "stale";
+  if (candidate !== immediateBucketForNow(mintedAtMs)) return "stale";
+
   return "ok";
 }
 
 /**
- * Authenticates a relayed immediate-publish bucket (Codex round 3, Low).
- *
- * `isAcceptableImmediateBucket`/`classifyImmediateBucket` only bound the bucket to
- * a plausible date window — they never proved the bucket came from THIS server's own
- * pins-route mint for THIS (user, draft) pair. Without that, any authenticated caller
- * could hand the social route an accepted-but-unearned bucket (e.g. yesterday's,
- * still inside the ±1-day window) to steer which idempotency key gets charged.
- * `signImmediateBucket` is computed once by the pins route right after it mints the
- * bucket and returned alongside it; `verifyImmediateBucket` is what the social route
- * runs before trusting a relayed bucket at all. Keyed with the SAME salt
- * `deriveScheduledPostKey` already uses — no new secret to provision or rotate.
- */
-export function signImmediateBucket(userId: string, draftId: string, bucket: string): string {
-  return crypto
-    .createHmac("sha256", usageRequestSalt())
-    .update(`${userId}|${draftId}|${bucket}`)
-    .digest("hex");
-}
-
-/**
- * Constant-time verification of `signImmediateBucket`'s output. Never throws: a
- * missing/non-string/wrong-length/malformed-hex signature is simply "not valid" —
- * exactly like a rejected bucket, it must fall back to the route's own date rather
- * than ever surface as a request error.
+ * Boolean gate built on `classifyImmediateBucket` — true only for "ok". Never
+ * throws: a missing/tampered/expired/out-of-band relay is simply "not valid",
+ * exactly like a rejected bucket, and must fall back to the caller's own date
+ * rather than ever surface as a request error.
  */
 export function verifyImmediateBucket(
   userId: string,
   draftId: string,
   bucket: string,
   sig: unknown,
+  mintedAtMs: unknown,
+  nowMs: number = Date.now(),
 ): boolean {
-  if (typeof sig !== "string" || !/^[0-9a-f]+$/i.test(sig)) return false;
-  try {
-    const expected = Buffer.from(signImmediateBucket(userId, draftId, bucket), "hex");
-    const actual = Buffer.from(sig, "hex");
-    if (expected.length !== actual.length) return false;
-    return crypto.timingSafeEqual(expected, actual);
-  } catch {
-    return false;
-  }
+  return classifyImmediateBucket(userId, draftId, bucket, sig, mintedAtMs, nowMs) === "ok";
 }
 
 export type ScheduledPostConsume =

@@ -11,6 +11,8 @@
  * memory that resets between requests / instances.
  */
 
+import { isPlausibleModelId } from "./modelId";
+
 
 // ── Errors + user-safe messages ───────────────────────────────────────────────
 

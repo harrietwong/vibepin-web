@@ -16,6 +16,11 @@
  *     meteringBucket?: string,           // relayed from /api/pinterest/pins for this
  *                                         // same Content; validated (never trusted
  *                                         // outright) — see the metering block below.
+ *     meteringBucketSig?: string,        // HMAC over (uid, postId, meteringBucket,
+ *                                         // meteringBucketMintedAt) from the same call.
+ *     meteringBucketMintedAt?: number,   // the server instant the bucket+sig above were
+ *                                         // minted at; verification is bound to THIS
+ *                                         // value, not this route's own "now".
  *   }
  *
  * Response:
@@ -46,9 +51,7 @@ import { rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRu
 import {
   consumeScheduledPost,
   deriveScheduledPostKey,
-  isAcceptableImmediateBucket,
   classifyImmediateBucket,
-  verifyImmediateBucket,
 } from "@/lib/server/usage/meterScheduledPost";
 import { logEvent } from "@/lib/server/usage/meterGeneration";
 
@@ -113,13 +116,16 @@ export async function POST(req: Request) {
   // "now", and if the pins call and this call straddle a UTC midnight (or land on
   // clock-skewed instances) the two buckets — and therefore the two keys — could
   // differ, defeating the replay collapse above and double-charging. So the client
-  // relays `meteringBucket` (+ `meteringBucketSig`), the exact bucket the pins route
-  // minted and metered under, and — ONLY when `isAcceptableImmediateBucket` accepts
-  // the shape (a `YYYY-MM-DD` string, real calendar date, within one UTC day of this
-  // route's own "now") AND `verifyImmediateBucket` confirms the HMAC really was
-  // minted by the pins route for THIS (uid, postId) pair — never trusted on shape
-  // alone — it is used as `deriveScheduledPostKey`'s override instead of this route
-  // computing its own. A missing/rejected/unsigned bucket (including every
+  // relays `meteringBucket` + `meteringBucketSig` + `meteringBucketMintedAt`, the
+  // exact bucket the pins route minted and metered under plus the instant and
+  // signature that prove it — and ONLY when `verifyImmediateBucket` confirms the
+  // HMAC really was minted by the pins route for THIS (uid, postId) pair, the relay
+  // arrived within `IMMEDIATE_BUCKET_MAX_RELAY_MS` of that mint, AND the bucket is
+  // that mint instant's OWN UTC date (never trusted on shape alone, and never on
+  // this route's own "now" — see meterScheduledPost.ts's module header for why
+  // binding to the FROZEN mint instant is what makes a UTC-midnight straddle safe)
+  // — it is used as `deriveScheduledPostKey`'s override instead of this route
+  // computing its own. A missing/rejected/stale/unsigned bucket (including every
   // social-only publish, which never had a pins call to relay from) falls back to
   // this route's own date, exactly as before this relay existed. The residual case
   // is honest, not hidden: a social-only retry of the SAME Content on a LATER day
@@ -133,24 +139,16 @@ export async function POST(req: Request) {
     const rawBucket = body.meteringBucket;
     let bucketOverride: string | undefined;
     if (rawBucket !== undefined && rawBucket !== null) {
-      if (!isAcceptableImmediateBucket(rawBucket)) {
+      const reason = classifyImmediateBucket(uid, postId, rawBucket, body.meteringBucketSig, body.meteringBucketMintedAt);
+      if (reason !== "ok") {
         // Never blocks or errors the publish — just means this call derives its own
-        // bucket below, same as if nothing had been sent.
-        logEvent("usage_meter_bucket_rejected", {
-          route: "publish_social",
-          reason: classifyImmediateBucket(rawBucket) === "out_of_window" ? "out_of_window" : "malformed",
-        });
-      } else if (!verifyImmediateBucket(uid, postId, rawBucket, body.meteringBucketSig)) {
-        // A well-formed, in-window bucket that was never actually signed for THIS
-        // (uid, postId) pair by the pins route — e.g. tampered, missing entirely, or
-        // signed for a different draft. Rejected the same way: this call derives its
-        // own date rather than trust an unauthenticated relay.
-        logEvent("usage_meter_bucket_rejected", {
-          route: "publish_social",
-          reason: "bad_signature",
-        });
+        // bucket below, same as if nothing had been sent. Covers a missing sig too
+        // (Fix 5: the pins route omits sig+mintedAt entirely when it refused to sign
+        // with an unsafe default salt in production) — classifyImmediateBucket
+        // reports that as "bad_signature", same as any other unverifiable relay.
+        logEvent("usage_meter_bucket_rejected", { route: "publish_social", reason });
       } else {
-        bucketOverride = rawBucket;
+        bucketOverride = rawBucket as string;
       }
     }
     await consumeScheduledPost({

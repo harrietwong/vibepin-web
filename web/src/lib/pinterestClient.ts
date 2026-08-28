@@ -31,9 +31,14 @@ export type PinterestClientError = Error & {
    *  this Content's other (social) destinations can still relay it. Present only on a
    *  publishPin() rejection. */
   meteringBucket?: string;
-  /** HMAC over (uid, draftId, meteringBucket), relayed alongside it so the social
-   *  route can authenticate the bucket instead of merely accepting its date shape. */
+  /** HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt), relayed
+   *  alongside them so the social route can authenticate the bucket instead of
+   *  merely accepting its date shape. */
   meteringBucketSig?: string;
+  /** The server instant (Date.now()) the bucket+sig above were minted at — the
+   *  social route's verification is bound to THIS value, not its own "now". Absent
+   *  whenever meteringBucketSig is (they always travel together). */
+  meteringBucketMintedAt?: number;
 };
 
 export type PinterestAccount = { id: string | null; username: string | null; accountType: string | null };
@@ -74,9 +79,13 @@ export type PublishResult = {
    *  so the two requests for the same Content never bucket differently across a UTC
    *  midnight straddle. */
   meteringBucket?: string;
-  /** HMAC over (uid, draftId, meteringBucket) — relayed alongside it so the social
-   *  route can authenticate the bucket rather than merely accept its date shape. */
+  /** HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt) — relayed
+   *  alongside them so the social route can authenticate the bucket rather than
+   *  merely accept its date shape. */
   meteringBucketSig?: string;
+  /** The server instant the bucket+sig were minted at (Fix 5 relay-age binding).
+   *  Absent whenever meteringBucketSig is. */
+  meteringBucketMintedAt?: number;
 };
 
 function currentReturnTo(): string {
@@ -219,9 +228,12 @@ type ParsedError = {
   /** Present on ANY /api/pinterest/pins failure body — typed AND thrown/unexpected —
    *  since pinterestErrorResponse's `extra` param now merges it in universally. */
   meteringBucket?: string;
-  /** HMAC over (uid, draftId, meteringBucket), relayed alongside it whenever the
-   *  bucket is. */
+  /** HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt), relayed
+   *  alongside them whenever the bucket is. */
   meteringBucketSig?: string;
+  /** The server instant the bucket+sig were minted at. Present on any failure body
+   *  that also carries meteringBucketSig. */
+  meteringBucketMintedAt?: number;
 };
 
 async function parseErrorResponse(res: Response): Promise<ParsedError> {
@@ -239,6 +251,7 @@ async function parseErrorResponse(res: Response): Promise<ParsedError> {
       httpStatus,
       meteringBucket: typeof body?.meteringBucket === "string" ? body.meteringBucket : undefined,
       meteringBucketSig: typeof body?.meteringBucketSig === "string" ? body.meteringBucketSig : undefined,
+      meteringBucketMintedAt: typeof body?.meteringBucketMintedAt === "number" ? body.meteringBucketMintedAt : undefined,
     };
   } catch {
     return {
@@ -257,6 +270,7 @@ function toClientError(body: ParsedError): PinterestClientError {
   err.httpStatus = body.httpStatus;
   err.meteringBucket = body.meteringBucket;
   err.meteringBucketSig = body.meteringBucketSig;
+  err.meteringBucketMintedAt = body.meteringBucketMintedAt;
   return err;
 }
 

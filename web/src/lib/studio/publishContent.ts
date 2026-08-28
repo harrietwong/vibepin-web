@@ -391,6 +391,7 @@ export async function publishContent(
     // social route just derives its own bucket, exactly as before this relay existed.
     let meteringBucket: string | undefined;
     let meteringBucketSig: string | undefined;
+    let meteringBucketMintedAt: number | undefined;
 
     const pinterestTargets = dispatch.filter(d => d.provider === "pinterest");
     const socialTargets = dispatch.filter(d => d.provider !== "pinterest");
@@ -432,6 +433,7 @@ export async function publishContent(
         // pinterest destination, rare) never overwrite it.
         if (!meteringBucket && res.meteringBucket) meteringBucket = res.meteringBucket;
         if (!meteringBucketSig && res.meteringBucketSig) meteringBucketSig = res.meteringBucketSig;
+        if (!meteringBucketMintedAt && res.meteringBucketMintedAt) meteringBucketMintedAt = res.meteringBucketMintedAt;
         outcomes.push({
           ...baseRow(destination, "published", submittedAt),
           // A legacy destination's row now names the account that actually received it.
@@ -457,6 +459,7 @@ export async function publishContent(
         // social route derives its own date, same as a social-only publish always has.
         if (!meteringBucket && err?.meteringBucket) meteringBucket = err.meteringBucket;
         if (!meteringBucketSig && err?.meteringBucketSig) meteringBucketSig = err.meteringBucketSig;
+        if (!meteringBucketMintedAt && err?.meteringBucketMintedAt) meteringBucketMintedAt = err.meteringBucketMintedAt;
         // Trial/Standard-access is a "not yet", not a failure. Recording a failed row
         // would flow through legacyFieldsFromResults into failureType "publish" and
         // RELEASE the Content's schedule — the Pin would silently leave its slot for a
@@ -500,6 +503,7 @@ export async function publishContent(
           // social-only publish — no pinterest call ran, so there is nothing to relay.
           ...(meteringBucket ? { meteringBucket } : {}),
           ...(meteringBucketSig ? { meteringBucketSig } : {}),
+          ...(meteringBucketMintedAt ? { meteringBucketMintedAt } : {}),
         });
         // The response is provider-ordered; match each result back to the destination it
         // came from so two accounts on one platform stay distinguishable.

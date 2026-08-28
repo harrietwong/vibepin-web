@@ -122,12 +122,19 @@ export async function POST(req: Request) {
   // Content should use instead of computing its own, so a UTC-midnight straddle
   // between the two requests cannot compute two different date buckets for one
   // publish (see meterScheduledPost.ts's module header).
-  const meteringBucket = immediateBucketForNow();
+  // mintedAt is the SAME instant the bucket itself is derived from — both travel to
+  // the client together and the social route verifies the signature against this
+  // exact pair (meterScheduledPost.ts's classifyImmediateBucket), never a value it
+  // computes itself.
+  const meteringBucketMintedAt = Date.now();
+  const meteringBucket = immediateBucketForNow(meteringBucketMintedAt);
   // Signed only against draftId (never the sourcePinId fallback below): the social
   // route verifies a relayed bucket against ITS OWN `postId`, which the client always
   // sends as the draft id (see publishContent.ts) — signing against a different
-  // identity here would make a legitimate relay unverifiable there.
-  const meteringBucketSig = draftId ? signImmediateBucket(uid, draftId, meteringBucket) : undefined;
+  // identity here would make a legitimate relay unverifiable there. `null` (Fix 5,
+  // production with no real salt configured) means "refuse to sign" — omit both sig
+  // and mintedAt below rather than relay an unsigned/forgeable bucket.
+  const meteringBucketSig = draftId ? signImmediateBucket(uid, draftId, meteringBucket, meteringBucketMintedAt) : undefined;
   const meterIdentity = draftId ?? (sourcePinId || null);
   if (meterIdentity) {
     await consumeScheduledPost({
@@ -174,7 +181,7 @@ export async function POST(req: Request) {
           error: result.error,
           code: result.code,
           meteringBucket,
-          ...(meteringBucketSig ? { meteringBucketSig } : {}),
+          ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}),
         },
         { status: result.status },
       );
@@ -200,9 +207,11 @@ export async function POST(req: Request) {
         // fan-out call for this SAME Content buckets identically even across a UTC
         // midnight straddle.
         meteringBucket,
-        // HMAC over (uid, draftId, meteringBucket) so the social route can verify this
-        // bucket really was minted here, not merely accept an in-window date shape.
-        ...(meteringBucketSig ? { meteringBucketSig } : {}),
+        // HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt) so the social
+        // route can verify this bucket really was minted here (and how long ago), not
+        // merely accept an in-window date shape. Travels together with the sig — a
+        // mintedAt with no sig (or vice versa) is meaningless to the verifier.
+        ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}),
       },
       { status: 201 },
     );
@@ -214,7 +223,7 @@ export async function POST(req: Request) {
     // reason it travels on a typed one above: the client may still proceed to this
     // Content's social destinations, and that call needs the identical bucket this
     // request metered under.
-    return pinterestErrorResponse(err, { meteringBucket, ...(meteringBucketSig ? { meteringBucketSig } : {}) });
+    return pinterestErrorResponse(err, { meteringBucket, ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}) });
   } finally {
     if (lockKey) _inFlightPublishes.delete(lockKey);
   }
