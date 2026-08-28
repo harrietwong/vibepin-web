@@ -19,9 +19,9 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `08c22a5ce66a33182a1d3a861d90581e3a5cfb93`, and exact
+functional tip `a299a17dae428dae69d55f4262f5301804fb35e7`, and exact
 81-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_08c22a5.json`.
+`backend/docs/product_opportunities_v37_release_manifest_a299a17.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -74,7 +74,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 984 tests with 2
+committed Product-only state, the full backend suite passed 994 tests with 2
 live-only skips, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
@@ -494,7 +494,8 @@ one process, and this harness inspects RLS policy/grant definitions rather than
 executing authenticated and anonymous sessions. The exact production post-apply
 verifier plus bounded concurrency/role canaries remain mandatory before rollout.
 
-Commit `08c22a5` adds the missing real-PostgreSQL gate without silently treating
+Commits `08c22a5` and `a299a17` add and harden the missing real-PostgreSQL gate
+without silently treating
 catalog definitions as runtime proof. The default command is a zero-network plan.
 Execution requires one reviewed Admission row plus exact project, manifest and
 migration SHA-256 bindings, and `VIBEPIN_PRODUCT_STAGE2_CANARY_MODE=production`.
@@ -502,9 +503,18 @@ It opens independent sessions: one holds an uncommitted Active identity, the
 second must time out on the partial unique index, and both transactions roll
 back. A separate statement temporarily creates two Saved Products rows for two
 existing auth users, switches to `authenticated` and `anon`, and accepts success
-only when the structured PostgreSQL error is exactly `P0001` /
+only when the normalized PostgreSQL error is exactly `P0001` /
 `V37_ROLE_CANARY_PASS`; that deliberate exception rolls back Product, Evidence
 and Saved rows. Exact Product/Saved counts must equal the pre-run baseline.
+The production read-only probe
+`backend/docs/product_opportunities_v37_management_api_error_shape_probe_20260828T073558Z.json`
+proved that the current Management API returns a message-only wrapper with the
+SQLSTATE embedded in its exact prefix. `a299a17` parses only that anchored shape
+or an unambiguous structured code/message pair, rejects SQL echoes and extra
+fields, and also requires the challenger to return exact HTTP 400 / `55P03` /
+`canceling statement due to lock timeout` rather than a substring match. The
+probe read no business row and performed no mutation; it is not concurrency or
+RLS execution evidence.
 The probe temporarily touches two existing user IDs inside the transaction but
 never returns those IDs and persists no row. Unit orchestration is PASS, but one
 execution against an isolated test project remains mandatory before any

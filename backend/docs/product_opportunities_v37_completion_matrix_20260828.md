@@ -3,8 +3,8 @@
 Authority: `docs/prd/0825数据功能修改-VibePin_Product_Opportunities_PRD_v3.7_—_产品与技术执行版.md`.
 
 Candidate boundary: functional commit
-`08c22a5ce66a33182a1d3a861d90581e3a5cfb93`, exact 81-artifact manifest
-`backend/docs/product_opportunities_v37_release_manifest_08c22a5.json`.
+`a299a17dae428dae69d55f4262f5301804fb35e7`, exact 81-artifact manifest
+`backend/docs/product_opportunities_v37_release_manifest_a299a17.json`.
 
 This matrix separates implementation evidence from production truth. `PASS`
 below never means that an unapplied schema, an unpromoted Web build, an empty
@@ -29,7 +29,7 @@ metric history or a disabled timer is live.
 
 ## Current validation
 
-- Backend: `984 passed`, `2` credential-gated skips, zero failures.
+- Backend: `994 passed`, `2` credential-gated skips, zero failures.
 - Admission/migration focused group: `132/132`.
 - Exact release automation contract: `30/30`.
 - Product Web checks rerun from the current tree: v3.7 contract, access,
@@ -49,7 +49,9 @@ metric history or a disabled timer is live.
 - Rollback-only PostgreSQL canary: local orchestration and fail-closed tests PASS;
   isolated test-project execution is still required. Its exact structured
   `P0001` sentinel prevents a SQL-echoing error response from becoming a false
-  PASS.
+  PASS. A production SELECT-only probe captured the real message-only API
+  wrapper; `a299a17` now parses only that anchored format or an unambiguous
+  structured pair and requires exact HTTP 400 / `55P03` for the lock challenger.
 
 ## Data quality decision
 

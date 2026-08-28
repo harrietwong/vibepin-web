@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. It descends from production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`08c22a5ce66a33182a1d3a861d90581e3a5cfb93`; and its exact Product boundary is
+`a299a17dae428dae69d55f4262f5301804fb35e7`; and its exact Product boundary is
 the 81-artifact
-`backend/docs/product_opportunities_v37_release_manifest_08c22a5.json`. This tip
+`backend/docs/product_opportunities_v37_release_manifest_a299a17.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -43,7 +43,7 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 984 passed with 2 live-only skips; Web 132/132
+and contract-test state: backend 994 passed with 2 live-only skips; Web 132/132
 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -135,7 +135,7 @@ Because PGlite is single-process and the harness inspects policy/grant catalog
 facts rather than authenticated/anonymous sessions, production concurrency and
 role isolation remain explicit bounded canary gates.
 
-Commits `596d472` and `08c22a5` turn those two gates into an exact rollback-only
+Commits `596d472`, `08c22a5` and `a299a17` turn those two gates into an exact rollback-only
 PostgreSQL canary. Its independent-session duplicate probe must block on the
 current-identity partial unique index; its role probe switches to authenticated
 and anonymous database roles, verifies per-user Saved Products visibility plus
@@ -144,7 +144,13 @@ to roll back every temporary Product/Evidence/Saved row. An independent Opus
 review found no P0/P1 and one P2 in the first detector: counting a sentinel in
 raw error text could misread a future SQL-echoing API response. `08c22a5` closes
 that inversion by requiring an exact structured PostgreSQL code and message and
-adds the SQL-echo regression. Local orchestration is proven; actual PostgreSQL
+adds the SQL-echo regression. A production SELECT-only error-shape probe then
+showed that the real Management API exposes only an exact message wrapper with
+the SQLSTATE embedded. `a299a17` safely normalizes that anchored wrapper, rejects
+ambiguous extra fields and requires exact HTTP 400 / `55P03` lock-timeout
+semantics. Evidence:
+`backend/docs/product_opportunities_v37_management_api_error_shape_probe_20260828T073558Z.json`.
+Local orchestration is proven; actual PostgreSQL
 semantics still require one isolated test-project execution before production.
 
 The historical integration candidate is
