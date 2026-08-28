@@ -2897,6 +2897,8 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "開頭一句",
   "insights.diagnosisPanel.variable.cta": "行動呼籲",
   "insights.diagnosisPanel.variable.first_image": "第一張圖",
+  "insights.diagnosisPanel.generate": "依這條洞察生成",
+  "insights.scorecard.generateTest": "發佈一個只改這一處的版本，再把它 7 天後的成績單和這張比對。",
   "insights.diagnosisPanel.variable.publish_time": "發布時間",
   "insights.diagnosisPanel.variable.keyword": "關鍵字",
   "insights.diagnosisPanel.variable.format": "格式",

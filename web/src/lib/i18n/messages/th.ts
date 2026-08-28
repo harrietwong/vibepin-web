@@ -2876,6 +2876,8 @@ const th: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "ประโยคเปิด",
   "insights.diagnosisPanel.variable.cta": "คำเชิญให้ทำต่อ",
   "insights.diagnosisPanel.variable.first_image": "ภาพแรก",
+  "insights.diagnosisPanel.generate": "สร้างจากอินไซต์นี้",
+  "insights.scorecard.generateTest": "เผยแพร่เวอร์ชันที่เปลี่ยนเพียงสิ่งเดียวนั้น แล้วเทียบสกอร์การ์ด 7 วันกับใบนี้",
   "insights.diagnosisPanel.variable.publish_time": "เวลาเผยแพร่",
   "insights.diagnosisPanel.variable.keyword": "คีย์เวิร์ด",
   "insights.diagnosisPanel.variable.format": "รูปแบบ",

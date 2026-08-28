@@ -2878,6 +2878,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "开头一句",
   "insights.diagnosisPanel.variable.cta": "行动号召",
   "insights.diagnosisPanel.variable.first_image": "第一张图",
+  "insights.diagnosisPanel.generate": "基于这条洞察生成",
+  "insights.scorecard.generateTest": "发布一个只改这一处的版本，再把它 7 天后的成绩单和这张对比。",
   "insights.diagnosisPanel.variable.publish_time": "发布时间",
   "insights.diagnosisPanel.variable.keyword": "关键词",
   "insights.diagnosisPanel.variable.format": "格式",

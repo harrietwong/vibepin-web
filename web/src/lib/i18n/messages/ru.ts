@@ -2927,6 +2927,8 @@ const ru: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Зацепка",
   "insights.diagnosisPanel.variable.cta": "Призыв к действию",
   "insights.diagnosisPanel.variable.first_image": "Первое изображение",
+  "insights.diagnosisPanel.generate": "Создать на основе этого вывода",
+  "insights.scorecard.generateTest": "Опубликуйте вариант, в котором изменено только это одно, и сравните его 7-дневную карточку с этой.",
   "insights.diagnosisPanel.variable.publish_time": "Время публикации",
   "insights.diagnosisPanel.variable.keyword": "Ключевые слова",
   "insights.diagnosisPanel.variable.format": "Формат",

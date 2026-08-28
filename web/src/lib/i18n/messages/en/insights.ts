@@ -233,6 +233,8 @@ export const insightsMessages = {
   "insights.diagnosisPanel.variable.hook": "Hook",
   "insights.diagnosisPanel.variable.cta": "Call to action",
   "insights.diagnosisPanel.variable.first_image": "First image",
+  "insights.diagnosisPanel.generate": "Generate based on this insight",
+  "insights.scorecard.generateTest": "Publish a variant that changes only that one thing, then compare its 7-day scorecard with this one.",
   "insights.diagnosisPanel.variable.publish_time": "Publishing time",
   "insights.diagnosisPanel.variable.keyword": "Keywords",
   "insights.diagnosisPanel.variable.format": "Format",

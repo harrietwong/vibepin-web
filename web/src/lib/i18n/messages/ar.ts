@@ -2877,6 +2877,8 @@ const ar: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "الجملة الافتتاحية",
   "insights.diagnosisPanel.variable.cta": "دعوة الإجراء",
   "insights.diagnosisPanel.variable.first_image": "الصورة الأولى",
+  "insights.diagnosisPanel.generate": "أنشئ بناءً على هذه الرؤية",
+  "insights.scorecard.generateTest": "انشر نسخة تغيّر هذا العنصر وحده، ثم قارن بطاقة أدائها بعد 7 أيام بهذه البطاقة.",
   "insights.diagnosisPanel.variable.publish_time": "وقت النشر",
   "insights.diagnosisPanel.variable.keyword": "الكلمات المفتاحية",
   "insights.diagnosisPanel.variable.format": "النوع",

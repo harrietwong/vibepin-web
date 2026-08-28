@@ -2883,6 +2883,8 @@ const vi: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Câu mở đầu",
   "insights.diagnosisPanel.variable.cta": "Lời kêu gọi hành động",
   "insights.diagnosisPanel.variable.first_image": "Hình đầu tiên",
+  "insights.diagnosisPanel.generate": "Tạo dựa trên insight này",
+  "insights.scorecard.generateTest": "Đăng một phiên bản chỉ thay đổi đúng một điều đó, rồi so bảng điểm 7 ngày của nó với bảng này.",
   "insights.diagnosisPanel.variable.publish_time": "Thời điểm đăng",
   "insights.diagnosisPanel.variable.keyword": "Từ khóa",
   "insights.diagnosisPanel.variable.format": "Định dạng",

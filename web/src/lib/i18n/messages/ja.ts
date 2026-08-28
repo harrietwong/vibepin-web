@@ -2879,6 +2879,8 @@ const ja: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "つかみ",
   "insights.diagnosisPanel.variable.cta": "行動のひとこと",
   "insights.diagnosisPanel.variable.first_image": "最初の画像",
+  "insights.diagnosisPanel.generate": "このインサイトをもとに作成",
+  "insights.scorecard.generateTest": "その一点だけを変えたバリエーションを公開し、7日後のスコアカードをこれと比べてください。",
   "insights.diagnosisPanel.variable.publish_time": "公開する時間",
   "insights.diagnosisPanel.variable.keyword": "キーワード",
   "insights.diagnosisPanel.variable.format": "形式",

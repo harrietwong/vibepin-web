@@ -2895,6 +2895,8 @@ const id: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Kalimat pembuka",
   "insights.diagnosisPanel.variable.cta": "Ajakan bertindak",
   "insights.diagnosisPanel.variable.first_image": "Gambar pertama",
+  "insights.diagnosisPanel.generate": "Buat berdasarkan insight ini",
+  "insights.scorecard.generateTest": "Terbitkan varian yang hanya mengubah satu hal itu, lalu bandingkan kartu skor 7 harinya dengan yang ini.",
   "insights.diagnosisPanel.variable.publish_time": "Waktu terbit",
   "insights.diagnosisPanel.variable.keyword": "Kata kunci",
   "insights.diagnosisPanel.variable.format": "Format",

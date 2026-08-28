@@ -23,10 +23,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Award, X } from "lucide-react";
+import { Award, Sparkles, X } from "lucide-react";
 import useSWR from "swr";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import type { I18nText } from "@/lib/insights/recommendations";
+import { buildPrefillFromInsight, openCreatePins } from "@/lib/createPinsPrefill";
+import * as pinDraftStore from "@/lib/pinDraftStore";
+import { readStoredTarget } from "@/lib/studio/publishTarget";
+import type { Evidence } from "@/lib/insights/evidence";
+import type { I18nText, RecommendationVariable } from "@/lib/insights/recommendations";
 import type {
   InsightReportDetail,
   InsightReportSummary,
@@ -93,6 +97,85 @@ function MetricCell({ label, value }: { label: string; value: number | null }) {
         {value === null ? "—" : value.toLocaleString()}
       </div>
     </div>
+  );
+}
+
+/**
+ * A scorecard has no Keep / Change / Test — that shape belongs to the weekly reading,
+ * and freezing a second one per Pin would double the surface a translator can drift.
+ * So the button synthesises one from what the scorecard DOES carry, and the mapping
+ * below is the whole of that synthesis: the flag that fired on this Pin names the
+ * variable to change, exactly as it does in the weekly templates (F1 keyword, F2 cta,
+ * F3 link). A Pin with no flag still gets a button — its variable is the first image,
+ * the one thing every Pin has and every regeneration changes.
+ */
+const FLAG_VARIABLE: Partial<Record<Evidence["kind"], RecommendationVariable>> = {
+  F1: "keyword",
+  F2: "cta",
+  F3: "link",
+};
+
+function scorecardVariable(flags: Evidence[] | undefined): RecommendationVariable {
+  for (const flag of flags ?? []) {
+    const mapped = FLAG_VARIABLE[flag.kind];
+    if (mapped) return mapped;
+  }
+  return "first_image";
+}
+
+/**
+ * "Generate based on this insight", on one Pin.
+ *
+ * The draft is the source of truth for WHERE a follow-up would publish: the scorecard
+ * row deliberately does not carry a connection id, and the draft that produced the Pin
+ * already records the account it went to. A Pin published before the app recorded that
+ * (`targetConnectionId` absent) gets no button rather than a guessed account — sending
+ * a regeneration to the wrong profile is worse than not offering it.
+ */
+function GenerateFromScorecard({ content, tr }: { content: ScorecardReportContent; tr: Translate }) {
+  const draftId = content.subject.draftId;
+  const draft = draftId ? pinDraftStore.getDraft(draftId) : null;
+  const connectionId = readStoredTarget(draft);
+  if (!connectionId) return null;
+
+  const variable = scorecardVariable(content.flags);
+  const onClick = () => {
+    openCreatePins(url => { window.location.href = url; }, buildPrefillFromInsight({
+      connectionId,
+      recommendation: {
+        keep: renderText(content.accountHeadline, tr),
+        change: {
+          variable: tr(`insights.diagnosisPanel.variable.${variable}`),
+          phrasing: renderText(content.line, tr),
+        },
+        test: tr("insights.scorecard.generateTest"),
+      },
+      sourcePin: {
+        imageUrl: draft?.imageUrl,
+        title: content.subject.title ?? draft?.title,
+        pinId: content.subject.contentId,
+        draftId: draftId ?? undefined,
+        boardId: draft?.boardId,
+        boardName: draft?.boardName,
+      },
+    }));
+  };
+
+  return (
+    <button
+      type="button"
+      data-testid="scorecard-generate-from-insight"
+      onClick={onClick}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        marginBottom: 14, padding: "6px 10px", borderRadius: 7,
+        border: "1px solid var(--app-border)", background: "rgba(124,58,237,.16)",
+        color: "var(--app-text)", fontSize: 12, fontWeight: 700, cursor: "pointer",
+      }}
+    >
+      <Sparkles size={12} aria-hidden />
+      {tr("insights.diagnosisPanel.generate")}
+    </button>
   );
 }
 
@@ -202,6 +285,8 @@ function ScorecardModal({ reportId, onClose, tr }: { reportId: string; onClose: 
             <p style={{ fontSize: 11, color: "var(--app-text-muted)", margin: "0 0 14px" }}>
               {renderText(content.sampleCaveat, tr)}
             </p>
+
+            <GenerateFromScorecard content={content} tr={tr} />
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 11, color: "var(--app-text-muted)" }}>

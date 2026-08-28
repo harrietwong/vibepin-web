@@ -2954,6 +2954,8 @@ const tr: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Giriş cümlesi",
   "insights.diagnosisPanel.variable.cta": "Harekete geçirici mesaj",
   "insights.diagnosisPanel.variable.first_image": "İlk görsel",
+  "insights.diagnosisPanel.generate": "Bu içgörüden üret",
+  "insights.scorecard.generateTest": "Yalnızca o tek şeyi değiştiren bir varyant yayımla, sonra 7 günlük karnesini bununla karşılaştır.",
   "insights.diagnosisPanel.variable.publish_time": "Yayın saati",
   "insights.diagnosisPanel.variable.keyword": "Anahtar kelimeler",
   "insights.diagnosisPanel.variable.format": "Format",

@@ -8,7 +8,7 @@ import type { CreativeDirectionSnapshotV2 } from "./studioPersistence";
 export type PrefillSource =
   | "workspace" | "weekly_plan" | "keyword_trends"
   | "viral_pins" | "pin_opportunities" | "product_signals"
-  | "product_ideas" | "manual";
+  | "product_ideas" | "manual" | "insights";
 
 export type CreatePinsPrefill = {
   source: PrefillSource;
@@ -48,6 +48,21 @@ export type CreatePinsPrefill = {
   promptSeed?: string;
   creativeDirectionSeed?: string;
   creativeDirectionSnapshot?: Partial<CreativeDirectionSnapshotV2>;
+  /**
+   * Where the Pin this prefill produces is meant to go.
+   *
+   * Carried, not applied: Studio's prefill path seeds the composer (opportunity,
+   * references, brief) and creates no draft, so there is no row to write a target
+   * onto at this point. Consumers that DO create a draft can read this and set
+   * `targetConnectionId` / `boardId` on it; until one does, this is context the
+   * prefill preserves rather than a decision it enacts.
+   */
+  defaultDestination?: {
+    provider: "pinterest";
+    socialConnectionId: string;
+    boardId?: string;
+    boardName?: string;
+  };
 };
 
 // ── SessionStorage helpers ─────────────────────────────────────────────────────
@@ -249,6 +264,103 @@ export function buildPrefillFromWeeklyPlan(item: {
   };
 }
 
+/**
+ * An Insights recommendation, turned into a Create Pins brief.
+ *
+ * Two properties this function must keep.
+ *
+ * **One variable.** A recommendation is Keep / Change / Test precisely because the
+ * user changes ONE thing and the next 30 days stay readable. The brief therefore
+ * names `change.variable` explicitly and repeats the instruction to leave the rest
+ * alone — a generated Pin that quietly redesigns everything would destroy the
+ * attribution the recommendation exists to protect.
+ *
+ * **English in, English out.** The engine emits i18n keys, not sentences; the caller
+ * lives where the locale does and passes text already rendered. Nothing here reads
+ * a catalogue, so the builder stays pure and testable.
+ *
+ * Pure: the input is only read, never written to.
+ */
+export function buildPrefillFromInsight(input: {
+  connectionId: string;
+  accountUsername?: string;
+  category?: string;
+  keyword?: string;
+  recommendation: {
+    keep: string;
+    change: { variable: string; phrasing: string };
+    test: string;
+  };
+  sourcePin?: {
+    imageUrl?: string;
+    title?: string;
+    pinId?: string;
+    draftId?: string;
+    boardId?: string;
+    boardName?: string;
+  };
+}): CreatePinsPrefill {
+  // The caller passes sentences it rendered for a human to read, so most of them
+  // already end in a full stop. Splicing those into a longer sentence is where
+  // "description.." comes from; trimming the terminator once here is cheaper than
+  // asking every caller to hand over half-punctuated fragments.
+  const clause = (text: string): string => text.trim().replace(/[.。!！?？]+$/u, "").trim();
+
+  const keep = clause(input.recommendation.keep);
+  const variable = clause(input.recommendation.change.variable);
+  const phrasing = clause(input.recommendation.change.phrasing);
+  const test = clause(input.recommendation.test);
+
+  const evidenceSentence = [
+    keep ? `Keep: ${keep}` : "",
+    phrasing || variable ? `Change: ${[variable, phrasing].filter(Boolean).join(" - ")}` : "",
+    test ? `Test: ${test}` : "",
+  ].filter(Boolean).join(" · ");
+
+  const subject = input.keyword ?? input.category ?? "";
+  // Two to four sentences, in the order a person would think them: what this is,
+  // what survives, what changes, what it is worth watching. The "everything else
+  // stays" clause rides on the change sentence rather than standing alone, because
+  // it is a qualifier on that instruction and not a separate instruction.
+  const brief = [
+    subject
+      ? `Create a new Pinterest Pin for "${subject}" that runs one experiment from this account's Insights reading.`
+      : "Create a new Pinterest Pin that runs one experiment from this account's Insights reading.",
+    keep ? `Keep what is already working: ${keep}.` : "",
+    `Change exactly one variable - ${variable || "the named variable"}${phrasing ? `: ${phrasing}` : ""} - and leave everything else as it is, so the result can be attributed to that one change.`,
+    test ? `What this tests: ${test}.` : "",
+  ].filter(Boolean).join(" ");
+
+  const referenceImage = input.sourcePin?.imageUrl?.trim();
+
+  return {
+    source: "insights",
+    opportunity: {
+      title: input.keyword ?? input.category ?? "Insights recommendation",
+      ...(input.keyword ? { keyword: input.keyword } : {}),
+      ...(input.category ? { category: input.category } : {}),
+      evidenceSentence,
+    },
+    ...(referenceImage ? {
+      pinReferences: [{
+        ...(input.sourcePin?.pinId ? { id: input.sourcePin.pinId } : {}),
+        imageUrl: referenceImage,
+        ...(input.sourcePin?.title ? { title: input.sourcePin.title } : {}),
+        source: "recent" as const,
+        ...(input.category ? { category: input.category } : {}),
+        ...(input.keyword ? { keyword: input.keyword } : {}),
+      }],
+    } : {}),
+    creativeDirectionSeed: brief,
+    defaultDestination: {
+      provider: "pinterest",
+      socialConnectionId: input.connectionId,
+      ...(input.sourcePin?.boardId ? { boardId: input.sourcePin.boardId } : {}),
+      ...(input.sourcePin?.boardName ? { boardName: input.sourcePin.boardName } : {}),
+    },
+  };
+}
+
 // ── Composer Draft helpers ─────────────────────────────────────────────────────
 //
 // openCreatePinsWithDraft() is the new preferred navigation path.
@@ -308,7 +420,7 @@ export function draftToPrefill(draft: Record<string, unknown>): CreatePinsPrefil
   const sourcePage = (draft.source_page as string | null) ?? "workspace";
   const source: PrefillSource = [
     "workspace","weekly_plan","keyword_trends","viral_pins",
-    "pin_opportunities","product_signals","product_ideas","manual",
+    "pin_opportunities","product_signals","product_ideas","manual","insights",
   ].includes(sourcePage) ? (sourcePage as PrefillSource) : "workspace";
 
   const opp = draft.resolved_opportunity as Record<string, unknown> | null | undefined;

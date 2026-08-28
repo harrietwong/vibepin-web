@@ -2884,6 +2884,8 @@ const fr: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Accroche",
   "insights.diagnosisPanel.variable.cta": "Appel à l’action",
   "insights.diagnosisPanel.variable.first_image": "Première image",
+  "insights.diagnosisPanel.generate": "Générer à partir de cet enseignement",
+  "insights.scorecard.generateTest": "Publie une variante qui ne change que cet élément, puis compare sa fiche de résultats à 7 jours avec celle-ci.",
   "insights.diagnosisPanel.variable.publish_time": "Heure de publication",
   "insights.diagnosisPanel.variable.keyword": "Mots-clés",
   "insights.diagnosisPanel.variable.format": "Format",

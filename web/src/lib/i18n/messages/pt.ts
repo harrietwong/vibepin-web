@@ -2897,6 +2897,8 @@ const pt: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Gancho",
   "insights.diagnosisPanel.variable.cta": "Chamada para ação",
   "insights.diagnosisPanel.variable.first_image": "Primeira imagem",
+  "insights.diagnosisPanel.generate": "Gerar com base neste insight",
+  "insights.scorecard.generateTest": "Publique uma variação que mude apenas essa coisa e depois compare o placar de 7 dias com este.",
   "insights.diagnosisPanel.variable.publish_time": "Horário de publicação",
   "insights.diagnosisPanel.variable.keyword": "Palavras-chave",
   "insights.diagnosisPanel.variable.format": "Formato",

@@ -2853,6 +2853,8 @@ const pl: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Haczyk",
   "insights.diagnosisPanel.variable.cta": "Wezwanie do działania",
   "insights.diagnosisPanel.variable.first_image": "Pierwszy obraz",
+  "insights.diagnosisPanel.generate": "Wygeneruj na podstawie tego wniosku",
+  "insights.scorecard.generateTest": "Opublikuj wariant, który zmienia tylko tę jedną rzecz, a potem porównaj jego 7-dniową kartę wyników z tą.",
   "insights.diagnosisPanel.variable.publish_time": "Czas publikacji",
   "insights.diagnosisPanel.variable.keyword": "Słowa kluczowe",
   "insights.diagnosisPanel.variable.format": "Format",

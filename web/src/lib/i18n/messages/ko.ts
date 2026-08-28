@@ -2873,6 +2873,8 @@ const ko: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "첫 문장",
   "insights.diagnosisPanel.variable.cta": "행동 유도 문구",
   "insights.diagnosisPanel.variable.first_image": "첫 이미지",
+  "insights.diagnosisPanel.generate": "이 인사이트로 만들기",
+  "insights.scorecard.generateTest": "그 하나만 바꾼 변형을 게시한 뒤, 7일 스코어카드를 이것과 비교하세요.",
   "insights.diagnosisPanel.variable.publish_time": "발행 시간",
   "insights.diagnosisPanel.variable.keyword": "키워드",
   "insights.diagnosisPanel.variable.format": "형식",

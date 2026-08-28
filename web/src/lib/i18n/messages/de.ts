@@ -2897,6 +2897,8 @@ const de: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Aufhänger",
   "insights.diagnosisPanel.variable.cta": "Handlungsaufruf",
   "insights.diagnosisPanel.variable.first_image": "Erstes Bild",
+  "insights.diagnosisPanel.generate": "Auf Basis dieser Erkenntnis erstellen",
+  "insights.scorecard.generateTest": "Veröffentliche eine Variante, die nur diese eine Sache ändert, und vergleiche dann ihre 7-Tage-Scorecard mit dieser.",
   "insights.diagnosisPanel.variable.publish_time": "Veröffentlichungszeit",
   "insights.diagnosisPanel.variable.keyword": "Keywords",
   "insights.diagnosisPanel.variable.format": "Format",

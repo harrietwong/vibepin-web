@@ -2897,6 +2897,8 @@ const nl: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Opening",
   "insights.diagnosisPanel.variable.cta": "Call to action",
   "insights.diagnosisPanel.variable.first_image": "Eerste beeld",
+  "insights.diagnosisPanel.generate": "Genereren op basis van dit inzicht",
+  "insights.scorecard.generateTest": "Publiceer een variant die alleen dat ene ding verandert en vergelijk daarna de 7-daagse scorecard met deze.",
   "insights.diagnosisPanel.variable.publish_time": "Publicatietijd",
   "insights.diagnosisPanel.variable.keyword": "Zoekwoorden",
   "insights.diagnosisPanel.variable.format": "Formaat",

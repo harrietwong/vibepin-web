@@ -2167,7 +2167,7 @@ function CreatePinsContent() {
 
   function hydrate(prefill: CreatePinsPrefill) {
     setLastPrefill(prefill);
-    const isRich = ["workspace","weekly_plan","keyword_trends","pin_opportunities"].includes(prefill.source);
+    const isRich = ["workspace","weekly_plan","keyword_trends","pin_opportunities","insights"].includes(prefill.source);
     if (prefill.opportunity) {
       const o = prefill.opportunity;
       const tierCode  = o.primaryLabel === "Best Bet" ? "best_bet" : o.primaryLabel === "Competitive" ? "competitive" : "steady";

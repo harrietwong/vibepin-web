@@ -649,6 +649,30 @@
   text-transform: uppercase;
 }
 
+/* "Generate based on this insight" — the step from reading to doing. It sits inside
+   the recommendation rather than under the panel because it carries THAT experiment's
+   variable into Create Pins; one button under three recommendations could only carry
+   the first, and would silently pick for the reader. */
+.generateFromInsight {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: rgba(124, 58, 237, .16);
+  color: var(--app-text);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.generateFromInsight:hover {
+  background: rgba(124, 58, 237, .26);
+}
+
 /* The one variable this experiment changes. Named, because the whole value of the
    suggestion is that everything else stays put. */
 .recommendationVariable {

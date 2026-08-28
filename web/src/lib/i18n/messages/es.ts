@@ -3134,6 +3134,8 @@ const es: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "Gancho",
   "insights.diagnosisPanel.variable.cta": "Llamada a la acción",
   "insights.diagnosisPanel.variable.first_image": "Primera imagen",
+  "insights.diagnosisPanel.generate": "Generar a partir de esta conclusión",
+  "insights.scorecard.generateTest": "Publica una variante que cambie solo esa cosa y luego compara su tarjeta de resultados de 7 días con esta.",
   "insights.diagnosisPanel.variable.publish_time": "Hora de publicación",
   "insights.diagnosisPanel.variable.keyword": "Palabras clave",
   "insights.diagnosisPanel.variable.format": "Formato",

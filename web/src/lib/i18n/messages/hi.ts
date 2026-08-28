@@ -2873,6 +2873,8 @@ const hi: Partial<Record<MessageKey, string>> = {
   "insights.diagnosisPanel.variable.hook": "पहली पंक्ति",
   "insights.diagnosisPanel.variable.cta": "कार्रवाई का आग्रह",
   "insights.diagnosisPanel.variable.first_image": "पहली तस्वीर",
+  "insights.diagnosisPanel.generate": "इस जानकारी के आधार पर बनाएँ",
+  "insights.scorecard.generateTest": "एक ऐसा वैरिएंट प्रकाशित करें जिसमें सिर्फ़ वही एक चीज़ बदली हो, फिर उसका 7-दिन का स्कोरकार्ड इससे मिलाएँ।",
   "insights.diagnosisPanel.variable.publish_time": "प्रकाशन का समय",
   "insights.diagnosisPanel.variable.keyword": "कीवर्ड",
   "insights.diagnosisPanel.variable.format": "फ़ॉर्मैट",

@@ -14,8 +14,10 @@ import {
   Link2,
   MousePointerClick,
   Share2,
+  Sparkles,
 } from "lucide-react";
-import type { I18nText } from "@/lib/insights/recommendations";
+import type { I18nText, InsightsRecommendation } from "@/lib/insights/recommendations";
+import { buildPrefillFromInsight, openCreatePins } from "@/lib/createPinsPrefill";
 import { isDiagnosisLocked } from "@/lib/insights/paidGate";
 import { dedupeUnattributedPins } from "@/lib/insights/collectionDashboard";
 import type {
@@ -510,6 +512,65 @@ function renderText(text: I18nText, tr: Translate): string {
 }
 
 /**
+ * "Generate based on this insight" — the one place a reading becomes work.
+ *
+ * The recommendation is already rendered to the reader's language here, and the
+ * builder is deliberately language-blind, so this is the only layer that can hand
+ * Create Pins sentences a person (and an image model) can act on.
+ *
+ * It never appears for a locked reading: the panel that hosts it returns null before
+ * this renders, because a free plan's payload carries no recommendation to generate
+ * from in the first place.
+ */
+function GenerateFromInsightButton({
+  recommendation,
+  connectionId,
+  accountUsername,
+  category,
+  keyword,
+  sourcePin,
+  tr,
+}: {
+  recommendation: InsightsRecommendation;
+  connectionId: string | null | undefined;
+  accountUsername?: string;
+  category?: string | null;
+  keyword?: string;
+  sourcePin?: { imageUrl?: string; title?: string; pinId?: string; draftId?: string };
+  tr: Translate;
+}) {
+  if (!connectionId) return null;
+  const onClick = () => {
+    openCreatePins(url => { window.location.href = url; }, buildPrefillFromInsight({
+      connectionId,
+      accountUsername,
+      category: category ?? undefined,
+      keyword,
+      recommendation: {
+        keep: renderText(recommendation.keep, tr),
+        change: {
+          variable: tr(`insights.diagnosisPanel.variable.${recommendation.change.variable}`),
+          phrasing: renderText(recommendation.change.phrasing, tr),
+        },
+        test: renderText(recommendation.test, tr),
+      },
+      ...(sourcePin ? { sourcePin } : {}),
+    }));
+  };
+  return (
+    <button
+      type="button"
+      className={styles.generateFromInsight}
+      data-testid="insights-generate-from-recommendation"
+      onClick={onClick}
+    >
+      <Sparkles size={12} aria-hidden />
+      {tr("insights.diagnosisPanel.generate")}
+    </button>
+  );
+}
+
+/**
  * The read on one account, above its content table.
  *
  * Three deliberate properties.
@@ -529,10 +590,15 @@ function renderText(text: I18nText, tr: Translate): string {
 function DiagnosisPanel({
   diagnosis,
   variant,
+  connectionId,
+  accountUsername,
   tr,
 }: {
   diagnosis: InsightsDiagnosisPayload;
   variant: "full" | "card";
+  /** The account this reading is about — where a generated Pin would go. */
+  connectionId?: string | null;
+  accountUsername?: string;
   tr: Translate;
 }) {
   if (!diagnosis) return null;
@@ -589,6 +655,13 @@ function DiagnosisPanel({
                 <span className={styles.recommendationLabel}>{tr("insights.diagnosisPanel.test")}</span>
                 {renderText(recommendation.test, tr)}
               </p>
+              <GenerateFromInsightButton
+                recommendation={recommendation}
+                connectionId={connectionId}
+                accountUsername={accountUsername}
+                category={diagnosis.category}
+                tr={tr}
+              />
             </div>
           ))}
         </div>
@@ -1057,7 +1130,13 @@ function AccountSummaryCard({
             locked={isDiagnosisLocked(dashboard.diagnosis)}
             tr={tr}
           />
-          <DiagnosisPanel diagnosis={dashboard.diagnosis} variant="card" tr={tr} />
+          <DiagnosisPanel
+            diagnosis={dashboard.diagnosis}
+            variant="card"
+            connectionId={account.id}
+            accountUsername={account.username ?? undefined}
+            tr={tr}
+          />
           {dashboard.warning || dashboard.availability.message ? (
             <p className={styles.accountCardNote}>
               {dashboard.warning || dashboard.availability.message}
@@ -1406,7 +1485,13 @@ export default function InsightsPage() {
                 />
                 <DashboardMetrics dashboard={dashboard} tr={tr} />
                 <Heatmap dashboard={dashboard} tr={tr} />
-                <DiagnosisPanel diagnosis={dashboard.diagnosis} variant="full" tr={tr} />
+                <DiagnosisPanel
+                  diagnosis={dashboard.diagnosis}
+                  variant="full"
+                  connectionId={activeConnectionId}
+                  accountUsername={dashboard.account?.username ?? undefined}
+                  tr={tr}
+                />
                 <ContentTable
                   rows={singleRows}
                   platform={dashboard.platform}

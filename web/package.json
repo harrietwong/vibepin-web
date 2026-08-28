@@ -45,6 +45,7 @@
     "test:pin-details-modal-compact": "npx tsx scripts/test-pin-details-modal-compact.ts",
     "test:settings": "npx tsx scripts/test-settings-p0.ts",
     "test:insights": "npx tsx scripts/test-insights-mvp.ts",
+    "test:insights-prefill": "npx tsx scripts/test-insights-prefill.ts",
     "test:insights-collector": "npx tsx scripts/test-insights-collector.ts",
     "test:insights-read": "npx tsx scripts/test-insights-read.ts",
     "test:insights-engine": "npx tsx scripts/test-insights-engine.ts",
