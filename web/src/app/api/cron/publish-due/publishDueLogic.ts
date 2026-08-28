@@ -27,6 +27,22 @@ import type { ScheduledDestination } from "@/lib/pinDraftStore";
  *  presumed dead (claim older than this window). Matches the SQL the route runs. */
 export const CLAIM_STALE_MS = 10 * 60 * 1000; // 10 minutes
 
+/**
+ * How long ONE run may keep CLAIMING rows (wall clock, from the top of the handler).
+ *
+ * The platform kills the invocation at `maxDuration` (300s). A row whose publish
+ * succeeded but whose result was never persisted keeps its schedule and its claim, so
+ * ten minutes later it is re-claimed and PUBLISHED AGAIN — a double post. The batch
+ * (20) is not a time bound: one Instagram publish alone polls its container for up to
+ * ~45s, so a slow batch could run past the ceiling mid-row.
+ *
+ * So the run stops TAKING work well before the ceiling, leaving ~100s of headroom for
+ * the row it is already publishing. Rows it never claimed were never touched: they stay
+ * due, unclaimed, and the next tick (~5 min) takes them. Deferring is free; being killed
+ * mid-publish is not.
+ */
+export const CLAIM_BUDGET_MS = 200_000;
+
 /** ISO timestamp of the stale-claim cutoff: claims at/after this are still "live". */
 export function staleClaimCutoffIso(nowMs: number): string {
   return new Date(nowMs - CLAIM_STALE_MS).toISOString();

@@ -20,7 +20,11 @@
  * publishPinForUser has no idempotency key against Pinterest. A durable idempotency key
  * is the P1 follow-up; the window is small and bounded.
  *
- * maxDuration 300 = current Vercel Hobby cap; the limit ≤ 20 keeps a run well under it.
+ * maxDuration 300 = current Vercel Hobby cap. The batch limit (≤ 20) is a SIZE bound,
+ * not a time bound — one Instagram publish alone can poll for ~45s — so the run also
+ * keeps a wall-clock budget (CLAIM_BUDGET_MS) and stops CLAIMING once it is spent.
+ * Unclaimed rows stay due for the next tick; that is strictly better than being killed
+ * between a successful publish and its persist, which re-publishes the row 10 min later.
  */
 
 import { createServerClient } from "@/lib/supabase";
@@ -43,6 +47,7 @@ import {
   type PublishEventBase,
 } from "@/lib/server/publishEvents";
 import {
+  CLAIM_BUDGET_MS,
   staleClaimCutoffIso,
   payloadToPublishInput,
   payloadAfterOutcomes,
@@ -60,6 +65,9 @@ export const maxDuration = 300;
 
 const TABLE = "pin_drafts";
 const DUE_LIMIT = 20; // ≤ 20 per run so one invocation stays comfortably under maxDuration.
+/** Pause before the single persist retry — long enough for a transient blip, short
+ *  enough that it cannot itself push the run past maxDuration. */
+const PERSIST_RETRY_DELAY_MS = 500;
 
 type DueRow = {
   vibepin_user_id: string;
@@ -106,7 +114,9 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const db = createServerClient();
-  const nowMs = Date.now();
+  // The run's wall clock. Everything time-bounded below measures from here.
+  const startedMs = Date.now();
+  const nowMs = startedMs;
   const nowIso = new Date(nowMs).toISOString();
 
   // ── 1) SCAN due, live rows ───────────────────────────────────────────────────
@@ -124,27 +134,45 @@ export async function GET(req: Request): Promise<Response> {
     .limit(DUE_LIMIT);
 
   if (scanError) {
-    if (isMissingSchemaError(scanError)) return json({ claimed: 0, published: 0, failed: 0, skipped: 0 });
+    if (isMissingSchemaError(scanError)) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
     console.error("[cron/publish-due] scan error:", scanError.message);
     return json({ error: "scan_failed", code: "database_unavailable" }, 503);
   }
 
   const candidates = (dueRows ?? []) as DueRow[];
-  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0 });
+  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
 
-  // ── 2) CLAIM atomically. One conditional UPDATE … RETURNING per row: set the lock
-  //    only when the row is still claimable (unclaimed OR the prior claim is stale).
-  //    PostgREST returns exactly the updated rows; a racing worker's claim excludes it. ─
+  // ── 2+3) CLAIM then PUBLISH, one row at a time ───────────────────────────────
+  //
+  // CLAIM is a single atomic conditional UPDATE … RETURNING: the lock is set only when
+  // the row is still claimable (unclaimed OR the prior claim is stale). PostgREST
+  // returns exactly the updated rows; a racing worker's claim excludes it.
+  //
+  // Claiming and publishing are INTERLEAVED on purpose. Claiming all 20 up front takes
+  // milliseconds, so a time check there could never fire — the time is spent publishing.
+  // Interleaved, the seconds row N spends publishing are what stop row N+1 from being
+  // claimed once the budget is gone. A row we never claim is untouched: still due, still
+  // unclaimed, taken by the next tick.
   const staleCutoff = staleClaimCutoffIso(nowMs);
-  const claimed: DueRow[] = [];
+  let claimedCount = 0;
   let skipped = 0;
+  let deferred = 0;
+  let published = 0;
+  let failed = 0;
 
-  for (const row of candidates) {
+  for (const candidate of candidates) {
+    // The budget is checked BEFORE the claim: an unclaimed row costs nothing, while a
+    // claimed row we are killed before finishing is the double-post window.
+    if (Date.now() - startedMs >= CLAIM_BUDGET_MS) {
+      deferred++;
+      continue;
+    }
+
     const { data: won, error: claimError } = await db
       .from(TABLE)
       .update({ publish_claimed_at: nowIso })
-      .eq("vibepin_user_id", row.vibepin_user_id)
-      .eq("draft_id", row.draft_id)
+      .eq("vibepin_user_id", candidate.vibepin_user_id)
+      .eq("draft_id", candidate.draft_id)
       .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
       .select("vibepin_user_id, draft_id, payload, scheduled_at");
 
@@ -154,15 +182,13 @@ export async function GET(req: Request): Promise<Response> {
       skipped++;
       continue;
     }
-    if (won && won.length > 0) claimed.push(won[0] as DueRow);
-    else skipped++; // lost the race to another worker / already-claimed
-  }
+    if (!won || won.length === 0) {
+      skipped++; // lost the race to another worker / already-claimed
+      continue;
+    }
+    const row = won[0] as DueRow;
+    claimedCount++;
 
-  // ── 3) PUBLISH each claimed row independently ────────────────────────────────
-  let published = 0;
-  let failed = 0;
-
-  for (const row of claimed) {
     // Per-row publish attempt: one publishAttemptId ties this row's attempted →
     // succeeded/failed events. boardId comes from the stored payload (may be "" if the
     // payload is unpublishable). Analytics is best-effort — see lib/server/publishEvents.ts.
@@ -403,7 +429,15 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  return json({ claimed: claimed.length, published, failed, skipped });
+  if (deferred > 0) {
+    // Visible on purpose: a run that regularly defers is the signal to raise the tick
+    // rate or lower DUE_LIMIT, and silence here would look like the rows never came due.
+    console.warn(
+      `[cron/publish-due] time budget spent after ${Date.now() - startedMs}ms — `
+      + `${deferred} due row(s) left unclaimed for the next run`,
+    );
+  }
+  return json({ claimed: claimedCount, published, failed, skipped, deferred });
 }
 
 /**
@@ -425,7 +459,7 @@ async function persistOutcomes(
   failureCode?: string,
 ): Promise<void> {
   const payload = payloadAfterOutcomes(row.payload, outcomes, nowIso, connectionId, failureCode);
-  const { error } = await db
+  const write = () => db
     .from(TABLE)
     .update({
       payload,
@@ -436,7 +470,47 @@ async function persistOutcomes(
     })
     .eq("vibepin_user_id", row.vibepin_user_id)
     .eq("draft_id", row.draft_id);
-  if (error) console.error("[cron/publish-due] persist success error:", error.message);
+
+  // This write is the ONLY record that the publish above happened. Losing it means the
+  // Content stays scheduled and claimed; ten minutes later the claim goes stale and the
+  // row is published AGAIN — a second real post the merchant never asked for. One retry
+  // costs half a second and covers the ordinary transient (a dropped connection, a
+  // PostgREST 5xx).
+  //
+  // It must also NEVER throw: the row's catch calls persistFailure, which would overwrite
+  // a delivered publish as failed AND clear scheduled_at + the claim. So every failure
+  // mode ends here, loudly.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const { error } = await write();
+      if (!error) return;
+      if (attempt === 2) {
+        // Nothing else to try. Log everything needed to reconstruct the row by hand —
+        // the outcomes are otherwise lost with the process.
+        console.error(
+          `[cron/publish-due] persist outcomes FAILED after ${attempt} attempts`
+          + ` draft_id=${String(row.draft_id)} user=${row.vibepin_user_id}: ${error.message}`
+          + ` outcomes=${JSON.stringify(outcomes)}`,
+        );
+        // The claim is deliberately left in place: releasing it here would hand the row
+        // straight back to the next run, which would publish it a second time.
+        return;
+      }
+      console.error("[cron/publish-due] persist outcomes error (retrying):", error.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt === 2) {
+        console.error(
+          `[cron/publish-due] persist outcomes THREW after ${attempt} attempts`
+          + ` draft_id=${String(row.draft_id)} user=${row.vibepin_user_id}: ${message}`
+          + ` outcomes=${JSON.stringify(outcomes)}`,
+        );
+        return;
+      }
+      console.error("[cron/publish-due] persist outcomes threw (retrying):", message);
+    }
+    await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
+  }
 }
 
 /** Persist the failure payload (WP-B §11.5 fields + cleared scheduling + cleared claim). */

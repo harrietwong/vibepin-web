@@ -11,7 +11,9 @@
  */
 
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import {
+  CLAIM_BUDGET_MS,
   CLAIM_STALE_MS,
   isClaimable,
   staleClaimCutoffIso,
@@ -515,6 +517,70 @@ test("payloadAfterSuccess: the Pinterest-only path archives the superseded Pin t
   assert.equal(previous?.length, 1);
   assert.equal(previous[0].postUrl, "https://pin/1");
   assert.equal(after.remotePinUrl, "https://pin/2");
+});
+
+
+// ── The run's time budget (source contract) ──────────────────────────────────
+// The route needs Supabase and a bearer secret, so the wiring is asserted on the
+// source. What must never regress: the budget exists, it leaves headroom under the
+// platform's kill time, and it is checked BEFORE a row is claimed — a claimed row we
+// are killed before persisting is re-published 10 minutes later (a real double post).
+const routeSrc = readFileSync("src/app/api/cron/publish-due/route.ts", "utf8");
+
+test("CLAIM_BUDGET_MS leaves headroom under maxDuration", () => {
+  const declared = /export const maxDuration = (\d+)/.exec(routeSrc);
+  assert.ok(declared, "the route must declare maxDuration");
+  const ceilingMs = Number(declared![1]) * 1000;
+  assert.ok(CLAIM_BUDGET_MS > 0, "a budget of 0 would claim nothing");
+  assert.ok(CLAIM_BUDGET_MS < ceilingMs,
+    `the budget (${CLAIM_BUDGET_MS}ms) must stop the run before the platform does (${ceilingMs}ms)`);
+  // Enough room for the slowest single row (an Instagram container poll, ~45s).
+  assert.ok(ceilingMs - CLAIM_BUDGET_MS >= 45_000,
+    "too little headroom: the row being published when the budget runs out could still be killed");
+});
+
+test("the budget is checked BEFORE each claim, not after", () => {
+  const budgetAt = routeSrc.indexOf("CLAIM_BUDGET_MS");
+  const claimAt = routeSrc.indexOf("publish_claimed_at: nowIso");
+  assert.ok(budgetAt > 0 && claimAt > 0, "both the budget check and the claim must exist");
+  assert.ok(routeSrc.lastIndexOf("CLAIM_BUDGET_MS") < claimAt,
+    "checking the budget after claiming would leave the claimed row exposed to the kill");
+  assert.match(routeSrc, /Date\.now\(\) - startedMs >= CLAIM_BUDGET_MS/,
+    "the check must measure wall clock from the top of the run");
+});
+
+test("claiming and publishing are interleaved, so the budget can actually fire", () => {
+  // Claiming every row up front takes milliseconds — a budget check there could never
+  // be true, which is how a guard ships dead. One loop: check → claim → publish.
+  const claimAt = routeSrc.indexOf("publish_claimed_at: nowIso");
+  const publishAt = routeSrc.indexOf("await publishPinForUser(");
+  assert.ok(claimAt > 0 && publishAt > claimAt, "the publish must follow the claim in the SAME loop");
+  const between = routeSrc.slice(claimAt, publishAt);
+  assert.ok(!/for \(const row of claimed\)/.test(between),
+    "a second loop over pre-claimed rows means the time check cannot defer anything");
+});
+
+test("a deferred row is reported, never silently dropped", () => {
+  assert.match(routeSrc, /deferred\+\+/, "deferred rows must be counted");
+  assert.match(routeSrc, /claimed: claimedCount, published, failed, skipped, deferred/,
+    "the count must reach the response so a run that keeps deferring is visible");
+});
+
+// ── persist must never lose the record of a publish that happened ────────────
+test("persistOutcomes retries once and then logs the outcomes it could not store", () => {
+  const at = routeSrc.indexOf("async function persistOutcomes(");
+  assert.ok(at > 0);
+  const body = routeSrc.slice(at, routeSrc.indexOf("async function persistFailure("));
+  assert.match(body, /for \(let attempt = 1; attempt <= 2; attempt\+\+\)/, "exactly one retry");
+  assert.match(body, /PERSIST_RETRY_DELAY_MS/, "the retry waits before trying again");
+  assert.match(body, /JSON\.stringify\(outcomes\)/,
+    "the final failure must log what could not be stored, or the publish is unreconstructable");
+  assert.match(body, /draft_id=/, "and which row it belongs to");
+  assert.ok(!/publish_claimed_at: null[\s\S]*catch/.test(body.slice(body.indexOf("for (let attempt"))),
+    "the claim must not be released on failure — that hands the row back to be re-published");
+  // A real `throw` statement — not the word in a comment.
+  assert.ok(!/\bthrow\s+(new\b|err\b|error\b)/.test(body),
+    "a throw would reach the row catch, which persists a FAILURE over a delivered publish");
 });
 
 
