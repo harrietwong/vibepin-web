@@ -38,6 +38,7 @@ import {
   hasTimeForDestination,
   pinterestOutcomeRow,
   recordOutcomes,
+  trialAccessPendingOutcome,
 } from "@/lib/social/publishFanout";
 import type { DestinationOutcome } from "@/lib/social/publishRules";
 import {
@@ -101,29 +102,56 @@ function rowIo(db: ReturnType<typeof createServerClient>): RowIo {
     read: async row => {
       const { data, error } = await db
         .from(TABLE)
-        .select("payload, scheduled_at, publish_claimed_at")
+        // `updated_at` is read so the write can be made conditional on it — see the
+        // compare-and-set in `update` below.
+        .select("payload, scheduled_at, publish_claimed_at, updated_at")
         .eq("vibepin_user_id", row.vibepin_user_id)
         .eq("draft_id", row.draft_id)
         .maybeSingle();
       if (error) return { snapshot: null, error: error.message };
       if (!data) return { snapshot: null, error: null };
-      const r = data as { payload?: unknown; scheduled_at?: string | null; publish_claimed_at?: string | null };
+      const r = data as {
+        payload?: unknown; scheduled_at?: string | null;
+        publish_claimed_at?: string | null; updated_at?: string | null;
+      };
       return {
         snapshot: {
           payload: (r.payload && typeof r.payload === "object" ? r.payload : {}) as Record<string, unknown>,
           scheduled_at: r.scheduled_at ?? null,
           publish_claimed_at: r.publish_claimed_at ?? null,
+          // Passed through as the RAW string PostgREST returned. Parsing and re-
+          // formatting it would drop the microseconds Postgres keeps, and the filter
+          // below would then match nothing, ever.
+          updated_at: r.updated_at ?? null,
         },
         error: null,
       };
     },
-    update: async (row, values) => {
-      const { error } = await db
+    /**
+     * Compare-and-set: the write applies only while the row still looks like `observed`.
+     *
+     * Filtering on user + draft_id alone let a reschedule made between the merge's read
+     * and its write be overwritten — the run cleared a slot it had never seen. The two
+     * observed columns are what the merge decided from, so they are what it is
+     * conditional on. `select("draft_id")` makes PostgREST return the affected rows;
+     * none means the row moved, and persistRow re-merges onto the new one.
+     */
+    update: async (row, values, observed) => {
+      let q = db
         .from(TABLE)
         .update(values)
         .eq("vibepin_user_id", row.vibepin_user_id)
         .eq("draft_id", row.draft_id);
-      return { error: error ? error.message : null };
+      // `.eq` never matches NULL in SQL — an unscheduled row needs `.is`.
+      q = observed.scheduled_at === null
+        ? q.is("scheduled_at", null)
+        : q.eq("scheduled_at", observed.scheduled_at);
+      q = observed.updated_at === null
+        ? q.is("updated_at", null)
+        : q.eq("updated_at", observed.updated_at);
+      const { data, error } = await q.select("draft_id");
+      if (error) return { error: error.message, matched: false };
+      return { error: null, matched: Array.isArray(data) && data.length > 0 };
     },
   };
 }
@@ -409,9 +437,17 @@ export async function GET(req: Request): Promise<Response> {
         } catch (err) {
           if (err instanceof PinterestTrialAccessError) {
             // Not a failure — the Content is publishable, just not until Pinterest
-            // grants access. Record nothing for this destination so the row keeps its
-            // schedule (handled after the loop).
+            // grants access. It is recorded as PENDING so the row keeps its schedule and
+            // this destination is owed again next run.
+            //
+            // Recording nothing here is what lost a trial-blocked destination in a MIXED
+            // row: with another destination's failure already in `outcomes`, the
+            // "every destination blocked" exemption below was skipped, the final persist
+            // saw nothing pending, cleared the schedule, and this account was never
+            // attempted again. `persistOne` stores nothing for a pending outcome, so the
+            // row still carries no result for it — which is what makes it owed.
             trialBlocked++;
+            await record(trialAccessPendingOutcome(destination));
             continue;
           }
           const described = describeThrown(err);
@@ -424,6 +460,13 @@ export async function GET(req: Request): Promise<Response> {
       // behaviour exactly — release the claim and leave the payload and scheduled_at
       // untouched, so the row is re-scanned until the account is approved.
       //
+      // "Every one" now reads `outcomes.length === trialBlocked` rather than
+      // `outcomes.length === 0`, because a blocked destination records a pending outcome
+      // instead of nothing. The condition is the same set of rows as before: pending
+      // trial rows are the ONLY thing in `outcomes` here. A row that also failed
+      // elsewhere, or deferred on time, falls through to the ordinary persist — where the
+      // pending row keeps the schedule for it just the same, and the failure is reported.
+      //
       // This deliberately runs BEFORE the fan-out, extras or not. Trial access is an
       // APP-level block, so "every Pinterest entry blocked while IG/FB are also owed"
       // is the ordinary case, not an edge. Falling through would fan out, see a
@@ -431,7 +474,7 @@ export async function GET(req: Request): Promise<Response> {
       // Pinterest entries would then have no result rows and nothing would ever
       // re-attempt them, breaking the promise that the Content keeps its slot until
       // Pinterest approves. The social destinations are re-attempted with it.
-      if (trialBlocked > 0 && outcomes.length === 0) {
+      if (trialBlocked > 0 && outcomes.length === trialBlocked) {
         await releaseClaim(db, row);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "pinterest_trial_access", message: "Pinterest access is still under review",

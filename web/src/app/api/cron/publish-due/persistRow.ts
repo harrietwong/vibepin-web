@@ -47,10 +47,36 @@ export interface RowSnapshot {
   payload: Record<string, unknown>;
   scheduled_at: string | null;
   publish_claimed_at: string | null;
+  /**
+   * The row's LWW stamp, exactly as the database returned it.
+   *
+   * Carried so the write can be made conditional on it. It must be passed back to the
+   * filter as the SAME STRING it arrived as: Postgres timestamptz keeps microseconds,
+   * and a value round-tripped through `new Date().toISOString()` is truncated to
+   * milliseconds — which matches nothing, and would make every write a CAS miss.
+   */
+  updated_at: string | null;
+}
+
+/** What the write was conditional ON — the row as the merge read it. */
+export interface ObservedRow {
+  scheduled_at: string | null;
+  updated_at: string | null;
 }
 
 export type ReadRow = (row: DueRowRef) => Promise<{ snapshot: RowSnapshot | null; error: string | null }>;
-export type UpdateRow = (row: DueRowRef, values: Record<string, unknown>) => Promise<{ error: string | null }>;
+/**
+ * A COMPARE-AND-SET write: it must apply only while the row still looks like `observed`.
+ *
+ * `matched: false` means the row moved between the read and the write — not an error,
+ * and emphatically not something to retry unconditionally. The merge is redone against
+ * whatever it looks like now.
+ */
+export type UpdateRow = (
+  row: DueRowRef,
+  values: Record<string, unknown>,
+  observed: ObservedRow,
+) => Promise<{ error: string | null; matched: boolean }>;
 export interface RowIo {
   read: ReadRow;
   update: UpdateRow;
@@ -62,26 +88,59 @@ export interface WriteResult {
   gone?: boolean;
 }
 
+/** How many times a merge is redone when the row moves underneath it. */
+const CAS_ATTEMPTS = 3;
+
 /**
- * Read → merge → write, with the timestamp taken between the read and the write.
+ * Read → merge → write, where the write applies only if the row is still what was read.
  *
- * The remaining window (read to write, milliseconds) is not closable through
- * PostgREST, which offers no read-modify-write transaction. What it replaces is a
- * window as long as the publish itself.
+ * Re-reading before the merge closed the long window (the publish itself) but left a
+ * short one: between this function's read and its write, the merchant can reschedule.
+ * The write was unconditional, so it clobbered whatever landed in that gap — deciding
+ * `scheduleUnchanged` from a snapshot that was already stale and then clearing
+ * `scheduled_at` on a slot it had never read. The merchant's new schedule vanished with
+ * no error anywhere.
+ *
+ * PostgREST has no read-modify-write transaction, but it can make the UPDATE
+ * conditional: filtering on the `scheduled_at` and `updated_at` that were observed makes
+ * the write apply only while the row still looks that way. Zero affected rows means it
+ * moved, and the answer is to re-read and re-merge onto the NEW row — never to write
+ * anyway.
+ *
+ * Bounded at `CAS_ATTEMPTS`, because a row being rewritten faster than this run can read
+ * it is a live-lock, not a retry. Exhausted, it fails loudly and writes nothing: the
+ * caller (persistOutcomes) logs the outcomes it could not store and deliberately keeps
+ * the claim, which is strictly safer than overwriting a merchant's edit.
  */
 async function readMergeWrite(
   io: RowIo,
   row: DueRowRef,
   build: (snapshot: RowSnapshot, nowIso: string, scheduleUnchanged: boolean) => Record<string, unknown>,
 ): Promise<WriteResult> {
-  const { snapshot, error } = await io.read(row);
-  if (error) return { error };
-  // Deleted mid-publish. Re-creating it from this run's snapshot would resurrect a
-  // Content the merchant threw away.
-  if (!snapshot) return { error: null, gone: true };
-  const nowIso = new Date().toISOString();
-  const scheduleUnchanged = (snapshot.scheduled_at ?? null) === (row.scheduled_at ?? null);
-  return io.update(row, build(snapshot, nowIso, scheduleUnchanged));
+  for (let attempt = 1; attempt <= CAS_ATTEMPTS; attempt++) {
+    const { snapshot, error } = await io.read(row);
+    if (error) return { error };
+    // Deleted mid-publish. Re-creating it from this run's snapshot would resurrect a
+    // Content the merchant threw away.
+    if (!snapshot) return { error: null, gone: true };
+    const nowIso = new Date().toISOString();
+    // Compared against the schedule this RUN claimed, not against the previous attempt:
+    // the question is always "is this still the slot we published for?".
+    const scheduleUnchanged = (snapshot.scheduled_at ?? null) === (row.scheduled_at ?? null);
+    const observed: ObservedRow = {
+      scheduled_at: snapshot.scheduled_at ?? null,
+      updated_at: snapshot.updated_at ?? null,
+    };
+    const { error: writeError, matched } = await io.update(row, build(snapshot, nowIso, scheduleUnchanged), observed);
+    if (writeError) return { error: writeError };
+    if (matched) return { error: null };
+    // CAS miss: the row changed between the read and the write. Loop to merge onto it.
+  }
+  const message =
+    `row changed under every one of ${CAS_ATTEMPTS} merge attempts`
+    + ` (draft_id=${row.draft_id} user=${row.vibepin_user_id})`;
+  console.error(`[persistRow] CAS exhausted, nothing written: ${message}`);
+  return { error: message };
 }
 
 /**
