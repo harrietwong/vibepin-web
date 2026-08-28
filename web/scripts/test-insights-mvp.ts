@@ -173,7 +173,7 @@ await test("Insights stays a single simple page with honest platform language", 
   const layout = readFileSync(join(process.cwd(), "src/app/app/layout.tsx"), "utf8");
   const instagramConfig = readFileSync(join(process.cwd(), "src/lib/server/instagram/config.ts"), "utf8");
   const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
-  const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/vibepinPublishedPins.ts"), "utf8");
+  const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/publishProvenance.ts"), "utf8");
   const pinMetadataRoute = readFileSync(join(process.cwd(), "src/app/api/insights/pinterest-pins/route.ts"), "utf8");
   // The page renders through the i18n catalog now, so the honest-language
   // wording lives in en/insights.ts rather than as JSX literals.
@@ -233,9 +233,11 @@ await test("Pin metadata is read with the account that owns the Pin", () => {
 });
 
 await test("Insights attributes each Pin to the account that published it", () => {
-  const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/vibepinPublishedPins.ts"), "utf8");
+  const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/publishProvenance.ts"), "utf8");
   const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
   assert.match(provenance, /nonEmptyString\(payload\.targetConnectionId\)/);
+  // Fan-out records win over the legacy root field; see publishProvenance.ts.
+  assert.match(provenance, /parseDestinationResults\(payload\.destinationResults\)/);
   // Attribution precedence: the draft's own recorded target, then the v64 content
   // registry (the account whose token listed the Pin owns it), and only with neither
   // does a legacy Pin stay visible on every account rather than vanishing.

@@ -1,71 +1,25 @@
 import "server-only";
 
 import { createServerClient } from "@/lib/supabase";
+import {
+  publishedPinterestPinsFromDraft,
+  type VibePinPublishedPinterestPin,
+} from "./publishProvenance";
 
 const TABLE = "pin_drafts";
 const PAGE_SIZE = 500;
 
-export type VibePinPublishedPinterestPin = {
-  pinId: string;
-  draftId: string;
-  title: string | null;
-  imageUrl: string | null;
-  postUrl: string;
-  publishedAt: string | null;
-  mediaType: string | null;
-  /**
-   * The social_connections row this Pin was actually published through
-   * (adopt-once, PRD §14). Null for drafts published before targets were
-   * recorded — those cannot be attributed to one account, so Insights shows
-   * them on every account rather than silently hiding them from the account
-   * that really owns them.
-   */
-  targetConnectionId: string | null;
-};
+export type { VibePinPublishedPinterestPin } from "./publishProvenance";
+export {
+  legacyPublishedPinterestPinFromDraft,
+  parseDestinationResults,
+  publishedPinterestPinsFromDraft,
+} from "./publishProvenance";
 
 export type VibePinPublishedPinterestResult = {
   pins: Map<string, VibePinPublishedPinterestPin>;
   storageAvailable: boolean;
 };
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function pinterestPinId(value: unknown): string | null {
-  const id = nonEmptyString(value);
-  return id && /^\d+$/.test(id) ? id : null;
-}
-
-function mediaType(payload: Record<string, unknown>): string | null {
-  return nonEmptyString(payload.mediaType)
-    ?? nonEmptyString(payload.format)
-    ?? (nonEmptyString(payload.imageUrl) ? "IMAGE" : null);
-}
-
-/**
- * Convert one server-authoritative VibePin draft into a Pinterest publish
- * provenance record. `remotePinId` is written only after Pinterest confirms a
- * successful publish, so title/image similarities never qualify a Pin.
- */
-export function publishedPinterestPinFromDraft(
-  draftId: string,
-  payload: Record<string, unknown>,
-): VibePinPublishedPinterestPin | null {
-  const pinId = pinterestPinId(payload.remotePinId);
-  if (!pinId) return null;
-
-  return {
-    pinId,
-    draftId,
-    title: nonEmptyString(payload.title),
-    imageUrl: nonEmptyString(payload.imageUrl) ?? nonEmptyString(payload.sourceImageUrl),
-    postUrl: nonEmptyString(payload.remotePinUrl) ?? `https://www.pinterest.com/pin/${pinId}/`,
-    publishedAt: nonEmptyString(payload.postedAt),
-    mediaType: mediaType(payload),
-    targetConnectionId: nonEmptyString(payload.targetConnectionId),
-  };
-}
 
 function isMissingTable(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
@@ -79,6 +33,11 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
 /**
  * Authoritative whitelist for Insights. Deleted/tombstoned drafts remain valid
  * provenance: deleting a local draft does not unpublish its remote Pinterest Pin.
+ *
+ * Keyed by Pin id, not by draft: one draft can produce several Pins (one per
+ * destination account), and one Pin belongs to exactly one draft. Rows arrive newest
+ * first and the first record for a Pin wins, so a re-published draft's latest
+ * attribution is the one Insights uses.
  */
 export async function listVibePinPublishedPinterestPins(
   uid: string,
@@ -103,8 +62,9 @@ export async function listVibePinPublishedPinterestPins(
       const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
         ? row.payload as Record<string, unknown>
         : {};
-      const record = publishedPinterestPinFromDraft(String(row.draft_id ?? ""), payload);
-      if (record && !pins.has(record.pinId)) pins.set(record.pinId, record);
+      for (const record of publishedPinterestPinsFromDraft(String(row.draft_id ?? ""), payload)) {
+        if (!pins.has(record.pinId)) pins.set(record.pinId, record);
+      }
     }
 
     if ((data ?? []).length < PAGE_SIZE) break;

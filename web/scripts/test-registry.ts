@@ -48,6 +48,8 @@ export const CORE: string[] = [
   "test-social-provider-status",
   // Insights (per-connection analytics contract + honest-language page gate)
   "test-insights-mvp",
+  // Insights collection layer (budget, measurement windows, status mapping, provenance)
+  "test-insights-collector",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
   "test-admin-account-kind",
