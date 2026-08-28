@@ -12,7 +12,10 @@
  *     postId?: string,
  *     productId?: string,
  *     post: { imageUrls: string[], title?, caption?, destinationUrl?, altText? },
- *     destinations: Array<{ provider, socialConnectionId? }>
+ *     destinations: Array<{ provider, socialConnectionId? }>,
+ *     meteringBucket?: string,           // relayed from /api/pinterest/pins for this
+ *                                         // same Content; validated (never trusted
+ *                                         // outright) — see the metering block below.
  *   }
  *
  * Response:
@@ -40,7 +43,11 @@ import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
 import { rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRules";
-import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
+import {
+  consumeScheduledPost,
+  deriveScheduledPostKey,
+  isAcceptableImmediateBucket,
+} from "@/lib/server/usage/meterScheduledPost";
 import { logEvent } from "@/lib/server/usage/meterGeneration";
 
 export const dynamic = "force-dynamic";
@@ -99,15 +106,43 @@ export async function POST(req: Request) {
   // idempotency_key), so whichever call lands second is collapsed into a replay
   // (kind: "consumed", replayed: true, no increment) rather than a second unit —
   // this is exactly what protects the pins-route case, not a client-trusted flag.
+  // That shared key alone is not sufficient, though: an immediate publish's key is
+  // partly a UTC date bucket that each route would otherwise compute at ITS OWN
+  // "now", and if the pins call and this call straddle a UTC midnight (or land on
+  // clock-skewed instances) the two buckets — and therefore the two keys — could
+  // differ, defeating the replay collapse above and double-charging. So the client
+  // relays `meteringBucket`, the exact bucket the pins route minted and metered
+  // under, and — ONLY when `isAcceptableImmediateBucket` accepts it (a `YYYY-MM-DD`
+  // string within one UTC day of this route's own "now"; never trusted outright) —
+  // it is used as `deriveScheduledPostKey`'s override instead of this route
+  // computing its own. A missing/rejected bucket (including every social-only
+  // publish, which never had a pins call to relay from) falls back to this route's
+  // own date, exactly as before this relay existed. The residual case is honest,
+  // not hidden: a social-only retry of the SAME Content on a LATER day counts
+  // again, by the same one-bucket-per-day design as the pins route always had.
   // Metered before any provider dispatch, and fail-open exactly like the pins
   // route/module (shadow never blocks; enforce is not wired anywhere on this
   // branch — see meterScheduledPost.ts's scheduledPostLimitResponseBody(), NOT
   // called from either publish route yet, so this mirrors the pins route's
   // current shadow-only behavior rather than inventing a new enforce switch here).
   if (postId) {
+    const rawBucket = body.meteringBucket;
+    let bucketOverride: string | undefined;
+    if (rawBucket !== undefined && rawBucket !== null) {
+      if (isAcceptableImmediateBucket(rawBucket)) {
+        bucketOverride = rawBucket;
+      } else {
+        // Never blocks or errors the publish — just means this call derives its own
+        // bucket below, same as if nothing had been sent.
+        logEvent("usage_meter_bucket_rejected", {
+          route: "publish_social",
+          reason: typeof rawBucket === "string" ? "out_of_window_or_malformed" : "non_string",
+        });
+      }
+    }
     await consumeScheduledPost({
       userId: uid,
-      key: deriveScheduledPostKey(uid, postId),
+      key: deriveScheduledPostKey(uid, postId, undefined, bucketOverride),
       referenceId: postId,
       metadata: { source: "social_immediate" },
     });

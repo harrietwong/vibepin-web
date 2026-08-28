@@ -27,7 +27,11 @@
 
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
-import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
+import {
+  consumeScheduledPost,
+  deriveScheduledPostKey,
+  immediateBucketForNow,
+} from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { createServerClient } from "@/lib/supabase";
 import {
@@ -112,11 +116,17 @@ export async function POST(req: Request) {
   // (all live callers send it); sourcePinId is the documented fallback. Metered before
   // the provider call so a crash mid-publish still records the action the user took,
   // and fail-open in shadow so a ledger outage can never block a publish.
+  // Minted ONCE, here, and relayed to the client in both the success and typed-failure
+  // JSON below — this is the value /api/publish/social's second call for the SAME
+  // Content should use instead of computing its own, so a UTC-midnight straddle
+  // between the two requests cannot compute two different date buckets for one
+  // publish (see meterScheduledPost.ts's module header).
+  const meteringBucket = immediateBucketForNow();
   const meterIdentity = draftId ?? (sourcePinId || null);
   if (meterIdentity) {
     await consumeScheduledPost({
       userId: uid,
-      key: deriveScheduledPostKey(uid, meterIdentity),
+      key: deriveScheduledPostKey(uid, meterIdentity, undefined, meteringBucket),
       referenceId: meterIdentity,
       metadata: { source: "immediate" },
     });
@@ -148,7 +158,13 @@ export async function POST(req: Request) {
         code: result.code,
         message: result.error,
       });
-      return Response.json({ error: result.error, code: result.code }, { status: result.status });
+      // meteringBucket travels even on a typed failure: the client may still proceed to
+      // publish this Content's other (social) destinations, and that call needs the
+      // SAME bucket this request metered under (see meterScheduledPost.ts header).
+      return Response.json(
+        { error: result.error, code: result.code, meteringBucket },
+        { status: result.status },
+      );
     }
 
     void recordPublishEvent(analyticsDb, PUBLISH_EVENT_SUCCEEDED, {
@@ -166,6 +182,11 @@ export async function POST(req: Request) {
         // Which account this published through, so the client can pin an adopted
         // (previously untargeted) draft to it — adopt-once (PRD §14).
         connectionId: result.connectionId,
+        // Server-minted immediate-publish bucket (see meterScheduledPost.ts header) —
+        // additive field, relayed by the client to /api/publish/social so a second
+        // fan-out call for this SAME Content buckets identically even across a UTC
+        // midnight straddle.
+        meteringBucket,
       },
       { status: 201 },
     );

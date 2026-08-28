@@ -46,7 +46,7 @@ import {
   type MediaCheckResult,
   type PublishMediaItem,
 } from "../publish/mediaRules";
-import { publishPin, type AttachedProduct } from "../pinterestClient";
+import { publishPin, type AttachedProduct, type PinterestClientError } from "../pinterestClient";
 import { publishToSocial } from "../social/socialClient";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "./pinLifecycle";
 
@@ -383,6 +383,13 @@ export async function publishContent(
     let adoptedConnectionId: string | undefined;
     let trialAccess = false;
     const errors: Array<{ provider: string; error: unknown }> = [];
+    // Server-minted immediate-publish bucket (meterScheduledPost.ts), relayed from
+    // whichever pinterest call answers first — success or typed failure both carry it.
+    // Relayed on to the social call below so the two requests for this SAME Content
+    // bucket identically even if they straddle a UTC midnight. Stays undefined for a
+    // social-only publish (no pinterest destination ever ran), which is fine: the
+    // social route just derives its own bucket, exactly as before this relay existed.
+    let meteringBucket: string | undefined;
 
     const pinterestTargets = dispatch.filter(d => d.provider === "pinterest");
     const socialTargets = dispatch.filter(d => d.provider !== "pinterest");
@@ -420,6 +427,9 @@ export async function publishContent(
         // Adopt-once (PRD §14): an untargeted draft keeps the connection it really
         // published through, so every later retry/action stays on that account.
         if (!destination.socialConnectionId && res.connectionId) adoptedConnectionId = res.connectionId;
+        // First pinterest call to answer wins the bucket — later calls (a second
+        // pinterest destination, rare) never overwrite it.
+        if (!meteringBucket && res.meteringBucket) meteringBucket = res.meteringBucket;
         outcomes.push({
           ...baseRow(destination, "published", submittedAt),
           // A legacy destination's row now names the account that actually received it.
@@ -432,8 +442,12 @@ export async function publishContent(
           publishedAt: deps.now(),
         });
       } catch (error) {
-        const err = error as { code?: string; message?: string };
+        const err = error as PinterestClientError;
         errors.push({ provider: destination.provider, error });
+        // A typed pinterest failure still relays the bucket it metered under (see
+        // /api/pinterest/pins) — this Content may still proceed to its social
+        // destinations below, and that call must bucket identically.
+        if (!meteringBucket && err?.meteringBucket) meteringBucket = err.meteringBucket;
         // Trial/Standard-access is a "not yet", not a failure. Recording a failed row
         // would flow through legacyFieldsFromResults into failureType "publish" and
         // RELEASE the Content's schedule — the Pin would silently leave its slot for a
@@ -471,6 +485,11 @@ export async function publishContent(
           destinations: socialTargets
             .filter(d => !!d.socialConnectionId)
             .map(d => ({ provider: d.provider, socialConnectionId: d.socialConnectionId as string })),
+          // Relay the bucket a pinterest call in THIS SAME publish already metered
+          // under, so this request buckets identically instead of computing its own
+          // (see meterScheduledPost.ts's module header). Omitted entirely for a
+          // social-only publish — no pinterest call ran, so there is nothing to relay.
+          ...(meteringBucket ? { meteringBucket } : {}),
         });
         // The response is provider-ordered; match each result back to the destination it
         // came from so two accounts on one platform stay distinguishable.
