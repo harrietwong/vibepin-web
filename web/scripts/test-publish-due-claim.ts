@@ -27,7 +27,12 @@ import {
   describeThrown,
   owedDestinations,
 } from "../src/app/api/cron/publish-due/publishDueLogic";
-import { pendingDestinations, publishedForSchedule } from "../src/lib/social/publishRules";
+import {
+  PENDING_TRIAL_ACCESS,
+  pendingDestinations,
+  publishedForSchedule,
+  trialAccessPendingOutcome,
+} from "../src/lib/social/publishRules";
 import {
   mergeOutcomesIntoRow,
   writeFailure,
@@ -651,8 +656,8 @@ test("each destination's outcome is stored the moment it is known", () => {
   );
   assert.ok(!/outcomes\.push\(/.test(pinterestLoop),
     "a Pinterest outcome collected without being stored is one a process death loses");
-  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 5,
-    "every branch of the Pinterest loop must go through the recorder");
+  assert.equal((pinterestLoop.match(/await record\(/g) ?? []).length, 6,
+    "every branch of the Pinterest loop must go through the recorder — trial-access included");
   const incremental = persistSrc.slice(persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
   const upToFinal = incremental.slice(0, incremental.indexOf("export interface FinalWriteOptions"));
   assert.ok(!/scheduled_at|publish_claimed_at|postedAt/.test(upToFinal),
@@ -1181,6 +1186,134 @@ test("persistOutcomes retries once and then logs the outcomes it could not store
   // A real `throw` statement — not the word in a comment.
   assert.ok(!/\bthrow\s+(new\b|err\b|error\b)/.test(body),
     "a throw would reach the row catch, which persists a FAILURE over a delivered publish");
+});
+
+
+// ── a trial-blocked destination in a MIXED row must not be lost (Codex #4) ───
+// Destination A (no board) recorded a failure; destination B threw
+// PinterestTrialAccessError and recorded NOTHING. The "every destination blocked"
+// exemption was skipped because `outcomes` was not empty, the final persist saw nothing
+// pending, cleared the schedule — and B was never attempted again. The fix is that a
+// blocked destination yields an explicit `pending` outcome.
+
+const TRIAL_DEST = { provider: "pinterest", socialConnectionId: "pin_B", boardId: "b-B", capturedAt: CLAIMED_AT } as const;
+
+test("trial-access: a blocked destination yields a pending outcome, not silence", () => {
+  const outcome = trialAccessPendingOutcome(TRIAL_DEST);
+  assert.equal(outcome.status, "pending", "failed would report a rejection Pinterest never made");
+  assert.equal(outcome.provider, "pinterest");
+  assert.equal(outcome.socialConnectionId, "pin_B", "the account is named, so only IT is owed again");
+  assert.equal(outcome.error, PENDING_TRIAL_ACCESS);
+});
+
+test("trial-access: the route records the blocked destination instead of counting it", () => {
+  // Scoped to the per-destination loop: the row-level catch further down handles the
+  // same error class and must not be mistaken for it.
+  const loop = routeSrc.slice(
+    routeSrc.indexOf("for (const destination of pinterestTargets) {"),
+    routeSrc.indexOf("// Every attempted Pinterest destination was blocked"),
+  );
+  assert.match(loop, /if \(err instanceof PinterestTrialAccessError\) \{/,
+    "the Pinterest loop still handles the trial-access throw");
+  assert.match(loop, /await record\(trialAccessPendingOutcome\(destination\)\)/,
+    "recording nothing is what lost the destination in a mixed row");
+  assert.match(routeSrc, /trialBlocked > 0 && outcomes\.length === trialBlocked/,
+    "the all-blocked exemption must compare against the pending rows it now creates");
+});
+
+test("trial-access: MIXED row — A failed, B blocked → B stays owed and the schedule is kept", async () => {
+  const { io, state, writes } = fakeStore({
+    payload: {
+      scheduledDate: "2026-07-11", plannedAt: "2026-07-11T09:00",
+      scheduledDestinations: [
+        { provider: "pinterest", socialConnectionId: "pin_A", boardId: "b-A", capturedAt: CLAIMED_AT },
+        { provider: "pinterest", socialConnectionId: "pin_B", boardId: "b-B", capturedAt: CLAIMED_AT },
+      ],
+    },
+    scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  const aFailed = {
+    provider: "pinterest", status: "failed", socialConnectionId: "pin_A",
+    error: "Choose a Pinterest board before publishing.",
+  } as const;
+  const bPending = trialAccessPendingOutcome(TRIAL_DEST);
+  // This is exactly what the route does: deferred is true because something is pending.
+  await writeOutcomes(io, REF, [aFailed, bPending], { deferred: true, failureCode: "bad_request" });
+
+  assert.ok(!("scheduled_at" in writes[0]),
+    "clearing the slot here is the lost publish — B has not been attempted");
+  assert.equal(state.payload.scheduledDate, "2026-07-11", "the Content is still scheduled for B");
+  assert.equal(writes[0].publish_claimed_at, null, "and the claim is released so the next run can take it");
+
+  const rows = state.payload.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1, "the pending destination gets NO stored row — that is what keeps it owed");
+  assert.equal(rows[0].socialConnectionId, "pin_A", "A's failure is recorded");
+  assert.equal(rows[0].status, "failed");
+  assert.equal(state.payload.postedAt, undefined, "nothing published, so the Content is not posted");
+
+  // The next run reads the row back and owes exactly B.
+  const owed = owedDestinations(
+    { imageUrl: "https://cdn/x.jpg", boardId: "b-A", ...state.payload },
+    { scheduledAt: CLAIMED_AT },
+  );
+  assert.deepEqual(owed.map(d => d.socialConnectionId).sort(), ["pin_A", "pin_B"],
+    "B is owed again — and A, whose failure is retryable, with it");
+});
+
+test("trial-access: a blocked destination never archives a live post", async () => {
+  // B published in July and is blocked today. Writing it as failed — or letting it reach
+  // supersededDestinationResults — would drop the live Pin from the card.
+  const livePin = {
+    destinationId: "pinterest:pin_B", provider: "pinterest", socialConnectionId: "pin_B",
+    status: "published", remoteId: "pin-live", postUrl: "https://pin/live",
+    publishedAt: "2026-07-01T09:00:00.000Z",
+  };
+  const { io, state } = fakeStore({
+    payload: { destinationResults: [livePin] },
+    scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  await writeOutcomes(io, REF, [trialAccessPendingOutcome(TRIAL_DEST)], { deferred: true });
+  assert.equal(state.payload.previousResults, undefined, "nothing replaced it, so nothing is archived");
+  const rows = state.payload.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "published", "the live post is untouched");
+  assert.equal(rows[0].postUrl, "https://pin/live");
+});
+
+test("trial-access: blocked this run, approved the next → it publishes", async () => {
+  const { io, state } = fakeStore({
+    payload: {
+      scheduledDate: "2026-07-11", plannedAt: "2026-07-11T09:00",
+      scheduledDestinations: [TRIAL_DEST],
+    },
+    scheduled_at: CLAIMED_AT, publish_claimed_at: CLAIMED_AT,
+  });
+  // Run 1: blocked.
+  await writeOutcomes(io, REF, [trialAccessPendingOutcome(TRIAL_DEST)], { deferred: true });
+  assert.equal(state.payload.scheduledDate, "2026-07-11", "still scheduled");
+  // Run 2: Pinterest approved the account, so the destination publishes.
+  const published = {
+    provider: "pinterest", status: "published", socialConnectionId: "pin_B",
+    externalPostId: "pin-77", externalPostUrl: "https://pin/77",
+  } as const;
+  await writeOutcomes(io, REF, [published]);
+  assert.equal(state.payload.scheduledDate, "", "now it is done, so the slot clears");
+  assert.ok(state.payload.postedAt, "and the Content is posted");
+  const rows = state.payload.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].postUrl, "https://pin/77");
+});
+
+test("trial-access: EVERY destination blocked keeps the untouched-row behaviour", () => {
+  // The exemption releases the claim and writes nothing at all. Its guard must still
+  // recognise the all-blocked case now that blocked destinations produce outcomes.
+  const at = routeSrc.indexOf("if (trialBlocked > 0 && outcomes.length === trialBlocked) {");
+  assert.ok(at > 0, "the exemption survives");
+  const body = routeSrc.slice(at, at + 500);
+  assert.match(body, /await releaseClaim\(db, row\)/, "the claim is released");
+  assert.match(body, /pinterest_trial_access/, "and the run reports why");
+  assert.ok(!/persistOutcomes|persistFailure/.test(body),
+    "the payload and scheduled_at must stay exactly as they were");
 });
 
 

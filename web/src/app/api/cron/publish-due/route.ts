@@ -38,6 +38,7 @@ import {
   hasTimeForDestination,
   pinterestOutcomeRow,
   recordOutcomes,
+  trialAccessPendingOutcome,
 } from "@/lib/social/publishFanout";
 import type { DestinationOutcome } from "@/lib/social/publishRules";
 import {
@@ -409,9 +410,17 @@ export async function GET(req: Request): Promise<Response> {
         } catch (err) {
           if (err instanceof PinterestTrialAccessError) {
             // Not a failure — the Content is publishable, just not until Pinterest
-            // grants access. Record nothing for this destination so the row keeps its
-            // schedule (handled after the loop).
+            // grants access. It is recorded as PENDING so the row keeps its schedule and
+            // this destination is owed again next run.
+            //
+            // Recording nothing here is what lost a trial-blocked destination in a MIXED
+            // row: with another destination's failure already in `outcomes`, the
+            // "every destination blocked" exemption below was skipped, the final persist
+            // saw nothing pending, cleared the schedule, and this account was never
+            // attempted again. `persistOne` stores nothing for a pending outcome, so the
+            // row still carries no result for it — which is what makes it owed.
             trialBlocked++;
+            await record(trialAccessPendingOutcome(destination));
             continue;
           }
           const described = describeThrown(err);
@@ -424,6 +433,13 @@ export async function GET(req: Request): Promise<Response> {
       // behaviour exactly — release the claim and leave the payload and scheduled_at
       // untouched, so the row is re-scanned until the account is approved.
       //
+      // "Every one" now reads `outcomes.length === trialBlocked` rather than
+      // `outcomes.length === 0`, because a blocked destination records a pending outcome
+      // instead of nothing. The condition is the same set of rows as before: pending
+      // trial rows are the ONLY thing in `outcomes` here. A row that also failed
+      // elsewhere, or deferred on time, falls through to the ordinary persist — where the
+      // pending row keeps the schedule for it just the same, and the failure is reported.
+      //
       // This deliberately runs BEFORE the fan-out, extras or not. Trial access is an
       // APP-level block, so "every Pinterest entry blocked while IG/FB are also owed"
       // is the ordinary case, not an edge. Falling through would fan out, see a
@@ -431,7 +447,7 @@ export async function GET(req: Request): Promise<Response> {
       // Pinterest entries would then have no result rows and nothing would ever
       // re-attempt them, breaking the promise that the Content keeps its slot until
       // Pinterest approves. The social destinations are re-attempted with it.
-      if (trialBlocked > 0 && outcomes.length === 0) {
+      if (trialBlocked > 0 && outcomes.length === trialBlocked) {
         await releaseClaim(db, row);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "pinterest_trial_access", message: "Pinterest access is still under review",

@@ -165,6 +165,16 @@ export const DESTINATION_RESERVE_MS = 50_000;
 export const DEFERRED_OUT_OF_TIME = "Deferred — out of time this run";
 
 /**
+ * Why a Pinterest destination has no result yet: the app's access to the API is still
+ * under review, so the call was refused before anything was sent.
+ *
+ * Distinct from `DEFERRED_OUT_OF_TIME` because the merchant-facing meaning differs —
+ * "we ran out of time, it goes out next run" versus "it goes out once Pinterest
+ * approves the account" — and the diagnostic that surfaces on the row should say which.
+ */
+export const PENDING_TRIAL_ACCESS = "Waiting for Pinterest access approval";
+
+/**
  * Is there time to START another destination before the run's deadline?
  *
  * No deadline given ⇒ always true, so every caller that does not (yet) bound its run
@@ -213,4 +223,23 @@ export function pinterestOutcomeRow(
     externalPostUrl: result.pinUrl ?? null,
     error: result.ok ? null : result.error ?? "Publishing failed.",
   };
+}
+
+/**
+ * The outcome for a Pinterest destination refused for trial/Standard-access review.
+ *
+ * `pending`, for the same reason `deferredOutcome` is: nothing was sent, nothing is
+ * wrong with the Content, and the merchant has nothing to fix but waiting. Recording it
+ * as `failed` would tell them Pinterest rejected a post it never received.
+ *
+ * The reason it must be an outcome AT ALL — rather than a counter the loop keeps to
+ * itself — is that a MIXED row loses the destination otherwise. One Pinterest account
+ * missing a board records a failure; a second, trial-blocked, recorded nothing; the
+ * "every destination blocked" exemption was therefore skipped (the outcome set was not
+ * empty), the final persist saw no pending destination, cleared the schedule, and the
+ * blocked account was never attempted again. As a pending row it keeps the Content
+ * scheduled and `pendingDestinations` owes it to the next run — and only it.
+ */
+export function trialAccessPendingOutcome(destination: ScheduledDestination): DestinationOutcome {
+  return { ...deferredOutcome(destination), provider: "pinterest", error: PENDING_TRIAL_ACCESS };
 }
