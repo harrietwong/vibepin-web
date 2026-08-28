@@ -2744,6 +2744,8 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "周六",
   "insights.content.title": "内容表现",
   "insights.content.helpPinterest": "全部 {count} 个 Pin 均来自 VibePin 的发布记录核验。指标覆盖所选的 30 天。",
+  "insights.content.unattributedTitle": "尚未归属",
+  "insights.content.unattributedHelp": "这些 Pin 是在 VibePin 记录目标账号之前发布的，且还没有任何账号列出它们。它们只在这里显示一次，而不会出现在每个账号下；下一次数据采集后会归入所属账号。",
   "insights.content.helpInstagram": "近期的图片与视频。网站点击无法归因到普通信息流图片。",
   "insights.content.emptyPinterestTitle": "还没有已发布的 VibePin Pin",
   "insights.content.emptyPinterestBody": "只有带成功发布记录的 Pin 才会出现在这里。",

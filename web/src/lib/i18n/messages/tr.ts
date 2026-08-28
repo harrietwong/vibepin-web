@@ -2820,6 +2820,8 @@ const tr: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Cmt",
   "insights.content.title": "İçerik performansı",
   "insights.content.helpPinterest": "VibePin yayın kayıtlarıyla doğrulanan {count} Pin'in tamamı. Metrikler seçili 30 günü kapsar.",
+  "insights.content.unattributedTitle": "Henüz atanmadı",
+  "insights.content.unattributedHelp": "Bu Pinler, VibePin hedef hesabı kaydetmeye başlamadan önce paylaşıldı ve henüz hiçbir hesap bunları listelemedi. Her hesapta değil, burada bir kez gösterilirler ve bir sonraki veri toplamadan sonra kendi hesaplarına geçerler.",
   "insights.content.helpInstagram": "Son görseller ve videolar. Site tıklamaları normal bir akış görseline atanamaz.",
   "insights.content.emptyPinterestTitle": "Henüz yayınlanmış VibePin Pin'i yok",
   "insights.content.emptyPinterestBody": "Burada yalnızca başarılı yayın kaydı olan Pin'ler görünür.",

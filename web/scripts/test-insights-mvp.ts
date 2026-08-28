@@ -251,14 +251,17 @@ await test("Insights attributes each Pin to the account that published it", () =
   // Fan-out records win over the legacy root field; see publishProvenance.ts.
   assert.match(provenance, /parseDestinationResults\(payload\.destinationResults\)/);
   // Attribution precedence: the draft's own recorded target, then the v64 content
-  // registry (the account whose token listed the Pin owns it), and only with neither
-  // does a legacy Pin stay visible on every account rather than vanishing.
+  // registry (the account whose token listed the Pin owns it). With neither, the
+  // answer is "unknown" — NOT "visible on every account", which is what it used to
+  // be and which put the same Pin on both cards of a two-account user, with metrics
+  // on one and blanks on the other.
   //
-  // The rule itself moved into the pure read layer so it can be exercised directly
+  // The rule itself lives in the pure read layer so it can be exercised directly
   // (see test-insights-read.ts); dashboard.ts still supplies the cross-account
   // registry lookup it depends on, which is the half that needs a database.
   const collectionRead = readFileSync(join(process.cwd(), "src/lib/insights/collectionDashboard.ts"), "utf8");
   assert.match(collectionRead, /export function attributePin\(/);
+  assert.match(collectionRead, /return "unknown";/);
   assert.match(dashboard, /ownerConnectionsForPins\(/);
 });
 

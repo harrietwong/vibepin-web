@@ -2763,6 +2763,8 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "週六",
   "insights.content.title": "內容表現",
   "insights.content.helpPinterest": "全部 {count} 個 Pin 均來自 VibePin 的發布記錄核驗。指標涵蓋所選的 30 天。",
+  "insights.content.unattributedTitle": "尚未歸屬",
+  "insights.content.unattributedHelp": "這些 Pin 是在 VibePin 記錄目標帳號之前發布的，且尚未有任何帳號列出它們。它們只在這裡顯示一次，而不會出現在每個帳號下；下一次資料收集後會歸入所屬帳號。",
   "insights.content.helpInstagram": "近期的圖片與影片。網站點擊無法歸因到一般動態圖片。",
   "insights.content.emptyPinterestTitle": "還沒有已發布的 VibePin Pin",
   "insights.content.emptyPinterestBody": "只有帶成功發布記錄的 Pin 才會出現在這裡。",

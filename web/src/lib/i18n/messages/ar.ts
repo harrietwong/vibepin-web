@@ -2743,6 +2743,8 @@ const ar: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "السبت",
   "insights.content.title": "أداء المحتوى",
   "insights.content.helpPinterest": "جميع الدبابيس البالغ عددها {count} تم التحقق منها من سجلات نشر VibePin. تغطي المقاييس الـ30 يومًا المحددة.",
+  "insights.content.unattributedTitle": "لم يُحدَّد حسابها بعد",
+  "insights.content.unattributedHelp": "نُشرت هذه الدبابيس عبر VibePin قبل أن يسجّل الحساب المستهدف، ولم يُدرجها أي حساب حتى الآن. تظهر هنا مرة واحدة بدلاً من الظهور في كل حساب، وستنتقل إلى حسابها بعد عملية الجمع التالية.",
   "insights.content.helpInstagram": "الصور ومقاطع الفيديو الحديثة. لا يمكن نسب نقرات الموقع إلى صورة عادية في الموجز.",
   "insights.content.emptyPinterestTitle": "لا توجد دبابيس منشورة عبر VibePin بعد",
   "insights.content.emptyPinterestBody": "تظهر هنا فقط الدبابيس التي لها سجل نشر ناجح.",

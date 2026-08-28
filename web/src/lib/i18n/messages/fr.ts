@@ -2750,6 +2750,8 @@ const fr: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Sam",
   "insights.content.title": "Performance du contenu",
   "insights.content.helpPinterest": "Les {count} épingles vérifiées à partir des enregistrements de publication VibePin. Les métriques couvrent les 30 jours sélectionnés.",
+  "insights.content.unattributedTitle": "Pas encore attribuées",
+  "insights.content.unattributedHelp": "Ces épingles ont été publiées via VibePin avant qu'il n'enregistre le compte de destination, et aucun compte ne les a encore répertoriées. Elles apparaissent ici une seule fois plutôt que sur chaque compte, et rejoindront le leur après la prochaine collecte.",
   "insights.content.helpInstagram": "Images et vidéos récentes. Les clics vers le site ne peuvent pas être attribués à une image ordinaire du fil.",
   "insights.content.emptyPinterestTitle": "Aucune épingle VibePin publiée pour l'instant",
   "insights.content.emptyPinterestBody": "Seules les épingles avec un enregistrement de publication réussi apparaissent ici.",

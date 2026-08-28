@@ -128,6 +128,17 @@ export type InsightsDashboard = {
   summary: InsightsMetrics;
   daily: InsightsDay[];
   content: InsightsContent[];
+  /**
+   * VibePin-published Pins that no source can place on an account yet.
+   *
+   * Empty on every path except the Pinterest one, and there it is the SAME list for
+   * every connection of one user: it is derived from user-level publish provenance
+   * plus the absence of a registry row, not from anything account-specific. That is
+   * exactly why it is carried separately from `content` rather than merged into it —
+   * a Pin nobody can place must be listed once, in the all-accounts view, and never
+   * repeated on each account card as though every account had published it.
+   */
+  unattributedContent: InsightsContent[];
   availability: {
     views: InsightsMetricAvailability;
     websiteClicks: InsightsMetricAvailability;

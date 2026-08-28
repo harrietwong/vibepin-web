@@ -2749,6 +2749,8 @@ const vi: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "T7",
   "insights.content.title": "Hiệu quả nội dung",
   "insights.content.helpPinterest": "Toàn bộ {count} Ghim đã được xác minh từ hồ sơ đăng của VibePin. Chỉ số bao gồm 30 ngày đã chọn.",
+  "insights.content.unattributedTitle": "Chưa xác định tài khoản",
+  "insights.content.unattributedHelp": "Những Pin này được đăng qua VibePin trước khi ứng dụng ghi lại tài khoản đích, và chưa tài khoản nào liệt kê chúng. Chúng chỉ hiển thị một lần ở đây thay vì trên mọi tài khoản, và sẽ chuyển về tài khoản của mình sau lần thu thập dữ liệu tiếp theo.",
   "insights.content.helpInstagram": "Hình ảnh và video gần đây. Lượt nhấp trang web không thể gán cho một hình ảnh thường trong nguồn cấp.",
   "insights.content.emptyPinterestTitle": "Chưa có Ghim nào được đăng qua VibePin",
   "insights.content.emptyPinterestBody": "Chỉ những Ghim có hồ sơ đăng thành công mới xuất hiện ở đây.",

@@ -2745,6 +2745,8 @@ const ja: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "土",
   "insights.content.title": "コンテンツの成果",
   "insights.content.helpPinterest": "VibePin の公開記録で確認された {count} 件すべてのピンです。指標は選択した30日間が対象です。",
+  "insights.content.unattributedTitle": "未割り当て",
+  "insights.content.unattributedHelp": "これらのピンは、VibePin が投稿先アカウントを記録する前に公開されたもので、まだどのアカウントにも一覧表示されていません。各アカウントに重複表示せずここに一度だけ表示し、次回のデータ収集後に該当アカウントへ移ります。",
   "insights.content.helpInstagram": "最近の画像と動画です。サイトクリックは通常のフィード画像には割り当てられません。",
   "insights.content.emptyPinterestTitle": "公開済みの VibePin ピンはまだありません",
   "insights.content.emptyPinterestBody": "公開成功の記録があるピンだけがここに表示されます。",

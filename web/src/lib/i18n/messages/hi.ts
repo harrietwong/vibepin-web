@@ -2739,6 +2739,8 @@ const hi: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "शनि",
   "insights.content.title": "सामग्री का प्रदर्शन",
   "insights.content.helpPinterest": "VibePin प्रकाशन रिकॉर्ड से सत्यापित सभी {count} पिन। मीट्रिक चुने गए 30 दिनों को कवर करते हैं।",
+  "insights.content.unattributedTitle": "अभी तक निर्धारित नहीं",
+  "insights.content.unattributedHelp": "ये पिन VibePin से तब प्रकाशित हुए थे जब वह लक्ष्य खाता दर्ज नहीं करता था, और किसी भी खाते ने इन्हें अब तक सूचीबद्ध नहीं किया है। ये हर खाते के बजाय यहाँ एक बार दिखते हैं और अगली डेटा-संग्रह प्रक्रिया के बाद अपने खाते में चले जाएँगे।",
   "insights.content.helpInstagram": "हाल की छवियाँ और वीडियो। वेबसाइट क्लिक सामान्य फ़ीड छवि से नहीं जोड़े जा सकते।",
   "insights.content.emptyPinterestTitle": "अभी तक कोई प्रकाशित VibePin पिन नहीं",
   "insights.content.emptyPinterestBody": "यहाँ केवल सफल प्रकाशन रिकॉर्ड वाले पिन दिखते हैं।",

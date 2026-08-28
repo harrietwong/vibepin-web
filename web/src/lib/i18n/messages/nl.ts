@@ -2763,6 +2763,8 @@ const nl: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Za",
   "insights.content.title": "Contentprestaties",
   "insights.content.helpPinterest": "Alle {count} pins geverifieerd via VibePin-publicatiegegevens. De statistieken beslaan de geselecteerde 30 dagen.",
+  "insights.content.unattributedTitle": "Nog niet toegewezen",
+  "insights.content.unattributedHelp": "Deze pins zijn via VibePin gepubliceerd voordat het doelaccount werd vastgelegd, en geen enkel account heeft ze al vermeld. Ze staan hier één keer in plaats van bij elk account en verhuizen na de volgende verzamelronde naar hun account.",
   "insights.content.helpInstagram": "Recente afbeeldingen en video's. Websiteklikken kunnen niet aan een gewone feed-afbeelding worden toegewezen.",
   "insights.content.emptyPinterestTitle": "Nog geen gepubliceerde VibePin-pins",
   "insights.content.emptyPinterestBody": "Alleen pins met een geslaagde publicatieregistratie verschijnen hier.",

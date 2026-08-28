@@ -2742,6 +2742,8 @@ const th: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "ส",
   "insights.content.title": "ประสิทธิภาพของเนื้อหา",
   "insights.content.helpPinterest": "พินทั้งหมด {count} รายการได้รับการยืนยันจากบันทึกการเผยแพร่ของ VibePin ตัววัดครอบคลุม 30 วันที่เลือก",
+  "insights.content.unattributedTitle": "ยังไม่ระบุบัญชี",
+  "insights.content.unattributedHelp": "พินเหล่านี้เผยแพร่ผ่าน VibePin ก่อนที่ระบบจะบันทึกบัญชีปลายทาง และยังไม่มีบัญชีใดแสดงรายการพินเหล่านี้ จึงแสดงที่นี่เพียงครั้งเดียวแทนที่จะแสดงในทุกบัญชี และจะย้ายไปยังบัญชีของตนหลังการเก็บข้อมูลครั้งถัดไป",
   "insights.content.helpInstagram": "ภาพและวิดีโอล่าสุด คลิกไปเว็บไซต์ไม่สามารถระบุเป็นภาพฟีดทั่วไปได้",
   "insights.content.emptyPinterestTitle": "ยังไม่มีพินที่เผยแพร่ผ่าน VibePin",
   "insights.content.emptyPinterestBody": "ที่นี่จะแสดงเฉพาะพินที่มีบันทึกการเผยแพร่สำเร็จเท่านั้น",

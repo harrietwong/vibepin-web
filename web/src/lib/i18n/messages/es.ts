@@ -3000,6 +3000,8 @@ const es: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Sáb",
   "insights.content.title": "Rendimiento del contenido",
   "insights.content.helpPinterest": "Los {count} Pines verificados con registros de publicación de VibePin. Las métricas cubren los 30 días seleccionados.",
+  "insights.content.unattributedTitle": "Aún sin atribuir",
+  "insights.content.unattributedHelp": "Estos Pines se publicaron a través de VibePin antes de que registrara la cuenta de destino, y ninguna cuenta los ha listado todavía. Aparecen aquí una sola vez en lugar de en cada cuenta, y pasarán a la suya tras la próxima recopilación.",
   "insights.content.helpInstagram": "Imágenes y vídeos recientes. Los clics al sitio no pueden asignarse a una imagen normal del feed.",
   "insights.content.emptyPinterestTitle": "Aún no hay Pines publicados con VibePin",
   "insights.content.emptyPinterestBody": "Aquí solo aparecen los Pines con un registro de publicación correcto.",

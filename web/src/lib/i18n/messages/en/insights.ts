@@ -80,6 +80,8 @@ export const insightsMessages = {
   // ── Content table ──
   "insights.content.title": "Content performance",
   "insights.content.helpPinterest": "All {count} Pins verified from VibePin publish records. Metrics cover the selected 30 days.",
+  "insights.content.unattributedTitle": "Not yet attributed",
+  "insights.content.unattributedHelp": "These Pins were published through VibePin before it recorded which account they went to, and no account has listed them yet. They are shown once here rather than on every account, and move to their account after the next collection run.",
   "insights.content.helpInstagram": "Recent images and videos. Website clicks cannot be assigned to a normal feed image.",
   "insights.content.emptyPinterestTitle": "No published VibePin Pins yet",
   "insights.content.emptyPinterestBody": "Only Pins with a successful VibePin publish record appear here.",

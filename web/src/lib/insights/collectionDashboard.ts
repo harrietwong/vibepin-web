@@ -54,6 +54,7 @@ import type {
   InsightsMetricState,
   InsightsMetrics,
   InsightsObservationStatus,
+  InsightsPlatform,
   InsightsScope,
 } from "./types";
 import type { VibePinPublishedPinterestPin } from "@/lib/server/insights/publishProvenance";
@@ -480,38 +481,96 @@ export function summarizeContent(rows: InsightsContent[]): InsightsMetrics {
 
 // ── Attribution ──────────────────────────────────────────────────────────────
 
+export type PinAttribution = "mine" | "other_account" | "unknown";
+
 /**
- * Does this Pin belong on the dashboard of this connection?
+ * Which account does this Pin belong to, as far as anyone can tell?
  *
- * The recorded target of the draft wins (it is what the publish path actually did),
- * then the registry owner (the account whose token listed the Pin), and only when
- * neither knows does a Pin stay visible on every account — where the owning account
- * is still the only one with numbers for it.
+ * The recorded target of the draft wins — it is what the publish path actually did,
+ * and no later observation is better evidence than the act itself. Failing that, the
+ * registry owner: the account whose own token listed the Pin is the account that
+ * holds it. Failing both, the answer is `unknown`, and `unknown` is deliberately not
+ * a synonym for "mine".
+ *
+ * It used to be. A Pin neither source could place stayed visible on EVERY account
+ * card, which for a two-account user meant the same Pin listed twice, and its metrics
+ * present on one card and blank on the other — the account that really owns it is the
+ * only one whose token can measure it. The blank copy is not a smaller version of the
+ * truth; it is a row asserting that this account published something it never
+ * published. So an unplaceable Pin now appears in exactly one place: the "not yet
+ * attributed" group of the all-accounts view, which says what it is instead of
+ * guessing whose it is. The registry's incremental pass runs daily, so the group
+ * empties itself as ownership becomes knowable.
  */
 export function attributePin(
   targetConnectionId: string | null,
   registryOwnerConnectionId: string | null,
   renderingConnectionId: string,
-): boolean {
-  if (targetConnectionId) return targetConnectionId === renderingConnectionId;
-  if (registryOwnerConnectionId) return registryOwnerConnectionId === renderingConnectionId;
-  return true;
+): PinAttribution {
+  if (targetConnectionId) {
+    return targetConnectionId === renderingConnectionId ? "mine" : "other_account";
+  }
+  if (registryOwnerConnectionId) {
+    return registryOwnerConnectionId === renderingConnectionId ? "mine" : "other_account";
+  }
+  return "unknown";
 }
+
+export type AttributedPins = {
+  /** Pins this connection published, per the draft record or the registry. */
+  mine: VibePinPublishedPinterestPin[];
+  /** Pins no source can place yet. The same set for every connection of one user,
+   *  because it is derived from user-level provenance and the absence of a registry
+   *  row — which is why the UI may show it once, and only outside the account cards. */
+  unattributed: VibePinPublishedPinterestPin[];
+};
 
 async function attributedPins(
   pins: VibePinPublishedPinterestPin[],
   connectionId: string,
   sources: CollectionSources,
-): Promise<VibePinPublishedPinterestPin[]> {
+): Promise<AttributedPins> {
   const legacyPinIds = pins.filter(item => item.targetConnectionId === null).map(item => item.pinId);
   const owners = legacyPinIds.length > 0
     ? await sources.loadRegistryOwners(legacyPinIds).catch(() => new Map<string, string>())
     : new Map<string, string>();
-  return pins.filter(item => attributePin(
-    item.targetConnectionId,
-    owners.get(item.pinId) ?? null,
-    connectionId,
-  ));
+  const mine: VibePinPublishedPinterestPin[] = [];
+  const unattributed: VibePinPublishedPinterestPin[] = [];
+  for (const item of pins) {
+    const verdict = attributePin(item.targetConnectionId, owners.get(item.pinId) ?? null, connectionId);
+    if (verdict === "mine") mine.push(item);
+    else if (verdict === "unknown") unattributed.push(item);
+  }
+  return { mine, unattributed };
+}
+
+/**
+ * The all-accounts "not yet attributed" group, from whichever account payloads have
+ * arrived.
+ *
+ * Every connection of one user carries the SAME unattributed list — it is derived
+ * from user-level publish provenance and the absence of a registry row, not from
+ * anything account-specific — so the group must be deduped by Pin id rather than
+ * taken from one payload. Taking the first would also make the group appear, grow and
+ * re-order as the slower accounts finish loading.
+ *
+ * It lives here rather than in the page because it is the one rule in that merge
+ * worth pinning down in a test, and the page is a client component the test harness
+ * cannot import.
+ */
+export function dedupeUnattributedPins(
+  dashboards: { platform: InsightsPlatform; unattributedContent?: InsightsContent[] }[],
+): { item: InsightsContent; platform: InsightsPlatform }[] {
+  const out: { item: InsightsContent; platform: InsightsPlatform }[] = [];
+  const seen = new Set<string>();
+  for (const dashboard of dashboards) {
+    for (const item of dashboard.unattributedContent ?? []) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      out.push({ item, platform: dashboard.platform });
+    }
+  }
+  return out;
 }
 
 // ── Evidence assembly ────────────────────────────────────────────────────────
@@ -679,6 +738,9 @@ export type ConnectionEvidenceRead = {
   provenance: { pins: VibePinPublishedPinterestPin[]; storageAvailable: boolean };
   /** The publish records that belong to THIS connection. */
   published: VibePinPublishedPinterestPin[];
+  /** Publish records no source can place on an account yet. Identical for every
+   *  connection of one user, so the UI shows them once, outside the account cards. */
+  unattributed: VibePinPublishedPinterestPin[];
   publishedIds: string[];
   lookup: MetricLookup;
   values: LatestValueRow[];
@@ -726,7 +788,7 @@ export async function readConnectionEvidence(
     sources.loadRegistry(ACCOUNT_CONTENT_ROW_LIMIT),
     sources.loadProvenance().catch(() => ({ pins: [], storageAvailable: false })),
   ]);
-  const published = await attributedPins(provenance.pins, connection.id, sources);
+  const { mine: published, unattributed } = await attributedPins(provenance.pins, connection.id, sources);
   const publishedIds = published.map(item => item.pinId);
   const registryIds = registry.map(row => row.platformContentId);
 
@@ -764,6 +826,7 @@ export async function readConnectionEvidence(
     registry,
     provenance,
     published,
+    unattributed,
     publishedIds,
     lookup,
     values,
@@ -811,6 +874,10 @@ async function buildAwaitingFirstRunDashboard(
     summary: emptyMetrics(0),
     daily: fillDailyRange([], startDate, endDate, true),
     content: [],
+    // Nothing has been collected, so nothing is known about ownership either. An
+    // unattributed group here would be every VibePin Pin of the user, listed under a
+    // heading that promises the registry will sort it out — before the registry exists.
+    unattributedContent: [],
     availability: {
       views: "pin_level",
       websiteClicks: "pin_level",
@@ -843,10 +910,14 @@ export async function buildPinterestInsights(
   if (!read) return buildAwaitingFirstRunDashboard(input, sources);
 
   const {
-    collection, registry, provenance, published, publishedIds,
+    collection, registry, provenance, published, unattributed, publishedIds,
     lookup, values, accountDaily, set, diagnosis,
   } = read;
   const provenanceByPin = new Map(provenance.pins.map(pin => [pin.pinId, pin]));
+  const registryImages = new Map(registry.map(row => [row.platformContentId, row.imageUrl]));
+  // Built once for both scopes. Their metrics read as "not collected", which is the
+  // honest state: no account's token has measured a Pin no account has claimed.
+  const unattributedRows = vibepinContentRows(unattributed, lookup, registryImages);
 
   if (scope === "account") {
     const rows = accountContentRows(registry, lookup, provenanceByPin);
@@ -859,6 +930,7 @@ export async function buildPinterestInsights(
       summary: summarizeDays(accountDaily, true),
       daily: accountDaily,
       content: attachEvidenceLines(rows, set.byPin),
+      unattributedContent: unattributedRows,
       availability: { views: "pin_level", websiteClicks: "pin_level", message: ACCOUNT_AVAILABILITY },
       collection,
       diagnosis,
@@ -870,11 +942,7 @@ export async function buildPinterestInsights(
     };
   }
 
-  const rows = vibepinContentRows(
-    published,
-    lookup,
-    new Map(registry.map(row => [row.platformContentId, row.imageUrl])),
-  );
+  const rows = vibepinContentRows(published, lookup, registryImages);
   const daily = daysFromValues(values, {
     scope: "content",
     pinIds: new Set(publishedIds),
@@ -892,6 +960,7 @@ export async function buildPinterestInsights(
     summary: summarizeContent(rows),
     daily,
     content: attachEvidenceLines(rows, set.byPin),
+    unattributedContent: unattributedRows,
     availability: { views: "pin_level", websiteClicks: "pin_level", message: VIBEPIN_AVAILABILITY },
     collection,
     diagnosis,

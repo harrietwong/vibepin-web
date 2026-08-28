@@ -2763,6 +2763,8 @@ const de: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Sa",
   "insights.content.title": "Content-Leistung",
   "insights.content.helpPinterest": "Alle {count} Pins aus VibePin-Veröffentlichungsnachweisen verifiziert. Die Kennzahlen umfassen die ausgewählten 30 Tage.",
+  "insights.content.unattributedTitle": "Noch nicht zugeordnet",
+  "insights.content.unattributedHelp": "Diese Pins wurden über VibePin veröffentlicht, bevor das Zielkonto gespeichert wurde, und noch kein Konto hat sie aufgelistet. Sie erscheinen hier einmal statt bei jedem Konto und wechseln nach dem nächsten Sammellauf zu ihrem Konto.",
   "insights.content.helpInstagram": "Aktuelle Bilder und Videos. Website-Klicks lassen sich keinem normalen Feed-Bild zuordnen.",
   "insights.content.emptyPinterestTitle": "Noch keine veröffentlichten VibePin-Pins",
   "insights.content.emptyPinterestBody": "Hier erscheinen nur Pins mit einem erfolgreichen Veröffentlichungsnachweis.",

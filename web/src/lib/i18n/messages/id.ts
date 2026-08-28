@@ -2761,6 +2761,8 @@ const id: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Sab",
   "insights.content.title": "Performa konten",
   "insights.content.helpPinterest": "Semua {count} Pin diverifikasi dari catatan penerbitan VibePin. Metrik mencakup 30 hari yang dipilih.",
+  "insights.content.unattributedTitle": "Belum diatribusikan",
+  "insights.content.unattributedHelp": "Pin ini dipublikasikan lewat VibePin sebelum akun tujuannya dicatat, dan belum ada akun yang mencantumkannya. Pin ditampilkan sekali di sini, bukan di setiap akun, dan akan berpindah ke akunnya setelah pengumpulan data berikutnya.",
   "insights.content.helpInstagram": "Gambar dan video terbaru. Klik situs tidak dapat dikaitkan ke gambar feed biasa.",
   "insights.content.emptyPinterestTitle": "Belum ada Pin VibePin yang diterbitkan",
   "insights.content.emptyPinterestBody": "Hanya Pin dengan catatan penerbitan berhasil yang muncul di sini.",

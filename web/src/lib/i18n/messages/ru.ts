@@ -2793,6 +2793,8 @@ const ru: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Сб",
   "insights.content.title": "Эффективность контента",
   "insights.content.helpPinterest": "Все пины ({count}) подтверждены записями о публикации VibePin. Метрики охватывают выбранные 30 дней.",
+  "insights.content.unattributedTitle": "Пока не отнесены к аккаунту",
+  "insights.content.unattributedHelp": "Эти пины были опубликованы через VibePin до того, как он начал сохранять аккаунт публикации, и пока ни один аккаунт их не показал. Они выводятся здесь один раз, а не в каждом аккаунте, и перейдут к своему аккаунту после следующего сбора данных.",
   "insights.content.helpInstagram": "Недавние изображения и видео. Клики на сайт нельзя отнести к обычному изображению в ленте.",
   "insights.content.emptyPinterestTitle": "Пока нет опубликованных пинов VibePin",
   "insights.content.emptyPinterestBody": "Здесь появляются только пины с успешной записью о публикации.",

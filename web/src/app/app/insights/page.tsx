@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import type { I18nText } from "@/lib/insights/recommendations";
 import { isDiagnosisLocked } from "@/lib/insights/paidGate";
+import { dedupeUnattributedPins } from "@/lib/insights/collectionDashboard";
 import type {
   InsightReportDetail,
   InsightReportSummary,
@@ -854,6 +855,7 @@ function ContentTable({
   totalPinCount,
   accounts,
   showAccountColumn,
+  heading,
   tr,
 }: {
   rows: ContentTableRow[];
@@ -863,6 +865,10 @@ function ContentTable({
   /** Accounts offered in the row filter. Empty in single-account mode. */
   accounts: InsightsAccountOption[];
   showAccountColumn: boolean;
+  /** Title + help for a table that is not "your content" — currently only the
+   *  not-yet-attributed group. When set, the account filter is hidden: the rows
+   *  belong to no account, which is the whole reason they are in their own table. */
+  heading?: { title: string; help: string };
   tr: Translate;
 }) {
   const [accountFilter, setAccountFilter] = useState<string>(ALL_ACCOUNTS);
@@ -876,16 +882,17 @@ function ContentTable({
     <section className={styles.panel}>
       <div className={styles.panelHeader}>
         <div>
-          <h2 className={styles.panelTitle}>{tr("insights.content.title")}</h2>
+          <h2 className={styles.panelTitle}>{heading?.title ?? tr("insights.content.title")}</h2>
           <p className={styles.panelHelp}>
-            {!isPinterest
+            {heading ? heading.help
+              : !isPinterest
               ? tr("insights.content.helpInstagram")
               : accountScope
                 ? fill(tr("insights.content.helpAccount"), { count: totalPinCount })
                 : fill(tr("insights.content.helpPinterest"), { count: totalPinCount })}
           </p>
         </div>
-        {showAccountColumn && accounts.length > 1 ? (
+        {showAccountColumn && accounts.length > 1 && !heading ? (
           <label className={styles.filterLabel}>
             <span className="sr-only">{tr("insights.content.filterAccount")}</span>
             <select
@@ -1214,6 +1221,24 @@ export default function InsightsPage() {
     [readyEntries],
   );
 
+  // Pins no account can claim yet, listed ONCE. Every account's payload carries the
+  // same list (it is user-level provenance minus the registry), so this is deduped
+  // by Pin id rather than read from one entry: accounts finish loading at different
+  // times, and taking the first would make the group appear, change and re-order as
+  // the others arrive.
+  const unattributedRows = useMemo<ContentTableRow[]>(
+    () => dedupeUnattributedPins(readyEntries.map(entry => entry.dashboard)).map(({ item, platform: rowPlatform }) => ({
+      key: `unattributed:${item.id}`,
+      item,
+      platform: rowPlatform,
+      // No account id and no label: naming an account here would be exactly the
+      // claim this group exists to withhold.
+      accountId: null,
+      accountLabel: null,
+    })),
+    [readyEntries],
+  );
+
   const singleRows = useMemo<ContentTableRow[]>(
     () => (dashboard?.content ?? []).map(item => ({
       key: item.id,
@@ -1340,6 +1365,21 @@ export default function InsightsPage() {
                   showAccountColumn
                   tr={tr}
                 />
+                {unattributedRows.length > 0 ? (
+                  <ContentTable
+                    rows={unattributedRows}
+                    platform={platform}
+                    scope={effectiveScope}
+                    totalPinCount={unattributedRows.length}
+                    accounts={[]}
+                    showAccountColumn={false}
+                    heading={{
+                      title: tr("insights.content.unattributedTitle"),
+                      help: tr("insights.content.unattributedHelp"),
+                    }}
+                    tr={tr}
+                  />
+                ) : null}
               </>
             ) : null}
           </>

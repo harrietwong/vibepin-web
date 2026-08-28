@@ -102,6 +102,7 @@ function emptyDashboard(
     summary: emptyMetrics(websiteClicksAvailable ? 0 : null),
     daily: fillDailyRange([], startDate, endDate, websiteClicksAvailable),
     content: [],
+    unattributedContent: [],
     availability: {
       views: platform === "pinterest" ? "pin_level" : "media_level",
       websiteClicks: platform === "pinterest" ? "pin_level" : "account_level",
@@ -283,6 +284,10 @@ async function buildInstagramDashboard(
     summary,
     daily,
     content: attachDiagnoses("instagram", rawContent),
+    // Instagram has no collection ledger and no registry, so there is no third
+    // answer to give: a media object either came back from the account's own token
+    // or it is not here at all.
+    unattributedContent: [],
     availability: {
       views: "media_level",
       websiteClicks: "account_level",

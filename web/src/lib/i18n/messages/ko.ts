@@ -2739,6 +2739,8 @@ const ko: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "토",
   "insights.content.title": "콘텐츠 성과",
   "insights.content.helpPinterest": "VibePin 게시 기록으로 확인된 핀 {count}개 전체입니다. 지표는 선택한 30일을 다룹니다.",
+  "insights.content.unattributedTitle": "아직 계정이 확인되지 않음",
+  "insights.content.unattributedHelp": "이 핀들은 VibePin이 게시 대상 계정을 기록하기 전에 게시되었으며, 아직 어떤 계정에서도 조회되지 않았습니다. 모든 계정에 중복 표시하지 않고 여기에 한 번만 표시되며, 다음 수집 실행 후 해당 계정으로 이동합니다.",
   "insights.content.helpInstagram": "최근 이미지와 동영상입니다. 사이트 클릭은 일반 피드 이미지에 귀속할 수 없습니다.",
   "insights.content.emptyPinterestTitle": "아직 게시된 VibePin 핀이 없습니다",
   "insights.content.emptyPinterestBody": "게시 성공 기록이 있는 핀만 여기에 표시됩니다.",

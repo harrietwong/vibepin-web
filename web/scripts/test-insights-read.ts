@@ -28,6 +28,7 @@ import {
   ACCOUNT_CONTENT_ROW_LIMIT,
   buildMetricLookup,
   buildPinterestInsights,
+  dedupeUnattributedPins,
   combineMetricStates,
   contentMetricsFor,
   daysFromValues,
@@ -584,16 +585,80 @@ await test("the VibePin scope shows only Pins this connection published", async 
     provenance: [
       publishedPin({ pinId: "111" }),
       publishedPin({ pinId: "222", targetConnectionId: "conn-b" }),
-      // No recorded target: the registry says conn-b owns it.
+      // No recorded target: the registry says conn-b owns it, so it is not ours.
       publishedPin({ pinId: "333", targetConnectionId: null }),
-      // No recorded target and no registry row: visible everywhere, because the
-      // owning account is still the only one that returns numbers for it.
+      // No recorded target and no registry row: nobody can place it yet.
       publishedPin({ pinId: "444", targetConnectionId: null }),
     ],
     registryOwners: new Map([["333", "conn-b"]]),
   });
-  const ids = dashboard.content.map(item => item.id).sort();
-  assert.deepEqual(ids, ["111", "444"]);
+  assert.deepEqual(dashboard.content.map(item => item.id).sort(), ["111"]);
+  // 444 is not silently dropped — it moves to the group that says what it is.
+  assert.deepEqual(dashboard.unattributedContent.map(item => item.id), ["444"]);
+});
+
+await test("a legacy Pin the registry can place appears on its owner's card only", async () => {
+  const db = new FakeCollectionDb();
+  db.runs.push(finishedRun("2026-08-27T03:05:00.000Z"));
+  const owners = new Map([["555", CONNECTION_ID]]);
+  const provenance = [publishedPin({ pinId: "555", targetConnectionId: null })];
+
+  const { client } = await pinterestSpy();
+  const mine = await build(db, "vibepin", { client, provenance, registryOwners: owners });
+  assert.deepEqual(mine.content.map(item => item.id), ["555"], "the owner shows it");
+  assert.deepEqual(mine.unattributedContent, [], "and it is not also in the group");
+
+  // The sibling account asks the same question and gets the opposite answer. This
+  // is the pair that used to be impossible: the old fallback put the Pin on BOTH.
+  const { client: siblingClient, requested } = await pinterestSpy();
+  const sibling = await buildPinterestInsights(
+    { scope: "vibepin", connection: { ...connection, id: "conn-b" }, startDate: START, endDate: END },
+    sourcesFor(db, { client: siblingClient, provenance, registryOwners: owners }),
+  );
+  assert.deepEqual(sibling.content, [], "the sibling shows nothing");
+  assert.deepEqual(sibling.unattributedContent, [], "and claims nothing about it");
+  assert.equal(requested.length, 0);
+});
+
+await test("an unplaceable Pin is in every account's group and on no account's card", async () => {
+  const db = new FakeCollectionDb();
+  db.runs.push(finishedRun("2026-08-27T03:05:00.000Z"));
+  const provenance = [publishedPin({ pinId: "666", targetConnectionId: null })];
+
+  const { client } = await pinterestSpy();
+  const first = await build(db, "vibepin", { client, provenance, registryOwners: new Map() });
+  const { client: secondClient } = await pinterestSpy();
+  const second = await buildPinterestInsights(
+    { scope: "vibepin", connection: { ...connection, id: "conn-b" }, startDate: START, endDate: END },
+    sourcesFor(db, { client: secondClient, provenance, registryOwners: new Map() }),
+  );
+
+  assert.deepEqual(first.content, []);
+  assert.deepEqual(second.content, []);
+  // The same list on both payloads is what lets the page dedupe it to one group.
+  assert.deepEqual(first.unattributedContent.map(item => item.id), ["666"]);
+  assert.deepEqual(second.unattributedContent.map(item => item.id), ["666"]);
+
+  const rows = dedupeUnattributedPins([first, second]);
+  assert.equal(rows.length, 1, "listed once, however many accounts report it");
+  assert.equal(rows[0].item.id, "666");
+  assert.equal(rows[0].platform, "pinterest");
+});
+
+await test("the account scope keeps its own registry rows out of the unattributed group", async () => {
+  const db = new FakeCollectionDb();
+  db.runs.push(finishedRun("2026-08-27T03:05:00.000Z"));
+  db.registry.push(registryRow({ platformContentId: "777" }));
+  const { client } = await pinterestSpy();
+  const dashboard = await build(db, "account", {
+    client,
+    provenance: [publishedPin({ pinId: "888", targetConnectionId: null })],
+    registryOwners: new Map(),
+  });
+  // The registry is this account's own population; only the unplaceable publish
+  // record goes to the group.
+  assert.deepEqual(dashboard.content.map(item => item.id), ["777"]);
+  assert.deepEqual(dashboard.unattributedContent.map(item => item.id), ["888"]);
 });
 
 await test("content daily rows outside the visible window never reach the heatmap", () => {

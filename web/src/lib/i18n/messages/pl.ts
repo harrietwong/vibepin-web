@@ -2719,6 +2719,8 @@ const pl: Partial<Record<MessageKey, string>> = {
   "insights.weekday.sat": "Sb",
   "insights.content.title": "Skuteczność treści",
   "insights.content.helpPinterest": "Wszystkie Piny ({count}) zweryfikowane na podstawie zapisów publikacji VibePin. Metryki obejmują wybrane 30 dni.",
+  "insights.content.unattributedTitle": "Jeszcze nieprzypisane",
+  "insights.content.unattributedHelp": "Te Piny opublikowano przez VibePin, zanim zapisywał konto docelowe, i żadne konto jeszcze ich nie wykazało. Są tu pokazane raz, a nie przy każdym koncie, i trafią do swojego konta po następnym zbieraniu danych.",
   "insights.content.helpInstagram": "Ostatnie obrazy i filmy. Kliknięć strony nie można przypisać do zwykłego obrazu w kanale.",
   "insights.content.emptyPinterestTitle": "Brak opublikowanych Pinów VibePin",
   "insights.content.emptyPinterestBody": "Pojawiają się tu tylko Piny z udanym zapisem publikacji.",
