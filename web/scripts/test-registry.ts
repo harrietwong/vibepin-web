@@ -185,6 +185,10 @@ export const STUDIO: string[] = [
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",
+  // Responsive Plan entry (PRD 0809 §IX): the viewport buckets + which form each one
+  // gets (docked panel / tablet drawer / mobile sheet), and that the entry is an
+  // explicit button rather than a hover target on any of them.
+  "test-plan-entry-responsive",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",
