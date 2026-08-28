@@ -169,14 +169,13 @@ Preview root HTML fetched through authenticated `vercel curl` had SHA-256
 Do not promote the Preview without separate production-rollout authorization.
 Evidence: `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
 
-The latest GET-only pre-Supply data-quality baseline is
-`backend/docs/product_opportunities_v37_pre_supply_data_quality_20260827T121042Z.json`.
-It originally proved 123 technical migration candidates and 25 reviewed
-automatic-Admission candidates. The later taxonomy audit on `c8f0d77` keeps the
-same 123 technical candidates and expands the reviewed source/family scope to 39
-(31 Physical / 8 Digital), including 14 Wedding candidates (13 Physical / 1
-Digital), but still has zero current/G7/G14/G30/full-metric coverage for all 39.
-Therefore Product discovery inventory exists, while v3.7
+The latest GET-only Stage 0 data-quality baseline is
+`backend/docs/product_opportunities_v37_stage0_data_quality_20260828T000146Z.json`.
+It proves 4,115 legacy Products, 34,073 legacy snapshots, 123 technical migration
+candidates and 39 reviewed automatic-Admission candidates (31 Physical / 8
+Digital). All 39 lack today's observation, G7, G30 and full-metric coverage; one
+Physical candidate has only a G14 anchor. The 39 include 14 Wedding candidates
+(13 Physical / 1 Digital). Therefore Product discovery inventory exists, while v3.7
 trend intelligence remains not launch-ready until Admission and daily tracking
 are deployed and produce real persisted history. Do not confuse Supply's 20-row
 atomic transaction cap with daily capacity: the candidate Supply run scans 100
@@ -397,7 +396,7 @@ exact candidate is mandatory after the final integration with concurrent work.
 ## Stage 0 — Read-only gate
 
 1. Re-run the production audit script without mutation and preserve its JSON
-   report. Reconcile totals with the PRD baseline instead of assuming 122
+   report. Reconcile totals with the PRD baseline instead of assuming 123
    candidates still exist.
 2. Confirm no v63 table, function, or view with incompatible definitions already
    exists. If one does, stop and produce a schema diff.

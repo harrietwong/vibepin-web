@@ -162,6 +162,15 @@ truth rules. The production alias remains on `dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn`.
 This closes Preview qualification but does not authorize promotion. Evidence:
 `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
 
+A fresh Stage 0 GET-only data audit at `2026-08-28T00:01:46Z` read 4,115 legacy
+Products and 34,073 legacy snapshots. It still finds 123 technical migration
+candidates and 39 reviewed automatic-Admission candidates (31 Physical / 8
+Digital). None has today's observation, G7, G30 or full-metric coverage; one
+Physical candidate has only a G14 anchor. This improves the precision of the
+earlier all-zero statement but does not change the launch decision: discovery
+inventory exists, stable trend intelligence does not. Evidence:
+`backend/docs/product_opportunities_v37_stage0_data_quality_20260828T000146Z.json`.
+
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure
 rule test, registry and full TypeScript gate pass, and the built full candidate

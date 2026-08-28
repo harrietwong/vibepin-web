@@ -39,6 +39,13 @@ PLATFORM_PREFLIGHT = json.loads(
         / "product_opportunities_v37_platform_preflight_20260827T234511Z.json"
     ).read_text(encoding="utf-8")
 )
+STAGE0_DATA_QUALITY = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_stage0_data_quality_20260828T000146Z.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() -> None:
@@ -250,6 +257,25 @@ def test_exact_platform_preflight_is_non_production_and_auditable() -> None:
     assert preview["promoted"] is False
     assert production["deploymentId"] == "dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn"
     assert production["unchanged"] is True
+
+
+def test_latest_stage0_data_quality_does_not_claim_launch_ready_metrics() -> None:
+    audit = STAGE0_DATA_QUALITY
+    assert audit["total_pin_product_rows"] == 4115
+    assert audit["legacy_snapshot_rows"] == 34073
+    assert audit["migration_gate_pass_unique_products"] == 123
+    assert audit["automatic_admission_scope_unique_products"] == 39
+    assert audit["automatic_admission_scope_by_family"] == {
+        "physical": 31,
+        "digital": 8,
+    }
+    coverage = audit["automatic_admission_scope_snapshot_coverage"]
+    assert coverage["today"] == 0
+    assert coverage["anchor_7"] == 0
+    assert coverage["anchor_14"] == 1
+    assert coverage["anchor_30"] == 0
+    assert coverage["full_metric"] == 0
+    assert "trend intelligence remains not launch-ready" in RUNBOOK
 
 
 def test_release_manifest_keeps_create_pin_null_title_contract_together() -> None:
