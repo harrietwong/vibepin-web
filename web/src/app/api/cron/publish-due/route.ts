@@ -391,7 +391,7 @@ export async function GET(req: Request): Promise<Response> {
       // firstFailure carries the platform's stable CODE, which the outcome rows do not:
       // categorizing from the message alone would put a differently-worded
       // needs_reconnect in "transient" and offer the merchant the wrong fix.
-      await persistOutcomes(db, row, outcomes, nowIso, adoptedConnectionId, firstFailure?.code);
+      await persistOutcomes(db, row, outcomes, rowNowIso, adoptedConnectionId, firstFailure?.code);
       const anyPublished = outcomes.some(o => o.status === "published");
       if (anyPublished) {
         const pin = outcomes.find(o => o.provider === "pinterest" && o.status === "published");

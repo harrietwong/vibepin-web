@@ -566,6 +566,16 @@ test("each row is claimed on ITS own clock, so a late claim keeps a full lock", 
   assert.match(routeSrc, /const claimIso = new Date\(\)\.toISOString\(\);/);
   assert.match(routeSrc, /const rowNowIso = new Date\(\)\.toISOString\(\);/,
     "and its persist must carry a current updatedAt, or a mid-run client edit wins the LWW merge");
+  // Declaring it is not using it. The MAIN outcome persist — the one that runs after a
+  // real publish — is where a start-of-run stamp loses the LWW merge to a mid-run edit
+  // that still carries scheduled_at, and the Pin goes out twice.
+  assert.match(routeSrc, /persistOutcomes\(db, row, outcomes, rowNowIso/);
+  const loopBody = routeSrc.slice(
+    routeSrc.indexOf("for (const candidate of candidates) {"),
+    routeSrc.indexOf("if (deferred > 0) {"),
+  );
+  assert.ok(!/[^w], nowIso/.test(loopBody),
+    "no call inside the row loop may still take the start-of-run clock");
 });
 
 test("a deferred row is reported, never silently dropped", () => {
