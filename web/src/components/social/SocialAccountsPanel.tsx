@@ -1827,8 +1827,15 @@ export function SocialAccountsPanel() {
    * Remove ONE account (Phase D ③).
    *
    * Asks the server what is still scheduled through that account first. Nothing
-   * scheduled ⇒ remove immediately; otherwise hand the decision to the user rather
-   * than quietly stranding work they planned.
+   * scheduled ⇒ try the remove; otherwise hand the decision to the user rather than
+   * quietly stranding work they planned.
+   *
+   * This count is a CONVENIENCE, not the authority (Codex #1). It opens the dialog
+   * without a round trip through a refusal, but a 0 here no longer authorises
+   * anything: the count can fail (answering 0), or be taken before the merchant
+   * schedules something in another tab. The remove route re-checks on its own and
+   * refuses with `schedules_exist` / `schedule_check_failed`, which `removeAccount`
+   * below turns into the same dialog and the same kept row.
    *
    * Wired for every platform now, but the count is asked of the RIGHT route per
    * provider rather than one route for all. Pinterest's scheduled口径 is the legacy
@@ -1895,12 +1902,34 @@ export function SocialAccountsPanel() {
       }
       toast.success(tr("socialPanel.toast.accountRemoved"));
     } catch (e) {
-      // The server refuses the removal when it could not cancel the schedules the
-      // merchant asked it to (409 schedule_cancel_failed) and says how many — that
-      // sentence is far more actionable than a generic failure, and it is the only
-      // thing that explains why the row is still here after the `load()` below
-      // puts it back.
-      toast.error((e as Error).message || tr("socialPanel.toast.accountRemoveFailed"));
+      const err = e as { code?: string; message?: string; scheduledCount?: number };
+
+      // The server checked, found live schedules, and refused (409 schedules_exist).
+      // That is not an error the merchant caused — it is the keep/cancel decision,
+      // arriving from the authority rather than from our pre-count. Reopen the SAME
+      // dialog on the SERVER's number: it was taken at the moment of the delete, so
+      // it is the only count that was ever true. The `load()` below restores the row
+      // the optimistic update removed, and the dialog acts on the account object we
+      // still hold here rather than on that refreshed state.
+      if (err.code === "schedules_exist") {
+        setPendingRemoval({
+          account,
+          label: labelForAccount(provider, account),
+          scheduledCount: typeof err.scheduledCount === "number" ? err.scheduledCount : 0,
+        });
+      } else if (err.code === "schedule_check_failed") {
+        // The server could not read the schedules at all, so it deleted nothing.
+        // Say so and keep the row: retrying is the entire remedy, and a generic
+        // failure would leave the merchant wondering whether it half-happened.
+        toast.error(err.message || tr("socialPanel.toast.scheduleCheckFailed"));
+      } else {
+        // Everything else, including the removal refused because the schedules the
+        // merchant asked to cancel could not all be cancelled (409
+        // schedule_cancel_failed), which says how many — far more actionable than a
+        // generic failure, and the only thing that explains why the row is still
+        // here after the `load()` below puts it back.
+        toast.error(err.message || tr("socialPanel.toast.accountRemoveFailed"));
+      }
     } finally {
       notifyConnectionsChanged();
       await load(); // the server is the truth either way — restores the row on failure

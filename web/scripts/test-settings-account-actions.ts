@@ -209,8 +209,11 @@ test("移除被拒时面板说出服务端那句话，并把行放回去（Codex
   const removeAt = panelSrc.indexOf("async function removeAccount(");
   assert.ok(removeAt > 0);
   const body = panelSrc.slice(removeAt, removeAt + 2400);
+  // 服务端的话优先,通用文案只作兜底。错误现在是带 code 的类型化对象
+  // (schedules_exist 要重开对话框、schedule_check_failed 要单独的文案),
+  // 所以取的是 err.message 而不是 (e as Error).message —— 意图不变。
   assert.ok(
-    body.includes('toast.error((e as Error).message || tr("socialPanel.toast.accountRemoveFailed"))'),
+    body.includes('toast.error(err.message || tr("socialPanel.toast.accountRemoveFailed"))'),
     "必须优先弹服务端的 userMessage，通用文案只作兜底",
   );
   assert.ok(!body.includes("} catch {"), "不能再把错误整个丢掉");

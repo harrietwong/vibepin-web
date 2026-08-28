@@ -167,19 +167,63 @@ async function readCandidates(
 }
 
 /**
+ * The count, plus whether the read behind it actually worked.
+ *
+ * The plain number was ambiguous in the one place it mattered: a remove route
+ * cannot tell "0 scheduled" apart from "the query failed, so I am telling you 0".
+ * Acting on the second as if it were the first hard-deletes an account that live
+ * schedules still target. A caller that must be SURE reads this instead.
+ */
+export type ScheduledCountOutcome = {
+  /** Matching rows found. Meaningless when `readFailed` is true. */
+  count: number;
+  /**
+   * The candidate read failed, so `count` describes nothing. A MISSING
+   * table/column is NOT a failure — the optional migration simply has not run and
+   * there is genuinely nothing scheduled.
+   */
+  readFailed: boolean;
+};
+
+/**
+ * How many scheduled Contents still publish through this account, WITH the
+ * read's own success in the answer.
+ *
+ * This is the form the remove route must use: it is the only one that can refuse
+ * to delete on a transient failure instead of silently reading it as "nothing is
+ * scheduled" (Codex #1).
+ */
+export async function countScheduledForSocialConnectionStrict(
+  db: DbLike,
+  uid: string,
+  connectionId: string,
+): Promise<ScheduledCountOutcome> {
+  if (!str(connectionId)) return { count: 0, readFailed: false };
+  const { rows, readFailed } = await readCandidates(db, uid, "scheduled count");
+  if (readFailed) return { count: 0, readFailed: true };
+  return {
+    count: rows.filter(r => payloadTargetsSocialConnection(r.payload, connectionId)).length,
+    readFailed: false,
+  };
+}
+
+/**
  * How many scheduled Contents still publish through this account.
  *
  * Degrades to 0 when the schema isn't there — a merchant must never be blocked
- * from removing an account because an optional migration hasn't run.
+ * from removing an account because an optional migration hasn't run — AND when the
+ * read itself fails. That second degradation is why this must not be used to
+ * decide a deletion; it exists for the advisory GET the dialog pre-loads with,
+ * where a wrong 0 costs a prompt rather than a merchant's scheduled posts. The
+ * authority is `countScheduledForSocialConnectionStrict`.
  */
 export async function countScheduledForSocialConnection(
   db: DbLike,
   uid: string,
   connectionId: string,
 ): Promise<number> {
-  if (!str(connectionId)) return 0;
-  const { rows } = await readCandidates(db, uid, "scheduled count");
-  return rows.filter(r => payloadTargetsSocialConnection(r.payload, connectionId)).length;
+  const { count } = await countScheduledForSocialConnectionStrict(db, uid, connectionId);
+  return count;
 }
 
 /**

@@ -36,6 +36,7 @@ import {
 import {
   cancelScheduledForSocialConnection,
   countScheduledForSocialConnection,
+  countScheduledForSocialConnectionStrict,
 } from "@/lib/server/social/scheduledForSocialConnection";
 import { getSocialProviderById } from "@/lib/social/providers";
 import { createServerClient } from "@/lib/supabase";
@@ -60,6 +61,30 @@ function scheduleCancelFailedMessage(failed: number, readFailed: boolean): strin
   return `We couldn't cancel ${posts}, so the account was not removed. Please try again.`;
 }
 
+
+/**
+ * The refusal when we could not even LOOK at what is scheduled (Codex #1).
+ *
+ * Separate from the cancel failure above because the merchant's situation is
+ * different: they have not asked to cancel anything, we simply cannot answer the
+ * question that decides whether removing is safe. Retrying is the whole advice.
+ */
+function scheduleCheckFailedMessage(): string {
+  return "We couldn't check what's still scheduled through this account, so it was not removed. Please try again.";
+}
+
+/**
+ * The refusal when live schedules still target the account and the merchant has
+ * not said what to do with them (Codex #1).
+ *
+ * It names the number because the next screen is a choice — keep them (they stop
+ * at publish time) or cancel them — and that choice is not answerable without
+ * knowing how much work is at stake.
+ */
+function schedulesExistMessage(count: number): string {
+  const posts = count === 1 ? "1 scheduled post" : `${count} scheduled posts`;
+  return `This account still has ${posts}. Choose whether to keep or cancel them before removing it.`;
+}
 
 /** Anything other than an explicit "remove" is the soft, reversible action. */
 function readMode(value: unknown): SocialDisconnectMode {
@@ -121,43 +146,66 @@ export async function POST(req: Request) {
     return Response.json({ ok: false, usePinterestFlow: true });
   }
 
-  try {
-    // Revoke at the provider first — this is what invalidates the credentials, and
-    // it names the CONNECTION, so the merchant's other accounts on the same platform
-    // are untouched (official.ts forwards connectionId to the Facebook/Instagram
-    // stores, whose UPDATE is narrowed by `.eq("id", connectionId)`).
-    await getSocialProviderById(connection.authProvider).disconnect({
-      userId: uid,
-      connectionId,
-      externalConnectionId: connection.externalConnectionId,
-      provider: connection.provider,
-    });
+  /**
+   * Invalidate the stored credentials at the provider.
+   *
+   * Named so the two modes can place it at different points in their sequence —
+   * immediately for a soft disconnect, LAST for a remove (Codex #2) — without the
+   * call itself being duplicated and drifting.
+   */
+  const revokeAtProvider = () => getSocialProviderById(connection.authProvider).disconnect({
+    userId: uid,
+    connectionId,
+    externalConnectionId: connection.externalConnectionId,
+    provider: connection.provider,
+  });
 
-    // SOFT: the row stays. Tokens are gone; the account is now a "Disconnected" row
-    // in Settings that a reconnect can repair. For Facebook this also preserves
-    // metadata.facebook.lastKnownPageId — the Page the merchant already identified —
+  try {
+    // -- SOFT disconnect ------------------------------------------------------
+    // The row stays. Tokens are gone; the account is now a "Disconnected" row in
+    // Settings that a reconnect can repair. For Facebook this also preserves
+    // metadata.facebook.lastKnownPageId - the Page the merchant already identified -
     // so a later reconnect does not have to ask for the Page id by hand again.
+    //
+    // A soft disconnect never touches schedules, so it revokes immediately: there is
+    // nothing to check and nothing to undo. The surviving row is what makes it
+    // reversible.
     if (mode === "disconnect") {
+      await revokeAtProvider();
       return Response.json({ ok: true, mode });
     }
 
-    // HARD. Cancel BEFORE the delete: if the request dies half-way, the worse
-    // outcome is a disconnected-but-present account whose schedules were not yet
-    // cleared (visible, retryable) rather than a deleted account leaving live rows
-    // the cron keeps picking up.
+    // -- HARD remove: check -> cancel -> revoke -> delete ---------------------
+    // The order is the fix for two separate defects, and neither step may move.
     //
-    // And the cancel has to actually SUCCEED. It used to degrade a read error to
-    // "nothing is scheduled" and log-and-skip failed updates, then return a count
-    // this route could not tell apart from real success — so a transient DB failure
-    // deleted the account, reported success, and left the merchant's schedules
-    // pointing at a row that no longer exists. The two steps are one decision:
-    // either the schedules the customer asked to cancel are gone, or the account
-    // stays and they can retry.
+    // CHECK, ALWAYS (Codex #1). The client used to be the authority: it pre-counted,
+    // and when that count came back 0 it sent `cancelScheduled:false` and this route
+    // inspected nothing at all. A transient count failure answered 0 - and so did a
+    // count taken before the merchant scheduled something in another tab. Either way
+    // the account was hard-deleted while live schedules still pointed at it. The
+    // client count is now a convenience that opens the dialog early; THIS decides.
+    //
+    // REVOKE LAST (Codex #2). Revoking first meant a cancellation failure returned
+    // "account kept" after the credentials were already cleared - the kept account
+    // could no longer publish, so its surviving schedules failed until the merchant
+    // reconnected. A refusal has to leave the row genuinely untouched.
+    //
+    // Cancel still runs BEFORE the delete: if the request dies half-way, the worse
+    // outcome is a present account whose schedules were not yet cleared (visible,
+    // retryable) rather than a deleted account leaving live rows the cron picks up.
     let cancelledScheduled = 0;
     if (cancelScheduled) {
+      // No separate count in this branch on purpose: the cancel does its own read
+      // and reports `readFailed`, so a pre-count would just be a second chance to
+      // fail at the same question. The outcome gate below IS the check here.
       const outcome = await cancelScheduledForSocialConnection(
         createServerClient(), uid, connectionId, new Date().toISOString(),
       );
+      // The cancel has to actually SUCCEED. It used to degrade a read error to
+      // "nothing is scheduled" and log-and-skip failed updates, then return a count
+      // this route could not tell apart from real success. The two steps are one
+      // decision: either the schedules the customer asked to cancel are gone, or the
+      // account stays - with its tokens - and they can retry.
       if (outcome.readFailed || outcome.failed > 0) {
         const userMessage = scheduleCancelFailedMessage(outcome.failed, outcome.readFailed);
         console.error(
@@ -177,8 +225,43 @@ export async function POST(req: Request) {
         );
       }
       cancelledScheduled = outcome.cleared;
+    } else {
+      const { count, readFailed } = await countScheduledForSocialConnectionStrict(
+        createServerClient(), uid, connectionId,
+      );
+      // We could not answer "is this safe to delete?". Not knowing is not the same
+      // as nothing being scheduled, and only one of those permits a delete.
+      if (readFailed) {
+        const userMessage = scheduleCheckFailedMessage();
+        console.error("[social/disconnect POST] schedule check failed - account kept");
+        return Response.json(
+          { ok: false, code: "schedule_check_failed", userMessage, error: userMessage },
+          { status: 503 },
+        );
+      }
+      // Schedules exist and nobody has decided their fate. Hand the decision back
+      // with the SERVER's count - the number the panel dialog must show, because it
+      // is the only one taken at the moment of the delete.
+      if (count > 0) {
+        const userMessage = schedulesExistMessage(count);
+        return Response.json(
+          {
+            ok: false,
+            code: "schedules_exist",
+            scheduledCount: count,
+            userMessage,
+            error: userMessage,
+          },
+          { status: 409 },
+        );
+      }
     }
 
+    // Only now are the credentials invalidated. The revoke names the CONNECTION, so
+    // the merchant's other accounts on the same platform are untouched (official.ts
+    // forwards connectionId to the Facebook/Instagram stores, whose UPDATE is
+    // narrowed by `.eq("id", connectionId)`).
+    await revokeAtProvider();
     await deleteConnection(uid, connectionId);
     return Response.json({ ok: true, mode, cancelledScheduled });
   } catch (err) {

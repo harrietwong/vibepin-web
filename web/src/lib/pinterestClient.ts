@@ -26,6 +26,12 @@ export type PinterestClientError = Error & {
   pinterestCode?: string;
   /** HTTP status from the internal API route (useful for fallback messages). */
   httpStatus?: number;
+  /**
+   * Present on the remove route's `schedules_exist` refusal: how many Pins the
+   * SERVER found still scheduled through the account, counted at delete time. The
+   * Remove dialog shows this number rather than its own earlier estimate.
+   */
+  scheduledCount?: number;
 };
 
 export type PinterestAccount = { id: string | null; username: string | null; accountType: string | null };
@@ -200,6 +206,7 @@ type ParsedError = {
   needsReconnect?: boolean;
   pinterestCode?: string;
   httpStatus: number;
+  scheduledCount?: number;
 };
 
 async function parseErrorResponse(res: Response): Promise<ParsedError> {
@@ -215,6 +222,8 @@ async function parseErrorResponse(res: Response): Promise<ParsedError> {
       needsReconnect: body?.needsReconnect === true,
       pinterestCode: typeof body?.pinterestCode === "string" ? body.pinterestCode : undefined,
       httpStatus,
+      // Carried so the Remove dialog can reopen on the server's own count.
+      scheduledCount: typeof body?.scheduledCount === "number" ? body.scheduledCount : undefined,
     };
   } catch {
     return {
@@ -231,6 +240,7 @@ function toClientError(body: ParsedError): PinterestClientError {
   err.needsReconnect = body.needsReconnect;
   err.pinterestCode = body.pinterestCode;
   err.httpStatus = body.httpStatus;
+  err.scheduledCount = body.scheduledCount;
   return err;
 }
 

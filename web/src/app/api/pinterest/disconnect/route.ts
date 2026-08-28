@@ -56,6 +56,7 @@ import { deleteConnection, disconnect } from "@/lib/server/pinterest/connectionS
 import {
   cancelScheduledForConnection,
   countScheduledForConnection,
+  countScheduledForConnectionStrict,
 } from "@/lib/server/pinterest/scheduledForConnection";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
 import { createServerClient } from "@/lib/supabase";
@@ -76,6 +77,30 @@ function scheduleCancelFailedMessage(failed: number, readFailed: boolean): strin
   }
   const posts = failed === 1 ? "1 scheduled post" : `${failed} scheduled posts`;
   return `We couldn't cancel ${posts}, so the account was not removed. Please try again.`;
+}
+
+/**
+ * The refusal when we could not even LOOK at what is scheduled (Codex #1).
+ *
+ * Distinct from the cancel failure above: the user has not asked to cancel
+ * anything, we simply cannot answer the question that decides whether removing is
+ * safe. Retrying is the whole advice.
+ */
+function scheduleCheckFailedMessage(): string {
+  return "We couldn't check what's still scheduled through this account, so it was not removed. Please try again.";
+}
+
+/**
+ * The refusal when Pins are still scheduled through the account and the user has
+ * not said what to do with them (Codex #1).
+ *
+ * It names the number because the next screen is a choice - keep them (Phase C's
+ * target_disconnected block stops them at publish time) or cancel them - and that
+ * choice is not answerable without knowing how much work is at stake.
+ */
+function schedulesExistMessage(count: number): string {
+  const pins = count === 1 ? "1 scheduled Pin" : `${count} scheduled Pins`;
+  return `This account still has ${pins}. Choose whether to keep or cancel them before removing it.`;
 }
 
 /** The optional single-connection target. Empty/absent ⇒ user-wide disconnect. */
@@ -121,10 +146,52 @@ export async function DELETE(req: Request) {
   }
 
   try {
+    // A remove ALWAYS inspects the schedules itself, before anything is touched
+    // (Codex #1). The panel used to be the authority: it pre-counted, and a count of
+    // 0 meant it sent no `cancelScheduled` at all and this route inspected nothing.
+    // A transient count failure answered 0 - so did a count taken before the user
+    // scheduled a Pin in another tab - and the account was deleted while live
+    // schedules still named it. The panel's count now only opens the dialog early.
+    //
+    // Only the `cancelScheduled` branch is exempt, because cancelling does its own
+    // read and reports `readFailed`; a pre-count there would be a second chance to
+    // fail at the same question. Its outcome gate below is that branch's check.
+    if (remove && connectionId && !cancelScheduled) {
+      const { count, readFailed } = await countScheduledForConnectionStrict(
+        createServerClient(), uid, connectionId,
+      );
+      if (readFailed) {
+        const userMessage = scheduleCheckFailedMessage();
+        console.error("[pinterest/disconnect] schedule check failed - account kept");
+        return Response.json(
+          { ok: false, code: "schedule_check_failed", userMessage, error: userMessage },
+          { status: 503 },
+        );
+      }
+      if (count > 0) {
+        const userMessage = schedulesExistMessage(count);
+        return Response.json(
+          {
+            ok: false,
+            code: "schedules_exist",
+            scheduledCount: count,
+            userMessage,
+            error: userMessage,
+          },
+          { status: 409 },
+        );
+      }
+    }
+
     let cancelledScheduled = 0;
     // Cancel BEFORE disconnecting/removing: if the request dies half-way, the worse
     // outcome is schedules cleared on a still-connected account (visible, recoverable)
     // rather than a removed account leaving live rows the cron keeps picking up.
+    //
+    // This is also why the credentials are only invalidated AFTER a successful
+    // cancel (Codex #2): a refused remove must leave the account able to publish the
+    // schedules it kept. `disconnect()` / `deleteConnection()` below are the first
+    // writes to the row, and both are past every refusal.
     let cancelOutcome: { cleared: number; failed: number; readFailed: boolean } | null = null;
     if (connectionId && cancelScheduled) {
       cancelOutcome = await cancelScheduledForConnection(

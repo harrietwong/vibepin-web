@@ -346,8 +346,13 @@ test("软断开与硬移除是两个不同的服务端动作,默认永远是软�
   // 都不带,如果默认是 remove,一次误点就会删掉账号行。
   assert.match(socialRoute, /return value === "remove" \? "remove" : "disconnect";/,
     "只有显式 remove 才是硬删,其余一律软断开");
-  assert.match(socialRoute, /if \(mode === "disconnect"\) \{\s*\n\s*return Response\.json\(\{ ok: true, mode \}\);/,
-    "软断开必须在 deleteConnection 之前返回(保留行)");
+  // 软断开分支自己撤销凭据后立刻返回:行保留,永远走不到 deleteConnection。
+  // (硬移除的撤销被挪到了取消之后 —— Codex #2,见下面的顺序断言。)
+  assert.match(
+    socialRoute,
+    /if \(mode === "disconnect"\) \{\s*\n\s*await revokeAtProvider\(\);\s*\n\s*return Response\.json\(\{ ok: true, mode \}\);/,
+    "软断开必须在 deleteConnection 之前返回(保留行)",
+  );
   const cancelAt = socialRoute.indexOf("cancelScheduledForSocialConnection(");
   const deleteAt = socialRoute.indexOf("await deleteConnection(uid, connectionId)");
   assert.ok(cancelAt > 0 && deleteAt > cancelAt,

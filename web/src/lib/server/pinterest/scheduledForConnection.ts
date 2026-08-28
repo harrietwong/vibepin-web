@@ -122,24 +122,64 @@ function isMissingSchemaError(err: { code?: string; message?: string } | null): 
 }
 
 /**
+ * The count, plus whether the read behind it actually worked. Identical contract
+ * to the multi-platform module's `ScheduledCountOutcome`, deliberately — the two
+ * remove routes make the same decision and must not disagree about what
+ * "nothing is scheduled" means.
+ *
+ * The plain number was ambiguous exactly where it mattered: a remove route cannot
+ * tell "0 scheduled" apart from "the query failed, so I am telling you 0".
+ */
+export type ScheduledCountOutcome = {
+  /** Matching rows found. Meaningless when `readFailed` is true. */
+  count: number;
+  /**
+   * The read failed, so `count` describes nothing. A MISSING table/column is NOT
+   * a failure — the optional migration simply has not run.
+   */
+  readFailed: boolean;
+};
+
+/**
+ * How many Pins are still scheduled through this connection, WITH the read's own
+ * success in the answer.
+ *
+ * The form the remove route must use: the only one that can refuse to delete on a
+ * transient failure rather than silently reading it as "nothing is scheduled"
+ * (Codex #1).
+ */
+export async function countScheduledForConnectionStrict(
+  db: DbLike,
+  uid: string,
+  connectionId: string,
+): Promise<ScheduledCountOutcome> {
+  if (!str(connectionId)) return { count: 0, readFailed: false };
+  const { data, error } = await scheduledForConnectionQuery(db, uid, connectionId, "draft_id");
+  if (error) {
+    if (isMissingSchemaError(error)) return { count: 0, readFailed: false };
+    console.error("[pinterest/disconnect] scheduled count failed:", error.message);
+    return { count: 0, readFailed: true };
+  }
+  return { count: Array.isArray(data) ? data.length : 0, readFailed: false };
+}
+
+/**
  * How many Pins are still scheduled to publish through this connection.
  *
  * Degrades to 0 when the schema isn't there — a user must never be blocked from
- * removing an account because an optional migration hasn't run.
+ * removing an account because an optional migration hasn't run — AND when the read
+ * itself fails. That second degradation is why this must not decide a deletion; it
+ * serves the advisory GET the Remove dialog pre-loads with, where a wrong 0 costs a
+ * prompt rather than a user's scheduled Pins. The authority is
+ * `countScheduledForConnectionStrict`.
  */
 export async function countScheduledForConnection(
   db: DbLike,
   uid: string,
   connectionId: string,
 ): Promise<number> {
-  if (!str(connectionId)) return 0;
-  const { data, error } = await scheduledForConnectionQuery(db, uid, connectionId, "draft_id");
-  if (error) {
-    if (isMissingSchemaError(error)) return 0;
-    console.error("[pinterest/disconnect] scheduled count failed:", error.message);
-    return 0;
-  }
-  return Array.isArray(data) ? data.length : 0;
+  const { count } = await countScheduledForConnectionStrict(db, uid, connectionId);
+  return count;
 }
 
 /**
