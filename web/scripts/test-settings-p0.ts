@@ -163,6 +163,11 @@ test("?addon=success is consumed, stripped, and answered with a notice + one re-
   // arrive any sooner and would hammer the endpoint.
   assert.match(social, /setTimeout\(\(\) => \{ void load\(\); \}, 5000\)/);
   assert.doesNotMatch(social, /setInterval\(/);
+  // And the retry must NOT be cleaned up. router.replace strips the query, which
+  // re-runs this effect within milliseconds; React runs the previous pass's cleanup
+  // first, so a clearTimeout here would cancel the re-fetch before it ever fired --
+  // leaving a test that passes on the source text while the retry is dead.
+  assert.doesNotMatch(social, /return \(\) => clearTimeout/);
   // The banner must retire itself on the SERVER's allowance, not on "we saw the
   // flag" -- the money is not what unblocks the connect, the provisioned slot is.
   assert.match(social, /allowance\.slotsAvailable > 0\) setAccountLimitReached\(false\)/);

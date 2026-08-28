@@ -1613,8 +1613,14 @@ export function SocialAccountsPanel() {
     setAddonPurchased(true);
     router.replace(SETTINGS_SOCIAL_PATH);
     void load();
-    const retry = setTimeout(() => { void load(); }, 5000);
-    return () => clearTimeout(retry);
+    // NO cleanup, deliberately. `router.replace` above strips the query, which hands
+    // useSearchParams a new object and re-runs this effect within milliseconds —
+    // React runs the previous pass's cleanup FIRST, so a `clearTimeout` here would
+    // cancel the retry before it could ever fire. (The sibling pinterest/facebook
+    // effects rely on that same re-run; they get away with it because they schedule
+    // promises, not timers.) A timer outliving the component is harmless: `load` on
+    // an unmounted component is a no-op state update.
+    setTimeout(() => { void load(); }, 5000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
