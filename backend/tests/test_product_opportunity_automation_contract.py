@@ -46,6 +46,13 @@ STAGE0_DATA_QUALITY = json.loads(
         / "product_opportunities_v37_stage0_data_quality_20260828T000146Z.json"
     ).read_text(encoding="utf-8")
 )
+STAGE0_SCHEMA_PRESENCE = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_schema_presence_audit_20260828T000833Z.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() -> None:
@@ -276,6 +283,18 @@ def test_latest_stage0_data_quality_does_not_claim_launch_ready_metrics() -> Non
     assert coverage["anchor_30"] == 0
     assert coverage["full_metric"] == 0
     assert "trend intelligence remains not launch-ready" in RUNBOOK
+
+
+def test_latest_stage0_openapi_check_does_not_overclaim_catalog_absence() -> None:
+    audit = STAGE0_SCHEMA_PRESENCE
+    assert audit["mutation"] is False
+    assert audit["http_status"] == 200
+    assert audit["legacy_control_paths"] == ["/pin_products", "/pin_save_snapshots"]
+    assert audit["v63_matching_paths"] == []
+    assert "cannot prove" in audit["coverage_limit"]
+    assert "PostgreSQL catalog readback" in audit["coverage_limit"]
+    assert "Query PostgreSQL catalogs" in RUNBOOK
+    assert "not only PostgREST OpenAPI" in RUNBOOK
 
 
 def test_release_manifest_keeps_create_pin_null_title_contract_together() -> None:

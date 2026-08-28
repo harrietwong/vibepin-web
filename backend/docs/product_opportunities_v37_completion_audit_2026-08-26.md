@@ -171,6 +171,14 @@ earlier all-zero statement but does not change the launch decision: discovery
 inventory exists, stable trend intelligence does not. Evidence:
 `backend/docs/product_opportunities_v37_stage0_data_quality_20260828T000146Z.json`.
 
+The companion service-role PostgREST OpenAPI GET at `2026-08-28T00:08:33Z`
+returned HTTP 200, 72 paths, both legacy control paths and zero exposed v63
+matches. This proves no v63 Product table/RPC is currently exposed, but does not
+prove that non-exposed PostgreSQL tables, views, functions, triggers, policies or
+indexes are absent. Exact catalog readback through the approved migration channel
+therefore remains a Stage 0 requirement rather than being inferred from OpenAPI.
+Evidence: `backend/docs/product_opportunities_v37_schema_presence_audit_20260828T000833Z.json`.
+
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure
 rule test, registry and full TypeScript gate pass, and the built full candidate

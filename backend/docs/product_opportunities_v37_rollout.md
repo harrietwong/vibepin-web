@@ -7,8 +7,10 @@ a push, production database write, VPS deployment, Vercel promotion, timer
 enablement, or budget increase.
 
 Current decision: code, manifest, Linux unit preflight and immutable Preview are
-PASS. Product launch remains NOT LIVE. The next privileged sequence is Stage 0
-read-only recheck -> Stage 1 additive schema -> Stage 2 one-product and <=20-row
+PASS. Product launch remains NOT LIVE. Stage 0 data and exposed-API schema checks
+are current, but exact PostgreSQL catalog readback is still required because
+PostgREST cannot see non-exposed objects. The next privileged sequence is Stage 0
+catalog recheck -> Stage 1 additive schema -> Stage 2 one-product and <=20-row
 canaries -> Stage 3 backend/manual Tracking canary -> Stage 4 Web promotion ->
 Stage 5 Admission first, then Tracking timers. A later-stage PASS must never be
 used to skip an earlier stage or its rollback receipt.
@@ -395,10 +397,19 @@ exact candidate is mandatory after the final integration with concurrent work.
 
 ## Stage 0 — Read-only gate
 
+Current read-only evidence: the `2026-08-28T00:08:33Z` service-role OpenAPI GET
+returned HTTP 200, retained both legacy control paths and exposed zero v63 path.
+This is not a complete PostgreSQL catalog proof: non-exposed tables, views,
+functions, triggers, policies and indexes are outside OpenAPI. Preserve
+`backend/docs/product_opportunities_v37_schema_presence_audit_20260828T000833Z.json`
+and complete the catalog query through the approved migration channel before
+Stage 1 apply.
+
 1. Re-run the production audit script without mutation and preserve its JSON
    report. Reconcile totals with the PRD baseline instead of assuming 123
    candidates still exist.
-2. Confirm no v63 table, function, or view with incompatible definitions already
+2. Query PostgreSQL catalogs—not only PostgREST OpenAPI—and confirm no v63 table,
+   view, function, trigger, policy or index with incompatible definitions already
    exists. If one does, stop and produce a schema diff.
 3. Confirm Product Supply, Product Tracking, and metric UI flags remain disabled.
 4. Confirm the deployment candidate contains no unrelated billing, social
