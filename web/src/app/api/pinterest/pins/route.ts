@@ -31,6 +31,7 @@ import {
   consumeScheduledPost,
   deriveScheduledPostKey,
   immediateBucketForNow,
+  signImmediateBucket,
 } from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { createServerClient } from "@/lib/supabase";
@@ -122,6 +123,11 @@ export async function POST(req: Request) {
   // between the two requests cannot compute two different date buckets for one
   // publish (see meterScheduledPost.ts's module header).
   const meteringBucket = immediateBucketForNow();
+  // Signed only against draftId (never the sourcePinId fallback below): the social
+  // route verifies a relayed bucket against ITS OWN `postId`, which the client always
+  // sends as the draft id (see publishContent.ts) — signing against a different
+  // identity here would make a legitimate relay unverifiable there.
+  const meteringBucketSig = draftId ? signImmediateBucket(uid, draftId, meteringBucket) : undefined;
   const meterIdentity = draftId ?? (sourcePinId || null);
   if (meterIdentity) {
     await consumeScheduledPost({
@@ -161,8 +167,15 @@ export async function POST(req: Request) {
       // meteringBucket travels even on a typed failure: the client may still proceed to
       // publish this Content's other (social) destinations, and that call needs the
       // SAME bucket this request metered under (see meterScheduledPost.ts header).
+      // meteringBucketSig travels alongside it so the social route can AUTHENTICATE
+      // the bucket, not merely accept whatever date shape it is handed.
       return Response.json(
-        { error: result.error, code: result.code, meteringBucket },
+        {
+          error: result.error,
+          code: result.code,
+          meteringBucket,
+          ...(meteringBucketSig ? { meteringBucketSig } : {}),
+        },
         { status: result.status },
       );
     }
@@ -187,6 +200,9 @@ export async function POST(req: Request) {
         // fan-out call for this SAME Content buckets identically even across a UTC
         // midnight straddle.
         meteringBucket,
+        // HMAC over (uid, draftId, meteringBucket) so the social route can verify this
+        // bucket really was minted here, not merely accept an in-window date shape.
+        ...(meteringBucketSig ? { meteringBucketSig } : {}),
       },
       { status: 201 },
     );
@@ -194,7 +210,11 @@ export async function POST(req: Request) {
     // Record the failure BEFORE mapping to a Response — recordFailedPublishEvent is fully
     // wrapped/best-effort so this can never mask the original Pinterest error.
     void recordFailedPublishEvent(analyticsDb, eventBase, Date.now() - publishStartedMs, err);
-    return pinterestErrorResponse(err);
+    // meteringBucket(+Sig) travels even on an UNTYPED (thrown) failure, for the same
+    // reason it travels on a typed one above: the client may still proceed to this
+    // Content's social destinations, and that call needs the identical bucket this
+    // request metered under.
+    return pinterestErrorResponse(err, { meteringBucket, ...(meteringBucketSig ? { meteringBucketSig } : {}) });
   } finally {
     if (lockKey) _inFlightPublishes.delete(lockKey);
   }

@@ -390,6 +390,7 @@ export async function publishContent(
     // social-only publish (no pinterest destination ever ran), which is fine: the
     // social route just derives its own bucket, exactly as before this relay existed.
     let meteringBucket: string | undefined;
+    let meteringBucketSig: string | undefined;
 
     const pinterestTargets = dispatch.filter(d => d.provider === "pinterest");
     const socialTargets = dispatch.filter(d => d.provider !== "pinterest");
@@ -430,6 +431,7 @@ export async function publishContent(
         // First pinterest call to answer wins the bucket — later calls (a second
         // pinterest destination, rare) never overwrite it.
         if (!meteringBucket && res.meteringBucket) meteringBucket = res.meteringBucket;
+        if (!meteringBucketSig && res.meteringBucketSig) meteringBucketSig = res.meteringBucketSig;
         outcomes.push({
           ...baseRow(destination, "published", submittedAt),
           // A legacy destination's row now names the account that actually received it.
@@ -447,7 +449,14 @@ export async function publishContent(
         // A typed pinterest failure still relays the bucket it metered under (see
         // /api/pinterest/pins) — this Content may still proceed to its social
         // destinations below, and that call must bucket identically.
+        // Residual: a lost Pinterest response that also straddles UTC midnight can bucket
+        // differently; accepted until the publish-action identity (PRD v3.2 §21 5A / design
+        // doc §A) replaces the date bucket. A transport failure (no HTTP response reached
+        // this client at all — err.meteringBucket stays undefined) falls through exactly
+        // that way: this Content proceeds to social below with no bucket to relay, and the
+        // social route derives its own date, same as a social-only publish always has.
         if (!meteringBucket && err?.meteringBucket) meteringBucket = err.meteringBucket;
+        if (!meteringBucketSig && err?.meteringBucketSig) meteringBucketSig = err.meteringBucketSig;
         // Trial/Standard-access is a "not yet", not a failure. Recording a failed row
         // would flow through legacyFieldsFromResults into failureType "publish" and
         // RELEASE the Content's schedule — the Pin would silently leave its slot for a
@@ -490,6 +499,7 @@ export async function publishContent(
           // (see meterScheduledPost.ts's module header). Omitted entirely for a
           // social-only publish — no pinterest call ran, so there is nothing to relay.
           ...(meteringBucket ? { meteringBucket } : {}),
+          ...(meteringBucketSig ? { meteringBucketSig } : {}),
         });
         // The response is provider-ordered; match each result back to the destination it
         // came from so two accounts on one platform stay distinguishable.

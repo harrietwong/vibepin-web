@@ -26,10 +26,14 @@ export type PinterestClientError = Error & {
   pinterestCode?: string;
   /** HTTP status from the internal API route (useful for fallback messages). */
   httpStatus?: number;
-  /** /api/pinterest/pins's typed-failure body relays its server-minted immediate-publish
-   *  bucket even on failure, so a caller that proceeds to publish this Content's other
-   *  (social) destinations can still relay it. Present only on a publishPin() rejection. */
+  /** /api/pinterest/pins relays its server-minted immediate-publish bucket on EVERY
+   *  failure body (typed AND thrown/unexpected), so a caller that proceeds to publish
+   *  this Content's other (social) destinations can still relay it. Present only on a
+   *  publishPin() rejection. */
   meteringBucket?: string;
+  /** HMAC over (uid, draftId, meteringBucket), relayed alongside it so the social
+   *  route can authenticate the bucket instead of merely accepting its date shape. */
+  meteringBucketSig?: string;
 };
 
 export type PinterestAccount = { id: string | null; username: string | null; accountType: string | null };
@@ -70,6 +74,9 @@ export type PublishResult = {
    *  so the two requests for the same Content never bucket differently across a UTC
    *  midnight straddle. */
   meteringBucket?: string;
+  /** HMAC over (uid, draftId, meteringBucket) — relayed alongside it so the social
+   *  route can authenticate the bucket rather than merely accept its date shape. */
+  meteringBucketSig?: string;
 };
 
 function currentReturnTo(): string {
@@ -209,8 +216,12 @@ type ParsedError = {
   needsReconnect?: boolean;
   pinterestCode?: string;
   httpStatus: number;
-  /** Only present when the failing route is /api/pinterest/pins's typed-failure body. */
+  /** Present on ANY /api/pinterest/pins failure body — typed AND thrown/unexpected —
+   *  since pinterestErrorResponse's `extra` param now merges it in universally. */
   meteringBucket?: string;
+  /** HMAC over (uid, draftId, meteringBucket), relayed alongside it whenever the
+   *  bucket is. */
+  meteringBucketSig?: string;
 };
 
 async function parseErrorResponse(res: Response): Promise<ParsedError> {
@@ -227,6 +238,7 @@ async function parseErrorResponse(res: Response): Promise<ParsedError> {
       pinterestCode: typeof body?.pinterestCode === "string" ? body.pinterestCode : undefined,
       httpStatus,
       meteringBucket: typeof body?.meteringBucket === "string" ? body.meteringBucket : undefined,
+      meteringBucketSig: typeof body?.meteringBucketSig === "string" ? body.meteringBucketSig : undefined,
     };
   } catch {
     return {
@@ -244,6 +256,7 @@ function toClientError(body: ParsedError): PinterestClientError {
   err.pinterestCode = body.pinterestCode;
   err.httpStatus = body.httpStatus;
   err.meteringBucket = body.meteringBucket;
+  err.meteringBucketSig = body.meteringBucketSig;
   return err;
 }
 

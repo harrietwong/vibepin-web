@@ -100,6 +100,16 @@ export function immediateBucketForNow(nowMs: number = Date.now()): string {
  * `isAcceptableImmediateBucket` before passing it here — this function does not
  * re-validate it, so an unchecked value would let a caller mint an arbitrary key.
  */
+/**
+ * The one server-side salt every identity derived in this module is keyed with —
+ * `deriveScheduledPostKey`'s idempotency key AND (below) `signImmediateBucket`'s
+ * HMAC both read it from here, so the two never drift onto different secrets.
+ * No new env var: same fallback chain deriveScheduledPostKey has always used.
+ */
+function usageRequestSalt(): string {
+  return process.env.USAGE_REQUEST_KEY_SALT ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "vibepin-usage";
+}
+
 export function deriveScheduledPostKey(
   userId: string,
   draftId: string,
@@ -109,10 +119,9 @@ export function deriveScheduledPostKey(
   const bucket = scheduledAtIso && scheduledAtIso.trim()
     ? scheduledAtIso.trim()
     : (bucketOverride ?? immediateBucketForNow());
-  const salt = process.env.USAGE_REQUEST_KEY_SALT ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "vibepin-usage";
   return crypto
     .createHash("sha256")
-    .update(`${salt}|${userId}|post:${draftId}:${bucket}`)
+    .update(`${usageRequestSalt()}|${userId}|post:${draftId}:${bucket}`)
     .digest("hex")
     .slice(0, 48);
 }
@@ -129,12 +138,76 @@ export function deriveScheduledPostKey(
  * matching long after it stopped describing "the other half of this same publish".
  */
 export function isAcceptableImmediateBucket(candidate: unknown, nowMs: number = Date.now()): candidate is string {
-  if (typeof candidate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return false;
+  return classifyImmediateBucket(candidate, nowMs) === "ok";
+}
+
+/**
+ * Same acceptance rule as `isAcceptableImmediateBucket`, but keeps WHY a candidate
+ * was refused distinguishable — callers that log a structured rejection (the social
+ * route) need "the date doesn't exist / isn't a date at all" separate from "the date
+ * is real but outside the relay window", and a single boolean throws that away.
+ * `isAcceptableImmediateBucket` stays the boolean gate everywhere else so existing
+ * callers are untouched.
+ */
+export function classifyImmediateBucket(
+  candidate: unknown,
+  nowMs: number = Date.now(),
+): "ok" | "malformed" | "out_of_window" {
+  if (typeof candidate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return "malformed";
   const candidateMs = Date.parse(`${candidate}T00:00:00.000Z`);
-  if (Number.isNaN(candidateMs)) return false;
+  if (Number.isNaN(candidateMs)) return "malformed";
+  // Reject calendar-invalid dates a naive regex+Date.parse pair lets through — e.g.
+  // "2026-02-30" or "2026-13-01" normalize FORWARD into a real (wrong) date instead
+  // of failing to parse, so the round-trip through ISO string comparison is the only
+  // reliable check: a real date's own YYYY-MM-DD slice always equals its input.
+  if (new Date(`${candidate}T00:00:00Z`).toISOString().slice(0, 10) !== candidate) return "malformed";
   const todayMs = Date.parse(`${immediateBucketForNow(nowMs)}T00:00:00.000Z`);
   const diffDays = Math.round((candidateMs - todayMs) / 86_400_000);
-  return diffDays >= -1 && diffDays <= 1;
+  if (diffDays < -1 || diffDays > 1) return "out_of_window";
+  return "ok";
+}
+
+/**
+ * Authenticates a relayed immediate-publish bucket (Codex round 3, Low).
+ *
+ * `isAcceptableImmediateBucket`/`classifyImmediateBucket` only bound the bucket to
+ * a plausible date window — they never proved the bucket came from THIS server's own
+ * pins-route mint for THIS (user, draft) pair. Without that, any authenticated caller
+ * could hand the social route an accepted-but-unearned bucket (e.g. yesterday's,
+ * still inside the ±1-day window) to steer which idempotency key gets charged.
+ * `signImmediateBucket` is computed once by the pins route right after it mints the
+ * bucket and returned alongside it; `verifyImmediateBucket` is what the social route
+ * runs before trusting a relayed bucket at all. Keyed with the SAME salt
+ * `deriveScheduledPostKey` already uses — no new secret to provision or rotate.
+ */
+export function signImmediateBucket(userId: string, draftId: string, bucket: string): string {
+  return crypto
+    .createHmac("sha256", usageRequestSalt())
+    .update(`${userId}|${draftId}|${bucket}`)
+    .digest("hex");
+}
+
+/**
+ * Constant-time verification of `signImmediateBucket`'s output. Never throws: a
+ * missing/non-string/wrong-length/malformed-hex signature is simply "not valid" —
+ * exactly like a rejected bucket, it must fall back to the route's own date rather
+ * than ever surface as a request error.
+ */
+export function verifyImmediateBucket(
+  userId: string,
+  draftId: string,
+  bucket: string,
+  sig: unknown,
+): boolean {
+  if (typeof sig !== "string" || !/^[0-9a-f]+$/i.test(sig)) return false;
+  try {
+    const expected = Buffer.from(signImmediateBucket(userId, draftId, bucket), "hex");
+    const actual = Buffer.from(sig, "hex");
+    if (expected.length !== actual.length) return false;
+    return crypto.timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
 }
 
 export type ScheduledPostConsume =

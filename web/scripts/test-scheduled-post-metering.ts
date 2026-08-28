@@ -143,6 +143,86 @@ async function load(mode: string) {
     assert.equal(m.isAcceptableImmediateBucket({}, nowMs), false, "object");
   });
 
+  // ── Strict calendar validation (Codex round 3, Low) ──────────────────────────
+  // A naive regex+Date.parse pair lets "2026-02-30" or "2026-13-01" through:
+  // JS's Date normalizes overflow fields FORWARD into a real (different) date
+  // instead of failing, so isAcceptableImmediateBucket must reject anything whose
+  // own ISO round-trip does not equal the input string, on top of the regex.
+  await test("isAcceptableImmediateBucket: 2026-02-30 (calendar-invalid day) is rejected", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-03-01T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2026-02-30", nowMs), false, "February never has a 30th");
+  });
+
+  await test("isAcceptableImmediateBucket: 2026-13-01 (calendar-invalid month) is rejected", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2027-01-01T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2026-13-01", nowMs), false, "there is no 13th month");
+  });
+
+  await test("isAcceptableImmediateBucket: 2024-02-29 (real leap day) is accepted when inside the window", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2024-02-29T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2024-02-29", nowMs), true, "2024 is a leap year — Feb 29 is real");
+  });
+
+  await test("isAcceptableImmediateBucket: 2025-02-29 (2025 is NOT a leap year) is rejected", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2025-03-01T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2025-02-29", nowMs), false, "2025 has no Feb 29 — it normalizes forward to Mar 1");
+  });
+
+  await test("isAcceptableImmediateBucket: month-end boundaries around now=2026-08-31 still accept the real neighboring dates", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-08-31T12:00:00.000Z");
+    assert.equal(m.isAcceptableImmediateBucket("2026-09-01", nowMs), true, "tomorrow crosses into September");
+    assert.equal(m.isAcceptableImmediateBucket("2026-08-30", nowMs), true, "yesterday");
+  });
+
+  // ── signImmediateBucket / verifyImmediateBucket (Codex round 3, Low) ─────────
+  await test("signImmediateBucket/verifyImmediateBucket: round-trips for the (userId, draftId, bucket) it was signed with", async () => {
+    const m = await load("shadow");
+    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig), true);
+  });
+
+  await test("verifyImmediateBucket: a signature for a different bucket (tampered day) fails", async () => {
+    const m = await load("shadow");
+    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-16", sig), false);
+  });
+
+  await test("verifyImmediateBucket: a signature for a different draftId fails", async () => {
+    const m = await load("shadow");
+    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_other", "2026-08-15", sig), false);
+  });
+
+  await test("verifyImmediateBucket: a signature for a different userId fails", async () => {
+    const m = await load("shadow");
+    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
+    assert.equal(m.verifyImmediateBucket("u-2", "pd_x", "2026-08-15", sig), false);
+  });
+
+  await test("verifyImmediateBucket: missing/undefined/non-string signatures are rejected, never throw", async () => {
+    const m = await load("shadow");
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", undefined), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", null), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", 123), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", ""), false);
+  });
+
+  await test("verifyImmediateBucket: a shorter/longer or non-hex signature is rejected without throwing (timingSafeEqual length-mismatch guard)", async () => {
+    const m = await load("shadow");
+    const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15");
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig.slice(0, -2)));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig.slice(0, -2)), false, "truncated signature must not verify");
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig + "00"));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig + "00"), false, "extended signature must not verify");
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", "not-hex-at-all!!"));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", "not-hex-at-all!!"), false, "non-hex garbage must not verify");
+  });
+
   // Cross-route parity (pins path vs. social path deriving the identical key for
   // the same Content) is proven at the real-route level in
   // test-social-only-metering.ts, which loads BOTH actual route modules and
