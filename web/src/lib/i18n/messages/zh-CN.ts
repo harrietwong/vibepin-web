@@ -1789,6 +1789,11 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "socialPanel.limit.addSlotBusy": "正在打开结账页…",
   "socialPanel.limit.addSlotFailed": "无法打开结账页,请重试。",
   "socialPanel.limit.addSlotUnavailable": "加购账号暂未开放购买。",
+  "socialPanel.limit.addSlotMonthly": "加购一个账号 · ${price}/月",
+  "socialPanel.limit.addSlotYearly": "加购一个账号 · ${price}/月 · 按年计费",
+  "socialPanel.addon.successTitle": "已收到付款,加购的账号名额正在开通",
+  "socialPanel.addon.successBody": "名额出现在这里后,你就可以再连接一个账号了。",
+  "socialPanel.addon.dismiss": "知道了",
   // ── studio ──
   "studio.header.title": "创建 Pin",
   "studio.header.saveDraft": "保存草稿",

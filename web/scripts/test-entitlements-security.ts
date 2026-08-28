@@ -246,6 +246,152 @@ async function main() {
     );
   });
 
+  // -- getActivePlanInterval (Decision A: the add-on follows the plan's interval) --
+  //
+  // The trap this whole block exists for: extra-account-slot subscriptions live in
+  // the SAME creem_subscriptions table with the same access-granting statuses. Pick
+  // "the newest row that has an interval" and a MONTHLY subscriber who once bought a
+  // YEARLY slot is told their next slot is billed yearly -- and then charged it.
+
+  type IntervalGrant = {
+    plan: unknown;
+    lastEventAt: string | null;
+    billingInterval?: unknown;
+  };
+  const intervalDeps = (subs: IntervalGrant[]) => ({
+    getActiveSubscriptions: async (_userId: string) => subs,
+  });
+
+  await test("normalizeBillingInterval accepts month/year (and their spellings), rejects the rest", () => {
+    assertEq(ent.normalizeBillingInterval("month"), "month", "month");
+    assertEq(ent.normalizeBillingInterval(" Monthly "), "month", "monthly, padded + cased");
+    assertEq(ent.normalizeBillingInterval("year"), "year", "year");
+    assertEq(ent.normalizeBillingInterval("YEARLY"), "year", "yearly");
+    assertEq(ent.normalizeBillingInterval("annual"), "year", "annual");
+    assertEq(ent.normalizeBillingInterval("fortnight"), null, "unknown string -> null");
+    assertEq(ent.normalizeBillingInterval(""), null, "empty -> null");
+    assertEq(ent.normalizeBillingInterval(null), null, "null -> null");
+    assertEq(ent.normalizeBillingInterval(12), null, "non-string -> null");
+  });
+
+  await test("interval comes from the HIGHEST-ranked plan sub, not the newest row", async () => {
+    assertEq(
+      await ent.getActivePlanInterval(
+        "u1",
+        intervalDeps([
+          { plan: "starter", lastEventAt: "2026-08-20T00:00:00.000Z", billingInterval: "month" },
+          { plan: "business", lastEventAt: "2026-01-01T00:00:00.000Z", billingInterval: "year" },
+        ]),
+      ),
+      "year",
+      "business outranks starter even though the starter row is newer",
+    );
+  });
+
+  await test("an ADD-ON subscription never decides the interval", async () => {
+    // The add-on mirrors with a plan that is not a PlanKey (it is deliberately absent
+    // from the product map), so it must be skipped outright.
+    assertEq(
+      await ent.getActivePlanInterval(
+        "u1",
+        intervalDeps([
+          { plan: "pro", lastEventAt: "2026-01-01T00:00:00.000Z", billingInterval: "month" },
+          { plan: null, lastEventAt: "2026-08-26T00:00:00.000Z", billingInterval: "year" },
+        ]),
+      ),
+      "month",
+      "monthly plan + yearly add-on -> month",
+    );
+  });
+
+  await test("same plan rank -> the newest event wins (an upgrade re-buy)", async () => {
+    assertEq(
+      await ent.getActivePlanInterval(
+        "u1",
+        intervalDeps([
+          { plan: "pro", lastEventAt: "2026-02-01T00:00:00.000Z", billingInterval: "month" },
+          { plan: "pro", lastEventAt: "2026-08-01T00:00:00.000Z", billingInterval: "year" },
+        ]),
+      ),
+      "year",
+      "the later pro row decides",
+    );
+  });
+
+  await test("no plan grant / unknown interval / free-only -> null (caller defaults)", async () => {
+    assertEq(await ent.getActivePlanInterval("u1", intervalDeps([])), null, "no subs");
+    assertEq(
+      await ent.getActivePlanInterval(
+        "u1",
+        intervalDeps([{ plan: "free", lastEventAt: null, billingInterval: "year" }]),
+      ),
+      null,
+      "a free row is not a paid plan grant",
+    );
+    assertEq(
+      await ent.getActivePlanInterval("u1", intervalDeps([{ plan: "pro", lastEventAt: null }])),
+      null,
+      "plan sub with no mirrored interval -> unknown, not a guess",
+    );
+    assertEq(
+      await ent.getActivePlanInterval(
+        "u1",
+        intervalDeps([{ plan: "pro", lastEventAt: null, billingInterval: "whenever" }]),
+      ),
+      null,
+      "unparseable interval -> unknown",
+    );
+  });
+
+  await test("legacy plan names still count as plan grants", async () => {
+    assertEq(
+      await ent.getActivePlanInterval(
+        "u1",
+        intervalDeps([{ plan: "growth", lastEventAt: null, billingInterval: "year" }]),
+      ),
+      "year",
+      "growth -> pro, so its interval decides",
+    );
+  });
+
+  await test("a failing lookup returns null, never throws (checkout must stay open)", async () => {
+    assertEq(
+      await ent.getActivePlanInterval("u1", {
+        getActiveSubscriptions: async () => {
+          throw new Error("db down");
+        },
+      }),
+      null,
+      "degrades to unknown -> the route charges monthly",
+    );
+  });
+
+  await test("the grant filter carries billing_interval through", () => {
+    const grants = ent.filterAccessGrantingSubscriptions([
+      {
+        plan: "pro",
+        status: "active",
+        last_event_at: null,
+        current_period_end: null,
+        billing_interval: "year",
+      },
+    ]);
+    assertEq(grants.length, 1, "kept");
+    assertEq(grants[0].billingInterval, "year", "interval survives the filter");
+  });
+
+  await test("the default subscription read actually SELECTs billing_interval", async () => {
+    // Source contract: every case above injects its grants, so a column dropped from
+    // the REAL query would leave every interval null in production and go unnoticed.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("src/lib/server/entitlements.ts", "utf8");
+    assertEq(
+      /\.select\("plan,status,last_event_at,current_period_end,billing_interval"\)/.test(src),
+      true,
+      "defaultGetActiveSubscriptions must select billing_interval",
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

@@ -26,6 +26,12 @@ import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 /** The plan the panel needs to know about — only "is it paid?" changes the UI. */
 type SocialPlanKey = "free" | "starter" | "pro" | "business";
 
+/** How that plan is billed; null when the server could not tell (→ treat as monthly). */
+type SocialPlanInterval = "month" | "year" | null;
+
+/** The extra-slot pool, as reported by /api/social/connections. */
+type SlotAllowance = { purchasedSlots: number; slotsAvailable: number };
+
 /** All-not-connected fallback so a failed fetch still shows the platform grid. */
 function notConnectedSummaries(): PlatformConnectionSummary[] {
   return SOCIAL_PROVIDERS.map(provider => ({
@@ -966,19 +972,36 @@ function AccountMismatchNotice({
  */
 function AccountLimitNotice({
   plan,
+  planInterval,
   onDismiss,
 }: {
   plan: SocialPlanKey;
+  /** How the buyer's plan is billed — the add-on follows it (决策 A). */
+  planInterval: SocialPlanInterval;
   onDismiss: () => void;
 }) {
   const { t: tr } = useLocale();
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const canBuySlot = plan !== "free";
 
+  // A slot is billed on the SAME interval as the plan it tops up, so the button
+  // must quote the price that will actually be charged: $5/month billed yearly for
+  // a yearly subscriber, $7/month for a monthly one. An unknown interval shows the
+  // monthly price — the same thing the checkout route falls back to charging, so
+  // the quote can never be lower than the bill.
+  const yearly = planInterval === "year";
+  const slotLabel = tr(
+    yearly ? "socialPanel.limit.addSlotYearly" : "socialPanel.limit.addSlotMonthly",
+  ).replace(
+    "{price}",
+    String(yearly ? EXTRA_ACCOUNT_PRICE_USD.yearlyPerMonth : EXTRA_ACCOUNT_PRICE_USD.monthly),
+  );
+
   async function handleAddAccount() {
     setCheckoutBusy(true);
     try {
-      const url = await startExtraAccountCheckout(1, "month");
+      // No interval argument: the server derives it from the plan (决策 A).
+      const { url } = await startExtraAccountCheckout(1);
       window.location.assign(url);
       // Navigation follows — keep the button busy until the page unloads.
     } catch (err) {
@@ -1045,7 +1068,7 @@ function AccountLimitNotice({
                 {tr("socialPanel.limit.addSlotBusy")}
               </>
             ) : (
-              `${tr("socialPanel.limit.addSlot")} · $${EXTRA_ACCOUNT_PRICE_USD.monthly}${tr("socialPanel.limit.perMonth")}`
+              slotLabel
             )}
           </button>
         )}
@@ -1060,6 +1083,53 @@ function AccountLimitNotice({
           }}
         >
           {tr("socialPanel.limit.dismiss")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 决策 B: the buyer just paid for an extra account slot and Creem sent them back
+ * HERE — to the page they were trying to use — instead of /welcome.
+ *
+ * The slot itself is provisioned by the Creem webhook, which can land a few seconds
+ * after this redirect. So the notice promises activation rather than asserting it,
+ * and the panel re-reads the allowance once more shortly afterwards (see the
+ * `?addon=success` effect). Claiming "you now have a slot" and then refusing the
+ * next connect would be worse than saying "being activated".
+ */
+function AddonSuccessNotice({ onDismiss }: { onDismiss: () => void }) {
+  const { t: tr } = useLocale();
+  return (
+    <div
+      data-testid="social-addon-success"
+      role="status"
+      style={{
+        padding: "12px 14px",
+        borderRadius: 12,
+        background: "rgba(16,185,129,0.10)",
+        border: "1px solid rgba(16,185,129,0.30)",
+      }}
+    >
+      <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: UI.success }}>
+        {tr("socialPanel.addon.successTitle")}
+      </p>
+      <p style={{ margin: "5px 0 0", fontSize: 12, color: UI.textSec, lineHeight: 1.55 }}>
+        {tr("socialPanel.addon.successBody")}
+      </p>
+      <div style={{ marginTop: 11 }}>
+        <button
+          type="button"
+          data-testid="social-addon-success-dismiss"
+          onClick={onDismiss}
+          style={{
+            padding: "8px 12px", borderRadius: 10,
+            border: "1px solid transparent", background: "transparent",
+            color: UI.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer",
+          }}
+        >
+          {tr("socialPanel.addon.dismiss")}
         </button>
       </div>
     </div>
@@ -1354,6 +1424,23 @@ export function SocialAccountsPanel() {
    */
   const [plan, setPlan] = useState<SocialPlanKey>("free");
   /**
+   * How that plan is billed. Extra slots are billed the same way (决策 A), so this
+   * is what the "Add another account" price quotes. Null until known — and null is
+   * rendered as the monthly price, matching the server's own fallback.
+   */
+  const [planInterval, setPlanInterval] = useState<SocialPlanInterval>(null);
+  /**
+   * The extra-slot pool from the same response. Only used to retire the limit
+   * banner once a purchased slot has actually been provisioned; null = not measured.
+   */
+  const [allowance, setAllowance] = useState<SlotAllowance | null>(null);
+  /**
+   * Set when Creem returns the buyer here after a slot purchase (`?addon=success`,
+   * 决策 B). A banner, not a toast: the slot is provisioned asynchronously, so the
+   * message has to stay on screen long enough to still be true when it lands.
+   */
+  const [addonPurchased, setAddonPurchased] = useState(false);
+  /**
    * A per-account Remove waiting on the user because that account still has Pins
    * scheduled through it. Holds the account plus the count so the prompt can be
    * specific ("3 Pins"), rather than a vague warning nobody can act on.
@@ -1376,9 +1463,16 @@ export function SocialAccountsPanel() {
   const load = useCallback(async () => {
     setLoadError(false);
     try {
-      const { platforms, plan: resolvedPlan } = await fetchSocialConnections();
+      const {
+        platforms,
+        plan: resolvedPlan,
+        planInterval: resolvedInterval,
+        allowance: resolvedAllowance,
+      } = await fetchSocialConnections();
       setSummaries(platforms);
       setPlan(resolvedPlan ?? "free");
+      setPlanInterval(resolvedInterval ?? null);
+      setAllowance(resolvedAllowance ?? null);
     } catch {
       setSummaries(null);
       setLoadError(true);
@@ -1501,6 +1595,45 @@ export function SocialAccountsPanel() {
     if (flag === "connected") { notifyConnectionsChanged(); void load(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
+
+  // `?addon=success` — the return leg of an extra-account-slot purchase (决策 B).
+  // Creem sends the buyer back HERE rather than to /welcome, because they came from
+  // this page to connect one more account.
+  //
+  // Timing is the whole problem: the slot is provisioned by the Creem webhook, which
+  // may land a second or two AFTER this redirect. So we (a) show a notice that
+  // promises activation instead of claiming it, (b) re-read immediately, and (c)
+  // re-read ONCE more ~5s later. One retry, not a polling loop — if it is still not
+  // there after that, the next render of this page (or the connect attempt itself)
+  // will pick it up, and hammering the endpoint would not make the webhook arrive
+  // any sooner. The flag is stripped the same way every other OAuth-return flag is,
+  // so a refresh cannot re-fire it.
+  useEffect(() => {
+    if (params.get("addon") !== "success") return;
+    setAddonPurchased(true);
+    router.replace(SETTINGS_SOCIAL_PATH);
+    void load();
+    // NO cleanup, deliberately. `router.replace` above strips the query, which hands
+    // useSearchParams a new object and re-runs this effect within milliseconds —
+    // React runs the previous pass's cleanup FIRST, so a `clearTimeout` here would
+    // cancel the retry before it could ever fire. (The sibling pinterest/facebook
+    // effects rely on that same re-run; they get away with it because they schedule
+    // promises, not timers.) A timer outliving the component is harmless: `load` on
+    // an unmounted component is a no-op state update.
+    setTimeout(() => { void load(); }, 5000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  // Retire the limit banner the moment the allowance actually permits another
+  // account. The banner is only ever raised when a connect was REFUSED (no slot
+  // free), so a spare slot means the refusal it describes is no longer true —
+  // leaving it up after a successful purchase is what would make the purchase feel
+  // like it did nothing. Deliberately keyed on the server's own allowance rather
+  // than on "we saw ?addon=success": the money is not what unblocks the connect,
+  // the provisioned slot is.
+  useEffect(() => {
+    if (allowance && allowance.slotsAvailable > 0) setAccountLimitReached(false);
+  }, [allowance]);
 
   /**
    * Start a connect / reconnect / add-another flow.
@@ -1687,8 +1820,16 @@ export function SocialAccountsPanel() {
         </p>
       </div>
 
+      {addonPurchased && (
+        <AddonSuccessNotice onDismiss={() => setAddonPurchased(false)} />
+      )}
+
       {accountLimitReached && (
-        <AccountLimitNotice plan={plan} onDismiss={() => setAccountLimitReached(false)} />
+        <AccountLimitNotice
+          plan={plan}
+          planInterval={planInterval}
+          onDismiss={() => setAccountLimitReached(false)}
+        />
       )}
 
       {pendingRemoval && (

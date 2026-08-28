@@ -765,6 +765,11 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "socialPanel.limit.addSlotBusy": "正在開啟結帳頁…",
   "socialPanel.limit.addSlotFailed": "無法開啟結帳頁,請再試一次。",
   "socialPanel.limit.addSlotUnavailable": "加購帳號尚未開放購買。",
+  "socialPanel.limit.addSlotMonthly": "加購一個帳號 · ${price}/月",
+  "socialPanel.limit.addSlotYearly": "加購一個帳號 · ${price}/月 · 依年計費",
+  "socialPanel.addon.successTitle": "已收到付款,加購的帳號名額正在開通",
+  "socialPanel.addon.successBody": "名額出現在這裡後,你就可以再連接一個帳號了。",
+  "socialPanel.addon.dismiss": "知道了",
 
   // ── productLibrary ──
   "productLibrary.source.viralPin": "熱門 Pin",

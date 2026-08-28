@@ -90,6 +90,22 @@ export const socialPanelMessages = {
   "socialPanel.limit.addSlotBusy": "Opening checkout…",
   "socialPanel.limit.addSlotFailed": "Could not open checkout. Please try again.",
   "socialPanel.limit.addSlotUnavailable": "Extra accounts are not available for purchase yet.",
+  //    The add-on is billed on the SAME interval as the buyer's plan (决策 A), so the
+  //    button must name the price they will actually be charged. Two variants, not one
+  //    string plus a suffix: "$5 / month · billed yearly" reads as a single promise,
+  //    and a yearly subscriber shown "$7 / month" would simply be told the wrong price.
+  "socialPanel.limit.addSlotMonthly": "Add another account · ${price} / month",
+  "socialPanel.limit.addSlotYearly": "Add another account · ${price} / month · billed yearly",
+
+  // ── Extra account slot purchased (决策 B) ──
+  //    Shown on return from Creem checkout (?addon=success). The slot is provisioned
+  //    by a webhook that can land seconds AFTER this redirect, so the copy promises
+  //    activation rather than claiming it already happened — and the panel re-reads
+  //    the allowance once more a few seconds later.
+  "socialPanel.addon.successTitle": "Thanks — your extra account slot is being activated",
+  "socialPanel.addon.successBody":
+    "You can add another account as soon as it appears here.",
+  "socialPanel.addon.dismiss": "Got it",
 
   // ── Per-account rows + their actions (PRD 0809 §II / PRD 0805 §4-§11) ──
   //    Derived from lib/social/accountActions.ts, one action set per row state.

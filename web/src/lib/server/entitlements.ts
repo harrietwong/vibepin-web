@@ -134,6 +134,12 @@ export type ActiveSubscriptionGrant = {
   lastEventAt: string | null;
   status?: string | null;
   currentPeriodEnd?: string | null;
+  /**
+   * The mirrored `creem_subscriptions.billing_interval` (free text in the DB —
+   * normalize before use). Optional so pre-existing callers that build grants by
+   * hand keep compiling; a grant without it simply has no known interval.
+   */
+  billingInterval?: unknown;
 };
 
 export type ResolvePlanDeps = {
@@ -160,6 +166,9 @@ export type SubscriptionRowForGrant = {
   status: string | null;
   last_event_at: string | null;
   current_period_end: string | null;
+  /** month | year, as mirrored from the Creem product map. Optional: not every
+   *  caller selects it (the slot-total query does not need it). */
+  billing_interval?: unknown;
 };
 
 /**
@@ -188,6 +197,7 @@ export function filterAccessGrantingSubscriptions(
       lastEventAt: r.last_event_at,
       status: r.status,
       currentPeriodEnd: r.current_period_end,
+      billingInterval: r.billing_interval,
     }));
 }
 
@@ -206,7 +216,7 @@ export async function defaultGetActiveSubscriptions(
     const db = createServerClient();
     const { data, error } = await db
       .from("creem_subscriptions")
-      .select("plan,status,last_event_at,current_period_end")
+      .select("plan,status,last_event_at,current_period_end,billing_interval")
       .eq("user_id", userId)
       .in("status", ["active", "trialing", "scheduled_cancel"]);
     if (error || !data) return [];
@@ -277,4 +287,81 @@ export async function resolvePlan(userId: string, deps?: ResolvePlanDeps): Promi
     plan = "pro";
   }
   return plan;
+}
+
+// ── Billing interval of the active plan ──────────────────────────────────────
+
+/** The two intervals Creem bills on. Mirrors CreemProductMapping["interval"]. */
+export type BillingInterval = "month" | "year";
+
+/**
+ * Parse a mirrored `billing_interval` into a BillingInterval, or null.
+ *
+ * The column is plain text, written by the webhook from the product map, so it is
+ * normalized here rather than trusted: unknown/empty values become null and the
+ * caller decides the default.
+ */
+export function normalizeBillingInterval(value: unknown): BillingInterval | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (v === "month" || v === "monthly") return "month";
+  if (v === "year" || v === "yearly" || v === "annual") return "year";
+  return null;
+}
+
+/** Sortable timestamp; an unparseable/missing value sorts oldest. */
+function grantTimeMs(value: string | null | undefined): number {
+  const t = Date.parse(value ?? "");
+  return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * The billing interval of the grant that DECIDES the plan — i.e. the highest-ranked
+ * access-granting PLAN subscription (ties broken by newest `lastEventAt`), which is
+ * exactly the row `highestPlanFromGrants` picks.
+ *
+ * Add-on subscriptions live in the same table with the same statuses and are
+ * deliberately excluded here: they mirror with a plan that is not a PlanKey, so
+ * `normalizePlanKey` returns null for them. Without that filter a user on a MONTHLY
+ * plan who bought a YEARLY slot could be told their next slot is billed yearly.
+ *
+ * Returns null when no access-granting plan sub exists, or when the deciding row
+ * carries no recognizable interval — the caller supplies the default.
+ */
+export function planIntervalFromGrants(
+  grants: ActiveSubscriptionGrant[],
+): BillingInterval | null {
+  let best: { rank: number; at: number; interval: BillingInterval | null } | null = null;
+  for (const g of grants) {
+    const plan = normalizePlanKey(g.plan);
+    if (!plan || plan === "free") continue; // add-on / unknown rows never decide the plan
+    const rank = PLAN_RANK[plan];
+    const at = grantTimeMs(g.lastEventAt);
+    if (!best || rank > best.rank || (rank === best.rank && at > best.at)) {
+      best = { rank, at, interval: normalizeBillingInterval(g.billingInterval) };
+    }
+  }
+  return best ? best.interval : null;
+}
+
+/**
+ * The billing interval the user's ACTIVE PLAN is billed on — "month", "year", or
+ * null when it cannot be determined (no live plan sub, e.g. a plan held only via
+ * the app_metadata cache or the email whitelist, or a lookup failure).
+ *
+ * Reuses `resolvePlan`'s subscription read and grant filtering, so "which
+ * subscription counts" cannot drift between the plan and its interval. Never
+ * throws — a caller on the checkout path must be able to fall back to monthly.
+ */
+export async function getActivePlanInterval(
+  userId: string,
+  deps?: Pick<ResolvePlanDeps, "getActiveSubscriptions">,
+): Promise<BillingInterval | null> {
+  const getActiveSubscriptions =
+    deps?.getActiveSubscriptions ?? defaultGetActiveSubscriptions;
+  try {
+    return planIntervalFromGrants(await getActiveSubscriptions(userId));
+  } catch {
+    return null;
+  }
 }

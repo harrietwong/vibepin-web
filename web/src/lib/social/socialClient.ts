@@ -53,6 +53,18 @@ export type ConnectionsResponse = {
    * callers must treat "missing" as "free".
    */
   plan?: "free" | "starter" | "pro" | "business";
+  /**
+   * How that plan is billed. Extra account slots follow it (决策 A), so the CTA
+   * prices itself off this value. Missing/null → show the monthly price, which is
+   * also what the checkout route falls back to charging.
+   */
+  planInterval?: "month" | "year" | null;
+  /**
+   * Extra-slot pool summary, for the moment after a slot purchase returns to
+   * Settings: `slotsAvailable > 0` means the limit banner is no longer true.
+   * Missing/null = the server could not measure it — change nothing.
+   */
+  allowance?: { purchasedSlots: number; slotsAvailable: number } | null;
 };
 
 export async function fetchSocialConnections(signal?: AbortSignal): Promise<ConnectionsResponse> {
