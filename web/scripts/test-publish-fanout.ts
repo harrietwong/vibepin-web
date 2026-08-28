@@ -2,18 +2,31 @@
  * test-publish-fanout.ts — the execution layer (P0 option A, layers B + C).
  *
  * Asserts the rules that decide what a merchant actually sees after a scheduled
- * multi-platform publish: how a job's status is rolled up, and what a retry is
- * allowed to re-send.
+ * multi-platform publish: how a job's status is rolled up, what a retry is allowed
+ * to re-send, and — the second half of this file — that `fanOutDestinations` really
+ * ISOLATES its destinations from one another.
+ *
+ * The dispatch layer builds a Supabase client at module load, so that half runs the
+ * real `fanOutDestinations` with `./server/socialConnectionStore` and `./providers`
+ * faked through Module._load (the same idiom as test-ai-provider-auth-boundary.ts).
+ * No network, no DB, no credentials.
  *
  * Run: npx tsx scripts/test-publish-fanout.ts
  */
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://example.supabase.co";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
+
 import {
   rollUpJobStatus,
   pendingDestinations,
   pinterestOutcomeRow,
+  hasTimeForDestination,
+  DESTINATION_RESERVE_MS,
+  DEFERRED_OUT_OF_TIME,
   type DestinationOutcome,
 } from "../src/lib/social/publishRules";
 import type { ScheduledDestination } from "../src/lib/pinDraftStore";
+import { Module } from "node:module";
 
 let pass = 0;
 let fail = 0;
@@ -137,5 +150,223 @@ check("a failed publish never carries a fake permalink (TC-102)",
 check("a Pinterest failure still shows up in the job status",
   rollUpJobStatus([badRow, out("instagram", "published")]) === "partially_published");
 
-console.log(`\nPublish fanout: ${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+// ── the fan-out isolates its destinations ────────────────────────────────────
+// Running the REAL fanOutDestinations, with only the two modules that touch the
+// outside world replaced. What is asserted here is not a helper's return value but
+// the function's contract under failure: it never rejects, and every destination it
+// is handed leaves exactly one outcome behind.
+
+const lookups: string[] = [];
+const publishes: string[] = [];
+/** Connection ids whose LOOKUP must throw — the defect's exact shape. */
+const lookupThrows = new Set<string>();
+/** Connection ids whose PUBLISH must throw. */
+const publishThrows = new Set<string>();
+/** Observed at the moment a publish starts — used to prove reporting is incremental. */
+let onPublish: ((id: string) => void) | null = null;
+
+const loader = Module as unknown as {
+  _load: (request: string, parent: unknown, isMain: boolean) => unknown;
+};
+const originalLoad = loader._load;
+loader._load = function (this: unknown, request: string, parent: unknown, isMain: boolean) {
+  if (request.endsWith("server/socialConnectionStore")) {
+    return {
+      findConnection: async (_uid: string, id: string) => {
+        lookups.push(id);
+        if (lookupThrows.has(id)) throw new Error(`lookup exploded for ${id}`);
+        if (id === "conn-gone") return null;
+        return { id, authProvider: "mock", connectionStatus: "connected" };
+      },
+    };
+  }
+  if (request.endsWith("./providers")) {
+    return {
+      getSocialProviderById: () => ({
+        publishPost: async ({ connection }: { connection: { id: string } }) => {
+          publishes.push(connection.id);
+          onPublish?.(connection.id);
+          if (publishThrows.has(connection.id)) throw new Error(`publish exploded for ${connection.id}`);
+          return { ok: true, externalPostId: `post-${connection.id}`, externalPostUrl: `https://x/${connection.id}` };
+        },
+      }),
+    };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+} as typeof originalLoad;
+
+async function main(): Promise<void> {
+  const { fanOutDestinations } = await import("../src/lib/social/publishFanout");
+
+  const social = (provider: string, id: string): ScheduledDestination =>
+    ({ provider, socialConnectionId: id, capturedAt: "2026-08-27T00:00:00.000Z" });
+  const POST = { imageUrls: ["https://cdn/x.jpg"], caption: "hi" };
+
+  section("one destination's failure never costs another its outcome");
+
+  {
+    // THE defect: the connection lookup used to live outside dispatchDestination's try,
+    // so a throw on #2 rejected the whole fan-out — and #1's already-published outcome
+    // died with it. The cron then wrote `failed` for #1 and re-posted it next run.
+    lookupThrows.clear(); publishThrows.clear(); lookups.length = 0; publishes.length = 0;
+    lookupThrows.add("conn-b");
+    const dests = [social("instagram", "conn-a"), social("facebook", "conn-b"), social("instagram", "conn-c")];
+    let threw: unknown = null;
+    let outcomes: DestinationOutcome[] = [];
+    try { outcomes = await fanOutDestinations("u1", dests, POST); }
+    catch (e) { threw = e; }
+
+    check("fanOutDestinations resolves — a lookup throw never rejects the batch",
+      threw === null, String(threw));
+    check("every destination still gets exactly one outcome, in order",
+      outcomes.length === 3
+      && outcomes.map(o => o.socialConnectionId).join(",") === "conn-a,conn-b,conn-c",
+      JSON.stringify(outcomes.map(o => o.socialConnectionId)));
+    check("the destination BEFORE the throw keeps its published outcome",
+      outcomes[0].status === "published" && outcomes[0].externalPostId === "post-conn-a",
+      JSON.stringify(outcomes[0]));
+    check("the throwing destination is failed, carrying the reason",
+      outcomes[1].status === "failed" && outcomes[1].error === "lookup exploded for conn-b",
+      JSON.stringify(outcomes[1]));
+    check("the destination AFTER the throw is still attempted",
+      outcomes[2].status === "published" && publishes.includes("conn-c"),
+      JSON.stringify(publishes));
+    check("the failed destination never carries a permalink",
+      !outcomes[1].externalPostId && !outcomes[1].externalPostUrl);
+  }
+
+  {
+    // Same isolation for a provider client that blows up rather than returning !ok.
+    lookupThrows.clear(); publishThrows.clear(); lookups.length = 0; publishes.length = 0;
+    publishThrows.add("conn-b");
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-a"), social("facebook", "conn-b")], POST);
+    check("a provider that throws fails only its own destination",
+      outcomes.length === 2 && outcomes[0].status === "published" && outcomes[1].status === "failed",
+      JSON.stringify(outcomes.map(o => o.status)));
+    check("and the reason the merchant sees is the provider's",
+      outcomes[1].error === "publish exploded for conn-b");
+  }
+
+  {
+    // A disconnected account is a failure with an actionable message — never a silent
+    // drop, and never a reason to abandon the accounts beside it.
+    lookupThrows.clear(); publishThrows.clear();
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-gone"), social("instagram", "conn-a")], POST);
+    check("a disconnected account fails with a reconnect message, alone",
+      outcomes.length === 2
+      && outcomes[0].status === "failed"
+      && /Reconnect your/.test(outcomes[0].error ?? "")
+      && outcomes[1].status === "published",
+      JSON.stringify(outcomes));
+  }
+
+  section("the run's deadline defers a destination instead of half-publishing it");
+
+  {
+    // The whole point: NOT ONE provider call once the deadline is in reach. A post
+    // made with no time left to persist it is the double-post window — the process
+    // dies before the write, the claim goes stale, and the run ten minutes later
+    // sends it again.
+    lookupThrows.clear(); publishThrows.clear(); lookups.length = 0; publishes.length = 0;
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-a"), social("facebook", "conn-b")], POST,
+      { deadlineMs: Date.now() + 1_000 });
+    check("no provider was called once the deadline was in reach",
+      publishes.length === 0 && lookups.length === 0,
+      `publishes=${JSON.stringify(publishes)} lookups=${JSON.stringify(lookups)}`);
+    check("every deferred destination still gets exactly one outcome",
+      outcomes.length === 2
+      && outcomes.map(o => o.socialConnectionId).join(",") === "conn-a,conn-b");
+    check("a deferred destination is pending — not failed, not skipped",
+      outcomes.every(o => o.status === "pending"),
+      JSON.stringify(outcomes.map(o => o.status)));
+    check("and it says why, for the log",
+      outcomes.every(o => o.error === DEFERRED_OUT_OF_TIME));
+    check("a deferred destination is still owed, so a retry re-sends it",
+      pendingDestinations([social("instagram", "conn-a")],
+        outcomes.map(o => ({ provider: o.provider, status: o.status, socialConnectionId: o.socialConnectionId }))
+      ).length === 1,
+      "pendingDestinations excludes only `published` — a pending row must stay owed");
+  }
+
+  {
+    // A deadline far away changes nothing at all.
+    lookupThrows.clear(); publishThrows.clear(); publishes.length = 0;
+    const outcomes = await fanOutDestinations("u1", [social("instagram", "conn-a")], POST,
+      { deadlineMs: Date.now() + 10 * 60 * 1000 });
+    check("with time to spare the destination publishes exactly as before",
+      outcomes[0].status === "published" && publishes.join(",") === "conn-a");
+  }
+
+  {
+    // The boundary is DESTINATION_RESERVE_MS: a destination may only start if it can
+    // finish AND be persisted before the ceiling.
+    const now = 1_000_000;
+    check("exactly one reserve of headroom is still enough to start",
+      hasTimeForDestination(now, now + DESTINATION_RESERVE_MS) === true);
+    check("one millisecond less is not",
+      hasTimeForDestination(now, now + DESTINATION_RESERVE_MS - 1) === false);
+    check("no deadline at all ⇒ unbounded, exactly the old behaviour",
+      hasTimeForDestination(now, undefined) === true);
+  }
+
+  section("each outcome is handed back before the next destination starts");
+
+  {
+    // A batch that reports only at the end leaves every post it already made
+    // unrecorded for as long as the rest take — and a kill in that window republishes
+    // them. The callback fires between destinations, which is what lets the caller
+    // store each one immediately.
+    lookupThrows.clear(); publishThrows.clear(); publishes.length = 0;
+    const seen: string[] = [];
+    /** What the recorder had already been told when each publish started. */
+    const witnessed: Record<string, string[]> = {};
+    onPublish = (id: string) => { witnessed[id] = [...seen]; };
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-a"), social("facebook", "conn-b")], POST,
+      { onOutcome: (o: DestinationOutcome) => { seen.push(`${o.socialConnectionId}:${o.status}`); } });
+    onPublish = null;
+    check("every destination reported exactly once, in order",
+      seen.join(",") === "conn-a:published,conn-b:published", JSON.stringify(seen));
+    check("destination #1's outcome was already delivered before #2 was dispatched",
+      (witnessed["conn-b"] ?? []).join(",") === "conn-a:published",
+      JSON.stringify(witnessed));
+    check("and the returned batch still holds them all",
+      outcomes.length === 2);
+  }
+
+  {
+    // Bookkeeping is not allowed to cost a destination its publish.
+    lookupThrows.clear(); publishThrows.clear(); publishes.length = 0;
+    let threw: unknown = null;
+    let outcomes: DestinationOutcome[] = [];
+    try {
+      outcomes = await fanOutDestinations("u1",
+        [social("instagram", "conn-a"), social("facebook", "conn-b")], POST,
+        { onOutcome: () => { throw new Error("persist exploded"); } });
+    } catch (e) { threw = e; }
+    check("a throwing onOutcome never rejects the batch or stops the next destination",
+      threw === null && outcomes.length === 2 && publishes.join(",") === "conn-a,conn-b",
+      `threw=${String(threw)} publishes=${JSON.stringify(publishes)}`);
+  }
+
+  {
+    // Pinterest keeps its dedicated path: the fan-out must not produce a row for it,
+    // or the Content would carry two rows for one publish.
+    const outcomes = await fanOutDestinations("u1",
+      [{ provider: "pinterest", socialConnectionId: "pin_A", capturedAt: "2026-08-27T00:00:00.000Z" },
+       social("instagram", "conn-a")], POST);
+    check("a Pinterest entry is skipped by the fan-out, not dispatched twice",
+      outcomes.length === 1 && outcomes[0].provider === "instagram");
+  }
+}
+
+main().then(() => {
+  console.log(`\nPublish fanout: ${pass} passed, ${fail} failed\n`);
+  process.exit(fail ? 1 : 0);
+}).catch(err => {
+  console.error(err);
+  process.exit(1);
+});

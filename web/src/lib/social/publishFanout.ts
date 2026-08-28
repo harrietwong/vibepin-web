@@ -30,7 +30,12 @@ import { findConnection } from "./server/socialConnectionStore";
 import { getSocialProviderById } from "./providers";
 import type { ScheduledDestination } from "../pinDraftStore";
 import type { SocialPostPayload } from "./types";
-import { rollUpJobStatus, type DestinationOutcome } from "./publishRules";
+import {
+  deferredOutcome,
+  hasTimeForDestination,
+  rollUpJobStatus,
+  type DestinationOutcome,
+} from "./publishRules";
 
 // The pure decision rules live in publishRules (importable without Supabase);
 // re-exported here so callers have one entry point for the execution layer.
@@ -137,19 +142,28 @@ export async function dispatchDestination(
   }
   const base = { provider, socialConnectionId: destination.socialConnectionId };
 
-  const connection = await findConnection(uid, destination.socialConnectionId);
-  if (!connection || connection.connectionStatus !== "connected") {
-    return {
-      ...base,
-      status: "failed",
-      // The account this Pin was scheduled to is the one that must be fixed —
-      // silently falling back to another account would publish somewhere the
-      // merchant never chose.
-      error: `Reconnect your ${platformName(provider)} account to publish this Pin.`,
-    };
-  }
-
+  // EVERYTHING that can throw is inside this try — the connection lookup above all.
+  //
+  // `findConnection` reads the database. It sat OUTSIDE the try, so a transient
+  // PostgREST error while resolving destination #2 rejected `fanOutDestinations`
+  // itself, and with it the ALREADY-PUBLISHED outcome of destination #1 (the loop is
+  // sequential, and the accumulated outcomes died with the rejection). The cron's
+  // catch then wrote a `failed` row for every owed destination — including the one
+  // that really published — so the retry re-posted it. A DB blip on one account is
+  // not allowed to cost a double post on another.
   try {
+    const connection = await findConnection(uid, destination.socialConnectionId);
+    if (!connection || connection.connectionStatus !== "connected") {
+      return {
+        ...base,
+        status: "failed",
+        // The account this Pin was scheduled to is the one that must be fixed —
+        // silently falling back to another account would publish somewhere the
+        // merchant never chose.
+        error: `Reconnect your ${platformName(provider)} account to publish this Pin.`,
+      };
+    }
+
     const result = await getSocialProviderById(connection.authProvider).publishPost({
       provider,
       connection,
@@ -174,22 +188,97 @@ export async function dispatchDestination(
 }
 
 /**
+ * The outcome for a destination whose dispatch threw somewhere no other handler
+ * covered. It exists so the invariant below can be stated without an "unless":
+ * every destination gets exactly one row, whatever happened.
+ */
+function isolationFailure(
+  destination: ScheduledDestination,
+  err: unknown,
+): DestinationOutcome {
+  const message = (err as { message?: unknown } | null)?.message;
+  return {
+    provider: (isSocialProvider(destination.provider) ? destination.provider : "pinterest") as SocialProvider,
+    status: "failed",
+    socialConnectionId: destination.socialConnectionId ?? null,
+    error: (typeof message === "string" && message) || "Publishing failed.",
+  };
+}
+
+/**
  * Fan out to every non-Pinterest destination, independently.
  *
- * Sequential on purpose: these are third-party writes, and a merchant with three
- * connected platforms is not a throughput problem. One destination failing never
- * prevents the others from being attempted — `dispatchDestination` resolves rather
- * than rejects, so there is no path where an early failure aborts the batch.
+ * THE INVARIANT: this function never rejects, and every destination it is given
+ * produces exactly one outcome, in the order it was given. Nothing a single
+ * destination does — a DB error resolving its account, a provider client throwing
+ * outside its own handler — may cost another destination its result.
+ *
+ * That is not a nicety. The loop is sequential and the outcomes accumulate in a local
+ * array, so ONE rejection discarded every outcome collected before it. In the cron
+ * that meant: Instagram published, Facebook's connection lookup threw, the whole call
+ * rejected, and the catch wrote a `failed` row for BOTH — including the Instagram post
+ * that is live on the platform. The next run then owed Instagram again and posted it a
+ * second time. A lost outcome is not a missing record, it is a duplicate post.
+ *
+ * Sequential is still on purpose: these are third-party writes, and a merchant with
+ * three connected platforms is not a throughput problem.
  */
+export interface FanOutOptions {
+  /**
+   * Absolute epoch-ms after which no further destination may be STARTED.
+   *
+   * Not a cancellation: a destination already in flight runs to completion (that is
+   * what `DESTINATION_RESERVE_MS` reserves room for). It stops the run from beginning
+   * work it cannot finish and persist before the platform kills the process — which
+   * is how a post that really went out ends up with no record and is sent again.
+   *
+   * Omitted ⇒ no deadline, i.e. the behaviour every caller had before.
+   */
+  deadlineMs?: number;
+  /**
+   * Called with each destination's outcome the moment it is known, before the next
+   * destination starts.
+   *
+   * The caller persists it there. Waiting for the whole batch to return means every
+   * post already made is unrecorded for as long as the destinations after it take —
+   * and a process killed in that window republishes them all. A throwing callback is
+   * logged and ignored: a bookkeeping failure must not cost a destination its outcome.
+   */
+  onOutcome?: (outcome: DestinationOutcome, destination: ScheduledDestination) => void | Promise<void>;
+}
+
 export async function fanOutDestinations(
   uid: string,
   destinations: readonly ScheduledDestination[],
   post: SocialPostPayload,
+  options?: FanOutOptions,
 ): Promise<DestinationOutcome[]> {
   const outcomes: DestinationOutcome[] = [];
   for (const destination of destinations) {
     if (destination.provider === "pinterest") continue; // dedicated path owns it
-    outcomes.push(await dispatchDestination(uid, destination, post));
+    // Belt and braces: `dispatchDestination` already resolves rather than rejects for
+    // everything it can see. This catch covers what it cannot — and it is the reason
+    // the invariant above holds no matter how that function is later changed.
+    let outcome: DestinationOutcome;
+    try {
+      outcome =
+        // Checked per destination, immediately before dispatch, because that is where
+        // the time actually goes: the check that mattered was made once at the top of
+        // the row, and three Instagram accounts later the run was past the ceiling.
+        hasTimeForDestination(Date.now(), options?.deadlineMs)
+          ? await dispatchDestination(uid, destination, post)
+          : deferredOutcome(destination);
+    } catch (err) {
+      outcome = isolationFailure(destination, err);
+    }
+    outcomes.push(outcome);
+    if (options?.onOutcome) {
+      try {
+        await options.onOutcome(outcome, destination);
+      } catch (err) {
+        console.error("[publishFanout] onOutcome:", (err as Error).message);
+      }
+    }
   }
   return outcomes;
 }
