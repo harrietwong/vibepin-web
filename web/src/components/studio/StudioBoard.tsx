@@ -48,6 +48,8 @@ import { selectionFromLinkedProduct, type CanonicalProductSelection } from "@/li
 import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
+import { loadPrefill } from "@/lib/createPinsPrefill";
+import { prefillToDrawerSeed, destinationDraftPatch, type PrefillDestination } from "@/lib/studio/prefillDrawerSeed";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 type AiDrawerState =
@@ -55,7 +57,11 @@ type AiDrawerState =
   // failed run that chose a different product than its parent is not re-inherited
   // from the parent on retry.
   | { mode: "version"; draft: PinDraft; product?: CanonicalProductSelection }
-  | { mode: "scratch"; product?: CanonicalProductSelection }
+  // `destination` is set ONLY by a prefill that named an account ("Generate based on
+  // this insight"). It lives on the drawer state, not in a ref or module scope, so it
+  // dies with this drawer: a later hand-opened drawer can never inherit account B's
+  // target and publish somebody else's Pin there.
+  | { mode: "scratch"; product?: CanonicalProductSelection; destination?: PrefillDestination }
   | null;
 
 // Deep link into /app/plan that reopens the Edit-details drawer for a specific Pin.
@@ -234,6 +240,32 @@ export function StudioBoard() {
     // failStaleGeneratingDrafts() behavior for that partition, so nothing sticks
     // in Generating either way.
     void reconcileGeneratingDrafts();
+
+    // ── Prefill handoff (?prefillKey=…) ──────────────────────────────────────
+    // Every "Generate from this…" entry point in the app (Insights, Discover,
+    // Products, Workspace, Trends, Plan) saves a prefill to sessionStorage and
+    // navigates here. Only the LEGACY Studio ever read it, and this board is the
+    // DEFAULT experience — so on the default path the user's brief, product and
+    // reference were dropped the moment the page rendered, and the button looked
+    // like it had worked. Consuming it here opens the same AI drawer the
+    // "Select product" flow opens, already filled in.
+    //
+    // loadPrefill consumes the key, so a refresh does not reopen the drawer over
+    // work the user has since started, and the same key cannot seed twice.
+    const prefillKey = searchParams.get("prefillKey");
+    if (prefillKey) {
+      const seed = prefillToDrawerSeed(loadPrefill(prefillKey));
+      if (seed) {
+        // The scratch drawer reads its initial setup from this cache under the
+        // literal key "scratch" — the same channel a retry uses. No new drawer prop.
+        setAiSetupCache(prev => ({ ...prev, scratch: seed.setup }));
+        setAiDrawer({
+          mode: "scratch",
+          ...(seed.product ? { product: seed.product } : {}),
+          ...(seed.destination ? { destination: seed.destination } : {}),
+        });
+      }
+    }
   }, [searchParams]);
 
   const [uploading, setUploading] = useState(false);
@@ -462,6 +494,12 @@ export function StudioBoard() {
   const handleAiGenerate = useCallback(async (opts: AiVersionOptions) => {
     if (!aiDrawer) return;
     const parent = aiDrawer.mode === "version" ? aiDrawer.draft : null;
+    // Where this run's Pins must publish, when the drawer was opened from a prefill
+    // that named an account. Read from the drawer state (not a ref), so it applies to
+    // exactly this run and nothing later.
+    const destinationPatch = destinationDraftPatch(
+      aiDrawer.mode === "scratch" ? aiDrawer.destination : null,
+    );
     setAiGenerating(true);
     // Regenerating from an existing pin (version mode) is a "regenerate" action.
     if (parent) track("regenerate_clicked", { draftId: parent.id });
@@ -496,7 +534,7 @@ export function StudioBoard() {
       // tests with a real store and a fake generate() — see test-ai-generation-run.
       const batchToastId = `gen-batch-${Date.now()}`;
       let groupTotal = 1;
-      await runAiGeneration({ parent, opts }, {
+      await runAiGeneration({ parent, opts, destinationPatch }, {
         store: pinDraftStore,
         generate: ({ styleReference, batchRequestId, setup }) =>
           generateAiVersions({ source: parent, setup, styleReference, batchRequestId }),
@@ -583,6 +621,12 @@ export function StudioBoard() {
         generationSlot: i,
       }),
     );
+    // Carry the prefill's account/board onto every Pin this run produced. Without it
+    // a Pin generated from account B's Insights publishes as whichever account the
+    // publish path defaults to — account A in a two-account workspace.
+    if (destinationPatch) {
+      placeholders.forEach(pl => pinDraftStore.updateDraft(pl.id, destinationPatch));
+    }
     // Close the drawer right away — generation continues and the cards update.
     setAiDrawer(null);
     setAiGenerating(false);

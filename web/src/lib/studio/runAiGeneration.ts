@@ -53,6 +53,15 @@ export type RunAiGenerationDeps = {
 export type RunAiGenerationInput = {
   parent: PinDraft | null;
   opts: AiVersionOptions;
+  /**
+   * Where these Pins are meant to publish, when the run started from a prefill that
+   * named an account (e.g. "Generate based on this insight" on account B).
+   *
+   * Applied to every placeholder at creation. Absent for an ordinary run, which
+   * leaves the drafts untargeted exactly as before — this never overwrites a target
+   * with nothing.
+   */
+  destinationPatch?: { targetConnectionId: string; boardId?: string; boardName?: string } | null;
 };
 
 /**
@@ -96,7 +105,7 @@ export async function runAiGeneration(
   input: RunAiGenerationInput,
   deps: RunAiGenerationDeps,
 ): Promise<{ okCount: number; failCount: number; requestId: string; totalPins: number }> {
-  const { parent, opts } = input;
+  const { parent, opts, destinationPatch } = input;
   const { store, generate, resolveModelLabel } = deps;
   const now = deps.now ?? (() => Date.now());
   const rand = deps.randomId ?? (() => Math.random().toString(36).slice(2, 8));
@@ -155,6 +164,9 @@ export async function runAiGeneration(
         setupSnapshot,
       });
       if (productLinkPatch) store.updateDraft(placeholder.id, productLinkPatch);
+      // Carry the prefill's account/board onto the Pin it produced, so a Pin generated
+      // from one account's Insights cannot publish as another.
+      if (destinationPatch) store.updateDraft(placeholder.id, destinationPatch);
       return placeholder;
     }),
   );
