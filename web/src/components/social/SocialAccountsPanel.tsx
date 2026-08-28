@@ -1894,8 +1894,13 @@ export function SocialAccountsPanel() {
         await disconnectSocial(account.id, { mode: "remove", cancelScheduled });
       }
       toast.success(tr("socialPanel.toast.accountRemoved"));
-    } catch {
-      toast.error(tr("socialPanel.toast.accountRemoveFailed"));
+    } catch (e) {
+      // The server refuses the removal when it could not cancel the schedules the
+      // merchant asked it to (409 schedule_cancel_failed) and says how many — that
+      // sentence is far more actionable than a generic failure, and it is the only
+      // thing that explains why the row is still here after the `load()` below
+      // puts it back.
+      toast.error((e as Error).message || tr("socialPanel.toast.accountRemoveFailed"));
     } finally {
       notifyConnectionsChanged();
       await load(); // the server is the truth either way — restores the row on failure

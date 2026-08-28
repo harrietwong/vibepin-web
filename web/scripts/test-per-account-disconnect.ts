@@ -210,8 +210,8 @@ await testAsync("cancel 写回:scheduled_at 置空、释放 claim、按 (user, d
   ];
   const { db, chains } = makeFakeDb([{ data: rows }, { data: null }, { data: null }]);
   const now = "2026-08-07T10:00:00.000Z";
-  const cleared = await cancelScheduledForConnection(db, "u1", "c1", now);
-  assert.equal(cleared, 2);
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", now);
+  assert.deepEqual(outcome, { cleared: 2, failed: 0, readFailed: false });
 
   for (const calls of chains.slice(1)) {
     const update = calls.find(c => c.method === "update");
@@ -230,7 +230,7 @@ await testAsync("cancel 写回:scheduled_at 置空、释放 claim、按 (user, d
   }
 });
 
-await testAsync("单行写回失败只跳过该行,不影响其它行的取消", async () => {
+await testAsync("单行写回失败只跳过该行,但必须报告 failed(Codex #6)", async () => {
   const rows = [
     { vibepin_user_id: "u1", draft_id: "d1", payload: { targetConnectionId: "c1" } },
     { vibepin_user_id: "u1", draft_id: "d2", payload: { targetConnectionId: "c1" } },
@@ -240,8 +240,26 @@ await testAsync("单行写回失败只跳过该行,不影响其它行的取消",
     { error: { code: "XX000", message: "boom" } },
     { data: null },
   ]);
-  const cleared = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
-  assert.equal(cleared, 1, "一行失败不应吞掉另一行的成功");
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
+  assert.equal(outcome.cleared, 1, "一行失败不应吞掉另一行的成功");
+  // 只回 cleared 的老契约里,这一次和"两行都成功清了 1 行"长得一模一样,
+  // 路由据此照删不误。failed 是删除守卫唯一的输入。
+  assert.equal(outcome.failed, 1, "失败的行必须出现在返回值里,否则路由无从判断");
+  assert.equal(outcome.readFailed, false);
+});
+
+await testAsync("读取失败 ≠ 没有排程:readFailed 必须为 true(Codex #6)", async () => {
+  const { db } = makeFakeDb([{ error: { code: "XX000", message: "connection reset" } }]);
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
+  assert.deepEqual(outcome, { cleared: 0, failed: 0, readFailed: true },
+    "查不到就等于不知道有什么排程,绝不能当成'什么都没有'");
+});
+
+await testAsync("缺表/缺列仍然是'确实没有排程',不是失败", async () => {
+  // 可选迁移没跑不该把商家卡在无法移除账号上——这条降级是故意的,别顺手改掉。
+  const { db } = makeFakeDb([{ error: { code: "42P01", message: "does not exist" } }]);
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
+  assert.deepEqual(outcome, { cleared: 0, failed: 0, readFailed: false });
 });
 
 console.log("\n=== 4) 路由编排 + UI 决策面 ===");
@@ -254,6 +272,34 @@ test("DELETE 先取消排程再断开,且只在带 id + cancelScheduled=1 时取
   const disconnectAt = routeSrc.indexOf("await disconnect(uid, connectionId)");
   assert.ok(cancelAt > 0 && disconnectAt > cancelAt,
     "取消必须发生在断开之前:中途失败时宁可留下'已连接但排程被清',也不要'已移除但 cron 还在发'");
+});
+
+test("Pinterest remove:取消没全清就不许删(Codex #6)", () => {
+  // 这是本任务的核心:取消与删除是同一个决定。读失败被降级成"没有排程"、
+  // 单行写回失败被 log-and-skip,路由却照删——商家看到"已移除",而 cron 手里
+  // 还攥着指向已删除账号的排程行。
+  assert.match(routeSrc, /if \(cancelOutcome && \(cancelOutcome\.readFailed \|\| cancelOutcome\.failed > 0\)\)/,
+    "删除前必须同时检查 readFailed 与 failed");
+  assert.match(routeSrc, /code: "schedule_cancel_failed"/);
+  assert.match(routeSrc, /status: 409/);
+  // 守卫必须在 deleteConnection 之前;否则它只是个装饰。
+  const guardAt = routeSrc.indexOf("cancelOutcome.readFailed || cancelOutcome.failed > 0");
+  const deleteAt = routeSrc.indexOf("await deleteConnection(uid, connectionId)");
+  assert.ok(guardAt > 0 && deleteAt > guardAt, "守卫必须挡在删除之前");
+  // 409 的响应体要能被客户端读成一句人话(parseErrorResponse 只认 body.error)。
+  assert.match(routeSrc, /error: userMessage/,
+    "客户端的 parseErrorResponse 读 body.error,少了它商家只会看到 HTTP 状态");
+  assert.match(routeSrc, /cleared: cancelOutcome\.cleared/);
+  assert.match(routeSrc, /failed: cancelOutcome\.failed/);
+});
+
+test("软断开不受守卫影响:行还在,排程发布时会被 target_disconnected 挡住", () => {
+  // 只有硬删是不可逆的那一个。软断开保留行,半清的排程仍然看得见、可重试,
+  // 把守卫扩到那里只会让一个 UI 根本走不到的路径变得更容易失败。
+  const guardAt = routeSrc.indexOf("cancelOutcome.readFailed || cancelOutcome.failed > 0");
+  const softAt = routeSrc.indexOf("await disconnect(uid, connectionId)");
+  assert.ok(softAt > guardAt, "软断开在 remove 分支之后,不经过守卫");
+  assert.match(routeSrc, /if \(remove && connectionId\) \{/);
 });
 
 test("GET 只在带 connectionId 时查排程,否则直接回 0", () => {
@@ -306,6 +352,12 @@ test("软断开与硬移除是两个不同的服务端动作,默认永远是软�
   const deleteAt = socialRoute.indexOf("await deleteConnection(uid, connectionId)");
   assert.ok(cancelAt > 0 && deleteAt > cancelAt,
     "取消排程必须发生在删除之前:否则中途失败会留下一个没有账号、cron 却照发的排程");
+  // 顺序还不够——取消还必须真的成功(Codex #6)。
+  const guardAt = socialRoute.indexOf("outcome.readFailed || outcome.failed > 0");
+  assert.ok(guardAt > cancelAt && deleteAt > guardAt,
+    "删除守卫必须夹在取消与删除之间");
+  assert.match(socialRoute, /code: "schedule_cancel_failed"/);
+  assert.match(socialRoute, /status: 409/);
 });
 
 await testAsync("断开一个账号不会波及同平台的其它账号", async () => {

@@ -141,15 +141,29 @@ function isMissingSchemaError(err: { code?: string; message?: string } | null): 
   );
 }
 
-/** Fetch the candidate rows, or [] when the schema/query is unavailable. */
-async function readCandidates(db: DbLike, uid: string, label: string): Promise<ScheduledDraftRow[]> {
+/**
+ * Fetch the candidate rows.
+ *
+ * `readFailed` distinguishes the two ways this comes back empty, which the callers
+ * must NOT treat alike:
+ *   - missing table/column (the optional migration has not run) ⇒ there genuinely
+ *     is nothing scheduled. Not a failure; a merchant must never be blocked from
+ *     removing an account by a migration they cannot run.
+ *   - a real query error ⇒ we have NO IDEA what is scheduled. Reporting "nothing"
+ *     is a lie, and the remove route used to act on it.
+ */
+async function readCandidates(
+  db: DbLike,
+  uid: string,
+  label: string,
+): Promise<{ rows: ScheduledDraftRow[]; readFailed: boolean }> {
   const { data, error } = await candidateScheduledQuery(db, uid);
   if (error) {
-    if (isMissingSchemaError(error)) return [];
+    if (isMissingSchemaError(error)) return { rows: [], readFailed: false };
     console.error(`[social/disconnect] ${label} failed:`, error.message);
-    return [];
+    return { rows: [], readFailed: true };
   }
-  return (Array.isArray(data) ? data : []) as ScheduledDraftRow[];
+  return { rows: (Array.isArray(data) ? data : []) as ScheduledDraftRow[], readFailed: false };
 }
 
 /**
@@ -164,16 +178,38 @@ export async function countScheduledForSocialConnection(
   connectionId: string,
 ): Promise<number> {
   if (!str(connectionId)) return 0;
-  const rows = await readCandidates(db, uid, "scheduled count");
+  const { rows } = await readCandidates(db, uid, "scheduled count");
   return rows.filter(r => payloadTargetsSocialConnection(r.payload, connectionId)).length;
 }
 
 /**
- * Drop this account from every scheduled Content that targets it. Returns how many
- * rows were changed.
+ * The outcome of a cancel, in enough detail for the caller to decide whether the
+ * account may now be deleted (Codex #6).
+ *
+ * `cleared` alone was not enough. This function used to swallow a read error as
+ * "nothing is scheduled" and log-and-skip each failed update, then return a number
+ * the remove route could not tell apart from real success — so a transient DB
+ * failure produced a DELETED account whose schedules still pointed at it, and the
+ * merchant was told the removal worked. The cron would then keep picking those rows
+ * up. Failures have to be visible in the return value to be actionable.
+ */
+export type CancelScheduledOutcome = {
+  /** Rows successfully updated. */
+  cleared: number;
+  /** Rows that matched but whose update FAILED. Any non-zero value blocks a delete. */
+  failed: number;
+  /** The candidate read itself failed, so `cleared`/`failed` describe nothing. */
+  readFailed: boolean;
+};
+
+/**
+ * Drop this account from every scheduled Content that targets it.
  *
  * A row keeps its schedule when other destinations survive; it is un-scheduled
  * (scheduled_at null, claim released) only when this account was its last one.
+ *
+ * Every matching row is still attempted even after one fails — a partial cancel is
+ * strictly better than stopping early, and the caller refuses the delete either way.
  *
  * Known and accepted for MVP, inherited from the Pinterest module: a row the cron
  * has ALREADY claimed may still finish its in-flight publish. The window is minutes
@@ -184,11 +220,13 @@ export async function cancelScheduledForSocialConnection(
   uid: string,
   connectionId: string,
   nowIso: string,
-): Promise<number> {
-  if (!str(connectionId)) return 0;
-  const rows = await readCandidates(db, uid, "scheduled fetch");
+): Promise<CancelScheduledOutcome> {
+  if (!str(connectionId)) return { cleared: 0, failed: 0, readFailed: false };
+  const { rows, readFailed } = await readCandidates(db, uid, "scheduled fetch");
+  if (readFailed) return { cleared: 0, failed: 0, readFailed: true };
 
   let cleared = 0;
+  let failed = 0;
   for (const row of rows) {
     if (!payloadTargetsSocialConnection(row.payload, connectionId)) continue;
     const { payload, remaining } = payloadAfterDestinationRemoved(
@@ -209,9 +247,10 @@ export async function cancelScheduledForSocialConnection(
       .eq("draft_id", row.draft_id);
     if (error) {
       console.error("[social/disconnect] schedule cancel failed:", error.message);
+      failed++;
       continue;
     }
     cleared++;
   }
-  return cleared;
+  return { cleared, failed, readFailed: false };
 }

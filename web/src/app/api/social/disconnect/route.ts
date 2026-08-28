@@ -44,6 +44,23 @@ export const dynamic = "force-dynamic";
 
 export type SocialDisconnectMode = "disconnect" | "remove";
 
+/**
+ * The customer-readable refusal when the schedules could not all be cancelled
+ * (Codex #6).
+ *
+ * It names a number because "something went wrong" gives the merchant nothing to
+ * check: they chose to cancel N scheduled posts, and they need to know the account
+ * is STILL THERE (so they can retry) rather than half-removed.
+ */
+function scheduleCancelFailedMessage(failed: number, readFailed: boolean): string {
+  if (readFailed) {
+    return "We couldn't check what's still scheduled through this account, so it was not removed. Please try again.";
+  }
+  const posts = failed === 1 ? "1 scheduled post" : `${failed} scheduled posts`;
+  return `We couldn't cancel ${posts}, so the account was not removed. Please try again.`;
+}
+
+
 /** Anything other than an explicit "remove" is the soft, reversible action. */
 function readMode(value: unknown): SocialDisconnectMode {
   return value === "remove" ? "remove" : "disconnect";
@@ -128,11 +145,38 @@ export async function POST(req: Request) {
     // outcome is a disconnected-but-present account whose schedules were not yet
     // cleared (visible, retryable) rather than a deleted account leaving live rows
     // the cron keeps picking up.
+    //
+    // And the cancel has to actually SUCCEED. It used to degrade a read error to
+    // "nothing is scheduled" and log-and-skip failed updates, then return a count
+    // this route could not tell apart from real success — so a transient DB failure
+    // deleted the account, reported success, and left the merchant's schedules
+    // pointing at a row that no longer exists. The two steps are one decision:
+    // either the schedules the customer asked to cancel are gone, or the account
+    // stays and they can retry.
     let cancelledScheduled = 0;
     if (cancelScheduled) {
-      cancelledScheduled = await cancelScheduledForSocialConnection(
+      const outcome = await cancelScheduledForSocialConnection(
         createServerClient(), uid, connectionId, new Date().toISOString(),
       );
+      if (outcome.readFailed || outcome.failed > 0) {
+        const userMessage = scheduleCancelFailedMessage(outcome.failed, outcome.readFailed);
+        console.error(
+          `[social/disconnect POST] schedule cancel incomplete (cleared=${outcome.cleared}, failed=${outcome.failed}, readFailed=${outcome.readFailed}) — account kept`,
+        );
+        return Response.json(
+          {
+            ok: false,
+            code: "schedule_cancel_failed",
+            cleared: outcome.cleared,
+            failed: outcome.failed,
+            userMessage,
+            // `error` is what the client's readError surfaces as the thrown message.
+            error: userMessage,
+          },
+          { status: 409 },
+        );
+      }
+      cancelledScheduled = outcome.cleared;
     }
 
     await deleteConnection(uid, connectionId);
