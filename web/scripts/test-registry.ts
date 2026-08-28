@@ -54,6 +54,8 @@ export const CORE: string[] = [
   "test-insights-read",
   // Insights evidence engine (observation rules, cohorts, confidence tiers, language gate)
   "test-insights-engine",
+  // Insights report layer (ISO week-year, scorecard windows, hash stability, regeneration, paid gate)
+  "test-insights-reports",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
   "test-admin-account-kind",

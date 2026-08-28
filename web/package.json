@@ -48,6 +48,7 @@
     "test:insights-collector": "npx tsx scripts/test-insights-collector.ts",
     "test:insights-read": "npx tsx scripts/test-insights-read.ts",
     "test:insights-engine": "npx tsx scripts/test-insights-engine.ts",
+    "test:insights-reports": "npx tsx scripts/test-insights-reports.ts",
     "test:ai-copy-language-guardrail": "npx tsx scripts/test-ai-copy-language-guardrail.ts",
     "test:support-ai-responder": "npx tsx scripts/test-support-ai-responder.ts",
     "test:support-translator": "npx tsx scripts/test-support-translator.ts",
