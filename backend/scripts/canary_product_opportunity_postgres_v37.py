@@ -49,6 +49,8 @@ EXPECTED_MIGRATION_SHA256 = (
 EXECUTION_MODE_ENV = "VIBEPIN_PRODUCT_STAGE2_CANARY_MODE"
 EXECUTION_MODE_VALUE = "production"
 ROLE_PASS_SENTINEL = "V37_ROLE_CANARY_PASS"
+LOCK_TIMEOUT_CODE = "55P03"
+LOCK_TIMEOUT_MESSAGE = "canceling statement due to lock timeout"
 HOLDER_SECONDS = 15
 CHALLENGER_LOCK_TIMEOUT_MS = 2_000
 READY_ATTEMPTS = 20
@@ -243,7 +245,14 @@ def _parse_ready(status: int, body: str) -> bool:
 
 
 def _parse_pg_error(body: str) -> tuple[str, str]:
-    """Return an exact PostgreSQL code/message pair from a structured API error."""
+    """Return an exact PostgreSQL code/message pair from an API error.
+
+    Supabase Management API currently wraps PostgreSQL failures in one JSON
+    ``message`` string, for example ``Failed to run sql query: ERROR:  22012:
+    division by zero``.  Some test/client adapters expose ``code`` and
+    ``message`` separately.  Both shapes are parsed structurally; arbitrary
+    body substring matches and SQL echoes are deliberately rejected.
+    """
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -252,12 +261,28 @@ def _parse_pg_error(body: str) -> tuple[str, str]:
         raise RuntimeError("Management API error response is not an object")
     nested = payload.get("error")
     if isinstance(nested, dict):
+        if set(payload) != {"error"}:
+            raise RuntimeError("Management API nested error has ambiguous sibling fields")
         payload = nested
-    code = payload.get("code", payload.get("error_code", payload.get("postgres_code")))
+    code_keys = [key for key in ("code", "error_code", "postgres_code") if key in payload]
+    if len(code_keys) > 1:
+        raise RuntimeError("Management API error has ambiguous PostgreSQL code fields")
+    code = payload.get(code_keys[0]) if code_keys else None
     message = payload.get("message")
-    if not isinstance(code, str) or not isinstance(message, str):
+    if isinstance(code, str) and isinstance(message, str):
+        if set(payload) != {code_keys[0], "message"}:
+            raise RuntimeError("Management API structured error has ambiguous extra fields")
+        return code, message
+    if set(payload) != {"message"} or not isinstance(message, str):
         raise RuntimeError("Management API error has no structured PostgreSQL code/message")
-    return code, message
+    wrapped = re.fullmatch(
+        r"Failed to run sql query: ERROR:\s+([0-9A-Z]{5}):\s*([^\r\n]*)"
+        r"(?:\r?\n[\s\S]*)?",
+        message,
+    )
+    if not wrapped:
+        raise RuntimeError("Management API PostgreSQL error wrapper is not exact")
+    return wrapped.group(1), wrapped.group(2)
 
 
 def _call(
@@ -336,7 +361,18 @@ def execute_canary(
             f"concurrency holder did not roll back cleanly: HTTP {holder_status} "
             f"{holder_body[:300]}"
         )
-    if challenger_status in (200, 201) or "lock timeout" not in challenger_body.lower():
+    try:
+        challenger_code, challenger_message = _parse_pg_error(challenger_body)
+    except RuntimeError as parse_error:
+        raise RuntimeError(
+            "concurrent duplicate did not return a structured active-identity lock error: "
+            f"HTTP {challenger_status} {challenger_body[:300]}"
+        ) from parse_error
+    if (
+        challenger_status != 400
+        or challenger_code != LOCK_TIMEOUT_CODE
+        or challenger_message != LOCK_TIMEOUT_MESSAGE
+    ):
         raise RuntimeError(
             "concurrent duplicate did not fail on the active-identity lock: "
             f"HTTP {challenger_status} {challenger_body[:300]}"
@@ -370,7 +406,7 @@ def execute_canary(
             f"HTTP {role_status} {role_body[:300]}"
         ) from parse_error
     if (
-        role_status in (200, 201)
+        role_status != 400
         or role_code != "P0001"
         or role_message != ROLE_PASS_SENTINEL
     ):

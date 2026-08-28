@@ -50,9 +50,15 @@ def valid_query(sql: str, *, label: str, **_: object) -> tuple[int, str]:
     if label == "concurrency_holder":
         return 201, "[]"
     if label == "concurrency_challenger":
-        return 400, '{"message":"canceling statement due to lock timeout"}'
+        return 400, json.dumps({
+            "message": "Failed to run sql query: ERROR:  55P03: "
+            "canceling statement due to lock timeout\n",
+        })
     if label == "role_isolation":
-        return 400, json.dumps({"code": "P0001", "message": canary.ROLE_PASS_SENTINEL})
+        return 400, json.dumps({
+            "message": "Failed to run sql query: ERROR:  P0001: "
+            f"{canary.ROLE_PASS_SENTINEL}\nCONTEXT: PL/pgSQL function inline_code_block",
+        })
     raise AssertionError(label)
 
 
@@ -92,7 +98,7 @@ def test_execute_canary_accepts_only_exact_lock_and_role_sentinel() -> None:
     [
         ("concurrency_holder", (500, "holder failed"), "holder did not roll back"),
         ("concurrency_challenger", (201, "[]"), "concurrent duplicate"),
-        ("concurrency_challenger", (400, "other failure"), "concurrent duplicate"),
+        ("concurrency_challenger", (400, '{"message":"other failure"}'), "concurrent duplicate"),
         ("role_isolation", (201, "[]"), "role-isolation"),
         ("role_isolation", (400, '{"code":"P0001","message":"wrong sentinel"}'), "role-isolation"),
     ],
@@ -163,7 +169,30 @@ def test_role_canary_rejects_failure_that_echoes_the_sentinel_sql() -> None:
             })
         return valid_query(sql, label=label, **kwargs)
 
-    with pytest.raises(RuntimeError, match="exact rollback sentinel"):
+    with pytest.raises(RuntimeError, match="structured rollback sentinel"):
+        canary.execute_canary(
+            candidate=candidate(),
+            manifest_sha256=MANIFEST_SHA,
+            token="fake-token",
+            project_ref="projectref",
+            query=query,
+            sleep=lambda _: None,
+        )
+
+
+def test_role_canary_rejects_exact_code_and_message_when_sql_is_also_echoed() -> None:
+    echoed = canary._role_canary_sql(candidate())
+
+    def query(sql: str, *, label: str, **kwargs: object) -> tuple[int, str]:
+        if label == "role_isolation":
+            return 400, json.dumps({
+                "code": "P0001",
+                "message": canary.ROLE_PASS_SENTINEL,
+                "query": echoed,
+            })
+        return valid_query(sql, label=label, **kwargs)
+
+    with pytest.raises(RuntimeError, match="structured rollback sentinel"):
         canary.execute_canary(
             candidate=candidate(),
             manifest_sha256=MANIFEST_SHA,
@@ -192,6 +221,78 @@ def test_role_canary_accepts_nested_structured_postgres_error() -> None:
     assert canary._parse_pg_error(
         '{"error":{"code":"P0001","message":"V37_ROLE_CANARY_PASS"}}'
     ) == ("P0001", canary.ROLE_PASS_SENTINEL)
+
+
+def test_parser_accepts_exact_management_api_postgres_wrapper() -> None:
+    body = json.dumps({
+        "message": "Failed to run sql query: ERROR:  22012: division by zero\n",
+    })
+    assert canary._parse_pg_error(body) == ("22012", "division by zero")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"message":"prefix Failed to run sql query: ERROR:  P0001: V37_ROLE_CANARY_PASS\\n"}',
+        '{"message":"Failed to run sql query: ERROR:  P0001: V37_ROLE_CANARY_PASS suffix\\n"}',
+        '{"message":"Failed to run sql query: ERROR:  P0001: V37_ROLE_CANARY_PASS\\n",'
+        '"query":"RAISE EXCEPTION V37_ROLE_CANARY_PASS"}',
+    ],
+)
+def test_parser_rejects_ambiguous_or_echoable_management_api_wrappers(body: str) -> None:
+    if " suffix" in body:
+        assert canary._parse_pg_error(body) == (
+            "P0001",
+            "V37_ROLE_CANARY_PASS suffix",
+        )
+        return
+    with pytest.raises(RuntimeError):
+        canary._parse_pg_error(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"message":"Failed to run sql query: ERROR:  57014: canceling statement due to lock timeout\\n"}',
+        '{"message":"Failed to run sql query: ERROR:  55P03: lock timeout\\n"}',
+        '{"code":"55P03","message":"canceling statement due to lock timeout suffix"}',
+    ],
+)
+def test_challenger_requires_exact_lock_timeout_code_and_message(body: str) -> None:
+    def query(sql: str, *, label: str, **kwargs: object) -> tuple[int, str]:
+        if label == "concurrency_challenger":
+            return 400, body
+        return valid_query(sql, label=label, **kwargs)
+
+    with pytest.raises(RuntimeError, match="active-identity lock"):
+        canary.execute_canary(
+            candidate=candidate(),
+            manifest_sha256=MANIFEST_SHA,
+            token="fake-token",
+            project_ref="projectref",
+            query=query,
+            sleep=lambda _: None,
+        )
+
+
+@pytest.mark.parametrize("label", ["concurrency_challenger", "role_isolation"])
+def test_exact_postgres_error_on_non_400_http_status_is_rejected(label: str) -> None:
+    def query(sql: str, *, label: str, **kwargs: object) -> tuple[int, str]:
+        status, body = valid_query(sql, label=label, **kwargs)
+        if label == target:
+            return 500, body
+        return status, body
+
+    target = label
+    with pytest.raises(RuntimeError):
+        canary.execute_canary(
+            candidate=candidate(),
+            manifest_sha256=MANIFEST_SHA,
+            token="fake-token",
+            project_ref="projectref",
+            query=query,
+            sleep=lambda _: None,
+        )
 
 
 def test_execution_guard_requires_four_exact_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
