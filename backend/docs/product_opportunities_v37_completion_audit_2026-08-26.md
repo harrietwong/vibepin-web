@@ -47,7 +47,7 @@ subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
 the Product-truth render verifier; and the manifest/automation contract passed
-24/24, while the latest focused systemd/worker/automation/admission group passed
+28/28, while the latest focused systemd/worker/automation/admission group passed
 156/156. ShellCheck also passed the exact current-candidate Git blobs for `cloud_lib.sh`,
 Product Supply, Product Opportunity Admission and Product Tracking wrappers;
 the intentional dynamic shared-library source warning was excluded explicitly,
@@ -157,8 +157,11 @@ an exact `6839e760:web` archive and its platform log proves `npm ci`, zero known
 vulnerabilities, Next.js 16.3.3, TypeScript completion, 70/70 pages and all
 required Product Opportunity routes. Anonymous Product-truth verification was
 redirected to Vercel SSO and correctly rejected as non-authoritative; the root
-HTML fetched through authenticated Vercel access passed the unchanged browser
-truth rules. The production alias remains on `dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn`.
+HTML fetched through authenticated Vercel access was replayed unchanged from a
+local HTTP server and passed the browser truth-text rules, but the bytes were not
+retained. This does not prove authenticated Preview API/middleware behavior,
+live server-side rendering, interactive Product/Saved workflows or origin asset
+delivery. The production alias remains on `dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn`.
 This closes Preview qualification but does not authorize promotion. Evidence:
 `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
 
@@ -168,7 +171,9 @@ candidates and 39 reviewed automatic-Admission candidates (31 Physical / 8
 Digital). None has today's observation, G7, G30 or full-metric coverage; one
 Physical candidate has only a G14 anchor. This improves the precision of the
 earlier all-zero statement but does not change the launch decision: discovery
-inventory exists, stable trend intelligence does not. Evidence:
+inventory exists, stable trend intelligence does not. Its `eligible_categories`
+map is Top-20 only (118 rows plus five omitted one-row categories), not a full
+123-row distribution. Evidence:
 `backend/docs/product_opportunities_v37_stage0_data_quality_20260828T000146Z.json`.
 
 The companion service-role PostgREST OpenAPI GET at `2026-08-28T00:08:33Z`
@@ -179,13 +184,16 @@ indexes are absent. Exact catalog readback through the approved migration channe
 therefore remains a Stage 0 requirement rather than being inferred from OpenAPI.
 Evidence: `backend/docs/product_opportunities_v37_schema_presence_audit_20260828T000833Z.json`.
 
-The remaining catalog gap was then closed through the approved Supabase
-Management API channel. A read-only `SELECT` over `pg_class`, `pg_proc`,
-`pg_trigger` and `pg_policies` returned HTTP 201 and zero matching v63 Product
-Opportunity relations, functions, triggers, policies or indexes in `public`.
-Stage 0 schema absence is therefore proven without relying on PostgREST exposure.
-No migration or other SQL mutation ran. Evidence:
-`backend/docs/product_opportunities_v37_catalog_audit_20260828T001649Z.json`.
+The catalog gap was then closed with a reproducible query through the approved
+Supabase Management API channel. The versioned SQL covers `pg_class`, `pg_proc`,
+`pg_trigger`, `pg_policies` and `pg_constraint`; its seven patterns cover every
+explicit v63 CREATE name plus implicit identity sequences and the free-preview /
+active-Primary supplemental names. The `2026-08-28T02:33:30Z` receipt returned
+HTTP 201 and zero matches in `public`, and binds the exact query SHA-256,
+migration SHA-256, production project ref and candidate SHA. No migration or SQL
+mutation ran. This proves the data/catalog portion of Stage 0; flags,
+contamination and full gates still require a final cutover-time refresh. Evidence:
+`backend/docs/product_opportunities_v37_catalog_audit_20260828T023330Z.json`.
 
 Commit `99efabcf8221141a470e73ae8e9765aad866a089` adds the already-qualified
 browser-rendered Product-truth verifier to the full v3.7 release line. Its pure

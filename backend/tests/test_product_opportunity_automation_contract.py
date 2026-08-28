@@ -55,9 +55,20 @@ STAGE0_SCHEMA_PRESENCE = json.loads(
 )
 STAGE0_CATALOG = json.loads(
     (
-        ROOT / "docs" / "product_opportunities_v37_catalog_audit_20260828T001649Z.json"
+        ROOT / "docs" / "product_opportunities_v37_catalog_audit_20260828T023330Z.json"
     ).read_text(encoding="utf-8")
 )
+STAGE0_CATALOG_QUERY_PATH = (
+    ROOT / "docs" / "product_opportunities_v37_catalog_query_v1.sql"
+)
+STAGE0_CATALOG_QUERY = STAGE0_CATALOG_QUERY_PATH.read_text(encoding="utf-8")
+V63_MIGRATION_PATH = ROOT / "db" / "migrate_v63_product_opportunities_v1.sql"
+V63_MIGRATION = V63_MIGRATION_PATH.read_text(encoding="utf-8")
+
+
+def _matches_sql_like_pattern(value: str, pattern: str) -> bool:
+    expression = re.escape(pattern.lower()).replace(r"%", ".*").replace(r"_", ".")
+    return re.fullmatch(expression, value.lower()) is not None
 
 
 def test_default_service_is_preflight_and_timer_file_does_not_enable_itself() -> None:
@@ -266,6 +277,14 @@ def test_exact_platform_preflight_is_non_production_and_auditable() -> None:
     assert preview["nextVersion"] == "16.3.3"
     assert preview["requiredProductRoutesPresent"] is True
     assert preview["deploymentProtection"]["authenticatedHtmlBrowserRender"] == "PASS"
+    assert preview["sourceProvenanceStrength"].startswith("operator-controlled")
+    protection = preview["deploymentProtection"]
+    assert protection["authenticatedRootHtmlArchived"] is False
+    assert "local HTTP server" in protection["verificationMethod"]
+    assert protection["verificationScope"] == (
+        "captured root HTML shell and rendered Product-truth text rules only"
+    )
+    assert "authenticated Preview API route behavior" in protection["notProven"]
     assert preview["promoted"] is False
     assert production["deploymentId"] == "dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn"
     assert production["unchanged"] is True
@@ -273,6 +292,22 @@ def test_exact_platform_preflight_is_non_production_and_auditable() -> None:
 
 def test_latest_stage0_data_quality_does_not_claim_launch_ready_metrics() -> None:
     audit = STAGE0_DATA_QUALITY
+    assert audit["candidate_functional_tip"] == (
+        "6839e7609ddff3f1fe288c48a42918e105a75fc9"
+    )
+    assert audit["audit_logic_git_blob"] == (
+        subprocess.run(
+            [
+                "git",
+                "rev-parse",
+                "6839e760:backend/scripts/audit_product_opportunity_v37.py",
+            ],
+            cwd=ROOT.parent,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+    )
     assert audit["total_pin_product_rows"] == 4115
     assert audit["legacy_snapshot_rows"] == 34073
     assert audit["migration_gate_pass_unique_products"] == 123
@@ -281,17 +316,34 @@ def test_latest_stage0_data_quality_does_not_claim_launch_ready_metrics() -> Non
         "physical": 31,
         "digital": 8,
     }
+    assert sum(audit["automatic_admission_scope_by_family"].values()) == 39
+    assert sum(audit["automatic_admission_scope_by_category"].values()) == 39
+    assert (
+        audit["automatic_admission_scope_rows"]
+        + sum(audit["automatic_admission_scope_exclusions"].values())
+        == audit["migration_gate_pass_rows"]
+    )
+    assert sum(audit["observation_day_distribution"].values()) == 123
+    assert sum(audit["maximum_gap_distribution"].values()) == 123
     coverage = audit["automatic_admission_scope_snapshot_coverage"]
     assert coverage["today"] == 0
     assert coverage["anchor_7"] == 0
     assert coverage["anchor_14"] == 1
     assert coverage["anchor_30"] == 0
     assert coverage["full_metric"] == 0
+    assert audit["eligible_categories_scope"] == "top_20"
+    assert sum(audit["eligible_categories"].values()) == 118
+    assert audit["eligible_categories_reported_rows"] == 118
+    assert audit["eligible_categories_omitted_rows"] == 5
+    assert 118 + 5 == audit["migration_gate_pass_rows"]
     assert "trend intelligence remains not launch-ready" in RUNBOOK
 
 
 def test_latest_stage0_openapi_check_does_not_overclaim_catalog_absence() -> None:
     audit = STAGE0_SCHEMA_PRESENCE
+    assert audit["candidate_functional_tip"] == (
+        "6839e7609ddff3f1fe288c48a42918e105a75fc9"
+    )
     assert audit["mutation"] is False
     assert audit["http_status"] == 200
     assert audit["legacy_control_paths"] == ["/pin_products", "/pin_save_snapshots"]
@@ -315,11 +367,75 @@ def test_latest_stage0_catalog_query_closes_hidden_object_gap_without_mutation()
         "pg_proc",
         "pg_trigger",
         "pg_policies",
+        "pg_constraint",
     ]
+    assert audit["candidate_functional_tip"] == (
+        "6839e7609ddff3f1fe288c48a42918e105a75fc9"
+    )
+    assert audit["project_ref"] == "jaxteelkecvlozdrdoog"
+    assert audit["query_file"] == (
+        "backend/docs/product_opportunities_v37_catalog_query_v1.sql"
+    )
+    assert audit["query_sha256"] == hashlib.sha256(
+        STAGE0_CATALOG_QUERY_PATH.read_bytes()
+    ).hexdigest()
+    assert audit["migration_sha256"] == hashlib.sha256(
+        V63_MIGRATION_PATH.read_bytes()
+    ).hexdigest()
     assert audit["matching_object_count"] == 0
     assert audit["matching_objects"] == []
-    assert "Current result: PASS for Stage 0" in RUNBOOK
-    assert "does not itself authorize applying the migration" in RUNBOOK
+    assert "Current Stage 0 data/catalog result: PASS" in RUNBOOK
+    assert "does not authorize applying the migration" in RUNBOOK
+    assert "must be" in RUNBOOK
+    assert "refreshed at the actual cutover checkpoint" in RUNBOOK
+
+
+def test_catalog_query_patterns_cover_every_explicit_v63_created_object() -> None:
+    patterns = re.findall(
+        r"\('([^']+)'\)",
+        STAGE0_CATALOG_QUERY.split("), catalog_objects", 1)[0],
+    )
+    assert patterns == STAGE0_CATALOG["match_patterns"]
+
+    create_pattern = re.compile(
+        r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?(?:UNIQUE\s+)?"
+        r"(TABLE|VIEW|FUNCTION|TRIGGER|INDEX|POLICY)\s+"
+        r"(?:IF\s+NOT\s+EXISTS\s+)?(?:\"([^\"]+)\"|([a-z_][a-z0-9_]*))",
+        re.IGNORECASE,
+    )
+    created = [
+        (kind.lower(), quoted or plain)
+        for kind, quoted, plain in create_pattern.findall(V63_MIGRATION)
+    ]
+    assert len(created) >= 35
+    # Policy display names need not match; the query matches their parent table.
+    uncovered = [
+        (kind, name)
+        for kind, name in created
+        if kind != "policy"
+        and not any(_matches_sql_like_pattern(name, pattern) for pattern in patterns)
+    ]
+    assert uncovered == []
+
+    supplemental_objects = {
+        "product_free_preview_rank_history_id_seq",
+        "product_evidence_snapshots_id_seq",
+        "product_evidence_switches_id_seq",
+        "audit_product_free_preview_rank_change",
+        "trg_audit_product_free_preview_rank_change",
+        "enforce_active_product_primary_evidence",
+        "trg_enforce_active_product_primary_evidence",
+        "enforce_active_product_evidence_at_commit",
+        "trg_enforce_active_product_evidence_at_commit",
+        "switch_product_primary_evidence",
+    }
+    assert all(
+        any(_matches_sql_like_pattern(name, pattern) for pattern in patterns)
+        for name in supplemental_objects
+    )
+    assert "FROM pg_catalog.pg_policies" in STAGE0_CATALOG_QUERY
+    assert "tablename" in STAGE0_CATALOG_QUERY
+    assert "FROM pg_catalog.pg_constraint" in STAGE0_CATALOG_QUERY
 
 
 def test_release_manifest_keeps_create_pin_null_title_contract_together() -> None:

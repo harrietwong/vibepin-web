@@ -1,5 +1,6 @@
 {
   "audited_at": "2026-08-28T00:08:33.958265+00:00",
+  "candidate_functional_tip": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
   "method": "GET PostgREST OpenAPI schema as service role",
   "mutation": false,
   "http_status": 200,

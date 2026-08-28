@@ -59,6 +59,7 @@
     "target": "preview",
     "readyState": "READY",
     "source": "git archive 6839e7609ddff3f1fe288c48a42918e105a75fc9:web with no Git metadata",
+    "sourceProvenanceStrength": "operator-controlled exact archive construction; Vercel deployment metadata exposes no Git source SHA",
     "entrypoint": ".",
     "installCommand": "npm ci",
     "installedPackages": 420,
@@ -82,7 +83,17 @@
       "directAnonymousDestination": "Vercel SSO",
       "directTruthVerifierResult": "not authoritative because it rendered the SSO page",
       "authenticatedRootHtmlSha256": "3d007093b0de3b1009fc1222bac4d977c94f6463c05a46187f2fe3bc4b0a2159",
-      "authenticatedHtmlBrowserRender": "PASS"
+      "authenticatedRootHtmlArchived": false,
+      "authenticatedHtmlBrowserRender": "PASS",
+      "verificationMethod": "authenticated vercel curl root HTML replayed unchanged through a local HTTP server into the existing browser-rendered Product-truth verifier",
+      "verificationScope": "captured root HTML shell and rendered Product-truth text rules only",
+      "notProven": [
+        "authenticated Preview API route behavior",
+        "Preview middleware behavior",
+        "live server-side rendering after authentication",
+        "interactive Product and Saved Product workflows",
+        "origin asset delivery"
+      ]
     },
     "cliCompatibilityWorkaround": "process-local ASCII os.hostname preload; no account, machine-name or project setting changed",
     "promoted": false

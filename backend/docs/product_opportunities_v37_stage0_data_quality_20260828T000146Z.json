@@ -1,5 +1,8 @@
 {
   "audited_at": "2026-08-28T00:01:46.942962+00:00",
+  "candidate_functional_tip": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
+  "audit_logic_file": "backend/scripts/audit_product_opportunity_v37.py",
+  "audit_logic_git_blob": "790c4f15e52711570c876b9dddc387925f16a8af",
   "automatic_admission_scope_by_category": {
     "digital-products": 7,
     "fashion": 6,
@@ -97,6 +100,9 @@
     "wedding": 14,
     "womens-fashion": 2
   },
+  "eligible_categories_scope": "top_20",
+  "eligible_categories_reported_rows": 118,
+  "eligible_categories_omitted_rows": 5,
   "eligible_detail_fetch_status": {
     "available": 24,
     "legacy_unknown": 99

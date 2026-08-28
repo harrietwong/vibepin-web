@@ -7,8 +7,10 @@ a push, production database write, VPS deployment, Vercel promotion, timer
 enablement, or budget increase.
 
 Current decision: code, manifest, Linux unit preflight and immutable Preview are
-PASS. Product launch remains NOT LIVE. Stage 0 data, exposed-API schema and exact
-PostgreSQL catalog checks are current and clean. The next privileged sequence is
+PASS. Product launch remains NOT LIVE. Stage 0 data and exact PostgreSQL catalog
+items are current and clean; production flags, candidate contamination and full
+test/build state must still be refreshed immediately before any Stage 1 apply.
+The next privileged sequence is
 Stage 1 additive schema -> Stage 2 one-product and <=20-row
 canaries -> Stage 3 backend/manual Tracking canary -> Stage 4 Web promotion ->
 Stage 5 Admission first, then Tracking timers. A later-stage PASS must never be
@@ -77,7 +79,7 @@ failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
 --audit-level=low` reported zero known vulnerabilities, and the built localhost
 site passed the executable Product-truth render verifier. The Product automation
-contract for the current manifest passed 24/24; the focused worker, automation,
+contract for the current manifest passed 28/28; the focused worker, automation,
 and admission group passed 59/59. These local gates do not authorize
 production rollout.
 
@@ -165,7 +167,11 @@ TypeScript and generated 70/70 pages including the Product Opportunity APIs,
 `/app/products` and `/app/products/saved`. Vercel Protection redirects anonymous
 requests to SSO, so the direct truth verifier was not authoritative; the same
 Preview root HTML fetched through authenticated `vercel curl` had SHA-256
-`3d007093...a2159` and passed the unchanged browser-rendered Product-truth rules.
+`3d007093...a2159`; those bytes were replayed unchanged from a local HTTP server
+through the Product-truth verifier but were not retained after the run. This
+proves only the captured root HTML shell and its rendered truth-text rules. It
+does not prove authenticated Preview API/middleware behavior, live server-side
+rendering, interactive Product/Saved workflows or origin asset delivery.
 `vibepin.co` still points to production deployment `dpl_GdtGTzX3FW9dGP1uE3UtgoWgApAn`.
 Do not promote the Preview without separate production-rollout authorization.
 Evidence: `backend/docs/product_opportunities_v37_platform_preflight_20260827T234511Z.json`.
@@ -176,7 +182,9 @@ It proves 4,115 legacy Products, 34,073 legacy snapshots, 123 technical migratio
 candidates and 39 reviewed automatic-Admission candidates (31 Physical / 8
 Digital). All 39 lack today's observation, G7, G30 and full-metric coverage; one
 Physical candidate has only a G14 anchor. The 39 include 14 Wedding candidates
-(13 Physical / 1 Digital). Therefore Product discovery inventory exists, while v3.7
+(13 Physical / 1 Digital). The `eligible_categories` object is explicitly a
+Top-20 view: it reports 118 rows and omits five one-row categories; it must not be
+summed as the complete 123-row category distribution. Therefore Product discovery inventory exists, while v3.7
 trend intelligence remains not launch-ready until Admission and daily tracking
 are deployed and produce real persisted history. Do not confuse Supply's 20-row
 atomic transaction cap with daily capacity: the candidate Supply run scans 100
@@ -404,12 +412,16 @@ functions, triggers, policies and indexes are outside OpenAPI. Preserve
 and complete the catalog query through the approved migration channel before
 Stage 1 apply.
 
-That exact catalog query is now complete. At `2026-08-28T00:16:49Z`, a read-only
-Supabase Management API `SELECT` over `pg_class`, `pg_proc`, `pg_trigger` and
-`pg_policies` returned HTTP 201 and zero matching v63 Product Opportunity tables,
-views, functions, triggers, policies or indexes in `public`. No SQL mutation was
-executed. Evidence:
-`backend/docs/product_opportunities_v37_catalog_audit_20260828T001649Z.json`.
+The reproducible catalog query is now complete. At `2026-08-28T02:33:30Z`, the
+versioned SQL `backend/docs/product_opportunities_v37_catalog_query_v1.sql` ran as
+a read-only Management API `SELECT` over `pg_class`, `pg_proc`, `pg_trigger`,
+`pg_policies` and `pg_constraint`. Its seven recorded patterns cover the v63
+tables, view, functions, triggers, policies, indexes, identity sequences and
+constraints—including the free-preview and active/Primary names missed by the
+earlier evidence format. It returned HTTP 201 and zero matches in `public`.
+The receipt binds the query SHA-256, migration SHA-256, production project ref
+and functional candidate SHA. No SQL mutation was executed. Evidence:
+`backend/docs/product_opportunities_v37_catalog_audit_20260828T023330Z.json`.
 
 1. Re-run the production audit script without mutation and preserve its JSON
    report. Reconcile totals with the PRD baseline instead of assuming 123
@@ -432,8 +444,10 @@ executed. Evidence:
 Exit condition: read-only evidence is archived and every artifact is tied to one
 clean candidate SHA.
 
-Current result: PASS for Stage 0. Production remains unchanged; this PASS permits
-review of Stage 1 but does not itself authorize applying the migration.
+Current Stage 0 data/catalog result: PASS. Production remains unchanged. Items
+3-5 (flags, contamination and full gates) retain earlier evidence but must be
+refreshed at the actual cutover checkpoint, so this result permits Stage 1
+authorization review and does not authorize applying the migration.
 
 ## Stage 1 — Additive database foundation
 
