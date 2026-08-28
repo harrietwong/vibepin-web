@@ -44,6 +44,7 @@ import {
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
+import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRules";
 
 export const dynamic = "force-dynamic";
@@ -82,6 +83,38 @@ export async function POST(req: Request) {
   const requested = Array.isArray(body.destinations) ? body.destinations : [];
   if (!requested.length) {
     return Response.json({ error: "Select at least one destination to publish." }, { status: 400 });
+  }
+
+  // ── Phase 5B: meter this publish ──────────────────────────────────────────
+  // The frozen contract is ONE unit per piece of content published, no matter how many
+  // platforms it fans out to. This route was never metered, so a social-only publish
+  // (Instagram / Facebook, which never touch /api/pinterest/pins) cost nothing at all —
+  // a free bypass of the quota — while the identical Content published to Pinterest was
+  // charged. The SAME key derivation as the Pinterest route (draft id + UTC date bucket,
+  // salted per user) is what keeps a Pinterest + Instagram publish of one Content at one
+  // unit: both legs derive the same key and the ledger collapses the replay.
+  //
+  // `postId` IS the draft id (publishContent sends `postId: draftId`). With none there is
+  // nothing stable to key on, so metering is skipped rather than keyed on a value that
+  // would either collide across Contents or charge every retry.
+  //
+  // Metered BEFORE any dispatch, so a crash mid-publish still records the action the
+  // merchant took, and fail-open in shadow: consumeScheduledPost never throws, so a
+  // ledger outage cannot stop a publish.
+  const publishableRequests = requested.filter(raw => {
+    const provider = (raw as { provider?: unknown }).provider;
+    // Exactly the destinations the loop below will actually dispatch: Pinterest is
+    // published by its own (already metered) route, and a platform with no publish path
+    // is skipped. A request that dispatches nothing must not be charged.
+    return isSocialProvider(provider) && provider !== "pinterest" && PLATFORMS[provider].liveConnect;
+  });
+  if (postId && publishableRequests.length > 0) {
+    await consumeScheduledPost({
+      userId: uid,
+      key: deriveScheduledPostKey(uid, postId),
+      referenceId: postId,
+      metadata: { source: "immediate" },
+    });
   }
 
   const summaries = await summarizeConnections(uid);

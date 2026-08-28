@@ -182,5 +182,58 @@ test("an explicit id that is no longer connected fails — it never falls back t
   assert.deepEqual(choice, { kind: "explicit", connectionId: "ig-gone" });
 });
 
+// ── the publish is metered exactly once, like every other publish ────────────
+// The frozen 5B contract: ONE unit per piece of content published, whatever it fans
+// out to. This route was never metered, so a social-only publish cost nothing while
+// the same Content published to Pinterest was charged — a free bypass of the quota.
+section("/api/publish/social meters the Content it publishes");
+
+const pinsRoute = readFileSync("src/app/api/pinterest/pins/route.ts", "utf8");
+
+test("the Content is consumed exactly once per request", () => {
+  const calls = route.split("consumeScheduledPost(").length - 1;
+  assert.equal(calls, 1, "a second consume would charge one publish twice");
+});
+
+test("the meter runs BEFORE any destination is dispatched", () => {
+  const meterAt = route.indexOf("await consumeScheduledPost(");
+  const loopAt = route.indexOf("for (const raw of requested)");
+  const publishAt = route.indexOf("publishPost({");
+  assert.ok(meterAt > 0 && loopAt > meterAt && publishAt > meterAt,
+    "metering after dispatch loses the action whenever the run dies mid-publish");
+});
+
+test("it uses the SAME key derivation as the Pinterest route (draft id + UTC day)", () => {
+  // Same two arguments, no provider and no connection id: that identity is what makes a
+  // Pinterest + Instagram publish of ONE Content collapse onto ONE ledger row.
+  const shape = /deriveScheduledPostKey[(]uid, [A-Za-z][A-Za-z0-9]*[)]/;
+  assert.match(route, shape);
+  assert.match(pinsRoute, shape, "the Pinterest route must still derive it the same way");
+  assert.ok(!/deriveScheduledPostKey[(][^)]*provider/.test(route),
+    "keying per platform would charge a fan-out once per destination");
+  assert.ok(!/deriveScheduledPostKey[(][^)]*connection/i.test(route),
+    "keying per account would charge a two-account platform twice");
+});
+
+test("a request that dispatches nothing is not charged", () => {
+  const guard = /if [(]postId && publishableRequests[.]length > 0[)]/;
+  assert.match(route, guard, "no publishable destination ⇒ no unit consumed");
+  // Pinterest is published (and metered) by its own route, so it must not be what makes
+  // this one charge — otherwise a Pinterest-only request pays twice.
+  const filterAt = route.indexOf("const publishableRequests");
+  const filterBody = route.slice(filterAt, route.indexOf("});", filterAt));
+  assert.match(filterBody, /provider !== "pinterest"/);
+  assert.match(filterBody, /liveConnect/, "a platform with no publish path is never charged");
+});
+
+test("metering never blocks the publish (shadow / fail-open)", () => {
+  const meterAt = route.indexOf("await consumeScheduledPost(");
+  const after = route.slice(meterAt, meterAt + 400);
+  assert.ok(!/status: 4[0-9][0-9]/.test(after), "enforcement is Phase 6C — nothing here may refuse");
+  assert.ok(!route.includes("scheduled_post_limit_reached"),
+    "the limit body must not be wired into this route yet");
+});
+
+
 console.log(`\nPublish social account guard: ${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);
