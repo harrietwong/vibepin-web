@@ -38,7 +38,6 @@ import styles from "./insights.module.css";
 
 type HeatMetric = "views" | "interactions" | "websiteClicks";
 type InsightsFetchError = Error & { status?: number };
-type HydratedPinMetadata = { id: string; title: string | null; imageUrl: string | null };
 type Translate = (key: string) => string;
 
 /** One connected account of the selected platform, as the switcher needs it. */
@@ -55,16 +54,18 @@ const ALL_ACCOUNTS = "__all__";
 const ACCOUNT_STORAGE_KEY = "vibepin.insights.pinterestAccount";
 const SCOPE_STORAGE_KEY = "vibepin.insights.scope";
 
-/**
- * Thumbnails asked of Pinterest per account, per view.
+/*
+ * Thumbnails are NOT fetched here.
  *
- * The account scope lists up to 200 registry rows and the registry keeps no image
- * URL, so an uncapped hydration pass would issue ~20 metadata requests per page
- * view — reintroducing through a side door exactly the per-Pin traffic the
- * collection layer was built to remove. A missing thumbnail costs a placeholder;
- * a spent rate-limit budget costs the next collection run.
+ * This page used to hydrate up to 20 missing thumbnails per account per view through
+ * /api/insights/pinterest-pins, which turned into one Pinterest metadata call per
+ * Pin. Capping it at 20 was treating the symptom: two accounts opening the page still
+ * spent ~40 calls of a 60/min/user allowance, on a request path that keeps no ledger
+ * and no budget, to fill in a picture. The collector already sees every Pin's image
+ * while it lists them, so the URL is now stored in `content_registry.image_url` and
+ * arrives with the dashboard. When it is absent the row shows a placeholder — which
+ * is what a missing thumbnail is worth.
  */
-const HYDRATION_LIMIT = 20;
 
 const WEEKDAY_KEYS = [
   "insights.weekday.sun",
@@ -242,11 +243,9 @@ function DataState({
   const updated = collection.mode === "collected" && collection.dataUpdatedAt
     ? fill(tr("insights.collection.dataUpdated"), { time: formatDateTime(collection.dataUpdatedAt) })
     : null;
-  const pending = collection.mode === "live_sample"
-    ? tr("insights.collection.liveSample")
-    : collection.mode === "awaiting_first_run"
-      ? tr("insights.collection.awaitingFirstRun")
-      : null;
+  const pending = collection.mode === "awaiting_first_run"
+    ? tr("insights.collection.awaitingFirstRun")
+    : null;
   if (!updated && !pending && !reasonKey) return null;
   return (
     <div className={className}>
@@ -853,7 +852,6 @@ function ContentTable({
   platform,
   scope,
   totalPinCount,
-  hydratedPins,
   accounts,
   showAccountColumn,
   tr,
@@ -862,7 +860,6 @@ function ContentTable({
   platform: InsightsPlatform;
   scope: InsightsScope;
   totalPinCount: number;
-  hydratedPins: Record<string, HydratedPinMetadata>;
   /** Accounts offered in the row filter. Empty in single-account mode. */
   accounts: InsightsAccountOption[];
   showAccountColumn: boolean;
@@ -934,16 +931,10 @@ function ContentTable({
               </tr>
             </thead>
             <tbody>{visibleRows.map(row => {
-              const hydrated = hydratedPins[row.item.id];
-              const displayItem = hydrated ? {
-                ...row.item,
-                title: hydrated.title || row.item.title,
-                imageUrl: hydrated.imageUrl || row.item.imageUrl,
-              } : row.item;
               return (
                 <ContentRow
                   key={row.key}
-                  item={displayItem}
+                  item={row.item}
                   platform={row.platform}
                   accountLabel={showAccountColumn ? row.accountLabel : null}
                   showOrigin={accountScope}
@@ -1128,7 +1119,6 @@ export default function InsightsPage() {
   const [platform, setPlatform] = useState<InsightsPlatform>("pinterest");
   const [selectedAccount, setSelectedAccount] = useState<string>(ALL_ACCOUNTS);
   const [scope, setScope] = useState<InsightsScope>("vibepin");
-  const [hydratedPins, setHydratedPins] = useState<Record<string, HydratedPinMetadata>>({});
   // Dashboards collected from the per-account cards, so the merged content
   // table and the stacked heatmap reuse the same fetches the cards already made.
   const [accountDashboards, setAccountDashboards] = useState<Record<string, InsightsDashboard | null>>({});
@@ -1242,74 +1232,10 @@ export default function InsightsPage() {
 
   const ready = dashboard?.connectionState === "ready";
 
-  // Pins whose thumbnail is missing locally, paired with the account whose token
-  // can actually read them — a Pin is only visible to the account that owns it,
-  // so the owning connection id is required, never optional. With one connected
-  // account the selection is implicit, so resolve it from the account list
-  // rather than letting the server pick a default on our behalf.
+  // The owning account of the current view. Used by ThisWeekCard, which asks the
+  // server for a report — never for thumbnails; see the note at the top of the file.
   const soleConnectionId = accounts.length === 1 ? accounts[0].id : null;
   const activeConnectionId = singleConnectionId ?? soleConnectionId;
-  const hydrationTargets = useMemo<Array<{ connectionId: string; ids: string[] }>>(() => {
-    if (platform !== "pinterest") return [];
-    if (allAccountsView) {
-      return readyEntries
-        .map(({ account, dashboard: accountDashboard }) => ({
-          connectionId: account.id,
-          ids: accountDashboard.content
-            .filter(item => !item.imageUrl)
-            .map(item => item.id)
-            .slice(0, HYDRATION_LIMIT),
-        }))
-        .filter(target => target.ids.length > 0);
-    }
-    if (!dashboard || dashboard.connectionState !== "ready") return [];
-    // Without a known owning account we cannot ask for previews honestly, so we
-    // skip hydration and keep the placeholder rather than guess an account.
-    if (!activeConnectionId) return [];
-    const ids = dashboard.content
-      .filter(item => !item.imageUrl)
-      .map(item => item.id)
-      .slice(0, HYDRATION_LIMIT);
-    return ids.length > 0 ? [{ connectionId: activeConnectionId, ids }] : [];
-  }, [platform, allAccountsView, readyEntries, dashboard, activeConnectionId]);
-
-  const hydrationKey = useMemo(
-    () => hydrationTargets.map(target => `${target.connectionId}:${target.ids.join(",")}`).join("|"),
-    [hydrationTargets],
-  );
-
-  useEffect(() => {
-    if (hydrationTargets.length === 0) return;
-    let cancelled = false;
-    const hydrate = async () => {
-      for (const target of hydrationTargets) {
-        for (let index = 0; index < target.ids.length && !cancelled; index += 10) {
-          const ids = target.ids.slice(index, index + 10);
-          try {
-            const response = await authedInsightsFetch(
-              `/api/insights/pinterest-pins?ids=${encodeURIComponent(ids.join(","))}`
-              + `&connectionId=${encodeURIComponent(target.connectionId)}`,
-            );
-            if (!response.ok) continue;
-            const body = await response.json() as { items?: HydratedPinMetadata[] };
-            if (cancelled || !body.items?.length) continue;
-            setHydratedPins(current => {
-              const next = { ...current };
-              for (const item of body.items ?? []) next[item.id] = item;
-              return next;
-            });
-          } catch {
-            // A missing preview must never hide the Pin's real analytics row.
-          }
-        }
-      }
-    };
-    hydrate();
-    return () => { cancelled = true; };
-    // hydrationKey collapses the target list to a stable identity so this does
-    // not re-run on every render that rebuilds an equivalent array.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrationKey]);
 
   const subtitle = allAccountsView
     ? `${fill(tr("insights.accounts.subtitleAll"), { n: accounts.length })} · ${tr("insights.subtitleSuffix")}`
@@ -1410,7 +1336,6 @@ export default function InsightsPage() {
                   platform={platform}
                   scope={effectiveScope}
                   totalPinCount={mergedRows.length}
-                  hydratedPins={hydratedPins}
                   accounts={readyEntries.map(entry => entry.account)}
                   showAccountColumn
                   tr={tr}
@@ -1447,7 +1372,6 @@ export default function InsightsPage() {
                   platform={dashboard.platform}
                   scope={dashboard.scope}
                   totalPinCount={dashboard.content.length}
-                  hydratedPins={hydratedPins}
                   accounts={[]}
                   showAccountColumn={false}
                   tr={tr}

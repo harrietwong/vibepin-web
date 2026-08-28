@@ -180,7 +180,7 @@ export async function loadRegistry(connectionId: string, limit: number): Promise
   const db = createServerClient();
   const { data, error } = await db
     .from("content_registry")
-    .select("platform_content_id,vibepin_draft_id,published_at,format,title,description,link_url,board_name,source_endpoint,last_seen_at")
+    .select("platform_content_id,vibepin_draft_id,published_at,format,title,description,link_url,image_url,board_name,source_endpoint,last_seen_at")
     .eq("connection_id", connectionId)
     .order("published_at", { ascending: false, nullsFirst: false })
     .order("last_seen_at", { ascending: false })
@@ -200,6 +200,7 @@ export async function loadRegistry(connectionId: string, limit: number): Promise
       title: row.title == null ? null : String(row.title),
       description: row.description == null ? null : String(row.description),
       linkUrl: row.link_url == null ? null : String(row.link_url),
+      imageUrl: row.image_url == null ? null : String(row.image_url),
       boardName: row.board_name == null ? null : String(row.board_name),
       sourceEndpoint: source === "top_pins" || source === "vibepin_publish" ? source : "pins_list",
       lastSeenAt: row.last_seen_at == null ? null : String(row.last_seen_at),

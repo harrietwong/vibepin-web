@@ -7,21 +7,24 @@
  * in-memory fake in `scripts/test-insights-read.ts`.
  *
  * That split is what makes the central promise testable rather than asserted. The
- * promise is: **a page request makes no Pinterest API call**. Before this module the
- * dashboard called `getOrganicPinAnalytics` once per Pin while the user waited, so
- * every page view spent the account's rate-limit allowance on data we already had a
- * ledger for. Here the Pinterest reader (`loadLiveAnalytics`) is one injectable
- * function among ten, so a test can hand in a spy and assert it was never called —
- * a property no amount of reading the code can guarantee once someone edits it.
+ * promise is: **a page request makes no Pinterest API call — in every state**. Before
+ * this module the dashboard called `getOrganicPinAnalytics` once per Pin while the
+ * user waited, so every page view spent the account's rate-limit allowance on data we
+ * already had a ledger for.
  *
- * ── The one exception ────────────────────────────────────────────────────────
- * A connection whose collector has never finished a run has nothing to read. Showing
- * an empty dashboard there would be indistinguishable from "you have no Pins", which
- * is the failure this whole layer exists to prevent. So that state, and only that
- * state, reads a bounded live sample (20 Pins) for the VibePin scope and says so.
- * The gate is a FINISHED run, not a run: a connection whose runs all crashed is
- * exactly when live calls are most expensive and least likely to help, so it keeps
- * the sample rather than pretending collection works.
+ * ── No exceptions ────────────────────────────────────────────────────────────
+ * There used to be one: a connection with no finished run read a bounded live sample
+ * so it was not shown an empty page. That exception is gone, and with it the last
+ * Pinterest reader in `CollectionSources`. The sample's calls sat outside every
+ * budget the collector keeps — two accounts opening the page could spend ~40 of a
+ * 60/min/user allowance nobody was counting — and it bought numbers the nightly run
+ * would have written hours later anyway. "No API calls except when it matters most"
+ * is not a contract; it is the shape of an outage waiting for a busy day.
+ *
+ * The state before the first run now says exactly that, and nothing else. Because no
+ * reader here can reach Pinterest, the promise is now structural: a test's fetch spy
+ * asserting zero calls cannot be defeated by a later edit that adds one back without
+ * also adding a reader to this contract.
  */
 
 import {
@@ -59,8 +62,6 @@ import type { VibePinPublishedPinterestPin } from "@/lib/server/insights/publish
  * Pins read live when collection has never finished. Was 60 on the live-only path;
  * 20 here because this is a stopgap shown for at most one night, and 60 sequential
  * analytics calls is most of a connection's minute allowance spent on a page view.
- */
-export const PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT = 20;
 
 /** Registry rows offered in the "Your account" table. An account can hold thousands
  *  of Pins; the table is a working list, not an export, and every row costs a metric
@@ -117,6 +118,9 @@ export type ContentRegistryRow = {
   /** Read by A1: a phrase in the description counts as much as one in the title. */
   description: string | null;
   linkUrl: string | null;
+  /** The Pin's image, captured by the collector when it listed the Pin. `null` renders
+   *  a placeholder — the page never fetches one, which is the point of storing it. */
+  imageUrl: string | null;
   /** Read by category inference only — board names say what an account is about
    *  without any of the account's words reaching the phrase set. */
   boardName: string | null;
@@ -144,12 +148,6 @@ export type CollectionRunRow = {
   error: string | null;
 };
 
-/** Structurally compatible with PinterestOrganicAnalyticsSlice, without importing it. */
-export type LiveAnalyticsSlice = {
-  daily_metrics?: Array<{ date?: string; metrics?: Record<string, unknown> }> | null;
-  summary_metrics?: Record<string, unknown> | null;
-};
-
 export type InsightsConnectionRef = {
   id: string;
   providerAccountId: string | null;
@@ -162,7 +160,8 @@ export type InsightsConnectionRef = {
  * the point: the fetch-spy test replaces exactly one of them.
  */
 export type CollectionSources = {
-  /** Newest run WITH a finish time. The gate for the live fallback. */
+  /** Newest run WITH a finish time. The gate between "awaiting first run" and real
+   *  data: a connection whose runs all crashed has nothing to show, and says so. */
   loadLatestFinishedRun(): Promise<CollectionRunRow | null>;
   /** Newest run of any kind, finished or not — where `skipped_reason` comes from. */
   loadLatestRun(): Promise<CollectionRunRow | null>;
@@ -182,8 +181,8 @@ export type CollectionSources = {
   /** The phrase set this account's Pin text is checked against. `inferenceTexts` are
    *  board names and Pin titles, used ONLY to pick a category. */
   loadKeywordSet(inferenceTexts: string[]): Promise<EvidenceKeywordSet>;
-  /** The ONLY reader that talks to Pinterest. Called on the fallback path alone. */
-  loadLiveAnalytics(pinIds: string[]): Promise<Map<string, LiveAnalyticsSlice | null>>;
+  // NOTE: there is deliberately no Pinterest reader in this contract. Adding one is
+  // how the zero-calls promise gets lost, so it has to be a visible decision here.
 };
 
 export const EMPTY_KEYWORD_SET_INPUT: EvidenceKeywordSet = {
@@ -399,13 +398,17 @@ function sortContent(rows: InsightsContent[]): InsightsContent[] {
 export function vibepinContentRows(
   pins: VibePinPublishedPinterestPin[],
   lookup: MetricLookup,
+  /** Registry thumbnails by Pin id. The publish record's own image wins when it has
+   *  one (it is ours, and cannot 404 when Pinterest rotates a CDN URL); the registry
+   *  covers the Pins published before we started keeping the draft's image. */
+  registryImages: Map<string, string | null> = new Map(),
 ): InsightsContent[] {
   return sortContent(pins.map((record): InsightsContent => {
     const read = contentMetricsFor(lookup, record.pinId);
     return {
       id: record.pinId,
       title: record.title || `VibePin Pin ${record.pinId.slice(-6)}`,
-      imageUrl: record.imageUrl,
+      imageUrl: record.imageUrl ?? registryImages.get(record.pinId) ?? null,
       postUrl: record.postUrl,
       publishedAt: record.publishedAt ?? null,
       format: contentFormat(record.mediaType),
@@ -423,10 +426,14 @@ export function vibepinContentRows(
  * Rows for the "Your account" scope: everything in the registry.
  *
  * `vibepin_draft_id` decides the origin: it is written only by a `vibepin_publish`
- * registry row, so it is evidence rather than inference. Title and thumbnail are
- * borrowed from the publish record when there is one — the registry keeps no image
- * URL, and a Pin we published is one we already have a picture of, so asking
- * Pinterest for it again would spend a call to learn something we know.
+ * registry row, so it is evidence rather than inference.
+ *
+ * The thumbnail comes from the registry first — the collector stored what Pinterest
+ * showed it while listing the Pin, which is the freshest thing anyone has — then from
+ * the publish record, whose image is ours and cannot go stale but only exists for
+ * Pins we published, and then from nothing at all. `null` renders a placeholder. The
+ * page does not fetch a thumbnail in any of the three cases; that is the point of
+ * keeping the column.
  */
 export function accountContentRows(
   registry: ContentRegistryRow[],
@@ -440,7 +447,7 @@ export function accountContentRows(
     return {
       id: row.platformContentId,
       title: row.title || published?.title || `Pin ${row.platformContentId.slice(-6)}`,
-      imageUrl: published?.imageUrl ?? null,
+      imageUrl: row.imageUrl ?? published?.imageUrl ?? null,
       postUrl: published?.postUrl ?? pinUrl(row.platformContentId),
       publishedAt: row.publishedAt ?? published?.publishedAt ?? null,
       format: contentFormat(row.format),
@@ -505,87 +512,6 @@ async function attributedPins(
     owners.get(item.pinId) ?? null,
     connectionId,
   ));
-}
-
-// ── Live sample (fallback only) ──────────────────────────────────────────────
-
-function summarizeSlice(slice: LiveAnalyticsSlice | null): Record<string, unknown> {
-  if (!slice) return {};
-  if (slice.summary_metrics) return slice.summary_metrics;
-  const summary: Record<string, number> = {};
-  for (const row of slice.daily_metrics ?? []) {
-    for (const [key, value] of Object.entries(row.metrics ?? {})) {
-      summary[key] = finiteMetric(summary[key]) + finiteMetric(value);
-    }
-  }
-  return summary;
-}
-
-function liveContentRows(
-  pins: VibePinPublishedPinterestPin[],
-  slices: Map<string, LiveAnalyticsSlice | null>,
-): InsightsContent[] {
-  return sortContent(pins.map((record): InsightsContent => {
-    const slice = slices.get(record.pinId) ?? null;
-    const metrics = summarizeSlice(slice);
-    const read = (name: string) => finiteMetric(metrics[name]);
-    const views = read("IMPRESSION");
-    const clicks = read("OUTBOUND_CLICK");
-    const saves = read("SAVE");
-    return {
-      id: record.pinId,
-      title: record.title || `VibePin Pin ${record.pinId.slice(-6)}`,
-      imageUrl: record.imageUrl,
-      postUrl: record.postUrl,
-      publishedAt: record.publishedAt ?? null,
-      format: contentFormat(record.mediaType),
-      metrics: {
-        views,
-        interactions: saves + clicks + read("PIN_CLICK") + read("TOTAL_COMMENTS") + read("TOTAL_REACTIONS"),
-        saves,
-        shares: 0,
-        websiteClicks: clicks,
-        trafficRate: trafficRate(clicks, views),
-      },
-      metricsAvailable: slice !== null,
-      metricsState: slice !== null ? "ok" : "not_collected",
-      origin: "vibepin",
-      websiteClickAvailability: "pin_level",
-      diagnosis: "",
-    };
-  }));
-}
-
-function liveDays(
-  slices: Map<string, LiveAnalyticsSlice | null>,
-  startDate: string,
-  endDate: string,
-): InsightsDay[] {
-  const byDate = new Map<string, InsightsDay>();
-  for (const slice of slices.values()) {
-    for (const row of slice?.daily_metrics ?? []) {
-      if (typeof row.date !== "string" || !row.date) continue;
-      const current = byDate.get(row.date) ?? {
-        date: row.date,
-        views: 0,
-        interactions: 0,
-        saves: 0,
-        shares: 0,
-        websiteClicks: 0,
-        trafficRate: null,
-      };
-      const read = (name: string) => finiteMetric(row.metrics?.[name]);
-      const saves = read("SAVE");
-      const clicks = read("OUTBOUND_CLICK");
-      current.views += read("IMPRESSION");
-      current.saves += saves;
-      current.websiteClicks = (current.websiteClicks ?? 0) + clicks;
-      current.interactions += saves + clicks + read("PIN_CLICK") + read("TOTAL_COMMENTS") + read("TOTAL_REACTIONS");
-      current.trafficRate = trafficRate(current.websiteClicks, current.views);
-      byDate.set(row.date, current);
-    }
-  }
-  return fillDailyRange(Array.from(byDate.values()), startDate, endDate, true);
 }
 
 // ── Evidence assembly ────────────────────────────────────────────────────────
@@ -848,6 +774,61 @@ export async function readConnectionEvidence(
   };
 }
 
+/**
+ * The state before the first finished collection run.
+ *
+ * It shows nothing, and says why. There used to be a live fallback here that read up
+ * to 20 single-Pin analytics so a freshly connected account was not told it had no
+ * data — and it broke the one promise this module exists to make. Those calls were
+ * outside every budget and ledger the collector maintains: two accounts opening the
+ * page could issue ~40 analytics requests against a 60/min/user allowance nobody was
+ * counting against, and they bought a number that the nightly run would replace hours
+ * later anyway. A page that spends the user's rate limit to avoid an empty state has
+ * chosen the wrong thing to protect.
+ *
+ * So both scopes return the same honest answer: no rows, `awaiting_first_run`, and
+ * the reason the latest run gave if it already tried and stopped. No diagnosis — an
+ * evidence panel over zero rows would be a headline about nothing.
+ */
+async function buildAwaitingFirstRunDashboard(
+  input: {
+    scope: InsightsScope;
+    connection: InsightsConnectionRef;
+    startDate: string;
+    endDate: string;
+  },
+  sources: CollectionSources,
+): Promise<InsightsDashboard> {
+  const { scope, connection, startDate, endDate } = input;
+  const latestRun = await sources.loadLatestRun();
+
+  return {
+    platform: "pinterest",
+    scope,
+    connectionState: "ready",
+    account: accountOf(connection),
+    range: { startDate, endDate, days: 30 },
+    summary: emptyMetrics(0),
+    daily: fillDailyRange([], startDate, endDate, true),
+    content: [],
+    availability: {
+      views: "pin_level",
+      websiteClicks: "pin_level",
+      message: scope === "account" ? ACCOUNT_AVAILABILITY : VIBEPIN_AVAILABILITY,
+    },
+    collection: {
+      mode: "awaiting_first_run",
+      dataUpdatedAt: null,
+      skippedReason: latestRun?.skippedReason ?? null,
+      sampleLimit: null,
+    },
+    diagnosis: null,
+    latestAvailableAt: null,
+    syncedAt: new Date().toISOString(),
+    warning: null,
+  };
+}
+
 export async function buildPinterestInsights(
   input: {
     scope: InsightsScope;
@@ -859,7 +840,7 @@ export async function buildPinterestInsights(
 ): Promise<InsightsDashboard> {
   const { scope, connection, startDate, endDate } = input;
   const read = await readConnectionEvidence(input, sources);
-  if (!read) return buildFallbackDashboard(input, sources);
+  if (!read) return buildAwaitingFirstRunDashboard(input, sources);
 
   const {
     collection, registry, provenance, published, publishedIds,
@@ -889,7 +870,11 @@ export async function buildPinterestInsights(
     };
   }
 
-  const rows = vibepinContentRows(published, lookup);
+  const rows = vibepinContentRows(
+    published,
+    lookup,
+    new Map(registry.map(row => [row.platformContentId, row.imageUrl])),
+  );
   const daily = daysFromValues(values, {
     scope: "content",
     pinIds: new Set(publishedIds),
@@ -911,127 +896,6 @@ export async function buildPinterestInsights(
     collection,
     diagnosis,
     latestAvailableAt: read.dataUpdatedAt,
-    syncedAt: new Date().toISOString(),
-    warning: vibepinWarning(provenance.storageAvailable, rows.length, missing),
-  };
-}
-
-/** Evidence rows from a live sample: the same shape, filled from what Pinterest
- *  answered a moment ago rather than from the ledger. Cohorts of at most 20 mean
- *  almost everything comes back `insufficient` — the honest reading of a sample. */
-function liveEvidenceRows(
-  pins: VibePinPublishedPinterestPin[],
-  slices: Map<string, LiveAnalyticsSlice | null>,
-): EvidenceContentRow[] {
-  return pins.map((record): EvidenceContentRow => {
-    const slice = slices.get(record.pinId) ?? null;
-    const metrics = summarizeSlice(slice);
-    const read = (name: EvidenceMetricName): number | null => {
-      if (slice === null) return null;
-      const value = metrics[name];
-      return value === undefined || value === null ? null : finiteMetric(value);
-    };
-    return {
-      pinId: record.pinId,
-      title: record.title,
-      description: null,
-      linkUrl: null,
-      publishedAt: record.publishedAt,
-      format: contentFormat(record.mediaType),
-      origin: "vibepin",
-      lifetime: {
-        IMPRESSION: read("IMPRESSION"),
-        SAVE: read("SAVE"),
-        PIN_CLICK: read("PIN_CLICK"),
-        OUTBOUND_CLICK: read("OUTBOUND_CLICK"),
-      },
-    };
-  });
-}
-
-/**
- * The state before the first finished collection run.
- *
- * The account scope has no honest live equivalent — it would need a full Pin scan
- * plus an analytics call per Pin, which is precisely the spend the collector exists
- * to move off the request path — so it shows nothing, says why, and carries no
- * diagnosis: an evidence panel over zero rows would be a headline about nothing. The
- * VibePin scope reads a bounded sample so a user who connected an account today is
- * not told they have no data, and the engine runs over that sample with the cohort
- * sizes it really has.
- */
-async function buildFallbackDashboard(
-  input: {
-    scope: InsightsScope;
-    connection: InsightsConnectionRef;
-    startDate: string;
-    endDate: string;
-  },
-  sources: CollectionSources,
-): Promise<InsightsDashboard> {
-  const { scope, connection, startDate, endDate } = input;
-  const latestRun = await sources.loadLatestRun();
-
-  if (scope === "account") {
-    return {
-      platform: "pinterest",
-      scope,
-      connectionState: "ready",
-      account: accountOf(connection),
-      range: { startDate, endDate, days: 30 },
-      summary: emptyMetrics(0),
-      daily: fillDailyRange([], startDate, endDate, true),
-      content: [],
-      availability: { views: "pin_level", websiteClicks: "pin_level", message: ACCOUNT_AVAILABILITY },
-      collection: {
-        mode: "awaiting_first_run",
-        dataUpdatedAt: null,
-        skippedReason: latestRun?.skippedReason ?? null,
-        sampleLimit: null,
-      },
-      diagnosis: null,
-      latestAvailableAt: null,
-      syncedAt: new Date().toISOString(),
-      warning: null,
-    };
-  }
-
-  const provenance = await sources.loadProvenance();
-  const published = await attributedPins(provenance.pins, connection.id, sources);
-  // Sliced BEFORE the reader is called: the cap is the promise, so it cannot be left
-  // to whatever the reader happens to do with a longer list.
-  const sample = published.slice(0, PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT);
-  const slices = sample.length > 0
-    ? await sources.loadLiveAnalytics(sample.map(item => item.pinId))
-    : new Map<string, LiveAnalyticsSlice | null>();
-  const rows = liveContentRows(sample, slices);
-  const daily = liveDays(slices, startDate, endDate);
-  const missing = rows.filter(item => item.metricsAvailable === false).length;
-  const { set, diagnosis } = await evidenceAndDiagnosis(
-    sources,
-    liveEvidenceRows(sample, slices),
-    [],
-    daily,
-  );
-
-  return {
-    platform: "pinterest",
-    scope,
-    connectionState: "ready",
-    account: accountOf(connection),
-    range: { startDate, endDate, days: 30 },
-    summary: summarizeContent(rows),
-    daily,
-    content: attachEvidenceLines(rows, set.byPin),
-    availability: { views: "pin_level", websiteClicks: "pin_level", message: VIBEPIN_AVAILABILITY },
-    collection: {
-      mode: "live_sample",
-      dataUpdatedAt: null,
-      skippedReason: latestRun?.skippedReason ?? null,
-      sampleLimit: PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT,
-    },
-    diagnosis,
-    latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
     warning: vibepinWarning(provenance.storageAvailable, rows.length, missing),
   };

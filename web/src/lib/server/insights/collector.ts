@@ -221,6 +221,8 @@ async function runRegistry(
         title: item.title,
         description: item.description,
         linkUrl: item.link,
+        // Captured here so the dashboard never has to ask Pinterest for a thumbnail.
+        imageUrl: item.imageUrl,
       })));
       if (plan.reconciling && cursor) {
         // This pass IS the reconciliation; the previous full scan is now complete.
@@ -245,6 +247,7 @@ async function runRegistry(
           title: item.title,
           description: item.description,
           linkUrl: item.link,
+          imageUrl: item.imageUrl,
         })));
         if (!page.bookmark) { exhausted = true; bookmark = undefined; break; }
         bookmark = page.bookmark;

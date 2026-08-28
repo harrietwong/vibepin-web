@@ -183,6 +183,7 @@ export type RegistryUpsert = {
   title?: string | null;
   description?: string | null;
   linkUrl?: string | null;
+  imageUrl?: string | null;
   boardId?: string | null;
   boardName?: string | null;
 };
@@ -204,7 +205,7 @@ export async function upsertContentRegistry(
   const ids = entries.map(entry => entry.platformContentId);
   const { data: existingRows, error: readError } = await db
     .from("content_registry")
-    .select("platform_content_id,source_endpoint,vibepin_draft_id")
+    .select("platform_content_id,source_endpoint,vibepin_draft_id,image_url")
     .eq("connection_id", connectionId)
     .in("platform_content_id", ids);
   if (readError) {
@@ -213,7 +214,11 @@ export async function upsertContentRegistry(
   }
   const existing = new Map((existingRows ?? []).map(row => [
     String(row.platform_content_id),
-    { source: row.source_endpoint as RegistrySource, draftId: row.vibepin_draft_id as string | null },
+    {
+      source: row.source_endpoint as RegistrySource,
+      draftId: row.vibepin_draft_id as string | null,
+      imageUrl: (row as { image_url?: string | null }).image_url ?? null,
+    },
   ]));
 
   const nowIso = new Date().toISOString();
@@ -230,6 +235,10 @@ export async function upsertContentRegistry(
       title: entry.title ?? null,
       description: entry.description ?? null,
       link_url: entry.linkUrl ?? null,
+      // Same rule as the draft id: a pass that did not carry an image (top_pins
+      // returns metrics only) must not erase the URL a listing pass already stored.
+      // The thumbnail is the whole reason the page no longer calls Pinterest.
+      image_url: entry.imageUrl ?? prior?.imageUrl ?? null,
       board_id: entry.boardId ?? null,
       board_name: entry.boardName ?? null,
       last_seen_at: nowIso,

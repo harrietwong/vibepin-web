@@ -96,18 +96,22 @@ export type InsightsAccount = {
  *
  * `collected`          — read from the nightly collection; `dataUpdatedAt` is the
  *                        finish time of the newest run for this connection.
- * `live_sample`        — collection has never finished for this connection, so a
- *                        bounded live sample was read instead. Temporary by
- *                        construction: the first finished run retires this path.
- * `awaiting_first_run` — same situation, but this scope has no honest live
- *                        equivalent, so nothing is shown rather than something wrong.
+ * `awaiting_first_run` — the collector has not finished a run for this connection
+ *                        yet, so there is nothing to read. Nothing is shown rather
+ *                        than something wrong, and `skippedReason` says why if the
+ *                        last attempt stopped early.
+ *
+ * There is deliberately no third mode. A `live_sample` one existed and read Pinterest
+ * during the request to avoid an empty first screen; those calls were outside every
+ * budget the collector keeps. The page now makes no Pinterest call in any state.
  */
 export type InsightsCollectionState = {
-  mode: "collected" | "live_sample" | "awaiting_first_run";
+  mode: "collected" | "awaiting_first_run";
   dataUpdatedAt: string | null;
   /** `collection_run.skipped_reason` of the most recent run, when it stopped early. */
   skippedReason: string | null;
-  /** Pins read live in `live_sample` mode; null in every other mode. */
+  /** Always null. Retained so stored dashboards from before the live sample was
+   *  removed still parse; nothing writes a number here any more. */
   sampleLimit: number | null;
 };
 

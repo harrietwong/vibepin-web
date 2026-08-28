@@ -176,7 +176,6 @@ await test("Insights stays a single simple page with honest platform language", 
   const instagramConfig = readFileSync(join(process.cwd(), "src/lib/server/instagram/config.ts"), "utf8");
   const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
   const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/publishProvenance.ts"), "utf8");
-  const pinMetadataRoute = readFileSync(join(process.cwd(), "src/app/api/insights/pinterest-pins/route.ts"), "utf8");
   // The page renders through the i18n catalog now, so the honest-language
   // wording lives in en/insights.ts rather than as JSX literals.
   const catalog = readFileSync(join(process.cwd(), "src/lib/i18n/messages/en/insights.ts"), "utf8");
@@ -186,21 +185,28 @@ await test("Insights stays a single simple page with honest platform language", 
   assert.match(catalog, /Not available for feed images/);
   assert.match(page, /freshAccessToken/);
   assert.match(page, /Authorization: `Bearer \$\{token\}`/);
-  assert.match(page, /\/api\/insights\/pinterest-pins\?ids=/);
+  // The page used to hydrate thumbnails through /api/insights/pinterest-pins, and
+  // this file used to assert that it did. Both the route and the caller are gone:
+  // the thumbnail is collected into content_registry, and the page makes no
+  // Pinterest call in any state (see test-insights-read.ts for the fetch spies).
+  assert.doesNotMatch(page, /`\/api\/insights\/pinterest-pins/);
+  assert.doesNotMatch(page, /"\/api\/insights\/pinterest-pins/);
   assert.match(dashboard, /DASHBOARD_LOAD_TIMEOUT_MS = 20_000/);
-  assert.match(dashboard, /PIN_SINGLE_ANALYTICS_CONCURRENCY = 20/);
-  assert.match(dashboard, /getOrganicPinAnalytics/);
-  // Insights must read analytics through the NAMED connection. On the multi-account
-  // lineage `forUser()` resolves whichever row is "active", so a two-account user
-  // would silently see one account's numbers under the other account's header.
-  assert.match(dashboard, /forConnection\(/);
+  // The read path no longer constructs a Pinterest client at all — not per Pin, not
+  // in a bounded fallback. `forConnection` remains the only accessor the COLLECTOR
+  // may use (a user-scoped client would read whichever account is "active", so a
+  // two-account user would see one account's numbers under the other's header), and
+  // that assertion now lives against collector.ts rather than the dashboard.
+  assert.doesNotMatch(dashboard, /getOrganicPinAnalytics/);
+  assert.doesNotMatch(dashboard, /PinterestClient\.forConnection\(/);
   assert.doesNotMatch(dashboard, /forUser\(/);
+  const collector = readFileSync(join(process.cwd(), "src/lib/server/insights/collector.ts"), "utf8");
+  assert.match(collector, /PinterestClient\.forConnection\(/);
+  assert.doesNotMatch(collector, /forUser\(/);
   assert.match(dashboard, /listVibePinPublishedPinterestPins/);
   assert.match(provenance, /payload\.remotePinId/);
   assert.match(provenance, /if \(!pinId\) return null/);
   assert.match(catalog, /All \{count\} Pins verified from VibePin publish records/);
-  assert.match(pinMetadataRoute, /MAX_IDS = 10/);
-  assert.match(pinMetadataRoute, /CONCURRENCY = 5/);
   assert.doesNotMatch(page, /Overview[\s\S]*Pins[\s\S]*Analytics[\s\S]*Boards[\s\S]*Audience/);
   assert.match(instagramConfig, /instagram_business_manage_insights/);
 });
@@ -222,16 +228,20 @@ await test("All-accounts view shows accounts side by side and never sums them", 
   assert.match(catalog, /"insights\.accounts\.all"/);
 });
 
-await test("Pin metadata is read with the account that owns the Pin", () => {
-  const route = readFileSync(join(process.cwd(), "src/app/api/insights/pinterest-pins/route.ts"), "utf8");
-  const page = readFileSync(join(process.cwd(), "src/app/app/insights/page.tsx"), "utf8");
-  // A Pin is only readable with its own account's token; a user-scoped client
-  // would 404 every Pin of the non-default account and silently drop its
-  // thumbnail. Insights therefore never falls back to forUser().
-  assert.match(route, /forConnection\(uid, connectionId\)/);
-  assert.doesNotMatch(route, /forUser\(/);
-  // The page always knows which account owns the row it is hydrating.
-  assert.match(page, /connectionId=\$\{encodeURIComponent\(target\.connectionId\)\}/);
+await test("Pin metadata is collected with the owning account, never fetched by the page", () => {
+  const collector = readFileSync(join(process.cwd(), "src/lib/server/insights/collector.ts"), "utf8");
+  const store = readFileSync(join(process.cwd(), "src/lib/server/insights/collectorStore.ts"), "utf8");
+
+  // A Pin is only readable with its own account's token; a user-scoped client would
+  // 404 every Pin of the non-default account and silently drop its thumbnail. That
+  // constraint did not go away — it moved to the collector, which is now the only
+  // thing that reads Pin metadata at all.
+  assert.match(collector, /PinterestClient\.forConnection\(userId, connectionId\)/);
+  assert.doesNotMatch(collector, /forUser\(/);
+
+  // The image is captured while listing and stored, so the page never asks for one.
+  assert.match(collector, /imageUrl: item\.imageUrl/);
+  assert.match(store, /image_url: entry\.imageUrl \?\? prior\?\.imageUrl \?\? null/);
 });
 
 await test("Insights attributes each Pin to the account that published it", () => {

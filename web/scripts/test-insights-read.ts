@@ -11,18 +11,21 @@
  * calls" is the whole point of moving collection off the request path, and it is a
  * property that reading the code can only ever suggest — one `await client.…` added
  * later in a helper would undo it silently. So the Pinterest client here is a real
- * PinterestClient over a counting fetch, and the collected path must leave the
- * counter at zero.
+ * PinterestClient over a counting fetch, and the counter must stay at zero in EVERY
+ * state, not only the collected one: before any run has finished, after a finished
+ * run, after a crashed run, and with several accounts rendered side by side. The
+ * earlier version of this file allowed a bounded live sample in the first state, which
+ * is exactly where the calls were — a spy that is only armed on the happy path proves
+ * nothing about the path that spends the budget.
  *
  * Run: npm run test:insights-read
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ACCOUNT_CONTENT_ROW_LIMIT,
-  PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT,
   buildMetricLookup,
   buildPinterestInsights,
   combineMetricStates,
@@ -33,7 +36,6 @@ import {
   type ContentRegistryRow,
   type LatestStatusRow,
   type LatestValueRow,
-  type LiveAnalyticsSlice,
   type ObservationHistoryRow,
 } from "../src/lib/insights/collectionDashboard";
 import type { EvidenceKeywordSet } from "../src/lib/insights/evidence";
@@ -147,6 +149,7 @@ function registryRow(overrides: Partial<ContentRegistryRow> & { platformContentI
     title: null,
     description: null,
     linkUrl: null,
+    imageUrl: null,
     boardName: null,
     sourceEndpoint: "pins_list",
     lastSeenAt: "2026-08-27T03:00:00.000Z",
@@ -192,9 +195,9 @@ type SourcesOptions = {
   provenance?: VibePinPublishedPinterestPin[];
   storageAvailable?: boolean;
   registryOwners?: Map<string, string>;
+  /** Kept so every test still constructs the spy — an unused client whose fetch
+   *  counter must read zero IS the assertion. */
   client: Awaited<ReturnType<typeof pinterestSpy>>["client"];
-  /** Pin id batches handed to the live reader, in order. */
-  liveBatches: string[][];
   observationHistory?: ObservationHistoryRow[];
   keywordSet?: EvidenceKeywordSet;
   /** Inference texts the composer offered the keyword-set reader, in order. */
@@ -202,9 +205,12 @@ type SourcesOptions = {
 };
 
 /**
- * The production wiring, minus Supabase. `loadLiveAnalytics` calls the same client
- * method `dashboard.ts` calls, so a run that touches it is visible both as a batch
- * here and as an HTTP request on the spy.
+ * The production wiring, minus Supabase.
+ *
+ * Note what is NOT here: a Pinterest reader. `CollectionSources` no longer has one,
+ * so this fake could not supply Pinterest data even if a test wanted it to — the
+ * zero-calls property is now structural rather than something the fakes cooperate to
+ * produce. The spy in each test exists to catch a call made through some other route.
  */
 function sourcesFor(db: FakeCollectionDb, options: SourcesOptions): CollectionSources {
   return {
@@ -252,20 +258,6 @@ function sourcesFor(db: FakeCollectionDb, options: SourcesOptions): CollectionSo
       options.keywordSetRequests?.push([...texts]);
       return options.keywordSet ?? { phrases: [], category: null, version: null, hash: "0" };
     },
-    loadLiveAnalytics: async pinIds => {
-      options.liveBatches.push([...pinIds]);
-      const slices = new Map<string, LiveAnalyticsSlice | null>();
-      for (const pinId of pinIds) {
-        const response = await options.client.getOrganicPinAnalytics(
-          pinId,
-          START,
-          END,
-          ["IMPRESSION", "SAVE", "OUTBOUND_CLICK"],
-        );
-        slices.set(pinId, response.ALL ?? null);
-      }
-      return slices;
-    },
   };
 }
 
@@ -307,7 +299,7 @@ await test("account scope builds the heatmap and summary from account daily obse
   db.observe({ scope: "account", metricName: "IMPRESSION", period: "day", periodDate: "2026-06-01", metricValue: 9_999, observedAt: "2026-08-27T03:00:00.000Z" });
 
   const { client } = await pinterestSpy();
-  const dashboard = await build(db, "account", { client, liveBatches: [] });
+  const dashboard = await build(db, "account", { client });
 
   assert.equal(dashboard.scope, "account");
   assert.equal(dashboard.daily.length, 30, "the range is always filled to 30 days");
@@ -335,7 +327,7 @@ await test("account scope lists registry rows and marks unmeasured Pins unavaila
   db.observe({ platformContentId: "111", metricName: "OUTBOUND_CLICK", metricValue: 12, observedAt: "2026-08-27T03:00:00.000Z" });
 
   const { client } = await pinterestSpy();
-  const dashboard = await build(db, "account", { client, liveBatches: [] });
+  const dashboard = await build(db, "account", { client });
 
   const measured = dashboard.content.find(item => item.id === "111");
   const missing = dashboard.content.find(item => item.id === "222");
@@ -406,7 +398,7 @@ await test("a row that kept a value is diagnosed on its numbers, not on the fail
   db.observe({ platformContentId: "444", metricName: "IMPRESSION", metricValue: null, status: "not_returned", observedAt: "2026-08-27T03:00:00.000Z" });
 
   const { client } = await pinterestSpy();
-  const dashboard = await build(db, "account", { client, liveBatches: [] });
+  const dashboard = await build(db, "account", { client });
   const row = dashboard.content[0];
   assert.equal(row.metricsAvailable, true);
   assert.equal(row.metrics.views, 120);
@@ -414,7 +406,12 @@ await test("a row that kept a value is diagnosed on its numbers, not on the fail
   assert.notEqual(row.diagnosis, "insights.diagnosis.notCollected");
 });
 
-// ── (d) the fetch spy: a collected connection makes no Pinterest calls ──────
+// ── (d) the fetch spy: NO state makes a Pinterest call ─────────────────────
+//
+// Four states and the multi-account view. The one that used to be allowed to call —
+// "no finished run yet" — is first on purpose: it is the state a newly connected
+// account is in, so it is the state that would have spent that account's rate-limit
+// budget on its very first page view.
 
 await test("a connection with a finished run performs ZERO Pinterest calls", async () => {
   const db = new FakeCollectionDb();
@@ -425,14 +422,12 @@ await test("a connection with a finished run performs ZERO Pinterest calls", asy
   db.observe({ platformContentId: "111", metricName: "IMPRESSION", period: "day", periodDate: "2026-08-26", metricValue: 40, observedAt: "2026-08-27T03:00:00.000Z" });
 
   const { client, requested } = await pinterestSpy();
-  const liveBatches: string[][] = [];
   const provenance = [publishedPin({ pinId: "111", title: "Published by VibePin" })];
 
-  const vibepin = await build(db, "vibepin", { client, liveBatches, provenance });
-  const account = await build(db, "account", { client, liveBatches, provenance });
+  const vibepin = await build(db, "vibepin", { client, provenance });
+  const account = await build(db, "account", { client, provenance });
 
   assert.equal(requested.length, 0, `expected no Pinterest requests, got ${requested.join(", ")}`);
-  assert.equal(liveBatches.length, 0, "the live reader is never even entered");
   assert.equal(vibepin.collection?.mode, "collected");
   assert.equal(account.collection?.mode, "collected");
   assert.equal(vibepin.content[0]?.metrics.views, 40);
@@ -444,20 +439,40 @@ await test("a finished run with no observations shows an empty collected state, 
   const db = new FakeCollectionDb();
   db.runs.push(finishedRun("2026-08-27T03:05:00.000Z"));
   const { client, requested } = await pinterestSpy();
-  const liveBatches: string[][] = [];
   const dashboard = await build(db, "vibepin", {
     client,
-    liveBatches,
     provenance: [publishedPin({ pinId: "111" })],
   });
   assert.equal(requested.length, 0);
-  assert.equal(liveBatches.length, 0);
   assert.equal(dashboard.collection?.mode, "collected");
   assert.equal(dashboard.content[0].metricsAvailable, false);
   assert.equal(dashboard.summary.views, 0);
 });
 
-await test("an unfinished run does not count as collection having happened", async () => {
+// ── (e) the three states with no data — and still not one call ─────────────
+
+await test("NO RUN YET: both scopes await the first run and make zero Pinterest calls", async () => {
+  const db = new FakeCollectionDb();
+  // 45 published Pins: under the old fallback this was 20 single-Pin analytics calls.
+  const provenance = Array.from({ length: 45 }, (_, index) => publishedPin({ pinId: String(100_000 + index) }));
+  const { client, requested } = await pinterestSpy();
+
+  const vibepin = await build(db, "vibepin", { client, provenance });
+  const account = await build(db, "account", { client, provenance });
+
+  assert.equal(requested.length, 0, `a page with no collected data must still call nothing, got ${requested.join(", ")}`);
+  for (const dashboard of [vibepin, account]) {
+    assert.equal(dashboard.collection?.mode, "awaiting_first_run");
+    assert.equal(dashboard.collection?.sampleLimit, null, "nothing writes a sample limit any more");
+    assert.equal(dashboard.collection?.dataUpdatedAt, null);
+    assert.equal(dashboard.content.length, 0, "no rows are invented from a live read");
+    assert.equal(dashboard.summary.views, 0);
+    assert.equal(dashboard.diagnosis, null, "an evidence panel over zero rows is a headline about nothing");
+    assert.equal(dashboard.daily.length, 30, "the empty range is still drawn, so the shape does not jump");
+  }
+});
+
+await test("CRASHED RUN: an unfinished run is not collection, and still calls nothing", async () => {
   const db = new FakeCollectionDb();
   db.runs.push({
     id: "crashed",
@@ -466,57 +481,52 @@ await test("an unfinished run does not count as collection having happened", asy
     finishedAt: null,
     callsMade: 2,
     callsBudget: 30,
-    skippedReason: null,
+    skippedReason: "rate_limited",
     error: "boom",
   });
-  const { client } = await pinterestSpy();
-  const liveBatches: string[][] = [];
+  const { client, requested } = await pinterestSpy();
   const dashboard = await build(db, "vibepin", {
     client,
-    liveBatches,
     provenance: [publishedPin({ pinId: "111" })],
   });
-  assert.equal(dashboard.collection?.mode, "live_sample");
-});
-
-// ── (e) the fallback: only without a finished run, and capped at 20 ─────────
-
-await test("without a finished run the VibePin scope reads a live sample capped at 20", async () => {
-  assert.equal(PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT, 20, "the cap is the promise, not a suggestion");
-  const db = new FakeCollectionDb();
-  const provenance = Array.from({ length: 45 }, (_, index) => publishedPin({ pinId: String(100_000 + index) }));
-  const { client, requested } = await pinterestSpy();
-  const liveBatches: string[][] = [];
-
-  const dashboard = await build(db, "vibepin", { client, liveBatches, provenance });
-
-  assert.equal(liveBatches.length, 1);
-  assert.equal(liveBatches[0].length, 20, "sliced before the reader is called");
-  assert.equal(requested.length, 20, "one Pinterest request per sampled Pin, and no more");
-  assert.equal(dashboard.content.length, 20);
-  assert.equal(dashboard.collection?.mode, "live_sample");
-  assert.equal(dashboard.collection?.sampleLimit, 20);
-  assert.equal(dashboard.collection?.dataUpdatedAt, null);
-  assert.equal(dashboard.content[0].metricsAvailable, true);
-});
-
-await test("without a finished run the account scope shows nothing and calls nothing", async () => {
-  const db = new FakeCollectionDb();
-  const { client, requested } = await pinterestSpy();
-  const liveBatches: string[][] = [];
-  const dashboard = await build(db, "account", {
-    client,
-    liveBatches,
-    provenance: Array.from({ length: 30 }, (_, index) => publishedPin({ pinId: String(200_000 + index) })),
-  });
-  assert.equal(requested.length, 0, "there is no honest live equivalent of the account scope");
-  assert.equal(liveBatches.length, 0);
+  // The state where a live call is least likely to help: Pinterest just rate-limited
+  // the collector on this very token. Retrying from the request path would be the
+  // worst possible moment to spend one.
+  assert.equal(requested.length, 0);
   assert.equal(dashboard.collection?.mode, "awaiting_first_run");
+  assert.equal(dashboard.collection?.skippedReason, "rate_limited", "the page says why, instead of calling");
   assert.equal(dashboard.content.length, 0);
-  assert.equal(dashboard.daily.length, 30);
 });
 
-await test("one finished run retires the live path even when a later run crashed", async () => {
+await test("ALL ACCOUNTS: rendering several connections side by side calls nothing", async () => {
+  // The multi-account view builds one dashboard per connection. Two accounts in the
+  // pre-collection state used to be ~40 analytics calls against a 60/min/user
+  // allowance — the exact overrun this test forbids.
+  const { client, requested } = await pinterestSpy();
+  const provenance = Array.from({ length: 25 }, (_, index) => publishedPin({
+    pinId: String(300_000 + index),
+    targetConnectionId: null,
+  }));
+
+  const collected = new FakeCollectionDb();
+  collected.runs.push(finishedRun("2026-08-27T03:05:00.000Z"));
+  collected.registry.push(registryRow({ platformContentId: "300000" }));
+
+  const dashboards = [
+    await build(new FakeCollectionDb(), "vibepin", { client, provenance }),
+    await build(collected, "vibepin", { client, provenance }),
+    await build(new FakeCollectionDb(), "account", { client, provenance }),
+  ];
+
+  assert.equal(requested.length, 0, `All-accounts mode must call nothing, got ${requested.join(", ")}`);
+  assert.deepEqual(
+    dashboards.map(item => item.collection?.mode),
+    ["awaiting_first_run", "collected", "awaiting_first_run"],
+    "mixed states render together, and none of them reaches Pinterest",
+  );
+});
+
+await test("one finished run means collected, even when a later run crashed", async () => {
   const db = new FakeCollectionDb();
   db.runs.push(finishedRun("2026-08-26T03:05:00.000Z"));
   db.runs.push({
@@ -530,17 +540,37 @@ await test("one finished run retires the live path even when a later run crashed
     error: null,
   });
   const { client, requested } = await pinterestSpy();
-  const liveBatches: string[][] = [];
   const dashboard = await build(db, "vibepin", {
     client,
-    liveBatches,
     provenance: [publishedPin({ pinId: "111" })],
   });
-  assert.equal(requested.length, 0, "a crashed run must not send the page back to live calls");
+  assert.equal(requested.length, 0);
   assert.equal(dashboard.collection?.mode, "collected");
   assert.equal(dashboard.collection?.dataUpdatedAt, "2026-08-26T03:05:00.000Z");
   // skipped_reason belongs to the most recent ATTEMPT, finished or not.
   assert.equal(dashboard.collection?.skippedReason, "rate_limited");
+});
+
+// ── Registry thumbnails: stored by the collector, never fetched by the page ─
+
+await test("the account scope prefers the registry thumbnail, then the publish record", async () => {
+  const db = new FakeCollectionDb();
+  db.runs.push(finishedRun("2026-08-27T03:05:00.000Z"));
+  db.registry.push(registryRow({ platformContentId: "111", imageUrl: "https://i.pinimg.com/collected.jpg" }));
+  db.registry.push(registryRow({ platformContentId: "222", vibepinDraftId: "draft-222", sourceEndpoint: "vibepin_publish" }));
+  db.registry.push(registryRow({ platformContentId: "333" }));
+
+  const { client, requested } = await pinterestSpy();
+  const dashboard = await build(db, "account", {
+    client,
+    provenance: [publishedPin({ pinId: "222", imageUrl: "https://cdn.vibepin/draft.jpg" })],
+  });
+
+  const byId = new Map(dashboard.content.map(row => [row.id, row]));
+  assert.equal(byId.get("111")?.imageUrl, "https://i.pinimg.com/collected.jpg", "registry first");
+  assert.equal(byId.get("222")?.imageUrl, "https://cdn.vibepin/draft.jpg", "then the publish record");
+  assert.equal(byId.get("333")?.imageUrl, null, "then a placeholder — never a fetch");
+  assert.equal(requested.length, 0, "a missing thumbnail costs a placeholder, not an API call");
 });
 
 // ── Attribution and scoping ────────────────────────────────────────────────
@@ -551,7 +581,6 @@ await test("the VibePin scope shows only Pins this connection published", async 
   const { client } = await pinterestSpy();
   const dashboard = await build(db, "vibepin", {
     client,
-    liveBatches: [],
     provenance: [
       publishedPin({ pinId: "111" }),
       publishedPin({ pinId: "222", targetConnectionId: "conn-b" }),
@@ -581,27 +610,49 @@ await test("content daily rows outside the visible window never reach the heatma
 
 // ── Source contracts: properties that must outlive these fakes ─────────────
 
-await test("the dashboard reaches Pinterest only from the live fallback reader", () => {
+await test("the read path cannot reach Pinterest at all: no client, no route", () => {
   const dashboard = src("src/lib/server/insights/dashboard.ts");
   const collection = src("src/lib/insights/collectionDashboard.ts");
-  // Building the client can refresh a token, so an eager construction would be a
-  // Pinterest round trip on the collected path too. It lives inside loadLiveAnalytics.
-  const liveReader = dashboard.slice(dashboard.indexOf("loadLiveAnalytics:"));
-  assert.match(liveReader, /PinterestClient\.forConnection\(uid, connection\.id\)/);
-  assert.equal(
-    dashboard.split("PinterestClient.forConnection(").length - 1,
-    1,
-    "exactly one client construction, and it is inside the fallback reader",
-  );
+  const reportStore = src("src/lib/server/insights/reportStore.ts");
+  const page = src("src/app/app/insights/page.tsx");
+
+  // The counting-fetch tests above prove the current code makes no call. This one
+  // proves the NEXT edit cannot make one either, which the fetch spy alone cannot:
+  // a spy only sees the paths a test happens to exercise. Constructing the client is
+  // itself a possible round trip (forConnection can refresh an access token), so the
+  // assertion is that the constructor never appears on the read path.
+  assert.doesNotMatch(dashboard, /PinterestClient\.forConnection\(/);
+  assert.doesNotMatch(dashboard, /PinterestClient\.forUser\(/);
+  assert.doesNotMatch(dashboard, /new PinterestClient\(/);
   // The @handle used to cost one API call per page load; it comes from the row now.
   // Matched as a CALL (leading dot) so the comment explaining the removal survives.
   assert.doesNotMatch(dashboard, /\.getCurrentPinterestUser/);
   assert.doesNotMatch(dashboard, /forUser\(/);
+  // No live reader may re-enter the source contract. Matched as a PROPERTY
+  // (`name:`) so the comments explaining why it was removed can stay.
+  assert.doesNotMatch(dashboard, /loadLiveAnalytics\s*:/);
+  assert.doesNotMatch(collection, /loadLiveAnalytics\s*[:(]/);
+  assert.doesNotMatch(reportStore, /loadLiveAnalytics\s*:/);
+
   // The composer must not be able to call Pinterest at all, and must stay loadable
   // outside a Next server runtime — which is what lets this file test it directly.
   assert.doesNotMatch(collection, /PinterestClient/);
   assert.doesNotMatch(collection, /^import "server-only"/m);
   assert.doesNotMatch(collection, /^import \{[^}]*\} from "@\/lib\/server\//m);
+
+  // The page hydrated thumbnails through a route that turned into one Pinterest
+  // metadata call per Pin. Both the caller and the route are gone; the registry
+  // column carries the image instead.
+  // Matched as a URL LITERAL (leading slash inside a string/template), so the
+  // comment recording why the route was deleted survives while a call cannot.
+  assert.doesNotMatch(page, /`\/api\/insights\/pinterest-pins/);
+  assert.doesNotMatch(page, /"\/api\/insights\/pinterest-pins/);
+  assert.doesNotMatch(page, /hydratedPins/);
+  assert.equal(
+    existsSync(join(process.cwd(), "src/app/api/insights/pinterest-pins/route.ts")),
+    false,
+    "the per-Pin metadata route must not come back",
+  );
 });
 
 await test("the read store degrades a missing v64 schema to empty instead of throwing", () => {
@@ -627,7 +678,7 @@ await test("the read store degrades a missing v64 schema to empty instead of thr
   assert.match(store, /\.order\("finished_at", \{ ascending: false \}\)/);
 });
 
-await test("the page carries the scope into every request and bounds thumbnail hydration", () => {
+await test("the page carries the scope into every request and hydrates no thumbnails", () => {
   const page = src("src/app/app/insights/page.tsx");
   const route = src("src/app/api/insights/route.ts");
   assert.match(route, /readScope\(url\.searchParams\.get\("scope"\)\)/);
@@ -636,8 +687,11 @@ await test("the page carries the scope into every request and bounds thumbnail h
   // answer with the other view's numbers.
   assert.equal(page.split("scope=${").length - 1, 2);
   assert.match(page, /ScopeToggle scope=\{scope\}/);
-  assert.match(page, /const HYDRATION_LIMIT = 20/);
-  assert.equal(page.split("slice(0, HYDRATION_LIMIT)").length - 1, 2);
+  // There used to be a HYDRATION_LIMIT here, capping the thumbnails fetched per
+  // account per view at 20. The cap is gone because the fetching is gone: a bound on
+  // an unbudgeted call is still an unbudgeted call, and the image now arrives with
+  // the dashboard from content_registry.
+  assert.doesNotMatch(page, /HYDRATION_LIMIT/);
   assert.match(page, /insights\.content\.originVibePin/);
   assert.match(page, /insights\.collection\.dataUpdated/);
 });

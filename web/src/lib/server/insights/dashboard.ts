@@ -12,7 +12,6 @@ import {
   ACCOUNT_CONTENT_ROW_LIMIT,
   buildPinterestInsights,
   type CollectionSources,
-  type LiveAnalyticsSlice,
 } from "@/lib/insights/collectionDashboard";
 import type {
   InsightsContent,
@@ -21,12 +20,10 @@ import type {
   InsightsPlatform,
   InsightsScope,
 } from "@/lib/insights/types";
-import {
-  PinterestApiError,
-  PinterestClient,
-  type PinterestAccountAnalyticsResponse,
-  type PinterestOrganicAnalyticsSlice,
-} from "@/lib/server/pinterest/service";
+// PinterestApiError only — the error TYPE, for classifying a failure that happened
+// elsewhere. The client itself is deliberately not imported: this module builds the
+// page, and the page makes no Pinterest calls.
+import { PinterestApiError } from "@/lib/server/pinterest/service";
 import { hasInstagramInsightsScope } from "@/lib/server/instagram/config";
 import { getInstagramAccessToken } from "@/lib/server/instagram/connectionStore";
 import {
@@ -54,8 +51,6 @@ import { EMPTY_KEYWORD_SET } from "@/lib/insights/keywordSet";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const DASHBOARD_LOAD_TIMEOUT_MS = 20_000;
-/** Parallel single-Pin analytics calls on the fallback path only. */
-const PIN_SINGLE_ANALYTICS_CONCURRENCY = 20;
 const dashboardCache = new Map<string, { at: number; value: InsightsDashboard }>();
 
 async function withDashboardTimeout<T>(promise: Promise<T>): Promise<T> {
@@ -73,14 +68,6 @@ async function withDashboardTimeout<T>(promise: Promise<T>): Promise<T> {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
-
-/** The single-Pin analytics response is keyed by app type ("ALL", "WEB", …), not by
- *  Pin id. `ALL` is the total; any other key alone would silently report one surface
- *  as if it were the whole. */
-function organicSlice(response: PinterestAccountAnalyticsResponse): PinterestOrganicAnalyticsSlice | null {
-  if (!response || typeof response !== "object") return null;
-  return response.ALL ?? Object.values(response).find(value => value && typeof value === "object") ?? null;
 }
 
 function mediaFormat(mediaType: string | null): InsightsContent["format"] {
@@ -133,13 +120,13 @@ function emptyDashboard(
 /**
  * The readers the Pinterest dashboard is built from.
  *
- * Nine of the ten touch our own database. The tenth, `loadLiveAnalytics`, is the
- * only path to Pinterest, and it constructs the client lazily on purpose:
- * `PinterestClient.forConnection` can itself refresh an access token, so building it
- * eagerly would put a Pinterest round trip on every page load — including the
- * collected path that is supposed to make none. For the same reason the account name
- * comes from the stored connection row rather than `getCurrentPinterestUser()`,
- * which this file used to call on every request.
+ * Every one of them touches our own database. There is no Pinterest client here at
+ * all any more: the last one, `loadLiveAnalytics`, served the pre-first-run fallback
+ * and made up to 20 single-Pin analytics calls per account per page view, outside the
+ * collector's budget and ledger. Its absence is what makes "a page request makes no
+ * Pinterest API call" true by construction rather than by discipline — the account
+ * name likewise comes from the stored connection row, not from
+ * `getCurrentPinterestUser()`, which this file used to call on every request.
  */
 function pinterestSources(
   uid: string,
@@ -177,37 +164,6 @@ function pinterestSources(
     // across accounts. A registry that is not there yet resolves to an empty map.
     loadRegistryOwners: pinIds => ownerConnectionsForPins(siblingConnectionIds, pinIds)
       .catch(() => new Map<string, string>()),
-    loadLiveAnalytics: async pinIds => {
-      const slices = new Map<string, LiveAnalyticsSlice | null>();
-      if (pinIds.length === 0) return slices;
-      const client = await PinterestClient.forConnection(uid, connection.id);
-      const metrics = [
-        "IMPRESSION",
-        "SAVE",
-        "PIN_CLICK",
-        "OUTBOUND_CLICK",
-        "TOTAL_COMMENTS",
-        "TOTAL_REACTIONS",
-      ] as const;
-      // Pinterest's bulk endpoint is a restricted beta this app is not entitled to;
-      // the stable single-Pin endpoint returns the same shape one Pin at a time.
-      for (let index = 0; index < pinIds.length; index += PIN_SINGLE_ANALYTICS_CONCURRENCY) {
-        const chunk = pinIds.slice(index, index + PIN_SINGLE_ANALYTICS_CONCURRENCY);
-        const settled = await Promise.allSettled(chunk.map(pinId => client.getOrganicPinAnalytics(
-          pinId,
-          startDate,
-          endDate,
-          [...metrics],
-        )));
-        settled.forEach((result, resultIndex) => {
-          const pinId = chunk[resultIndex];
-          slices.set(pinId, result.status === "fulfilled"
-            ? organicSlice(result.value)
-            : null);
-        });
-      }
-      return slices;
-    },
   };
 }
 
