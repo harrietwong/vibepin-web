@@ -55,6 +55,7 @@ import type { PinDraft }    from "@/lib/pinDraftStore";
 import { PinHoverTarget, type PinHoverPreviewActions, setPinPreviewSuspended } from "@/components/plan/PinHoverPreview";
 import { PinThumbnail } from "@/components/plan/PinThumbnail";
 import { PlanCardStatusBadge } from "@/components/plan/PlanCardStatusBadge";
+import { ScorecardBadge } from "@/components/insights/ScorecardBadge";
 import { autoSchedulePins, ensureScheduledPlanTime, normalizeInPlanDraftTimes, buildDaySlotRows, dayHasFreeFutureSlot, classifyDayDropBlock, formatScheduleDateLabel } from "@/lib/smartSchedule";
 import { mapPlanDraftToCalendarEvent, draftsToSortedEvents } from "@/lib/planCalendar";
 import { filterUnscheduledPinIds } from "@/lib/smartScheduleActions";
@@ -1089,6 +1090,14 @@ function DraggablePinCard({ draft, dnd, onEdit, compact, select, hoverActions }:
             the calendar (image + time only). Bottom-right, opposite the time, so it
             never collides with the account badge or the selection checkbox. Icon and
             text ride along with the colour (PRD 0809 §8). */}
+        {/* A published Pin whose 7-day scorecard exists gets one chip; every other
+            card renders nothing at all. Bottom-LEFT beside the time, because the
+            opposite corner already carries the status badge and the lock, and a third
+            thing in that corner would be a pile rather than a badge. */}
+        <ScorecardBadge
+          remotePinId={draft.remotePinId}
+          style={{ position: "absolute", bottom: 4, left: ev.plannedTime ? 46 : 4 }}
+        />
         <PlanCardStatusBadge draft={draft} style={{ position: "absolute", bottom: 4, right: 4 }} />
         {/* Which account this Pin publishes to — only with 2+ connected accounts.
             Sits right of the selection checkbox (top-left) and clear of the remove

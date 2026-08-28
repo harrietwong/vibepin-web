@@ -705,3 +705,30 @@
 }
 
 .lockedCta:hover { filter: brightness(1.08); }
+
+/* The one question a report asks back. Small and at the end: the reading is the
+   point, the thumb is bookkeeping — but it is the only signal that tells a report
+   which is true and useless from one that changed what somebody did. */
+.reportFeedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--app-text-muted);
+}
+
+.thumb {
+  border: 1px solid var(--app-border);
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 6px;
+}
+
+.thumbActive {
+  border-color: var(--app-accent, #7c3aed);
+  background: rgba(124, 58, 237, .16);
+}

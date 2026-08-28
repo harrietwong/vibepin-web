@@ -18,6 +18,11 @@ import {
 import type { I18nText } from "@/lib/insights/recommendations";
 import { isDiagnosisLocked } from "@/lib/insights/paidGate";
 import type {
+  InsightReportDetail,
+  InsightReportSummary,
+  WeeklyReportContent,
+} from "@/lib/insights/reportTypes";
+import type {
   InsightsApiResponse,
   InsightsCollectionState,
   InsightsContent,
@@ -82,25 +87,23 @@ function fill(template: string, values: Record<string, string | number>): string
   );
 }
 
-async function authedInsightsFetch(url: string): Promise<Response> {
-  let response = await fetch(url, {
-    cache: "no-store",
-    credentials: "same-origin",
-  });
+async function authedInsightsFetch(url: string, init?: RequestInit): Promise<Response> {
+  const base: RequestInit = { ...init, cache: "no-store" };
+  let response = await fetch(url, { ...base, credentials: "same-origin" });
   if (response.status === 401) {
     const token = await freshAccessToken();
     if (token) {
       response = await fetch(url, {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${token}` },
+        ...base,
+        headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` },
       });
     }
     if (response.status === 401) {
       const refreshedToken = await refreshSessionOnce();
       if (refreshedToken) {
         response = await fetch(url, {
-          cache: "no-store",
-          headers: { Authorization: `Bearer ${refreshedToken}` },
+          ...base,
+          headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${refreshedToken}` },
         });
       }
     }
@@ -534,21 +537,10 @@ function DiagnosisPanel({
 }) {
   if (!diagnosis) return null;
   // The gate is server-side: a locked payload has no headline, no findings and no
-  // evidence to hide. What is rendered here is the placeholder itself, not a
-  // censored version of a reading the browser was nevertheless sent.
-  if (isDiagnosisLocked(diagnosis)) {
-    return (
-      <section className={`${styles.diagnosisPanel} ${variant === "card" ? styles.diagnosisPanelCard : ""}`}>
-        <header className={styles.diagnosisHeader}>
-          <h2 className={styles.diagnosisTitle}>{tr("insights.diagnosisPanel.title")}</h2>
-          <span className={styles.diagnosisChip}>{tr("insights.locked.chip")}</span>
-        </header>
-        <p className={styles.diagnosisHeadline}>{tr("insights.locked.headline")}</p>
-        <p className={styles.diagnosisMuted}>{tr("insights.locked.body")}</p>
-        <Link className={styles.lockedCta} href="/pricing">{tr("insights.locked.cta")}</Link>
-      </section>
-    );
-  }
+  // evidence to hide. The upgrade message is rendered ONCE per account, by the
+  // "This week" card above; repeating it here would turn one product decision into
+  // two walls stacked on the same screen.
+  if (isDiagnosisLocked(diagnosis)) return null;
   const confidenceKey = `insights.diagnosisPanel.confidence.${diagnosis.confidence}`;
   return (
     <section className={`${styles.diagnosisPanel} ${variant === "card" ? styles.diagnosisPanelCard : ""}`}>
@@ -603,6 +595,161 @@ function DiagnosisPanel({
       ) : null}
 
       <p className={styles.diagnosisCaveat}>{renderText(diagnosis.sampleCaveat, tr)}</p>
+    </section>
+  );
+}
+
+type ReportListResponse = { reports?: InsightReportSummary[]; locked?: true };
+
+async function reportListFetcher(url: string): Promise<ReportListResponse> {
+  const response = await authedInsightsFetch(url);
+  // A free plan answers 403 here and an account with no reports answers with an
+  // empty list. Neither is an error, and neither should light up the page.
+  if (!response.ok) return { reports: [] };
+  return response.json() as Promise<ReportListResponse>;
+}
+
+async function reportDetailFetcher(url: string): Promise<{ report: InsightReportDetail } | null> {
+  const response = await authedInsightsFetch(url);
+  if (!response.ok) return null;
+  return response.json() as Promise<{ report: InsightReportDetail }>;
+}
+
+/**
+ * The weekly report, at the top of the account it is about.
+ *
+ * Two requests, not one, and the split is the design. The list says WHICH report is
+ * current; reading the body is what marks it viewed, and viewing is what freezes the
+ * row. A card that got the body from the list would mark a report read every time the
+ * page rendered, and `viewed_at` would stop meaning "a person saw this".
+ *
+ * Nothing is rendered when there is no current weekly report. The empty state of a
+ * feature that produces one thing a week is silence, not a box explaining itself: the
+ * account panel below already says what the numbers show today.
+ */
+function ThisWeekCard({
+  connectionId,
+  locked,
+  tr,
+}: {
+  connectionId: string | null;
+  /** From the dashboard payload: the plan is not entitled to a diagnosis. */
+  locked: boolean;
+  tr: Translate;
+}) {
+  const [helpful, setHelpful] = useState<boolean | null>(null);
+
+  const listKey = locked
+    ? null
+    : `/api/insights/reports?kind=weekly${connectionId ? `&connectionId=${encodeURIComponent(connectionId)}` : ""}`;
+  const { data: list } = useSWR<ReportListResponse>(listKey, reportListFetcher, {
+    revalidateOnFocus: false,
+    shouldRetryOnError: false,
+  });
+  const summary = list?.reports?.[0] ?? null;
+
+  const { data: detail } = useSWR<{ report: InsightReportDetail } | null>(
+    summary ? `/api/insights/reports/${encodeURIComponent(summary.id)}` : null,
+    reportDetailFetcher,
+    { revalidateOnFocus: false, shouldRetryOnError: false },
+  );
+
+  const report = detail?.report ?? null;
+  useEffect(() => {
+    if (report) setHelpful(report.helpful);
+  }, [report]);
+
+  const sendFeedback = useCallback((value: boolean) => {
+    if (!summary) return;
+    setHelpful(value);
+    authedInsightsFetch(`/api/insights/reports/${encodeURIComponent(summary.id)}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ helpful: value }),
+    }).catch(() => {
+      // The next thumb overwrites this one; a failed vote is not worth a dialog.
+    });
+  }, [summary]);
+
+  if (locked) {
+    return (
+      <section className={styles.diagnosisPanel}>
+        <header className={styles.diagnosisHeader}>
+          <h2 className={styles.diagnosisTitle}>{tr("insights.thisWeek.title")}</h2>
+          <span className={styles.diagnosisChip}>{tr("insights.locked.chip")}</span>
+        </header>
+        <p className={styles.diagnosisHeadline}>{tr("insights.locked.headline")}</p>
+        <p className={styles.diagnosisMuted}>{tr("insights.locked.body")}</p>
+        <Link className={styles.lockedCta} href="/pricing">{tr("insights.locked.cta")}</Link>
+      </section>
+    );
+  }
+
+  if (!summary || !report) return null;
+  const content = report.snapshot.content as WeeklyReportContent;
+  if (!content?.headline) return null;
+
+  return (
+    <section className={styles.diagnosisPanel}>
+      <header className={styles.diagnosisHeader}>
+        <h2 className={styles.diagnosisTitle}>{tr("insights.thisWeek.title")}</h2>
+        <span className={styles.diagnosisChip}>{summary.periodKey}</span>
+        <span className={styles.diagnosisCategory}>
+          {report.dataThrough
+            ? fill(tr("insights.thisWeek.dataThrough"), { date: formatDateTime(report.dataThrough) })
+            : ""}
+        </span>
+      </header>
+
+      <p className={styles.diagnosisHeadline}>{renderText(content.headline, tr)}</p>
+
+      {content.findings.length > 0 ? (
+        <ul className={styles.diagnosisList}>
+          {content.findings.slice(0, 3).map(finding => (
+            <li key={finding.evidenceId}>{renderText(finding.text, tr)}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className={styles.diagnosisMuted}>{tr("insights.diagnosisPanel.noFindings")}</p>
+      )}
+
+      {content.recommendations.slice(0, 2).map(recommendation => (
+        <div key={recommendation.id} className={styles.recommendation}>
+          <p>
+            <span className={styles.recommendationLabel}>{tr("insights.diagnosisPanel.change")}</span>
+            <span className={styles.recommendationVariable}>
+              {tr(`insights.diagnosisPanel.variable.${recommendation.change.variable}`)}
+            </span>
+            {renderText(recommendation.change.phrasing, tr)}
+          </p>
+          <p>
+            <span className={styles.recommendationLabel}>{tr("insights.diagnosisPanel.test")}</span>
+            {renderText(recommendation.test, tr)}
+          </p>
+        </div>
+      ))}
+
+      <div className={styles.reportFeedback}>
+        <span>{helpful === null ? tr("insights.thisWeek.helpfulQuestion") : tr("insights.thisWeek.thanks")}</span>
+        <button
+          type="button"
+          className={`${styles.thumb} ${helpful === true ? styles.thumbActive : ""}`}
+          aria-pressed={helpful === true}
+          aria-label={tr("insights.thisWeek.helpfulYes")}
+          onClick={() => sendFeedback(true)}
+        >
+          {"\u{1F44D}"}
+        </button>
+        <button
+          type="button"
+          className={`${styles.thumb} ${helpful === false ? styles.thumbActive : ""}`}
+          aria-pressed={helpful === false}
+          aria-label={tr("insights.thisWeek.helpfulNo")}
+          onClick={() => sendFeedback(false)}
+        >
+          {"\u{1F44E}"}
+        </button>
+      </div>
     </section>
   );
 }
@@ -907,6 +1054,11 @@ function AccountSummaryCard({
             </div>
           </div>
           <DataState collection={dashboard.collection} className={styles.cardDataState} tr={tr} />
+          <ThisWeekCard
+            connectionId={account.id}
+            locked={isDiagnosisLocked(dashboard.diagnosis)}
+            tr={tr}
+          />
           <DiagnosisPanel diagnosis={dashboard.diagnosis} variant="card" tr={tr} />
           {dashboard.warning || dashboard.availability.message ? (
             <p className={styles.accountCardNote}>
@@ -1282,6 +1434,11 @@ export default function InsightsPage() {
             <DataState collection={dashboard.collection} className={styles.dataState} tr={tr} />
             {ready ? (
               <>
+                <ThisWeekCard
+                  connectionId={activeConnectionId}
+                  locked={isDiagnosisLocked(dashboard.diagnosis)}
+                  tr={tr}
+                />
                 <DashboardMetrics dashboard={dashboard} tr={tr} />
                 <Heatmap dashboard={dashboard} tr={tr} />
                 <DiagnosisPanel diagnosis={dashboard.diagnosis} variant="full" tr={tr} />

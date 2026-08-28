@@ -245,4 +245,23 @@ export const insightsMessages = {
   "insights.locked.headline": "The read on your account is part of Starter and above.",
   "insights.locked.body": "Your numbers stay yours and keep being collected every night, so upgrading gives you a diagnosis with the history already behind it - not an empty page and a month of waiting.",
   "insights.locked.cta": "See plans",
+
+  // -- Weekly report card + Plan scorecard --
+  //    "Data through" is not decoration: a report is frozen evidence, and a reader
+  //    who cannot see which night it was cut from cannot tell a stale report from a
+  //    quiet week. The thumb is the only signal that separates a report that is true
+  //    and useless from one that changed what somebody did.
+  "insights.thisWeek.title": "This week",
+  "insights.thisWeek.dataThrough": "Data through {date}",
+  "insights.thisWeek.helpfulQuestion": "Was this useful?",
+  "insights.thisWeek.helpfulYes": "Yes, useful",
+  "insights.thisWeek.helpfulNo": "No, not useful",
+  "insights.thisWeek.thanks": "Noted - thank you.",
+  "insights.scorecard.badge": "Scorecard",
+  "insights.scorecard.title7": "7-day scorecard",
+  "insights.scorecard.title30": "30-day scorecard",
+  "insights.scorecard.age": "Day {days}",
+  "insights.scorecard.close": "Close",
+  "insights.scorecard.openLabel": "Open this Pin's scorecard",
+  "insights.scorecard.loading": "Loading...",
 } as const;
