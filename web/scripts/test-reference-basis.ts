@@ -411,4 +411,42 @@ test("tiered: untiered results still take the legacy signal path (contract is ad
   assert.equal(deriveRecommendationBasis({ hasAnalysis: false, hasText: true, results: legacy }), "product_text");
 });
 
+
+// ── 12. the keyword-cluster cap must not move the honest basis ────────────────
+
+test("tiered: keywordClusterCap reorders the set without changing the basis", () => {
+  const product = { title: "Gold Hoop Earrings" };
+  const input: ReferenceScoringInput = { category: "fashion", productTitle: product.title };
+  const HOT = "cozy neutral aesthetic";
+  const fashion = (id: string, o: Partial<ReferenceCandidateRow> = {}) =>
+    row(id, { category: "fashion", ...o });
+  const rows = [
+    // 5 Tier-1 rows in ONE keyword cluster (product words arrive via the title)…
+    ...[1, 2, 3, 4, 5].map(i => fashion("t1-" + i, { title: "gold hoop earrings", sourceKeyword: HOT })),
+    // …plus Tier-2 backfill with no product overlap ("reference" is a stop word)
+    fashion("t2-a", { sourceKeyword: "summery wallpapers" }),
+    fashion("t2-b", { sourceKeyword: "kids playroom ideas" }),
+  ];
+  const basisOf = (results: ReturnType<typeof rankReferencesTiered>) =>
+    deriveRecommendationBasis({
+      hasAnalysis: false,
+      hasText: hasProductTextSignal(product),
+      results,
+    });
+
+  const uncapped = rankReferencesTiered(rows, input, 12);
+  const capped = rankReferencesTiered(rows, input, 12, { keywordClusterCap: 2 });
+  assert.equal(basisOf(uncapped), "product_text");
+  assert.equal(
+    basisOf(capped),
+    "product_text",
+    "capping only demotes within the list — Tier-1 evidence still exists, so the basis holds",
+  );
+  assert.equal(capped[0].recommendationTier, "product_evidence", "the cap never demotes an entire tier");
+  assert.deepEqual(
+    capped.map(r => r.id).sort(),
+    uncapped.map(r => r.id).sort(),
+    "same membership, different order",
+  );
+});
 console.log(`\n${passed} reference-basis tests passed.`);

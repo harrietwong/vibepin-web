@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {
   rankReferences,
+  rankReferencesTiered,
+  keywordClusterKey,
   scoreReference,
   normalizedSaves,
   normalizedQuality,
@@ -194,4 +196,139 @@ test("rankReferences: dedupes by id and imageUrl", () => {
   assert.equal(ranked.length, 1, "same id/imageUrl must not appear twice");
 });
 
+
+// ── scrapedAt freshness tie-break + keyword-cluster cap (P0-e) ─────────────────
+
+test("rankReferencesTiered: final tie-break is scrapedAt desc, then id asc", () => {
+  // Every row here scores identically (same category / saves / quality, no crawl keyword),
+  // so ONLY the tie-break can order them. Plain id-asc would give a, b, c, d, e.
+  const rows = [
+    row("a", { scrapedAt: "2026-08-01T00:00:00Z" }),
+    row("b", { scrapedAt: "2026-08-20T00:00:00Z" }),
+    row("c", { scrapedAt: null }),
+    row("d", { scrapedAt: "2026-08-20T00:00:00Z" }),
+    row("e"),   // scrapedAt absent entirely
+  ];
+  const ids = rankReferencesTiered(rows, { category: "home-decor" }, 12).map(r => r.id);
+  assert.deepEqual(
+    ids,
+    ["b", "d", "a", "c", "e"],
+    "freshest crawl first; equal timestamps fall back to id asc; null/absent counts as oldest",
+  );
+});
+
+test("keywordClusterKey: order-free, normalized identity for a crawl keyword", () => {
+  assert.equal(keywordClusterKey("back to school outfit inspo"), "back outfit school");
+  assert.equal(
+    keywordClusterKey("back 2 school outfits"),
+    keywordClusterKey("back to school outfit inspo"),
+    "plural + filler variants of one keyword must collapse into the same cluster",
+  );
+  assert.equal(keywordClusterKey("school back outfit"), "back outfit school", "word order must not matter");
+  assert.equal(keywordClusterKey("outfit outfits outfit"), "outfit", "duplicates collapse to one");
+  // The six variants MEASURED on the live fashion pool: under a full-word-set key each was
+  // its own cluster, so cap = 2 still left 9 of 9 top slots to one theme.
+  const backToSchool = [
+    "back to school outfit inspo",
+    "back 2 school outfits senior",
+    "back to school outfits boys",
+    "back to school outfit inspo high school",
+    "back 2 school outfits uniform",
+    "back to school outfits 2026-2027",
+  ];
+  for (const kw of backToSchool) {
+    assert.equal(keywordClusterKey(kw), "back outfit school", "measured variant must join the back-to-school cluster: " + kw);
+  }
+  assert.equal(
+    new Set(backToSchool.map(kw => keywordClusterKey(kw))).size,
+    1,
+    "all six measured variants must collapse into ONE cluster",
+  );
+  assert.equal(
+    keywordClusterKey("outfit ideas summer"),
+    keywordClusterKey("summer outfit ideas"),
+    "stop words drop out and word order must not matter",
+  );
+  // …and the key must still SEPARATE genuinely different themes (no over-merging).
+  assert.notEqual(
+    keywordClusterKey("cozy bedroom aesthetic"),
+    keywordClusterKey("cozy reading nook ideas"),
+    "keywords with different leading vocabulary must stay in different clusters",
+  );
+  for (const empty of ["", "   ", "a to the", null, undefined]) {
+    assert.equal(keywordClusterKey(empty), "", String(empty) + " carries no usable keyword");
+  }
+});
+
+// Product vocabulary is gold / hoop / earring. Tier-1 admission comes from the TITLE, which
+// leaves the crawl keyword free to be shared across tiers — that is what makes the CROSS-tier
+// cluster accounting observable.
+const capInput: ReferenceScoringInput = { category: "fashion", productTitle: "Gold Hoop Earrings" };
+const HOT_KEYWORD = "cozy neutral aesthetic";   // the monopolising crawl keyword
+
+function capRows(): ReferenceCandidateRow[] {
+  const fashion = (id: string, o: Partial<ReferenceCandidateRow> = {}) =>
+    row(id, { category: "fashion", ...o });
+  return [
+    // 5 Tier-1 rows sharing ONE crawl keyword — evidence 3 hits / sqrt(6)
+    ...[1, 2, 3, 4, 5].map(i => fashion("t1-same-" + i, { title: "gold hoop earrings", sourceKeyword: HOT_KEYWORD })),
+    // 2 Tier-1 rows from other keywords, strictly lower evidence — 2 hits / sqrt(5)
+    fashion("t1-alt-a", { title: "gold hoop", sourceKeyword: "linen shirt outfit" }),
+    fashion("t1-alt-b", { title: "gold hoop", sourceKeyword: "denim jacket layer" }),
+    // Tier-2 backfill: no product words at all ("reference" is a stop word)
+    fashion("t2-x", { sourceKeyword: "summery wallpapers" }),
+    fashion("t2-same", { sourceKeyword: HOT_KEYWORD }),   // same cluster as the Tier-1 five
+  ];
+}
+
+test("rankReferencesTiered: keywordClusterCap breaks one keyword's monopoly (demote, never drop)", () => {
+  const rows = capRows();
+  const uncapped = rankReferencesTiered(rows, capInput, 12).map(r => r.id);
+  assert.deepEqual(
+    uncapped,
+    ["t1-same-1", "t1-same-2", "t1-same-3", "t1-same-4", "t1-same-5", "t1-alt-a", "t1-alt-b", "t2-x", "t2-same"],
+    "precondition: uncapped, a single crawl keyword owns the whole Tier-1 head",
+  );
+
+  const capped = rankReferencesTiered(rows, capInput, 12, { keywordClusterCap: 2 });
+  assert.deepEqual(
+    capped.map(r => r.id),
+    [
+      // Tier-1 keeps → Tier-2 keeps → Tier-1 overflow → Tier-2 overflow
+      "t1-same-1", "t1-same-2", "t1-alt-a", "t1-alt-b",
+      "t2-x",
+      "t1-same-3", "t1-same-4", "t1-same-5",
+      "t2-same",
+    ],
+  );
+  const head = capped.slice(0, 5).map(r => r.id);
+  assert.equal(
+    head.filter(id => id.startsWith("t1-same")).length,
+    2,
+    "the monopolising cluster may hold at most cap slots in the head",
+  );
+  assert.ok(
+    head.indexOf("t1-alt-a") < capped.map(r => r.id).indexOf("t1-same-3"),
+    "other-cluster Tier-1 rows must rank ahead of the demoted overflow",
+  );
+  assert.deepEqual(
+    capped.map(r => r.id).sort(),
+    [...uncapped].sort(),
+    "the cap is a reorder — it must never filter a row out",
+  );
+  // Cluster counting is CROSS-tier: t2-same is in the cluster Tier-1 already exhausted.
+  assert.equal(capped[capped.length - 1].id, "t2-same", "a Tier-2 row in an exhausted cluster is demoted too");
+  // Tiers themselves are untouched by the cap.
+  assert.equal(capped.find(r => r.id === "t1-same-5")?.recommendationTier, "product_evidence");
+  assert.equal(capped.find(r => r.id === "t2-same")?.recommendationTier, "category_fallback");
+});
+
+test("rankReferencesTiered: no opts, {}, and a non-positive cap are all the legacy path", () => {
+  const rows = capRows();
+  const base = rankReferencesTiered(rows, capInput, 12).map(r => r.id);
+  assert.deepEqual(rankReferencesTiered(rows, capInput, 12, {}).map(r => r.id), base);
+  assert.deepEqual(rankReferencesTiered(rows, capInput, 12, { keywordClusterCap: undefined }).map(r => r.id), base);
+  assert.deepEqual(rankReferencesTiered(rows, capInput, 12, { keywordClusterCap: 0 }).map(r => r.id), base);
+  assert.deepEqual(rankReferencesTiered(rows, capInput, 12, { keywordClusterCap: -1 }).map(r => r.id), base);
+});
 console.log(`\n${passed} reference-scoring tests passed.`);

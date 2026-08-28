@@ -74,6 +74,9 @@ export const CORE: string[] = [
   "test-ai-cost-log",
   "test-reference-scoring",
   "test-reference-basis",
+  "test-reference-category",
+  "test-reference-pool",
+  "test-reference-serve",
   "test-product-evidence",
   "test-top-pick",
   // Products / opportunity
