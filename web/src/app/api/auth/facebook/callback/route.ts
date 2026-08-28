@@ -10,6 +10,11 @@
  *   5. Verify the ACTUALLY-granted permissions (/me/permissions). Missing any of
  *      the required Page scopes → store 'reconnect_required' (never mark active)
  *      and redirect ?facebook=reconnect_required.
+ *   5b. If this flow was started as a Reconnect (the target connection id rides in
+ *      the sealed state), compare the Facebook user that just authorized with the
+ *      identity recorded on that row. A DIFFERENT user writes NOTHING at all and
+ *      redirects ?facebook=account_mismatch&expected=&got= — the same refusal
+ *      Pinterest makes. Checked before step 5's write, which also persists.
  *   6. Fetch the Facebook user (id + name) and discover the Pages the user manages
  *      (/me/accounts). An EMPTY (but successful) enumeration →
  *      'page_discovery_empty' (?facebook=page_discovery_empty) — see below. We

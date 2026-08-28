@@ -60,7 +60,7 @@ export const socialPanelMessages = {
   //    Split into prefix/middle/suffix so the two @usernames can be interpolated
   //    without HTML in the catalog; translators keep the sentence natural in their
   //    own word order by moving the punctuation between the parts.
-  "socialPanel.mismatch.title": "That's a different Pinterest account",
+  "socialPanel.mismatch.title": "That's a different {platform} account",
   "socialPanel.mismatch.bodyPrefix": "You signed in as ",
   "socialPanel.mismatch.bodyMiddle": ", but you were reconnecting ",
   "socialPanel.mismatch.bodySuffix":

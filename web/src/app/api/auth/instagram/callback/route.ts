@@ -12,6 +12,11 @@
  *      A PERSONAL account is REJECTED (?instagram=personal_account) — VibePin
  *      supports only Business / Creator accounts. Nothing is persisted for a
  *      rejected account.
+ *   5b. If this flow was started as a Reconnect (the target connection id rides in
+ *      the sealed state), compare the Instagram account that just authorized with
+ *      the identity recorded on that row. A DIFFERENT account writes NOTHING and
+ *      redirects ?instagram=account_mismatch&expected=&got= — the same refusal
+ *      Pinterest and Facebook make.
  *   6. Encrypt + persist into social_connections (provider='instagram') as
  *      'connected'.
  *   7. Redirect back to returnTo (or the social settings page) with a status flag.
