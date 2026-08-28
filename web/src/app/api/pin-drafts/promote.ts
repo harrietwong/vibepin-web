@@ -1,4 +1,5 @@
 import { isSocialProvider, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
+import { isUsableDestination } from "@/lib/social/scheduledDestinations";
 /**
  * promote.ts — pure helpers that lift the Creative-Intelligence blocks out of a
  * PinDraft `payload` into the v41 pin_drafts promoted columns
@@ -228,11 +229,34 @@ export const SCHEDULE_COLUMN_KEYS: Array<keyof PromotedScheduleColumns> = ["sche
 // ── Schedulable-destination rule ─────────────────────────────────────────────
 /**
  * The destinations a payload asks to publish to, restricted to real providers.
- * Unknown/garbage entries are dropped here rather than reaching the rule.
+ *
+ * READ FROM `scheduledDestinations` — the canonical, PERSISTED intent
+ * (`{provider, socialConnectionId, …}`, written by buildScheduledDestinations).
+ *
+ * It used to read `payload.socialDestinations`, a field NOTHING writes: the drawer's
+ * `socialDestinations` is local React state that never reaches the payload. So this
+ * always returned [], `blockedScheduleDestinations` was always empty, and the PUT
+ * handler's 422 could not fire for any request — a guard wired to a value its
+ * condition can never be true for. A payload that still carries `socialDestinations`
+ * is deliberately IGNORED: it is not intent, nothing at due time reads it, and
+ * honouring it would let a client be refused for a destination it never scheduled.
+ *
+ * Only USABLE entries count (`isUsableDestination`: a real provider AND an account) —
+ * the same filter `resolveScheduledDestinations` applies before dispatch, so this rule
+ * refuses exactly what the due-time worker would otherwise be asked to publish, and
+ * nothing else. Deduped by provider: two Pinterest accounts are one platform here.
  */
 export function requestedSocialDestinations(payload: Record<string, unknown>): SocialProvider[] {
-  const raw = payload.socialDestinations;
-  return Array.isArray(raw) ? raw.filter(isSocialProvider) : [];
+  const raw = payload.scheduledDestinations;
+  if (!Array.isArray(raw)) return [];
+  const out: SocialProvider[] = [];
+  for (const entry of raw) {
+    // isUsableDestination already rejects a non-provider; isSocialProvider is what
+    // NARROWS it (ScheduledDestination.provider is typed `string` on purpose).
+    if (!isUsableDestination(entry) || !isSocialProvider(entry.provider)) continue;
+    if (!out.includes(entry.provider)) out.push(entry.provider);
+  }
+  return out;
 }
 
 /**
