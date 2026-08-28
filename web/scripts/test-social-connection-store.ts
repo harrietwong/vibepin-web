@@ -17,6 +17,7 @@ process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -106,6 +107,46 @@ async function main() {
   test("一条活跃行上,两个投影给出同一个身份(只有一份定义)", () => {
     const live = row("a");
     assert.deepEqual(store.toSafeStatus(live).account, store.toAccountIdentity(live));
+  });
+
+  console.log("\n=== 占位行:列表侧与额度侧共用同一个判定 ===");
+  const { isPlaceholderConnectionRow } = await import("../src/lib/social/connectionPlaceholder");
+
+  test("从未连接过的占位行(无 token / 未断开 / 无身份)=> 是占位行", () => {
+    // savePinterestDefaultBoard 在还没有任何账号时写下的 “只记住默认板” 的行。
+    assert.equal(
+      isPlaceholderConnectionRow({ hasAccessToken: false, disconnectedAt: null, providerAccountId: null }),
+      true,
+    );
+  });
+  test("已断开但留有身份的行 => 不是占位行(仍是账号,仍占额度)", () => {
+    assert.equal(
+      isPlaceholderConnectionRow({
+        hasAccessToken: false,
+        disconnectedAt: "2026-08-01T00:00:00Z",
+        providerAccountId: "pid-a",
+      }),
+      false,
+    );
+  });
+  test("有 token 但身份尚未同步的行 => 不是占位行(token 就是那条救命的事实)", () => {
+    assert.equal(
+      isPlaceholderConnectionRow({ hasAccessToken: true, disconnectedAt: null, providerAccountId: null }),
+      false,
+    );
+  });
+
+  test("列表守卫与额度计数指向同一个模块,不得各写一份", () => {
+    const listing = readFileSync("src/lib/social/server/socialConnectionStore.ts", "utf8");
+    const counting = readFileSync("src/lib/server/social/accountAllowance.ts", "utf8");
+    for (const [what, src] of [["列表", listing], ["计数", counting]] as const) {
+      assert.ok(src.includes("isPlaceholderConnectionRow"), what + "侧必须调用共享判定");
+      assert.ok(/connectionPlaceholder"/.test(src), what + "侧必须从共享模块导入,而不是自己复述一遍");
+    }
+    assert.ok(
+      !listing.includes("!safe.connected && !row.disconnected_at && !row.pinterest_user_id"),
+      "旧的内联判定必须消失,否则两处会各自漂移",
+    );
   });
 
   console.log("\n=== CAS 签名面(connection 粒度) ===");

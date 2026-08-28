@@ -22,7 +22,10 @@
  *           row DOES count: Disconnect keeps the account (it stays in Settings with a
  *           Reconnect) and keeps its slot; only Remove — a hard delete — frees one
  *           (PRD 0805 §11). Reconnecting a disconnected row adds nothing, because
- *           that row was already counted.
+ *           that row was already counted. The one row that does NOT count is the
+ *           never-connected placeholder (`isPlaceholderConnectionRow`): Settings does
+ *           not list it, so no Remove exists for it, and counting a seat nobody can
+ *           free would refuse a legacy merchant their first account for good.
  *   limit = PLAN_ENTITLEMENTS[plan].connectedAccountsPerPlatform; `null` = uncapped.
  *           Purchased extra slots do NOT change this number — they are counted in
  *           `canAddAccount`, so the limit shown/logged stays the plan's own figure.

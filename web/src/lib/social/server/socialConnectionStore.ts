@@ -23,6 +23,7 @@ import {
   toAccountIdentity,
   toSafeStatus,
 } from "@/lib/server/pinterest/connectionStore";
+import { isPlaceholderConnectionRow } from "../connectionPlaceholder";
 import { getSocialProvider } from "../providers";
 import {
   PLATFORMS,
@@ -319,10 +320,20 @@ async function readPinterestConnections(
     // Publish-side reads keep the old rule: only rows that can publish right now.
     if (!safe.connected && !opts?.includeDisconnected) continue;
     // A row that was NEVER connected is not an account. `savePinterestDefaultBoard`
-    // inserts a metadata-only placeholder (no token, no disconnected_at, no account
-    // id) to remember a default board; listing it would show the merchant a
+    // inserts a metadata-only placeholder (no token, no disconnect timestamp, no
+    // account id) to remember a default board; listing it would show the merchant a
     // "Disconnected" row for an account that never existed, named by a mask.
-    if (!safe.connected && !row.disconnected_at && !row.pinterest_user_id) continue;
+    // The predicate is shared with the plan-slot count (accountAllowance.ts): what is
+    // not shown here — and so cannot be Removed — must not hold a seat there.
+    if (
+      isPlaceholderConnectionRow({
+        hasAccessToken: !!row.access_token_encrypted,
+        disconnectedAt: row.disconnected_at,
+        providerAccountId: row.pinterest_user_id,
+      })
+    ) {
+      continue;
+    }
     // A disconnected row reports the same status Facebook/Instagram write for theirs
     // ("not_connected" + no token), so `accountUiState` reads all three as the one
     // customer-visible state: Disconnected, with a Reconnect.

@@ -33,6 +33,7 @@ import { exchangeCodeForTokens, fetchAccountIdentity } from "@/lib/server/pinter
 import { upsertConnection, listConnections } from "@/lib/server/pinterest/connectionStore";
 import { decideConnect, type AuthorizedAccount, type ExistingConnection } from "@/lib/server/pinterest/connectDecision";
 import { evaluateAccountQuota } from "@/lib/server/pinterest/accountQuota";
+import { isPlaceholderConnectionRow } from "@/lib/social/connectionPlaceholder";
 import { resolvePlan } from "@/lib/server/entitlements";
 
 export const dynamic = "force-dynamic";
@@ -178,7 +179,8 @@ export async function GET(req: NextRequest) {
     let existing: ExistingConnection[];
     // Slots are held by every row the user has on this provider, whatever its
     // status (PRD 0805 §11: Disconnect keeps the account and its slot, Remove frees
-    // it). Derived from the rows we already read, so the quota re-check below costs
+    // it) — except a never-connected placeholder row, which is not an account at all.
+    // Derived from the rows we already read, so the quota re-check below costs
     // no extra Pinterest/DB round trip.
     let heldCount = 0;
     try {
@@ -190,7 +192,19 @@ export async function GET(req: NextRequest) {
       // We do NOT guess: with no id, decideConnect can only match an unidentified row
       // (or create), and a reconnect aimed at an identified row is refused below.
       account = identity ?? { id: null, username: null, accountType: null };
-      heldCount = rows.length;
+      // This count OVERRIDES the grouped one inside the quota check, so it has to
+      // apply the same placeholder rule — otherwise a merchant carrying a default-board
+      // placeholder passes the connect-start gate, authorizes at Pinterest, and is
+      // bounced here on their first real account, with no row Settings would let them
+      // Remove. Same predicate, no extra query: the rows are already in hand.
+      heldCount = rows.filter(
+        r =>
+          !isPlaceholderConnectionRow({
+            hasAccessToken: !!r.access_token_encrypted,
+            disconnectedAt: r.disconnected_at,
+            providerAccountId: r.pinterest_user_id,
+          }),
+      ).length;
       existing = rows.map((r): ExistingConnection => ({
         connectionId: r.id,
         accountId: r.pinterest_user_id,

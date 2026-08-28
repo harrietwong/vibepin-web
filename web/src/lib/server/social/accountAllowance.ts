@@ -20,6 +20,14 @@
  * EVERY row the user holds for the provider, whatever its connection status. No
  * filter on `disconnected_at`, on the token column, or on `connection_status`.
  *
+ * ONE exception, and it is not a status: a metadata-only PLACEHOLDER row — never
+ * connected, never disconnected, no account behind it — is not an account and holds
+ * nothing. `savePinterestDefaultBoard` writes one when a default board is chosen
+ * before any Pinterest account is connected. Settings does not list it, so it offers
+ * no Remove for it; counting it would refuse a legacy merchant their FIRST account
+ * with no way out. The predicate is `isPlaceholderConnectionRow`, shared verbatim
+ * with the listing so the two can never drift apart.
+ *
  * This follows the product rule, not the other way round (PRD 0805 §11): Disconnect
  * keeps the account — the row stays, listed in Settings as "Disconnected" with a
  * Reconnect — and it goes on occupying its slot; REMOVE is a hard delete and the
@@ -72,6 +80,7 @@ import {
   isExtraAccountConfigured,
 } from "@/lib/server/creem/creemProducts";
 import { normalizeUnits } from "@/lib/server/creem/creemStore";
+import { isPlaceholderConnectionRow } from "@/lib/social/connectionPlaceholder";
 
 const CONNECTIONS_TABLE = "social_connections";
 const SUBSCRIPTIONS_TABLE = "creem_subscriptions";
@@ -190,42 +199,97 @@ export function evaluateAllowance(
 
 // ── IO ────────────────────────────────────────────────────────────────────────
 
+/** One row as the count reads it. The token column is never among these fields. */
+export type ConnectionCountRow = {
+  id?: string | null;
+  provider?: string | null;
+  disconnected_at?: string | null;
+  provider_account_id?: string | null;
+};
+
 /**
- * Connection ROWS per provider, in ONE query. Returns null when the count is
- * unavailable (missing table / DB error) so callers can fail open rather than guess.
+ * Rows → rows-held per provider. Pure, so WHAT the count includes is testable without
+ * a database; the query below only supplies the facts.
  *
- * Deliberately UNFILTERED. A disconnected row is still an account the merchant holds
- * — it is listed in Settings, it can be reconnected, and it occupies its slot until
- * they Remove it (PRD 0805 §11). Re-adding a not-disconnected / has-a-token filter
- * here would hand out a slot the row is still holding, so the ceiling could be
- * exceeded by disconnecting instead of removing. test-account-allowance.ts asserts
- * those two predicates are absent from this file, so this comment may not name them
- * verbatim either.
+ * Placeholder rows are skipped through `isPlaceholderConnectionRow` — the same call the
+ * Settings listing makes, which is the point: a row the merchant is not shown (and so
+ * cannot Remove) must not hold a seat against them.
  *
- * Never selects the token ciphertext — the column is not read at all now.
+ * `idsWithAccessToken` carries the one fact the select deliberately does not return:
+ * which rows hold a token. A row that arrives without an id is COUNTED rather than
+ * dropped — when the token fact cannot be attached to it, "this is an account" is the
+ * safe direction, since the alternative silently hands out a seat.
+ */
+export function tallyConnectionsByProvider(
+  rows: ConnectionCountRow[],
+  idsWithAccessToken: ReadonlySet<string>,
+): ConnectionCountsByProvider {
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const provider = (row.provider ?? "").trim();
+    if (!provider) continue;
+    const id = typeof row.id === "string" && row.id ? row.id : null;
+    const placeholder = isPlaceholderConnectionRow({
+      hasAccessToken: id === null ? true : idsWithAccessToken.has(id),
+      disconnectedAt: row.disconnected_at,
+      providerAccountId: row.provider_account_id,
+    });
+    if (placeholder) continue;
+    counts[provider] = (counts[provider] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * Connection ROWS per provider. Returns null when the count is unavailable (missing
+ * table / DB error) so callers can fail open rather than guess.
+ *
+ * Deliberately UNFILTERED BY STATUS. A disconnected row is still an account the merchant
+ * holds — it is listed in Settings, it can be reconnected, and it occupies its slot until
+ * they Remove it (PRD 0805 §11). Re-adding a not-disconnected / has-a-token filter here
+ * would hand out a slot the row is still holding, so the ceiling could be exceeded by
+ * disconnecting instead of removing. test-account-allowance.ts asserts those two query
+ * predicates are absent from this file, so this comment may not name them verbatim either.
+ * What IS skipped — the never-connected placeholder — is decided in `tallyConnectionsByProvider`
+ * above, in JavaScript, by the predicate the listing shares.
+ *
+ * Never selects the token ciphertext. Token presence arrives as a NOT-NULL CHECK: the
+ * second select returns only the IDS of rows that hold one, so the bytes stay in the
+ * database. Both selects are issued together, so this still costs one round trip.
  */
 export async function countConnectionsByProvider(
   uid: string,
 ): Promise<ConnectionCountsByProvider | null> {
-  const { data, error } = await createServerClient()
-    .from(CONNECTIONS_TABLE)
-    .select("provider")
-    .eq("user_id", uid);
+  const db = createServerClient();
+  const [allRows, tokenRows] = await Promise.all([
+    db
+      .from(CONNECTIONS_TABLE)
+      .select("id, provider, disconnected_at, provider_account_id")
+      .eq("user_id", uid),
+    db
+      .from(CONNECTIONS_TABLE)
+      .select("id")
+      .eq("user_id", uid)
+      .filter("access_token_encrypted", "not.is", null),
+  ]);
 
-  if (error) {
-    if (!isMissingTable(error.code)) {
-      console.error("[social] count connections:", error.message);
+  const failure = allRows.error ?? tokenRows.error;
+  if (failure) {
+    if (!isMissingTable(failure.code)) {
+      console.error("[social] count connections:", failure.message);
     }
     return null;
   }
 
-  const counts: Record<string, number> = {};
-  for (const row of (data as Array<{ provider?: string | null }> | null) ?? []) {
-    const provider = (row.provider ?? "").trim();
-    if (!provider) continue;
-    counts[provider] = (counts[provider] ?? 0) + 1;
+  const idsWithAccessToken = new Set<string>();
+  for (const row of (tokenRows.data as Array<{ id?: string | null }> | null) ?? []) {
+    if (typeof row.id === "string" && row.id) idsWithAccessToken.add(row.id);
   }
-  return counts;
+
+  return tallyConnectionsByProvider(
+    (allRows.data as ConnectionCountRow[] | null) ?? [],
+    idsWithAccessToken,
+  );
 }
 
 /** A mirrored subscription row as read for the slot total. */

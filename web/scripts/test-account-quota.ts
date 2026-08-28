@@ -114,9 +114,13 @@ test("listActiveConnections 仍是发布侧的定义(未断开 且 有 token)", 
     "额度口径变了,但发布侧 “现在能发” 的定义必须原样保留",
   );
 });
-test("callback 内联计数 = 全部行(与额度口径一致,不多发一次 DB 请求)", () => {
+test("callback 内联计数 = 全部行(占位行除外),且不多发一次 DB 请求", () => {
   const cb = read("src/app/api/auth/pinterest/callback/route.ts");
-  assert.ok(cb.includes("heldCount = rows.length;"), "callback 必须数全部行");
+  assert.ok(/heldCount = rows\.filter\(/.test(cb), "仍从已读到的行里数,不额外查一次库");
+  assert.ok(
+    cb.includes("isPlaceholderConnectionRow({"),
+    "这个计数会覆盖分组计数,必须用同一个占位行判定,否则用户在授权后才被拦",
+  );
   assert.ok(
     !cb.includes("rows.filter(r => !r.disconnected_at && !!r.access_token_encrypted).length"),
     "旧的 “只数活跃行” 必须消失,否则两套口径会静默分叉",

@@ -11,7 +11,9 @@
  *      available to Instagram;
  *   3. ROW counting: every account row the user holds occupies a slot, whatever its
  *      connection status — Disconnect keeps the account and its slot, only Remove
- *      (a hard delete) gives one back (PRD 0805 §11);
+ *      (a hard delete) gives one back (PRD 0805 §11); the ONE row that holds nothing
+ *      is the never-connected placeholder, skipped by the predicate the Settings
+ *      listing shares (`isPlaceholderConnectionRow`);
  *   4. fail-open on infrastructure trouble, but slots degrade to 0 rather than
  *      failing open — an unreadable add-on must not disable the ceiling;
  *   5. purchased slots = sum of `units` over ACCESS-GRANTING add-on subscriptions
@@ -160,7 +162,7 @@ function snapshot(
 
   console.log("\n=== counting: every row held, until it is REMOVED ===\n");
 
-  await test("a disconnected row still occupies its slot — the query filters nothing", () => {
+  await test("a disconnected row still occupies its slot — the query filters no status", () => {
     // Source-level on purpose: what the count includes is a PostgREST predicate, so
     // no pure function can prove it. These are the filters that must NOT be there.
     const src = readFileSync("src/lib/server/social/accountAllowance.ts", "utf8");
@@ -179,6 +181,98 @@ function snapshot(
     assert.ok(
       !src.includes("countActiveConnectionsByProvider"),
       "the old active-only name must not survive alongside the new rule",
+    );
+  });
+
+  await test("a never-connected placeholder row holds no seat", () => {
+    // `savePinterestDefaultBoard` writes a metadata-only row (no token, never
+    // disconnected, no account id) when a default board is chosen before any account
+    // is connected. Settings does not list it, so no Remove exists for it — counting
+    // it would refuse a legacy merchant their FIRST account with no way out.
+    const counts = A.tallyConnectionsByProvider(
+      [{ id: "ph", provider: "pinterest", disconnected_at: null, provider_account_id: null }],
+      new Set<string>(),
+    );
+    assert.deepEqual(counts, {}, "a default-board placeholder is not an account");
+    // …and the merchant holding only that row can connect their first account.
+    const v = evaluateAllowance(snapshot(1, counts), "pinterest");
+    assert.equal(v.allowed, true);
+    assert.equal(v.held, 0);
+  });
+
+  await test("a DISCONNECTED row with an identity STILL counts (token cleared)", () => {
+    // The pinned rule, restated against the new shape: no token, but a disconnect
+    // timestamp and an identity — a real account, still holding its slot.
+    assert.deepEqual(
+      A.tallyConnectionsByProvider(
+        [{ id: "gone", provider: "pinterest", disconnected_at: "2026-08-01T00:00:00Z", provider_account_id: "pid-1" }],
+        new Set<string>(),
+      ),
+      { pinterest: 1 },
+    );
+  });
+
+  await test("a token-less Facebook row that kept its identity STILL counts", () => {
+    assert.deepEqual(
+      A.tallyConnectionsByProvider(
+        [{ id: "fb", provider: "facebook", disconnected_at: null, provider_account_id: "page-1" }],
+        new Set<string>(),
+      ),
+      { facebook: 1 },
+    );
+  });
+
+  await test("a live row whose identity has not synced yet counts — the token is the fact", () => {
+    // The Pinterest callback may insert with a null account id and backfill it later
+    // (updateAccountInfo). Without the token fact this REAL account would be shaped
+    // exactly like a placeholder and would hand out a free seat.
+    assert.deepEqual(
+      A.tallyConnectionsByProvider(
+        [{ id: "live", provider: "pinterest", disconnected_at: null, provider_account_id: null }],
+        new Set(["live"]),
+      ),
+      { pinterest: 1 },
+    );
+  });
+
+  await test("placeholder + real account: only the real one spends a seat", () => {
+    assert.deepEqual(
+      A.tallyConnectionsByProvider(
+        [
+          { id: "ph", provider: "pinterest", disconnected_at: null, provider_account_id: null },
+          { id: "live", provider: "pinterest", disconnected_at: null, provider_account_id: "pid-1" },
+        ],
+        new Set(["live"]),
+      ),
+      { pinterest: 1 },
+    );
+  });
+
+  await test("a row with no id is counted, never silently dropped", () => {
+    // The token fact is attached BY id. When there is no id to attach it to, the safe
+    // direction is "this is an account" — the alternative gives away a seat in silence.
+    assert.deepEqual(
+      A.tallyConnectionsByProvider(
+        [{ provider: "pinterest", disconnected_at: null, provider_account_id: null }],
+        new Set<string>(),
+      ),
+      { pinterest: 1 },
+    );
+  });
+
+  await test("token PRESENCE is read as a not-null check — the ciphertext is never selected", () => {
+    const src = readFileSync("src/lib/server/social/accountAllowance.ts", "utf8");
+    assert.ok(
+      !/select\("[^"]*access_token_encrypted/.test(src),
+      "the count must never pull the token ciphertext out of the database",
+    );
+    assert.ok(
+      src.includes('.filter("access_token_encrypted", "not.is", null)'),
+      "presence arrives as ids of token-holding rows; the tally still counts the token-less ones",
+    );
+    assert.ok(
+      src.includes("isPlaceholderConnectionRow"),
+      "the placeholder rule is the shared predicate, not a second copy of it",
     );
   });
 
