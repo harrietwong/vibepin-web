@@ -37,6 +37,19 @@ let rpcBehaviour: (fn: string, args: Record<string, unknown>) => RpcResult =
   () => ({ data: { ok: true, replayed: false }, error: null });
 
 /**
+ * publishPinForUser's fake result -- mutable per-test (like rpcBehaviour) so the
+ * FIX1 regression test below can make it THROW (an untyped/unexpected failure,
+ * exactly the pins route's `catch (err)` path) without touching every other test
+ * that relies on the default success shape.
+ */
+let publishPinBehaviour: () => Promise<unknown> = async () => ({
+  ok: true,
+  pin: { id: "p1", url: "https://pin/1" },
+  board: { id: "b", name: "Board" },
+  environment: "sandbox",
+});
+
+/**
  * A generic chainable + awaitable query-builder stand-in. Every real call site
  * on the social-route dependency path either awaits the chain directly
  * (await db().from(t).select(...).eq(...)) or terminates it with
@@ -98,12 +111,7 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
   // never makes a real network call and never depends on Pinterest credentials.
   if (request === "@/lib/server/pinterest/publishPin" || request.endsWith("/lib/server/pinterest/publishPin")) {
     return {
-      publishPinForUser: async () => ({
-        ok: true,
-        pin: { id: "p1", url: "https://pin/1" },
-        board: { id: "b", name: "Board" },
-        environment: "sandbox",
-      }),
+      publishPinForUser: async () => publishPinBehaviour(),
     };
   }
   // socialConnectionStore.ts reads Pinterest rows through this aliased import. Faked to
@@ -124,6 +132,12 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
 async function test(name: string, fn: () => Promise<void>) {
   rpcCalls.length = 0;
   rpcBehaviour = () => ({ data: { ok: true, replayed: false }, error: null });
+  publishPinBehaviour = async () => ({
+    ok: true,
+    pin: { id: "p1", url: "https://pin/1" },
+    board: { id: "b", name: "Board" },
+    environment: "sandbox",
+  });
   try { await fn(); console.log(`  PASS  ${name}`); passed++; }
   catch (e) { console.log(`  FAIL  ${name}\n        ${(e as Error).stack ?? (e as Error).message}`); failed++; }
 }
@@ -143,7 +157,8 @@ function consumeCalls(): RpcCall[] {
   const { POST } = mod as { POST: (r: Request) => Promise<Response> };
   const pinsMod = await import("../src/app/api/pinterest/pins/route");
   const { POST: pinsPOST } = pinsMod as { POST: (r: Request) => Promise<Response> };
-  const { deriveScheduledPostKey } = await import("../src/lib/server/usage/meterScheduledPost");
+  const { deriveScheduledPostKey, signImmediateBucket, immediateBucketForNow } =
+    await import("../src/lib/server/usage/meterScheduledPost");
 
   await test("a social-only publish (no Pinterest destination) charges exactly ONE unit, keyed like the pins route would key the SAME Content", async () => {
     const draftId = "pd_social_only_1";
@@ -307,8 +322,9 @@ function consumeCalls(): RpcCall[] {
         draftId, boardId: "b", imageUrl: "https://i/midnight.png", title: "t",
       }));
       assert.equal(pinsRes.status, 201, "the pins call itself must succeed");
-      const pinsBody = await pinsRes.json() as { meteringBucket?: string };
+      const pinsBody = await pinsRes.json() as { meteringBucket?: string; meteringBucketSig?: string };
       assert.ok(pinsBody.meteringBucket, "the pins route must mint and return a bucket");
+      assert.ok(pinsBody.meteringBucketSig, "the pins route must also mint and return a signature over that bucket");
       const pinsCalls = consumeCalls();
       assert.equal(pinsCalls.length, 1);
       const keyFromPinsRoute = pinsCalls[0].args.p_idempotency_key;
@@ -320,6 +336,7 @@ function consumeCalls(): RpcCall[] {
         post: { imageUrls: ["https://example.com/midnight.png"] },
         destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
         meteringBucket: pinsBody.meteringBucket,
+        meteringBucketSig: pinsBody.meteringBucketSig,
       }));
       assert.equal(socialRes.status, 200);
       const socialCalls = consumeCalls();
@@ -431,6 +448,130 @@ function consumeCalls(): RpcCall[] {
       .find(l => l?.event === "usage_meter_bucket_rejected");
     assert.ok(parsed, `expected a usage_meter_bucket_rejected log line, saw: ${JSON.stringify(lines)}`);
     assert.equal(parsed!.route, "publish_social");
+  });
+
+  // -- signImmediateBucket / verifyImmediateBucket, at the route level (Codex round 3, Low) --
+  await test("MIDNIGHT REGRESSION WITH A THROWN PINTEREST FAILURE: the pins route's catch(err) path still relays a bucket+sig, and the social route (straddling midnight) derives the IDENTICAL key", async () => {
+    const draftId = "pd_midnight_thrown_1";
+    const originalNow = Date.now;
+    publishPinBehaviour = async () => {
+      const err = new Error("Pinterest is temporarily unavailable.") as Error & { status?: number };
+      err.status = 503;
+      throw err;
+    };
+    try {
+      Date.now = () => Date.parse("2026-08-28T23:59:59.000Z");
+      const pinsRes = await pinsPOST(req({
+        draftId, boardId: "b", imageUrl: "https://i/midnight-thrown.png", title: "t",
+      }));
+      assert.equal(pinsRes.status, 500, "an unexpected thrown error maps to pinterestErrorResponse's catch-all 500");
+      const pinsBody = await pinsRes.json() as { meteringBucket?: string; meteringBucketSig?: string };
+      assert.ok(pinsBody.meteringBucket, "even an UNTYPED (thrown) failure must relay the bucket it metered under");
+      assert.ok(pinsBody.meteringBucketSig, "and the signature over that bucket");
+      const pinsCalls = consumeCalls();
+      assert.equal(pinsCalls.length, 1, "metering runs BEFORE the provider call, so a thrown failure still consumed one unit");
+      const keyFromPinsRoute = pinsCalls[0].args.p_idempotency_key;
+
+      rpcCalls.length = 0;
+      Date.now = () => Date.parse("2026-08-29T00:00:01.000Z");
+      const socialRes = await POST(req({
+        postId: draftId,
+        post: { imageUrls: ["https://example.com/midnight-thrown.png"] },
+        destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+        meteringBucket: pinsBody.meteringBucket,
+        meteringBucketSig: pinsBody.meteringBucketSig,
+      }));
+      assert.equal(socialRes.status, 200);
+      const socialCalls = consumeCalls();
+      assert.equal(socialCalls.length, 1);
+      assert.equal(
+        socialCalls[0].args.p_idempotency_key, keyFromPinsRoute,
+        "the relayed bucket+sig from a THROWN pins failure must still make the two keys identical across the UTC-midnight straddle",
+      );
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  await test("a tampered bucket (a different in-window day, reusing a signature minted for another day) is rejected -- the key equals the route's own-date key", async () => {
+    const draftId = "pd_tampered_bucket_1";
+    const today = immediateBucketForNow();
+    const sigForToday = signImmediateBucket(OWNER, draftId, today);
+    const tomorrow = new Date(Date.parse(`${today}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+
+    const ownRes = await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/tamper.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    }));
+    assert.equal(ownRes.status, 200);
+    const ownKey = consumeCalls()[0].args.p_idempotency_key;
+
+    rpcCalls.length = 0;
+    const tamperedRes = await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/tamper.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+      meteringBucket: tomorrow, // in-window, but never signed
+      meteringBucketSig: sigForToday, // signed for `today`, not `tomorrow`
+    }));
+    assert.equal(tamperedRes.status, 200, "a tampered bucket must never fail the publish");
+    const tamperedKey = consumeCalls()[0].args.p_idempotency_key;
+
+    assert.equal(ownKey, tamperedKey, "a bucket whose signature does not match it must be rejected, falling back to the route's own bucket");
+  });
+
+  await test("a relayed bucket with NO signature at all is rejected -- the key equals the route's own-date key", async () => {
+    const draftId = "pd_missing_sig_1";
+    const today = immediateBucketForNow();
+
+    const ownRes = await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/nosig.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    }));
+    assert.equal(ownRes.status, 200);
+    const ownKey = consumeCalls()[0].args.p_idempotency_key;
+
+    rpcCalls.length = 0;
+    const noSigRes = await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/nosig.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+      meteringBucket: today, // well-formed, in-window -- but...
+      // ...no meteringBucketSig at all
+    }));
+    assert.equal(noSigRes.status, 200, "a missing signature must never fail the publish");
+    const noSigKey = consumeCalls()[0].args.p_idempotency_key;
+
+    assert.equal(ownKey, noSigKey, "an unsigned bucket must be rejected exactly like a tampered one, falling back to the route's own bucket");
+  });
+
+  await test("a signature minted for a DIFFERENT draftId is rejected even though the bucket itself is well-formed and in-window -- the key equals the route's own-date key", async () => {
+    const draftId = "pd_wrong_draft_real_1";
+    const today = immediateBucketForNow();
+    const sigForADifferentDraft = signImmediateBucket(OWNER, "pd_wrong_draft_OTHER", today);
+
+    const ownRes = await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/wrongdraft.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    }));
+    assert.equal(ownRes.status, 200);
+    const ownKey = consumeCalls()[0].args.p_idempotency_key;
+
+    rpcCalls.length = 0;
+    const wrongDraftRes = await POST(req({
+      postId: draftId,
+      post: { imageUrls: ["https://example.com/wrongdraft.png"] },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+      meteringBucket: today,
+      meteringBucketSig: sigForADifferentDraft,
+    }));
+    assert.equal(wrongDraftRes.status, 200, "a mismatched-draftId signature must never fail the publish");
+    const wrongDraftKey = consumeCalls()[0].args.p_idempotency_key;
+
+    assert.equal(ownKey, wrongDraftKey, "a signature minted for a different draftId must be rejected, falling back to the route's own bucket");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

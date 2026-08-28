@@ -144,9 +144,12 @@ export async function publishToSocial(input: {
   destinations: DestinationInput[];
   /** Server-minted immediate-publish UTC date bucket relayed from a pinterest call
    *  for this SAME Content (meterScheduledPost.ts). The server independently
-   *  validates it (isAcceptableImmediateBucket) before trusting it — this client
-   *  never asserts it is honored. */
+   *  validates it (isAcceptableImmediateBucket + verifyImmediateBucket) before
+   *  trusting it — this client never asserts it is honored. */
   meteringBucket?: string;
+  /** HMAC over (uid, postId, meteringBucket), relayed alongside it so the server can
+   *  authenticate the bucket instead of merely accepting its date shape. */
+  meteringBucketSig?: string;
 }): Promise<SocialPublishResult> {
   const res = await fetch("/api/publish/social", {
     method: "POST",
