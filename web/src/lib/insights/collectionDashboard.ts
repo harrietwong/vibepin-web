@@ -25,13 +25,23 @@
  */
 
 import {
-  attachDiagnoses,
   emptyMetrics,
   fillDailyRange,
   finiteMetric,
+  missingMetricsDiagnosis,
   summarizeDays,
   trafficRate,
 } from "./businessRules";
+import {
+  buildEvidence,
+  type Evidence,
+  type EvidenceContentRow,
+  type EvidenceKeywordSet,
+  type EvidenceMetricName,
+  type EvidenceObservation,
+  type EvidenceSet,
+} from "./evidence";
+import { buildDiagnosis, describeContentRow, type InsightsDiagnosis } from "./recommendations";
 import type {
   InsightsCollectionState,
   InsightsContent,
@@ -104,9 +114,23 @@ export type ContentRegistryRow = {
   publishedAt: string | null;
   format: string | null;
   title: string | null;
+  /** Read by A1: a phrase in the description counts as much as one in the title. */
+  description: string | null;
   linkUrl: string | null;
+  /** Read by category inference only — board names say what an account is about
+   *  without any of the account's words reaching the phrase set. */
+  boardName: string | null;
   sourceEndpoint: "pins_list" | "top_pins" | "vibepin_publish";
   lastSeenAt: string | null;
+};
+
+/** One raw lifetime observation. Ordered history, not a latest-value view: the
+ *  difference is the whole reason C5 can exist. */
+export type ObservationHistoryRow = {
+  pinId: string;
+  metricName: string;
+  metricValue: number;
+  observedAt: string;
 };
 
 export type CollectionRunRow = {
@@ -152,8 +176,21 @@ export type CollectionSources = {
   /** Registry ownership across the other Pinterest connections of the same user — a
    *  Pin listed by account A is not account B, and only a cross-account lookup knows. */
   loadRegistryOwners(pinIds: string[]): Promise<Map<string, string>>;
+  /** Append-only observation history for the age-pinned comparisons (C5). Empty is a
+   *  normal answer: it means nothing was collected at a fixed age yet. */
+  loadObservationHistory(pinIds: string[]): Promise<ObservationHistoryRow[]>;
+  /** The phrase set this account's Pin text is checked against. `inferenceTexts` are
+   *  board names and Pin titles, used ONLY to pick a category. */
+  loadKeywordSet(inferenceTexts: string[]): Promise<EvidenceKeywordSet>;
   /** The ONLY reader that talks to Pinterest. Called on the fallback path alone. */
   loadLiveAnalytics(pinIds: string[]): Promise<Map<string, LiveAnalyticsSlice | null>>;
+};
+
+export const EMPTY_KEYWORD_SET_INPUT: EvidenceKeywordSet = {
+  phrases: [],
+  category: null,
+  version: null,
+  hash: "0",
 };
 
 // ── Metric lookup ────────────────────────────────────────────────────────────
@@ -551,6 +588,118 @@ function liveDays(
   return fillDailyRange(Array.from(byDate.values()), startDate, endDate, true);
 }
 
+// ── Evidence assembly ────────────────────────────────────────────────────────
+
+const EVIDENCE_METRICS: EvidenceMetricName[] = ["IMPRESSION", "SAVE", "PIN_CLICK", "OUTBOUND_CLICK"];
+
+/** Lifetime values per metric, `null` where nothing was observed. Never 0: the
+ *  engine's ratios must be able to tell "no clicks" from "no measurement". */
+function lifetimeOf(lookup: MetricLookup, pinId: string): Partial<Record<EvidenceMetricName, number | null>> {
+  const values: Partial<Record<EvidenceMetricName, number | null>> = {};
+  for (const name of EVIDENCE_METRICS) {
+    values[name] = lookup.value("content", pinId, name, "lifetime", null);
+  }
+  return values;
+}
+
+/**
+ * The set of Pins the engine reasons over, for BOTH scopes.
+ *
+ * Deliberately not "the rows of the current scope": cohorts are how a Pin is judged,
+ * and a cohort assembled from the VibePin publish list alone would compare a Pin with
+ * a fifth of its own account. The account's registry is the population; Pins VibePin
+ * published that the registry has not caught up with are added so a freshly published
+ * Pin is never invisible to its own diagnosis.
+ */
+export function evidenceContentRows(
+  registry: ContentRegistryRow[],
+  publishedByPin: Map<string, VibePinPublishedPinterestPin>,
+  lookup: MetricLookup,
+): EvidenceContentRow[] {
+  const rows: EvidenceContentRow[] = [];
+  const seen = new Set<string>();
+  for (const row of registry) {
+    seen.add(row.platformContentId);
+    const published = publishedByPin.get(row.platformContentId) ?? null;
+    rows.push({
+      pinId: row.platformContentId,
+      title: row.title ?? published?.title ?? null,
+      description: row.description,
+      linkUrl: row.linkUrl,
+      publishedAt: row.publishedAt ?? published?.publishedAt ?? null,
+      format: contentFormat(row.format ?? published?.mediaType ?? null),
+      origin: row.vibepinDraftId ? "vibepin" : "pinterest",
+      lifetime: lifetimeOf(lookup, row.platformContentId),
+    });
+  }
+  for (const [pinId, published] of publishedByPin) {
+    if (seen.has(pinId)) continue;
+    rows.push({
+      pinId,
+      title: published.title,
+      description: null,
+      linkUrl: null,
+      publishedAt: published.publishedAt,
+      format: contentFormat(published.mediaType),
+      origin: "vibepin",
+      lifetime: lifetimeOf(lookup, pinId),
+    });
+  }
+  return rows;
+}
+
+/** Board names and Pin titles offered to category inference. Bounded: a category is
+ *  decided by what an account is mostly about, and the newest hundred rows say that
+ *  as well as a thousand. */
+export function inferenceTextsFrom(registry: ContentRegistryRow[], limit = 100): string[] {
+  const boards = new Set<string>();
+  const texts: string[] = [];
+  for (const row of registry.slice(0, limit)) {
+    if (row.title) texts.push(row.title);
+    if (row.boardName) boards.add(row.boardName);
+  }
+  return [...boards, ...texts];
+}
+
+/**
+ * The per-row line, from the same evidence the panel above the table shows.
+ *
+ * Rows with no numbers keep the four-way "why is this empty" wording (reconnect /
+ * wait for the run / wait for Pinterest), which is a data-state answer, not a
+ * comparison — the engine has nothing to say about a Pin nobody measured.
+ */
+export function attachEvidenceLines(
+  rows: InsightsContent[],
+  byPin: Map<string, Evidence[]>,
+): InsightsContent[] {
+  return rows.map(item => ({
+    ...item,
+    diagnosis: item.metricsAvailable === false
+      ? missingMetricsDiagnosis(item)
+      : describeContentRow(byPin.get(item.id)),
+  }));
+}
+
+async function evidenceAndDiagnosis(
+  sources: CollectionSources,
+  rows: EvidenceContentRow[],
+  inferenceTexts: string[],
+  accountDaily: InsightsDay[],
+): Promise<{ set: EvidenceSet; diagnosis: InsightsDiagnosis }> {
+  const [observations, keywordSet] = await Promise.all([
+    sources.loadObservationHistory(rows.map(row => row.pinId)).catch(() => [] as EvidenceObservation[]),
+    sources.loadKeywordSet(inferenceTexts).catch(() => EMPTY_KEYWORD_SET_INPUT),
+  ]);
+  const set = buildEvidence({
+    now: new Date(),
+    accountDaily,
+    content: rows,
+    observations,
+    keywordSet,
+  });
+  return { set, diagnosis: buildDiagnosis(set) };
+}
+
 // ── Messages (English; the page localizes the data-state line via `collection`) ──
 
 const VIBEPIN_AVAILABILITY =
@@ -589,10 +738,13 @@ function vibepinWarning(storageAvailable: boolean, total: number, missing: numbe
 /**
  * Build the dashboard of one connection for one scope.
  *
- * Reads are issued in the order their results are needed and nothing more is read
- * than the scope requires: the VibePin scope never touches the account series, and
- * the account scope never reads per-Pin daily rows (its heatmap is the Pinterest
- * account report, which is a different and better measurement than summing Pins).
+ * Both scopes read the same population and produce the SAME per-connection
+ * diagnosis. Flipping the toggle changes which Pins the table lists, not which
+ * account the user owns, and a panel that changed its mind with the toggle would be
+ * getting one of the two answers wrong. What the scope still decides is cost: per-Pin
+ * daily rows are read only for the scope whose heatmap needs them — the account
+ * scope heatmap is the Pinterest account report, a different and better measurement
+ * than summing Pins.
  */
 export async function buildPinterestInsights(
   input: {
@@ -616,34 +768,59 @@ export async function buildPinterestInsights(
     sampleLimit: null,
   };
 
-  if (scope === "account") {
-    const [accountRows, registry] = await Promise.all([
-      sources.loadAccountMetrics(startDate, endDate),
-      sources.loadRegistry(ACCOUNT_CONTENT_ROW_LIMIT),
-    ]);
-    const pinIds = registry.map(row => row.platformContentId);
-    const [contentRows, provenance] = await Promise.all([
-      pinIds.length > 0
-        ? sources.loadContentMetrics(pinIds, { startDate, endDate, includeDaily: false })
-        : Promise.resolve(EMPTY_METRIC_ROWS),
-      sources.loadProvenance().catch(() => ({ pins: [], storageAvailable: false })),
-    ]);
-    const lookup = buildMetricLookup(contentRows.values, contentRows.statuses);
-    const provenanceByPin = new Map(provenance.pins.map(pin => [pin.pinId, pin]));
-    const rows = accountContentRows(registry, lookup, provenanceByPin);
-    const daily = daysFromValues(accountRows.values, { scope: "account", startDate, endDate });
+  const [accountRows, registry, provenance] = await Promise.all([
+    sources.loadAccountMetrics(startDate, endDate),
+    sources.loadRegistry(ACCOUNT_CONTENT_ROW_LIMIT),
+    sources.loadProvenance().catch(() => ({ pins: [], storageAvailable: false })),
+  ]);
+  const published = await attributedPins(provenance.pins, connection.id, sources);
+  const publishedIds = published.map(item => item.pinId);
+  const registryIds = registry.map(row => row.platformContentId);
 
+  // The rows of the selected scope carry daily observations (its heatmap needs them);
+  // the other scope rows are read lifetime-only, because they are here to complete
+  // the cohorts, and 200 Pins × 30 days × 6 metrics of daily rows would be tens of
+  // thousands of rows fetched to be thrown away.
+  const primaryIds = scope === "vibepin" ? publishedIds : registryIds;
+  const primarySet = new Set(primaryIds);
+  const secondaryIds = (scope === "vibepin" ? registryIds : publishedIds)
+    .filter(id => !primarySet.has(id));
+  const [primary, secondary] = await Promise.all([
+    primaryIds.length > 0
+      ? sources.loadContentMetrics(primaryIds, { startDate, endDate, includeDaily: scope === "vibepin" })
+      : Promise.resolve(EMPTY_METRIC_ROWS),
+    secondaryIds.length > 0
+      ? sources.loadContentMetrics(secondaryIds, { startDate, endDate, includeDaily: false })
+      : Promise.resolve(EMPTY_METRIC_ROWS),
+  ]);
+  const values = [...primary.values, ...secondary.values];
+  const statuses = [...primary.statuses, ...secondary.statuses];
+  const lookup = buildMetricLookup(values, statuses);
+
+  const provenanceByPin = new Map(provenance.pins.map(pin => [pin.pinId, pin]));
+  const attributedByPin = new Map(published.map(pin => [pin.pinId, pin]));
+  const accountDaily = daysFromValues(accountRows.values, { scope: "account", startDate, endDate });
+  const { set, diagnosis } = await evidenceAndDiagnosis(
+    sources,
+    evidenceContentRows(registry, attributedByPin, lookup),
+    inferenceTextsFrom(registry),
+    accountDaily,
+  );
+
+  if (scope === "account") {
+    const rows = accountContentRows(registry, lookup, provenanceByPin);
     return {
       platform: "pinterest",
       scope,
       connectionState: "ready",
       account: accountOf(connection),
       range: { startDate, endDate, days: 30 },
-      summary: summarizeDays(daily, true),
-      daily,
-      content: attachDiagnoses("pinterest", rows),
+      summary: summarizeDays(accountDaily, true),
+      daily: accountDaily,
+      content: attachEvidenceLines(rows, set.byPin),
       availability: { views: "pin_level", websiteClicks: "pin_level", message: ACCOUNT_AVAILABILITY },
       collection,
+      diagnosis,
       latestAvailableAt: finishedRun.finishedAt,
       syncedAt: new Date().toISOString(),
       warning: registry.length === 0
@@ -652,17 +829,10 @@ export async function buildPinterestInsights(
     };
   }
 
-  const provenance = await sources.loadProvenance();
-  const published = await attributedPins(provenance.pins, connection.id, sources);
-  const pinIds = published.map(item => item.pinId);
-  const contentRows = pinIds.length > 0
-    ? await sources.loadContentMetrics(pinIds, { startDate, endDate, includeDaily: true })
-    : EMPTY_METRIC_ROWS;
-  const lookup = buildMetricLookup(contentRows.values, contentRows.statuses);
   const rows = vibepinContentRows(published, lookup);
-  const daily = daysFromValues(contentRows.values, {
+  const daily = daysFromValues(values, {
     scope: "content",
-    pinIds: new Set(pinIds),
+    pinIds: new Set(publishedIds),
     startDate,
     endDate,
   });
@@ -676,13 +846,47 @@ export async function buildPinterestInsights(
     range: { startDate, endDate, days: 30 },
     summary: summarizeContent(rows),
     daily,
-    content: attachDiagnoses("pinterest", rows),
+    content: attachEvidenceLines(rows, set.byPin),
     availability: { views: "pin_level", websiteClicks: "pin_level", message: VIBEPIN_AVAILABILITY },
     collection,
+    diagnosis,
     latestAvailableAt: finishedRun.finishedAt,
     syncedAt: new Date().toISOString(),
     warning: vibepinWarning(provenance.storageAvailable, rows.length, missing),
   };
+}
+
+/** Evidence rows from a live sample: the same shape, filled from what Pinterest
+ *  answered a moment ago rather than from the ledger. Cohorts of at most 20 mean
+ *  almost everything comes back `insufficient` — the honest reading of a sample. */
+function liveEvidenceRows(
+  pins: VibePinPublishedPinterestPin[],
+  slices: Map<string, LiveAnalyticsSlice | null>,
+): EvidenceContentRow[] {
+  return pins.map((record): EvidenceContentRow => {
+    const slice = slices.get(record.pinId) ?? null;
+    const metrics = summarizeSlice(slice);
+    const read = (name: EvidenceMetricName): number | null => {
+      if (slice === null) return null;
+      const value = metrics[name];
+      return value === undefined || value === null ? null : finiteMetric(value);
+    };
+    return {
+      pinId: record.pinId,
+      title: record.title,
+      description: null,
+      linkUrl: null,
+      publishedAt: record.publishedAt,
+      format: contentFormat(record.mediaType),
+      origin: "vibepin",
+      lifetime: {
+        IMPRESSION: read("IMPRESSION"),
+        SAVE: read("SAVE"),
+        PIN_CLICK: read("PIN_CLICK"),
+        OUTBOUND_CLICK: read("OUTBOUND_CLICK"),
+      },
+    };
+  });
 }
 
 /**
@@ -690,9 +894,11 @@ export async function buildPinterestInsights(
  *
  * The account scope has no honest live equivalent — it would need a full Pin scan
  * plus an analytics call per Pin, which is precisely the spend the collector exists
- * to move off the request path — so it shows nothing and says why. The VibePin scope
- * reads a bounded sample so a user who connected an account today is not told they
- * have no data.
+ * to move off the request path — so it shows nothing, says why, and carries no
+ * diagnosis: an evidence panel over zero rows would be a headline about nothing. The
+ * VibePin scope reads a bounded sample so a user who connected an account today is
+ * not told they have no data, and the engine runs over that sample with the cohort
+ * sizes it really has.
  */
 async function buildFallbackDashboard(
   input: {
@@ -723,6 +929,7 @@ async function buildFallbackDashboard(
         skippedReason: latestRun?.skippedReason ?? null,
         sampleLimit: null,
       },
+      diagnosis: null,
       latestAvailableAt: null,
       syncedAt: new Date().toISOString(),
       warning: null,
@@ -740,6 +947,12 @@ async function buildFallbackDashboard(
   const rows = liveContentRows(sample, slices);
   const daily = liveDays(slices, startDate, endDate);
   const missing = rows.filter(item => item.metricsAvailable === false).length;
+  const { set, diagnosis } = await evidenceAndDiagnosis(
+    sources,
+    liveEvidenceRows(sample, slices),
+    [],
+    daily,
+  );
 
   return {
     platform: "pinterest",
@@ -749,7 +962,7 @@ async function buildFallbackDashboard(
     range: { startDate, endDate, days: 30 },
     summary: summarizeContent(rows),
     daily,
-    content: attachDiagnoses("pinterest", rows),
+    content: attachEvidenceLines(rows, set.byPin),
     availability: { views: "pin_level", websiteClicks: "pin_level", message: VIBEPIN_AVAILABILITY },
     collection: {
       mode: "live_sample",
@@ -757,6 +970,7 @@ async function buildFallbackDashboard(
       skippedReason: latestRun?.skippedReason ?? null,
       sampleLimit: PIN_SINGLE_ANALYTICS_FALLBACK_LIMIT,
     },
+    diagnosis,
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
     warning: vibepinWarning(provenance.storageAvailable, rows.length, missing),

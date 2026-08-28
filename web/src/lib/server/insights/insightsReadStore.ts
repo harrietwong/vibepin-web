@@ -32,6 +32,7 @@ import type {
   LatestStatusRow,
   LatestValueRow,
   MetricRows,
+  ObservationHistoryRow,
 } from "@/lib/insights/collectionDashboard";
 import { EMPTY_METRIC_ROWS } from "@/lib/insights/collectionDashboard";
 import { isMissingSchema } from "./collectorStore";
@@ -39,6 +40,11 @@ import { isMissingSchema } from "./collectorStore";
 /** Pin ids per PostgREST `in(...)` filter. A URL carrying 200 ids is long enough to
  *  hit proxy limits; batching keeps each request ordinary. */
 const CONTENT_ID_CHUNK = 100;
+
+/** Observation rows read per chunk of Pins. One Pin accumulates at most a handful of
+ *  lifetime observations per metric per collection run, so this is a guard against a
+ *  pathological history, not a working limit. */
+const OBSERVATION_HISTORY_LIMIT = 2000;
 
 const RUN_COLUMNS = "id,kind,started_at,finished_at,calls_made,calls_budget,skipped_reason,error";
 const OBSERVATION_COLUMNS =
@@ -174,7 +180,7 @@ export async function loadRegistry(connectionId: string, limit: number): Promise
   const db = createServerClient();
   const { data, error } = await db
     .from("content_registry")
-    .select("platform_content_id,vibepin_draft_id,published_at,format,title,link_url,source_endpoint,last_seen_at")
+    .select("platform_content_id,vibepin_draft_id,published_at,format,title,description,link_url,board_name,source_endpoint,last_seen_at")
     .eq("connection_id", connectionId)
     .order("published_at", { ascending: false, nullsFirst: false })
     .order("last_seen_at", { ascending: false })
@@ -192,11 +198,63 @@ export async function loadRegistry(connectionId: string, limit: number): Promise
       publishedAt: row.published_at == null ? null : String(row.published_at),
       format: row.format == null ? null : String(row.format),
       title: row.title == null ? null : String(row.title),
+      description: row.description == null ? null : String(row.description),
       linkUrl: row.link_url == null ? null : String(row.link_url),
+      boardName: row.board_name == null ? null : String(row.board_name),
       sourceEndpoint: source === "top_pins" || source === "vibepin_publish" ? source : "pins_list",
       lastSeenAt: row.last_seen_at == null ? null : String(row.last_seen_at),
     } satisfies ContentRegistryRow;
   }).filter(row => row.platformContentId !== "");
+}
+
+/**
+ * Raw lifetime observations for a set of Pins — the ONLY source of age-pinned values.
+ *
+ * `metric_latest_value` deliberately keeps one row per measurement key, so a Pin's
+ * day-1 reading and its day-7 reading of the same metric are indistinguishable there:
+ * the later one simply wins. Growth from day 1 to day 7 is therefore unanswerable
+ * from the views, and answerable from the append-only ledger they are built on. The
+ * engine decides which window each observation falls in (it knows `published_at`);
+ * this reader only fetches, ordered oldest-first so a truncated read loses the newest
+ * rows rather than a random half of the history.
+ */
+export async function loadObservationHistory(
+  connectionId: string,
+  pinIds: string[],
+): Promise<ObservationHistoryRow[]> {
+  if (pinIds.length === 0) return [];
+  const db = createServerClient();
+  const rows: ObservationHistoryRow[] = [];
+  for (let index = 0; index < pinIds.length; index += CONTENT_ID_CHUNK) {
+    const chunk = pinIds.slice(index, index + CONTENT_ID_CHUNK);
+    const { data, error } = await db
+      .from("metric_observation")
+      .select("platform_content_id,metric_name,metric_value,observed_at")
+      .eq("connection_id", connectionId)
+      .eq("scope", "content")
+      .eq("period", "lifetime")
+      .eq("status", "ok")
+      .in("platform_content_id", chunk)
+      .order("observed_at", { ascending: true })
+      .limit(OBSERVATION_HISTORY_LIMIT);
+    if (error) {
+      if (isMissingSchema(error)) return [];
+      throw new Error(`Unable to read metric_observation: ${error.message}`);
+    }
+    for (const raw of data ?? []) {
+      const row = raw as Row;
+      const value = Number(row.metric_value);
+      const pinId = row.platform_content_id == null ? "" : String(row.platform_content_id);
+      if (!pinId || !Number.isFinite(value)) continue;
+      rows.push({
+        pinId,
+        metricName: String(row.metric_name ?? ""),
+        metricValue: value,
+        observedAt: String(row.observed_at ?? ""),
+      });
+    }
+  }
+  return rows;
 }
 
 /**

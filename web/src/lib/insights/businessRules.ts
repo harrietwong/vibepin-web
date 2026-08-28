@@ -139,7 +139,7 @@ export function diagnoseContent(
  * Collapsing them into one "no data yet" is what turns an analytics page into
  * something nobody trusts.
  */
-function missingMetricsDiagnosis(item: InsightsContent): string {
+export function missingMetricsDiagnosis(item: InsightsContent): string {
   if (item.metricsState === "no_permission") return "insights.diagnosis.noPermission";
   if (item.metricsState === "not_collected") return "insights.diagnosis.notCollected";
   return item.origin === "pinterest"

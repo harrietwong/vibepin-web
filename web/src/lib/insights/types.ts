@@ -1,3 +1,5 @@
+import type { InsightsDiagnosis } from "./recommendations";
+
 export type InsightsPlatform = "pinterest" | "instagram";
 
 /**
@@ -119,6 +121,16 @@ export type InsightsDashboard = {
   };
   /** Null on the Instagram path, which has no collection layer of its own. */
   collection: InsightsCollectionState | null;
+  /**
+   * The evidence-engine read on this account: headline, findings, Keep/Change/Test.
+   *
+   * Null wherever there is nothing to reason about — Instagram (no collection layer),
+   * an unusable connection, and the state before the first collection run in the
+   * account scope. Null is not "no problems found": that answer is a diagnosis with
+   * the fallback headline and an empty findings list, and the page must be able to
+   * tell the two apart.
+   */
+  diagnosis: InsightsDiagnosis | null;
   latestAvailableAt: string | null;
   syncedAt: string;
   warning: string | null;

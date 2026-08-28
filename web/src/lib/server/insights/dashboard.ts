@@ -46,8 +46,11 @@ import {
   loadContentMetrics,
   loadLatestFinishedRun,
   loadLatestRun,
+  loadObservationHistory,
   loadRegistry,
 } from "./insightsReadStore";
+import { loadAccountKeywordSet } from "./keywordSetStore";
+import { EMPTY_KEYWORD_SET } from "@/lib/insights/keywordSet";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const DASHBOARD_LOAD_TIMEOUT_MS = 20_000;
@@ -120,6 +123,7 @@ function emptyDashboard(
         : "A normal Instagram feed image has no clickable caption link. Only account-level profile link taps are available, and they cannot be assigned to one image.",
     },
     collection: null,
+    diagnosis: null,
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
     warning,
@@ -150,6 +154,21 @@ function pinterestSources(
     loadAccountMetrics: (from, to) => loadAccountMetrics(connection.id, from, to),
     loadRegistry: limit => loadRegistry(connection.id, limit),
     loadContentMetrics: (pinIds, options) => loadContentMetrics(connection.id, pinIds, options),
+    loadObservationHistory: pinIds => loadObservationHistory(connection.id, pinIds),
+    // The phrase set is the one reader allowed to WRITE: an inferred category is
+    // persisted so tomorrow does not re-guess it, and a rebuilt set is versioned so
+    // an old diagnosis stays explainable. Both writes are best effort — a page that
+    // fails because a keyword set could not be stored would be trading the feature
+    // for its own bookkeeping.
+    loadKeywordSet: inferenceTexts => loadAccountKeywordSet({
+      uid,
+      connectionId: connection.id,
+      metadata: connection.metadata ?? null,
+      inferenceTexts,
+    }).catch(error => {
+      console.error("[insights] keyword set unavailable", error);
+      return EMPTY_KEYWORD_SET;
+    }),
     loadProvenance: async () => {
       const result = await listVibePinPublishedPinterestPins(uid);
       return { pins: Array.from(result.pins.values()), storageAvailable: result.storageAvailable };
@@ -314,6 +333,10 @@ async function buildInstagramDashboard(
       message: "Profile link taps are an account total for the last 30 days and cannot be attributed to one feed image. Image rows show only official media interactions.",
     },
     collection: null,
+    // Instagram has no collection ledger, no cohorts and no keyword set of its own,
+    // so there is nothing for the evidence engine to read. A diagnosis assembled from
+    // a different platform data would be a guess wearing the same panel.
+    diagnosis: null,
     latestAvailableAt: null,
     syncedAt: new Date().toISOString(),
     warning: failedMedia > 0

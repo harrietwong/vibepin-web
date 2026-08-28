@@ -34,7 +34,9 @@ import {
   type LatestStatusRow,
   type LatestValueRow,
   type LiveAnalyticsSlice,
+  type ObservationHistoryRow,
 } from "../src/lib/insights/collectionDashboard";
+import type { EvidenceKeywordSet } from "../src/lib/insights/evidence";
 import type { InsightsObservationStatus, InsightsScope } from "../src/lib/insights/types";
 import type { VibePinPublishedPinterestPin } from "../src/lib/server/insights/publishProvenance";
 
@@ -143,7 +145,9 @@ function registryRow(overrides: Partial<ContentRegistryRow> & { platformContentI
     publishedAt: null,
     format: "IMAGE",
     title: null,
+    description: null,
     linkUrl: null,
+    boardName: null,
     sourceEndpoint: "pins_list",
     lastSeenAt: "2026-08-27T03:00:00.000Z",
     ...overrides,
@@ -191,6 +195,10 @@ type SourcesOptions = {
   client: Awaited<ReturnType<typeof pinterestSpy>>["client"];
   /** Pin id batches handed to the live reader, in order. */
   liveBatches: string[][];
+  observationHistory?: ObservationHistoryRow[];
+  keywordSet?: EvidenceKeywordSet;
+  /** Inference texts the composer offered the keyword-set reader, in order. */
+  keywordSetRequests?: string[][];
 };
 
 /**
@@ -236,6 +244,14 @@ function sourcesFor(db: FakeCollectionDb, options: SourcesOptions): CollectionSo
       storageAvailable: options.storageAvailable ?? true,
     }),
     loadRegistryOwners: async () => options.registryOwners ?? new Map<string, string>(),
+    // The evidence engine reads the ledger and the keyword set, both of which are our
+    // own tables. Empty is the shape production sees before v65 is applied, so the
+    // fake defaults to it: the composer must produce a dashboard either way.
+    loadObservationHistory: async () => options.observationHistory ?? [],
+    loadKeywordSet: async texts => {
+      options.keywordSetRequests?.push([...texts]);
+      return options.keywordSet ?? { phrases: [], category: null, version: null, hash: "0" };
+    },
     loadLiveAnalytics: async pinIds => {
       options.liveBatches.push([...pinIds]);
       const slices = new Map<string, LiveAnalyticsSlice | null>();
@@ -592,10 +608,19 @@ await test("the read store degrades a missing v64 schema to empty instead of thr
   const store = src("src/lib/server/insights/insightsReadStore.ts");
   // This ships before the migration is applied in production; a reader that threw
   // would blank the live page on deploy day instead of falling back.
-  for (const reader of ["loadLatestFinishedRun", "loadLatestRun", "loadAccountMetrics", "loadRegistry", "loadContentMetrics"]) {
+  for (const reader of [
+    "loadLatestFinishedRun",
+    "loadLatestRun",
+    "loadAccountMetrics",
+    "loadRegistry",
+    "loadContentMetrics",
+    // Age-pinned readings come from the append-only ledger, not the latest-value
+    // view, and that reader ships before v65 like the rest.
+    "loadObservationHistory",
+  ]) {
     assert.match(store, new RegExp(`export async function ${reader}`), reader);
   }
-  assert.equal(store.split("isMissingSchema(").length - 1, 6, "every query checks for a missing relation");
+  assert.equal(store.split("isMissingSchema(").length - 1, 7, "every query checks for a missing relation");
   // The finished-run gate must ask the database for a finished run, not filter a
   // window of recent runs in memory.
   assert.match(store, /\.not\("finished_at", "is", null\)/);
