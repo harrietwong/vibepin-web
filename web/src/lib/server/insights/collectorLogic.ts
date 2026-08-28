@@ -316,7 +316,7 @@ export function dedupeObservationDrafts(drafts: ObservationDraft[]): Observation
       draft.metricName,
       draft.period,
       draft.periodDate ?? "",
-    ].join(" ");
+    ].join("\u001f");
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(draft);
