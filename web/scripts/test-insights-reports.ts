@@ -409,6 +409,7 @@ function dashboardWithDiagnosis(diag: InsightsDashboard["diagnosis"]): InsightsD
     summary: { views: 100, interactions: 10, saves: 4, shares: 1, websiteClicks: 2, trafficRate: 0.02 },
     daily: [],
     content: [contentRow({ id: "pin-1", diagnosis: "insights.diagnosis.notCollected" })],
+    unattributedContent: [],
     availability: { views: "account_level", websiteClicks: "account_level", message: "" },
     collection: null,
     diagnosis: diag,
