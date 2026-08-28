@@ -19,7 +19,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle, Sparkles } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { hasPersistFailure, retryPersist, subscribe as subscribeDrafts, splitContentMedia, copyMedia } from "@/lib/pinDraftStore";
+import { getDraft, hasPersistFailure, retryPersist, subscribe as subscribeDrafts, splitContentMedia, copyMedia } from "@/lib/pinDraftStore";
 import { toast } from "sonner";
 import { getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
 import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
@@ -329,8 +329,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const saveState: "saved" | "saving" | "failed" = persistFailed ? "failed" : pendingSave ? "saving" : "saved";
 
   const persistNow = useCallback((f: PinFieldsValue) => {
+    // Read the stored record FRESH (same contract as handlePublish): `persistNow` is
+    // rebuilt on every render and the flush effect below runs the PREVIOUS one in its
+    // cleanup, closed over the PREVIOUS draft. Computing intent from that closure would
+    // let a board edit sitting in the debounce window overwrite whatever a concurrent
+    // writer — the destination picker on this very card, AI copy, a sync — had just
+    // stored. The prop is only a fallback for a draft the store no longer has.
+    const current = getDraft(draft.id) ?? draft;
     const nextBoardId = f.boardId.trim();
-    const storedDestinations = draft.scheduledDestinations ?? [];
+    const storedDestinations = current.scheduledDestinations ?? [];
     // The board is the one field on this form that is ALSO a publish destination:
     // changing it here changes where this Content goes (owner decision, 2026-08-27).
     // Writing only the legacy board left the stored Pinterest entry — what the due-time
@@ -341,7 +348,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     // re-derived from picker state. `withBoardOnPinterestEntry` is a pure rewrite of the
     // STORED entries, and it runs ONLY when the board actually changed — a title
     // keystroke can never reach destinations.
-    const boardChanged = nextBoardId !== (draft.boardId ?? "").trim();
+    const boardChanged = nextBoardId !== (current.boardId ?? "").trim();
     props.onPersist(draft.id, {
       title: f.title,
       description: f.description,
@@ -354,13 +361,13 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
         ? {
             scheduledDestinations: withBoardOnPinterestEntry(
               storedDestinations,
-              draft.targetConnectionId,
+              current.targetConnectionId,
               { boardId: nextBoardId, boardName: boardName(nextBoardId) },
             ),
           }
         : {}),
     });
-  }, [props, draft.id, draft.boardId, draft.scheduledDestinations, draft.targetConnectionId, boardName]);
+  }, [props, draft.id, boardName]);
 
   const flush = useCallback(() => {
     if (timer.current) {

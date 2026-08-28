@@ -154,11 +154,18 @@ async function main() {
       "persistNow must route the board edit through withBoardOnPinterestEntry");
     // Guarded on an actual board change: an unconditional rewrite would make every
     // keystroke in title/description a destinations writer.
-    assert.match(body, /boardChanged\s*=\s*[^;]*draft\.boardId/,
+    assert.match(body, /boardChanged\s*=\s*[^;]*current\.boardId/,
       "the rewrite must be guarded on the board actually changing");
-    // And it must rewrite the STORED entries. Re-deriving from the picker's component
-    // state is the stale-state bug the one-writer rule exists to prevent.
-    assert.match(body, /draft\.scheduledDestinations/, "the rewrite must read the stored intent");
+    // And it must rewrite the STORED entries, read FRESH from the store — the same
+    // contract 5/6a pins on handlePublish. The flush effect runs the PREVIOUS persistNow
+    // in its cleanup, so intent computed from the closed-over draft would overwrite a
+    // concurrent writer (the picker on this card, AI copy, a sync) whose write landed
+    // during the debounce window.
+    assert.match(body, /const current = getDraft\(draft\.id\) \?\? draft;/,
+      "persistNow must read the draft fresh from the store, not from its closure");
+    assert.match(body, /current\.scheduledDestinations/, "the rewrite must read the stored intent");
+    assert.doesNotMatch(body, /draft\.scheduledDestinations|draft\.targetConnectionId|draft\.boardId/,
+      "persistNow must not read intent off the closed-over draft");
     assert.doesNotMatch(body, /selectedAccountIds|buildScheduledDestinations|connectionSummaries/,
       "persistNow must not re-derive intent from picker state");
   });
