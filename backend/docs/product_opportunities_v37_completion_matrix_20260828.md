@@ -3,9 +3,8 @@
 Authority: `docs/prd/0825数据功能修改-VibePin_Product_Opportunities_PRD_v3.7_—_产品与技术执行版.md`.
 
 Candidate boundary: functional commit
-`1946a68483f7ca225438d7a98c6f897ee7f088c5`, docs/test commit
-`19744fc9`, exact 80-artifact manifest
-`backend/docs/product_opportunities_v37_release_manifest_1946a68.json`.
+`08c22a5ce66a33182a1d3a861d90581e3a5cfb93`, exact 81-artifact manifest
+`backend/docs/product_opportunities_v37_release_manifest_08c22a5.json`.
 
 This matrix separates implementation evidence from production truth. `PASS`
 below never means that an unapplied schema, an unpromoted Web build, an empty
@@ -17,12 +16,12 @@ metric history or a disabled timer is live.
 | Real direct PDP and real merchant image | Manifest construction re-fetches the Pin and merchant page; admission, RPC and table constraints reject missing/unsafe PDP identity, Pinterest-hosted images and unproven image provenance. | The latest reviewed permanent Supply receipt wrote zero eligible merchant-proven rows and was rejected for one render failure. | Implementation PASS / Data gate BLOCK |
 | Product Pin is optional when a direct-link Source Pin is valid | Both Product Pin and `direct_outbound_link` Source Pin are admissible Evidence types; one persisted Primary and bounded Additional Evidence remain distinct. | No production v3.7 Evidence row exists yet. | Implementation PASS / Production NOT LIVE |
 | Product name/title may be null and must never be fabricated | Admission accepts null, rejects unproven non-null names, API keeps null, cards omit the title and Create Pins receives no invented title/keyword. | Candidate Web is not promoted; current production homepage still contains older fabricated/retired claims. | Implementation PASS / Production UI BLOCK |
-| Stable entity, lifecycle and history | Canonical URL/hash identity, partial current uniqueness, database-owned lifecycle transitions and history-preserving retirement are enforced. Exact PGlite transactions prove retired/current coexistence and complete schema rollback. | Production v63 schema is absent. | Implementation PASS / Production NOT LIVE |
+| Stable entity, lifecycle and history | Canonical URL/hash identity, partial current uniqueness, database-owned lifecycle transitions and history-preserving retirement are enforced. Exact PGlite transactions prove retired/current coexistence and complete schema rollback. A rollback-only real-PostgreSQL canary now exercises the partial unique index across two sessions. | The canary has not yet run in an isolated test project or production; production v63 schema is absent. | Implementation PASS / PostgreSQL canary NEEDS EVIDENCE |
 | Daily idempotent snapshots and one-Primary metrics | Snapshot uniqueness is per canonical Pin/UTC day; shared Pins are fetched once. G30 and current/previous G7 bind one Primary Evidence and reject stale, incomplete or counter-regressed history. | Current reviewed automatic candidates have zero today/G7/G30/full-metric coverage; one Physical candidate has only a G14 anchor. | Implementation PASS / Metric launch BLOCK |
 | Primary switch safety | Three distinct natural-day `not_found` observations are required; provider failures do not count. The replacement must itself have a valid current-day observation before the atomic switch. | No production switch history exists. | Implementation PASS / Production NOT LIVE |
 | Physical and Digital calibration are separate | Persisted family/version calibration and release gates are independent. Demand/Trend/Fastest Growing remain hidden below 70% valid G30+G7 coverage, without an approved quality review, or without an effective approved calibration. | Both families currently lack launch-ready metric history; publication flags must remain false. | Implementation PASS / Metric launch BLOCK |
 | Free fixed ten; paid full catalog; same facts per product | Free access is the persisted curated rank 1–10 at every list/detail/save path. Paid plans use the complete Active catalog. Both paths use the same `publicItem()` metric mapper; plan affects which products are accessible, not their facts. | No production v3.7 catalog exists, so entitlement behavior is not yet proven against live rows. | Implementation PASS / Live access NEEDS EVIDENCE |
-| Saved Products is a record, not a tracking trigger | Saved Products is an account relation with database-owned idempotent state/history. UI copy describes a shortlist. Tracking has no Saved dependency. | Production relation is absent until Stage 1. | Implementation PASS / Production NOT LIVE |
+| Saved Products is a record, not a tracking trigger | Saved Products is an account relation with database-owned idempotent state/history. UI copy describes a shortlist. Tracking has no Saved dependency. The rollback-only PostgreSQL canary switches to two authenticated identities and anon without returning user IDs. | Its real role-isolation execution remains pending; production relation is absent until Stage 1. | Implementation PASS / PostgreSQL canary NEEDS EVIDENCE |
 | Save and Create Pin have no implicit side effects | Save calls only the Saved Products API. Create Pin uses the existing authenticated composer-draft plus one-shot fallback and never calls Save. Navigation occurs only after one handoff path succeeds. | Candidate interactive authenticated flow is not yet promoted or live-tested. | Implementation PASS / Live flow NEEDS EVIDENCE |
 | No internal lifecycle vocabulary in Product UI | Product routes/components/API contract reject `retired`, `inactive`, `unavailable` and `insufficient_signal` as user copy; ordinary explanations and null omission are used instead. | Candidate is not promoted; current production truth scan must be repeated after promotion. | Implementation PASS / Production UI BLOCK |
 | Retire percentile Demand, keyword Trend, Competition and Opportunity Score | Product Picker no longer exposes the old conclusions; the legacy product intelligence route returns HTTP 410; candidate landing removes fake/retired panels. | Current production homepage still exposes old/fabricated claims and is not a valid rollback target. | Candidate PASS / Production P0 BLOCK |
@@ -30,7 +29,7 @@ metric history or a disabled timer is live.
 
 ## Current validation
 
-- Backend: `966 passed`, `2` credential-gated skips, zero failures.
+- Backend: `984 passed`, `2` credential-gated skips, zero failures.
 - Admission/migration focused group: `132/132`.
 - Exact release automation contract: `30/30`.
 - Product Web checks rerun from the current tree: v3.7 contract, access,
@@ -47,6 +46,10 @@ metric history or a disabled timer is live.
   10/18/9/3/4/91/44 contract, atomic Admission and zero-object rollback.
   It does not prove production PostgreSQL concurrency or live role isolation;
   those remain bounded production canary gates.
+- Rollback-only PostgreSQL canary: local orchestration and fail-closed tests PASS;
+  isolated test-project execution is still required. Its exact structured
+  `P0001` sentinel prevents a SQL-echoing error response from becoming a false
+  PASS.
 
 ## Data quality decision
 
@@ -59,22 +62,25 @@ coverage and quality/calibration gates.
 
 ## Remaining production sequence
 
-1. Refresh the exact `1946a684` six-unit/four-wrapper VPS `/tmp` hashes and
+1. Refresh the exact current-candidate six-unit/four-wrapper VPS `/tmp` hashes and
    `systemd-analyze verify`; the old `6839e760` receipt is historical only.
 2. With separate production-write authorization, refresh Stage 0 catalog,
    backup inventory and a legacy baseline no older than 15 minutes.
 3. Apply the exact canonical-LF v63 migration and immediately run the exact
    post-apply catalog/security/legacy-integrity verifier with all Product timers
    and metric publication flags disabled.
-4. Admit one reviewed Product, prove every Product/Evidence field, then rehearse
+4. Run the rollback-only PostgreSQL concurrency/role canary first in the isolated
+   test project and then, under separate authority, against the post-apply
+   production schema. Require exact before/after equality and zero persisted rows.
+5. Admit one reviewed Product, prove every Product/Evidence field, then rehearse
    the exact-ID history-preserving rollback. Only afterward admit one batch of at
    most 20.
-5. Deploy Tracking disabled, run preflight/dry-run and one bounded real canary;
+6. Deploy Tracking disabled, run preflight/dry-run and one bounded real canary;
    prove lock, timeout, failure propagation, cleanup and metric writes.
-6. Promote the unchanged qualified Web boundary only after truthful live rows
+7. Promote the unchanged qualified Web boundary only after truthful live rows
    exist; verify Free ten, paid catalog, Saved Products, Create Pin and removal of
    all retired/fabricated public claims on `vibepin.co`.
-7. Enable Admission and Tracking timers in order only after their manual canaries
+8. Enable Admission and Tracking timers in order only after their manual canaries
    pass; preserve Pinterest cooldowns and verify first permanent-timer origins.
 
 ## Rollback boundary

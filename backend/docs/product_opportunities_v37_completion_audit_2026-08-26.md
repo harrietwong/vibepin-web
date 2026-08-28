@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. It descends from production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`1946a68483f7ca225438d7a98c6f897ee7f088c5`; and its exact Product boundary is
-the 80-artifact
-`backend/docs/product_opportunities_v37_release_manifest_1946a68.json`. This tip
+`08c22a5ce66a33182a1d3a861d90581e3a5cfb93`; and its exact Product boundary is
+the 81-artifact
+`backend/docs/product_opportunities_v37_release_manifest_08c22a5.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -36,13 +36,14 @@ The read-only production evidence is archived at
 the automatic 2026-08-27 chain exited 2 because the deployed worker had zero
 `classify-chain` routes. The repair is locally qualified but not deployed, so
 same-day fresh classification remains unproven in production.
-It changes 72 paths and all 72 belong to that manifest. The four remaining
-manifest dependencies are byte-identical to the remote base. This eliminates
+Exactly 71 production paths differ from the remote base and every one belongs
+to that manifest. The other entries are versioned SQL/operator dependencies,
+including four files byte-identical to the remote base. This eliminates
 the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 966 passed with 2 live-only skips; Web 132/132
+and contract-test state: backend 984 passed with 2 live-only skips; Web 132/132
 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -133,6 +134,18 @@ rollback. Its latest clean replay is
 Because PGlite is single-process and the harness inspects policy/grant catalog
 facts rather than authenticated/anonymous sessions, production concurrency and
 role isolation remain explicit bounded canary gates.
+
+Commits `596d472` and `08c22a5` turn those two gates into an exact rollback-only
+PostgreSQL canary. Its independent-session duplicate probe must block on the
+current-identity partial unique index; its role probe switches to authenticated
+and anonymous database roles, verifies per-user Saved Products visibility plus
+server-only writes, and deliberately raises an exact structured `P0001` sentinel
+to roll back every temporary Product/Evidence/Saved row. An independent Opus
+review found no P0/P1 and one P2 in the first detector: counting a sentinel in
+raw error text could misread a future SQL-echoing API response. `08c22a5` closes
+that inversion by requiring an exact structured PostgreSQL code and message and
+adds the SQL-echo regression. Local orchestration is proven; actual PostgreSQL
+semantics still require one isolated test-project execution before production.
 
 The historical integration candidate is
 `codex/product-v37-security-deps`. Its prequalified integration base

@@ -23,7 +23,7 @@ COMPLETION_MATRIX = (
     ROOT / "docs" / "product_opportunities_v37_completion_matrix_20260828.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_1946a68.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_08c22a5.json"
 )
 FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
     ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
@@ -146,16 +146,16 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "1946a68483f7ca225438d7a98c6f897ee7f088c5"
+    functional = "08c22a5ce66a33182a1d3a861d90581e3a5cfb93"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
-    manifest_name = "product_opportunities_v37_release_manifest_1946a68.json"
+    manifest_name = "product_opportunities_v37_release_manifest_08c22a5.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert functional in COMPLETION_MATRIX
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "966 tests" in RUNBOOK
+    assert "984 tests" in RUNBOOK
     assert "Web registry passed 132/132" in RUNBOOK
     assert "migration-contract group passed 132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
@@ -176,7 +176,8 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert manifest["productionRemoteBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     assert manifest["prequalifiedIntegrationBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     paths = [item["path"] for item in manifest["artifacts"]]
-    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 80
+    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 81
+    assert manifest["postgresCanaryCommit"] == functional
     assert manifest["liveProductTruthGateCommit"] == core_functional
     assert "web/src/app/api/generate/route.ts" in paths
     assert "web/src/lib/server/generationModeration.ts" in paths
@@ -189,6 +190,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert "web/scripts/verify-product-truth-url.ts" in paths
     assert "backend/scripts/run_migration.py" in paths
     assert "backend/scripts/audit_product_opportunity_schema_v37.py" in paths
+    assert "backend/scripts/canary_product_opportunity_postgres_v37.py" in paths
     assert "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql" in paths
     assert "backend/docs/product_opportunities_v37_stage1_post_apply_query_v1.sql" in paths
 

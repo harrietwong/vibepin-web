@@ -19,9 +19,9 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `1946a68483f7ca225438d7a98c6f897ee7f088c5`, and exact
-80-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_1946a68.json`.
+functional tip `08c22a5ce66a33182a1d3a861d90581e3a5cfb93`, and exact
+81-artifact Product boundary
+`backend/docs/product_opportunities_v37_release_manifest_08c22a5.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -48,11 +48,11 @@ directly on `b22930e`: it inherits the Product implementation from `351e479` and
 the Tracking schedule hardening from `01dcb53`. It also restores the
 `classify-chain` worker route required by the already-installed Crawl OnSuccess
 wrapper, fixing the production version mismatch observed on 2026-08-27 without
-changing its unit, timer, or wrapper. The same 72 production paths differ and
-every one is listed in the 80-artifact
-manifest; the remaining four manifest dependencies are already byte-identical
-on the remote base. No provider/write budget changed. No Usage/Metering production
-file or migration is included.
+changing its unit, timer, or wrapper. Exactly 71 production paths differ from
+the remote base and every one is listed in the 81-artifact manifest. The other
+entries are versioned SQL/operator dependencies, including four files already
+byte-identical on the remote base. No provider/write budget changed. No
+Usage/Metering production file or migration is included.
 
 `c8f0d77` then separates user-facing launch taxonomy from immutable acquisition
 provenance. It adds Wedding & Celebrations, Gifts, and Jewelry & Accessories,
@@ -74,7 +74,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 966 tests with 2
+committed Product-only state, the full backend suite passed 984 tests with 2
 live-only skips, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
@@ -494,6 +494,34 @@ one process, and this harness inspects RLS policy/grant definitions rather than
 executing authenticated and anonymous sessions. The exact production post-apply
 verifier plus bounded concurrency/role canaries remain mandatory before rollout.
 
+Commit `08c22a5` adds the missing real-PostgreSQL gate without silently treating
+catalog definitions as runtime proof. The default command is a zero-network plan.
+Execution requires one reviewed Admission row plus exact project, manifest and
+migration SHA-256 bindings, and `VIBEPIN_PRODUCT_STAGE2_CANARY_MODE=production`.
+It opens independent sessions: one holds an uncommitted Active identity, the
+second must time out on the partial unique index, and both transactions roll
+back. A separate statement temporarily creates two Saved Products rows for two
+existing auth users, switches to `authenticated` and `anon`, and accepts success
+only when the structured PostgreSQL error is exactly `P0001` /
+`V37_ROLE_CANARY_PASS`; that deliberate exception rolls back Product, Evidence
+and Saved rows. Exact Product/Saved counts must equal the pre-run baseline.
+The probe temporarily touches two existing user IDs inside the transaction but
+never returns those IDs and persists no row. Unit orchestration is PASS, but one
+execution against an isolated test project remains mandatory before any
+production use; this runbook does not authorize that execution.
+
+```powershell
+$env:VIBEPIN_PRODUCT_STAGE2_CANARY_MODE = "production"
+py backend/scripts/canary_product_opportunity_postgres_v37.py `
+  --manifest <exact-one-row-reviewed-manifest.json> `
+  --execute `
+  --project-ref <project-ref> `
+  --expected-project-ref <same-project-ref> `
+  --expected-migration-sha256 6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1 `
+  --confirm "CANARY:<project-ref>:<manifest-sha256>:6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1" `
+  --report-out <local-receipt.json>
+```
+
 The Stage 1 baseline and post-apply verifier were executed against the exact
 migration in PGlite. The post-apply contract proves 10 relations, 18 exact RPC/
 trigger functions, 9 enabled triggers, 3 Saved Products RLS policies, 4 unique
@@ -509,7 +537,8 @@ cutover. This receipt is demonstration evidence only and will be stale by the
 actual apply. Evidence:
 `backend/docs/product_opportunities_v37_stage1_legacy_baseline_20260828T041242Z.json`.
 
-`run_migration.py` and the verifier are part of the 80-artifact boundary. Apply now fails before
+`run_migration.py`, the verifier and the rollback-only PostgreSQL canary are part
+of the 81-artifact boundary. Apply now fails before
 the Management API unless the operator explicitly supplies the target project,
 the same expected target, the canonical Git-blob SQL SHA-256, and a confirmation
 string binding both. CRLF/CR checkouts are normalized to repository LF before
