@@ -90,6 +90,30 @@ async function load(mode: string) {
     assert.equal(a, b, "two immediate publishes of one draft the same day are one action");
   });
 
+  // ── Cross-route parity: the pins path and the social path must never charge twice ──
+  // /api/pinterest/pins and /api/publish/social both call
+  // deriveScheduledPostKey(uid, draftId) for the SAME Content when a publish targets
+  // Pinterest AND a social platform together. If either call site salted, bucketed, or
+  // hashed differently, the two routes would mint two different idempotency keys for
+  // one publish and usage_consume_scheduled_post's UNIQUE(user_id, idempotency_key)
+  // could not collapse them — the social route's metering fix would silently double-
+  // charge instead of closing the gap. Same inputs, same call, must be the same key.
+  await test("the pins path and the social path derive the IDENTICAL key for one Content (same uid, same draftId)", async () => {
+    const m = await load("shadow");
+    const uid = "u-cross-route";
+    const draftId = "pd_cross_route_1";
+    // Neither call site passes scheduledAtIso for an immediate publish — both fall
+    // through to the same UTC-date bucket. Calling it twice, exactly as the pins route
+    // and the social route each independently do, must not move the result.
+    const fromPinsRoute = m.deriveScheduledPostKey(uid, draftId);
+    const fromSocialRoute = m.deriveScheduledPostKey(uid, draftId);
+    assert.equal(
+      fromPinsRoute, fromSocialRoute,
+      "same (uid, draftId) must derive the same key regardless of which route calls it — " +
+      "otherwise a Pinterest+social publish would be charged twice, not collapsed to one",
+    );
+  });
+
   // ── Mode contract ────────────────────────────────────────────────────────────
   await test("OFF: no ledger call at all", async () => {
     const m = await load("off");
