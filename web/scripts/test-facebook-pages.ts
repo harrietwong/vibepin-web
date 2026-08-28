@@ -596,9 +596,22 @@ async function main() {
       storeSrc.includes("facebookUserIdOf(r) === facebookUserId"),
       "the row must be matched on metadata.facebook.facebookUserId",
     );
+    // A Reconnect may additionally NAME the row it repairs, so the upsert goes
+    // through pickRowForUpsert — which still delegates to the shared rule. What
+    // matters is that no private copy of the matching logic appears here.
     assert(
-      storeSrc.includes("pickRowForFacebookUser(allRows, input.accountId)"),
-      "upsert must reuse the shared identity rule, not a private copy of it",
+      storeSrc.includes("pickRowForUpsert(allRows, input.accountId, targetConnectionId)"),
+      "upsert must resolve the row through the shared picker, not a private copy of it",
+    );
+    assert(
+      storeSrc.includes("return pickRowForFacebookUser(rows, facebookUserId);"),
+      "pickRowForUpsert must fall back to the identity rule every READ also uses",
+    );
+    // The named target can only SELECT among rows identity already agrees with —
+    // it must never override identity, or a forged id would repoint a connection.
+    assert(
+      storeSrc.includes("if (!recorded || recorded === facebookUserId) return target;"),
+      "an explicit target is honoured only when its recorded identity is compatible",
     );
   });
 
