@@ -104,6 +104,7 @@ export const CORE: string[] = [
   "test-scheduled-post-metering",
   "test-usage-enforce-switches",
   "test-ai-copy-model-config",
+  "test-social-only-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
   // Settings / support
