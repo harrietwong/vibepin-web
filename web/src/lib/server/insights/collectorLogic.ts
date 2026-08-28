@@ -446,6 +446,57 @@ export function resolveRegistrySource(
   return incoming;
 }
 
+// ── Rate limiting ────────────────────────────────────────────────────────────
+
+export type RateLimitVerdict = "backoff_and_continue" | "stop";
+
+export type RateLimitGate = {
+  /** Record a 429 and get the run's answer. First hit: back off, keep working.
+   *  Second hit anywhere in the same run: stop. */
+  register429(): RateLimitVerdict;
+  /** True once the run has decided to stop — read by the phase sequencer. */
+  readonly stopped: boolean;
+  readonly hits: number;
+};
+
+/**
+ * One run's 429 policy, shared by all three phases.
+ *
+ * The rule it encodes is "back off once, then continue", and the reason it is a
+ * RUN-level object rather than a per-phase flag is the reason F5 exists at all. A
+ * per-phase flag made the first 429 — wherever it landed — abort every later phase,
+ * so a rate limit while reading the account series meant the registry never ran and
+ * no Pin task was measured that day. Pinterest's limit is per token per minute: it
+ * clears while we wait. Abandoning a whole day's remaining work over one 429 throws
+ * away collection windows that cannot be backfilled (the daily analytics window
+ * moves on, and an unregistered Pin is invisible to every later step), while the
+ * only thing continuing costs is the 60 seconds we already agreed to spend.
+ *
+ * The second 429 is treated differently on purpose: one is a burst we rode out, two
+ * in the same run means the limit is not clearing and further calls are guaranteed
+ * failures that still burn wall time and get written down as failed runs. Every
+ * phase is resumable by design — the account window is re-read whole, the registry
+ * keeps its cursor, tasks stay pending inside their windows — so stopping loses
+ * nothing that the next invocation cannot pick up.
+ *
+ * Note what a verdict does NOT say: retry the claim that was refused. The refused
+ * call is abandoned (a task keeps its pending state and an incremented attempt
+ * count) and the run moves to the next claim. Retrying the same call immediately
+ * after the backoff would spend the recovered budget on the one request we already
+ * know Pinterest is unhappy about.
+ */
+export function createRateLimitGate(): RateLimitGate {
+  let hits = 0;
+  return {
+    register429() {
+      hits += 1;
+      return hits >= 2 ? "stop" : "backoff_and_continue";
+    },
+    get stopped() { return hits >= 2; },
+    get hits() { return hits; },
+  };
+}
+
 // ── Ownership attribution ────────────────────────────────────────────────────
 
 export type RegistryOwnerRow = {
@@ -454,45 +505,38 @@ export type RegistryOwnerRow = {
   sourceEndpoint: RegistrySource;
 };
 
-/**
- * Which connection owns a Pin, per the registry.
- *
- * This is what closes the legacy-attribution gap. Drafts published before the app
- * recorded `targetConnectionId` have no attribution in their payload, so the
- * dashboard's only options were to show them on EVERY account (today's behaviour —
- * each Pin repeated once per account, metrics returned by only one of them) or hide
- * them (losing real content). The registry gives a third, correct answer: the
- * account whose own token listed the Pin is the account that owns it.
- *
- * `vibepin_publish` beats a discovery row when two connections both claim a Pin —
- * which should not happen, since a Pin lives in one account, but a shared/duplicated
- * connection makes it possible and a deterministic winner beats an arbitrary one.
- * With no row at all the answer is null, and the caller keeps the old
- * visible-on-every-card fallback rather than guessing.
- */
-export function ownerConnectionFromRegistry(
-  rows: RegistryOwnerRow[],
-  platformContentId: string,
-): string | null {
-  const matches = rows.filter(row => row.platformContentId === platformContentId);
-  if (matches.length === 0) return null;
-  const published = matches.find(row => row.sourceEndpoint === "vibepin_publish");
-  return (published ?? matches[0]).connectionId;
-}
+/** What the collector should do with one VibePin-published Pin this run. */
+export type PinClaimVerdict = "collect" | "not_mine" | "unknown_owner";
 
 /**
- * Does this Pin belong on this connection's dashboard?
+ * Should THIS connection register and measure this Pin?
  *
- * Precedence is explicit: the draft's own recorded target wins (it is what the
- * publish path actually did), then the registry's owner, and only when neither
- * knows does the Pin fall back to being visible everywhere.
+ * The draft's own recorded target wins whenever it exists: it is what the publish
+ * path actually did, and no later observation can be better evidence than the act
+ * itself. Drafts published before the app recorded `targetConnectionId` have no such
+ * evidence, and the old code simply skipped them (`targetConnectionId !== id` is true
+ * for `null`), so a legacy Pin was never registered and never measured by ANY
+ * account — invisible to the whole feature rather than merely mis-attributed.
+ *
+ * The registry supplies the missing answer: the account whose own token listed the
+ * Pin is the account that owns it. When it has not listed the Pin yet the verdict is
+ * `unknown_owner`, and the honest action is to do nothing THIS run. Guessing "mine"
+ * would let two connections both register the same Pin and both create tasks for it,
+ * which is the multi-account duplication this whole path exists to remove; the
+ * registry's incremental pass runs every day, so the Pin is claimed within a day of
+ * becoming knowable.
  */
-export function attributePinToConnection(
+export function claimPinForConnection(
   targetConnectionId: string | null,
   registryOwnerConnectionId: string | null,
-  renderingConnectionId: string,
-): boolean {
-  if (targetConnectionId) return targetConnectionId === renderingConnectionId;
-  if (registryOwnerConnectionId) return registryOwnerConnectionId === renderingConnectionId;
-  return true;
+  collectingConnectionId: string,
+): PinClaimVerdict {
+  if (targetConnectionId) {
+    return targetConnectionId === collectingConnectionId ? "collect" : "not_mine";
+  }
+  if (registryOwnerConnectionId) {
+    return registryOwnerConnectionId === collectingConnectionId ? "collect" : "not_mine";
+  }
+  return "unknown_owner";
 }
+

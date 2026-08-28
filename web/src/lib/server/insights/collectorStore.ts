@@ -8,7 +8,7 @@ import "server-only";
  * production BEFORE the migration is applied there (the migration is applied to the
  * test project only, and production apply is a human decision). A collector that
  * threw on a missing table would take the live Insights dashboard down with it —
- * `ownerConnectionForPin` is called on the request path.
+ * `ownerConnectionsForPins` is called on the request path.
  *
  * The rule is therefore: a missing table means "no data", never an exception. A
  * REAL error (permissions, constraint violation, connectivity) still propagates —
@@ -387,38 +387,6 @@ export async function recordTaskAttempt(id: number, attempts: number): Promise<v
   if (error && !isMissingSchema(error)) {
     throw new Error(`Unable to record pin_task attempt: ${error.message}`);
   }
-}
-
-/**
- * The connection that owns a Pin, per the registry — the durable answer used to
- * attribute legacy drafts whose payload never recorded a target.
- *
- * Scoped to the user's own connections by the caller's connection id list, so this
- * cannot be used to probe another account's ownership.
- */
-export async function ownerConnectionForPin(
-  connectionIds: string[],
-  platformContentId: string,
-): Promise<string | null> {
-  if (connectionIds.length === 0) return null;
-  const db = createServerClient();
-  const { data, error } = await db
-    .from("content_registry")
-    .select("connection_id,platform_content_id,source_endpoint")
-    .in("connection_id", connectionIds)
-    .eq("platform_content_id", platformContentId);
-  if (error) {
-    if (isMissingSchema(error)) return null;
-    throw new Error(`Unable to read content_registry ownership: ${error.message}`);
-  }
-  const rows = (data ?? []).map(row => ({
-    connectionId: String(row.connection_id),
-    platformContentId: String(row.platform_content_id),
-    sourceEndpoint: row.source_endpoint as RegistrySource,
-  }));
-  if (rows.length === 0) return null;
-  const published = rows.find(row => row.sourceEndpoint === "vibepin_publish");
-  return (published ?? rows[0]).connectionId;
 }
 
 /** Registry ownership for MANY Pins at once — the dashboard needs one query, not

@@ -33,14 +33,14 @@ import {
   REGISTRY_FULL_PAGES_PER_DAY,
   TASK_WINDOWS,
   advanceRegistryCursor,
-  attributePinToConnection,
+  claimPinForConnection,
   clearReconciliation,
+  createRateLimitGate,
   computeCallsBudget,
   dedupeObservationDrafts,
   expiredTasks,
   mapMetricStatus,
   observationsFromSlice,
-  ownerConnectionFromRegistry,
   planRegistryRun,
   resolveRegistrySource,
   selectExecutableTasks,
@@ -301,28 +301,53 @@ await test("vibepin_publish provenance is never downgraded by a later discovery 
 
 // ── Ownership attribution ──────────────────────────────────────────────────
 
-await test("ownerConnectionForPin answers from the registry, with publish outranking discovery", () => {
-  const rows = [
-    { connectionId: "conn-b", platformContentId: "111", sourceEndpoint: "pins_list" as const },
-    { connectionId: "conn-a", platformContentId: "111", sourceEndpoint: "vibepin_publish" as const },
-    { connectionId: "conn-b", platformContentId: "222", sourceEndpoint: "pins_list" as const },
-  ];
-  assert.equal(ownerConnectionFromRegistry(rows, "111"), "conn-a");
-  assert.equal(ownerConnectionFromRegistry(rows, "222"), "conn-b");
-  // No row yet — collection has not run, or v64 is not applied here. The honest
-  // answer is "unknown", not a guess.
-  assert.equal(ownerConnectionFromRegistry(rows, "333"), null);
+await test("a Pin with a recorded target is claimed only by that connection", () => {
+  assert.equal(claimPinForConnection("conn-a", null, "conn-a"), "collect");
+  assert.equal(claimPinForConnection("conn-a", null, "conn-b"), "not_mine");
+  // The draft's own record beats the registry: it is what the publish path did.
+  assert.equal(claimPinForConnection("conn-a", "conn-b", "conn-a"), "collect");
+  assert.equal(claimPinForConnection("conn-a", "conn-b", "conn-b"), "not_mine");
 });
 
-await test("attribution precedence: draft target, then registry, then visible everywhere", () => {
-  assert.equal(attributePinToConnection("conn-a", "conn-b", "conn-a"), true);
-  assert.equal(attributePinToConnection("conn-a", "conn-b", "conn-b"), false);
-  assert.equal(attributePinToConnection(null, "conn-a", "conn-a"), true);
-  assert.equal(attributePinToConnection(null, "conn-a", "conn-b"), false);
-  // Neither source knows: a legacy Pin stays visible on every card rather than
-  // disappearing from the account that really owns it.
-  assert.equal(attributePinToConnection(null, null, "conn-a"), true);
-  assert.equal(attributePinToConnection(null, null, "conn-b"), true);
+await test("a legacy Pin with no recorded target is claimed by its registry owner", () => {
+  // This is the case that used to be lost entirely: `targetConnectionId !== id` is
+  // true for null, so no account registered the Pin and no account measured it.
+  assert.equal(claimPinForConnection(null, "conn-a", "conn-a"), "collect");
+  assert.equal(claimPinForConnection(null, "conn-a", "conn-b"), "not_mine");
+});
+
+await test("a Pin the registry has not resolved yet is skipped this run, never guessed", () => {
+  // Claiming on a guess would let BOTH connections of a two-account user register
+  // the same Pin and create a duplicate set of tasks for it. The registry's
+  // incremental pass runs daily, so the Pin is claimed as soon as it is knowable.
+  assert.equal(claimPinForConnection(null, null, "conn-a"), "unknown_owner");
+  assert.equal(claimPinForConnection(null, null, "conn-b"), "unknown_owner");
+});
+
+// ── Rate limiting: back off once, then keep working ────────────────────────
+
+await test("the first 429 of a run backs off and continues; the second stops the run", () => {
+  const gate = createRateLimitGate();
+  assert.equal(gate.stopped, false);
+  assert.equal(gate.register429(), "backoff_and_continue");
+  // The whole point of F5: after one 429 the run is still allowed to make its
+  // remaining claims — the registry pass and the Pin tasks that follow it.
+  assert.equal(gate.stopped, false);
+  assert.equal(gate.hits, 1);
+  assert.equal(gate.register429(), "stop");
+  assert.equal(gate.stopped, true);
+  assert.equal(gate.hits, 2);
+});
+
+await test("the gate keeps saying stop, and two runs never share a budget of patience", () => {
+  const gate = createRateLimitGate();
+  gate.register429();
+  gate.register429();
+  assert.equal(gate.register429(), "stop");
+  // A fresh run gets its own backoff: yesterday's rate limit is not today's.
+  const next = createRateLimitGate();
+  assert.equal(next.stopped, false);
+  assert.equal(next.register429(), "backoff_and_continue");
 });
 
 // ── Publish provenance: fan-out vs legacy ──────────────────────────────────
@@ -566,9 +591,23 @@ await test("the collector reads through the named connection, never the active o
   // user that silently collects one account's data under the other's id.
   assert.match(collector, /PinterestClient\.forConnection\(userId, connectionId\)/);
   assert.doesNotMatch(collector, /forUser\(/);
-  // Once rate-limited, the remaining steps are skipped rather than attempted.
-  assert.match(collector, /if \(!wasRateLimited\(\)\) runs\.push\(await runRegistry/);
-  assert.match(collector, /if \(!wasRateLimited\(\)\) runs\.push\(await runPinTasks/);
+  // The run's 429 policy is the shared gate, not a per-phase flag: one 429 backs
+  // off and the LATER phases still run, and only the gate's stop state ends the
+  // sequence. A per-phase flag was what made a single 429 on the account series
+  // cost the whole day's registry and Pin-task work.
+  assert.match(collector, /const gate = createRateLimitGate\(\)/);
+  assert.match(collector, /if \(!gate\.stopped\) runs\.push\(await runRegistry/);
+  assert.match(collector, /if \(!gate\.stopped\) runs\.push\(await runPinTasks/);
+  assert.doesNotMatch(collector, /wasRateLimited/);
+  // A 429 in the account phase is handled there; rethrowing it aborted the run.
+  assert.doesNotMatch(collector, /isRateLimited\(thrown\)\) throw thrown/);
+  // Exactly one sleep site, so "one backoff per run" is auditable.
+  assert.equal((collector.match(/setTimeout\(resolve, RATE_LIMIT_BACKOFF_MS\)/g) ?? []).length, 1);
+  // Legacy Pins are claimed through the registry, in one batched query, and the
+  // hard `!== connectionId` skip that silently dropped them is gone.
+  assert.match(collector, /ownerConnectionsForPins\(\[connectionId\], unattributed\)/);
+  assert.match(collector, /claimPinForConnection\(/);
+  assert.doesNotMatch(collector, /pin\.targetConnectionId !== connectionId/);
   // Expired tasks are cancelled before any call is spent.
   assert.match(collector, /cancelTasks\(expired\.map\(task => task\.id\), "window_expired"\)/);
 });

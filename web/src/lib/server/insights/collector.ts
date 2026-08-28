@@ -31,8 +31,11 @@ import {
   selectExecutableTasks,
   tasksForPublishedPin,
   advanceRegistryCursor,
+  claimPinForConnection,
   clearReconciliation,
+  createRateLimitGate,
   type ObservationDraft,
+  type RateLimitGate,
 } from "./collectorLogic";
 import {
   callsSpentToday,
@@ -42,6 +45,7 @@ import {
   insertObservations,
   listPendingTasks,
   markTaskDone,
+  ownerConnectionsForPins,
   readRegistryCursor,
   recordTaskAttempt,
   startCollectionRun,
@@ -60,8 +64,15 @@ const ACCOUNT_WINDOW_DAYS = 90;
  *  can close its ledger rows rather than being killed mid-write. */
 const RUN_DEADLINE_MS = 100_000;
 
-/** One 60s backoff on 429, then stop. See the note in `runPinTasks`. */
+/** One 60s backoff on the run's first 429, then the run CONTINUES with its remaining
+ *  claims; a second 429 stops it. The policy itself lives in `createRateLimitGate`,
+ *  which explains why continuing is the right answer. */
 const RATE_LIMIT_BACKOFF_MS = 60_000;
+
+/** Serialise the backoff. Extracted so there is exactly one sleep site to audit. */
+async function backOff(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_BACKOFF_MS));
+}
 
 function utcDate(daysAgo: number, now = new Date()): string {
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysAgo));
@@ -112,6 +123,7 @@ async function runAccountDaily(
   connectionId: string,
   userId: string,
   budget: CallBudget,
+  gate: RateLimitGate,
   now: Date,
 ): Promise<CollectionRunSummary> {
   const runId = await startCollectionRun(connectionId, userId, "account_daily", budget.remaining);
@@ -138,9 +150,21 @@ async function runAccountDaily(
           ?? Object.values(response).find(value => value && typeof value === "object")
           ?? null;
       } catch (thrown) {
-        if (isRateLimited(thrown)) throw thrown;
-        permissionDenied = isPermissionDenied(thrown);
-        if (!permissionDenied) error = errorMessage(thrown);
+        if (isRateLimited(thrown)) {
+          // Not rethrown any more: a 429 on the account series used to abort the
+          // whole day, registry and Pin tasks included. The account slice is lost
+          // for this run either way — it is re-read whole tomorrow — but the rest
+          // of the run is still worth making.
+          if (gate.register429() === "stop") {
+            skippedReason = "rate_limited";
+          } else {
+            await backOff();
+            if (budget.expired) skippedReason = "deadline";
+          }
+        } else {
+          permissionDenied = isPermissionDenied(thrown);
+          if (!permissionDenied) error = errorMessage(thrown);
+        }
       }
 
       const drafts: ObservationDraft[] = observationsFromSlice(accountSlice, {
@@ -153,7 +177,7 @@ async function runAccountDaily(
       // 2. Top Pins → content-scope observations plus registry rows. Their period is
       //    the requested range, which Pinterest returns as a lifetime-style total,
       //    so they are recorded as 'lifetime' rather than pretending to be daily.
-      if (budget.canSpend()) {
+      if (budget.canSpend() && !gate.stopped) {
         try {
           budget.spend(); made += 1;
           const topPins = await client.getOrganicTopPins(startDate, endDate, [...COLLECTED_METRICS]);
@@ -169,16 +193,27 @@ async function runAccountDaily(
           }
           await upsertContentRegistry(connectionId, registryEntries);
         } catch (thrown) {
-          if (isRateLimited(thrown)) throw thrown;
-          if (!isPermissionDenied(thrown)) error = error ?? errorMessage(thrown);
+          if (isRateLimited(thrown)) {
+            if (gate.register429() === "stop") skippedReason = "rate_limited";
+            else {
+              await backOff();
+              if (budget.expired) skippedReason = skippedReason ?? "deadline";
+            }
+          } else if (!isPermissionDenied(thrown)) {
+            error = error ?? errorMessage(thrown);
+          }
         }
       }
 
+      // Always written, even after a 429: whatever the run did manage to read is
+      // real data, and dropping it would make the backoff cost more than the limit.
       await insertObservations(connectionId, userId, runId, drafts);
     }
   } catch (thrown) {
     if (isRateLimited(thrown)) {
-      skippedReason = "rate_limited";
+      // Only reachable if a 429 escapes a call site that does not handle it.
+      if (gate.register429() === "stop") skippedReason = "rate_limited";
+      else skippedReason = skippedReason ?? "rate_limited_backoff";
     } else {
       error = errorMessage(thrown);
     }
@@ -195,6 +230,7 @@ async function runRegistry(
   connectionId: string,
   budget: CallBudget,
   userId: string,
+  gate: RateLimitGate,
   now: Date,
 ): Promise<CollectionRunSummary> {
   const runId = await startCollectionRun(connectionId, userId, "registry", budget.remaining);
@@ -263,7 +299,17 @@ async function runRegistry(
       }
     }
   } catch (thrown) {
-    if (isRateLimited(thrown)) skippedReason = "rate_limited";
+    if (isRateLimited(thrown)) {
+      // The refused page is abandoned, not retried: the cursor was not advanced for
+      // it, so the next run asks for exactly the same page. On the run's first 429
+      // this phase simply ends and the sequencer moves on to the Pin tasks.
+      if (gate.register429() === "stop") {
+        skippedReason = "rate_limited";
+      } else {
+        await backOff();
+        skippedReason = "rate_limited_backoff";
+      }
+    }
     else if (isPermissionDenied(thrown)) skippedReason = "no_permission";
     else error = errorMessage(thrown);
   }
@@ -279,6 +325,7 @@ async function runPinTasks(
   connectionId: string,
   userId: string,
   budget: CallBudget,
+  gate: RateLimitGate,
   now: Date,
 ): Promise<CollectionRunSummary> {
   const runId = await startCollectionRun(connectionId, userId, "pin_task", budget.remaining);
@@ -291,10 +338,30 @@ async function runPinTasks(
     // 1. Create tasks for VibePin-published Pins of THIS connection. Registry-only
     //    Pins get none: their publish date is historical, so every point would be
     //    born expired.
+    //
+    //    A Pin whose draft never recorded `targetConnectionId` (published before the
+    //    app stored one) used to fail the `!== connectionId` test and was therefore
+    //    registered and measured by NO account at all. Its owner is asked of the
+    //    registry instead — one batched query, scoped to this connection so it can
+    //    only ever confirm "mine", never probe another account. A Pin the registry
+    //    has not listed yet is left for a later run rather than claimed on a guess:
+    //    guessing would let every connection of a multi-account user register the
+    //    same Pin and create a duplicate set of tasks for it.
     const provenance = await listVibePinPublishedPinterestPins(userId);
+    const allPins = Array.from(provenance.pins.values());
+    const unattributed = allPins.filter(pin => pin.targetConnectionId === null).map(pin => pin.pinId);
+    const registryOwners = unattributed.length > 0
+      ? await ownerConnectionsForPins([connectionId], unattributed).catch(() => new Map<string, string>())
+      : new Map<string, string>();
+
     const registryEntries: RegistryUpsert[] = [];
-    for (const pin of provenance.pins.values()) {
-      if (pin.targetConnectionId !== connectionId) continue;
+    for (const pin of allPins) {
+      const verdict = claimPinForConnection(
+        pin.targetConnectionId,
+        registryOwners.get(pin.pinId) ?? null,
+        connectionId,
+      );
+      if (verdict !== "collect") continue;
       registryEntries.push({
         platformContentId: pin.pinId,
         sourceEndpoint: "vibepin_publish",
@@ -319,7 +386,6 @@ async function runPinTasks(
     const executable = selectExecutableTasks(pending, budget.remaining, now);
     const startDate = utcDate(ACCOUNT_WINDOW_DAYS - 1, now);
     const endDate = utcDate(0, now);
-    let backedOff = false;
 
     for (const task of executable) {
       if (!budget.canSpend()) {
@@ -343,13 +409,17 @@ async function runPinTasks(
       } catch (thrown) {
         await recordTaskAttempt(task.id, task.attempts + 1);
         if (isRateLimited(thrown)) {
-          // One 60s backoff, then stop the run. Tasks stay PENDING with attempts+1:
-          // their windows are still open, so tomorrow's run (or the second run of
-          // today) retries them. Grinding through a rate limit would only deepen it.
-          if (backedOff || budget.expired) { skippedReason = "rate_limited"; break; }
-          backedOff = true;
-          await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_BACKOFF_MS));
-          if (budget.expired) { skippedReason = "rate_limited"; break; }
+          // One 60s backoff per RUN, then this loop keeps going with the next task.
+          // The refused task stays PENDING with attempts+1 — its window is still
+          // open, so a later run measures it. The second 429 of the run stops here:
+          // two in a row means the limit is not clearing, and grinding through it
+          // only deepens it while every task's state is already resumable.
+          if (gate.register429() === "stop" || budget.expired) {
+            skippedReason = "rate_limited";
+            break;
+          }
+          await backOff();
+          if (budget.expired) { skippedReason = "deadline"; break; }
           continue;
         }
         if (isPermissionDenied(thrown)) {
@@ -365,7 +435,13 @@ async function runPinTasks(
       }
     }
   } catch (thrown) {
-    if (isRateLimited(thrown)) skippedReason = "rate_limited";
+    if (isRateLimited(thrown)) {
+      if (gate.register429() === "stop") skippedReason = "rate_limited";
+      else {
+        await backOff();
+        skippedReason = "rate_limited_backoff";
+      }
+    }
     else error = errorMessage(thrown);
   }
 
@@ -402,19 +478,25 @@ export async function collectForConnection(
   const budget = new CallBudget(callsBudget, Date.now() + RUN_DEADLINE_MS);
   const client = await PinterestClient.forConnection(userId, connectionId);
 
-  // Once Pinterest has rate-limited us, the remaining steps are not "worth a try":
-  // the limit is per token and per minute, so every further call is a guaranteed 429
-  // that still costs wall time and would be recorded as a failed run. Stop, and let
-  // the next invocation (or tomorrow's) pick the work up — every step's state is
-  // resumable by design: the account window is re-read whole, the registry keeps its
-  // cursor, and tasks stay pending inside their windows.
-  const wasRateLimited = () => runs.some(run => run.skippedReason === "rate_limited");
+  // One 429 does not end the day. Pinterest's limit is per token and per minute, so
+  // it clears while we wait: the run backs off 60s ONCE and then continues with the
+  // claims it has not made yet. The phases that follow are the ones whose work cannot
+  // be backfilled — the registry (an unregistered Pin is invisible to every later
+  // step) and the Pin tasks (each measurement window closes on its own schedule) —
+  // so abandoning them over a burst that is already over was the expensive choice.
+  //
+  // The second 429 of the same run is the one that stops it: two means the limit is
+  // not clearing, every further call is a guaranteed failure that still costs wall
+  // time, and nothing is lost by waiting because every step is resumable — the
+  // account window is re-read whole, the registry keeps its cursor, and tasks stay
+  // pending inside their windows.
+  const gate = createRateLimitGate();
 
-  runs.push(await runAccountDaily(client, connectionId, userId, budget, now));
-  if (!wasRateLimited()) runs.push(await runRegistry(client, connectionId, budget, userId, now));
-  if (!wasRateLimited()) runs.push(await runPinTasks(client, connectionId, userId, budget, now));
+  runs.push(await runAccountDaily(client, connectionId, userId, budget, gate, now));
+  if (!gate.stopped) runs.push(await runRegistry(client, connectionId, budget, userId, gate, now));
+  if (!gate.stopped) runs.push(await runPinTasks(client, connectionId, userId, budget, gate, now));
 
-  const rateLimited = wasRateLimited();
+  const rateLimited = gate.stopped;
   const stopReason = rateLimited
     ? "rate_limited"
     : budget.expired
