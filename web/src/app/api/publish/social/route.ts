@@ -65,7 +65,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const postId = typeof body.postId === "string" ? body.postId : null;
+  const postId = typeof body.postId === "string" && body.postId.trim() ? body.postId.trim() : null;
   const productId = typeof body.productId === "string" ? body.productId : null;
   const rawPost = (body.post ?? {}) as Record<string, unknown>;
   const post: SocialPostPayload = {
@@ -83,38 +83,38 @@ export async function POST(req: Request) {
 
   // ── Metering: scheduled-post quota (PRD v3.1 decisions 3 & 4) ────────────────
   // One Content published = one unit, no matter how many platforms it fans out to.
-  // /api/pinterest/pins already charges this for any publish that INCLUDES
-  // Pinterest, keyed on deriveScheduledPostKey(uid, draftId) — draftId is the
-  // SAME value the client sends here as `postId` (see publishContent.ts, which
-  // sends `draftId` to the Pinterest call and `postId: draftId` to this one). So
-  // when a publish targets Pinterest AND a social platform, both routes derive
-  // the IDENTICAL key; usage_consume_scheduled_post's UNIQUE(user_id,
-  // idempotency_key) collapses this route's call into a replay of that one, not
-  // a second charge — which is why we must NOT call it again here in that case.
-  // The gap this closes is the one the pins route cannot see: a publish that
-  // goes ONLY to social platforms (possible since 4218c67) never touches
-  // /api/pinterest/pins at all and would otherwise cost 0. Metered here, before
-  // any provider dispatch, and fail-open exactly like the pins route/module
-  // (shadow never blocks; enforce is not wired anywhere on this branch — see
-  // meterScheduledPost.ts's scheduledPostLimitResponseBody(), NOT called from
-  // either publish route yet, so this mirrors the pins route's current
-  // shadow-only behavior rather than inventing a new enforce switch here).
-  const hasPinterestDestination = requested.some(
-    raw => (raw as { provider?: unknown }).provider === "pinterest",
-  );
-  if (!hasPinterestDestination) {
-    if (postId) {
-      await consumeScheduledPost({
-        userId: uid,
-        key: deriveScheduledPostKey(uid, postId),
-        referenceId: postId,
-        metadata: { source: "social_immediate" },
-      });
-    } else {
-      // No draft identity on the request — never charge a key that could collide
-      // across drafts. Direct API callers that omit postId are simply unmetered.
-      logEvent("usage_meter_skipped", { reason: "no_draft_identity", route: "publish_social" });
-    }
+  // We ALWAYS attempt a consume here when postId is present — never gated on
+  // whether `destinations` also names Pinterest. That gate used to trust the
+  // client's own destination list to decide whether metering was "already done"
+  // by /api/pinterest/pins; a request can claim a pinterest destination that
+  // never actually published (a stale/failed entry sent alongside a real
+  // Facebook one) and this route would then publish to Facebook for free. There
+  // is no way to verify from here whether the pins route actually ran, so the
+  // only safe rule is: this route always tries to charge.
+  // This cannot double-charge a publish that ALSO went through
+  // /api/pinterest/pins: both routes derive the SAME key —
+  // deriveScheduledPostKey(uid, draftId) — for the SAME Content (draftId is the
+  // value the client sends as `postId` here; see publishContent.ts). v55's
+  // usage_consume_scheduled_post ledger enforces UNIQUE(user_id,
+  // idempotency_key), so whichever call lands second is collapsed into a replay
+  // (kind: "consumed", replayed: true, no increment) rather than a second unit —
+  // this is exactly what protects the pins-route case, not a client-trusted flag.
+  // Metered before any provider dispatch, and fail-open exactly like the pins
+  // route/module (shadow never blocks; enforce is not wired anywhere on this
+  // branch — see meterScheduledPost.ts's scheduledPostLimitResponseBody(), NOT
+  // called from either publish route yet, so this mirrors the pins route's
+  // current shadow-only behavior rather than inventing a new enforce switch here).
+  if (postId) {
+    await consumeScheduledPost({
+      userId: uid,
+      key: deriveScheduledPostKey(uid, postId),
+      referenceId: postId,
+      metadata: { source: "social_immediate" },
+    });
+  } else {
+    // No draft identity on the request — never charge a key that could collide
+    // across drafts. Direct API callers that omit postId are simply unmetered.
+    logEvent("usage_meter_skipped", { reason: "no_draft_identity", route: "publish_social" });
   }
 
   const summaries = await summarizeConnections(uid);
