@@ -339,9 +339,13 @@ BEGIN
   -- or ROLLBACK, so a failed generator cannot strand it. The key is the same tuple
   -- the unique index is built on, so two callers collide here exactly when they would
   -- have collided there.
+  -- The key is built from the PARSED values, not the raw JSON text: '5F2A…' and
+  -- '5f2a…' and an unhyphenated form are one uuid to the unique index, so they must
+  -- be one lock too — hashing the caller's spelling would hand two writers of the
+  -- same identity two different locks and re-open the race the lock exists to close.
   PERFORM pg_advisory_xact_lock(hashtextextended(
-    coalesce(p->>'connection_id', '') || ':' || coalesce(p->>'kind', '') || ':' ||
-    coalesce(p->>'subject_content_id', '') || ':' || coalesce(p->>'period_key', ''), 0));
+    v_connection_id::text || ':' || v_kind || ':' ||
+    coalesce(v_subject, '') || ':' || v_period_key, 0));
 
   -- Lock the identity's current row, if it has one. FOR UPDATE is kept: the advisory
   -- lock serialises generators of this identity, this still guards the row itself.

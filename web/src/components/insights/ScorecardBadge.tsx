@@ -143,8 +143,15 @@ function GenerateFromScorecard(
 ) {
   const draftId = content.subject.draftId;
   const draft = draftId ? pinDraftStore.getDraft(draftId) : null;
-  const connectionId = readStoredTarget(draft) || reportConnectionId || "";
+  // The REPORT names the account this scorecard is about; the local draft is only a
+  // cache of what this browser last saw. When they disagree the local copy is stale
+  // (or belongs to another account entirely), and following it would generate the
+  // next Pin for the wrong Pinterest account. The report wins; the local draft is
+  // consulted only for the board, and only when it agrees about the account.
+  const storedTarget = readStoredTarget(draft);
+  const connectionId = reportConnectionId || storedTarget || "";
   if (!connectionId) return null;
+  const boardIsForThisAccount = Boolean(storedTarget) && storedTarget === connectionId;
 
   const variable = scorecardVariable(content.flags);
   const onClick = () => {
@@ -163,8 +170,8 @@ function GenerateFromScorecard(
         title: content.subject.title ?? draft?.title,
         pinId: content.subject.contentId,
         draftId: draftId ?? undefined,
-        boardId: draft?.boardId,
-        boardName: draft?.boardName,
+        boardId: boardIsForThisAccount ? draft?.boardId : undefined,
+        boardName: boardIsForThisAccount ? draft?.boardName : undefined,
       },
     }));
   };

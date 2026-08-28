@@ -2167,6 +2167,18 @@ function CreatePinsContent() {
 
   function hydrate(prefill: CreatePinsPrefill) {
     setLastPrefill(prefill);
+    // `defaultDestination` (which Pinterest account the next Pin is for) is honoured
+    // only by the board-v2 Studio, which stamps it onto the generated draft. Legacy
+    // has no `targetConnectionId` writer at all, so a destination arriving here can
+    // only be dropped — never silently applied to whichever account happens to be
+    // active, which would publish account B's idea as account A. Callers that need
+    // the destination must reach board-v2; the drop is deliberate and logged.
+    if (prefill.defaultDestination) {
+      console.info(
+        "[studio/legacy] prefill destination dropped — legacy Studio cannot pin a draft to an account:",
+        prefill.defaultDestination.socialConnectionId,
+      );
+    }
     const isRich = ["workspace","weekly_plan","keyword_trends","pin_opportunities","insights"].includes(prefill.source);
     if (prefill.opportunity) {
       const o = prefill.opportunity;
