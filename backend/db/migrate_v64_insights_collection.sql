@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS metric_observation (
 
 ALTER TABLE metric_observation ENABLE ROW LEVEL SECURITY;
 
+-- The table is closed by RLS, but a bigserial's sequence is a SEPARATE object with
+-- its own default grants. Leaving it open lets anon/authenticated call nextval() and
+-- setval() on it: they still cannot insert a row, but they can burn or rewind the
+-- id counter, which is a write against data they may not even read. Closing the
+-- table without closing its sequence is a half-closed table.
+REVOKE ALL ON SEQUENCE metric_observation_id_seq FROM anon, authenticated;
+
 -- One observation per metric per run: makes the collector's inserts safely
 -- retryable (ON CONFLICT DO NOTHING) without inventing duplicate history.
 -- The coalesce sentinels are collision-proof only because of the checks above.
@@ -233,6 +240,10 @@ CREATE TABLE IF NOT EXISTS pin_task (
 );
 
 ALTER TABLE pin_task ENABLE ROW LEVEL SECURITY;
+
+-- Same reasoning as metric_observation_id_seq above: RLS closes the table, this
+-- closes the id counter that lives beside it.
+REVOKE ALL ON SEQUENCE pin_task_id_seq FROM anon, authenticated;
 
 -- Partial index on exactly the claim query: pending tasks of one connection in
 -- execution order. Excluding done/cancelled keeps it small as history accumulates.

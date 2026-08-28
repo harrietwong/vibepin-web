@@ -329,8 +329,22 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  -- Lock the identity's current row, if it has one. FOR UPDATE is what makes the
-  -- read-decide-write below atomic against a second generator.
+  -- Lock the IDENTITY, not the row. FOR UPDATE below can only lock a row that
+  -- already exists, so on a first creation — or on an identity left with nothing but
+  -- superseded rows — two concurrent callers lock nothing, both compute the same
+  -- max(version)+1, and one dies on uq_insight_report_current. Even with a current
+  -- row present, the waiter can resume on its old snapshot and miss the new current.
+  -- A transaction-scoped advisory lock keyed on the full report identity closes both
+  -- gaps: it exists before any row does, and it is released automatically at COMMIT
+  -- or ROLLBACK, so a failed generator cannot strand it. The key is the same tuple
+  -- the unique index is built on, so two callers collide here exactly when they would
+  -- have collided there.
+  PERFORM pg_advisory_xact_lock(hashtextextended(
+    coalesce(p->>'connection_id', '') || ':' || coalesce(p->>'kind', '') || ':' ||
+    coalesce(p->>'subject_content_id', '') || ':' || coalesce(p->>'period_key', ''), 0));
+
+  -- Lock the identity's current row, if it has one. FOR UPDATE is kept: the advisory
+  -- lock serialises generators of this identity, this still guards the row itself.
   SELECT * INTO v_current
   FROM insight_report
   WHERE connection_id = v_connection_id
