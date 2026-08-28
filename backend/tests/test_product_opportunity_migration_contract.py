@@ -388,6 +388,8 @@ def test_activation_is_fail_closed_and_retired_history_is_never_reactivated() ->
     assert "retired product opportunity evidence cannot be reactivated in place" in LOWER
     assert "grant execute on function activate_product_opportunity" in LOWER
     assert "admit_product_opportunity_batch" in LOWER
+    assert "jsonb_array_length(p_candidates) = 0" in LOWER
+    assert "product opportunity admission batch must not be empty" in LOWER
     assert "jsonb_array_length(p_candidates) > 20" in LOWER
     assert "perform activate_product_opportunity(v_product_id)" in LOWER
     assert "rollback_product_opportunity_admission_batch" in LOWER

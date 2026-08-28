@@ -323,6 +323,9 @@ async def run_pipeline(
                 raise RuntimeError(
                     "apply refused: VIBEPIN_PRODUCT_ADMISSION_CONFIRM is not the reviewed token"
                 )
+            report["projectRef"] = admission.require_expected_project_ref(
+                os.environ.get("VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF")
+            )
             if not receipt.scheduled_origin_verified or receipt.scheduled_origin is None:
                 raise RuntimeError(
                     "apply refused: Product Supply report lacks permanent timer-origin evidence"
@@ -405,7 +408,7 @@ async def run_pipeline(
                 if ids:
                     reason = f"pipeline_verification:{type(exc).__name__}"
                     rolled_back = admission.rollback_candidates(ids, reason)
-                    admission.verify_rollback(ids)
+                    admission.verify_rollback(ids, batch)
                     report["batches"][index]["rolledBack"] = rolled_back
                 raise
             report["written"] += len(ids)

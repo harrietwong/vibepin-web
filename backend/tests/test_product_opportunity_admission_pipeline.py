@@ -10,6 +10,14 @@ import product_opportunity_admission_pipeline as pipeline
 
 
 NOW = datetime(2026, 8, 26, 12, tzinfo=timezone.utc)
+PROJECT_REF = "jaxteelkecvlozdrdoog"
+
+
+def authorize_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUPABASE_URL", f"https://{PROJECT_REF}.supabase.co")
+    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_MODE", "production")
+    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_CONFIRM", pipeline.admission.APPLY_CONFIRM)
+    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF", PROJECT_REF)
 
 
 def batch_receipts(ids: list[str]) -> list[dict]:
@@ -394,8 +402,7 @@ def test_apply_uses_separate_verified_atomic_receipts(
     monkeypatch.setattr(pipeline.admission, "validate_manifest", lambda rows, *, now: (rows, []))
     monkeypatch.setattr(pipeline.admission, "apply_candidates", fake_apply)
     monkeypatch.setattr(pipeline.admission, "verify_candidates", lambda ids, rows: len(ids))
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_MODE", "production")
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_CONFIRM", pipeline.admission.APPLY_CONFIRM)
+    authorize_apply(monkeypatch)
 
     artifacts = asyncio.run(
         pipeline.run_pipeline(loaded, apply=True, now=NOW, db=db)
@@ -432,9 +439,8 @@ def test_verification_failure_rolls_back_only_exact_returned_ids(
         "rollback_candidates",
         lambda ids, reason: rolled_back.append(list(ids)) or len(ids),
     )
-    monkeypatch.setattr(pipeline.admission, "verify_rollback", lambda ids: len(ids))
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_MODE", "production")
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_CONFIRM", pipeline.admission.APPLY_CONFIRM)
+    monkeypatch.setattr(pipeline.admission, "verify_rollback", lambda ids, _rows: len(ids))
+    authorize_apply(monkeypatch)
 
     with pytest.raises(pipeline.PipelineExecutionError, match="readback mismatch") as exc:
         asyncio.run(pipeline.run_pipeline(loaded, apply=True, now=NOW, db=db))
@@ -481,8 +487,7 @@ def test_authorized_apply_without_timer_origin_fails_before_db_or_providers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     loaded = receipt(tmp_path, 1)
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_MODE", "production")
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_CONFIRM", pipeline.admission.APPLY_CONFIRM)
+    authorize_apply(monkeypatch)
     monkeypatch.setattr(
         pipeline,
         "load_exact_legacy_rows",
@@ -497,6 +502,29 @@ def test_authorized_apply_without_timer_origin_fails_before_db_or_providers(
         asyncio.run(pipeline.run_pipeline(loaded, apply=True, now=NOW))
 
 
+def test_apply_with_wrong_project_ref_fails_before_db_or_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded = receipt(tmp_path, 1, scheduled=True)
+    authorize_apply(monkeypatch)
+    monkeypatch.setenv(
+        "VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF",
+        "snulmwprsahzqvdbyenc",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "load_exact_legacy_rows",
+        lambda *_args, **_kwargs: pytest.fail("wrong-target apply must not read DB"),
+    )
+    monkeypatch.setattr(
+        pipeline.manifest_builder,
+        "_run_live",
+        lambda *_args, **_kwargs: pytest.fail("wrong-target apply must not reach providers"),
+    )
+    with pytest.raises(pipeline.PipelineExecutionError, match="does not match"):
+        asyncio.run(pipeline.run_pipeline(loaded, apply=True, now=NOW))
+
+
 def test_forged_verified_origin_is_revalidated_before_db_or_providers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -507,8 +535,7 @@ def test_forged_verified_origin_is_revalidated_before_db_or_providers(
             "scheduled_origin": {**(loaded.scheduled_origin or {}), "serviceResult": "failed"},
         }
     )
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_MODE", "production")
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_CONFIRM", pipeline.admission.APPLY_CONFIRM)
+    authorize_apply(monkeypatch)
     monkeypatch.setattr(
         pipeline,
         "load_exact_legacy_rows",
@@ -543,4 +570,5 @@ def test_systemd_and_wrapper_contract_is_disabled_bounded_and_cooldown_safe() ->
     assert "cloud_run_with_tree_timeout" in wrapper
     assert "VIBEPIN_PRODUCT_ADMISSION_MODE" in wrapper
     assert "VIBEPIN_PRODUCT_ADMISSION_CONFIRM" in wrapper
+    assert "VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF" in wrapper
     assert "ADMIT_REVIEWED_PRODUCTS" in wrapper

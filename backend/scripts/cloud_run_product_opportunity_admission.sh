@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Bounded Product Supply receipt -> Product Opportunity admission.
-# Default mode is a safe preflight. A real run needs all three explicit values:
+# Default mode is a safe preflight. A real run needs all four explicit values:
 # VIBEPIN_PRODUCT_ADMISSION_RUN_MODE=apply
 # VIBEPIN_PRODUCT_ADMISSION_MODE=production
 # VIBEPIN_PRODUCT_ADMISSION_CONFIRM=ADMIT_REVIEWED_PRODUCTS
+# VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF=<production-project-ref>
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cloud_lib.sh"
 cloud_init "product_opportunity_admission"
@@ -46,6 +47,10 @@ case "$MODE" in
     fi
     if [[ "${VIBEPIN_PRODUCT_ADMISSION_CONFIRM:-}" != "ADMIT_REVIEWED_PRODUCTS" ]]; then
       cloud_log "REFUSE apply: VIBEPIN_PRODUCT_ADMISSION_CONFIRM is not the reviewed token."
+      exit 5
+    fi
+    if [[ -z "${VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF:-}" ]]; then
+      cloud_log "REFUSE apply: VIBEPIN_PRODUCT_ADMISSION_EXPECTED_PROJECT_REF is missing."
       exit 5
     fi
     cloud_network_flock

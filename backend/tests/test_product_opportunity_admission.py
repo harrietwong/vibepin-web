@@ -51,6 +51,111 @@ def candidate(**overrides: object) -> dict:
     return row
 
 
+def stored_product(expected: dict, product_id: str) -> dict:
+    return {
+        "id": product_id,
+        "canonical_product_url": expected["canonical_product_url"],
+        "canonical_url_hash": expected["canonical_url_hash"],
+        "external_product_url": expected["external_product_url"],
+        "product_image_url": expected["product_image_url"],
+        "product_image_source": expected["product_image_source"],
+        "product_page_verified_at": expected["product_page_verified_at"],
+        "product_page_verification_method": expected["product_page_verification_method"],
+        "product_name": expected["product_name"],
+        "merchant": expected["merchant"],
+        "domain": expected["domain"],
+        "category": expected["category"],
+        "product_type": expected["product_type"],
+        "product_family": expected["product_family"],
+        "discovery_method": expected["discovery_method"],
+        "provenance": expected["provenance"],
+        "free_preview_rank": None,
+        "lifecycle_status": "active",
+    }
+
+
+def stored_evidence(expected: dict, product_id: str) -> list[dict]:
+    evidence = [
+        {
+            "product_opportunity_id": product_id,
+            "pinterest_pin_id": expected["pinterest_pin_id"],
+            "pinterest_pin_url": expected["pinterest_pin_url"],
+            "evidence_type": expected["evidence_type"],
+            "relationship_method": expected["relationship_method"],
+            "external_product_url": expected["external_product_url"],
+            "canonical_url_hash": expected["canonical_url_hash"],
+            "provenance": expected["provenance"],
+            "evidence_status": "active",
+            "is_primary": True,
+        }
+    ]
+    evidence.extend(
+        {
+            "product_opportunity_id": product_id,
+            "pinterest_pin_id": additional["pinterest_pin_id"],
+            "pinterest_pin_url": additional["pinterest_pin_url"],
+            "evidence_type": additional["evidence_type"],
+            "relationship_method": additional["relationship_method"],
+            "external_product_url": expected["external_product_url"],
+            "canonical_url_hash": expected["canonical_url_hash"],
+            "provenance": additional["provenance"],
+            "evidence_status": "active",
+            "is_primary": False,
+        }
+        for additional in expected.get("additional_evidence", [])
+    )
+    return evidence
+
+
+def test_apply_target_must_match_direct_supabase_project_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_ref = "jaxteelkecvlozdrdoog"
+    monkeypatch.setenv("SUPABASE_URL", f"https://{project_ref}.supabase.co")
+    assert admission.require_expected_project_ref(project_ref) == project_ref
+
+    with pytest.raises(RuntimeError, match="expected Supabase project ref"):
+        admission.require_expected_project_ref(None)
+    with pytest.raises(RuntimeError, match="does not match"):
+        admission.require_expected_project_ref("snulmwprsahzqvdbyenc")
+
+    monkeypatch.setenv("SUPABASE_URL", "https://db-proxy.example.com")
+    with pytest.raises(RuntimeError, match="direct Supabase project URL"):
+        admission.require_expected_project_ref(project_ref)
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "http://jaxteelkecvlozdrdoog.supabase.co",
+        "https://user@jaxteelkecvlozdrdoog.supabase.co",
+        "https://jaxteelkecvlozdrdoog.supabase.co:444",
+        "https://jaxteelkecvlozdrdoog.supabase.co/rest/v1",
+        "https://jaxteelkecvlozdrdoog.supabase.co?target=other",
+    ],
+)
+def test_apply_target_rejects_non_exact_https_project_origins(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_url: str,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", unsafe_url)
+    with pytest.raises(RuntimeError, match="exact HTTPS project origin"):
+        admission.require_expected_project_ref("jaxteelkecvlozdrdoog")
+
+
+def test_manual_confirmation_binds_project_and_exact_manifest_bytes() -> None:
+    project_ref = "jaxteelkecvlozdrdoog"
+    first = hashlib.sha256(b"[{}]\n").hexdigest()
+    second = hashlib.sha256(b"[{}]").hexdigest()
+    assert first != second
+    assert admission.manual_apply_confirmation(project_ref, first) == (
+        f"ADMIT:{project_ref}:{first}"
+    )
+    assert admission.manual_apply_confirmation(project_ref, first) != (
+        admission.manual_apply_confirmation(project_ref, second)
+    )
+
+
 def test_valid_candidate_keeps_null_name_and_computes_sha256_identity() -> None:
     row = admission.validate_candidate(candidate(), now=NOW)
     assert row["product_name"] is None
@@ -478,6 +583,272 @@ def test_manifest_hard_cap_and_duplicate_identity() -> None:
     assert rejected == [{"index": 1, "reason": "duplicate product identity within manifest"}]
 
 
+def test_apply_refuses_empty_or_over_cap_before_any_db_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    touched: list[str] = []
+    monkeypatch.setattr(db, "_get_http", lambda: touched.append("http"))
+    monkeypatch.setattr(db, "DB", lambda: touched.append("db"))
+
+    with pytest.raises(RuntimeError, match="non-empty"):
+        admission.apply_candidates([])
+    with pytest.raises(RuntimeError, match="MAX_BATCH=20"):
+        admission.apply_candidates([{}] * 21)
+    assert touched == []
+
+
+def test_apply_refuses_current_identity_before_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    rpc_calls: list[str] = []
+
+    class FakeDB:
+        def select_many(self, table: str, **kwargs):
+            assert table == "product_opportunities"
+            assert expected["canonical_url_hash"] in kwargs["filters"]["canonical_url_hash"]
+            return [{
+                "id": "00000000-0000-0000-0000-000000000001",
+                "canonical_url_hash": expected["canonical_url_hash"],
+                "lifecycle_status": "active",
+            }]
+
+    monkeypatch.setattr(db, "DB", FakeDB)
+    monkeypatch.setattr(db, "_get_http", lambda: rpc_calls.append("rpc"))
+    with pytest.raises(RuntimeError, match="current Product identity"):
+        admission.apply_candidates([expected])
+    assert rpc_calls == []
+
+
+def test_receipt_recovery_requires_the_active_state_accepted_by_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    product_id = "00000000-0000-0000-0000-000000000001"
+
+    class FakeDB:
+        def select_many(self, _table: str, **_kwargs):
+            return [{
+                "id": product_id,
+                "canonical_url_hash": expected["canonical_url_hash"],
+                "lifecycle_status": "active",
+            }]
+
+    monkeypatch.setattr(db, "DB", FakeDB)
+    assert admission.recover_candidate_ids([expected]) == [product_id]
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        [],
+        [{}],
+        [{"product_opportunity_id": "not-a-uuid"}],
+    ],
+)
+def test_invalid_http_200_receipt_recovers_and_rolls_back_exact_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    receipt: list[dict],
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    product_id = "00000000-0000-0000-0000-000000000001"
+    calls: list[tuple[str, object]] = []
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return receipt
+
+    class Http:
+        def post(self, path: str, json: dict):
+            calls.append(("post", path))
+            assert json == {"p_candidates": [expected]}
+            return Response()
+
+    monkeypatch.setattr(db, "_get_http", lambda: Http())
+    monkeypatch.setattr(admission, "assert_no_current_identity_conflicts", lambda _rows: None)
+    monkeypatch.setattr(
+        admission,
+        "recover_candidate_ids",
+        lambda rows: calls.append(("recover", rows)) or [product_id],
+    )
+    monkeypatch.setattr(
+        admission,
+        "verify_candidates",
+        lambda ids, rows: calls.append(("verify", (ids, rows))) or 1,
+    )
+    monkeypatch.setattr(
+        admission,
+        "rollback_candidates",
+        lambda ids, reason: calls.append(("rollback", (ids, reason))) or 1,
+    )
+    monkeypatch.setattr(
+        admission,
+        "verify_rollback",
+        lambda ids, rows: calls.append(("verify_rollback", (ids, rows))) or 1,
+    )
+
+    with pytest.raises(RuntimeError, match="history-preserving rollback retired 1"):
+        admission.apply_candidates([expected])
+    assert [name for name, _value in calls] == [
+        "post",
+        "recover",
+        "verify",
+        "rollback",
+        "verify_rollback",
+    ]
+
+
+def test_valid_receipt_must_match_committed_canonical_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    product_id = "00000000-0000-0000-0000-000000000001"
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return [{"product_opportunity_id": product_id}]
+
+    class Http:
+        def post(self, path: str, json: dict):
+            assert path == "rpc/admit_product_opportunity_batch"
+            assert json == {"p_candidates": [expected]}
+            return Response()
+
+    monkeypatch.setattr(db, "_get_http", lambda: Http())
+    monkeypatch.setattr(admission, "assert_no_current_identity_conflicts", lambda _rows: None)
+    monkeypatch.setattr(admission, "recover_candidate_ids", lambda _rows: [product_id])
+    assert admission.apply_candidates([expected]) == [product_id]
+
+
+def test_invalid_receipt_still_rolls_back_when_recovered_readback_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    product_id = "00000000-0000-0000-0000-000000000001"
+    rollback_calls: list[tuple[list[str], str]] = []
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return []
+
+    class Http:
+        def post(self, _path: str, json: dict):
+            assert json == {"p_candidates": [expected]}
+            return Response()
+
+    monkeypatch.setattr(db, "_get_http", lambda: Http())
+    monkeypatch.setattr(admission, "assert_no_current_identity_conflicts", lambda _rows: None)
+    monkeypatch.setattr(admission, "recover_candidate_ids", lambda _rows: [product_id])
+    monkeypatch.setattr(
+        admission,
+        "verify_candidates",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("readback mismatch")),
+    )
+    monkeypatch.setattr(
+        admission,
+        "rollback_candidates",
+        lambda ids, reason: rollback_calls.append((ids, reason)) or 1,
+    )
+    monkeypatch.setattr(admission, "verify_rollback", lambda _ids, _rows: 1)
+
+    with pytest.raises(RuntimeError, match="recovered readback also failed: readback mismatch"):
+        admission.apply_candidates([expected])
+    assert rollback_calls == [([product_id], "invalid_admission_receipt")]
+
+
+def test_wrong_but_valid_receipt_id_rolls_back_only_recovered_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    recovered_id = "00000000-0000-0000-0000-000000000001"
+    unrelated_receipt_id = "00000000-0000-0000-0000-000000000002"
+    rollback_calls: list[list[str]] = []
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return [{"product_opportunity_id": unrelated_receipt_id}]
+
+    class Http:
+        def post(self, _path: str, json: dict):
+            assert json == {"p_candidates": [expected]}
+            return Response()
+
+    monkeypatch.setattr(db, "_get_http", lambda: Http())
+    monkeypatch.setattr(admission, "assert_no_current_identity_conflicts", lambda _rows: None)
+    monkeypatch.setattr(admission, "recover_candidate_ids", lambda _rows: [recovered_id])
+    monkeypatch.setattr(admission, "verify_candidates", lambda _ids, _rows: 1)
+    monkeypatch.setattr(
+        admission,
+        "rollback_candidates",
+        lambda ids, _reason: rollback_calls.append(ids) or 1,
+    )
+    monkeypatch.setattr(admission, "verify_rollback", lambda _ids, _rows: 1)
+
+    with pytest.raises(RuntimeError, match="history-preserving rollback retired 1"):
+        admission.apply_candidates([expected])
+    assert rollback_calls == [[recovered_id]]
+    assert unrelated_receipt_id not in rollback_calls[0]
+
+
+def test_invalid_receipt_reports_unproven_rollback_without_claiming_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    product_id = "00000000-0000-0000-0000-000000000001"
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return []
+
+    class Http:
+        def post(self, _path: str, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(db, "_get_http", lambda: Http())
+    monkeypatch.setattr(admission, "assert_no_current_identity_conflicts", lambda _rows: None)
+    monkeypatch.setattr(admission, "recover_candidate_ids", lambda _rows: [product_id])
+    monkeypatch.setattr(admission, "verify_candidates", lambda _ids, _rows: 1)
+    monkeypatch.setattr(
+        admission,
+        "rollback_candidates",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("rollback RPC failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="exact rollback was not proven"):
+        admission.apply_candidates([expected])
+
+
 def test_post_write_readback_checks_product_and_primary_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -497,46 +868,14 @@ def test_post_write_readback_checks_product_and_primary_evidence(
     }]
     expected = admission.validate_candidate(raw, now=NOW)
     product_id = "00000000-0000-0000-0000-000000000001"
-    stored_product = {
-        "id": product_id,
-        "canonical_url_hash": expected["canonical_url_hash"],
-        "external_product_url": expected["external_product_url"],
-        "product_image_url": expected["product_image_url"],
-        "product_type": expected["product_type"],
-        "product_family": expected["product_family"],
-        "lifecycle_status": "active",
-    }
+    product = stored_product(expected, product_id)
 
     class FakeDB:
         def select_many(self, table: str, **_kwargs):
             if table == "product_opportunities":
-                return [stored_product]
+                return [product]
             if table == "product_opportunity_evidence":
-                additional = expected["additional_evidence"][0]
-                return [
-                    {
-                        "product_opportunity_id": product_id,
-                        "pinterest_pin_id": expected["pinterest_pin_id"],
-                        "pinterest_pin_url": expected["pinterest_pin_url"],
-                        "evidence_type": expected["evidence_type"],
-                        "relationship_method": expected["relationship_method"],
-                        "canonical_url_hash": expected["canonical_url_hash"],
-                        "provenance": expected["provenance"],
-                        "evidence_status": "active",
-                        "is_primary": True,
-                    },
-                    {
-                        "product_opportunity_id": product_id,
-                        "pinterest_pin_id": additional["pinterest_pin_id"],
-                        "pinterest_pin_url": additional["pinterest_pin_url"],
-                        "evidence_type": additional["evidence_type"],
-                        "relationship_method": additional["relationship_method"],
-                        "canonical_url_hash": expected["canonical_url_hash"],
-                        "provenance": additional["provenance"],
-                        "evidence_status": "active",
-                        "is_primary": False,
-                    },
-                ]
+                return stored_evidence(expected, product_id)
             raise AssertionError(table)
 
     monkeypatch.setattr(db, "DB", FakeDB)
@@ -544,6 +883,71 @@ def test_post_write_readback_checks_product_and_primary_evidence(
 
     expected["product_image_url"] = "https://shop.example/images/other.jpg"
     with pytest.raises(RuntimeError, match="product_image_url"):
+        admission.verify_candidates([product_id], [expected])
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "bad_value", "message"),
+    [
+        ("product", "canonical_product_url", "https://other.example/p/1", "canonical_product_url"),
+        ("product", "product_image_source", "pin_card", "product_image_source"),
+        ("product", "product_page_verification_method", "unknown", "verification_method"),
+        ("product", "merchant", "Other Shop", "merchant"),
+        ("product", "domain", "other.example", "domain"),
+        ("product", "category", "home-decor", "category"),
+        ("product", "discovery_method", "pin_card", "discovery_method"),
+        ("product", "provenance", {}, "provenance"),
+        ("product", "free_preview_rank", 1, "Free preview rank"),
+        ("evidence", "external_product_url", "https://other.example/p/1", "external_product_url"),
+    ],
+)
+def test_post_write_readback_rejects_truth_field_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    field: str,
+    bad_value: object,
+    message: str,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    product_id = "00000000-0000-0000-0000-000000000001"
+    product = stored_product(expected, product_id)
+    evidence = stored_evidence(expected, product_id)
+    if target == "product":
+        product[field] = bad_value
+    else:
+        evidence[0][field] = bad_value
+
+    class FakeDB:
+        def select_many(self, table: str, **_kwargs):
+            if table == "product_opportunities":
+                return [product]
+            if table == "product_opportunity_evidence":
+                return evidence
+            raise AssertionError(table)
+
+    monkeypatch.setattr(db, "DB", FakeDB)
+    with pytest.raises(RuntimeError, match=message):
+        admission.verify_candidates([product_id], [expected])
+
+
+def test_post_write_readback_rejects_naive_merchant_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    expected = admission.validate_candidate(candidate(), now=NOW)
+    product_id = "00000000-0000-0000-0000-000000000001"
+    product = stored_product(expected, product_id)
+    product["product_page_verified_at"] = "2026-08-25T12:00:00"
+
+    class FakeDB:
+        def select_many(self, table: str, **_kwargs):
+            return [product] if table == "product_opportunities" else stored_evidence(expected, product_id)
+
+    monkeypatch.setattr(db, "DB", FakeDB)
+    with pytest.raises(RuntimeError, match="invalid merchant verification timestamp"):
         admission.verify_candidates([product_id], [expected])
 
 
@@ -560,13 +964,14 @@ def test_rollback_requires_an_exact_receipt(monkeypatch: pytest.MonkeyPatch) -> 
     class Http:
         def post(self, path: str, json: dict):
             assert path == "rpc/rollback_product_opportunity_admission_batch"
-            assert json["p_ids"] == ["product-1"]
+            assert json["p_ids"] == ["00000000-0000-0000-0000-000000000001"]
             assert json["p_reason"].startswith("post_write_verification")
             return Response()
 
     monkeypatch.setattr(db, "_get_http", lambda: Http())
     assert admission.rollback_candidates(
-        ["product-1"], "post_write_verification:RuntimeError"
+        ["00000000-0000-0000-0000-000000000001"],
+        "post_write_verification:RuntimeError",
     ) == 1
 
 
@@ -579,21 +984,66 @@ def test_rollback_readback_requires_retired_product_and_non_active_evidence(
         def select_many(self, table: str, **_kwargs):
             if table == "product_opportunities":
                 return [{
-                    "id": "product-1",
+                    "id": "00000000-0000-0000-0000-000000000001",
                     "lifecycle_status": "retired",
                     "lifecycle_reason": "admission_rollback:verification",
                     "retired_at": NOW.isoformat(),
                 }]
             if table == "product_opportunity_evidence":
                 return [{
-                    "product_opportunity_id": "product-1",
+                    "product_opportunity_id": "00000000-0000-0000-0000-000000000001",
                     "evidence_status": "retired",
                     "is_primary": False,
                 }]
             raise AssertionError(table)
 
     monkeypatch.setattr(db, "DB", FakeDB)
-    assert admission.verify_rollback(["product-1"]) == 1
+    assert admission.verify_rollback(
+        ["00000000-0000-0000-0000-000000000001"]
+    ) == 1
+
+
+def test_rollback_readback_requires_exact_expected_evidence_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    raw = candidate()
+    raw["additional_evidence"] = [{
+        "pinterest_pin_id": "223456789012345678",
+        "pinterest_pin_url": "https://www.pinterest.com/pin/223456789012345678/",
+        "evidence_type": "product_pin",
+        "relationship_method": "direct_outbound_link",
+        "provenance": {
+            "verified_by": "pinterest-refetch-v1",
+            "pinterest_pin_id": "223456789012345678",
+            "pin_direct_outbound_url": raw["canonical_product_url"],
+        },
+    }]
+    expected = admission.validate_candidate(raw, now=NOW)
+
+    class FakeDB:
+        def select_many(self, table: str, **_kwargs):
+            if table == "product_opportunities":
+                return [{
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "lifecycle_status": "retired",
+                    "lifecycle_reason": "admission_rollback:verification",
+                    "retired_at": NOW.isoformat(),
+                }]
+            if table == "product_opportunity_evidence":
+                return [{
+                    "product_opportunity_id": "00000000-0000-0000-0000-000000000001",
+                    "evidence_status": "retired",
+                    "is_primary": False,
+                }]
+            raise AssertionError(table)
+
+    monkeypatch.setattr(db, "DB", FakeDB)
+    with pytest.raises(RuntimeError, match="Evidence count mismatch"):
+        admission.verify_rollback(
+            ["00000000-0000-0000-0000-000000000001"], [expected]
+        )
 
 
 def test_main_automatically_rolls_back_a_failed_post_write_verification(
@@ -621,11 +1071,55 @@ def test_main_automatically_rolls_back_a_failed_post_write_verification(
         "rollback_candidates",
         lambda ids, _reason: rolled_back.append(ids) or len(ids),
     )
-    monkeypatch.setattr(admission, "verify_rollback", lambda ids: len(ids))
+    monkeypatch.setattr(admission, "verify_rollback", lambda ids, _rows: len(ids))
     monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_MODE", "production")
-    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_CONFIRM", admission.APPLY_CONFIRM)
-    monkeypatch.setattr(sys, "argv", ["product_opportunity_admission.py", "--manifest", str(manifest), "--apply"])
+    project_ref = "jaxteelkecvlozdrdoog"
+    monkeypatch.setenv("SUPABASE_URL", f"https://{project_ref}.supabase.co")
+    manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setattr(sys, "argv", [
+        "product_opportunity_admission.py",
+        "--manifest",
+        str(manifest),
+        "--apply",
+        "--expected-project-ref",
+        project_ref,
+        "--confirm",
+        admission.manual_apply_confirmation(project_ref, manifest_sha256),
+    ])
 
     assert admission.main() == 1
     assert rolled_back == [[product_id]]
     assert "history-preserving rollback retired 1 rows" in capsys.readouterr().err
+
+
+def test_main_wrong_manifest_confirmation_fails_before_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps([candidate(product_page_verified_at=datetime.now(timezone.utc).isoformat())]),
+        encoding="utf-8",
+    )
+    project_ref = "jaxteelkecvlozdrdoog"
+    monkeypatch.setenv("SUPABASE_URL", f"https://{project_ref}.supabase.co")
+    monkeypatch.setenv("VIBEPIN_PRODUCT_ADMISSION_MODE", "production")
+    monkeypatch.setattr(
+        admission,
+        "apply_candidates",
+        lambda _rows: pytest.fail("wrong confirmation must fail before apply"),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "product_opportunity_admission.py",
+        "--manifest",
+        str(manifest),
+        "--apply",
+        "--expected-project-ref",
+        project_ref,
+        "--confirm",
+        f"ADMIT:{project_ref}:{'0' * 64}",
+    ])
+
+    assert admission.main() == 1
+    assert "does not bind the expected project and manifest SHA-256" in capsys.readouterr().err

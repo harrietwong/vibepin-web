@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -59,6 +60,7 @@ MAX_REDIRECT_HOPS = 2
 MAX_PRODUCT_NAME_CHARS = 500
 MAX_MERCHANT_CHARS = 200
 MAX_PRODUCT_TYPE_CHARS = 160
+PROJECT_REF_RE = re.compile(r"^[a-z0-9]{6,40}$")
 
 
 def _host(value: str) -> str:
@@ -66,6 +68,49 @@ def _host(value: str) -> str:
         return (urlparse(value).hostname or "").lower().rstrip(".")
     except ValueError:
         return ""
+
+
+def require_expected_project_ref(expected_project_ref: object) -> str:
+    expected = str(expected_project_ref or "").strip()
+    if not PROJECT_REF_RE.fullmatch(expected):
+        raise RuntimeError("apply refused: expected Supabase project ref is missing or invalid")
+    if not os.environ.get("SUPABASE_URL"):
+        from dotenv import load_dotenv  # type: ignore
+
+        load_dotenv(ROOT / ".env")
+    raw_url = os.environ.get("SUPABASE_URL", "").strip()
+    try:
+        parsed_url = urlparse(raw_url)
+        parsed_port = parsed_url.port
+    except ValueError as exc:
+        raise RuntimeError("apply refused: SUPABASE_URL is malformed") from exc
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_port not in (None, 443)
+        or parsed_url.path not in ("", "/")
+        or parsed_url.params
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        raise RuntimeError("apply refused: SUPABASE_URL must be an exact HTTPS project origin")
+    actual_host = (parsed_url.hostname or "").lower().rstrip(".")
+    suffix = ".supabase.co"
+    if not actual_host.endswith(suffix):
+        raise RuntimeError("apply refused: SUPABASE_URL is not a direct Supabase project URL")
+    actual = actual_host[: -len(suffix)]
+    if not PROJECT_REF_RE.fullmatch(actual) or actual != expected:
+        raise RuntimeError("apply refused: SUPABASE_URL does not match the expected project ref")
+    return actual
+
+
+def manual_apply_confirmation(project_ref: str, manifest_sha256: str) -> str:
+    if not PROJECT_REF_RE.fullmatch(project_ref):
+        raise ValueError("invalid Supabase project ref")
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+        raise ValueError("invalid manifest SHA-256")
+    return f"ADMIT:{project_ref}:{manifest_sha256}"
 
 
 def _optional_display_text(raw: object, field: str, max_chars: int) -> str | None:
@@ -446,26 +491,144 @@ def validate_manifest(payload: object, *, now: datetime) -> tuple[list[dict], li
     return accepted, rejected
 
 
+def _canonical_uuid(value: object) -> str:
+    raw = str(value or "").strip()
+    try:
+        parsed = str(uuid.UUID(raw))
+    except (ValueError, AttributeError) as exc:
+        raise RuntimeError("admission receipt contains an invalid Product Opportunity ID") from exc
+    if raw != parsed:
+        raise RuntimeError("admission receipt Product Opportunity ID is not canonical")
+    return parsed
+
+
+def _canonical_uuid_batch(values: list[str], *, allow_empty: bool) -> list[str]:
+    if not values:
+        if allow_empty:
+            return []
+        raise RuntimeError("Product Opportunity ID batch must not be empty")
+    if len(values) > MAX_BATCH:
+        raise RuntimeError(f"Product Opportunity ID batch exceeds MAX_BATCH={MAX_BATCH}")
+    canonical = [_canonical_uuid(value) for value in values]
+    if len(set(canonical)) != len(canonical):
+        raise RuntimeError("Product Opportunity IDs are duplicated")
+    return canonical
+
+
+def _current_products_for_rows(rows: list[dict]) -> list[dict]:
+    from db import DB  # type: ignore
+
+    hashes = [str(row.get("canonical_url_hash") or "") for row in rows]
+    if not rows or len(hashes) != len(set(hashes)) or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes):
+        raise RuntimeError("admission rows have missing or duplicate canonical identities")
+    return DB().select_many(
+        "product_opportunities",
+        columns="id,canonical_url_hash,lifecycle_status",
+        filters={
+            "canonical_url_hash": f"in.({','.join(hashes)})",
+            "lifecycle_status": "not.eq.retired",
+        },
+        limit=MAX_BATCH,
+    )
+
+
+def assert_no_current_identity_conflicts(rows: list[dict]) -> None:
+    conflicts = _current_products_for_rows(rows)
+    if conflicts:
+        raise RuntimeError("admission refused: a current Product identity already exists")
+
+
+def recover_candidate_ids(rows: list[dict]) -> list[str]:
+    """Recover an exact committed batch only after an unusable HTTP 200 receipt."""
+    found = _current_products_for_rows(rows)
+    by_hash: dict[str, str] = {}
+    for item in found:
+        identity = str(item.get("canonical_url_hash") or "")
+        if identity in by_hash or item.get("lifecycle_status") != "active":
+            raise RuntimeError("cannot recover a unique active admission batch")
+        by_hash[identity] = _canonical_uuid(item.get("id"))
+    expected_hashes = [row["canonical_url_hash"] for row in rows]
+    if set(by_hash) != set(expected_hashes):
+        raise RuntimeError("cannot recover every Product ID from the committed admission batch")
+    return [by_hash[value] for value in expected_hashes]
+
+
 def apply_candidates(rows: list[dict]) -> list[str]:
     from db import _get_http  # type: ignore
 
+    if not rows:
+        raise RuntimeError("admission apply requires a non-empty reviewed batch")
+    if len(rows) > MAX_BATCH:
+        raise RuntimeError(f"admission apply exceeds MAX_BATCH={MAX_BATCH}")
+    assert_no_current_identity_conflicts(rows)
     response = _get_http().post(
         "rpc/admit_product_opportunity_batch",
         json={"p_candidates": rows},
     )
     if response.status_code != 200:
         raise RuntimeError(f"admission RPC failed [{response.status_code}]: {response.text[:300]}")
-    receipt = response.json()
-    if not isinstance(receipt, list) or len(receipt) != len(rows):
-        raise RuntimeError("admission receipt count does not match the reviewed manifest")
-    return [str(item["product_opportunity_id"]) for item in receipt]
+    committed_ids: list[str] | None = None
+    try:
+        receipt = response.json()
+        if not isinstance(receipt, list) or len(receipt) != len(rows):
+            raise RuntimeError("admission receipt count does not match the reviewed manifest")
+        ids = [
+            _canonical_uuid(item.get("product_opportunity_id") if isinstance(item, dict) else None)
+            for item in receipt
+        ]
+        if len(set(ids)) != len(ids):
+            raise RuntimeError("admission receipt Product IDs are duplicated")
+        committed_ids = recover_candidate_ids(rows)
+        if ids != committed_ids:
+            raise RuntimeError(
+                "admission receipt Product IDs do not match the committed canonical identities"
+            )
+        return ids
+    except Exception as receipt_error:
+        try:
+            recovered = committed_ids or recover_candidate_ids(rows)
+        except Exception as recovery_error:
+            raise RuntimeError(
+                "admission returned HTTP 200 with an invalid receipt and the committed "
+                f"Product IDs could not be recovered: receipt={receipt_error}; "
+                f"recovery={recovery_error}"
+            ) from recovery_error
+        verification_error: Exception | None = None
+        try:
+            verify_candidates(recovered, rows)
+        except Exception as exc:
+            verification_error = exc
+        try:
+            rolled_back = rollback_candidates(recovered, "invalid_admission_receipt")
+            verify_rollback(recovered, rows)
+        except Exception as rollback_error:
+            verification_detail = (
+                f"; recovered_readback={verification_error}"
+                if verification_error is not None
+                else ""
+            )
+            raise RuntimeError(
+                "admission returned HTTP 200 with an invalid receipt and exact rollback "
+                f"was not proven: receipt={receipt_error}{verification_detail}; "
+                f"rollback={rollback_error}"
+            ) from rollback_error
+        verification_detail = (
+            f"; recovered readback also failed: {verification_error}"
+            if verification_error is not None
+            else ""
+        )
+        raise RuntimeError(
+            f"admission returned an invalid receipt; history-preserving rollback retired "
+            f"{rolled_back} recovered rows: {receipt_error}{verification_detail}"
+        ) from receipt_error
 
 
 def verify_candidates(product_ids: list[str], rows: list[dict]) -> int:
     """Read back the exact admission receipt and its active Primary Evidence."""
     from db import DB  # type: ignore
 
-    if len(product_ids) != len(rows) or len(set(product_ids)) != len(product_ids):
+    product_ids = _canonical_uuid_batch(product_ids, allow_empty=True)
+    if len(product_ids) != len(rows):
         raise RuntimeError("admission receipt ids are missing or duplicated")
     if not product_ids:
         return 0
@@ -474,8 +637,11 @@ def verify_candidates(product_ids: list[str], rows: list[dict]) -> int:
     products = db.select_many(
         "product_opportunities",
         columns=(
-            "id,canonical_url_hash,external_product_url,product_image_url,"
-            "product_type,product_family,lifecycle_status"
+            "id,canonical_product_url,canonical_url_hash,external_product_url,"
+            "product_image_url,product_image_source,product_page_verified_at,"
+            "product_page_verification_method,product_name,merchant,domain,category,"
+            "product_type,product_family,discovery_method,provenance,free_preview_rank,"
+            "lifecycle_status"
         ),
         filters={"id": encoded_ids},
     )
@@ -483,7 +649,7 @@ def verify_candidates(product_ids: list[str], rows: list[dict]) -> int:
         "product_opportunity_evidence",
         columns=(
             "product_opportunity_id,pinterest_pin_id,pinterest_pin_url,"
-            "evidence_type,relationship_method,canonical_url_hash,provenance,"
+            "evidence_type,relationship_method,external_product_url,canonical_url_hash,provenance,"
             "evidence_status,is_primary"
         ),
         filters={
@@ -503,14 +669,44 @@ def verify_candidates(product_ids: list[str], rows: list[dict]) -> int:
         if not product or product.get("lifecycle_status") != "active":
             raise RuntimeError(f"admission readback missing active product {product_id}")
         for field in (
+            "canonical_product_url",
             "canonical_url_hash",
             "external_product_url",
             "product_image_url",
+            "product_image_source",
+            "product_page_verification_method",
+            "product_name",
+            "merchant",
+            "domain",
+            "category",
             "product_type",
             "product_family",
+            "discovery_method",
+            "provenance",
         ):
             if product.get(field) != expected.get(field):
                 raise RuntimeError(f"admission readback product mismatch: {product_id}/{field}")
+        try:
+            actual_raw_timestamp = datetime.fromisoformat(
+                str(product.get("product_page_verified_at") or "").replace("Z", "+00:00")
+            )
+            expected_raw_timestamp = datetime.fromisoformat(
+                str(expected.get("product_page_verified_at") or "").replace("Z", "+00:00")
+            )
+            if actual_raw_timestamp.tzinfo is None or expected_raw_timestamp.tzinfo is None:
+                raise ValueError("merchant verification timestamp has no timezone")
+            actual_verified_at = actual_raw_timestamp.astimezone(timezone.utc)
+            expected_verified_at = expected_raw_timestamp.astimezone(timezone.utc)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"admission readback invalid merchant verification timestamp: {product_id}"
+            ) from exc
+        if actual_verified_at != expected_verified_at:
+            raise RuntimeError(
+                f"admission readback product mismatch: {product_id}/product_page_verified_at"
+            )
+        if product.get("free_preview_rank") is not None:
+            raise RuntimeError(f"admission unexpectedly assigned Free preview rank: {product_id}")
         if not primary or primary.get("is_primary") is not True:
             raise RuntimeError(f"admission readback missing Primary Evidence {product_id}")
         expected_evidence = [
@@ -519,16 +715,24 @@ def verify_candidates(product_ids: list[str], rows: list[dict]) -> int:
                 "pinterest_pin_url": expected["pinterest_pin_url"],
                 "evidence_type": expected["evidence_type"],
                 "relationship_method": expected["relationship_method"],
+                "external_product_url": expected["external_product_url"],
                 "provenance": expected["provenance"],
                 "is_primary": True,
             },
             *[
-                {**additional, "is_primary": False}
+                {
+                    **additional,
+                    "external_product_url": expected["external_product_url"],
+                    "is_primary": False,
+                }
                 for additional in expected.get("additional_evidence", [])
             ],
         ]
         actual_by_pin = {str(row["pinterest_pin_id"]): row for row in evidence_rows}
-        if len(actual_by_pin) != len(expected_evidence):
+        if (
+            len(evidence_rows) != len(expected_evidence)
+            or len(actual_by_pin) != len(expected_evidence)
+        ):
             raise RuntimeError(f"admission readback Evidence count mismatch: {product_id}")
         for expected_row in expected_evidence:
             actual = actual_by_pin.get(expected_row["pinterest_pin_id"])
@@ -541,6 +745,7 @@ def verify_candidates(product_ids: list[str], rows: list[dict]) -> int:
                 "pinterest_pin_url",
                 "evidence_type",
                 "relationship_method",
+                "external_product_url",
                 "provenance",
                 "is_primary",
             ):
@@ -562,6 +767,7 @@ def verify_candidates(product_ids: list[str], rows: list[dict]) -> int:
 def rollback_candidates(product_ids: list[str], reason: str) -> int:
     from db import _get_http  # type: ignore
 
+    product_ids = _canonical_uuid_batch(product_ids, allow_empty=True)
     if not product_ids:
         return 0
     response = _get_http().post(
@@ -579,9 +785,10 @@ def rollback_candidates(product_ids: list[str], reason: str) -> int:
     return retired
 
 
-def verify_rollback(product_ids: list[str]) -> int:
+def verify_rollback(product_ids: list[str], rows: list[dict] | None = None) -> int:
     from db import DB  # type: ignore
 
+    product_ids = _canonical_uuid_batch(product_ids, allow_empty=True)
     if not product_ids:
         return 0
     db = DB()
@@ -607,11 +814,25 @@ def verify_rollback(product_ids: list[str]) -> int:
             or not row.get("retired_at")
         ):
             raise RuntimeError(f"admission rollback not proven for product {product_id}")
+    evidence_by_product: dict[str, list[dict]] = {}
+    for row in evidence:
+        evidence_by_product.setdefault(str(row.get("product_opportunity_id") or ""), []).append(row)
+    if set(evidence_by_product) != set(product_ids):
+        raise RuntimeError("admission rollback did not preserve every Evidence history row")
+    if rows is not None:
+        if len(rows) != len(product_ids):
+            raise RuntimeError("admission rollback expected-row count mismatch")
+        for product_id, expected in zip(product_ids, rows, strict=True):
+            expected_count = 1 + len(expected.get("additional_evidence", []))
+            if len(evidence_by_product.get(product_id, [])) != expected_count:
+                raise RuntimeError(
+                    f"admission rollback Evidence count mismatch: {product_id}"
+                )
     if any(
-        row.get("evidence_status") == "active" or row.get("is_primary") is True
+        row.get("evidence_status") != "retired" or row.get("is_primary") is not False
         for row in evidence
     ):
-        raise RuntimeError("admission rollback left active or Primary Evidence")
+        raise RuntimeError("admission rollback left non-retired or Primary Evidence")
     return len(product_ids)
 
 
@@ -619,9 +840,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--expected-project-ref")
+    parser.add_argument("--confirm")
     args = parser.parse_args()
     try:
-        payload = json.loads(args.manifest.read_text(encoding="utf-8"))
+        manifest_bytes = args.manifest.read_bytes()
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        payload = json.loads(manifest_bytes.decode("utf-8"))
         accepted, rejected = validate_manifest(payload, now=datetime.now(timezone.utc))
         report: dict = {
             "mode": "apply" if args.apply else "dry-run",
@@ -630,6 +855,7 @@ def main() -> int:
             "rejectedRows": len(rejected),
             "rejections": rejected,
             "maxBatch": MAX_BATCH,
+            "manifestSha256": manifest_sha256,
             "written": 0,
         }
         if args.apply:
@@ -637,8 +863,13 @@ def main() -> int:
                 raise RuntimeError("apply refused: every manifest row must pass all evidence gates")
             if os.environ.get("VIBEPIN_PRODUCT_ADMISSION_MODE") != "production":
                 raise RuntimeError("apply refused: VIBEPIN_PRODUCT_ADMISSION_MODE must equal production")
-            if os.environ.get("VIBEPIN_PRODUCT_ADMISSION_CONFIRM") != APPLY_CONFIRM:
-                raise RuntimeError(f"apply refused: VIBEPIN_PRODUCT_ADMISSION_CONFIRM must equal {APPLY_CONFIRM}")
+            project_ref = require_expected_project_ref(args.expected_project_ref)
+            required_confirmation = manual_apply_confirmation(project_ref, manifest_sha256)
+            if args.confirm != required_confirmation:
+                raise RuntimeError(
+                    "apply refused: --confirm does not bind the expected project and manifest SHA-256"
+                )
+            report["projectRef"] = project_ref
             report["productOpportunityIds"] = apply_candidates(accepted)
             report["written"] = len(accepted)
             try:
@@ -651,7 +882,7 @@ def main() -> int:
                     rolled_back = rollback_candidates(
                         report["productOpportunityIds"], reason
                     )
-                    verify_rollback(report["productOpportunityIds"])
+                    verify_rollback(report["productOpportunityIds"], accepted)
                 except Exception as rollback_error:
                     raise RuntimeError(
                         "post-write verification failed and automatic rollback was not proven: "

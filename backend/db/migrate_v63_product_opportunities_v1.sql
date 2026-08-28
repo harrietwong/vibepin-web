@@ -834,6 +834,9 @@ BEGIN
     IF jsonb_typeof(p_candidates) <> 'array' THEN
       RAISE EXCEPTION 'p_candidates must be a JSON array';
     END IF;
+    IF jsonb_array_length(p_candidates) = 0 THEN
+      RAISE EXCEPTION 'Product Opportunity admission batch must not be empty';
+    END IF;
     IF jsonb_array_length(p_candidates) > 20 THEN
       RAISE EXCEPTION 'Product Opportunity admission batch exceeds 20 rows';
     END IF;
