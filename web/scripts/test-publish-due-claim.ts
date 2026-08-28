@@ -11,7 +11,9 @@
  */
 
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import {
+  CLAIM_BUDGET_MS,
   CLAIM_STALE_MS,
   isClaimable,
   staleClaimCutoffIso,
@@ -433,6 +435,172 @@ test("owedDestinations: a draft that DOES name an account is untouched by the le
   assert.equal(owed.length, 1);
   assert.equal(owed[0].socialConnectionId, "pin_A", "derived intent still wins — nothing synthetic is added");
 });
+
+// ── A1-1: a republish must not erase the post it replaces ────────────────────
+// A Content that was Posted, then edited and re-scheduled, publishes into the SAME
+// destination again. The card path has always kept the superseded row (with its
+// permalink) under previousResults; the cron dropped it, so the earlier Pin became
+// unreachable from the app only when the scheduler was the publisher.
+const PUBLISHED_PIN = {
+  destinationId: "pinterest:pin_A", provider: "pinterest", socialConnectionId: "pin_A",
+  status: "published", remoteId: "pin-1", postUrl: "https://pin/1",
+  publishedAt: "2026-07-01T09:00:00.000Z",
+};
+const NOW_ISO = "2026-07-11T12:00:00.000Z";
+
+test("payloadAfterOutcomes: a republish keeps the old permalink in previousResults", () => {
+  const after = payloadAfterOutcomes(
+    { destinationResults: [PUBLISHED_PIN], scheduledDate: "2026-07-11", plannedAt: "2026-07-11T09:00" },
+    [{ provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "pin-2", externalPostUrl: "https://pin/2" }],
+    NOW_ISO,
+  );
+  const rows = after.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1, "the destination still has exactly one CURRENT row");
+  assert.equal(rows[0].postUrl, "https://pin/2", "which is the Pin this run created");
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous.length, 1);
+  assert.equal(previous[0].postUrl, "https://pin/1", "the earlier Pin is still live — its permalink must survive");
+  assert.equal(previous[0].status, "published");
+});
+
+test("payloadAfterOutcomes: a first publish records no history at all", () => {
+  const after = payloadAfterOutcomes({}, [
+    { provider: "instagram", status: "published", socialConnectionId: "ig_A", externalPostId: "ig-1", externalPostUrl: "https://ig/1" },
+  ], NOW_ISO);
+  assert.equal(after.previousResults, undefined, "nothing was replaced, so nothing is archived");
+});
+
+test("payloadAfterOutcomes: an untouched destination is never archived", () => {
+  const after = payloadAfterOutcomes(
+    { destinationResults: [PUBLISHED_PIN] },
+    [{ provider: "instagram", status: "published", socialConnectionId: "ig_A", externalPostId: "ig-1" }],
+    NOW_ISO,
+  );
+  assert.equal(after.previousResults, undefined, "the Pinterest row was kept, not replaced");
+  const rows = after.destinationResults as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find(r => r.destinationId === "pinterest:pin_A")?.postUrl, "https://pin/1");
+});
+
+test("payloadAfterOutcomes: a FAILED re-attempt still archives the live post it replaced", () => {
+  const after = payloadAfterOutcomes(
+    { destinationResults: [PUBLISHED_PIN] },
+    [{ provider: "pinterest", status: "failed", socialConnectionId: "pin_A", error: "Reconnect your Pinterest account." }],
+    NOW_ISO,
+  );
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous?.length, 1, "the earlier Pin is still on Pinterest, however the retry went");
+  assert.equal(previous[0].postUrl, "https://pin/1");
+});
+
+test("payloadAfterOutcomes: history accumulates across republishes", () => {
+  const after = payloadAfterOutcomes(
+    {
+      destinationResults: [{ ...PUBLISHED_PIN, remoteId: "pin-2", postUrl: "https://pin/2" }],
+      previousResults: [PUBLISHED_PIN],
+    },
+    [{ provider: "pinterest", status: "published", socialConnectionId: "pin_A", externalPostId: "pin-3", externalPostUrl: "https://pin/3" }],
+    NOW_ISO,
+  );
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.deepEqual(previous.map(r => r.postUrl), ["https://pin/1", "https://pin/2"]);
+  assert.equal((after.destinationResults as Array<Record<string, unknown>>)[0].postUrl, "https://pin/3");
+});
+
+test("payloadAfterSuccess: the Pinterest-only path archives the superseded Pin too", () => {
+  const after = payloadAfterSuccess(
+    { destinationResults: [PUBLISHED_PIN], targetConnectionId: "pin_A" },
+    { id: "pin-2", url: "https://pin/2" },
+    NOW_ISO,
+  );
+  const previous = after.previousResults as Array<Record<string, unknown>>;
+  assert.equal(previous?.length, 1);
+  assert.equal(previous[0].postUrl, "https://pin/1");
+  assert.equal(after.remotePinUrl, "https://pin/2");
+});
+
+
+// ── The run's time budget (source contract) ──────────────────────────────────
+// The route needs Supabase and a bearer secret, so the wiring is asserted on the
+// source. What must never regress: the budget exists, it leaves headroom under the
+// platform's kill time, and it is checked BEFORE a row is claimed — a claimed row we
+// are killed before persisting is re-published 10 minutes later (a real double post).
+const routeSrc = readFileSync("src/app/api/cron/publish-due/route.ts", "utf8");
+
+test("CLAIM_BUDGET_MS leaves headroom under maxDuration", () => {
+  const declared = /export const maxDuration = (\d+)/.exec(routeSrc);
+  assert.ok(declared, "the route must declare maxDuration");
+  const ceilingMs = Number(declared![1]) * 1000;
+  assert.ok(CLAIM_BUDGET_MS > 0, "a budget of 0 would claim nothing");
+  assert.ok(CLAIM_BUDGET_MS < ceilingMs,
+    `the budget (${CLAIM_BUDGET_MS}ms) must stop the run before the platform does (${ceilingMs}ms)`);
+  // Enough room for the slowest single row (an Instagram container poll, ~45s).
+  assert.ok(ceilingMs - CLAIM_BUDGET_MS >= 45_000,
+    "too little headroom: the row being published when the budget runs out could still be killed");
+});
+
+test("the budget is checked BEFORE each claim, not after", () => {
+  const budgetAt = routeSrc.indexOf("CLAIM_BUDGET_MS");
+  const claimAt = routeSrc.indexOf("publish_claimed_at: claimIso");
+  assert.ok(budgetAt > 0 && claimAt > 0, "both the budget check and the claim must exist");
+  assert.ok(routeSrc.lastIndexOf("CLAIM_BUDGET_MS") < claimAt,
+    "checking the budget after claiming would leave the claimed row exposed to the kill");
+  assert.match(routeSrc, /Date\.now\(\) - startedMs >= CLAIM_BUDGET_MS/,
+    "the check must measure wall clock from the top of the run");
+});
+
+test("claiming and publishing are interleaved, so the budget can actually fire", () => {
+  // Claiming every row up front takes milliseconds — a budget check there could never
+  // be true, which is how a guard ships dead. One loop: check → claim → publish.
+  const claimAt = routeSrc.indexOf("publish_claimed_at: claimIso");
+  const publishAt = routeSrc.indexOf("await publishPinForUser(");
+  assert.ok(claimAt > 0 && publishAt > claimAt, "the publish must follow the claim in the SAME loop");
+  const between = routeSrc.slice(claimAt, publishAt);
+  assert.ok(!/for \(const row of claimed\)/.test(between),
+    "a second loop over pre-claimed rows means the time check cannot defer anything");
+});
+
+test("each row is claimed on ITS own clock, so a late claim keeps a full lock", () => {
+  // With claiming interleaved a row can be claimed minutes into the run; stamping it
+  // with the start of the run would shorten its 10-minute lock by exactly that much.
+  assert.match(routeSrc, /const claimIso = new Date\(\)\.toISOString\(\);/);
+  assert.match(routeSrc, /const rowNowIso = new Date\(\)\.toISOString\(\);/,
+    "and its persist must carry a current updatedAt, or a mid-run client edit wins the LWW merge");
+  // Declaring it is not using it. The MAIN outcome persist — the one that runs after a
+  // real publish — is where a start-of-run stamp loses the LWW merge to a mid-run edit
+  // that still carries scheduled_at, and the Pin goes out twice.
+  assert.match(routeSrc, /persistOutcomes\(db, row, outcomes, rowNowIso/);
+  const loopBody = routeSrc.slice(
+    routeSrc.indexOf("for (const candidate of candidates) {"),
+    routeSrc.indexOf("if (deferred > 0) {"),
+  );
+  assert.ok(!/[^w], nowIso/.test(loopBody),
+    "no call inside the row loop may still take the start-of-run clock");
+});
+
+test("a deferred row is reported, never silently dropped", () => {
+  assert.match(routeSrc, /deferred\+\+/, "deferred rows must be counted");
+  assert.match(routeSrc, /claimed: claimedCount, published, failed, skipped, deferred/,
+    "the count must reach the response so a run that keeps deferring is visible");
+});
+
+// ── persist must never lose the record of a publish that happened ────────────
+test("persistOutcomes retries once and then logs the outcomes it could not store", () => {
+  const at = routeSrc.indexOf("async function persistOutcomes(");
+  assert.ok(at > 0);
+  const body = routeSrc.slice(at, routeSrc.indexOf("async function persistFailure("));
+  assert.match(body, /for \(let attempt = 1; attempt <= 2; attempt\+\+\)/, "exactly one retry");
+  assert.match(body, /PERSIST_RETRY_DELAY_MS/, "the retry waits before trying again");
+  assert.match(body, /JSON\.stringify\(outcomes\)/,
+    "the final failure must log what could not be stored, or the publish is unreconstructable");
+  assert.match(body, /draft_id=/, "and which row it belongs to");
+  assert.ok(!/publish_claimed_at: null[\s\S]*catch/.test(body.slice(body.indexOf("for (let attempt"))),
+    "the claim must not be released on failure — that hands the row back to be re-published");
+  // A real `throw` statement — not the word in a comment.
+  assert.ok(!/\bthrow\s+(new\b|err\b|error\b)/.test(body),
+    "a throw would reach the row catch, which persists a FAILURE over a delivered publish");
+});
+
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

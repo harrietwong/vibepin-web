@@ -120,6 +120,35 @@ function needsPinterestConnect(err?: PinterestClientError | { code?: string; nee
     || err?.code === "configuration_error";
 }
 
+/**
+ * The destinations a draft was actually scheduled to, as the picker reads a selection.
+ *
+ * Only EXPLICIT intent seeds a selection: a legacy Pin's DERIVED Pinterest destination
+ * is our inference, not the merchant's choice, so it must not appear as though they had
+ * ticked it. Shared by the useState initialiser and the per-draft seed below so the
+ * selection is correct on the FIRST render — PublishDestinations is mounted fresh on
+ * every open, and a selection that only arrives in an effect lets its own
+ * "default Pinterest" path run against an empty/stale value.
+ */
+function seedSocialDestinations(draft: PinDraft | null | undefined): SocialProvider[] {
+  if (!draft || !hasExplicitIntent(draft)) return [];
+  return (draft.scheduledDestinations ?? []).map(d => d.provider).filter(isSocialProvider);
+}
+
+/**
+ * The ACCOUNT half of that intent. Restoring only the platform would drop which account
+ * was chosen, and the next save would have to guess it again — the exact ambiguity
+ * resolveScheduledAccount refuses to resolve.
+ */
+function seedSocialAccountIds(
+  draft: PinDraft | null | undefined,
+): Array<{ provider: string; id: string }> {
+  if (!draft || !hasExplicitIntent(draft)) return [];
+  return (draft.scheduledDestinations ?? [])
+    .filter(d => isSocialProvider(d.provider) && d.provider !== "pinterest" && !!d.socialConnectionId)
+    .map(d => ({ provider: d.provider, id: d.socialConnectionId }));
+}
+
 export type PinDetailsModalProps = {
   draft: PinDraft | null;
   open: boolean;
@@ -223,11 +252,34 @@ export function PinDetailsModal({
   const [supportRequest, setSupportRequest] = useState<{ seedText: string; extra: Record<string, unknown> } | null>(null);
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
-  const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
+  const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>(
+    () => seedSocialDestinations(open ? draft : null),
+  );
   // Which specific accounts to publish as, on platforms with more than one
   // connected. Empty means "every connected account on the selected platforms" —
   // connecting a second account must not silently narrow an existing habit.
-  const [socialAccountIds, setSocialAccountIds] = useState<Array<{ provider: string; id: string }>>([]);
+  const [socialAccountIds, setSocialAccountIds] = useState<Array<{ provider: string; id: string }>>(
+    () => seedSocialAccountIds(open ? draft : null),
+  );
+  /**
+   * Which draft the selection above was seeded from — the render-time half of the
+   * per-draft seed below (React's documented "adjust state when props change").
+   *
+   * It has to happen DURING RENDER, not in the seed effect: PublishDestinations mounts
+   * fresh on every open and its child effects run BEFORE this component's, so a
+   * selection that only lands in an effect leaves the picker looking at an empty (or
+   * the previous draft's) selection on first render — which is exactly when it decides
+   * whether to apply its Pinterest default. Seeding here means the picker's first
+   * render already sees this Content's real intent and stands down.
+   */
+  const [selectionSeededId, setSelectionSeededId] = useState<string | null>(
+    () => (open && draft ? draft.id : null),
+  );
+  if (open && draft && selectionSeededId !== draft.id) {
+    setSelectionSeededId(draft.id);
+    setSocialDestinations(seedSocialDestinations(draft));
+    setSocialAccountIds(seedSocialAccountIds(draft));
+  }
   // Connection summaries reported by PublishDestinations. Needed to turn a chosen
   // PLATFORM into the specific ACCOUNT the schedule should publish through, and to
   // tell "one obvious account" apart from "several, so the choice must be explicit".
@@ -671,20 +723,10 @@ export function PinDetailsModal({
     setConfirmReplaceUrlOpen(false);
     setPinterestConnected(false);
     setPinterestAccount(null);
-    // Re-open a scheduled Pin showing the destinations it was actually scheduled to.
-    // Only EXPLICIT intent seeds the selection: a legacy Pin's derived Pinterest
-    // destination is our inference, not the merchant's choice, so it must not appear
-    // as though they had ticked it.
-    const explicitIntent = hasExplicitIntent(draft) ? (draft.scheduledDestinations ?? []) : [];
-    setSocialDestinations(explicitIntent.map(d => d.provider).filter(isSocialProvider));
-    // Re-hydrate the ACCOUNT half of that intent too. Restoring only the platform
-    // would drop which account was chosen, and the next save would have to guess it
-    // again — the exact ambiguity resolveScheduledAccount now refuses to resolve.
-    setSocialAccountIds(
-      explicitIntent
-        .filter(d => isSocialProvider(d.provider) && d.provider !== "pinterest" && !!d.socialConnectionId)
-        .map(d => ({ provider: d.provider, id: d.socialConnectionId })),
-    );
+    // The destination selection is NOT seeded here. It is seeded during render
+    // (seedSocialDestinations / seedSocialAccountIds, keyed on selectionSeededId), so
+    // the freshly mounted PublishDestinations sees this Content's real intent on its
+    // FIRST render instead of an empty selection it would default to Pinterest.
     // Scoped to one publish: never carry another Pin's live posts into this one.
     setLiveSocialPosts(null);
     setLiveDestinationResults(null);

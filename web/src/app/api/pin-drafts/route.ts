@@ -266,11 +266,14 @@ export async function PUT(req: Request) {
       const wasScheduled = existingScheduled.get(d.draftId) ?? false;
       if (incomingScheduledAt && !wasScheduled) newlyScheduledDraftIds.push(d.draftId);
       // A future-dated Pin may only name destinations whose intent we can actually
-      // persist and replay. Today that is Pinterest alone: boardId and
-      // targetConnectionId ride the draft and the due worker reads them back, while
-      // an Instagram/Facebook choice is not stored anywhere and would be dropped in
-      // silence. Refusing here (not just in the UI) is the point — the client can be
-      // stale or bypassed entirely.
+      // persist and replay. That is now every platform with a publish path: intent
+      // rides the draft as scheduledDestinations[] and the due worker reads it back.
+      // What is still refused is a platform we cannot execute at due time (liveSchedule
+      // false — TikTok today), because accepting it would drop the choice in silence.
+      // Refusing here (not just in the UI) is the point — the client can be stale or
+      // bypassed entirely. The rule reads scheduledDestinations[], the field that is
+      // actually persisted; it used to read a `socialDestinations` field nothing wrote,
+      // so it never refused anything at all.
       const blocked = blockedScheduleDestinations(p);
       if (blocked.length) unschedulable.push({ draftId: d.draftId, providers: blocked });
     }
