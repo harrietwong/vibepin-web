@@ -35,6 +35,8 @@ import {
 import { listConnections } from "@/lib/social/server/socialConnectionStore";
 import type { SocialConnection } from "@/lib/social/types";
 import { listVibePinPublishedPinterestPins } from "./vibepinPublishedPins";
+import { attributePinToConnection } from "./collectorLogic";
+import { ownerConnectionsForPins } from "./collectorStore";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const DASHBOARD_LOAD_TIMEOUT_MS = 20_000;
@@ -162,6 +164,9 @@ async function buildPinterestDashboard(
   connection: SocialConnection,
   startDate: string,
   endDate: string,
+  /** Every Pinterest connection this user holds. Scopes the registry ownership
+   *  lookup to their own accounts — a Pin's owner is only meaningful among them. */
+  siblingConnectionIds: string[] = [connection.id],
 ): Promise<InsightsDashboard> {
   const [client, provenance] = await Promise.all([
     PinterestClient.forConnection(uid, connection.id),
@@ -191,11 +196,29 @@ async function buildPinterestDashboard(
   // All-accounts view would repeat each Pin once per account and this account's
   // token would return no metrics for the other account's Pins — reported as
   // "Pinterest has not returned metrics yet" rather than as the mis-attribution
-  // it really is. Drafts published before targets were recorded have no
-  // attribution at all; they stay visible on every account (metrics only come
-  // back on the one that truly owns them) rather than disappearing entirely.
-  const published = Array.from(provenance.pins.values())
-    .filter(item => item.targetConnectionId === null || item.targetConnectionId === connection.id);
+  // it really is.
+  //
+  // Drafts published before targets were recorded carry no attribution of their
+  // own. The v64 content registry answers for them: the account whose own token
+  // listed a Pin is the account that owns it, which is real evidence rather than
+  // a guess. Only when the registry has no row yet — collection has not run, or
+  // the migration is not applied here — does a Pin fall back to being visible on
+  // every card, where the owning account is still the only one that returns
+  // metrics for it.
+  const allPublished = Array.from(provenance.pins.values());
+  const legacyPinIds = allPublished
+    .filter(item => item.targetConnectionId === null)
+    .map(item => item.pinId);
+  // One query for every unattributed Pin, not one per Pin. A registry that is not
+  // there yet resolves to an empty map, so this never breaks the dashboard.
+  const registryOwners = legacyPinIds.length > 0
+    ? await ownerConnectionsForPins(siblingConnectionIds, legacyPinIds).catch(() => new Map<string, string>())
+    : new Map<string, string>();
+  const published = allPublished.filter(item => attributePinToConnection(
+    item.targetConnectionId,
+    registryOwners.get(item.pinId) ?? null,
+    connection.id,
+  ));
   const analyticsResult = await loadVerifiedPinterestAnalytics(
     client,
     published.map(item => item.pinId),
@@ -478,7 +501,7 @@ export async function getInsightsDashboard(
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
 
     const dashboard = await withDashboardTimeout(platform === "pinterest"
-      ? buildPinterestDashboard(uid, connection, startDate, endDate)
+      ? buildPinterestDashboard(uid, connection, startDate, endDate, connections.map(item => item.id))
       : buildInstagramDashboard(uid, connection, startDate, endDate));
     dashboardCache.set(cacheKey, { at: Date.now(), value: dashboard });
     return dashboard;

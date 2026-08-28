@@ -235,9 +235,12 @@ await test("Pin metadata is read with the account that owns the Pin", () => {
 await test("Insights attributes each Pin to the account that published it", () => {
   const provenance = readFileSync(join(process.cwd(), "src/lib/server/insights/vibepinPublishedPins.ts"), "utf8");
   const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
-  assert.match(provenance, /targetConnectionId: nonEmptyString\(payload\.targetConnectionId\)/);
-  // Unattributed legacy drafts stay visible rather than vanishing from every account.
-  assert.match(dashboard, /item\.targetConnectionId === null \|\| item\.targetConnectionId === connection\.id/);
+  assert.match(provenance, /nonEmptyString\(payload\.targetConnectionId\)/);
+  // Attribution precedence: the draft's own recorded target, then the v64 content
+  // registry (the account whose token listed the Pin owns it), and only with neither
+  // does a legacy Pin stay visible on every account rather than vanishing.
+  assert.match(dashboard, /attributePinToConnection\(/);
+  assert.match(dashboard, /ownerConnectionsForPins\(/);
 });
 
 await test("server-side Insights strings are not hardcoded Chinese", () => {
