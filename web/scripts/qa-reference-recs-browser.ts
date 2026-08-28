@@ -225,7 +225,7 @@ async function main() {
   await context.addInitScript(function (arg) {
     try {
       window.localStorage.setItem(arg[0], JSON.stringify({ drafts: arg[1] }));
-    } catch (e) { /* ignore */ }
+    } catch { /* a browser without localStorage cannot run this QA anyway */ }
   }, [DRAFT_KEY, SEEDS] as unknown as [string, Record<string, unknown>]);
 
   await installMocks(context);
