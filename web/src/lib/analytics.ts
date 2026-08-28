@@ -29,6 +29,17 @@ export type AnalyticsEvent =
   | "direction_rejected"
   | "reference_selected"
   | "reference_rejected"
+  // ── Reference-recommendation serving (P0, §1.4) ──
+  // `reference_recs_requested` is the client half of the server's
+  // `reference_recs_served`: joined on requestId they show which analysis state a
+  // served list was produced under, which is what makes a category_fallback rate
+  // attributable to a missing analysis rather than to a thin library.
+  | "reference_recs_requested"
+  | "reference_refreshed"
+  // The analysis came back for an image the draft no longer has, so it was dropped
+  // instead of written — counted so a silent discard is visible rather than looking
+  // like an analysis that never finished.
+  | "image_analysis_discarded_stale"
   | "keyword_removed"
   | "generation_kept"
   | "generation_deleted"

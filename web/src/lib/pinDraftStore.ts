@@ -24,6 +24,9 @@ import { isActionablePublishFailure } from "./studio/pinLifecycle";
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
 import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
+// Type-only: erased at build time, so this cannot create a runtime import cycle
+// (recommendationRequest itself imports nothing at runtime).
+import type { AnalysisErrorCode } from "./studio/recommendationRequest";
 import {
   contentMedia,
   mediaId,
@@ -241,6 +244,10 @@ export interface PinDraft {
   // All optional so drafts persisted before this feature keep working unchanged.
   /** Lifecycle of the background image analysis started right after upload. */
   imageAnalysisStatus?:    "pending" | "ready" | "failed";
+  /** Why the last analysis failed (only meaningful with status "failed"); cleared on success. */
+  imageAnalysisError?:     AnalysisErrorCode;
+  /** Seconds from the 429 `Retry-After` header, so the UI can say when to try again. */
+  imageAnalysisRetryAfter?: number;
   /** 1-2 sentence description of what is visible in the image. */
   imageSummary?:           string;
   visibleObjects?:         string[];
