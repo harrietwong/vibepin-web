@@ -56,6 +56,8 @@ export const CORE: string[] = [
   "test-insights-engine",
   // Insights report layer (ISO week-year, scorecard windows, hash stability, regeneration, paid gate)
   "test-insights-reports",
+  // Insights → Create Pins prefill (builder shape, immutability, destination seed)
+  "test-insights-prefill",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
   "test-admin-account-kind",
