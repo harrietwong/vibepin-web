@@ -29,10 +29,18 @@ def test_canonical_hash_is_independent_of_checkout_line_endings(tmp_path: Path) 
     assert crlf_hash == lf_hash
 
 
+def test_sql_bom_is_rejected_instead_of_silently_changing_blob_identity(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SystemExit):
+        run_migration._load_canonical_sql(_sql(tmp_path, b"\xef\xbb\xbfSELECT 1;\n"))
+
+
 @pytest.mark.parametrize(
     ("explicit_ref", "expected_ref", "expected_hash", "confirmation"),
     [
         (None, "prodref", "a" * 64, "APPLY:prodref:" + "a" * 64),
+        ("   ", "prodref", "a" * 64, "APPLY:prodref:" + "a" * 64),
         ("prodref", None, "a" * 64, "APPLY:prodref:" + "a" * 64),
         ("prodref", "wrongref", "a" * 64, "APPLY:prodref:" + "a" * 64),
         ("prodref", "prodref", None, "APPLY:prodref:" + "a" * 64),
@@ -93,3 +101,29 @@ def test_cmd_apply_rejects_before_management_api_call(
             confirmation="wrong",
         )
     assert calls == 0
+
+
+def test_cmd_apply_submits_only_the_exact_canonical_sql(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sql_path = _sql(tmp_path)
+    canonical_sql, digest = run_migration._load_canonical_sql(sql_path)
+    submitted: list[tuple[str, str]] = []
+
+    def successful_query(sql: str, *, token: str, project_ref: str, label: str = ""):
+        submitted.append((sql, project_ref))
+        return 201, "[]"
+
+    monkeypatch.setattr(run_migration, "_mgmt_query", successful_query)
+    result = run_migration.cmd_apply(
+        {"SUPABASE_MIGRATION_TOKEN": "not-a-real-token"},
+        sql_path,
+        "prodref",
+        False,
+        explicit_project_ref="prodref",
+        expected_project_ref="prodref",
+        expected_sql_sha256=digest,
+        confirmation=f"APPLY:prodref:{digest}",
+    )
+    assert result == 0
+    assert submitted == [(canonical_sql, "prodref")]

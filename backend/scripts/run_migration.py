@@ -290,7 +290,10 @@ def cmd_check(creds: dict, sql_path: Path | None, ref: str, is_default: bool) ->
 def _load_canonical_sql(sql_path: Path) -> tuple[str, str]:
     """Load SQL with repository-canonical LF endings and return (text, SHA-256)."""
     try:
-        text = sql_path.read_bytes().decode("utf-8-sig")
+        raw = sql_path.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            _die(f"SQL file must be UTF-8 without a BOM: {sql_path}")
+        text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         _die(f"SQL file is not valid UTF-8: {sql_path} ({exc})")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -308,7 +311,7 @@ def _guard_apply_target(
     confirmation: str | None,
 ) -> None:
     """Fail before any network call unless target, bytes and intent are exact."""
-    if not explicit_project_ref:
+    if not explicit_project_ref or explicit_project_ref.strip() != ref:
         _die("--apply requires an explicit --project-ref; default/env-derived targets are refused.")
     if not expected_project_ref:
         _die("--apply requires --expected-project-ref.")
