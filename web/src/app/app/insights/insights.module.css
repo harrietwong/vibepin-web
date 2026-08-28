@@ -535,3 +535,155 @@
   font-weight: 750;
   line-height: 1.35;
 }
+
+/* ── Evidence panel ─────────────────────────────────────────────────────────
+   Sits directly above the content table because it is the same evidence: the
+   panel states it for the account, each row states it for one Pin. Keeping them
+   apart on the page would invite reading them as two opinions. */
+.diagnosisPanel {
+  margin: 0 0 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  background: var(--app-panel, var(--app-inset));
+}
+
+.diagnosisHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.diagnosisTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+}
+
+/* What the numbers are worth, next to the numbers themselves rather than in a
+   footnote nobody reaches. */
+.diagnosisChip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(124, 58, 237, .13);
+  color: var(--app-text-sec);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.diagnosisCategory {
+  margin-left: auto;
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.diagnosisHeadline {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.45;
+  color: var(--app-text);
+}
+
+.diagnosisSection { margin-bottom: 12px; }
+
+.diagnosisSubtitle {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+}
+
+.diagnosisList {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--app-text-sec);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.diagnosisList li { margin-bottom: 4px; }
+
+.diagnosisMuted {
+  margin: 0 0 12px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.recommendation {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-inset);
+}
+
+.recommendation p {
+  margin: 0 0 4px;
+  color: var(--app-text-sec);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.recommendation p:last-child { margin-bottom: 0; }
+
+.recommendationLabel {
+  display: inline-block;
+  min-width: 52px;
+  margin-right: 6px;
+  color: var(--app-text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+/* The one variable this experiment changes. Named, because the whole value of the
+   suggestion is that everything else stays put. */
+.recommendationVariable {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(124, 58, 237, .13);
+  color: var(--app-text-sec);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+/* Always rendered. It is the line that says what the rest is worth. */
+.diagnosisCaveat {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border);
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Inside an account card the panel is one column of a side-by-side row, so it
+   loses its own frame and tightens up rather than turning the card into a page. */
+.diagnosisPanelCard {
+  margin: 10px 0 0;
+  padding: 10px 0 0;
+  border: none;
+  border-top: 1px solid var(--app-border);
+  border-radius: 0;
+  background: none;
+}
+
+.diagnosisPanelCard .diagnosisHeadline { font-size: 13px; margin-bottom: 8px; }
+.diagnosisPanelCard .diagnosisList { font-size: 11px; }
+.diagnosisPanelCard .recommendation { font-size: 11px; }
+.diagnosisPanelCard .diagnosisCaveat { font-size: 10px; }

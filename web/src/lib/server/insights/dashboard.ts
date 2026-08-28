@@ -424,4 +424,25 @@ export async function getInsightsDashboard(
   }
 }
 
+/**
+ * Drop every cached dashboard of one connection.
+ *
+ * Called when the account category changes. Without it the user picks a category,
+ * the page reloads, and the ten-minute cache serves back a diagnosis measured
+ * against the phrases of the category they just rejected — which reads exactly like
+ * the setting not working. The cache key carries scope and date range, so the whole
+ * map is scanned rather than a key guessed.
+ */
+export function invalidateInsightsCache(uid: string, connectionId: string): number {
+  const prefix = `${uid}:pinterest:${connectionId}:`;
+  let dropped = 0;
+  for (const key of [...dashboardCache.keys()]) {
+    if (key.startsWith(prefix)) {
+      dashboardCache.delete(key);
+      dropped += 1;
+    }
+  }
+  return dropped;
+}
+
 export { ACCOUNT_CONTENT_ROW_LIMIT };

@@ -15,6 +15,7 @@ import {
   MousePointerClick,
   Share2,
 } from "lucide-react";
+import type { I18nText, InsightsDiagnosis } from "@/lib/insights/recommendations";
 import type {
   InsightsApiResponse,
   InsightsCollectionState,
@@ -498,6 +499,96 @@ function MultiAccountHeatmap({
   );
 }
 
+/** An engine string: a key plus the numbers the tier allowed it to carry. */
+function renderText(text: I18nText, tr: Translate): string {
+  return fill(tr(text.key), text.params ?? {});
+}
+
+/**
+ * The read on one account, above its content table.
+ *
+ * Three deliberate properties.
+ *
+ * **The caveat is not optional.** It states how many Pins the rest is based on and
+ * whether they were compared at a fixed age or as lifetime totals. A panel that hides
+ * that line when the sample is thin is a panel that lies exactly when it matters.
+ *
+ * **A recommendation names one variable.** Keep / Change / Test is a shape, not a
+ * decoration: the user changes one thing, everything else stays, and the next 30 days
+ * are readable. Two changes at once produce a result nobody can attribute.
+ *
+ * **Silence is rendered, not hidden.** When nothing clears the thresholds the panel
+ * still appears, says so, and keeps the caveat — the alternative is a page that looks
+ * identical whether it found nothing or was never asked.
+ */
+function DiagnosisPanel({
+  diagnosis,
+  variant,
+  tr,
+}: {
+  diagnosis: InsightsDiagnosis | null;
+  variant: "full" | "card";
+  tr: Translate;
+}) {
+  if (!diagnosis) return null;
+  const confidenceKey = `insights.diagnosisPanel.confidence.${diagnosis.confidence}`;
+  return (
+    <section className={`${styles.diagnosisPanel} ${variant === "card" ? styles.diagnosisPanelCard : ""}`}>
+      <header className={styles.diagnosisHeader}>
+        <h2 className={styles.diagnosisTitle}>{tr("insights.diagnosisPanel.title")}</h2>
+        <span className={styles.diagnosisChip}>{tr(confidenceKey)}</span>
+        <span className={styles.diagnosisCategory}>
+          {diagnosis.category
+            ? fill(tr("insights.diagnosisPanel.category"), { category: diagnosis.category })
+            : tr("insights.diagnosisPanel.categoryUnknown")}
+        </span>
+      </header>
+
+      <p className={styles.diagnosisHeadline}>{renderText(diagnosis.headline, tr)}</p>
+
+      {diagnosis.findings.length > 0 ? (
+        <div className={styles.diagnosisSection}>
+          <h3 className={styles.diagnosisSubtitle}>{tr("insights.diagnosisPanel.findings")}</h3>
+          <ul className={styles.diagnosisList}>
+            {diagnosis.findings.map(finding => (
+              <li key={finding.evidenceId}>{renderText(finding.text, tr)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className={styles.diagnosisMuted}>{tr("insights.diagnosisPanel.noFindings")}</p>
+      )}
+
+      {diagnosis.recommendations.length > 0 ? (
+        <div className={styles.diagnosisSection}>
+          <h3 className={styles.diagnosisSubtitle}>{tr("insights.diagnosisPanel.recommendations")}</h3>
+          {diagnosis.recommendations.map(recommendation => (
+            <div key={recommendation.id} className={styles.recommendation}>
+              <p>
+                <span className={styles.recommendationLabel}>{tr("insights.diagnosisPanel.keep")}</span>
+                {renderText(recommendation.keep, tr)}
+              </p>
+              <p>
+                <span className={styles.recommendationLabel}>{tr("insights.diagnosisPanel.change")}</span>
+                <span className={styles.recommendationVariable}>
+                  {tr(`insights.diagnosisPanel.variable.${recommendation.change.variable}`)}
+                </span>
+                {renderText(recommendation.change.phrasing, tr)}
+              </p>
+              <p>
+                <span className={styles.recommendationLabel}>{tr("insights.diagnosisPanel.test")}</span>
+                {renderText(recommendation.test, tr)}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <p className={styles.diagnosisCaveat}>{renderText(diagnosis.sampleCaveat, tr)}</p>
+    </section>
+  );
+}
+
 function ContentRow({
   item,
   platform,
@@ -798,6 +889,7 @@ function AccountSummaryCard({
             </div>
           </div>
           <DataState collection={dashboard.collection} className={styles.cardDataState} tr={tr} />
+          <DiagnosisPanel diagnosis={dashboard.diagnosis} variant="card" tr={tr} />
           {dashboard.warning || dashboard.availability.message ? (
             <p className={styles.accountCardNote}>
               {dashboard.warning || dashboard.availability.message}
@@ -1174,6 +1266,7 @@ export default function InsightsPage() {
               <>
                 <DashboardMetrics dashboard={dashboard} tr={tr} />
                 <Heatmap dashboard={dashboard} tr={tr} />
+                <DiagnosisPanel diagnosis={dashboard.diagnosis} variant="full" tr={tr} />
                 <ContentTable
                   rows={singleRows}
                   platform={dashboard.platform}

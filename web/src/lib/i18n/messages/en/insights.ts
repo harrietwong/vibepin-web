@@ -228,7 +228,6 @@ export const insightsMessages = {
   "insights.diagnosisPanel.confidence.quantified": "Measured",
   "insights.diagnosisPanel.category": "Category: {category}",
   "insights.diagnosisPanel.categoryUnknown": "Category not set yet",
-  "insights.diagnosisPanel.categoryInferred": "Guessed from your boards and Pin titles",
   "insights.diagnosisPanel.variable.hook": "Hook",
   "insights.diagnosisPanel.variable.cta": "Call to action",
   "insights.diagnosisPanel.variable.first_image": "First image",
