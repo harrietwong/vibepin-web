@@ -169,3 +169,78 @@ curl -sS -X POST -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: appli
 4. 再把上面的 crontab 加到 VPS，先手动跑一次两个 curl 确认返回体正常。
 5. 观察 3 天：`/var/log/vibepin-insights.log` 里每个连接每晚应有 3 段 `runs`，
    `callsMade` 之和不超过 60。
+
+---
+
+## 报告生成（第 5 步 · `/api/cron/insights-reports`）
+
+采集写账本，报告把账本**冻结成一份能被复述的东西**。两者必须分开跑，而且顺序固定：
+**先采集，后报告**。反过来跑，冻进报告的是昨天的证据，而报告一旦被看过就不能改了。
+
+| 端点 | 方法 | 作用 |
+|---|---|---|
+| `/api/cron/insights-reports` | POST | 对**一个**连接生成到期报告：周报（仅 UTC 周一，除非 `force: true`）+ 到龄的 T+7 / T+30 记分卡。 |
+
+请求体：`{"connectionId": "<uuid>", "force": false}`。鉴权与采集端点完全一致
+（`Authorization: Bearer $CRON_SECRET`），未配密钥 → 503 `cron_not_configured`。
+
+### crontab
+
+跟在采集之后，同一份连接列表循环（`30 3 * * *` = 采集第一轮 03:00 之后半小时）：
+
+```cron
+30 3 * * * /usr/local/bin/vibepin-insights-reports.sh >> /var/log/vibepin-insights.log 2>&1
+```
+
+`/usr/local/bin/vibepin-insights-reports.sh`（`chmod 750`，与采集脚本同一属主）：
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+DOMAIN="https://<prod-domain>"
+: "${CRON_SECRET:?CRON_SECRET is not set}"
+
+CONNS=$(curl -sS -m 30 -H "Authorization: Bearer ${CRON_SECRET}" \
+  "${DOMAIN}/api/cron/insights-connections" | python3 -c \
+  'import json,sys; [print(c["connectionId"]) for c in json.load(sys.stdin).get("connections",[])]')
+
+for cid in ${CONNS}; do
+  echo "[$(date -Is)] reports connection=${cid}"
+  curl -sS -m 300 -X POST \
+    -H "Authorization: Bearer ${CRON_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "{\"connectionId\":\"${cid}\"}" \
+    "${DOMAIN}/api/cron/insights-reports"
+  echo
+done
+```
+
+### 返回体怎么读
+
+```json
+{"connectionId":"…","skipped":null,
+ "weekly":{"due":true,"created":1,"unchanged":0},
+ "scorecards":{"due":3,"created":2,"unchanged":1},
+ "reportIds":["…"]}
+```
+
+| 情况 | 含义 |
+|---|---|
+| `weekly.due: false` | 今天不是周一，也没传 `force`。**正常**，不是故障。 |
+| `unchanged` 大于 0 | 证据哈希与当前版本一致 → **什么都没写**。重跑同一天必然是这个结果，这正是它可以每晚跑的原因。 |
+| `created` 大于 0 且已有旧版本 | 证据变了：旧行置 `superseded`，新行 `version+1`。**从不原地改**。 |
+| `skipped: "plan"` | 免费账号。诊断是付费能力，所以一行报告都不生成——采集照常继续，升级后历史还在。 |
+| `skipped: "no_finished_run"` | 这个连接还没有任何一次**跑完**的采集。报告不接受实时抽样作证据，宁可不出。 |
+| `skipped: "schema_unavailable"` | v65 没 apply 到这个库。返回 200，不报警。 |
+| `scorecards.due` 为 0 而账号有新 Pin | 到龄窗口是 T+7 `[7,9]`、T+30 `[30,36]` 天；不在窗口内，或该 Pin 还没有任何一个指标被采到（四个值全 null），都会被跳过。 |
+
+### 前置条件（在采集那一节的 5 条之外）
+
+6. 对目标库 apply `backend/db/migrate_v65_insights_keyword_set.sql`
+   （它同时建 `account_keyword_set` / `insight_report` / `insight_report_feedback` /
+   `insight_email_send` 四张表）。未 apply 时端点返回 200 +
+   `skipped: "schema_unavailable"`，页面上的"本周"卡片直接不出现——
+   **先部署后迁移不会把线上打挂**。
+7. 首次验证：对一个已有采集数据的连接手动跑一次 `force: true`，确认返回
+   `weekly.created: 1`；紧接着**再跑一次**，必须返回 `weekly.unchanged: 1`。
+   第二次如果还是 `created`，说明哈希不稳定——**停下排查，不要让它每晚堆版本**。

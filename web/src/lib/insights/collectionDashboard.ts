@@ -746,7 +746,35 @@ function vibepinWarning(storageAvailable: boolean, total: number, missing: numbe
  * scope heatmap is the Pinterest account report, a different and better measurement
  * than summing Pins.
  */
-export async function buildPinterestInsights(
+export type ConnectionEvidenceRead = {
+  collection: InsightsCollectionState;
+  registry: ContentRegistryRow[];
+  /** Every VibePin publish record of the user, for the origin chips. */
+  provenance: { pins: VibePinPublishedPinterestPin[]; storageAvailable: boolean };
+  /** The publish records that belong to THIS connection. */
+  published: VibePinPublishedPinterestPin[];
+  publishedIds: string[];
+  lookup: MetricLookup;
+  values: LatestValueRow[];
+  accountDaily: InsightsDay[];
+  set: EvidenceSet;
+  diagnosis: InsightsDiagnosis;
+  /** Finish time of the newest completed collection run. */
+  dataUpdatedAt: string | null;
+};
+
+/**
+ * Everything both the dashboard and the report generator need from the ledger, read
+ * once.
+ *
+ * Returns `null` when no collection run has ever FINISHED for this connection. The
+ * dashboard answers that with a live sample; the report generator must answer it by
+ * doing nothing, which is why the decision lives here as a null rather than inside
+ * the dashboard fallback. A report hashed from a live sample would be a report whose
+ * evidence cannot be re-derived tomorrow, which is the one thing a frozen report
+ * exists to prevent.
+ */
+export async function readConnectionEvidence(
   input: {
     scope: InsightsScope;
     connection: InsightsConnectionRef;
@@ -754,11 +782,10 @@ export async function buildPinterestInsights(
     endDate: string;
   },
   sources: CollectionSources,
-): Promise<InsightsDashboard> {
+): Promise<ConnectionEvidenceRead | null> {
   const { scope, connection, startDate, endDate } = input;
   const finishedRun = await sources.loadLatestFinishedRun();
-
-  if (!finishedRun) return buildFallbackDashboard(input, sources);
+  if (!finishedRun) return null;
 
   const latestRun = await sources.loadLatestRun();
   const collection: InsightsCollectionState = {
@@ -797,7 +824,6 @@ export async function buildPinterestInsights(
   const statuses = [...primary.statuses, ...secondary.statuses];
   const lookup = buildMetricLookup(values, statuses);
 
-  const provenanceByPin = new Map(provenance.pins.map(pin => [pin.pinId, pin]));
   const attributedByPin = new Map(published.map(pin => [pin.pinId, pin]));
   const accountDaily = daysFromValues(accountRows.values, { scope: "account", startDate, endDate });
   const { set, diagnosis } = await evidenceAndDiagnosis(
@@ -806,6 +832,40 @@ export async function buildPinterestInsights(
     inferenceTextsFrom(registry),
     accountDaily,
   );
+
+  return {
+    collection,
+    registry,
+    provenance,
+    published,
+    publishedIds,
+    lookup,
+    values,
+    accountDaily,
+    set,
+    diagnosis,
+    dataUpdatedAt: finishedRun.finishedAt,
+  };
+}
+
+export async function buildPinterestInsights(
+  input: {
+    scope: InsightsScope;
+    connection: InsightsConnectionRef;
+    startDate: string;
+    endDate: string;
+  },
+  sources: CollectionSources,
+): Promise<InsightsDashboard> {
+  const { scope, connection, startDate, endDate } = input;
+  const read = await readConnectionEvidence(input, sources);
+  if (!read) return buildFallbackDashboard(input, sources);
+
+  const {
+    collection, registry, provenance, published, publishedIds,
+    lookup, values, accountDaily, set, diagnosis,
+  } = read;
+  const provenanceByPin = new Map(provenance.pins.map(pin => [pin.pinId, pin]));
 
   if (scope === "account") {
     const rows = accountContentRows(registry, lookup, provenanceByPin);
@@ -821,7 +881,7 @@ export async function buildPinterestInsights(
       availability: { views: "pin_level", websiteClicks: "pin_level", message: ACCOUNT_AVAILABILITY },
       collection,
       diagnosis,
-      latestAvailableAt: finishedRun.finishedAt,
+      latestAvailableAt: read.dataUpdatedAt,
       syncedAt: new Date().toISOString(),
       warning: registry.length === 0
         ? "No Pins are registered for this account yet. They appear after the next collection run."
@@ -850,7 +910,7 @@ export async function buildPinterestInsights(
     availability: { views: "pin_level", websiteClicks: "pin_level", message: VIBEPIN_AVAILABILITY },
     collection,
     diagnosis,
-    latestAvailableAt: finishedRun.finishedAt,
+    latestAvailableAt: read.dataUpdatedAt,
     syncedAt: new Date().toISOString(),
     warning: vibepinWarning(provenance.storageAvailable, rows.length, missing),
   };
