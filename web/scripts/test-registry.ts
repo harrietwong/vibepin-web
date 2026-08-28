@@ -52,6 +52,8 @@ export const CORE: string[] = [
   "test-insights-collector",
   // Insights read path (collection-layer reads, status precedence, zero-call gate)
   "test-insights-read",
+  // Insights evidence engine (observation rules, cohorts, confidence tiers, language gate)
+  "test-insights-engine",
   // Admin operator console (derivation layer + UI i18n)
   "test-admin-auth-security",
   "test-admin-account-kind",

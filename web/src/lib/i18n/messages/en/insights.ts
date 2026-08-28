@@ -144,4 +144,96 @@ export const insightsMessages = {
   "insights.state.loadFailedBody": "Refresh the page and try again.",
   "insights.state.accountFailed": "This account could not be loaded",
   "insights.state.accountFailedBody": "The other accounts on this page are unaffected.",
+  // ── Evidence engine (rules name observations, never causes) ──
+  //    Every string below is scanned by test-insights-engine for the vocabulary of
+  //    causation. We can see that a Pin was seen less often than the middle Pin of
+  //    its group; we cannot see why, and neither can Pinterest's API. A template that
+  //    explained WHY would be a story the data cannot support, and the user would act
+  //    on it. Keep every line to what was measured, plus one thing to try.
+  "insights.evidence.finding.f1.quantified": "{matched} of {comparable} comparable Pins were seen less often than the middle Pin of their group (same format, same age).",
+  "insights.evidence.finding.f1.directional": "Some Pins were seen less often than the middle Pin of their group (same format, same age). Too few comparable Pins to put a number on it.",
+  "insights.evidence.finding.f2.quantified": "{matched} of {comparable} Pins were seen about as often as their group, yet fewer of those people went on to your site.",
+  "insights.evidence.finding.f2.directional": "At least one Pin was seen about as often as its group while fewer of those people went on to your site. Direction only — too few comparable Pins for a number.",
+  "insights.evidence.finding.f3.quantified": "{matched} of {comparable} Pins sent people to your site. What happens after the click is not visible to VibePin.",
+  "insights.evidence.finding.f3.directional": "Pins are sending people to your site. What happens after the click is not visible to VibePin.",
+  "insights.evidence.finding.a1.quantified": "{without} of the {checked} Pins published in the last 90 days carry none of your category's search phrases in the title or description.",
+  "insights.evidence.finding.a1.directional": "Most Pins published in the last 90 days carry none of your category's search phrases in the title or description.",
+  "insights.evidence.finding.a2.quantified": "You published {published} Pins on {activeDays} days in the last 30 days, up to {maxPerDay} in a single day.",
+  "insights.evidence.finding.a2.directional": "Your publishing in the last 30 days is bunched into a few days.",
+  "insights.evidence.finding.a3.quantified": "{matched} of {withLink} recent Pins point at a link shortener rather than your own domain.",
+  "insights.evidence.finding.a3.directional": "Some recent Pins point at a link shortener rather than your own domain.",
+
+  // ── Per-row line in the content table ──
+  //    No numbers on purpose: the row already shows Seen, Saved and Went to site in
+  //    the columns beside it. These come from the same evidence as the panel above,
+  //    so the table and the panel can never disagree.
+  "insights.evidence.row.impressionsBelow": "Seen less often than the middle Pin of its group (same format, same age).",
+  "insights.evidence.row.outboundBelow": "Seen about as often as its group, but fewer of those people went on to your site.",
+  "insights.evidence.row.clicksPresent": "Sent people to your site. What happens after the click is not visible here.",
+  "insights.evidence.row.outboundAbove": "More of the people who saw it went on to your site than for its group.",
+  "insights.evidence.row.impressionsAbove": "Seen more often than the middle Pin of its group.",
+  "insights.evidence.row.savesAbove": "Saved more often than the middle Pin of its group.",
+  "insights.evidence.row.typical": "In line with its group (same format, same age).",
+  "insights.evidence.row.insufficient": "Not enough comparable Pins yet to place this one.",
+
+  // ── Sample-size caveat (always shown) ──
+  //    The line that says what the rest is worth. Age-pinned readings exist only for
+  //    Pins collected through their day 1 / 7 / 30; everything older is compared as a
+  //    lifetime total inside its age band, and that difference is stated, not hidden.
+  "insights.evidence.caveat.lifetime": "Based on {comparable} of {pins} Pins, compared as lifetime totals within groups of the same format and age. Pins published from now on will also carry day-1, day-7 and day-30 readings.",
+  "insights.evidence.caveat.agePinned": "Based on {comparable} of {pins} Pins, compared at the same age (day-1, day-7 and day-30 readings).",
+  "insights.evidence.caveat.mixed": "Based on {comparable} of {pins} Pins. Some are compared at a fixed age (day-1, day-7, day-30 readings), the rest as lifetime totals.",
+
+  // ── Headlines ──
+  "insights.recommendation.headline.f1": "Some Pins were seen less often than the rest of their group.",
+  "insights.recommendation.headline.f2": "Your Pins are getting seen — fewer of those people go on to your site.",
+  "insights.recommendation.headline.f3": "Your Pins are sending people to your site.",
+  "insights.recommendation.headline.a1": "Most recent Pins carry none of your category's search phrases.",
+  "insights.recommendation.headline.a2": "Your publishing is bunched into a few days.",
+  "insights.recommendation.headline.a3": "Some destination links go through a shortener.",
+  "insights.recommendation.headline.fallback": "Nothing stands out yet — here is what we have so far.",
+
+  // ── Keep / Change / Test ──
+  //    One variable per recommendation: two changes at once produce a result nobody
+  //    can attribute, and the next 30 days teach the user nothing.
+  "insights.recommendation.f1.keep": "Keep publishing to the same boards — that is the set these Pins are compared against.",
+  "insights.recommendation.f1.change": "Change one thing: the words. Put a phrase people search in your category into the title and the first line of the description.",
+  "insights.recommendation.f1.test": "Publish three Pins carrying a search phrase, change nothing else, and compare their Seen count with these after 7 days.",
+  "insights.recommendation.f2.keep": "Keep the images and boards of the Pins that get seen — reach is not the gap here.",
+  "insights.recommendation.f2.change": "Change one thing: the call to action. Say what is on the other side of the click, on the image and in the first line of the description.",
+  "insights.recommendation.f2.test": "Publish three Pins with the new call to action, keep everything else the same, and compare Went to site after 7 days.",
+  "insights.recommendation.f3.keep": "Keep the Pins that are sending people to your site.",
+  "insights.recommendation.f3.change": "Change one thing: the link. Point it at the page you want measured and add a tracking parameter so your own analytics can see the visit.",
+  "insights.recommendation.f3.test": "Tag the links on your next five Pins, then look for those visits in your site analytics after 7 days.",
+  "insights.recommendation.a1.keep": "Keep the images that already earn saves.",
+  "insights.recommendation.a1.change": "Change one thing: the words. Write one of your category's search phrases into the title and description of your next batch.",
+  "insights.recommendation.a1.test": "Do that for the next five Pins, then compare their Seen count with the previous five after 7 days.",
+  "insights.recommendation.a2.keep": "Keep the content you are making.",
+  "insights.recommendation.a2.change": "Change one thing: when you publish. Spread the same number of Pins across more days.",
+  "insights.recommendation.a2.test": "Spread the next two weeks evenly, then compare Seen on those days with the bunched weeks.",
+  "insights.recommendation.a3.keep": "Keep the Pins as they are.",
+  "insights.recommendation.a3.change": "Change one thing: the link. Point it at your own domain instead of a shortener.",
+  "insights.recommendation.a3.test": "Publish the next five Pins with direct links and compare Went to site after 7 days.",
+
+  // ── Panel chrome ──
+  "insights.diagnosisPanel.title": "Insights for this account",
+  "insights.diagnosisPanel.findings": "What the numbers show",
+  "insights.diagnosisPanel.recommendations": "What to try next",
+  "insights.diagnosisPanel.keep": "Keep",
+  "insights.diagnosisPanel.change": "Change",
+  "insights.diagnosisPanel.test": "Test",
+  "insights.diagnosisPanel.noFindings": "Nothing stands out in the numbers yet.",
+  "insights.diagnosisPanel.confidence.insufficient": "Not enough comparable Pins",
+  "insights.diagnosisPanel.confidence.directional": "Direction only",
+  "insights.diagnosisPanel.confidence.quantified": "Measured",
+  "insights.diagnosisPanel.category": "Category: {category}",
+  "insights.diagnosisPanel.categoryUnknown": "Category not set yet",
+  "insights.diagnosisPanel.categoryInferred": "Guessed from your boards and Pin titles",
+  "insights.diagnosisPanel.variable.hook": "Hook",
+  "insights.diagnosisPanel.variable.cta": "Call to action",
+  "insights.diagnosisPanel.variable.first_image": "First image",
+  "insights.diagnosisPanel.variable.publish_time": "Publishing time",
+  "insights.diagnosisPanel.variable.keyword": "Keywords",
+  "insights.diagnosisPanel.variable.format": "Format",
+  "insights.diagnosisPanel.variable.link": "Destination link",
 } as const;
