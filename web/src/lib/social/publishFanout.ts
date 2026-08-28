@@ -137,19 +137,28 @@ export async function dispatchDestination(
   }
   const base = { provider, socialConnectionId: destination.socialConnectionId };
 
-  const connection = await findConnection(uid, destination.socialConnectionId);
-  if (!connection || connection.connectionStatus !== "connected") {
-    return {
-      ...base,
-      status: "failed",
-      // The account this Pin was scheduled to is the one that must be fixed —
-      // silently falling back to another account would publish somewhere the
-      // merchant never chose.
-      error: `Reconnect your ${platformName(provider)} account to publish this Pin.`,
-    };
-  }
-
+  // EVERYTHING that can throw is inside this try — the connection lookup above all.
+  //
+  // `findConnection` reads the database. It sat OUTSIDE the try, so a transient
+  // PostgREST error while resolving destination #2 rejected `fanOutDestinations`
+  // itself, and with it the ALREADY-PUBLISHED outcome of destination #1 (the loop is
+  // sequential, and the accumulated outcomes died with the rejection). The cron's
+  // catch then wrote a `failed` row for every owed destination — including the one
+  // that really published — so the retry re-posted it. A DB blip on one account is
+  // not allowed to cost a double post on another.
   try {
+    const connection = await findConnection(uid, destination.socialConnectionId);
+    if (!connection || connection.connectionStatus !== "connected") {
+      return {
+        ...base,
+        status: "failed",
+        // The account this Pin was scheduled to is the one that must be fixed —
+        // silently falling back to another account would publish somewhere the
+        // merchant never chose.
+        error: `Reconnect your ${platformName(provider)} account to publish this Pin.`,
+      };
+    }
+
     const result = await getSocialProviderById(connection.authProvider).publishPost({
       provider,
       connection,
@@ -174,12 +183,40 @@ export async function dispatchDestination(
 }
 
 /**
+ * The outcome for a destination whose dispatch threw somewhere no other handler
+ * covered. It exists so the invariant below can be stated without an "unless":
+ * every destination gets exactly one row, whatever happened.
+ */
+function isolationFailure(
+  destination: ScheduledDestination,
+  err: unknown,
+): DestinationOutcome {
+  const message = (err as { message?: unknown } | null)?.message;
+  return {
+    provider: (isSocialProvider(destination.provider) ? destination.provider : "pinterest") as SocialProvider,
+    status: "failed",
+    socialConnectionId: destination.socialConnectionId ?? null,
+    error: (typeof message === "string" && message) || "Publishing failed.",
+  };
+}
+
+/**
  * Fan out to every non-Pinterest destination, independently.
  *
- * Sequential on purpose: these are third-party writes, and a merchant with three
- * connected platforms is not a throughput problem. One destination failing never
- * prevents the others from being attempted — `dispatchDestination` resolves rather
- * than rejects, so there is no path where an early failure aborts the batch.
+ * THE INVARIANT: this function never rejects, and every destination it is given
+ * produces exactly one outcome, in the order it was given. Nothing a single
+ * destination does — a DB error resolving its account, a provider client throwing
+ * outside its own handler — may cost another destination its result.
+ *
+ * That is not a nicety. The loop is sequential and the outcomes accumulate in a local
+ * array, so ONE rejection discarded every outcome collected before it. In the cron
+ * that meant: Instagram published, Facebook's connection lookup threw, the whole call
+ * rejected, and the catch wrote a `failed` row for BOTH — including the Instagram post
+ * that is live on the platform. The next run then owed Instagram again and posted it a
+ * second time. A lost outcome is not a missing record, it is a duplicate post.
+ *
+ * Sequential is still on purpose: these are third-party writes, and a merchant with
+ * three connected platforms is not a throughput problem.
  */
 export async function fanOutDestinations(
   uid: string,
@@ -189,7 +226,14 @@ export async function fanOutDestinations(
   const outcomes: DestinationOutcome[] = [];
   for (const destination of destinations) {
     if (destination.provider === "pinterest") continue; // dedicated path owns it
-    outcomes.push(await dispatchDestination(uid, destination, post));
+    // Belt and braces: `dispatchDestination` already resolves rather than rejects for
+    // everything it can see. This catch covers what it cannot — and it is the reason
+    // the invariant above holds no matter how that function is later changed.
+    try {
+      outcomes.push(await dispatchDestination(uid, destination, post));
+    } catch (err) {
+      outcomes.push(isolationFailure(destination, err));
+    }
   }
   return outcomes;
 }

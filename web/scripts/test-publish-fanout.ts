@@ -2,11 +2,20 @@
  * test-publish-fanout.ts — the execution layer (P0 option A, layers B + C).
  *
  * Asserts the rules that decide what a merchant actually sees after a scheduled
- * multi-platform publish: how a job's status is rolled up, and what a retry is
- * allowed to re-send.
+ * multi-platform publish: how a job's status is rolled up, what a retry is allowed
+ * to re-send, and — the second half of this file — that `fanOutDestinations` really
+ * ISOLATES its destinations from one another.
+ *
+ * The dispatch layer builds a Supabase client at module load, so that half runs the
+ * real `fanOutDestinations` with `./server/socialConnectionStore` and `./providers`
+ * faked through Module._load (the same idiom as test-ai-provider-auth-boundary.ts).
+ * No network, no DB, no credentials.
  *
  * Run: npx tsx scripts/test-publish-fanout.ts
  */
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://example.supabase.co";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
+
 import {
   rollUpJobStatus,
   pendingDestinations,
@@ -14,6 +23,7 @@ import {
   type DestinationOutcome,
 } from "../src/lib/social/publishRules";
 import type { ScheduledDestination } from "../src/lib/pinDraftStore";
+import { Module } from "node:module";
 
 let pass = 0;
 let fail = 0;
@@ -137,5 +147,130 @@ check("a failed publish never carries a fake permalink (TC-102)",
 check("a Pinterest failure still shows up in the job status",
   rollUpJobStatus([badRow, out("instagram", "published")]) === "partially_published");
 
-console.log(`\nPublish fanout: ${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+// ── the fan-out isolates its destinations ────────────────────────────────────
+// Running the REAL fanOutDestinations, with only the two modules that touch the
+// outside world replaced. What is asserted here is not a helper's return value but
+// the function's contract under failure: it never rejects, and every destination it
+// is handed leaves exactly one outcome behind.
+
+const lookups: string[] = [];
+const publishes: string[] = [];
+/** Connection ids whose LOOKUP must throw — the defect's exact shape. */
+const lookupThrows = new Set<string>();
+/** Connection ids whose PUBLISH must throw. */
+const publishThrows = new Set<string>();
+
+const loader = Module as unknown as {
+  _load: (request: string, parent: unknown, isMain: boolean) => unknown;
+};
+const originalLoad = loader._load;
+loader._load = function (this: unknown, request: string, parent: unknown, isMain: boolean) {
+  if (request.endsWith("server/socialConnectionStore")) {
+    return {
+      findConnection: async (_uid: string, id: string) => {
+        lookups.push(id);
+        if (lookupThrows.has(id)) throw new Error(`lookup exploded for ${id}`);
+        if (id === "conn-gone") return null;
+        return { id, authProvider: "mock", connectionStatus: "connected" };
+      },
+    };
+  }
+  if (request.endsWith("./providers")) {
+    return {
+      getSocialProviderById: () => ({
+        publishPost: async ({ connection }: { connection: { id: string } }) => {
+          publishes.push(connection.id);
+          if (publishThrows.has(connection.id)) throw new Error(`publish exploded for ${connection.id}`);
+          return { ok: true, externalPostId: `post-${connection.id}`, externalPostUrl: `https://x/${connection.id}` };
+        },
+      }),
+    };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+} as typeof originalLoad;
+
+async function main(): Promise<void> {
+  const { fanOutDestinations } = await import("../src/lib/social/publishFanout");
+
+  const social = (provider: string, id: string): ScheduledDestination =>
+    ({ provider, socialConnectionId: id, capturedAt: "2026-08-27T00:00:00.000Z" });
+  const POST = { imageUrls: ["https://cdn/x.jpg"], caption: "hi" };
+
+  section("one destination's failure never costs another its outcome");
+
+  {
+    // THE defect: the connection lookup used to live outside dispatchDestination's try,
+    // so a throw on #2 rejected the whole fan-out — and #1's already-published outcome
+    // died with it. The cron then wrote `failed` for #1 and re-posted it next run.
+    lookupThrows.clear(); publishThrows.clear(); lookups.length = 0; publishes.length = 0;
+    lookupThrows.add("conn-b");
+    const dests = [social("instagram", "conn-a"), social("facebook", "conn-b"), social("instagram", "conn-c")];
+    let threw: unknown = null;
+    let outcomes: DestinationOutcome[] = [];
+    try { outcomes = await fanOutDestinations("u1", dests, POST); }
+    catch (e) { threw = e; }
+
+    check("fanOutDestinations resolves — a lookup throw never rejects the batch",
+      threw === null, String(threw));
+    check("every destination still gets exactly one outcome, in order",
+      outcomes.length === 3
+      && outcomes.map(o => o.socialConnectionId).join(",") === "conn-a,conn-b,conn-c",
+      JSON.stringify(outcomes.map(o => o.socialConnectionId)));
+    check("the destination BEFORE the throw keeps its published outcome",
+      outcomes[0].status === "published" && outcomes[0].externalPostId === "post-conn-a",
+      JSON.stringify(outcomes[0]));
+    check("the throwing destination is failed, carrying the reason",
+      outcomes[1].status === "failed" && outcomes[1].error === "lookup exploded for conn-b",
+      JSON.stringify(outcomes[1]));
+    check("the destination AFTER the throw is still attempted",
+      outcomes[2].status === "published" && publishes.includes("conn-c"),
+      JSON.stringify(publishes));
+    check("the failed destination never carries a permalink",
+      !outcomes[1].externalPostId && !outcomes[1].externalPostUrl);
+  }
+
+  {
+    // Same isolation for a provider client that blows up rather than returning !ok.
+    lookupThrows.clear(); publishThrows.clear(); lookups.length = 0; publishes.length = 0;
+    publishThrows.add("conn-b");
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-a"), social("facebook", "conn-b")], POST);
+    check("a provider that throws fails only its own destination",
+      outcomes.length === 2 && outcomes[0].status === "published" && outcomes[1].status === "failed",
+      JSON.stringify(outcomes.map(o => o.status)));
+    check("and the reason the merchant sees is the provider's",
+      outcomes[1].error === "publish exploded for conn-b");
+  }
+
+  {
+    // A disconnected account is a failure with an actionable message — never a silent
+    // drop, and never a reason to abandon the accounts beside it.
+    lookupThrows.clear(); publishThrows.clear();
+    const outcomes = await fanOutDestinations("u1",
+      [social("instagram", "conn-gone"), social("instagram", "conn-a")], POST);
+    check("a disconnected account fails with a reconnect message, alone",
+      outcomes.length === 2
+      && outcomes[0].status === "failed"
+      && /Reconnect your/.test(outcomes[0].error ?? "")
+      && outcomes[1].status === "published",
+      JSON.stringify(outcomes));
+  }
+
+  {
+    // Pinterest keeps its dedicated path: the fan-out must not produce a row for it,
+    // or the Content would carry two rows for one publish.
+    const outcomes = await fanOutDestinations("u1",
+      [{ provider: "pinterest", socialConnectionId: "pin_A", capturedAt: "2026-08-27T00:00:00.000Z" },
+       social("instagram", "conn-a")], POST);
+    check("a Pinterest entry is skipped by the fan-out, not dispatched twice",
+      outcomes.length === 1 && outcomes[0].provider === "instagram");
+  }
+}
+
+main().then(() => {
+  console.log(`\nPublish fanout: ${pass} passed, ${fail} failed\n`);
+  process.exit(fail ? 1 : 0);
+}).catch(err => {
+  console.error(err);
+  process.exit(1);
+});
