@@ -157,6 +157,66 @@ async function main() {
     assert.ok(store.updateTokens.length >= 2, "updateTokens(connectionId, tokens, ...)");
   });
 
+  console.log("\n=== Facebook 多行:失败要闭合,不许猜 (E1a-01) ===");
+  // 同一张 social_connections 表,Facebook 侧曾经四处 `.maybeSingle()`。
+  // 用户连上第二个 Facebook 账号后 PostgREST 直接报 multiple rows,
+  // 两个账号一起废掉。行为断言在 scripts/test-facebook-pages.ts(带假 db 真跑),
+  // 这里守的是**契约**:签名收得下 connectionId,且多行时是 throw 而不是取 [0]。
+  test("四个读函数都接受调用方指名的那一行", () => {
+    const fbSrc = readFileSync("src/lib/server/facebook/connectionStore.ts", "utf8");
+    for (const sig of [
+      "export async function selectFacebookPage(",
+      "export async function getFacebookUserToken(",
+      "export async function connectFacebookPageManually(",
+      "export async function getStoredFacebookSelection(",
+    ]) {
+      assert.ok(fbSrc.includes(sig), `缺少导出:${sig}`);
+    }
+    // 旧的单行读法一处都不能剩:它就是第二个账号一进来就全崩的原因。
+    // 只看代码行 —— 注释里提到 maybeSingle 是在解释这个 bug,不该算复发。
+    const codeLines = fbSrc
+      .split(/\r?\n/)
+      .filter(line => {
+        const t = line.trim();
+        return t !== "" && !t.startsWith("*") && !t.startsWith("//") && !t.startsWith("/*");
+      });
+    assert.ok(
+      !codeLines.some(line => line.includes(".maybeSingle()")),
+      "maybeSingle 在用户可能持有多行时必然报错,必须全部改成显式解析",
+    );
+    assert.ok(
+      fbSrc.includes("export const MULTIPLE_FACEBOOK_CONNECTIONS"),
+      "失败闭合需要一个调用方能分辨的错误标识",
+    );
+  });
+
+  test("多行且没指名 => 抛错;恰好一行 => 保持旧的单账号行为", () => {
+    const fbSrc = readFileSync("src/lib/server/facebook/connectionStore.ts", "utf8");
+    assert.ok(
+      /if \(rows\.length > 1\) \{[\s\S]*?throw new Error\(MULTIPLE_FACEBOOK_CONNECTIONS\)/.test(fbSrc),
+      "多行无目标必须 throw —— 静默挑一行就是发到别人主页的那种错",
+    );
+    assert.ok(
+      !/rows\[0\]\s*\?\?\s*null;\s*\/\/\s*pick/.test(fbSrc),
+      "不得存在'先取第一行再说'的兜底",
+    );
+    // 单账号老用户的路径逐字不变:恰好一行时仍旧返回那一行。
+    assert.ok(fbSrc.includes("return rows[0] ?? null;"), "恰好一行时照旧返回该行");
+  });
+
+  test("user_id 过滤无条件生效,connectionId 只是额外收窄", () => {
+    const fbSrc = readFileSync("src/lib/server/facebook/connectionStore.ts", "utf8");
+    // connectionId 来自请求体。它若替代了 user_id,伪造一个 id 就能碰别人的连接。
+    assert.ok(
+      /\.eq\("user_id", uid\)\s*\.eq\("provider", PROVIDER\);/.test(fbSrc),
+      "归属过滤必须先于任何分支无条件加上",
+    );
+    assert.ok(
+      /target\?\.connectionId\s*\r?\n?\s*\?\s*await query\.eq\("id", target\.connectionId\)/.test(fbSrc),
+      "connectionId 必须是在归属过滤之上再 .eq,不是另起一条查询",
+    );
+  });
+
   console.log(`\nSocial connection store: ${passed} passed, 0 failed\n`);
 }
 void main();

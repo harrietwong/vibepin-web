@@ -106,6 +106,117 @@ function isMissingTable(code: string | undefined): boolean {
   return code === "42P01" || code === "PGRST205";
 }
 
+/**
+ * Thrown when a user holds SEVERAL Facebook rows and the caller did not say which
+ * one it is acting on. Before multi-account (B3/d3ed390) every read here used
+ * `.maybeSingle()`, which PostgREST fails outright once a second row exists — so
+ * connecting a second Facebook account broke BOTH accounts (page selection, token
+ * lookup, stored selection). Now the callers name their row and we only ever fall
+ * back to "the sole row" when there genuinely is exactly one.
+ *
+ * Guessing is not an option: publishing to, or re-pointing, the WRONG Facebook
+ * Page is a silent, customer-visible data error. Fail closed instead.
+ */
+export const MULTIPLE_FACEBOOK_CONNECTIONS = "MULTIPLE_FACEBOOK_CONNECTIONS";
+
+/** Minimal shape every row resolution needs. */
+type FacebookRowBase = { id: string; metadata?: Record<string, unknown> | null };
+
+/**
+ * Which Facebook row a caller means. Exactly one identity is needed:
+ *   - `connectionId` — the social_connections row id. What the UI/publisher has:
+ *     the account the customer clicked, or the account a Pin is published as.
+ *   - `facebookUserId` — the Facebook USER id (metadata.facebook.facebookUserId).
+ *     What the OAuth callback has: mid-callback the row may not exist yet, so
+ *     there is no id to pass. This is the same key `upsertFacebookConnection`
+ *     uses to find the row it is about to update, so the two can never disagree.
+ * Neither given = the legacy single-account contract (see resolveFacebookRow).
+ */
+export type FacebookRowTarget = {
+  connectionId?: string;
+  facebookUserId?: string | null;
+};
+
+/** metadata.facebook.facebookUserId for a row, or null when it predates B3. */
+function facebookUserIdOf(row: FacebookRowBase): string | null {
+  return (
+    (row.metadata as { facebook?: { facebookUserId?: string | null } } | null)?.facebook
+      ?.facebookUserId ?? null
+  );
+}
+
+/**
+ * Pick the row belonging to one Facebook user. IDENTICAL rule to the one
+ * `upsertFacebookConnection` applies, deliberately shared so a read and the write
+ * that follows it can never resolve to different rows: match on the recorded
+ * facebookUserId, else adopt a lone row that has no id recorded yet (written
+ * before multi-account, or still mid-OAuth), else nothing.
+ */
+function pickRowForFacebookUser<T extends FacebookRowBase>(
+  rows: T[],
+  facebookUserId: string | null | undefined,
+): T | null {
+  const match = rows.find(r => facebookUserIdOf(r) && facebookUserIdOf(r) === facebookUserId);
+  if (match) return match;
+  if (rows.length === 1 && !facebookUserIdOf(rows[0])) return rows[0];
+  return null;
+}
+
+/**
+ * Read the ONE Facebook row a caller is acting on.
+ *
+ * SECURITY: `user_id` + `provider` are filtered unconditionally, and a
+ * caller-supplied `connectionId` is an ADDITIONAL filter — never a replacement.
+ * connectionId arrives from a request body, so on its own it would let a forged
+ * id reach another user's row.
+ *
+ * Resolution:
+ *   - `connectionId` given → that row (already narrowed by the query), or null.
+ *   - `facebookUserId` given → pickRowForFacebookUser (upsert's rule).
+ *   - neither → the sole row when there is exactly one (the pre-multi-account
+ *     contract, unchanged); NONE when there are none; and with several we THROW
+ *     MULTIPLE_FACEBOOK_CONNECTIONS rather than silently pick one.
+ *
+ * Throws on storage errors (missing table / unavailable) with `context` in the log.
+ */
+async function resolveFacebookRow<T extends FacebookRowBase>(
+  uid: string,
+  columns: string,
+  target: FacebookRowTarget | undefined,
+  context: string,
+): Promise<T | null> {
+  const query = db()
+    .from(TABLE)
+    .select(columns)
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER);
+
+  const { data, error } = target?.connectionId
+    ? await query.eq("id", target.connectionId)
+    : await query;
+
+  if (error) {
+    if (isMissingTable(error.code)) throw new Error("Facebook connection storage is not set up");
+    console.error(`[facebook] read connection (${context}):`, error.message);
+    throw new Error("Facebook connection storage is unavailable");
+  }
+
+  // `as unknown` first: PostgREST's select() return type is a union that includes
+  // GenericStringError[], which does not overlap a generic T[].
+  const rows = ((data as unknown as T[] | null) ?? []).filter(r => Boolean(r?.id));
+  if (target?.connectionId) return rows[0] ?? null;
+  if (target?.facebookUserId !== undefined && target?.facebookUserId !== null) {
+    return pickRowForFacebookUser(rows, target.facebookUserId);
+  }
+  if (rows.length > 1) {
+    // Several accounts and nobody said which — refuse. The caller must thread the
+    // id of the row the customer is acting on.
+    console.error(`[facebook] several connections and no target given (${context})`);
+    throw new Error(MULTIPLE_FACEBOOK_CONNECTIONS);
+  }
+  return rows[0] ?? null;
+}
+
 export type UpsertFacebookInput = {
   /** Long-lived USER access token (encrypted into access_token_encrypted). */
   accessToken: string;
@@ -237,15 +348,10 @@ export async function upsertFacebookConnection(
     .eq("user_id", uid)
     .eq("provider", PROVIDER);
 
-  type FacebookRow = { id: string; metadata?: Record<string, unknown> | null };
-  const facebookUserIdOf = (r: FacebookRow): string | null =>
-    ((r.metadata as { facebook?: { facebookUserId?: string | null } } | null)?.facebook?.facebookUserId) ?? null;
-  const allRows = (rows as FacebookRow[] | null) ?? [];
-  const existing =
-    allRows.find(r => facebookUserIdOf(r) && facebookUserIdOf(r) === input.accountId) ??
-    // No account id recorded yet (a row written before multi-account, or one
-    // still mid-OAuth): adopt that single row rather than orphaning it.
-    (allRows.length === 1 && !facebookUserIdOf(allRows[0]) ? allRows[0] : null);
+  const allRows = (rows as FacebookRowBase[] | null) ?? [];
+  // Shared with every READ in this module (getStoredFacebookSelection's callback
+  // path), so the row this write lands on is the row those reads returned.
+  const existing = pickRowForFacebookUser(allRows, input.accountId);
 
   if (readError && !isMissingTable(readError.code)) {
     console.error("[facebook] read connection:", readError.message);
@@ -336,21 +442,20 @@ export type SelectFacebookPageResult = {
 export async function selectFacebookPage(
   uid: string,
   pageId: string,
+  /**
+   * Which connected Facebook account the customer is picking a Page FOR. With
+   * several connected, omitting it would re-point an arbitrary account at this
+   * Page — so the picker names its row and we fail closed without one.
+   * Omitted with exactly one row: the pre-multi-account behaviour, unchanged.
+   */
+  connectionId?: string,
 ): Promise<SelectFacebookPageResult> {
-  const { data: existing, error: readError } = await db()
-    .from(TABLE)
-    .select("id, metadata")
-    .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
-
-  if (readError) {
-    if (isMissingTable(readError.code)) throw new Error("Facebook connection storage is not set up");
-    console.error("[facebook] read connection (select page):", readError.message);
-    throw new Error("Facebook connection storage is unavailable");
-  }
-
-  const row = existing as { id?: string; metadata?: Record<string, unknown> | null } | null;
+  const row = await resolveFacebookRow<{ id: string; metadata?: Record<string, unknown> | null }>(
+    uid,
+    "id, metadata",
+    { connectionId },
+    "select page",
+  );
   if (!row?.id) {
     throw new Error("No Facebook connection to select a Page for");
   }
@@ -407,21 +512,23 @@ export async function selectFacebookPage(
  * Returns null when there is no Facebook row or the row has no stored token (e.g.
  * after a disconnect). Callers treat null as NO_FACEBOOK_CONNECTION.
  */
-export async function getFacebookUserToken(uid: string): Promise<string | null> {
-  const { data, error } = await db()
-    .from(TABLE)
-    .select("access_token_encrypted")
-    .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
+export async function getFacebookUserToken(
+  uid: string,
+  /**
+   * Whose user token to read. With several Facebook accounts connected the wrong
+   * token resolves the wrong Pages, so the caller names its row; without one and
+   * with several rows this THROWS MULTIPLE_FACEBOOK_CONNECTIONS. It must not
+   * return null there — null means "no connection at all", which would tell a
+   * multi-account customer to "connect Facebook first".
+   */
+  connectionId?: string,
+): Promise<string | null> {
+  const row = await resolveFacebookRow<{
+    id: string;
+    access_token_encrypted?: string | null;
+  }>(uid, "id, access_token_encrypted", { connectionId }, "read user token");
 
-  if (error) {
-    if (isMissingTable(error.code)) throw new Error("Facebook connection storage is not set up");
-    console.error("[facebook] read user token:", error.message);
-    throw new Error("Facebook connection storage is unavailable");
-  }
-
-  const encrypted = (data as { access_token_encrypted?: string | null } | null)?.access_token_encrypted;
+  const encrypted = row?.access_token_encrypted;
   if (!encrypted) return null;
   return cipher.decrypt(encrypted);
 }
@@ -543,21 +650,20 @@ export async function getSelectedPageToken(
 export async function connectFacebookPageManually(
   uid: string,
   page: ManagedPage,
+  /**
+   * Which connected Facebook account this manually-entered Page belongs to.
+   * Omitted with several rows → MULTIPLE_FACEBOOK_CONNECTIONS: attaching a Page
+   * to the wrong Facebook account would publish as a Page that account cannot
+   * even see. Omitted with exactly one row: unchanged single-account behaviour.
+   */
+  connectionId?: string,
 ): Promise<SelectFacebookPageResult> {
-  const { data: existing, error: readError } = await db()
-    .from(TABLE)
-    .select("id, metadata")
-    .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
-
-  if (readError) {
-    if (isMissingTable(readError.code)) throw new Error("Facebook connection storage is not set up");
-    console.error("[facebook] read connection (manual page):", readError.message);
-    throw new Error("Facebook connection storage is unavailable");
-  }
-
-  const row = existing as { id?: string; metadata?: Record<string, unknown> | null } | null;
+  const row = await resolveFacebookRow<{ id: string; metadata?: Record<string, unknown> | null }>(
+    uid,
+    "id, metadata",
+    { connectionId },
+    "manual page",
+  );
   if (!row?.id) {
     throw new Error("NO_FACEBOOK_CONNECTION");
   }
@@ -633,15 +739,21 @@ export async function connectFacebookPageManually(
  */
 export async function getStoredFacebookSelection(
   uid: string,
+  /**
+   * Whose prior Page to restore. The OAuth callback passes
+   * `{ facebookUserId }` — mid-callback the row may not exist yet, so there is no
+   * connection id to pass, and reading ANOTHER account's saved Page would restore
+   * a Page this Facebook user does not administer. Omitted with several rows,
+   * resolveFacebookRow throws and the caller degrades to a first-connect.
+   */
+  target?: FacebookRowTarget,
 ): Promise<{ pageId: string; pageName: string | null } | null> {
-  const { data, error } = await db()
-    .from(TABLE)
-    .select("metadata")
-    .eq("user_id", uid)
-    .eq("provider", PROVIDER)
-    .maybeSingle();
-  if (error || !data) return null;
-  const fb = (data.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
+  const row = await resolveFacebookRow<{
+    id: string;
+    metadata?: Record<string, unknown> | null;
+  }>(uid, "id, metadata", target, "stored selection");
+  if (!row) return null;
+  const fb = (row.metadata as { facebook?: FacebookConnectionMetadata } | null)?.facebook;
   if (!fb) return null;
   const pageId = fb.selectedPageId ?? fb.lastKnownPageId ?? null;
   if (!pageId) return null;

@@ -99,7 +99,10 @@ function conn(id: string, status: "connected" | "not_connected" | "expired") {
     providerAccountId: "pid-" + id, providerAccountName: "Studio " + id,
     providerAccountUsername: id, providerAccountAvatarUrl: null,
     connectionStatus: status, authProvider: "official" as const,
-    externalConnectionId: null, scopes: ["boards:read", "pins:read", "pins:write"],
+    externalConnectionId: null,
+    // The full publish floor, boards:write included — without it the row is
+    // legitimately needs_reconnect and stops being the "healthy" fixture.
+    scopes: ["boards:read", "boards:write", "pins:read", "pins:write"],
     tokenExpiresAt: null, metadata: null, createdAt: null, updatedAt: null,
   };
 }
@@ -159,7 +162,10 @@ test("scope 完整性只对 Pinterest 生效,别家不会被误判成 needs_reco
 });
 
 test("每一行独立取状态:第一行健康不会掩盖第二行需要重连", () => {
-  const healthy = { connectionStatus: "connected" as const, scopes: ["boards:read", "pins:read", "pins:write"] };
+  const healthy = {
+    connectionStatus: "connected" as const,
+    scopes: ["boards:read", "boards:write", "pins:read", "pins:write"],
+  };
   const broken = { connectionStatus: "expired" as const, scopes: [] };
   assert.equal(accountRowState(healthy, "pinterest"), "connected");
   assert.equal(accountRowState(broken, "pinterest"), "needs_reconnect");

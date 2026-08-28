@@ -358,7 +358,7 @@ async function main() {
     assertEq(store.get("sub_1")?.user_id ?? null, null, "user_id deferred (null)");
   });
 
-  // -- units (migrate_v63): the add-on's quantity must survive the mirror ------
+  // -- units (migrate_v66): the add-on's quantity must survive the mirror ------
   await test("units defaults to 1 when the event carries none", async () => {
     const store = new Map<string, Row>();
     const db = makeFakeDb(store);

@@ -247,8 +247,22 @@ test("REQUIRED_PINTEREST_SCOPES_UI matches the server's PINTEREST_REQUIRED_SCOPE
 
 test("missingRequiredPinterestScopes reports precisely what is absent", () => {
   assert.deepEqual(missingRequiredPinterestScopes(FULL_SCOPES), []);
-  assert.deepEqual(missingRequiredPinterestScopes(["boards:read", "pins:read"]), ["pins:write"]);
-  assert.deepEqual(missingRequiredPinterestScopes(null), ["boards:read", "pins:read", "pins:write"]);
+  assert.deepEqual(missingRequiredPinterestScopes(["boards:read", "pins:read"]), [
+    "boards:write",
+    "pins:write",
+  ]);
+  // boards:write belongs to the floor: POST /pins 401s without it, so a connection
+  // holding everything else still cannot publish and must say needs_reconnect.
+  assert.deepEqual(
+    missingRequiredPinterestScopes(["boards:read", "pins:read", "pins:write"]),
+    ["boards:write"],
+  );
+  assert.deepEqual(missingRequiredPinterestScopes(null), [
+    "boards:read",
+    "boards:write",
+    "pins:read",
+    "pins:write",
+  ]);
 });
 
 // ── Presentation tables stay complete ────────────────────────────────────────

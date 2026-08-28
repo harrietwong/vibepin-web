@@ -225,8 +225,12 @@ type FacebookMeta = {
   }> | null;
 };
 
-function readFacebookMeta(summary: PlatformConnectionSummary): FacebookMeta | null {
-  const account = summary.accounts[0];
+/**
+ * The Facebook block of ONE account row. Deliberately per-account: reading
+ * `summary.accounts[0]` made a two-account card show (and act on) the first
+ * account only, so the second account's Page picker was unreachable.
+ */
+function readFacebookMeta(account: SocialConnection | undefined): FacebookMeta | null {
   const meta = account?.metadata as { facebook?: FacebookMeta } | null | undefined;
   return meta?.facebook ?? null;
 }
@@ -418,9 +422,10 @@ function PlatformCard({
           stored Facebook row, including degraded/error states, so the user sees
           exactly what is connected and what is missing. Includes the Page picker
           when several Pages await selection. */}
-      {summary.provider === "facebook" && summary.accounts.length > 0 && (
-        <FacebookDetails summary={summary} onRefresh={onRefresh} />
-      )}
+      {summary.provider === "facebook" &&
+        summary.accounts.map(acc => (
+          <FacebookDetails key={acc.id} account={acc} onRefresh={onRefresh} />
+        ))}
 
       {/* Instagram connection detail (display only). Independent of Facebook — reads
           only the Instagram row's sanitized metadata.instagram (no tokens). */}
@@ -550,9 +555,21 @@ const CONNECT_PAGE_ERRORS: Record<string, string> = {
   FACEBOOK_PAGE_NOT_FOUND: "No Facebook Page matches that ID. Double-check the number and try again.",
   FACEBOOK_GRAPH_API_ERROR: "Facebook returned an error — please try again in a moment.",
   no_facebook_connection: "Connect Facebook first, then add your Page.",
+  // Server refused to guess which of several connected Facebook accounts to
+  // attach the Page to. Only reachable if this form somehow posted without a
+  // connection id — the copy names the fix rather than blaming the customer.
+  multiple_facebook_connections:
+    "Several Facebook accounts are connected — reopen Settings and add the Page from the account you mean.",
 };
 
-function FacebookManualPageForm({ onConnected }: { onConnected: () => void }) {
+function FacebookManualPageForm({
+  connectionId,
+  onConnected,
+}: {
+  /** WHICH connected Facebook account this Page is being added to. */
+  connectionId: string | undefined;
+  onConnected: () => void;
+}) {
   const [pageId, setPageId] = useState("");
   const [pageUrl, setPageUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -566,9 +583,12 @@ function FacebookManualPageForm({ onConnected }: { onConnected: () => void }) {
       const res = await fetch("/api/integrations/facebook/connect-page", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          pageId.trim() ? { pageId: pageId.trim() } : { pageUrl: pageUrl.trim() },
-        ),
+        body: JSON.stringify({
+          ...(pageId.trim() ? { pageId: pageId.trim() } : { pageUrl: pageUrl.trim() }),
+          // Names the account. Without it the server fails closed (409) rather
+          // than attaching the Page to an arbitrary Facebook account.
+          ...(connectionId ? { connectionId } : {}),
+        }),
       });
       const body = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -653,16 +673,20 @@ function FacebookManualPageForm({ onConnected }: { onConnected: () => void }) {
   );
 }
 
-function FacebookDetails({ summary, onRefresh }: { summary: PlatformConnectionSummary; onRefresh: () => void }) {
-  const fb = readFacebookMeta(summary);
-  const account = summary.accounts[0];
+/**
+ * Page detail + picker for ONE connected Facebook account. Rendered once per
+ * account: every write it triggers carries THIS account's connection id, so with
+ * several Facebook accounts connected the customer acts on the row they can see,
+ * and the server never has to guess.
+ */
+function FacebookDetails({ account, onRefresh }: { account: SocialConnection; onRefresh: () => void }) {
+  const fb = readFacebookMeta(account);
   const [selecting, setSelecting] = useState<string | null>(null);
-  if (!fb && !account) return null;
 
-  const grantedScopes = new Set(account?.scopes ?? []);
+  const grantedScopes = new Set(account.scopes ?? []);
   const missing = REQUIRED_FACEBOOK_SCOPES_UI.filter(s => !grantedScopes.has(s));
   const state = fb?.connectionState ?? null;
-  const tokenExpiresAt = account?.tokenExpiresAt ?? null;
+  const tokenExpiresAt = account.tokenExpiresAt ?? null;
   const expiryLabel = tokenExpiresAt
     ? new Date(tokenExpiresAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
     : null;
@@ -681,7 +705,9 @@ function FacebookDetails({ summary, onRefresh }: { summary: PlatformConnectionSu
       const res = await fetch("/api/integrations/facebook/select-page", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pageId }),
+        // connectionId names the account being re-pointed. With several Facebook
+        // accounts and no id the server refuses (409) instead of guessing.
+        body: JSON.stringify({ pageId, connectionId: account.id }),
       });
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; pageName?: string | null; error?: string };
       if (!res.ok || !body.ok) {
@@ -700,6 +726,7 @@ function FacebookDetails({ summary, onRefresh }: { summary: PlatformConnectionSu
   return (
     <div
       data-testid="facebook-connection-detail"
+      data-connection-id={account.id}
       style={{
         marginTop: 14,
         padding: "12px 14px",
@@ -721,7 +748,7 @@ function FacebookDetails({ summary, onRefresh }: { summary: PlatformConnectionSu
       ))}
 
       {state === "page_discovery_empty" && (
-        <FacebookManualPageForm onConnected={onRefresh} />
+        <FacebookManualPageForm connectionId={account.id} onConnected={onRefresh} />
       )}
 
       {(state === "reconnect_required" || missing.length > 0) && (
