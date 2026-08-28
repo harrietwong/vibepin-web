@@ -16,17 +16,28 @@ Usage:
   # Read-only post-migration column probe
   python scripts/run_migration.py --check --sql db/migrate_v28_product_supply_expansion.sql
 
-  # Apply a migration (requires explicit --apply flag)
-  python scripts/run_migration.py --apply --sql db/migrate_v28_product_supply_expansion.sql
+  # Apply a migration (target + canonical SQL bytes + intent are all required)
+  python scripts/run_migration.py --apply \
+      --sql db/migrate_v28_product_supply_expansion.sql \
+      --project-ref <project-ref> \
+      --expected-project-ref <project-ref> \
+      --expected-sql-sha256 <64-lowercase-hex> \
+      --confirm APPLY:<project-ref>:<64-lowercase-hex>
 
   # Apply to a NON-DEFAULT project (e.g. the isolated integration-test project).
   # Requires --project-ref; there is no way to reach a second project implicitly.
   python scripts/run_migration.py --apply --sql db/migrate_v53_ai_rate_limit_windows.sql \
-      --project-ref snulmwprsahzqvdbyenc
+      --project-ref snulmwprsahzqvdbyenc \
+      --expected-project-ref snulmwprsahzqvdbyenc \
+      --expected-sql-sha256 <64-lowercase-hex> \
+      --confirm APPLY:snulmwprsahzqvdbyenc:<64-lowercase-hex>
 
 Guardrails:
   - Token values are NEVER printed, logged, or included in error output.
   - --apply is refused when SUPABASE_MIGRATION_TOKEN is missing.
+  - --apply refuses implicit/default/env-only targets; --project-ref is mandatory.
+  - The resolved target, expected target, canonical SQL SHA-256 and confirmation
+    phrase must all bind exactly before the first Management API call.
   - SQL file must exist and must not be empty.
   - Only the SQL in the named file is executed; nothing else.
   - No product rows are touched; no opportunity/backfill/crawl jobs run.
@@ -45,7 +56,9 @@ TARGET SELECTION (added for the integration-test channel):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -274,7 +287,59 @@ def cmd_check(creds: dict, sql_path: Path | None, ref: str, is_default: bool) ->
     return 0 if ok else 1
 
 
-def cmd_apply(creds: dict, sql_path: Path, ref: str, is_default: bool) -> int:
+def _load_canonical_sql(sql_path: Path) -> tuple[str, str]:
+    """Load SQL with repository-canonical LF endings and return (text, SHA-256)."""
+    try:
+        text = sql_path.read_bytes().decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        _die(f"SQL file is not valid UTF-8: {sql_path} ({exc})")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return text, digest
+
+
+def _guard_apply_target(
+    *,
+    ref: str,
+    explicit_project_ref: str | None,
+    expected_project_ref: str | None,
+    actual_sql_sha256: str,
+    expected_sql_sha256: str | None,
+    confirmation: str | None,
+) -> None:
+    """Fail before any network call unless target, bytes and intent are exact."""
+    if not explicit_project_ref:
+        _die("--apply requires an explicit --project-ref; default/env-derived targets are refused.")
+    if not expected_project_ref:
+        _die("--apply requires --expected-project-ref.")
+    if ref != expected_project_ref:
+        _die(
+            "resolved project_ref does not match --expected-project-ref "
+            f"({ref!r} != {expected_project_ref!r})."
+        )
+    if not expected_sql_sha256 or not re.fullmatch(r"[0-9a-f]{64}", expected_sql_sha256):
+        _die("--apply requires --expected-sql-sha256 as 64 lowercase hex characters.")
+    if actual_sql_sha256 != expected_sql_sha256:
+        _die(
+            "canonical SQL SHA-256 mismatch "
+            f"({actual_sql_sha256} != {expected_sql_sha256})."
+        )
+    required = f"APPLY:{ref}:{actual_sql_sha256}"
+    if confirmation != required:
+        _die("--confirm does not exactly bind this project_ref and SQL SHA-256.")
+
+
+def cmd_apply(
+    creds: dict,
+    sql_path: Path,
+    ref: str,
+    is_default: bool,
+    *,
+    explicit_project_ref: str | None,
+    expected_project_ref: str | None,
+    expected_sql_sha256: str | None,
+    confirmation: str | None,
+) -> int:
     """Apply a migration SQL file via the Management API. Requires --apply flag."""
     tok = creds.get("SUPABASE_MIGRATION_TOKEN", "")
     url = creds.get("SUPABASE_URL", "")
@@ -286,14 +351,24 @@ def cmd_apply(creds: dict, sql_path: Path, ref: str, is_default: bool) -> int:
         _die("Cannot derive project_ref from SUPABASE_URL (and no --project-ref given).")
     if not sql_path.exists():
         _die(f"SQL file not found: {sql_path}")
-    sql = sql_path.read_text(encoding="utf-8").strip()
-    if not sql:
+    sql, sql_sha256 = _load_canonical_sql(sql_path)
+    if not sql.strip():
         _die(f"SQL file is empty: {sql_path}")
+
+    _guard_apply_target(
+        ref=ref,
+        explicit_project_ref=explicit_project_ref,
+        expected_project_ref=expected_project_ref,
+        actual_sql_sha256=sql_sha256,
+        expected_sql_sha256=expected_sql_sha256,
+        confirmation=confirmation,
+    )
 
     print(f"\n{'='*60}")
     print(f"APPLYING MIGRATION: {sql_path.name}")
     print(f"Target project_ref: {ref}"
           f"{'  (default — derived from SUPABASE_URL)' if is_default else '  ← OVERRIDDEN via --project-ref'}")
+    print(f"Canonical SQL SHA-256: {sql_sha256}")
     print(f"Endpoint: https://api.supabase.com/v1/projects/{ref}/database/query")
     print(f"{'='*60}")
     print(f"SQL preview (first 400 chars):\n{sql[:400]}{'...' if len(sql)>400 else ''}\n")
@@ -352,6 +427,12 @@ def main() -> int:
                          "project). Omit for the historical behaviour: the ref derived from "
                          "SUPABASE_URL in backend/.env. Also settable via "
                          "SUPABASE_MIGRATION_PROJECT_REF.")
+    ap.add_argument("--expected-project-ref", default=None,
+                    help="Required with --apply; must exactly match --project-ref")
+    ap.add_argument("--expected-sql-sha256", default=None,
+                    help="Required with --apply; SHA-256 after UTF-8/LF canonicalization")
+    ap.add_argument("--confirm", default=None,
+                    help="Required with --apply; APPLY:<project-ref>:<expected-sha256>")
 
     args = ap.parse_args()
 
@@ -374,7 +455,16 @@ def main() -> int:
     if args.apply:
         if not sql_path:
             _die("--apply requires --sql <path>")
-        return cmd_apply(creds, sql_path, ref, is_default)
+        return cmd_apply(
+            creds,
+            sql_path,
+            ref,
+            is_default,
+            explicit_project_ref=args.project_ref,
+            expected_project_ref=args.expected_project_ref,
+            expected_sql_sha256=args.expected_sql_sha256,
+            confirmation=args.confirm,
+        )
 
     return 0
 
