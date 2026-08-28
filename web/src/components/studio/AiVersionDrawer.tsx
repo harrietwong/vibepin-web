@@ -669,9 +669,15 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // whatever order the resets and the in-flight response happen to run in.
   const recScopeKey = `${draft?.id ?? "-"}|${productKey}`;
   const shownIdsRef = useRef<{ key: string; ids: string[] }>({ key: recScopeKey, ids: [] });
-  // sha-256 of an image url is async; the request must not wait for it. First request
-  // for a url carries the (synchronous) djb2 key, later ones the cached strong key.
+  // sha-256 of an image url is async; every request (including the first for a url)
+  // awaits it, then caches it so later requests for the same url read synchronously.
   const imageKeyCacheRef = useRef<Map<string, string>>(new Map());
+  // "Show different ideas" mints the requestId the moment it fires and stashes it here,
+  // so the click's `reference_refreshed` event and the request it triggers (via
+  // recReloadKey) share one id — the server's `reference_recs_served` can then be
+  // joined to the click that caused it, not just to the request that followed it.
+  const nextRequestIdRef = useRef<string | null>(null);
+  const newRequestId = () => globalThis.crypto?.randomUUID?.() ?? djb2Hex(`${Date.now()}:${Math.random()}`);
   // Drafts this drawer session already kicked an analysis for — one backfill per draft
   // per open, never a loop.
   const backfilledRef = useRef<Set<string>>(new Set());
@@ -838,58 +844,13 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
           visualFormat: sel.visualFormat ?? selectedAsset?.visualFormat,
         }
       : null;
-    // Serving context (contract §1.1): who asked, for which image, under which analysis
-    // state, with which day's seed, and what has already been shown. Every field is
-    // optional server-side; sending it is what lets a served list be explained after the
-    // fact instead of guessed at — including "this product never had an analysis".
-    const requestId = globalThis.crypto?.randomUUID?.() ?? djb2Hex(`${Date.now()}:${Math.random()}`);
-    const cachedImageKey = imageKeyCacheRef.current.get(requestUrl);
-    const imageKey = cachedImageKey ?? djb2Hex(requestUrl);
-    if (!cachedImageKey) {
-      // Compute the strong key for NEXT time; never awaited. An image key is telemetry,
-      // not a precondition — blocking the request on SubtleCrypto would delay every open.
-      void imageKeyFor(requestUrl)
-        .then(key => { imageKeyCacheRef.current.set(requestUrl, key); })
-        .catch(() => { /* telemetry only — the djb2 key already went out */ });
-    }
     // Non-empty ONLY after "Show different ideas", which is also what tells the response
     // handler to merge into the current grid instead of replacing it.
     const excludeIds = pendingExcludeIds;
-    const body = buildReferenceRequestBody({
-      primary: enrichedPrimary,
-      draftImageSelected,
-      draftAnalysis: d ? {
-        title: d.title,
-        category: d.imageCategory || d.category || undefined,
-        style: d.style, colors: d.colors, visibleObjects: d.visibleObjects, imageSummary: d.imageSummary,
-      } : undefined,
-      productAnalysis: swappedProduct,
-      serve: {
-        draftId: draft?.id,
-        requestId,
-        imageKey,
-        analysisSource: analysisState.source,
-        analysisStatus: analysisState.status,
-        // Stable for a UTC day: reopening the drawer shows the same sample instead of
-        // churning, and the library still rotates tomorrow with nothing stored.
-        seed: dailySeed(draft?.id ?? imageKey, new Date()),
-        excludeIds: excludeIds.length ? excludeIds : undefined,
-      },
-    });
-    // Client half of the server's `reference_recs_served`. Joined on requestId the pair
-    // shows which analysis state each served list was produced under, which is what makes
-    // a high category_fallback rate attributable rather than merely observed.
-    track("reference_recs_requested", {
-      draftId: draft?.id ?? null,
-      requestId,
-      imageKey,
-      analysisSource: analysisState.source,
-      analysisStatus: analysisState.status,
-    });
     // Transient failures (dev recompile 500s, flaky network) must not permanently blank
     // the section for this drawer session — retry a couple of times before giving up.
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    const attempt = (retriesLeft: number) => {
+    const attempt = (retriesLeft: number, body: ReturnType<typeof buildReferenceRequestBody>) => {
       fetch("/api/reference-candidates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -926,14 +887,62 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         .catch((e: unknown) => {
           if (e instanceof DOMException && e.name === "AbortError") return;
           if (isStale()) return;
-          if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1), 1500); return; }
+          if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1, body), 1500); return; }
           // Exhausted retries: surface an error+retry state rather than showing an
           // empty grid that looks like a legitimate "no recommendations" (§4.9).
           setRecommendedRefs([]);
           setRecStatus("error");
         });
     };
-    attempt(2);
+    void (async () => {
+      // Serving context (contract §1.1): who asked, for which image, under which analysis
+      // state, with which day's seed, and what has already been shown. Every field is
+      // optional server-side; sending it is what lets a served list be explained after the
+      // fact instead of guessed at — including "this product never had an analysis".
+      // A refresh click already minted this id (see handleShowDifferent); a normal open
+      // mints its own so the pair still lines up when nothing was refreshed.
+      const requestId = nextRequestIdRef.current ?? newRequestId();
+      nextRequestIdRef.current = null;
+      const cachedImageKey = imageKeyCacheRef.current.get(requestUrl);
+      // The strong key is awaited even on the first request for a url — a djb2 key sent
+      // once can never be joined to the SHA-256 key the server logs going forward.
+      const imageKey = cachedImageKey ?? await imageKeyFor(requestUrl).catch(() => djb2Hex(requestUrl));
+      if (!cachedImageKey) imageKeyCacheRef.current.set(requestUrl, imageKey);
+      // The product (or the whole drawer) may have moved on while we awaited the digest.
+      if (isStale()) return;
+      const body = buildReferenceRequestBody({
+        primary: enrichedPrimary,
+        draftImageSelected,
+        draftAnalysis: d ? {
+          title: d.title,
+          category: d.imageCategory || d.category || undefined,
+          style: d.style, colors: d.colors, visibleObjects: d.visibleObjects, imageSummary: d.imageSummary,
+        } : undefined,
+        productAnalysis: swappedProduct,
+        serve: {
+          draftId: draft?.id,
+          requestId,
+          imageKey,
+          analysisSource: analysisState.source,
+          analysisStatus: analysisState.status,
+          // Stable for a UTC day: reopening the drawer shows the same sample instead of
+          // churning, and the library still rotates tomorrow with nothing stored.
+          seed: dailySeed(draft?.id ?? imageKey, new Date()),
+          excludeIds: excludeIds.length ? excludeIds : undefined,
+        },
+      });
+      // Client half of the server's `reference_recs_served`. Joined on requestId the pair
+      // shows which analysis state each served list was produced under, which is what makes
+      // a high category_fallback rate attributable rather than merely observed.
+      track("reference_recs_requested", {
+        draftId: draft?.id ?? null,
+        requestId,
+        imageKey,
+        analysisSource: analysisState.source,
+        analysisStatus: analysisState.status,
+      });
+      attempt(2, body);
+    })();
     // Aborting on product change guarantees the previous product's late response
     // cannot write recommendedRefs / basis / status for the new product.
     return () => { controller.abort(); if (retryTimer) clearTimeout(retryTimer); };
@@ -960,10 +969,14 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     const next = mergeExcludeIds(shown, selectedRefIds);
     setPendingExcludeIds(next);
     setRecStatus("loading");
+    // Mint the id NOW, before the request exists, so the click event and the request it
+    // triggers (via recReloadKey below) carry the same requestId.
+    const requestId = newRequestId();
+    nextRequestIdRef.current = requestId;
     // The fetch effect re-runs on this key; pendingExcludeIds is intentionally NOT a
     // dependency of it, or setting both would fire two requests for one click.
     setRecReloadKey(k => k + 1);
-    track("reference_refreshed", { draftId: draft?.id ?? null, excludedCount: next.length });
+    track("reference_refreshed", { draftId: draft?.id ?? null, requestId, excludedCount: next.length });
   };
 
   /**

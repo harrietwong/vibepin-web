@@ -34,12 +34,19 @@ import {
 } from "@/lib/studio/recommendationRequest";
 
 /**
- * In-flight analyses, keyed by draft id. A second call for the same draft joins the
- * first instead of issuing a duplicate vision request: the drawer can trigger this
- * from several places (open, product swap, manual retry) and each duplicate would be
- * a real, billable model call for the same image.
+ * In-flight analyses, keyed by `draftId|imageUrl`. A second call for the same draft
+ * AND the same image joins the first instead of issuing a duplicate vision request:
+ * the drawer can trigger this from several places (open, product swap, manual retry)
+ * and each duplicate would be a real, billable model call for the same image. Keying
+ * on the image too (not just the draft id) means a draft whose image was swapped
+ * gets its OWN slot — it no longer joins a stale run still in flight for the old
+ * picture, which used to let that old run's failure/success land on the new image.
  */
 const inFlight = new Map<string, Promise<void>>();
+
+function inFlightKey(draftId: string, imageUrl: string | undefined): string {
+  return `${draftId}|${imageUrl ?? ""}`;
+}
 
 type AnalyzeResponse = {
   ok?: boolean;
@@ -58,13 +65,17 @@ type AnalyzeResponse = {
 };
 
 export function startImageAnalysis(draftId: string): Promise<void> {
-  const existing = inFlight.get(draftId);
+  // Read the draft's CURRENT image before touching the map — the key must reflect
+  // the picture this call is actually for, not whatever a prior in-flight run for
+  // this draft id was started against.
+  const key = inFlightKey(draftId, pinDraftStore.getDraft(draftId)?.imageUrl);
+  const existing = inFlight.get(key);
   if (existing) return existing;
   const run = runImageAnalysis(draftId).finally(() => {
     // Only clear our own entry (a newer run may already have taken the slot).
-    if (inFlight.get(draftId) === run) inFlight.delete(draftId);
+    if (inFlight.get(key) === run) inFlight.delete(key);
   });
-  inFlight.set(draftId, run);
+  inFlight.set(key, run);
   return run;
 }
 
@@ -186,8 +197,21 @@ async function runImageAnalysis(draftId: string): Promise<void> {
     // in Ns" if the Retry-After the server actually sent is kept.
     const errorCode = classifyAnalysisError(err, res?.status);
     const retryAfter = res?.status === 429 ? parseRetryAfter(res.headers.get("retry-after")) : undefined;
+    const cur = pinDraftStore.getDraft(draftId);
+    // Same guard as the success path: the draft's image may have been swapped while
+    // this request was out. A FAILURE for the OLD picture must not blank the NEW
+    // image's analysis state (no error, no retryAfter) — the new image is either
+    // already analysing under its own in-flight key or has never been asked for yet,
+    // and this stale failure must not overwrite either state.
+    if (!shouldApplyAnalysis(startedImageUrl, cur?.imageUrl)) {
+      if (cur?.imageAnalysisStatus === "pending") {
+        pinDraftStore.updateDraft(draftId, { imageAnalysisStatus: undefined, keywordStatus: undefined });
+      }
+      track("image_analysis_discarded_stale", { draftId });
+      return;
+    }
     // Only overwrite our own pending marker (avoid clobbering a concurrent success).
-    if (pinDraftStore.getDraft(draftId)?.imageAnalysisStatus === "pending") {
+    if (cur?.imageAnalysisStatus === "pending") {
       pinDraftStore.updateDraft(draftId, {
         imageAnalysisStatus:     "failed",
         keywordStatus:           "failed",
