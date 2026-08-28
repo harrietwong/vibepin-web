@@ -117,7 +117,11 @@ function deps(plan: string, count: number | null) {
     const body = L.connectionLimitResponseBody(v);
     assert.equal(body.code, "connected_account_limit_reached");
     assert.equal(body.limit, 1);
-    assert.match(body.error, /Disconnect one, or upgrade/);
+    // Under the row-counting rule only Remove (a hard delete) frees a seat, so the
+    // refusal must not send the merchant to Disconnect — that keeps both the row and
+    // the slot, and they would come back no less full than before.
+    assert.match(body.error, /Remove one, or upgrade/);
+    assert.doesNotMatch(body.error, /Disconnect/i, "Disconnect no longer frees a seat, so it must not be the advice");
     assert.doesNotMatch(body.error, /credit/i, "the retired Credit vocabulary must not reappear");
   });
 

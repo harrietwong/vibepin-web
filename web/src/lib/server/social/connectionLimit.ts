@@ -120,7 +120,7 @@ export function connectionLimitResponseBody(verdict: Extract<ConnectionLimitVerd
     code: "connected_account_limit_reached",
     error:
       `Your plan includes ${verdict.limit} account${verdict.limit === 1 ? "" : "s"} per platform. ` +
-      "Disconnect one, or upgrade to connect more.",
+      "Remove one, or upgrade to connect more.",
     limit: verdict.limit,
     current: verdict.current,
   };
