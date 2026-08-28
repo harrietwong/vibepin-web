@@ -88,7 +88,13 @@ const originalLoad = (Module as any)._load;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
   if (request.includes("server/authUser")) {
-    return { getUserIdFromBearerOrCookies: fakeGetUserIdFromBearerOrCookies };
+    // See test-ai-provider-auth-boundary.ts: analyze / quality-judge also import
+    // getUserIdFromSameOriginSession (cost attribution, acb6810); without it the
+    // route throws before the limiter decision is ever observed.
+    return {
+      getUserIdFromBearerOrCookies: fakeGetUserIdFromBearerOrCookies,
+      getUserIdFromSameOriginSession: fakeGetUserIdFromBearerOrCookies,
+    };
   }
   if (request.includes("ai-copy/visionServer")) {
     // Wrap the REAL module so pure helpers keep their real behaviour; only the seams

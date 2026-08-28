@@ -147,7 +147,14 @@ const originalLoad = (Module as any)._load;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
   if (request.includes("server/authUser")) {
-    return { getUserIdFromBearerOrCookies: () => Promise.resolve("user-1") };
+    // analyze / quality-judge also call getUserIdFromSameOriginSession for cost
+    // attribution (acb6810). A fake missing that export throws `undefined(req)`
+    // synchronously — before `.catch` attaches — so the route 500s ahead of the
+    // model assertion and the governance cases read as failures they are not.
+    return {
+      getUserIdFromBearerOrCookies: () => Promise.resolve("user-1"),
+      getUserIdFromSameOriginSession: () => Promise.resolve("user-1"),
+    };
   }
   if (request.includes("ai-copy/visionServer")) {
     const real = originalLoad.call(this, request, parent, isMain);
