@@ -275,6 +275,49 @@ export function legacyPinterestMirror(
   };
 }
 
+/**
+ * Move the board onto the ONE Pinterest entry the card's board field speaks for.
+ *
+ * The card shows a single Board field, and editing it IS changing where this Pin
+ * publishes (owner decision, 2026-08-27). Writing only the legacy `boardId`/`boardName`
+ * left the stored entry — the thing the cron actually publishes to — on the previous
+ * board, so the card showed the new board while the Pin went to the old one. Silently,
+ * and only discoverable after it had already happened.
+ *
+ * WHICH entry: the one whose account the draft's legacy target names, because that is
+ * the target the card's field describes. With no match (or nothing to match on) the
+ * FIRST Pinterest entry is used — the same entry `legacyPinterestMirror` mirrors, so
+ * the two views of "the card's Pinterest target" cannot drift apart. A second Pinterest
+ * account's entry is never touched: a board id means nothing on the other account.
+ *
+ * With NO Pinterest entry the list comes back unchanged. The legacy fields alone are
+ * then correct, since `resolveScheduledDestinations` derives Pinterest-only intent from
+ * them for exactly that case.
+ *
+ * Pure: a new array, one copied entry, only its board fields changed — `capturedAt` and
+ * `accountLabel` stay as captured. Clearing the board clears those keys rather than
+ * storing "", which is how every other writer in this module records them.
+ */
+export function withBoardOnPinterestEntry(
+  destinations: readonly ScheduledDestination[] | null | undefined,
+  targetConnectionId: string | null | undefined,
+  board: { boardId?: string | null; boardName?: string | null },
+): ScheduledDestination[] {
+  const list = Array.isArray(destinations) ? destinations.slice() : [];
+  const isPinterest = (d: ScheduledDestination) => d.provider === "pinterest" && !!str(d.socialConnectionId);
+  const target = str(targetConnectionId);
+  let idx = target ? list.findIndex(d => isPinterest(d) && str(d.socialConnectionId) === target) : -1;
+  if (idx < 0) idx = list.findIndex(isPinterest);
+  if (idx < 0) return list;
+  const boardId = str(board.boardId);
+  const boardName = str(board.boardName);
+  const next: ScheduledDestination = { ...list[idx] };
+  if (boardId) next.boardId = boardId; else delete next.boardId;
+  if (boardName) next.boardName = boardName; else delete next.boardName;
+  list[idx] = next;
+  return list;
+}
+
 /** The providers named by a draft's effective intent, in order. */
 export function scheduledProviders(
   draft: Parameters<typeof resolveScheduledDestinations>[0],

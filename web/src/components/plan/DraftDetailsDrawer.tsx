@@ -78,7 +78,7 @@ import { destinationKey, type PublishDestination, type PublishProvider } from "@
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { fetchInFlightPublish } from "@/lib/social/socialClient";
 import { isSocialProvider, platformName, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
-import { buildScheduledDestinations, hasExplicitIntent, resolveScheduledAccount, AmbiguousScheduleAccountError } from "@/lib/social/scheduledDestinations";
+import { buildScheduledDestinations, hasExplicitIntent, resolveScheduledAccount, withBoardOnPinterestEntry, AmbiguousScheduleAccountError } from "@/lib/social/scheduledDestinations";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -933,6 +933,22 @@ export function PinDetailsModal({
         }
         throw err;
       }
+    } else if (
+      (activeDraft.scheduledDestinations ?? []).length
+      && (selectedBoard?.id ?? "").trim() !== (activeDraft.boardId ?? "").trim()
+    ) {
+      // Undated Pin that ALREADY carries intent — the Create Pins card's destination
+      // picker writes `scheduledDestinations` with no date condition, so this is reachable.
+      // Nothing above ran, which used to mean the board field moved the legacy fields only
+      // and left the stored entry on the old board; scheduling it later from the card (which
+      // does not rebuild intent) would then publish to a board the merchant had changed away
+      // from. Only the board moves here — an undated Pin has no picked date to freeze the
+      // rest of the intent against.
+      patch.scheduledDestinations = withBoardOnPinterestEntry(
+        activeDraft.scheduledDestinations,
+        activeDraft.targetConnectionId,
+        { boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" },
+      );
     }
     // Setting a date implies the pin is on the plan — keep the flags in sync so
     // it lands on the calendar and leaves the "not added" / "needs date" trays.
