@@ -29,11 +29,13 @@ import { checkAllowance, recordUsage } from "@/lib/server/usage";
 import { recordAiCost, estimateCost, type AiCostRequestStatus } from "@/lib/server/aiCostLog";
 import {
   usageMeteringMode,
+  usageEnforceFor,
   reserveGenerationJobViaLedger,
   reserveInline,
   settleInline,
   releaseInline,
   aiImageLimitResponseBody,
+  readImagesAvailableAfterReservation,
   type InlineReservation,
 } from "@/lib/server/usage/meterGeneration";
 
@@ -1179,11 +1181,20 @@ export async function POST(req: NextRequest) {
       });
       if (ledger.kind === "reserved") {
         console.log(`[/api/generate] enqueued job=${ledger.jobId} slots=${ledger.slots} user=${userId} (metered)`);
-        return NextResponse.json({ jobId: ledger.jobId, slots: ledger.slots });
+        // Decision #11 (2026-08-28): carry a usage snapshot on the metered response so
+        // the client can show remaining capacity without a second round trip. Never
+        // throws — availability readback failure must not fail a successful enqueue.
+        const availableAfterReservation = await readImagesAvailableAfterReservation(userId).catch(() => null);
+        return NextResponse.json({
+          jobId: ledger.jobId,
+          slots: ledger.slots,
+          usage: { reserved: ledger.slots, availableAfterReservation },
+        });
       }
-      if (ledger.kind === "insufficient" && meterMode === "enforce") {
-        // ENFORCE (reserved for a later phase; NOT enabled in prod this phase):
-        // insufficient balance → limit response in the route's error envelope.
+      if (ledger.kind === "insufficient" && usageEnforceFor("ai_image")) {
+        // ENFORCE, gated by USAGE_ENFORCE_AI_IMAGES (decision #8, 2026-08-28 — the
+        // global mode alone blocks nothing): insufficient balance → limit response in
+        // the route's error envelope.
         return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
       }
       // SHADOW fail-open: insufficient / error / skipped → fall through to the plain
@@ -1252,12 +1263,13 @@ export async function POST(req: NextRequest) {
   // reservation) and BEFORE runGenerator dispatches. Only authenticated `user:<id>`
   // callers meter: anonymous inline callers (session:/anon:) have no usage account,
   // so they are skipped entirely — metering never touches the documented anonymous
-  // path. `enforce` refuses an insufficient balance; `shadow` proceeds regardless.
+  // path. `enforce` (gated by USAGE_ENFORCE_AI_IMAGES — decision #8, 2026-08-28)
+  // refuses an insufficient balance; `shadow` proceeds regardless.
   // Moderation (Step 3, ~line 926) already ran and is unmoved.
   let inlineReservation: InlineReservation = { kind: "off" };
   if (authUserId && usageMeteringMode() !== "off") {
     inlineReservation = await reserveInline({ userId: authUserId, count, generationRequestId });
-    if (inlineReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
+    if (inlineReservation.kind === "insufficient" && usageEnforceFor("ai_image")) {
       await userLock.release();
       return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
     }

@@ -338,6 +338,24 @@ for (const problem of checkAiCopyTextModelForProd(process.env)) {
   failures.push(problem);
 }
 
+// --- Informational only: per-type usage enforce switches (decision #8, 2026-08-28) ---
+// USAGE_METERING_MODE=enforce alone blocks nothing — each usage type only actually
+// enforces when its own flag is also truthy (see usageEnforceFor in
+// src/lib/server/usage/meterGeneration.ts). This is NOT a blocking check: an operator
+// may deliberately ship enforce mode with zero/some/all type flags on. Print the
+// current combination so a deploy log always shows what will actually block.
+{
+  const enforceFlagNames = ["USAGE_ENFORCE_AI_IMAGES", "USAGE_ENFORCE_AI_TEXT", "USAGE_ENFORCE_SCHEDULED_POSTS"];
+  const isTruthyFlag = (raw) => {
+    if (!raw) return false;
+    const v = String(raw).trim().toLowerCase();
+    return v === "1" || v === "true";
+  };
+  const meteringMode = String(process.env.USAGE_METERING_MODE ?? "off").trim().toLowerCase();
+  const flagStates = enforceFlagNames.map((name) => `${name}=${isTruthyFlag(process.env[name]) ? "on" : "off"}`);
+  infoLines.push(`usage metering mode: ${meteringMode || "off"} | enforce switches: ${flagStates.join(", ")}`);
+}
+
 // --- Resolve outcome ---
 function logOverrideAndExit() {
   const reason = process.env.OVERRIDE_REASON;

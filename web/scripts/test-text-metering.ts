@@ -227,11 +227,23 @@ function makeReq(auth: boolean, body: Record<string, unknown> = happyBody()): Re
   return new Request("https://vibepin.co/api/ai-copy", { method: "POST", headers, body: JSON.stringify(body) });
 }
 
-type RunOpts = { meterMode?: "off" | "shadow" | "enforce"; ledger?: LedgerMode; auth?: boolean; gate?: "pass" | "fail" | "fail_then_pass"; body?: Record<string, unknown> };
+type RunOpts = {
+  meterMode?: "off" | "shadow" | "enforce";
+  ledger?: LedgerMode;
+  auth?: boolean;
+  gate?: "pass" | "fail" | "fail_then_pass";
+  body?: Record<string, unknown>;
+  // Per-type enforce switch (decision #8, 2026-08-28). Defaults to ON so every
+  // pre-existing "ENFORCE ... -> 402" case below keeps asserting the blocking path
+  // unchanged; pass `false` to prove enforce-mode WITHOUT the flag does not block.
+  enforceAiText?: boolean;
+};
 async function run(opts: RunOpts = {}): Promise<{ status: number; json: Record<string, unknown> }> {
   const meter = opts.meterMode ?? "off";
   if (meter === "off") delete process.env.USAGE_METERING_MODE;
   else process.env.USAGE_METERING_MODE = meter;
+  if (opts.enforceAiText === false) delete process.env.USAGE_ENFORCE_AI_TEXT;
+  else process.env.USAGE_ENFORCE_AI_TEXT = "true";
   ledgerMode = opts.ledger ?? "reserve_ok";
   gateBehaviour = opts.gate ?? "pass";
   genCallSeq = 0;
@@ -245,6 +257,7 @@ async function run(opts: RunOpts = {}): Promise<{ status: number; json: Record<s
     return { status: res.status, json };
   } finally {
     delete process.env.USAGE_METERING_MODE;
+    delete process.env.USAGE_ENFORCE_AI_TEXT;
   }
 }
 
@@ -393,6 +406,15 @@ async function main() {
     assertHappyOutput(json);
     assertEq(reserveCalls().length, 1, "reserved once");
     assertEq(settleCalls().length, 1, "settled once");
+  });
+
+  // ── PER-TYPE ENFORCE SWITCH (decision #8, 2026-08-28) ─ the global mode alone
+  // blocks nothing until USAGE_ENFORCE_AI_TEXT is also set ─────────────────
+  await test("ENFORCE WITHOUT USAGE_ENFORCE_AI_TEXT: insufficient balance does NOT block", async () => {
+    const { status, json } = await run({ meterMode: "enforce", ledger: "reserve_insufficient", enforceAiText: false });
+    assertEq(status, 200, "generation still proceeds — the global mode alone does not block");
+    assertHappyOutput(json);
+    assertEq(calls.generateCopyFromAnalysis, 1, "the model call DID happen (fail-open, same as shadow)");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

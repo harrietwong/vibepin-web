@@ -147,6 +147,32 @@ async function load(mode: string) {
     assert.ok(r.kind !== "consumed");
   });
 
+  // ── PER-TYPE ENFORCE SWITCH (decision #8, 2026-08-28) ─ usageEnforceFor exists for
+  // scheduled_post too, but consumeScheduledPost itself is STILL fully unwired to any
+  // blocking decision (Phase 6C, not this phase) ─ so it must never block regardless
+  // of the mode/flag combination below. When 6C wires a caller-side block, that call
+  // site should read usageEnforceFor("scheduled_post"), exactly like the image/text
+  // call sites do ─ proven directly against the shared switch in
+  // test-usage-enforce-switches.ts.
+  await test("ENFORCE + USAGE_ENFORCE_SCHEDULED_POSTS on: a ledger refusal is reported but STILL does not block (6C not wired yet)", async () => {
+    process.env.USAGE_ENFORCE_SCHEDULED_POSTS = "true";
+    const m = await load("enforce");
+    assert.equal(m.usageEnforceFor("scheduled_post"), true, "the switch itself is on");
+    const { rpc } = makeRpc(() => ({ ok: false, reason: "limit_reached" }));
+    const r = await m.consumeScheduledPost({ userId: "u-1", key: "k", deps: { rpc, ensure: ensureNoop } });
+    assert.ok(r.kind !== "consumed", "still not consumed (refusal reported)");
+    delete process.env.USAGE_ENFORCE_SCHEDULED_POSTS;
+  });
+
+  await test("ENFORCE WITHOUT USAGE_ENFORCE_SCHEDULED_POSTS: a ledger refusal is reported but does not block either", async () => {
+    delete process.env.USAGE_ENFORCE_SCHEDULED_POSTS;
+    const m = await load("enforce");
+    assert.equal(m.usageEnforceFor("scheduled_post"), false, "the switch is off — global mode alone does not flip it");
+    const { rpc } = makeRpc(() => ({ ok: false, reason: "limit_reached" }));
+    const r = await m.consumeScheduledPost({ userId: "u-1", key: "k", deps: { rpc, ensure: ensureNoop } });
+    assert.ok(r.kind !== "consumed", "still not consumed (refusal reported, no block either way — unwired)");
+  });
+
   await test("SHADOW: a replayed consume is reported as replayed, not double-counted", async () => {
     const m = await load("shadow");
     const { rpc, calls } = makeRpc(() => ({ ok: true, replayed: true }));

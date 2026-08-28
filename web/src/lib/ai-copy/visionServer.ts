@@ -153,15 +153,51 @@ export function providerConfig() {
   // lib/support/* and backend/generator.py.
   const providerDefaultBaseUrl = useLinapi ? LINAPI_BASE_URL : OPENAI_BASE_URL;
   const configuredBaseUrl = useLinapi ? (process.env.LINAPI_BASE_URL || "").trim() : "";
-  return {
+
+  const cfg = {
     provider: useLinapi ? "linapi" : openaiKey ? "openai" : "none",
     key: linapiKey || openaiKey,
     baseUrl: (configuredBaseUrl || providerDefaultBaseUrl).replace(/\/$/, "") || providerDefaultBaseUrl,
     // Vision-capable model used for image analysis and the vision fallback.
     visionModel: process.env.AI_COPY_VISION_MODEL || process.env.LINAPI_ANALYSIS_MODEL || process.env.OPENAI_AI_COPY_VISION_MODEL || (useLinapi ? "gemini-2.5-flash" : "gpt-4o-mini"),
-    // Fast text-only model used when a cached analysis exists (no image tokens).
-    textModel: process.env.AI_COPY_TEXT_MODEL || (useLinapi ? "gemini-2.5-flash" : "gpt-4o-mini"),
-  };
+  } as { provider: string; key: string; baseUrl: string; visionModel: string; textModel: string };
+
+  // Fast text-only model used when a cached analysis exists (no image tokens).
+  //
+  // Fail-closed in production (decision #12, 2026-08-28): AI_COPY_TEXT_MODEL unset in
+  // production must NEVER silently fall back to a hardcoded default — that default can
+  // drift out of sync with whatever model was actually vetted/priced for prod traffic.
+  // Outside production the fallback is unchanged (keeps local/dev/preview working with
+  // zero extra config).
+  //
+  // Implemented as a lazy getter, not an eager throw, so providerConfig() itself never
+  // throws — callers that only need `.key`/`.visionModel` (analyze, quality-judge) are
+  // unaffected — and the throw fires exactly at the point of use (generateCopyFromAnalysis,
+  // right before its provider call), which is always reached from inside the calling
+  // route's try/catch, so it surfaces as a normal CopyError response instead of an
+  // unhandled rejection.
+  const rawTextModel = (process.env.AI_COPY_TEXT_MODEL || "").trim();
+  const isProduction = process.env.VERCEL_ENV === "production";
+  if (rawTextModel) {
+    cfg.textModel = rawTextModel;
+  } else if (!isProduction) {
+    cfg.textModel = useLinapi ? "gemini-2.5-flash" : "gpt-4o-mini";
+  } else {
+    Object.defineProperty(cfg, "textModel", {
+      enumerable: true,
+      configurable: true,
+      get(): string {
+        try {
+          console.warn(JSON.stringify({ event: "ai_copy_model_unset" }));
+        } catch {
+          /* logging must never itself throw into the caller */
+        }
+        throw new CopyError("ai_copy_model_unset", 503, PROVIDER_MESSAGE);
+      },
+    });
+  }
+
+  return cfg;
 }
 
 export type ProviderConfig = ReturnType<typeof providerConfig>;

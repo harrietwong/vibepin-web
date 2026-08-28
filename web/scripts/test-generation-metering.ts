@@ -126,13 +126,20 @@ function fakeServerClient() {
           };
         },
         select() {
-          // Two consumers of .select():
+          // Three consumers of .select():
           //   - generation_worker_status heartbeat lookup (.eq().maybeSingle/single)
           //   - creem_subscriptions grant lookup (.eq().in() → [])
+          //   - usage_accounts availability readback (.eq().maybeSingle) — decision #11
           const chain = {
             eq() {
               return {
-                maybeSingle: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
+                maybeSingle: async () => {
+                  if (table === "usage_accounts") {
+                    // limit 100, used 10, reserved 5 → availableAfterReservation = 85.
+                    return { data: { ai_images_used: 10, ai_images_limit: 100, ai_images_reserved: 5 }, error: null };
+                  }
+                  return { data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null };
+                },
                 single: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
                 // creem_subscriptions: no active subscription → free plan.
                 in: async () => ({ data: [], error: null }),
@@ -237,12 +244,18 @@ type RunOpts = {
   anon?: boolean;
   ledger?: LedgerMode;
   urls?: number;
+  // Per-type enforce switch (decision #8, 2026-08-28). Defaults to ON so every
+  // pre-existing "ENFORCE ... -> 402" case below keeps asserting the blocking path
+  // unchanged; pass `false` to prove enforce-mode WITHOUT the flag does not block.
+  enforceAiImages?: boolean;
 };
 
 async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{ status: number; json: Record<string, unknown> }> {
   const meter = opts.meterMode ?? "off";
   if (meter === "off") delete process.env.USAGE_METERING_MODE;
   else process.env.USAGE_METERING_MODE = meter;
+  if (opts.enforceAiImages === false) delete process.env.USAGE_ENFORCE_AI_IMAGES;
+  else process.env.USAGE_ENFORCE_AI_IMAGES = "true";
   process.env.GENERATION_MODE = opts.genMode ?? "inline";
   process.env.MODERATION_MOCK_DECISION = opts.decision ?? "allow";
   ledgerMode = opts.ledger ?? "reserve_ok";
@@ -262,6 +275,7 @@ async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{
   } finally {
     process.env.GENERATION_MODE = "inline";
     delete process.env.USAGE_METERING_MODE;
+    delete process.env.USAGE_ENFORCE_AI_IMAGES;
     if (anonHeaderWasOn) process.env.ALLOW_GENERATION_AUTH_TEST_HEADER = anonHeaderWasOn;
   }
 }
@@ -439,6 +453,39 @@ async function main() {
     const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "reserve_ok" });
     assertEq(status, 200, "status");
     assertEq(json.jobId, "job-metered-1", "metered job id");
+  });
+
+  // ── PER-TYPE ENFORCE SWITCH (decision #8, 2026-08-28) ─ the global mode alone
+  // blocks nothing until USAGE_ENFORCE_AI_IMAGES is also set ─────────────────
+  await test("ENFORCE worker WITHOUT USAGE_ENFORCE_AI_IMAGES: insufficient balance does NOT block", async () => {
+    const { status, json } = await run(fullBody(), {
+      meterMode: "enforce", genMode: "worker", ledger: "reserve_insufficient", enforceAiImages: false,
+    });
+    assertEq(status, 200, "generation still proceeds — the global mode alone does not block");
+    assertEq(json.jobId, "job_plain", "fell back to the plain enqueue, same as shadow");
+  });
+
+  await test("ENFORCE inline WITHOUT USAGE_ENFORCE_AI_IMAGES: insufficient balance does NOT block", async () => {
+    const { status, json } = await run(fullBody(), {
+      meterMode: "enforce", genMode: "inline", ledger: "reserve_insufficient", enforceAiImages: false,
+    });
+    assertEq(status, 200, "generation still proceeds — the global mode alone does not block");
+    assertEq(json.ok, true, "ok");
+  });
+
+  // ── Decision #11 (2026-08-28): the metered enqueue response carries a usage block ─
+  await test("SHADOW worker: reserved response includes usage.reserved and usage.availableAfterReservation", async () => {
+    const { status, json } = await run(fullBody({ count: 1 }), { meterMode: "shadow", genMode: "worker", ledger: "reserve_ok" });
+    assertEq(status, 200, "status");
+    const usage = json.usage as Record<string, unknown> | undefined;
+    assert(!!usage && typeof usage === "object", "usage object present on the metered response");
+    assertEq(usage!.reserved, 1, "reserved echoes the slot count");
+    assertEq(usage!.availableAfterReservation, 85, "computed from usage_accounts: limit 100 - used 10 - reserved 5");
+  });
+
+  await test("OFF worker: the plain enqueue response has NO usage field (unmetered path unchanged)", async () => {
+    const { json } = await run(fullBody(), { meterMode: "off", genMode: "worker" });
+    assertEq(json.usage, undefined, "off mode: byte-for-byte unchanged, no usage field");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -64,6 +64,41 @@ export function meteringActive(): boolean {
   return usageMeteringMode() !== "off";
 }
 
+// ── PER-TYPE ENFORCE SWITCHES (product decision #8, 2026-08-28) ─────────────────
+// The three usage types (AI images, AI text, scheduled posts) must be switchable
+// independently. USAGE_METERING_MODE stays the single ON/OFF for the ledger itself
+// (off = no ledger call at all; shadow/enforce both record). Whether an `insufficient`
+// outcome actually BLOCKS the request is a SEPARATE, per-type decision layered on top:
+// setting the global mode to "enforce" alone blocks NOTHING until the matching
+// per-type flag below is also turned on, so enforcement can be rolled out type by type
+// rather than as one global cutover.
+export type UsageEnforceType = "ai_image" | "ai_text_generation" | "scheduled_post";
+
+/** Exported so predeploy-guard.mjs can print these without duplicating the names. */
+export const USAGE_ENFORCE_ENV_VAR: Record<UsageEnforceType, string> = {
+  ai_image: "USAGE_ENFORCE_AI_IMAGES",
+  ai_text_generation: "USAGE_ENFORCE_AI_TEXT",
+  scheduled_post: "USAGE_ENFORCE_SCHEDULED_POSTS",
+};
+
+function isTruthyFlag(raw: string | undefined): boolean {
+  if (!raw) return false;
+  const v = raw.trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
+/**
+ * True ONLY when the global mode is "enforce" AND the per-type env flag
+ * (USAGE_ENFORCE_AI_IMAGES / USAGE_ENFORCE_AI_TEXT / USAGE_ENFORCE_SCHEDULED_POSTS,
+ * accepting "1"/"true" case-insensitively, default false) is set for `type`. This is
+ * the single decision point every blocking call site must use instead of comparing
+ * `usageMeteringMode() === "enforce"` directly.
+ */
+export function usageEnforceFor(type: UsageEnforceType): boolean {
+  if (usageMeteringMode() !== "enforce") return false;
+  return isTruthyFlag(process.env[USAGE_ENFORCE_ENV_VAR[type]]);
+}
+
 /**
  * The canonical slot keys for a `count`-image reservation: ["s0","s1",...]. Array
  * length IS the quantity (v55 derives quantity from the slots). The worker rebuilds
@@ -388,4 +423,50 @@ export function aiImageLimitResponseBody(generationRequestId: string): Record<st
     urls: [],
     generation_request_id: generationRequestId,
   };
+}
+
+/**
+ * Product decision #11 (2026-08-28): the enqueue response should carry a usage
+ * snapshot so the client can show remaining capacity without a second round trip.
+ *
+ * usage_reserve_generation_job's SUCCESS payload does not include an availability
+ * figure (only its `insufficient` refusal branch does — see availableRecurring above)
+ * — so on a successful reserve we read usage_accounts ONCE, straight after the
+ * reserve, and compute limit - used - reserved ourselves. `reserved` already reflects
+ * THIS request's slots at that point, so the number is accurate for what the caller
+ * can request next. No migration: same columns /api/billing/usage already reads.
+ *
+ * Never throws: an availability-readback failure must not fail a successful enqueue
+ * response, so any error resolves to `null` (client renders it as "unknown").
+ */
+export type UsageAccountBalanceRow = {
+  ai_images_used: number | null;
+  ai_images_limit: number | null;
+  ai_images_reserved: number | null;
+};
+
+export async function readImagesAvailableAfterReservation(
+  userId: string,
+  deps?: { client?: { from: (table: string) => { select: (columns: string) => { eq: (col: string, val: string) => { maybeSingle: () => Promise<{ data: unknown; error: unknown }> } } } } },
+): Promise<number | null> {
+  try {
+    const client = deps?.client ?? createServerClient();
+    const { data, error } = await client
+      .from("usage_accounts")
+      .select("ai_images_used, ai_images_limit, ai_images_reserved")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as UsageAccountBalanceRow;
+    if (row.ai_images_limit === null || row.ai_images_limit === undefined) return null; // unlimited plan
+    const used = typeof row.ai_images_used === "number" ? row.ai_images_used : 0;
+    const reserved = typeof row.ai_images_reserved === "number" ? row.ai_images_reserved : 0;
+    return Math.max(0, row.ai_images_limit - used - reserved);
+  } catch (err) {
+    logEvent("usage_meter_availability_read_failed", {
+      path: "worker",
+      error: (err as Error)?.message?.slice(0, 200),
+    });
+    return null;
+  }
 }

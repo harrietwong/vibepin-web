@@ -50,7 +50,7 @@ import {
   type RpcRunner,
 } from "./meterGeneration";
 
-export { usageMeteringMode, type UsageMeteringMode } from "./meterGeneration";
+export { usageMeteringMode, type UsageMeteringMode, usageEnforceFor, type UsageEnforceType } from "./meterGeneration";
 
 /**
  * Stable identity for one publish action, salted like deriveRequestKey so a
