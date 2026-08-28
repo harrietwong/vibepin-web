@@ -18,9 +18,9 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `6839e7609ddff3f1fe288c48a42918e105a75fc9`, and exact
-76-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_6839e76.json`.
+functional tip `0a0c20f7404aca112052ebe649c6a7df6c6638b1`, and exact
+77-artifact Product boundary
+`backend/docs/product_opportunities_v37_release_manifest_0a0c20f.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -48,7 +48,7 @@ the Tracking schedule hardening from `01dcb53`. It also restores the
 `classify-chain` worker route required by the already-installed Crawl OnSuccess
 wrapper, fixing the production version mismatch observed on 2026-08-27 without
 changing its unit, timer, or wrapper. The same 72 production paths differ and
-every one is listed in the 76-artifact
+every one is listed in the 77-artifact
 manifest; the remaining four manifest dependencies are already byte-identical
 on the remote base. No provider/write budget changed. No Usage/Metering production
 file or migration is included.
@@ -73,13 +73,13 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 898 tests with 2
+committed Product-only state, the full backend suite passed 914 tests with 2
 live-only skips and 77 subtests, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
 --audit-level=low` reported zero known vulnerabilities, and the built localhost
 site passed the executable Product-truth render verifier. The Product automation
-contract for the current manifest passed 28/28; the focused worker, automation,
+contract for the current manifest passed 29/29; the focused worker, automation,
 and admission group passed 59/59. These local gates do not authorize
 production rollout.
 
@@ -258,6 +258,7 @@ these exact files from that commit, not from a dirty working tree:
 
 - `backend/db/migrate_v63_product_opportunities_v1.sql`
 - `backend/db/rollback_v63_product_opportunities_v1.sql`
+- `backend/scripts/run_migration.py`
 - `backend/.env.example`
 - `backend/deploy/systemd/vibepin-product-supply.service`
 - `backend/run_worker.py`
@@ -451,6 +452,40 @@ authorization review and does not authorize applying the migration.
 
 ## Stage 1 — Additive database foundation
 
+Authorization-review evidence is now closed locally but production execution is
+still not authorized. A GET-only Management API inventory at
+`2026-08-28T03:18:21Z` located seven completed physical backups; the latest was
+backup `1497305229` from `2026-08-27T13:55:45.333Z`. WAL-G is enabled, PITR is
+not enabled, and no restore was attempted. Refresh this inventory immediately
+before the actual apply; an old inventory is not a backup-at-cutover claim.
+Evidence:
+`backend/docs/product_opportunities_v37_stage1_backup_inventory_20260828T031821Z.json`.
+
+The exact migration and rollback were also rerun in a fresh in-memory
+PGlite/PostgreSQL-compatible runtime with `pgcrypto`. Migration created 40
+matching catalog objects and zero Product/Evidence/Saved/Snapshot rows; complete
+rollback left zero matching objects. This did not access production. Evidence:
+`backend/docs/product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json`.
+
+`run_migration.py` is part of the 77-artifact boundary. Apply now fails before
+the Management API unless the operator explicitly supplies the target project,
+the same expected target, the canonical Git-blob SQL SHA-256, and a confirmation
+string binding both. CRLF/CR checkouts are normalized to repository LF before
+hashing and submission, so Windows checkout bytes cannot silently create a
+different evidence identity. The reviewed future migration command is:
+
+```powershell
+py scripts/run_migration.py --apply `
+  --sql db/migrate_v63_product_opportunities_v1.sql `
+  --project-ref jaxteelkecvlozdrdoog `
+  --expected-project-ref jaxteelkecvlozdrdoog `
+  --expected-sql-sha256 035308eaa9e5ac6dda247f5554b268824649ebfe261a4e77439a3493769350a6 `
+  --confirm APPLY:jaxteelkecvlozdrdoog:035308eaa9e5ac6dda247f5554b268824649ebfe261a4e77439a3493769350a6
+```
+
+Do not run that command until the user separately authorizes the production
+schema write and the immediately-preceding Stage 0/backup refresh is green.
+
 1. Take the normal production database backup and prove it can be located before
    applying SQL.
 2. Apply `migrate_v63_product_opportunities_v1.sql` through the approved Supabase
@@ -470,6 +505,17 @@ must be retained. Use the reviewed
 `backend/db/rollback_v63_product_opportunities_v1.sql`; its dependency order is
 tested by a real migration-then-rollback exercise. After the first admission,
 leave the additive schema in place and roll back behavior, not history.
+
+If schema-only rollback is still allowed, its separately bound command is:
+
+```powershell
+py scripts/run_migration.py --apply `
+  --sql db/rollback_v63_product_opportunities_v1.sql `
+  --project-ref jaxteelkecvlozdrdoog `
+  --expected-project-ref jaxteelkecvlozdrdoog `
+  --expected-sql-sha256 bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c `
+  --confirm APPLY:jaxteelkecvlozdrdoog:bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c
+```
 
 ## Stage 2 — Evidence-reviewed canary admission
 

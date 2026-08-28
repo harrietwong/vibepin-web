@@ -1,0 +1,72 @@
+{
+  "audited_at": "2026-08-28T03:18:21.138608+00:00",
+  "candidate_functional_tip": "0a0c20f7404aca112052ebe649c6a7df6c6638b1",
+  "backup_count": 7,
+  "backup_row_keys": [
+    "id",
+    "inserted_at",
+    "is_physical_backup",
+    "status"
+  ],
+  "backups": [
+    {
+      "id": 1497305229,
+      "inserted_at": "2026-08-27T13:55:45.333Z",
+      "is_physical_backup": true,
+      "status": "COMPLETED"
+    },
+    {
+      "id": 1487529391,
+      "inserted_at": "2026-08-26T13:56:34.217Z",
+      "is_physical_backup": true,
+      "status": "COMPLETED"
+    },
+    {
+      "id": 1477753327,
+      "inserted_at": "2026-08-25T13:54:41.474Z",
+      "is_physical_backup": true,
+      "status": "COMPLETED"
+    },
+    {
+      "id": 1468000539,
+      "inserted_at": "2026-08-24T13:55:57.395Z",
+      "is_physical_backup": true,
+      "status": "COMPLETED"
+    },
+    {
+      "id": 1458332477,
+      "inserted_at": "2026-08-23T13:53:58.579Z",
+      "is_physical_backup": true,
+      "status": "COMPLETED"
+    },
+    {
+      "id": 1448754472,
+      "inserted_at": "2026-08-22T13:54:10.675Z",
+      "is_physical_backup": true,
+      "status": "COMPLETED"
+    },
+    {
+      "id": 1439172025,
+      "inserted_at": "2026-08-21T13:55:16.147Z",
+      "is_physical_backup": true,
+      "status": "COMPLETED"
+    }
+  ],
+  "http_status": 200,
+  "latest_completed_backup_age_seconds": 48155,
+  "latest_completed_backup_id": 1497305229,
+  "locatable_completed_backup_proven": true,
+  "mutation": false,
+  "physical_backup_data_keys": [],
+  "pitr_enabled": false,
+  "project_ref": "jaxteelkecvlozdrdoog",
+  "restore_tested": false,
+  "response_top_level_keys": [
+    "backups",
+    "physical_backup_data",
+    "pitr_enabled",
+    "region",
+    "walg_enabled"
+  ],
+  "walg_enabled": true
+}

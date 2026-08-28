@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. Its exact parent is production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`6839e7609ddff3f1fe288c48a42918e105a75fc9`; and its exact Product boundary is
-the 76-artifact
-`backend/docs/product_opportunities_v37_release_manifest_6839e76.json`. This tip
+`0a0c20f7404aca112052ebe649c6a7df6c6638b1`; and its exact Product boundary is
+the 77-artifact
+`backend/docs/product_opportunities_v37_release_manifest_0a0c20f.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -42,12 +42,12 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 898 passed with 2 live-only skips and 77
+and contract-test state: backend 914 passed with 2 live-only skips and 77
 subtests; Web 132/132 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
 the Product-truth render verifier; and the manifest/automation contract passed
-28/28, while the latest focused systemd/worker/automation/admission group passed
+29/29, while the latest focused systemd/worker/automation/admission group passed
 156/156. ShellCheck also passed the exact current-candidate Git blobs for `cloud_lib.sh`,
 Product Supply, Product Opportunity Admission and Product Tracking wrappers;
 the intentional dynamic shared-library source warning was excluded explicitly,
@@ -56,7 +56,7 @@ production endpoint was used, and no push, deployment, database write or timer
 mutation occurred.
 
 The six unit blobs and four wrapper blobs also match their exact SHA-256 entries
-in `product_opportunities_v37_release_manifest_6839e76.json`. This local evidence
+in `product_opportunities_v37_release_manifest_0a0c20f.json`. This local evidence
 is frozen in
 `backend/docs/product_opportunities_v37_local_systemd_gate_20260827T174000Z.json`;
 it does not substitute for staging those six exact unit bytes on the VPS and
@@ -72,6 +72,20 @@ Evidence: `backend/docs/product_opportunities_v37_platform_preflight_20260827T23
 
 The former `codex/product-v37-security-deps` pointer below remains historical
 functional evidence, not the current whole-tree deployment candidate.
+
+Stage 1 authorization review added an independently fail-closed schema apply
+boundary without applying it. Commit `0a0c20f` makes an explicit project ref,
+matching expected project ref, canonical Git-blob SQL SHA-256 and confirmation
+binding mandatory before the migration runner can call the Management API. Its
+10 guard/migration tests passed. A fresh in-memory PostgreSQL-compatible run
+created the exact v63 schema with zero data rows and removed all 40 matching
+objects on complete rollback. A separate GET-only production inventory located
+seven completed physical backups, but PITR is disabled and restore was not
+tested. These facts permit a production-write decision; they are not that
+decision. Evidence:
+`backend/docs/product_opportunities_v37_stage1_backup_inventory_20260828T031821Z.json`
+and
+`backend/docs/product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json`.
 
 The historical integration candidate is
 `codex/product-v37-security-deps`. Its prequalified integration base

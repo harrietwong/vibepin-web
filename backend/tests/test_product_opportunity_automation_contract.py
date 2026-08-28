@@ -20,7 +20,7 @@ COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_6839e76.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_0a0c20f.json"
 )
 FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
     ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
@@ -64,6 +64,18 @@ STAGE0_CATALOG_QUERY_PATH = (
 STAGE0_CATALOG_QUERY = STAGE0_CATALOG_QUERY_PATH.read_text(encoding="utf-8")
 V63_MIGRATION_PATH = ROOT / "db" / "migrate_v63_product_opportunities_v1.sql"
 V63_MIGRATION = V63_MIGRATION_PATH.read_text(encoding="utf-8")
+STAGE1_BACKUP = json.loads(
+    (
+        ROOT / "docs" / "product_opportunities_v37_stage1_backup_inventory_20260828T031821Z.json"
+    ).read_text(encoding="utf-8")
+)
+STAGE1_PGLITE = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_stage1_migration_rollback_pglite_20260828T032657Z.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def _matches_sql_like_pattern(value: str, pattern: str) -> bool:
@@ -100,15 +112,15 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "6839e7609ddff3f1fe288c48a42918e105a75fc9"
+    functional = "0a0c20f7404aca112052ebe649c6a7df6c6638b1"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
-    manifest_name = "product_opportunities_v37_release_manifest_6839e76.json"
+    manifest_name = "product_opportunities_v37_release_manifest_0a0c20f.json"
     assert functional in RUNBOOK and functional in COMPLETION_AUDIT
     assert manifest_name in RUNBOOK and manifest_name in COMPLETION_AUDIT
     assert "generationModeration.ts" in RUNBOOK
-    assert "898 tests" in RUNBOOK
+    assert "914 tests" in RUNBOOK
     assert "59/59" in RUNBOOK
     assert "132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
@@ -126,7 +138,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert manifest["productionRemoteBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     assert manifest["prequalifiedIntegrationBase"] == "b22930ebe73847cf35bc44be789414902ae6b599"
     paths = [item["path"] for item in manifest["artifacts"]]
-    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 76
+    assert len(paths) == len(set(paths)) == manifest["artifactCount"] == 77
     assert manifest["liveProductTruthGateCommit"] == core_functional
     assert "web/src/app/api/generate/route.ts" in paths
     assert "web/src/lib/server/generationModeration.ts" in paths
@@ -137,6 +149,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert "web/vercel.json" in paths
     assert "web/scripts/test-product-live-truth-verifier.ts" in paths
     assert "web/scripts/verify-product-truth-url.ts" in paths
+    assert "backend/scripts/run_migration.py" in paths
 
     assert subprocess.run(
         [
@@ -158,6 +171,34 @@ def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
     assert references
     missing = [path for path in sorted(references) if not (ROOT.parent / path).is_file()]
     assert missing == []
+
+
+def test_stage1_schema_authorization_evidence_is_exact_and_non_production() -> None:
+    functional = "0a0c20f7404aca112052ebe649c6a7df6c6638b1"
+    manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+
+    assert STAGE1_BACKUP["candidate_functional_tip"] == functional
+    assert STAGE1_BACKUP["project_ref"] == "jaxteelkecvlozdrdoog"
+    assert STAGE1_BACKUP["http_status"] == 200
+    assert STAGE1_BACKUP["mutation"] is False
+    assert STAGE1_BACKUP["locatable_completed_backup_proven"] is True
+    assert STAGE1_BACKUP["latest_completed_backup_id"] == 1497305229
+    assert STAGE1_BACKUP["pitr_enabled"] is False
+    assert STAGE1_BACKUP["restore_tested"] is False
+
+    assert STAGE1_PGLITE["candidate_functional_tip"] == functional
+    assert STAGE1_PGLITE["verdict"] == "PASS"
+    assert STAGE1_PGLITE["production_access"] is False
+    assert STAGE1_PGLITE["production_mutation"] is False
+    assert all(value == 0 for value in STAGE1_PGLITE["row_counts_after_migration"].values())
+    assert STAGE1_PGLITE["matching_catalog_objects_after_complete_rollback"] == 0
+    assert STAGE1_PGLITE["migration_git_blob_sha256"] == artifacts[
+        "backend/db/migrate_v63_product_opportunities_v1.sql"
+    ]["sha256"]
+    assert STAGE1_PGLITE["rollback_git_blob_sha256"] == artifacts[
+        "backend/db/rollback_v63_product_opportunities_v1.sql"
+    ]["sha256"]
 
 
 def test_first_complete_automatic_supply_attempt_is_not_misreported_as_pass() -> None:
