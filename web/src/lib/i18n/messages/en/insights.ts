@@ -81,6 +81,19 @@ export const insightsMessages = {
   "insights.content.openPost": "Open post",
   "insights.content.previewUnavailable": "Published Pin — preview unavailable",
 
+  // ── Per-content diagnosis ──
+  //    diagnoseContent() runs on the server, where there is no locale, so it returns
+  //    one of these keys rather than a sentence. Every branch of the rule needs a key
+  //    here and in all 18 locale catalogs.
+  "insights.diagnosis.efficientButSmallReach": "Good at sending people to your website, but not many have seen it yet. Worth publishing more like this.",
+  "insights.diagnosis.seenButFewClicks": "Plenty of people saw it, but few went to your website. Start with the selling point and the call to action on the image.",
+  "insights.diagnosis.seenAndConverts": "Seen by many and it brings people to your website. Use it as the reference for your next batch.",
+  "insights.diagnosis.savedInstagram": "People are saving or sharing this. Keep watching whether similar images bring interaction consistently.",
+  "insights.diagnosis.savedPinterest": "People want to keep this image. Try a clearer call to action to your website next.",
+  "insights.diagnosis.tooEarly": "It has views, but not enough data yet. Let more collect before judging.",
+  "insights.diagnosis.noData": "Not enough data yet. Numbers start building up here after you publish.",
+  "insights.diagnosis.awaitingMetrics": "Confirmed published by VibePin. Pinterest has not returned metrics for this image yet.",
+
   // ── Connection / empty states ──
   "insights.state.businessRequired": "Pinterest Business account needed",
   "insights.state.reconnectPinterest": "Reconnect Pinterest",

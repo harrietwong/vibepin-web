@@ -411,7 +411,9 @@ function ContentRow({
           </div>
           <div>
             <div className={styles.contentTitle}>{item.title}</div>
-            <div className={styles.diagnosis}>{item.diagnosis}</div>
+            {/* diagnosis is an i18n KEY: the rule runs on the server, where there
+                is no locale, so the choice of language is made here. */}
+            <div className={styles.diagnosis}>{tr(item.diagnosis)}</div>
           </div>
         </div>
       </td>

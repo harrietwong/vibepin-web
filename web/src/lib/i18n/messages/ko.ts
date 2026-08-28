@@ -2775,6 +2775,14 @@ const ko: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "페이지를 새로고침한 뒤 다시 시도하세요.",
   "insights.state.accountFailed": "이 계정을 불러오지 못했습니다",
   "insights.state.accountFailedBody": "이 페이지의 다른 계정은 영향을 받지 않습니다.",
+  "insights.diagnosis.efficientButSmallReach": "사이트로 사람을 잘 데려오지만 아직 본 사람이 많지 않습니다. 비슷한 콘텐츠를 더 올려 보세요.",
+  "insights.diagnosis.seenButFewClicks": "본 사람은 많은데 사이트로 온 사람은 적습니다. 이미지의 강점과 행동 유도 문구부터 손보세요.",
+  "insights.diagnosis.seenAndConverts": "많이 보이기도 하고 사이트로도 사람을 데려옵니다. 다음 묶음의 기준으로 삼으세요.",
+  "insights.diagnosis.savedInstagram": "저장하거나 공유한 사람이 있습니다. 비슷한 이미지가 꾸준히 반응을 얻는지 계속 지켜보세요.",
+  "insights.diagnosis.savedPinterest": "이 이미지는 남겨 두고 싶어 합니다. 사이트로 오라는 안내를 더 분명하게 넣어 보세요.",
+  "insights.diagnosis.tooEarly": "조회는 생겼지만 아직 데이터가 부족합니다. 좀 더 쌓인 뒤에 판단하세요.",
+  "insights.diagnosis.noData": "아직 데이터가 충분하지 않습니다. 게시하면 여기에 숫자가 쌓이기 시작합니다.",
+  "insights.diagnosis.awaitingMetrics": "VibePin으로 게시된 것이 확인되었습니다. Pinterest가 이 이미지의 수치를 아직 주지 않았습니다.",
 
 };
 

@@ -2829,6 +2829,14 @@ const ru: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "Обновите страницу и попробуйте ещё раз.",
   "insights.state.accountFailed": "Не удалось загрузить этот аккаунт",
   "insights.state.accountFailedBody": "Остальные аккаунты на этой странице не затронуты.",
+  "insights.diagnosis.efficientButSmallReach": "Хорошо приводит людей на сайт, но пока его увидели немногие. Стоит публиковать больше похожего.",
+  "insights.diagnosis.seenButFewClicks": "Многие увидели, но на сайт перешли немногие. Сначала поработайте над выгодой и призывом к действию на картинке.",
+  "insights.diagnosis.seenAndConverts": "И показывается многим, и приводит людей на сайт. Возьмите за образец для следующей партии.",
+  "insights.diagnosis.savedInstagram": "Люди сохраняют или делятся. Продолжайте смотреть, стабильно ли похожие картинки дают отклик.",
+  "insights.diagnosis.savedPinterest": "Эту картинку хочется сохранить. Попробуйте более явный призыв перейти на сайт.",
+  "insights.diagnosis.tooEarly": "Просмотры есть, но данных пока мало. Дайте им накопиться, прежде чем делать выводы.",
+  "insights.diagnosis.noData": "Пока недостаточно данных. Цифры начнут накапливаться здесь после публикации.",
+  "insights.diagnosis.awaitingMetrics": "Публикация через VibePin подтверждена. Pinterest пока не вернул показатели для этой картинки.",
 
 };
 

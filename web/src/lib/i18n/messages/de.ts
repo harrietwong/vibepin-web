@@ -2799,6 +2799,14 @@ const de: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "Aktualisieren Sie die Seite und versuchen Sie es erneut.",
   "insights.state.accountFailed": "Dieses Konto konnte nicht geladen werden",
   "insights.state.accountFailedBody": "Die anderen Konten auf dieser Seite sind nicht betroffen.",
+  "insights.diagnosis.efficientButSmallReach": "Bringt gut Leute auf deine Website, aber es haben noch nicht viele gesehen. Davon lohnt sich mehr.",
+  "insights.diagnosis.seenButFewClicks": "Viele haben es gesehen, aber wenige sind auf deine Website gegangen. Verbessere zuerst das Verkaufsargument und den Handlungsaufruf im Bild.",
+  "insights.diagnosis.seenAndConverts": "Wird oft gesehen und bringt Leute auf deine Website. Nimm es als Vorlage für die nächste Runde.",
+  "insights.diagnosis.savedInstagram": "Leute speichern oder teilen das. Beobachte weiter, ob ähnliche Bilder regelmäßig Interaktion bringen.",
+  "insights.diagnosis.savedPinterest": "Dieses Bild wollen Leute behalten. Teste als Nächstes einen deutlicheren Hinweis auf deine Website.",
+  "insights.diagnosis.tooEarly": "Es hat Aufrufe, aber noch zu wenig Daten. Lass mehr zusammenkommen, bevor du urteilst.",
+  "insights.diagnosis.noData": "Noch nicht genug Daten. Nach dem Veröffentlichen sammeln sich die Zahlen hier.",
+  "insights.diagnosis.awaitingMetrics": "Bestätigt von VibePin veröffentlicht. Pinterest hat für dieses Bild noch keine Werte geliefert.",
 
 };
 

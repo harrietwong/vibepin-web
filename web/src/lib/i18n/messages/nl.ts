@@ -2799,6 +2799,14 @@ const nl: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "Vernieuw de pagina en probeer het opnieuw.",
   "insights.state.accountFailed": "Dit account kon niet worden geladen",
   "insights.state.accountFailedBody": "De andere accounts op deze pagina zijn niet beïnvloed.",
+  "insights.diagnosis.efficientButSmallReach": "Brengt goed mensen naar je website, maar nog niet veel mensen hebben het gezien. De moeite waard om er meer van te plaatsen.",
+  "insights.diagnosis.seenButFewClicks": "Veel mensen zagen het, maar weinig gingen naar je website. Verbeter eerst het verkoopargument en de oproep tot actie op de afbeelding.",
+  "insights.diagnosis.seenAndConverts": "Wordt veel gezien en brengt ook mensen naar je website. Gebruik het als voorbeeld voor de volgende reeks.",
+  "insights.diagnosis.savedInstagram": "Mensen bewaren of delen dit. Blijf kijken of vergelijkbare afbeeldingen steeds interactie opleveren.",
+  "insights.diagnosis.savedPinterest": "Deze afbeelding willen mensen bewaren. Test een duidelijkere oproep om naar je website te gaan.",
+  "insights.diagnosis.tooEarly": "Er zijn weergaven, maar nog te weinig gegevens. Laat er meer binnenkomen voordat je oordeelt.",
+  "insights.diagnosis.noData": "Nog niet genoeg gegevens. Na het plaatsen lopen de cijfers hier op.",
+  "insights.diagnosis.awaitingMetrics": "Bevestigd gepubliceerd door VibePin. Pinterest heeft nog geen cijfers voor deze afbeelding teruggegeven.",
 
 };
 

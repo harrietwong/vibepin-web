@@ -2786,6 +2786,14 @@ const fr: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "Actualisez la page et réessayez.",
   "insights.state.accountFailed": "Impossible de charger ce compte",
   "insights.state.accountFailedBody": "Les autres comptes de cette page ne sont pas affectés.",
+  "insights.diagnosis.efficientButSmallReach": "Amène bien du monde sur ton site, mais peu de personnes l’ont vu pour l’instant. Publies-en davantage.",
+  "insights.diagnosis.seenButFewClicks": "Beaucoup l’ont vu, mais peu sont allés sur ton site. Commence par le bénéfice et l’appel à l’action sur l’image.",
+  "insights.diagnosis.seenAndConverts": "Très vu et il amène du monde sur ton site. Prends-le comme référence pour la prochaine série.",
+  "insights.diagnosis.savedInstagram": "Des personnes l’enregistrent ou le partagent. Continue à observer si les images similaires génèrent régulièrement de l’interaction.",
+  "insights.diagnosis.savedPinterest": "Cette image donne envie d’être gardée. Teste un appel à l’action vers ton site plus explicite.",
+  "insights.diagnosis.tooEarly": "Il a des vues, mais pas encore assez de données. Laisse-en venir davantage avant de juger.",
+  "insights.diagnosis.noData": "Pas encore assez de données. Les chiffres commenceront à s’accumuler ici après la publication.",
+  "insights.diagnosis.awaitingMetrics": "Publication par VibePin confirmée. Pinterest n’a pas encore renvoyé de mesures pour cette image.",
 
 };
 

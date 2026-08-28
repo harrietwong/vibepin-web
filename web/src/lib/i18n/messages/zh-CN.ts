@@ -2780,6 +2780,14 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "请刷新页面后重试。",
   "insights.state.accountFailed": "该账号加载失败",
   "insights.state.accountFailedBody": "本页其他账号不受影响。",
+  "insights.diagnosis.efficientButSmallReach": "引流效率不错，但看到的人还不多；适合继续发布相似内容。",
+  "insights.diagnosis.seenButFewClicks": "曝光不错，但进网站的人偏少；优先优化图片上的卖点和行动提示。",
+  "insights.diagnosis.seenAndConverts": "既能获得曝光，也能把人带进网站；可作为下一批内容的参考。",
+  "insights.diagnosis.savedInstagram": "有人愿意收藏或分享；继续观察同类图片是否稳定带来互动。",
+  "insights.diagnosis.savedPinterest": "这张图有留存意愿；可继续测试更明确的网站行动提示。",
+  "insights.diagnosis.tooEarly": "已经获得观看，样本还不够；继续积累数据后再判断。",
+  "insights.diagnosis.noData": "暂时没有足够数据，发布后会在这里开始累计。",
+  "insights.diagnosis.awaitingMetrics": "已确认由 VibePin 发布；Pinterest 暂未返回这张图的指标。",
 
 };
 

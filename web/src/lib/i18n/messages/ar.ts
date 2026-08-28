@@ -2779,6 +2779,14 @@ const ar: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "حدّث الصفحة وحاول مرة أخرى.",
   "insights.state.accountFailed": "تعذّر تحميل هذا الحساب",
   "insights.state.accountFailedBody": "لم تتأثر بقية الحسابات في هذه الصفحة.",
+  "insights.diagnosis.efficientButSmallReach": "يجيد جلب الزوار إلى موقعك، لكن لم يره كثيرون بعد. يستحق نشر المزيد مثله.",
+  "insights.diagnosis.seenButFewClicks": "رآه كثيرون لكن قلة انتقلوا إلى موقعك. ابدأ بتحسين ميزة البيع ودعوة التفاعل على الصورة.",
+  "insights.diagnosis.seenAndConverts": "يراه كثيرون ويجلب الزوار إلى موقعك أيضًا. اجعله المرجع للدفعة التالية.",
+  "insights.diagnosis.savedInstagram": "هناك من يحفظه أو يشاركه. واصل ملاحظة ما إذا كانت الصور المشابهة تحقق تفاعلًا ثابتًا.",
+  "insights.diagnosis.savedPinterest": "هذه الصورة يرغب الناس في الاحتفاظ بها. جرّب دعوة أوضح للانتقال إلى موقعك.",
+  "insights.diagnosis.tooEarly": "حصل على مشاهدات لكن البيانات لا تزال قليلة. اترك المزيد يتراكم قبل الحكم.",
+  "insights.diagnosis.noData": "لا توجد بيانات كافية بعد. تبدأ الأرقام بالتراكم هنا بعد النشر.",
+  "insights.diagnosis.awaitingMetrics": "تم تأكيد نشره عبر VibePin. لم يُعِد Pinterest مؤشرات هذه الصورة بعد.",
 
 };
 

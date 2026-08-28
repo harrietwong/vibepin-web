@@ -72,6 +72,18 @@ export function summarizeDays(days: InsightsDay[], websiteClicksAvailable: boole
   return summary;
 }
 
+/**
+ * The one-line read on a piece of content, as an i18n KEY rather than a sentence.
+ *
+ * This function runs on the server, where there is no locale: the dashboard is built
+ * once per connection and the same object is cached and served to whoever asks. A
+ * sentence baked in here would be one hardcoded language for every user of an app
+ * that ships in 18 — which is exactly what it used to be. Returning a key moves the
+ * choice of language to the only place that knows it, the page.
+ *
+ * Every branch must therefore have a key in `insights.diagnosis.*` in all catalogs;
+ * an unknown key renders as itself, which is visible but useless.
+ */
 export function diagnoseContent(
   platform: InsightsPlatform,
   metrics: InsightsMetrics,
@@ -93,24 +105,24 @@ export function diagnoseContent(
 
   if (platform === "pinterest" && metrics.views >= 100 && metrics.trafficRate != null) {
     if (metrics.trafficRate > medianRate && metrics.views < medianViews) {
-      return "引流效率不错，但看到的人还不多；适合继续发布相似内容。";
+      return "insights.diagnosis.efficientButSmallReach";
     }
     if (metrics.views >= medianViews && ((metrics.websiteClicks ?? 0) === 0 || metrics.trafficRate < medianRate)) {
-      return "曝光不错，但进网站的人偏少；优先优化图片上的卖点和行动提示。";
+      return "insights.diagnosis.seenButFewClicks";
     }
     if ((metrics.websiteClicks ?? 0) > 0 && metrics.trafficRate >= medianRate && metrics.views >= medianViews) {
-      return "既能获得曝光，也能把人带进网站；可作为下一批内容的参考。";
+      return "insights.diagnosis.seenAndConverts";
     }
   }
 
   if (metrics.saves + metrics.shares > 0 && metrics.interactions > 0) {
     return platform === "instagram"
-      ? "有人愿意收藏或分享；继续观察同类图片是否稳定带来互动。"
-      : "这张图有留存意愿；可继续测试更明确的网站行动提示。";
+      ? "insights.diagnosis.savedInstagram"
+      : "insights.diagnosis.savedPinterest";
   }
   return metrics.views > 0
-    ? "已经获得观看，样本还不够；继续积累数据后再判断。"
-    : "暂时没有足够数据，发布后会在这里开始累计。";
+    ? "insights.diagnosis.tooEarly"
+    : "insights.diagnosis.noData";
 }
 
 export function attachDiagnoses(
@@ -121,7 +133,7 @@ export function attachDiagnoses(
   return content.map(item => ({
     ...item,
     diagnosis: item.metricsAvailable === false
-      ? "已确认由 VibePin 发布；Pinterest 暂未返回这张图的指标。"
+      ? "insights.diagnosis.awaitingMetrics"
       : diagnoseContent(platform, item.metrics, cohort),
   }));
 }

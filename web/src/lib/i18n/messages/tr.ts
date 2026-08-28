@@ -2856,6 +2856,14 @@ const tr: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "Sayfayı yenileyip tekrar deneyin.",
   "insights.state.accountFailed": "Bu hesap yüklenemedi",
   "insights.state.accountFailedBody": "Bu sayfadaki diğer hesaplar etkilenmedi.",
+  "insights.diagnosis.efficientButSmallReach": "İnsanları siteye getirmede iyi ama henüz çok kişi görmedi. Benzerlerini yayınlamaya devam etmeye değer.",
+  "insights.diagnosis.seenButFewClicks": "Çok kişi gördü ama siteye giden az oldu. Önce görseldeki fayda ve harekete geçirici mesajı iyileştir.",
+  "insights.diagnosis.seenAndConverts": "Hem çok görülüyor hem de siteye insan getiriyor. Bir sonraki grup için örnek al.",
+  "insights.diagnosis.savedInstagram": "Kaydeden ya da paylaşan var. Benzer görsellerin düzenli etkileşim getirip getirmediğini izlemeye devam et.",
+  "insights.diagnosis.savedPinterest": "Bu görseli saklamak isteyenler var. Siteye yönlendiren daha net bir mesaj dene.",
+  "insights.diagnosis.tooEarly": "Görüntülenme var ama veri henüz yeterli değil. Karar vermeden önce biraz daha birikmesini bekle.",
+  "insights.diagnosis.noData": "Henüz yeterli veri yok. Yayınladıktan sonra sayılar burada birikmeye başlar.",
+  "insights.diagnosis.awaitingMetrics": "VibePin ile yayınlandığı doğrulandı. Pinterest bu görsel için henüz veri döndürmedi.",
 
 };
 

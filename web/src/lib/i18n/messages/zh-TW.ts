@@ -2799,6 +2799,14 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "請重新整理頁面後再試。",
   "insights.state.accountFailed": "該帳號載入失敗",
   "insights.state.accountFailedBody": "本頁其他帳號不受影響。",
+  "insights.diagnosis.efficientButSmallReach": "引流效率不錯，但看到的人還不多；適合繼續發布相似內容。",
+  "insights.diagnosis.seenButFewClicks": "曝光不錯，但進網站的人偏少；優先優化圖片上的賣點和行動提示。",
+  "insights.diagnosis.seenAndConverts": "既能獲得曝光，也能把人帶進網站；可作為下一批內容的參考。",
+  "insights.diagnosis.savedInstagram": "有人願意收藏或分享；繼續觀察同類圖片是否穩定帶來互動。",
+  "insights.diagnosis.savedPinterest": "這張圖有留存意願；可繼續測試更明確的網站行動提示。",
+  "insights.diagnosis.tooEarly": "已經獲得觀看，樣本還不夠；繼續累積資料後再判斷。",
+  "insights.diagnosis.noData": "暫時沒有足夠資料，發布後會在這裡開始累計。",
+  "insights.diagnosis.awaitingMetrics": "已確認由 VibePin 發布；Pinterest 暫未回傳這張圖的指標。",
 
 };
 

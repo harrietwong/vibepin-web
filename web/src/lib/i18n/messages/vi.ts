@@ -2785,6 +2785,14 @@ const vi: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "Hãy làm mới trang và thử lại.",
   "insights.state.accountFailed": "Không thể tải tài khoản này",
   "insights.state.accountFailedBody": "Các tài khoản khác trên trang này không bị ảnh hưởng.",
+  "insights.diagnosis.efficientButSmallReach": "Đưa người vào website khá tốt, nhưng chưa nhiều người nhìn thấy. Nên đăng thêm nội dung tương tự.",
+  "insights.diagnosis.seenButFewClicks": "Nhiều người nhìn thấy nhưng ít người vào website. Ưu tiên cải thiện điểm bán hàng và lời kêu gọi hành động trên ảnh.",
+  "insights.diagnosis.seenAndConverts": "Vừa được nhiều người nhìn thấy, vừa đưa người vào website. Lấy làm mẫu cho đợt nội dung tiếp theo.",
+  "insights.diagnosis.savedInstagram": "Có người lưu hoặc chia sẻ. Tiếp tục theo dõi xem ảnh cùng loại có đều đặn tạo tương tác không.",
+  "insights.diagnosis.savedPinterest": "Ảnh này khiến người ta muốn lưu lại. Thử lời kêu gọi vào website rõ ràng hơn.",
+  "insights.diagnosis.tooEarly": "Đã có lượt xem nhưng dữ liệu chưa đủ. Hãy để tích lũy thêm rồi hãy kết luận.",
+  "insights.diagnosis.noData": "Chưa đủ dữ liệu. Số liệu sẽ bắt đầu tích lũy ở đây sau khi bạn đăng.",
+  "insights.diagnosis.awaitingMetrics": "Đã xác nhận do VibePin đăng. Pinterest chưa trả về chỉ số cho ảnh này.",
 
 };
 

@@ -2775,6 +2775,14 @@ const hi: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "पेज रीफ़्रेश करें और फिर से कोशिश करें।",
   "insights.state.accountFailed": "यह खाता लोड नहीं हो सका",
   "insights.state.accountFailedBody": "इस पेज के अन्य खाते प्रभावित नहीं हुए।",
+  "insights.diagnosis.efficientButSmallReach": "लोगों को वेबसाइट तक अच्छी तरह ले जाता है, पर अभी इसे देखने वाले कम हैं। ऐसे और पोस्ट करना सही रहेगा।",
+  "insights.diagnosis.seenButFewClicks": "देखने वाले बहुत थे, पर वेबसाइट तक कम लोग गए। पहले तस्वीर पर फ़ायदा और कार्रवाई का संदेश सुधारें।",
+  "insights.diagnosis.seenAndConverts": "यह दिखता भी खूब है और वेबसाइट तक लोग भी लाता है। अगली सीरीज़ के लिए इसे नमूना बनाएँ।",
+  "insights.diagnosis.savedInstagram": "कुछ लोग इसे सहेज या साझा कर रहे हैं। देखते रहें कि ऐसी ही तस्वीरें लगातार प्रतिक्रिया लाती हैं या नहीं।",
+  "insights.diagnosis.savedPinterest": "यह तस्वीर लोग सहेजना चाहते हैं। वेबसाइट पर आने का और साफ़ संदेश आज़माएँ।",
+  "insights.diagnosis.tooEarly": "व्यू तो मिले हैं, पर आँकड़े अभी कम हैं। थोड़ा और जमा होने दें, फिर तय करें।",
+  "insights.diagnosis.noData": "अभी पर्याप्त आँकड़े नहीं हैं। पोस्ट करने के बाद यहाँ संख्याएँ जुड़ने लगेंगी।",
+  "insights.diagnosis.awaitingMetrics": "VibePin से प्रकाशित होना पक्का है। Pinterest ने इस तस्वीर के आँकड़े अभी नहीं भेजे हैं।",
 
 };
 

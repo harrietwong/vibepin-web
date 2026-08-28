@@ -2778,6 +2778,14 @@ const th: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "รีเฟรชหน้าเว็บแล้วลองอีกครั้ง",
   "insights.state.accountFailed": "ไม่สามารถโหลดบัญชีนี้ได้",
   "insights.state.accountFailedBody": "บัญชีอื่นในหน้านี้ไม่ได้รับผลกระทบ",
+  "insights.diagnosis.efficientButSmallReach": "พาคนเข้าเว็บไซต์ได้ดี แต่ยังมีคนเห็นไม่มาก น่าลงเนื้อหาแบบนี้เพิ่ม",
+  "insights.diagnosis.seenButFewClicks": "มีคนเห็นเยอะ แต่เข้าเว็บไซต์น้อย ให้ปรับจุดขายและคำชวนให้คลิกบนภาพก่อน",
+  "insights.diagnosis.seenAndConverts": "ทั้งมีคนเห็นเยอะและพาคนเข้าเว็บไซต์ได้ ใช้เป็นต้นแบบของชุดถัดไปได้เลย",
+  "insights.diagnosis.savedInstagram": "มีคนบันทึกหรือแชร์ ลองดูต่อว่าภาพแบบเดียวกันสร้างการมีส่วนร่วมได้สม่ำเสมอไหม",
+  "insights.diagnosis.savedPinterest": "ภาพนี้ทำให้คนอยากเก็บไว้ ลองใส่คำชวนให้เข้าเว็บไซต์ที่ชัดขึ้น",
+  "insights.diagnosis.tooEarly": "มียอดดูแล้ว แต่ข้อมูลยังไม่พอ รอให้สะสมอีกสักหน่อยก่อนตัดสิน",
+  "insights.diagnosis.noData": "ข้อมูลยังไม่พอ ตัวเลขจะเริ่มสะสมที่นี่หลังจากคุณเผยแพร่",
+  "insights.diagnosis.awaitingMetrics": "ยืนยันว่าเผยแพร่โดย VibePin แล้ว Pinterest ยังไม่ส่งตัวเลขของภาพนี้กลับมา",
 
 };
 

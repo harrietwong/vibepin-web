@@ -86,8 +86,10 @@ await test("zero outbound clicks never receives a positive traffic diagnosis", (
     diagnosis: "",
   }];
   const diagnosed = attachDiagnoses("pinterest", content);
-  assert.match(diagnosed[0].diagnosis, /进网站的人偏少/);
-  assert.doesNotMatch(diagnosed[0].diagnosis, /把人带进网站/);
+  // The rule returns an i18n key, not a sentence: it runs on the server, where
+  // there is no locale. The page resolves it.
+  assert.equal(diagnosed[0].diagnosis, "insights.diagnosis.seenButFewClicks");
+  assert.notEqual(diagnosed[0].diagnosis, "insights.diagnosis.seenAndConverts");
 });
 
 await test("diagnosis never assigns Instagram profile-link taps to an image", () => {
@@ -111,7 +113,7 @@ await test("diagnosis never assigns Instagram profile-link taps to an image", ()
   }];
   const diagnosed = attachDiagnoses("instagram", content);
   assert.equal(diagnosed[0].metrics.websiteClicks, null);
-  assert.match(diagnosed[0].diagnosis, /收藏|分享/);
+  assert.equal(diagnosed[0].diagnosis, "insights.diagnosis.savedInstagram");
 });
 
 await test("Pinterest client requests account, bulk Pin analytics and Pin metadata endpoints", async () => {
@@ -247,9 +249,22 @@ await test("Insights attributes each Pin to the account that published it", () =
 
 await test("server-side Insights strings are not hardcoded Chinese", () => {
   const dashboard = readFileSync(join(process.cwd(), "src/lib/server/insights/dashboard.ts"), "utf8");
-  // dashboard.ts runs on the server with no locale, so its user-facing warning /
-  // availability text must be plain English rather than one hardcoded language.
+  const rules = readFileSync(join(process.cwd(), "src/lib/insights/businessRules.ts"), "utf8");
+  const catalog = readFileSync(join(process.cwd(), "src/lib/i18n/messages/en/insights.ts"), "utf8");
+  const page = readFileSync(join(process.cwd(), "src/app/app/insights/page.tsx"), "utf8");
+  // Both run on the server with no locale, so neither may carry user-facing text in
+  // one hardcoded language. dashboard.ts uses plain English; businessRules.ts
+  // returns i18n keys, which the page resolves.
   assert.doesNotMatch(dashboard, /[一-鿿]/);
+  assert.doesNotMatch(rules, /[一-鿿]/);
+  assert.match(rules, /"insights\.diagnosis\.seenButFewClicks"/);
+  assert.match(page, /tr\(item\.diagnosis\)/);
+  // Every branch of the rule needs a key, or the page renders the key itself.
+  for (const key of ["efficientButSmallReach", "seenButFewClicks", "seenAndConverts",
+    "savedInstagram", "savedPinterest", "tooEarly", "noData", "awaitingMetrics"]) {
+    assert.match(rules, new RegExp(`"insights\.diagnosis\.${key}"`), `rule key ${key}`);
+    assert.match(catalog, new RegExp(`"insights\.diagnosis\.${key}":`), `catalog key ${key}`);
+  }
 });
 
 

@@ -2797,6 +2797,14 @@ const id: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "Muat ulang halaman dan coba lagi.",
   "insights.state.accountFailed": "Akun ini tidak dapat dimuat",
   "insights.state.accountFailedBody": "Akun lain di halaman ini tidak terpengaruh.",
+  "insights.diagnosis.efficientButSmallReach": "Bagus membawa orang ke situs kamu, tapi belum banyak yang melihat. Layak diterbitkan lagi yang serupa.",
+  "insights.diagnosis.seenButFewClicks": "Banyak yang melihat, tapi sedikit yang ke situs kamu. Perbaiki dulu keunggulan dan ajakan bertindak di gambarnya.",
+  "insights.diagnosis.seenAndConverts": "Banyak dilihat sekaligus membawa orang ke situs kamu. Jadikan acuan untuk kelompok berikutnya.",
+  "insights.diagnosis.savedInstagram": "Ada yang menyimpan atau membagikannya. Terus amati apakah gambar sejenis konsisten memberi interaksi.",
+  "insights.diagnosis.savedPinterest": "Gambar ini membuat orang ingin menyimpannya. Coba ajakan ke situs yang lebih jelas.",
+  "insights.diagnosis.tooEarly": "Sudah ada tayangan, tapi datanya belum cukup. Biarkan terkumpul lebih dulu sebelum menilai.",
+  "insights.diagnosis.noData": "Data belum cukup. Angkanya mulai terkumpul di sini setelah kamu menerbitkan.",
+  "insights.diagnosis.awaitingMetrics": "Dikonfirmasi diterbitkan oleh VibePin. Pinterest belum mengembalikan metrik untuk gambar ini.",
 
 };
 

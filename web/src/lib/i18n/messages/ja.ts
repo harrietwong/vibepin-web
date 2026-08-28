@@ -2781,6 +2781,14 @@ const ja: Partial<Record<MessageKey, string>> = {
   "insights.state.loadFailedBody": "ページを再読み込みしてもう一度お試しください。",
   "insights.state.accountFailed": "このアカウントを読み込めませんでした",
   "insights.state.accountFailedBody": "このページの他のアカウントには影響ありません。",
+  "insights.diagnosis.efficientButSmallReach": "サイトへ人を運ぶ力はありますが、まだ見た人が少ないです。同じような投稿を続けてみましょう。",
+  "insights.diagnosis.seenButFewClicks": "見た人は多いのに、サイトに来た人は少なめです。まず画像内の魅力と行動を促す一言を見直しましょう。",
+  "insights.diagnosis.seenAndConverts": "多くの人に見られ、サイトにも人を運べています。次のまとまりのお手本にしましょう。",
+  "insights.diagnosis.savedInstagram": "保存や共有をしてくれた人がいます。似た画像が安定して反応を得られるか観察を続けましょう。",
+  "insights.diagnosis.savedPinterest": "この画像は取っておきたいと思われています。サイトへの案内をもっとはっきり書いて試しましょう。",
+  "insights.diagnosis.tooEarly": "表示はされていますが、まだデータが足りません。もう少し貯まってから判断しましょう。",
+  "insights.diagnosis.noData": "まだデータが足りません。公開するとここに数字がたまり始めます。",
+  "insights.diagnosis.awaitingMetrics": "VibePin から公開済みであることを確認しました。Pinterest はこの画像の数値をまだ返していません。",
 
 };
 
