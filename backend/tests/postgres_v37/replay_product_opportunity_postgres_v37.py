@@ -34,7 +34,7 @@ MIGRATION = BACKEND / "db" / "migrate_v63_product_opportunities_v1.sql"
 ROLLBACK = BACKEND / "db" / "rollback_v63_product_opportunities_v1.sql"
 CATALOG = BACKEND / "docs" / "product_opportunities_v37_catalog_query_v1.sql"
 POST_APPLY = BACKEND / "docs" / "product_opportunities_v37_stage1_post_apply_query_v1.sql"
-MANIFEST = BACKEND / "docs" / "product_opportunities_v37_release_manifest_8caad77.json"
+MANIFEST = BACKEND / "docs" / "product_opportunities_v37_release_manifest_d2c13dd.json"
 EXPECTED_SHA256 = {
     MIGRATION: "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
     ROLLBACK: "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",

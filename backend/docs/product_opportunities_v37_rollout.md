@@ -19,19 +19,22 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `8caad7764f0f1c136ffe1d1e69d5a468a9d3593f`, and exact
+functional tip `d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d`, and exact
 81-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_8caad77.json`.
+`backend/docs/product_opportunities_v37_release_manifest_d2c13dd.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
-The current tip closes two deployment-review findings without changing Product
-eligibility or volume. Metric rows convert every timezone-aware anchor timestamp
+The current release line closes four deployment-review findings without changing
+Product eligibility or volume. Metric rows convert every timezone-aware anchor timestamp
 to ISO 8601 before the PostgREST JSON boundary, so a non-empty refresh cannot
 fail local JSON encoding. Supply, Tracking and standalone metric apply paths now
 bind `SUPABASE_URL` to an explicit expected project before database reads,
 Pinterest access or writes; direct core calls cannot bypass that check. The
 reviewed environment keys must be configured during staging and are not inferred
-from a service-role key.
+from a service-role key. The scheduled Supply audit now names either the historical
+Physical profile or the exact v3.7 29/22/29/20 launch profile, so one cannot pass
+for the other. Tracking also aborts before snapshot, Primary Evidence or metric
+writes if a provider run crosses a UTC date boundary.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
 current tip does not raise the 120-second safety wall or weaken the zero-render-
@@ -83,7 +86,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 1039 tests with 2
+committed Product-only state, the full backend suite passed 1054 tests with 2
 live-only skips, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit

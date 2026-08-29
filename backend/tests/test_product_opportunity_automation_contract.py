@@ -24,7 +24,7 @@ COMPLETION_MATRIX = (
     ROOT / "docs" / "product_opportunities_v37_completion_matrix_20260828.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
-    ROOT / "docs" / "product_opportunities_v37_release_manifest_8caad77.json"
+    ROOT / "docs" / "product_opportunities_v37_release_manifest_d2c13dd.json"
 )
 FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
     ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
@@ -168,18 +168,19 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
 
 
 def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
-    functional = "8caad7764f0f1c136ffe1d1e69d5a468a9d3593f"
+    functional = "d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d"
+    serialization_and_binding = "8caad7764f0f1c136ffe1d1e69d5a468a9d3593f"
     prior_functional = "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
-    manifest_name = "product_opportunities_v37_release_manifest_8caad77.json"
+    manifest_name = "product_opportunities_v37_release_manifest_d2c13dd.json"
     assert functional in RUNBOOK
     assert prior_functional in COMPLETION_AUDIT
     assert prior_functional in COMPLETION_MATRIX
     assert manifest_name in RUNBOOK
     assert "generationModeration.ts" in RUNBOOK
-    assert "1039 tests" in RUNBOOK
+    assert "1054 tests" in RUNBOOK
     assert "Web registry passed 132/132" in RUNBOOK
     assert "migration-contract group passed 132/132" in RUNBOOK
     assert "generated 70/70" in RUNBOOK
@@ -205,8 +206,10 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
         "a299a17dae428dae69d55f4262f5301804fb35e7"
     )
     assert manifest["liveManifestVerifierFixCommit"] == prior_functional
-    assert manifest["metricSerializationFixCommit"] == functional
-    assert manifest["writeTargetBindingCommit"] == functional
+    assert manifest["metricSerializationFixCommit"] == serialization_and_binding
+    assert manifest["writeTargetBindingCommit"] == serialization_and_binding
+    assert manifest["scheduledAuditProfileFixCommit"] == functional
+    assert manifest["trackingUtcDayGuardCommit"] == functional
     assert manifest["liveProductTruthGateCommit"] == core_functional
     assert "web/src/app/api/generate/route.ts" in paths
     assert "web/src/lib/server/generationModeration.ts" in paths
