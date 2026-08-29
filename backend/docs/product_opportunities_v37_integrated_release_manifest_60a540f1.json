@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAtUtc": "2026-08-29T11:50:09.5733313Z",
+  "generatedAtUtc": "2026-08-29T11:51:45.9647731Z",
   "candidateBranch": "codex/product-v37-central-integrate-0829",
   "productionAnchor": "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
   "sourceCommits": {
@@ -15,7 +15,7 @@
   "rollbackCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeCandidateCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeTree": "94b5994fdcd46077b0b52092238863c0896e37ea",
-  "evidenceCommit": "62b502f34aba0a2683b647b78ae3b7224901fe83",
+  "evidenceCommit": "1c9cf6c8db7292a78cd216ad6c41ffebccf987e4",
   "artifactCount": 36,
   "artifacts": [
     {
@@ -153,9 +153,9 @@
     },
     {
       "path": "backend/tests/test_product_opportunity_automation_contract.py",
-      "commit": "62b502f34aba0a2683b647b78ae3b7224901fe83",
-      "gitBlobSha1": "a22c02bd76f8332d6d3fb68ae6ff489f6a53d07d",
-      "sha256": "82c8692fe5e64cdab1fccdb0be34e41d92037c88d695c42f288ffacf8daa4a13",
+      "commit": "1c9cf6c8db7292a78cd216ad6c41ffebccf987e4",
+      "gitBlobSha1": "7c5310c85257dc91c45c8841c05fb93ad01aa65b",
+      "sha256": "fc4e69be02b099314f9bd725f1791e3724f29f7158c77f9406cc7456ac43490d",
       "bytes": 42000
     },
     {
