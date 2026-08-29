@@ -282,4 +282,3 @@ export async function fanOutDestinations(
   }
   return outcomes;
 }
-

@@ -655,9 +655,12 @@ def test_latest_stage0_catalog_query_closes_hidden_object_gap_without_mutation()
     assert audit["query_file"] == (
         "backend/docs/product_opportunities_v37_catalog_query_v1.sql"
     )
-    assert audit["query_sha256"] == hashlib.sha256(
-        STAGE0_CATALOG_QUERY_PATH.read_bytes()
-    ).hexdigest()
+    # query_sha256 records the canonical LF hash of the audited query (the receipt
+    # was generated on an LF checkout / production). Use _canonical_lf_sha256 — the
+    # same CRLF-robust helper the adjacent migration-blob check uses — so this
+    # provenance assertion holds on any checkout, not only where core.autocrlf keeps
+    # LF. On an LF working tree the value is identical to the raw byte hash.
+    assert audit["query_sha256"] == _canonical_lf_sha256(STAGE0_CATALOG_QUERY_PATH)
     assert audit["migration_git_blob_sha256"] == _canonical_lf_sha256(
         V63_MIGRATION_PATH
     )
