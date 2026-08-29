@@ -37,6 +37,21 @@ const ANALYSIS_STATUSES: readonly AnalysisStatus[] = ["ready", "pending", "faile
  *  unbounded list would grow the request body without limit. */
 export const MAX_EXCLUDE_IDS = 72;
 
+/** Hard cap, in characters, on every free-text observability field (`requestId`,
+ *  `imageKey`, `seed`, `draftId`, and each `excludeIds` entry). These fields are echoed
+ *  verbatim into `served` and ultimately into the analytics event; without a source-level
+ *  limit a single oversized value (e.g. a corrupted client `requestId`) can make even the
+ *  "minimal floor" stage of `boundedServedPayload` exceed its byte budget, defeating it. */
+export const MAX_FIELD_CHARS = 200;
+
+/** `optionalString`, then clamp to `MAX_FIELD_CHARS`. Truncating (not discarding) a
+ *  present-but-oversized value keeps its prefix stable, so a client that logs its own
+ *  `requestId` can still correlate the truncated one back to the same request. */
+function boundedString(value: unknown): string | undefined {
+  const s = optionalString(value);
+  return s === undefined ? undefined : s.slice(0, MAX_FIELD_CHARS);
+}
+
 /** The observability request fields, after defaulting. Only `requestId` is guaranteed. */
 export type ServeRequestFields = {
   draftId?: string;
@@ -91,7 +106,7 @@ function optionalString(value: unknown): string | undefined {
 export function parseServeFields(body: unknown, gen: { uuid: () => string }): ServeRequestFields {
   const raw = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
 
-  const requestId = optionalString(raw.requestId) ?? gen.uuid();
+  const requestId = boundedString(raw.requestId) ?? gen.uuid();
 
   const source = raw.analysisSource;
   const analysisSource = ANALYSIS_SOURCES.includes(source as AnalysisSource)
@@ -104,19 +119,21 @@ export function parseServeFields(body: unknown, gen: { uuid: () => string }): Se
     : "none";
 
   // Filter then dedupe then truncate, in that order: dropping junk first means 72 real
-  // ids survive even when the client padded the list with nulls or repeats.
+  // ids survive even when the client padded the list with nulls or repeats. Each surviving
+  // id is then length-clamped so a single oversized entry can't blow the payload budget.
   const excludeIds = Array.isArray(raw.excludeIds)
     ? Array.from(new Set(raw.excludeIds.filter((id): id is string => typeof id === "string" && id.length > 0)))
         .slice(0, MAX_EXCLUDE_IDS)
+        .map(id => id.slice(0, MAX_FIELD_CHARS))
     : [];
 
   return {
-    draftId: optionalString(raw.draftId),
+    draftId: boundedString(raw.draftId),
     requestId,
-    imageKey: optionalString(raw.imageKey),
+    imageKey: boundedString(raw.imageKey),
     analysisSource,
     analysisStatus,
-    seed: optionalString(raw.seed),
+    seed: boundedString(raw.seed),
     excludeIds,
   };
 }
@@ -221,9 +238,11 @@ export function utcDayStart(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-/** The fields kept when even step 3 of `boundedServedPayload` is still over budget. This
- *  set is deliberately tiny — no unbounded string/array field — so it is always well under
- *  `maxBytes` for any 4KiB-class budget. */
+/** The fields kept when even step 2 of `boundedServedPayload` is still over budget. This
+ *  set is deliberately tiny and its one free-text field (`requestId`) is bounded at the
+ *  source by `parseServeFields`, so in practice it is always well under `maxBytes` for any
+ *  4KiB-class budget; `boundedServedPayload` re-clamps every string here anyway so that
+ *  guarantee does not depend on every caller going through that source-level bound. */
 const MINIMAL_SERVED_KEYS = [
   "requestId",
   "recommendationBasis",
@@ -242,6 +261,11 @@ const MINIMAL_SERVED_KEYS = [
  * replace the whole block with `{_truncated,_bytes}` and lose every field. Degrades in
  * stages, re-measuring with the same `byteLength` `normalizePayload` uses so the two stay
  * consistent, and returns as soon as a stage fits. Never mutates `payload`.
+ *
+ * The return value is guaranteed to be `<= maxBytes` for any input: the last two stages
+ * re-clamp (and, if needed, progressively shrink) every string field of the minimal floor,
+ * so an oversized field that reaches this function some other way than `parseServeFields`
+ * can never make it return an over-budget payload.
  */
 export function boundedServedPayload(
   payload: Record<string, unknown>,
@@ -263,9 +287,39 @@ export function boundedServedPayload(
   if (byteLength(withoutBulky) <= maxBytes) return withoutBulky;
 
   // Stage 3: floor — only the small, bounded fields every event needs to be diagnosable.
+  // `MINIMAL_SERVED_KEYS` is normally small enough on its own, but it includes free-text
+  // fields (`requestId`) that `parseServeFields` bounds at the source — not fields this
+  // function controls. A caller that bypasses that source-level clamp (or any future
+  // free-text field added to the set) must not be able to defeat the floor, so every string
+  // value here is re-clamped, and if the result is STILL over budget every string is
+  // truncated harder until it fits or there is nothing left to cut.
   const minimal: Record<string, unknown> = { idsCount, _idsElided: true };
   for (const key of MINIMAL_SERVED_KEYS) {
-    if (key in payload) minimal[key] = payload[key];
+    if (!(key in payload)) continue;
+    const value = payload[key];
+    minimal[key] = typeof value === "string" ? value.slice(0, MAX_FIELD_CHARS) : value;
   }
-  return minimal;
+  if (byteLength(minimal) <= maxBytes) return minimal;
+
+  // Stage 4: the floor itself doesn't fit (e.g. maxBytes is pathologically small, or the
+  // minimal set still has many bounded-but-numerous string fields). Shrink every string
+  // field in `minimal` in lockstep until it fits, then fall back to the smallest possible
+  // diagnosable object.
+  let budget = MAX_FIELD_CHARS;
+  while (budget > 0) {
+    budget = Math.floor(budget / 2);
+    for (const key of Object.keys(minimal)) {
+      const value = minimal[key];
+      if (typeof value === "string") minimal[key] = value.slice(0, budget);
+    }
+    if (byteLength(minimal) <= maxBytes) return minimal;
+  }
+
+  const floor: Record<string, unknown> = { _idsElided: true, idsCount, _floorTruncated: true };
+  if (byteLength(floor) <= maxBytes) return floor;
+  const smaller: Record<string, unknown> = { _idsElided: true, _floorTruncated: true };
+  if (byteLength(smaller) <= maxBytes) return smaller;
+  // `maxBytes` is smaller than any non-empty JSON object can be — there is nothing left to
+  // diagnose with, only the guarantee to keep.
+  return {};
 }

@@ -26,6 +26,7 @@ import {
   buildServed,
   boundedServedPayload,
   MAX_EXCLUDE_IDS,
+  MAX_FIELD_CHARS,
   type TieredResult,
 } from "../src/lib/studio/referenceServe";
 import { poolHash } from "../src/lib/studio/referencePool";
@@ -143,6 +144,43 @@ test("parseServeFields: excludeIds truncates to 72 AFTER filtering and deduping"
   assert.equal(f.excludeIds.length, 72);
   assert.equal(new Set(f.excludeIds).size, 72);
   assert.ok(f.excludeIds.every(id => id.startsWith("real-")));
+});
+
+test("parseServeFields: an oversized requestId is truncated, not replaced with a new uuid", () => {
+  const g = gen();
+  const huge = "r".repeat(5000);
+  const f = parseServeFields({ requestId: huge }, g);
+  assert.equal(g.calls, 0, "a present (if oversized) requestId must not trigger generation");
+  assert.equal(f.requestId.length, MAX_FIELD_CHARS);
+  assert.equal(f.requestId, huge.slice(0, MAX_FIELD_CHARS), "truncated value keeps the original prefix");
+  assert.ok(huge.startsWith(f.requestId), "the client's own truncated copy can still be correlated");
+});
+
+test("parseServeFields: a missing requestId still generates a uuid (unchanged behaviour)", () => {
+  const g = gen();
+  const f = parseServeFields({}, g);
+  assert.equal(f.requestId, "generated-uuid");
+  assert.equal(g.calls, 1);
+});
+
+test("parseServeFields: oversized seed / imageKey / draftId are each truncated to MAX_FIELD_CHARS", () => {
+  const hugeSeed = "s".repeat(1000);
+  const hugeImageKey = "k".repeat(1000);
+  const hugeDraftId = "d".repeat(1000);
+  const f = parseServeFields({ seed: hugeSeed, imageKey: hugeImageKey, draftId: hugeDraftId }, gen());
+  assert.equal(f.seed, hugeSeed.slice(0, MAX_FIELD_CHARS));
+  assert.equal(f.imageKey, hugeImageKey.slice(0, MAX_FIELD_CHARS));
+  assert.equal(f.draftId, hugeDraftId.slice(0, MAX_FIELD_CHARS));
+  assert.equal(f.seed!.length, MAX_FIELD_CHARS);
+  assert.equal(f.imageKey!.length, MAX_FIELD_CHARS);
+  assert.equal(f.draftId!.length, MAX_FIELD_CHARS);
+});
+
+test("parseServeFields: an oversized excludeIds entry is truncated in place", () => {
+  const hugeId = "x".repeat(1000);
+  const f = parseServeFields({ excludeIds: [hugeId, "short-id"] }, gen());
+  assert.deepEqual(f.excludeIds, [hugeId.slice(0, MAX_FIELD_CHARS), "short-id"]);
+  assert.equal(f.excludeIds[0].length, MAX_FIELD_CHARS);
 });
 
 // ── defaultSeed ─────────────────────────────────────────────────────────────────
@@ -462,6 +500,96 @@ test("boundedServedPayload: an extreme payload (huge categoryInput too) still fi
   assert.equal(out.tier2Count, 3);
   assert.equal(out.idsCount, hugeIds.length);
   assert.equal(out._idsElided, true);
+});
+
+test("boundedServedPayload: floor guarantee holds for a battery of extreme inputs (byteLength <= maxBytes)", () => {
+  const hugeIds = Array.from({ length: 5000 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+  const basePayload = {
+    requestId: "req-battery",
+    categoryInput: "fashion",
+    categoryCanonical: "fashion",
+    poolMode: "unknown-roundrobin",
+    poolSize: hugeIds.length,
+    poolHash: poolHash(hugeIds),
+    excludedCount: 2,
+    tier1Count: 5,
+    tier2Count: 7,
+    ids: hugeIds,
+    recommendationBasis: "category_fallback",
+    analysisSource: "draft",
+    analysisStatus: "ready",
+  };
+
+  const cases: Record<string, Record<string, unknown>> = {
+    "huge requestId": { ...basePayload, requestId: "r".repeat(20_000) },
+    "huge categoryInput": { ...basePayload, categoryInput: "x".repeat(10 * 1024) },
+    "huge poolMode": { ...basePayload, poolMode: "p".repeat(20_000) },
+    "5000-element ids (already covered by hugeIds, kept for clarity)": { ...basePayload },
+    "everything huge at once": {
+      ...basePayload,
+      requestId: "r".repeat(20_000),
+      categoryInput: "x".repeat(10 * 1024),
+      poolMode: "p".repeat(20_000),
+      recommendationBasis: "b".repeat(20_000),
+    },
+  };
+
+  for (const [label, payload] of Object.entries(cases)) {
+    const before = JSON.stringify(payload);
+    const out = boundedServedPayload(payload, MAX_PAYLOAD_BYTES);
+    assert.equal(JSON.stringify(payload), before, `input must not be mutated (${label})`);
+    assert.ok(
+      byteLength(out) <= MAX_PAYLOAD_BYTES,
+      `${label}: bounded payload must fit under budget, got ${byteLength(out)}`,
+    );
+  }
+});
+
+test("boundedServedPayload: a pathologically tiny maxBytes still returns something at-or-under budget", () => {
+  const payload = {
+    requestId: "r".repeat(20_000),
+    categoryInput: "x".repeat(10 * 1024),
+    categoryCanonical: "fashion",
+    poolMode: "unknown-roundrobin",
+    poolSize: 5000,
+    poolHash: "deadbeef",
+    excludedCount: 1,
+    tier1Count: 1,
+    tier2Count: 1,
+    ids: Array.from({ length: 5000 }, (_, i) => `id-${i}`),
+    recommendationBasis: "category_fallback",
+  };
+  for (const maxBytes of [200, 64, 32, 10, 2]) {
+    const out = boundedServedPayload(payload, maxBytes);
+    assert.ok(
+      byteLength(out) <= maxBytes,
+      `maxBytes=${maxBytes}: bounded payload must fit, got ${byteLength(out)}`,
+    );
+  }
+  // Below the smallest possible non-empty JSON object (`{}` is 2 bytes), there is nothing
+  // left to shed — the function returns `{}` rather than violate the budget.
+  assert.deepEqual(boundedServedPayload(payload, 1), {});
+  assert.deepEqual(boundedServedPayload(payload, 0), {});
+});
+
+test("boundedServedPayload: a normal payload under budget is still returned untouched (regression)", () => {
+  const payload = {
+    requestId: "req-normal",
+    categoryInput: "home-decor",
+    categoryCanonical: "home-decor",
+    poolMode: "single",
+    poolSize: 5,
+    poolHash: poolHash(["a", "b", "c", "d", "e"]),
+    excludedCount: 0,
+    tier1Count: 2,
+    tier2Count: 3,
+    ids: ["a", "b", "c", "d", "e"],
+    recommendationBasis: "product_analysis",
+  };
+  const before = JSON.stringify(payload);
+  const out = boundedServedPayload(payload, MAX_PAYLOAD_BYTES);
+  assert.equal(out, payload, "untouched payload should be the same object reference");
+  assert.equal(JSON.stringify(payload), before, "input must not be mutated");
 });
 
 console.log(`\n${passed} reference-serve tests passed.`);
