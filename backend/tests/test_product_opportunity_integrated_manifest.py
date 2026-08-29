@@ -122,7 +122,7 @@ def test_integrated_manifest_migration_order_and_gate_receipts_are_exact() -> No
 
     gates = manifest["gates"]
     assert gates == {
-        "backend": "1125 passed, 2 skipped, 77 subtests",
+        "backend": "1126 passed, 2 skipped, 77 subtests",
         "automationContract": "35 passed",
         "webCoreStudioPlan": "203/203 passed",
         "productOpportunityWebContracts": "7/7 passed",

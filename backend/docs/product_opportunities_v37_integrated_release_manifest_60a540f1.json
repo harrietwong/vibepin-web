@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAtUtc": "2026-08-29T12:02:14.9858468Z",
+  "generatedAtUtc": "2026-08-29T12:06:40.0927897Z",
   "candidateBranch": "codex/product-v37-central-integrate-0829",
   "productionAnchor": "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
   "sourceCommits": {
@@ -15,7 +15,7 @@
   "rollbackCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeCandidateCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeTree": "94b5994fdcd46077b0b52092238863c0896e37ea",
-  "evidenceCommit": "f7731aa0b480d5e64c8bac9b1c6be5078daa7fe0",
+  "evidenceCommit": "efd9e31a54c9a9cd37a81e3b45ca93445eb32513",
   "artifactCount": 39,
   "artifacts": [
     {
@@ -174,9 +174,9 @@
     },
     {
       "path": "backend/tests/test_product_opportunity_automation_contract.py",
-      "commit": "f7731aa0b480d5e64c8bac9b1c6be5078daa7fe0",
-      "gitBlobSha1": "175a02dda247e5618e03bb2335443f637ec5504c",
-      "sha256": "fc8bdc7d55232696ecca7d07e60cb0062172b31dbab82566d1c6f2ecc58f473b",
+      "commit": "efd9e31a54c9a9cd37a81e3b45ca93445eb32513",
+      "gitBlobSha1": "7032136959406706679ef8e4a38d985030281a0c",
+      "sha256": "812e6416b5da8eea4180479a244a9c98af7491526c04ce1b4f1b500e799f73f5",
       "bytes": 44399
     },
     {
@@ -307,7 +307,7 @@
     }
   ],
   "gates": {
-    "backend": "1125 passed, 2 skipped, 77 subtests",
+    "backend": "1126 passed, 2 skipped, 77 subtests",
     "automationContract": "35 passed",
     "webCoreStudioPlan": "203/203 passed",
     "productOpportunityWebContracts": "7/7 passed",
