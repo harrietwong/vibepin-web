@@ -14,6 +14,7 @@ import asyncio
 import copy
 import hashlib
 import html as html_lib
+import ipaddress
 import json
 import os
 import re
@@ -337,12 +338,12 @@ def _validated_redirect_chain(
     direct = normalize_product_url(direct_url)
     final = normalize_product_url(final_url)
     chain = [_normalized_redirect_hop(item) for item in raw_chain]
-    if direct == final:
-        if chain:
-            raise ValueError("merchant redirect proof does not end at a changed identity")
-        return []
-    if not chain or len(chain) > MAX_MERCHANT_REQUESTS - 1:
+    if len(chain) > MAX_MERCHANT_REQUESTS - 1:
         raise ValueError("merchant identity changed without a complete bounded redirect proof")
+    if not chain:
+        if direct != final:
+            raise ValueError("merchant identity changed without a complete bounded redirect proof")
+        return []
     current = direct
     for hop in chain:
         if hop["from"] != current:
@@ -350,7 +351,10 @@ def _validated_redirect_chain(
         current = hop["to"]
     if current != final:
         raise ValueError("merchant redirect proof does not end at the final PDP")
-    return chain
+    # A www/non-www redirect can normalize to the same canonical identity. It
+    # must still be a valid continuous bounded chain, but it is not an identity
+    # migration and therefore does not need migration provenance.
+    return chain if direct != final else []
 
 
 def _redirect_chain_sha256(chain: list[dict]) -> str:

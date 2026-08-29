@@ -362,6 +362,27 @@ def test_changed_merchant_identity_requires_complete_bounded_redirect_proof(
     assert reason in rejected[0]["reason"]
 
 
+def test_www_redirect_with_same_canonical_identity_is_not_a_migration() -> None:
+    direct = "https://ofuure.com/products/denim-rue-button-up-shirt"
+    final = "https://www.ofuure.com/products/denim-rue-button-up-shirt"
+    assert bridge.normalize_product_url(direct) == bridge.normalize_product_url(final)
+    html = '<meta property="og:image" content="https://www.ofuure.com/images/item.jpg">'
+    (manifest, rejected), _ = asyncio.run(
+        run_one(
+            legacy(canonical_product_url=direct),
+            {"id": PIN_ID, "link": direct},
+            merchant(
+                html,
+                url=final,
+                redirect_chain=({"status": 301, "from": direct, "to": final},),
+            ),
+        )
+    )
+    assert rejected == []
+    assert manifest[0]["canonical_product_url"] == bridge.normalize_product_url(direct)
+    assert "pin_redirect_chain" not in manifest[0]["provenance"]
+
+
 def test_same_product_identity_rejects_conflicting_product_family() -> None:
     html = '<meta property="og:image" content="https://shop.example/images/item.jpg">'
     rows = [
@@ -603,3 +624,26 @@ def test_local_or_internal_merchant_targets_fail_before_provider_requests(url: s
     assert manifest == []
     assert "public" in rejected[0]["reason"] or "non-public" in rejected[0]["reason"]
     assert calls == 0
+
+
+def test_resolved_merchant_host_accepts_only_global_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bridge.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (bridge.socket.AF_INET, bridge.socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))
+        ],
+    )
+    asyncio.run(bridge._assert_public_resolution(PDP))
+
+    monkeypatch.setattr(
+        bridge.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (bridge.socket.AF_INET, bridge.socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))
+        ],
+    )
+    with pytest.raises(ValueError, match="public addresses"):
+        asyncio.run(bridge._assert_public_resolution(PDP))
