@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAtUtc": "2026-08-29T12:13:49.2799636Z",
+  "generatedAtUtc": "2026-08-29T12:19:58.5450212Z",
   "candidateBranch": "codex/product-v37-central-integrate-0829",
   "productionAnchor": "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
   "sourceCommits": {
@@ -15,7 +15,7 @@
   "rollbackCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeCandidateCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeTree": "94b5994fdcd46077b0b52092238863c0896e37ea",
-  "evidenceCommit": "34d0431ee69c6c6795c8f804b0909bd72679fe93",
+  "evidenceCommit": "52bc59001d1ef5bd3e2c13eac3c78ecfb7bb8a27",
   "artifactCount": 41,
   "artifacts": [
     {
@@ -34,10 +34,10 @@
     },
     {
       "path": "backend/docs/product_opportunities_v37_integrated_pre_stage_handoff_20260829.md",
-      "commit": "f7731aa0b480d5e64c8bac9b1c6be5078daa7fe0",
-      "gitBlobSha1": "e9b281f12ced76c8dae8d3d5dd88ef067aafd65f",
-      "sha256": "7cfbbf317d5b7dd0f9815507438eb3e8d19415f2d0109a92f62d59a5870db13c",
-      "bytes": 7138
+      "commit": "52bc59001d1ef5bd3e2c13eac3c78ecfb7bb8a27",
+      "gitBlobSha1": "53b00e12d7bd502774b96a96e047dbbfd491d5e9",
+      "sha256": "80e558afbccbe7b3a9fd706ad08c28a65754532290b243ac3eec4421431b3699",
+      "bytes": 7989
     },
     {
       "path": "backend/docs/product_opportunities_v37_pre_stage_handoff_20260829T075822Z.md",
@@ -55,10 +55,10 @@
     },
     {
       "path": "backend/docs/product_opportunities_v37_rollout.md",
-      "commit": "f7731aa0b480d5e64c8bac9b1c6be5078daa7fe0",
-      "gitBlobSha1": "211c4d3aa94ac2ea5e69089fbffad31f773108ae",
-      "sha256": "9f98a1064f598365e7f7dec11159c7869399d0eec4262249f68be7da2a77ede0",
-      "bytes": 65690
+      "commit": "52bc59001d1ef5bd3e2c13eac3c78ecfb7bb8a27",
+      "gitBlobSha1": "30ee2b4fe66b15a039db47ec70c3f932e413c42f",
+      "sha256": "626598c08bdf22fd268df9a33c7eecae98f6ec72d77c59181093b622761bd9ce",
+      "bytes": 65991
     },
     {
       "path": "backend/db/migrate_v63_product_opportunities_v1.sql",
@@ -174,17 +174,17 @@
     },
     {
       "path": "backend/scripts/preflight_product_opportunity_integrated_release.py",
-      "commit": "34d0431ee69c6c6795c8f804b0909bd72679fe93",
-      "gitBlobSha1": "c79415acb28ad8a7c414e123d5180788b8d26f51",
-      "sha256": "8ec778b7d765bc3174c128a0634c825be5fec4349b09baca88c90d871c1c2549",
-      "bytes": 13936
+      "commit": "52bc59001d1ef5bd3e2c13eac3c78ecfb7bb8a27",
+      "gitBlobSha1": "8591265631f90c2a3584a0e554b3b41edd44fac3",
+      "sha256": "d58647b2468e80b4518c758b9128e9347f08245518eccfaa3c1a4532ac7d96bc",
+      "bytes": 14174
     },
     {
       "path": "backend/tests/test_product_opportunity_automation_contract.py",
-      "commit": "efd9e31a54c9a9cd37a81e3b45ca93445eb32513",
-      "gitBlobSha1": "7032136959406706679ef8e4a38d985030281a0c",
-      "sha256": "812e6416b5da8eea4180479a244a9c98af7491526c04ce1b4f1b500e799f73f5",
-      "bytes": 44399
+      "commit": "52bc59001d1ef5bd3e2c13eac3c78ecfb7bb8a27",
+      "gitBlobSha1": "964a25a8f1bfbbef16e9080f85f71209f35d5f55",
+      "sha256": "bbfa291e433f2a1fa4ab8def41ef2a1b33164c74e68b0e6c7f060ce456737858",
+      "bytes": 44530
     },
     {
       "path": "backend/tests/test_integrated_migration_rollbacks.py",
@@ -195,10 +195,10 @@
     },
     {
       "path": "backend/tests/test_product_opportunity_integrated_preflight.py",
-      "commit": "34d0431ee69c6c6795c8f804b0909bd72679fe93",
-      "gitBlobSha1": "9d25d5ec70ccfb777fd95522982fef4d8e2e9f2a",
-      "sha256": "d2d6c753bc887d25e85de2924c624989e1aa96159a0d6ba31953d17714d23b9f",
-      "bytes": 3840
+      "commit": "52bc59001d1ef5bd3e2c13eac3c78ecfb7bb8a27",
+      "gitBlobSha1": "8a92b8a18f5a29d01f7714deb962fea6c0ac1423",
+      "sha256": "f43ddb1c862441ec8b4d541d40c37d229af2a720b745e46c3a2bcbb98f5a4f41",
+      "bytes": 4658
     },
     {
       "path": "backend/tests/pglite_v37/package.json",
