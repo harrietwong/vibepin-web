@@ -1,4 +1,4 @@
--- v67: scheduled-post RELEASE (refund) + consume key re-arming.
+-- v68: scheduled-post RELEASE (refund) + consume key re-arming.
 -- Apply with backend/scripts/run_migration.py --apply (Management API).
 -- NOT APPLIED YET to production: authored only; the owner applies this deliberately.
 --
@@ -312,7 +312,7 @@ begin
       using errcode = 'no_data_found';
   end if;
 
-  -- v67 RE-ARMING: which attempt of this key family are we on? Counted under the
+  -- v68 RE-ARMING: which attempt of this key family are we on? Counted under the
   -- account lock taken above, so a concurrent release cannot change the answer
   -- mid-flight. n = 0 → the historical single-key behaviour, unchanged.
   select count(*) into v_releases

@@ -319,7 +319,7 @@ export type ScheduledPostConsume =
    * `replayed` — the ledger already had an event under this attempt's effective key,
    * so nothing was charged by THIS call.
    * `fresh` — its exact inverse (`!replayed`), named for what the refund gate actually
-   * needs to ask: "did THIS request charge a unit?" v67's consume writes under the key
+   * needs to ask: "did THIS request charge a unit?" v68's consume writes under the key
    * family's CURRENT arm (K when the family has no releases, K:r<n> after n of them),
    * so a consume that lands on a newly re-armed key after a prior refund is `fresh:true`
    * — it really did charge again — while a second route (or a same-day retry) collapsing
@@ -389,7 +389,7 @@ export async function consumeScheduledPost(args: ConsumeScheduledPostArgs): Prom
         replayed,
         mode,
       });
-      // `fresh` is the RPC's own answer, not a guess: v67 returns replayed:false ONLY
+      // `fresh` is the RPC's own answer, not a guess: v68 returns replayed:false ONLY
       // when it inserted a new consume event under the family's current arm (K, or
       // K:r<n> after n refunds). That is precisely "this request charged a unit", which
       // is the only condition under which the caller may later release one.
@@ -398,7 +398,7 @@ export async function consumeScheduledPost(args: ConsumeScheduledPostArgs): Prom
 
     // v55's RPC answers with `insufficient_capacity`; the shorter `insufficient`
     // is what the in-memory fakes and the sibling meters use. Accepting BOTH is not
-    // tolerance for sloppiness — before v67 this branch only matched the short form,
+    // tolerance for sloppiness — before v68 this branch only matched the short form,
     // so against the real database an over-limit publish fell through to the
     // `unexpected` branch below and returned `kind: "error"`. Every fake-db test
     // still passed. With enforcement now keyed on `kind === "insufficient"` (the
@@ -442,7 +442,7 @@ export function scheduledPostLimitResponseBody() {
 }
 
 /**
- * ── REFUND (v67) ───────────────────────────────────────────────────────────────
+ * ── REFUND (v68) ───────────────────────────────────────────────────────────────
  *
  * A publish is charged BEFORE the provider call (see consumeScheduledPost above),
  * which is right for the crash case and wrong for the two cases where nothing was
@@ -495,7 +495,7 @@ export function scheduledPostLimitResponseBody() {
  * The caller passes the SAME key it consumed with — never a re-derived one (an
  * immediate publish's key contains a UTC date bucket that may have been relayed
  * from another route, and re-deriving it here could resolve to a different day and
- * refund nothing). v67's RPC owns the attempt arithmetic: it finds the latest
+ * refund nothing). v68's RPC owns the attempt arithmetic: it finds the latest
  * un-released consume in key family K, decrements once, and writes a `release`
  * event keyed `K:release:<n>`. A later successful publish under the same K is then
  * charged again, because the RPC re-arms the family to `K:r<n>` — that is what makes
