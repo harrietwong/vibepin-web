@@ -82,10 +82,19 @@ as $$
   ),
   del as (
     -- The delete reads `blocking` in the SAME statement, so the count and the
-    -- delete see one snapshot. A schedule inserted after this statement starts
-    -- cannot slip between them; it either predates the snapshot (and blocks) or
-    -- lands after the row is already gone (and is refused by the route's
-    -- destination validation on the write side).
+    -- delete are evaluated against ONE snapshot. That is the whole guarantee, and
+    -- it is worth stating exactly: this statement can never delete a row while its
+    -- own count says something is scheduled through it.
+    --
+    -- It is NOT a guarantee that schedule writes are serialised against this
+    -- statement. Concurrent schedule writes run in their own transactions and this
+    -- function does not lock pin_drafts, so a schedule that commits just after this
+    -- snapshot is taken is invisible here and survives the delete. See the
+    -- "Accepted residual" note at the routes' delete step
+    -- (web/src/app/api/social/disconnect/route.ts,
+    --  web/src/app/api/pinterest/disconnect/route.ts): the consequence is a
+    -- schedule that fails at publish time with `target_disconnected` — a visible
+    -- failure, never a duplicate post — and the owner accepted it on 2026-08-29.
     delete from social_connections c
     where c.id = p_connection_id
       and c.user_id = p_user_id
@@ -105,4 +114,4 @@ revoke all on function public.remove_social_connection_if_unscheduled(uuid, uuid
 grant execute on function public.remove_social_connection_if_unscheduled(uuid, uuid) to service_role;
 
 comment on function public.remove_social_connection_if_unscheduled(uuid, uuid) is
-  'Delete one social_connections row only if no live pin_drafts schedule still targets it. Check and delete are one statement so the two cannot race. Returns (deleted, scheduled_count); deleted=false with scheduled_count=0 means the row was already gone.';
+  'Delete one social_connections row only if no live pin_drafts schedule still targets it. Check and delete are one statement evaluated against one snapshot, so this can never delete a row its own count says is scheduled; concurrent schedule writes are NOT serialised against it (accepted residual, see the header). Returns (deleted, scheduled_count); deleted=false with scheduled_count=0 means the row was already gone.';

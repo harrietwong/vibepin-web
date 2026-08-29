@@ -278,6 +278,16 @@ export async function POST(req: Request) {
     // separate round trip from the delete, so a schedule created in another tab
     // between the two used to survive and point at a row that no longer exists. This
     // RPC counts and deletes in ONE statement; it is the only authority.
+    // ACCEPTED RESIDUAL (owner decision, 2026-08-29). The RPC's guarantee is that
+    // its count and its delete see one snapshot — it can never delete a row that
+    // its own count says is still scheduled through. It does NOT serialise
+    // concurrent schedule writes: the schedule path is validate-then-upsert in a
+    // separate transaction, so a schedule committed in the millisecond after this
+    // statement's snapshot survives the delete and ends up naming a connection that
+    // is gone. Closing that would need a lock or a single transaction spanning both
+    // paths, which PostgREST cannot express. The consequence is bounded and was
+    // accepted: at due time the publish fails with `target_disconnected` — a
+    // visible failure on the schedule, never a duplicate post, never a silent drop.
     const removal = await removeConnectionIfUnscheduled(createServerClient(), uid, connectionId);
     if (removal.outcome === "unavailable") {
       // Fail CLOSED. Falling back to the plain delete here would restore the exact
