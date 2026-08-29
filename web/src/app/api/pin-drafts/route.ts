@@ -20,11 +20,16 @@ import { resolvePlan } from "@/lib/server/entitlements";
 import { checkAllowance, recordUsage } from "@/lib/server/usage";
 import { platformName } from "@/lib/social/platforms";
 import {
+  unavailableScheduleDestinations,
+  type ScheduleTarget,
+} from "@/lib/server/social/scheduledDestinationsAvailable";
+import {
   buildPromotedColumns,
   PROMOTED_COLUMN_KEYS,
   buildScheduleColumns,
   buildScheduledAt,
   blockedScheduleDestinations,
+  requiredScheduleConnectionIds,
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
 
@@ -256,6 +261,9 @@ export async function PUT(req: Request) {
   // Drafts in this request that ask to be scheduled to a destination we cannot
   // honour at due time. Collected, then REFUSED below — never quietly stripped.
   const unschedulable: Array<{ draftId: string; providers: string[] }> = [];
+  // Drafts being scheduled, with the connection ids their schedule will publish
+  // through. Validated in ONE batch after the loop (see the destination gate).
+  const scheduleTargets: ScheduleTarget[] = [];
   for (const d of incoming) {
     const rowMs = existingMs.get(d.draftId);
     const incMs = parseMs(d.updatedAt)!;
@@ -276,6 +284,13 @@ export async function PUT(req: Request) {
       // so it never refused anything at all.
       const blocked = blockedScheduleDestinations(p);
       if (blocked.length) unschedulable.push({ draftId: d.draftId, providers: blocked });
+      // A scheduled draft must also name accounts that still EXIST and can still
+      // publish. Collected here (cheap, pure) and resolved in one batch below —
+      // the actual lookup is a database read and must not run per draft.
+      if (incomingScheduledAt) {
+        const connectionIds = requiredScheduleConnectionIds(p);
+        if (connectionIds.length) scheduleTargets.push({ draftId: d.draftId, connectionIds });
+      }
     }
     rows.push({
       vibepin_user_id: userId,
@@ -315,6 +330,42 @@ export async function PUT(req: Request) {
       },
       { status: 422 },
     );
+  }
+
+  // ── Destination-EXISTS gate (the write half of the remove race) ───────────
+  // Remove is now atomic — an account with live schedules is not deleted (v67).
+  // This is the other direction: a schedule WRITTEN after the account went away.
+  // A tab open since before the removal would otherwise persist a schedule naming
+  // a row that no longer exists, and the cron would inherit the very orphan the
+  // delete guard exists to prevent. The client cannot be the authority here,
+  // because a stale client IS the failure.
+  //
+  // 422, like the gate above: the request is well formed, the destination is not
+  // usable. A distinct code (`destination_unavailable`) because the remedy is
+  // different — reconnect or pick another account, not "wait for the platform".
+  if (scheduleTargets.length > 0) {
+    const unavailable = await unavailableScheduleDestinations(userId, scheduleTargets);
+    if (unavailable.length > 0) {
+      const names = [...new Set(
+        unavailable.map(u => (u.provider ? platformName(u.provider) : null)).filter((n): n is string => !!n),
+      )];
+      const disconnected = unavailable.some(u => u.reason === "disconnected");
+      const userMessage = names.length === 0
+        // The id resolves to nothing at all, so there is no platform to name.
+        ? "One of the accounts this schedule publishes to is no longer connected. Pick another account, then schedule again."
+        : disconnected
+          ? `Your ${names.join(" and ")} account is no longer connected, so this can't be scheduled. Reconnect it, or pick another account.`
+          : `The ${names.join(" and ")} account this schedule publishes to no longer exists. Pick another account, then schedule again.`;
+      return Response.json(
+        {
+          error: "destination_unavailable",
+          code: "destination_unavailable",
+          drafts: unavailable,
+          userMessage,
+        },
+        { status: 422 },
+      );
+    }
   }
 
   // ── Scheduled-post quota gate ─────────────────────────────────────────────
