@@ -379,7 +379,15 @@ export async function consumeScheduledPost(args: ConsumeScheduledPostArgs): Prom
       return { kind: "consumed", replayed: Boolean(result.replayed) };
     }
 
-    if (result?.reason === "insufficient") {
+    // v55's RPC answers with `insufficient_capacity`; the shorter `insufficient`
+    // is what the in-memory fakes and the sibling meters use. Accepting BOTH is not
+    // tolerance for sloppiness — before v67 this branch only matched the short form,
+    // so against the real database an over-limit publish fell through to the
+    // `unexpected` branch below and returned `kind: "error"`. Every fake-db test
+    // still passed. With enforcement now keyed on `kind === "insufficient"` (the
+    // A.4.0 blocking sites), that mismatch would have meant a limit gate that is
+    // green in tests and silently open in production.
+    if (result?.reason === "insufficient" || result?.reason === "insufficient_capacity") {
       logEvent("scheduled_post_insufficient", { userId: args.userId, mode });
       // In shadow this is observational only; the caller must not block.
       return { kind: "insufficient" };
@@ -414,4 +422,125 @@ export function scheduledPostLimitResponseBody() {
     code: "scheduled_post_limit_reached",
     error: "You have reached your scheduled post limit for this billing period.",
   };
+}
+
+/**
+ * ── REFUND (v67) ───────────────────────────────────────────────────────────────
+ *
+ * A publish is charged BEFORE the provider call (see consumeScheduledPost above),
+ * which is right for the crash case and wrong for the two cases where nothing was
+ * ever created. PRD v3.2 §5.3/§5.4 (decisions #4 and #8) fixes what happens:
+ *
+ *   not_sent          the request never left us                     → refund
+ *   rejected          provider returned 4xx and created nothing     → refund
+ *   sent              provider returned a resource id               → keep the charge
+ *   delivery_unknown  timeout / 5xx / no status code at all         → keep the charge,
+ *                     never refunded and never re-charged
+ *
+ * `delivery_unknown` is deliberately charged: a timeout is trivially reproducible,
+ * so refunding it would be an advertised free-publish bypass. The product accepts
+ * over-charging in that narrow case rather than under-charging in the general one.
+ *
+ * The caller passes the SAME key it consumed with — never a re-derived one (an
+ * immediate publish's key contains a UTC date bucket that may have been relayed
+ * from another route, and re-deriving it here could resolve to a different day and
+ * refund nothing). v67's RPC owns the attempt arithmetic: it finds the latest
+ * un-released consume in key family K, decrements once, and writes a `release`
+ * event keyed `K:release:<n>`. A later successful publish under the same K is then
+ * charged again, because the RPC re-arms the family to `K:r<n>` — that is what makes
+ * "refunded, then published → charged again" true without any caller carrying an
+ * attempt counter.
+ */
+export type ScheduledPostReleaseReason = "not_sent" | "rejected";
+
+export type ScheduledPostRelease =
+  | { kind: "off" }
+  | { kind: "released"; replayed: boolean }
+  | { kind: "nothing_to_release" }
+  | { kind: "error"; message: string };
+
+export type ReleaseScheduledPostArgs = {
+  userId: string;
+  /** The EXACT key the matching consumeScheduledPost used — never re-derived here. */
+  key: string;
+  reason: ScheduledPostReleaseReason;
+  referenceId?: string | null;
+  metadata?: Record<string, unknown>;
+  deps?: { rpc?: RpcRunner };
+};
+
+/**
+ * Give back one scheduled-post unit, idempotently.
+ *
+ * FAIL-OPEN, and more strictly than consume: this runs on a path that has ALREADY
+ * failed, and the caller is about to answer the user about that failure. A ledger
+ * problem here must never change the response, never throw, and never mask the real
+ * publish error — it logs `usage_meter_release_error` and returns. The worst case of
+ * a lost refund is one over-charged unit, visible in `usage_events`; the worst case
+ * of a thrown refund is a publish route that 500s on top of an already-failed
+ * publish.
+ *
+ * No `ensureUsageAccount` call: a refund is only ever meaningful when a consume
+ * already ran, and that consume provisioned the account. Provisioning one HERE would
+ * create a fresh row and then try to refund a charge that row never had.
+ */
+export async function releaseScheduledPost(args: ReleaseScheduledPostArgs): Promise<ScheduledPostRelease> {
+  const mode = usageMeteringMode();
+  if (mode === "off") return { kind: "off" };
+
+  try {
+    const rpc = args.deps?.rpc ?? defaultRpc();
+    const { data, error } = await rpc("usage_release_scheduled_post", {
+      p_user_id: args.userId,
+      p_idempotency_key: args.key,
+      p_reason: args.reason,
+      p_reference_id: args.referenceId ?? null,
+      p_metadata: args.metadata ?? {},
+    });
+
+    if (error) {
+      logEvent("usage_meter_release_error", {
+        userId: args.userId,
+        reason: args.reason,
+        mode,
+        error: error.message.slice(0, 200),
+      });
+      return { kind: "error", message: error.message };
+    }
+
+    const result = data as { ok?: boolean; replayed?: boolean; reason?: string } | null;
+
+    if (result?.ok) {
+      logEvent("scheduled_post_released", {
+        userId: args.userId,
+        reason: args.reason,
+        replayed: Boolean(result.replayed),
+        mode,
+      });
+      return { kind: "released", replayed: Boolean(result.replayed) };
+    }
+
+    if (result?.reason === "nothing_to_release") {
+      // Not an error and not rare: metering may be off for this user, the consume
+      // may have been refused (enforce), or the failure happened before it ran.
+      logEvent("scheduled_post_nothing_to_release", { userId: args.userId, mode });
+      return { kind: "nothing_to_release" };
+    }
+
+    logEvent("usage_meter_release_error", {
+      userId: args.userId,
+      reason: args.reason,
+      mode,
+      error: `unexpected_result:${result?.reason ?? "unknown"}`,
+    });
+    return { kind: "error", message: result?.reason ?? "unexpected_result" };
+  } catch (err) {
+    logEvent("usage_meter_release_error", {
+      userId: args.userId,
+      reason: args.reason,
+      mode,
+      error: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+    });
+    return { kind: "error", message: err instanceof Error ? err.message : "unknown" };
+  }
 }

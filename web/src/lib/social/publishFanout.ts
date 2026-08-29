@@ -28,6 +28,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isSocialProvider, platformName, type SocialProvider } from "./platforms";
 import { findConnection } from "./server/socialConnectionStore";
 import { getSocialProviderById } from "./providers";
+import { readProviderSignal } from "@/lib/server/usage/deliveryOutcome";
 import type { ScheduledDestination } from "../pinDraftStore";
 import type { SocialPostPayload } from "./types";
 import { rollUpJobStatus, type DestinationOutcome } from "./publishRules";
@@ -146,6 +147,9 @@ export async function dispatchDestination(
       // silently falling back to another account would publish somewhere the
       // merchant never chose.
       error: `Reconnect your ${platformName(provider)} account to publish this Pin.`,
+      // Decided here, before any network call: this destination is `not_sent` and
+      // its share of the scheduled-post charge is refundable (deliveryOutcome.ts).
+      preNetwork: true,
     };
   }
 
@@ -167,9 +171,24 @@ export async function dispatchDestination(
         : result.status === "not_implemented"
           ? `Publishing to ${platformName(provider)} is coming soon.`
           : result.error ?? "Publishing is not available for this platform yet.",
+      // Carried through for the usage refund decision only (deliveryOutcome.ts).
+      // `not_implemented` never reached a platform, so it is pre-network.
+      providerStatus: result.providerStatus ?? null,
+      providerResourceId: result.providerResourceId ?? result.externalPostId ?? null,
+      preNetwork: result.status === "not_implemented",
     };
   } catch (err) {
-    return { ...base, status: "failed", error: (err as Error).message || "Publishing failed." };
+    // A provider implementation that THREW rather than returning a typed failure.
+    // Read the two provider fields off it if they happen to be there; otherwise
+    // this is `delivery_unknown` and the charge stands.
+    const signal = readProviderSignal(err);
+    return {
+      ...base,
+      status: "failed",
+      error: (err as Error).message || "Publishing failed.",
+      providerStatus: signal.providerStatus ?? null,
+      providerResourceId: signal.providerResourceId ?? null,
+    };
   }
 }
 

@@ -24,9 +24,25 @@
  */
 
 import { createServerClient } from "@/lib/supabase";
-import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
+import {
+  consumeScheduledPost,
+  deriveScheduledPostKey,
+  releaseScheduledPost,
+  usageEnforceFor,
+} from "@/lib/server/usage/meterScheduledPost";
+import {
+  aggregateDelivery,
+  classifyDelivery,
+  isRefundable,
+  readProviderSignal,
+  type DeliveryOutcome,
+} from "@/lib/server/usage/deliveryOutcome";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
-import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
+import {
+  NeedsReconnectError,
+  NotConnectedError,
+  PinterestTrialAccessError,
+} from "@/lib/server/pinterest/service";
 import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
 import {
   createPublishJob,
@@ -173,6 +189,26 @@ export async function GET(req: Request): Promise<Response> {
     };
     const rowStartedMs = Date.now();
     void recordPublishEvent(db, PUBLISH_EVENT_ATTEMPTED, eventBase);
+    // Metering state for THIS row, declared at row scope so the outer catch below —
+    // which handles a throw from anywhere in the row's processing, including before
+    // the per-destination loop — can settle the refund too. `meterKey` stays null
+    // until the consume actually runs; a null key means nothing was charged and
+    // nothing can be refunded.
+    let meterKey: string | null = null;
+    const meterReference = typeof row.draft_id === "string" ? row.draft_id : null;
+    const deliveries: DeliveryOutcome[] = [];
+    const settleMetering = async (): Promise<void> => {
+      if (!meterKey) return;
+      const outcome = aggregateDelivery(deliveries);
+      if (!isRefundable(outcome)) return;
+      await releaseScheduledPost({
+        userId: row.vibepin_user_id,
+        key: meterKey,
+        reason: outcome,
+        referenceId: meterReference,
+        metadata: { source: "scheduled-cron", route: "cron_publish_due" },
+      });
+    };
     try {
       const input = payloadToPublishInput(row.vibepin_user_id, row.payload);
       if (!input) {
@@ -198,12 +234,69 @@ export async function GET(req: Request): Promise<Response> {
       // before the provider call also means a crash mid-publish still recorded the
       // attempt the user really made. Fail-open in shadow: consumeScheduledPost never
       // throws, so a ledger outage cannot stop a scheduled publish.
-      await consumeScheduledPost({
+      // Kept so a refund below releases the EXACT key that was charged.
+      meterKey = deriveScheduledPostKey(row.vibepin_user_id, String(row.draft_id ?? ""), row.scheduled_at);
+      const consumed = await consumeScheduledPost({
         userId: row.vibepin_user_id,
-        key: deriveScheduledPostKey(row.vibepin_user_id, String(row.draft_id ?? ""), row.scheduled_at),
-        referenceId: typeof row.draft_id === "string" ? row.draft_id : null,
+        key: meterKey,
+        referenceId: meterReference,
         metadata: { source: "scheduled-cron" },
       });
+
+      // ── A.4.0 BLOCKING SITE — over-quota rows never reach a provider ──────────
+      // The cron path cannot answer 402 to anyone, so the refusal is written into
+      // the row instead: a `limit_reached` failure with §5.4's not_sent semantics
+      // (nothing was charged — the consume was REFUSED, so there is nothing to
+      // refund either) and, crucially, `scheduled_at` cleared by persistFailure.
+      // Leaving it set would re-scan and re-refuse this row every five minutes for
+      // as long as the user stays over limit — a retry storm made of failures the
+      // user cannot clear by waiting. The merchant re-schedules once they have
+      // capacity, exactly as with any other terminal failure. Shadow is unaffected:
+      // usageEnforceFor is false unless the mode is `enforce` AND the per-type flag
+      // is on, so this branch is unreachable today.
+      if (consumed.kind === "insufficient" && usageEnforceFor("scheduled_post")) {
+        await persistFailure(
+          db,
+          row,
+          { message: "Scheduled post limit reached for this billing period.", code: "scheduled_post_limit_reached" },
+          nowIso,
+        );
+        void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
+          code: "scheduled_post_limit_reached",
+          message: "Scheduled post limit reached for this billing period.",
+        });
+        failed++;
+        continue;
+      }
+
+      /**
+       * ── DELIVERY TRI-STATE → REFUND (design §A.4; PRD v3.2 §5.3/§5.4) ────────
+       * Collected per destination and collapsed once at the end of the row, since
+       * one Content is one charged unit however many destinations it has:
+       *
+       *   not_sent  (REFUND)  a destination with no usable board, a typed
+       *                       publishPinForUser failure (bad_request /
+       *                       invalid_image_url / invalid_link / board_not_owned /
+       *                       carousel_*), a thrown NotConnectedError /
+       *                       NeedsReconnectError, or a social target with no
+       *                       connected account. None reached a provider.
+       *   rejected  (REFUND)  a real provider 4xx with no resource id back.
+       *   sent      (CHARGE)  ANY destination published — including one Pinterest
+       *                       account succeeding while a second fails.
+       *   delivery_unknown    5xx / timeout / an error carrying no provider status,
+       *             (CHARGE)  or a row where nothing was attempted at all (every
+       *                       destination had already published on an earlier
+       *                       attempt — refunding there would give back a unit for
+       *                       a Content that is live).
+       *
+       * PinterestTrialAccessError contributes nothing and never refunds: the row
+       * keeps its schedule and will be re-charged under the SAME key on the next
+       * pass, so refunding would churn release/re-consume pairs every five minutes
+       * until the app is approved.
+       *
+       * Reads ONLY `providerStatus` / `providerResourceId` — never message text.
+       */
+
 
       // ── The destinations this Content was scheduled to ────────────────────────
       // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
@@ -235,6 +328,8 @@ export async function GET(req: Request): Promise<Response> {
       for (const destination of pinterestTargets) {
         const perDestination = destinationPublishInput(input, destination, legacyTarget);
         if (!perDestination) {
+          // No board on this destination — refused here, never dispatched.
+          deliveries.push(classifyDelivery({ preNetwork: true }));
           outcomes.push({
             provider: "pinterest", status: "failed",
             socialConnectionId: destination.socialConnectionId ?? null,
@@ -245,6 +340,9 @@ export async function GET(req: Request): Promise<Response> {
         }
         try {
           const result = await publishPinForUser(perDestination);
+          // A typed failure is decided before (or instead of) a create; a success is
+          // a real Pin id. Either way this destination's state is known here.
+          deliveries.push(classifyDelivery(result.ok ? { ok: true } : { preNetwork: true }));
           if (result.ok) {
             // Adopt-once (PRD §14) applies only to a Content that named no account.
             if (!destination.socialConnectionId && result.connectionId) adoptedConnectionId = result.connectionId;
@@ -262,10 +360,19 @@ export async function GET(req: Request): Promise<Response> {
           if (err instanceof PinterestTrialAccessError) {
             // Not a failure — the Content is publishable, just not until Pinterest
             // grants access. Record nothing for this destination so the row keeps its
-            // schedule (handled after the loop).
+            // schedule (handled after the loop). Deliberately contributes no delivery
+            // state: the charge stands and is replayed on the next attempt.
             trialBlocked++;
             continue;
           }
+          // Class first: our OWN connection errors carry an HTTP status we chose
+          // (409/401) that no provider sent, so reading it as a provider rejection
+          // would be exactly the mistake the two-field rule forbids.
+          deliveries.push(
+            err instanceof NotConnectedError || err instanceof NeedsReconnectError
+              ? classifyDelivery({ preNetwork: true })
+              : classifyDelivery(readProviderSignal(err)),
+          );
           const described = describeThrown(err);
           outcomes.push(pinterestOutcomeRow(destination, { ok: false, error: described.message }));
           if (!firstFailure) firstFailure = described;
@@ -284,6 +391,8 @@ export async function GET(req: Request): Promise<Response> {
       // re-attempt them, breaking the promise that the Content keeps its slot until
       // Pinterest approves. The social destinations are re-attempted with it.
       if (trialBlocked > 0 && outcomes.length === 0) {
+        // No refund: the row keeps its schedule and the SAME key is charged again
+        // next pass, so a release here would only churn (see the mapping above).
         await releaseClaim(db, row);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "pinterest_trial_access", message: "Pinterest access is still under review",
@@ -313,6 +422,15 @@ export async function GET(req: Request): Promise<Response> {
             altText: input.altText,
           });
           outcomes.push(...fanned);
+          for (const f of fanned) {
+            if (f.status === "skipped") continue; // never attempted, not a delivery failure
+            deliveries.push(classifyDelivery({
+              ok: f.status === "published",
+              preNetwork: f.preNetwork,
+              providerStatus: f.providerStatus,
+              providerResourceId: f.providerResourceId ?? f.externalPostId ?? null,
+            }));
+          }
           if (jobId) await recordOutcomes(db, jobId, outcomes);
         } catch (fanErr) {
           // A fan-out failure must never undo a Pinterest publish that already
@@ -324,6 +442,8 @@ export async function GET(req: Request): Promise<Response> {
       if (!outcomes.length) {
         // Nothing was owed at all (every destination had already published on an
         // earlier attempt). Clear the schedule so the row leaves the due scan.
+        // Explicitly NO refund: an empty attempt is not evidence of non-delivery —
+        // this Content is live on every destination it named.
         await persistOutcomes(db, row, [], nowIso, null);
         skipped++;
         continue;
@@ -333,6 +453,10 @@ export async function GET(req: Request): Promise<Response> {
       // categorizing from the message alone would put a differently-worded
       // needs_reconnect in "transient" and offer the merchant the wrong fix.
       await persistOutcomes(db, row, outcomes, nowIso, adoptedConnectionId, firstFailure?.code);
+      // Refund decision for the whole row, once, after every destination is known.
+      // Runs after the persist so a ledger hiccup can never delay writing what
+      // actually happened (releaseScheduledPost is fail-open and never throws).
+      await settleMetering();
       const anyPublished = outcomes.some(o => o.status === "published");
       if (anyPublished) {
         const pin = outcomes.find(o => o.provider === "pinterest" && o.status === "published");
@@ -374,6 +498,16 @@ export async function GET(req: Request): Promise<Response> {
       // a single expired account never aborts the batch, and no retry storm (scheduling
       // is cleared so the row leaves the due scan).
       await persistFailure(db, row, describeThrown(err), nowIso);
+      // A throw that escaped the per-destination loops — the row failed as a whole.
+      // Classify it the same way (class first, then the two provider fields) and
+      // settle: if nothing was charged (`meterKey` still null, e.g. an unpublishable
+      // payload) this is a no-op. The trial-access branch above already returned.
+      deliveries.push(
+        err instanceof NotConnectedError || err instanceof NeedsReconnectError
+          ? classifyDelivery({ preNetwork: true })
+          : classifyDelivery(readProviderSignal(err)),
+      );
+      await settleMetering();
       void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, err);
       failed++;
     }
