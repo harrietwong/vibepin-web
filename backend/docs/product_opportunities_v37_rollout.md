@@ -1,28 +1,42 @@
 # Product Opportunities v3.7 Rollout Runbook
 
-Status: exact local candidate plus non-production Preview qualified. Production
-rollout is not authorized, the additive v63 schema is not installed, and real
+Status: exact central integrated candidate locally qualified for Preview.
+The integrated candidate itself has not been deployed to Preview or production,
+the additive v63 schema is not installed, and real
 Admission/Tracking history does not yet exist. This document does not authorize
 a push, production database write, VPS deployment, Vercel promotion, timer
 enablement, or budget increase.
 
-Current decision: code, manifest, local ShellCheck and the unchanged Web Preview
-are PASS; exact current VPS staging/systemd verification remains pending. Product
+Current decision: integrated code, manifest, local shell/systemd evidence and
+build gates are PASS; exact integrated Preview and current VPS staging/systemd
+verification remain pending. The older standalone Product Preview is historical
+evidence only and cannot qualify the central candidate. Product
 launch remains NOT LIVE. Stage 0 data and exact PostgreSQL catalog
 items are current and clean; production flags, candidate contamination and full
 test/build state must still be refreshed immediately before any Stage 1 apply.
 The next privileged sequence is
-Stage 1 additive schema -> Stage 2 one-product and <=20-row
+Stage 1 ordered v63 -> v66 -> v67 schema/RPC migration and readback -> Stage 2 one-product and <=20-row
 canaries -> Stage 3 backend/manual Tracking canary -> Stage 4 Web promotion ->
 Stage 5 Admission first, then Tracking timers. A later-stage PASS must never be
 used to skip an earlier stage or its rollback receipt.
 
-Current release pointer: branch `codex/product-v37-manifest-b229`, exact
-production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d`, and exact
-81-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_d2c13dd.json`.
-Earlier branch pointers and manifests are chronological evidence only.
+Current release pointer: branch `codex/product-v37-central-integrate-0829`,
+production anchor `5bcc1a6a0068347c6397b463c713aba82e45a6d9`, integrated
+runtime/rollback boundary `60a540f1f3ead08e112d378f3df778000c189abb`, and
+schema-v2 integrated manifest
+`backend/docs/product_opportunities_v37_integrated_release_manifest_60a540f1.json`.
+That outer manifest preserves the nested 81-artifact Product boundary
+`backend/docs/product_opportunities_v37_release_manifest_d2c13dd.json` while
+also binding the selected admin, reference and multichannel lines. Operational
+handoff is `backend/docs/product_opportunities_v37_integrated_pre_stage_handoff_20260829.md`.
+Earlier standalone branch pointers, manifests and Previews are chronological
+evidence only and must not be deployed in place of the central candidate.
+
+Current integrated local evidence: backend `1125 passed, 2 skipped, 77 subtests`;
+Web core/studio/plan `203/203`; Product contracts `7/7`; moderation gate
+`106/106`; registry `210 tracked / 203 run / 7 justified exclusions`; TypeScript
+exit 0; i18n `2860` English keys across `18` locale catalogs; production build
+`71/71`; integrated manifest/automation contract and PGlite rollback gates PASS.
 
 The current release line closes four deployment-review findings without changing
 Product eligibility or volume. Metric rows convert every timezone-aware anchor timestamp
@@ -650,7 +664,8 @@ and
 `backend/docs/product_opportunities_v37_pre_authorization_backup_inventory_20260829T024627Z.json`.
 
 `run_migration.py`, the verifier and the rollback-only PostgreSQL canary are part
-of the 81-artifact boundary. Apply now fails before
+of the nested 81-artifact Product boundary and are transitively bound by the
+outer integrated manifest. Apply now fails before
 the Management API unless the operator explicitly supplies the target project,
 the same expected target, the canonical Git-blob SQL SHA-256, and a confirmation
 string binding both. CRLF/CR checkouts are normalized to repository LF before
@@ -664,12 +679,12 @@ py scripts/audit_product_opportunity_schema_v37.py baseline `
   --project-ref jaxteelkecvlozdrdoog `
   --expected-project-ref jaxteelkecvlozdrdoog `
   --expected-query-sha256 3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c `
-  --candidate-sha d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d `
+  --candidate-sha 60a540f1f3ead08e112d378f3df778000c189abb `
   --output $baseline
 $baselineSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $baseline).Hash.ToLower()
 ```
 
-The reviewed future migration command is:
+The first reviewed migration command is:
 
 ```powershell
 py scripts/run_migration.py --apply `
@@ -690,12 +705,22 @@ py scripts/audit_product_opportunity_schema_v37.py post-apply `
   --project-ref jaxteelkecvlozdrdoog `
   --expected-project-ref jaxteelkecvlozdrdoog `
   --expected-query-sha256 2c482caca84b779dd60d94be8f0f7010162701fea5d0abfa3d773328d69c8b43 `
-  --candidate-sha d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d `
+  --candidate-sha 60a540f1f3ead08e112d378f3df778000c189abb `
   --baseline-receipt $baseline `
   --expected-baseline-sha256 $baselineSha `
   --max-baseline-age-seconds 900 `
   --output docs/product_opportunities_v37_stage1_post_apply_cutover.json
 ```
+
+Only after the v63 post-apply contract passes while every new v63 table is still
+empty, apply v66 and then v67 through the same reviewed runner. Their canonical
+LF SHA-256 values are respectively
+`41cb068ab89f55cc887a68daef8921f6ef32f4f9e697efcb30a5da3c007d0de0`
+and `df0208cfc2087056ed78b16fa816ae423cafa6b4435d85fcc69bc9648a9752e3`.
+Read back the v66 `units` column/default and the exact v67 RPC signature before
+deploying code. The complete commands, reverse rollback order and fail-closed
+conditions are in the integrated pre-stage handoff; do not infer them from the
+older v63-only handoff.
 
 Any catalog, grant, RPC signature, RLS, new-table emptiness, legacy count or
 legacy content-checksum difference is `BLOCK`. The verifier preserves its raw

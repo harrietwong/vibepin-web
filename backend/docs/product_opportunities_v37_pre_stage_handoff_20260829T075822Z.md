@@ -1,5 +1,10 @@
 # Product Opportunities v3.7 — Pre-stage deployment handoff
 
+> **SUPERSEDED — HISTORICAL STANDALONE HANDOFF. DO NOT EXECUTE AS THE CURRENT
+> DEPLOYMENT PLAN.** The current central integrated handoff is
+> `backend/docs/product_opportunities_v37_integrated_pre_stage_handoff_20260829.md`.
+> This file is retained only to preserve the evidence available at 07:58:22Z.
+
 Generated at `2026-08-29T07:58:22Z`. This is a read-only readiness handoff. It
 does not authorize or claim a migration, deploy, promotion, timer change, or
 production write.

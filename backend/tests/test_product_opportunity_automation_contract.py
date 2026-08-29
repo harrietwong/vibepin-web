@@ -26,6 +26,9 @@ COMPLETION_MATRIX = (
 INTEGRATION_READINESS = (
     ROOT / "docs" / "product_opportunities_v37_integration_readiness_20260829.md"
 ).read_text(encoding="utf-8")
+INTEGRATED_HANDOFF = (
+    ROOT / "docs" / "product_opportunities_v37_integrated_pre_stage_handoff_20260829.md"
+).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
     ROOT / "docs" / "product_opportunities_v37_release_manifest_d2c13dd.json"
 )
@@ -175,26 +178,30 @@ def test_tracking_schedule_stays_within_one_utc_day_and_between_live_jobs() -> N
     assert "stays wholly inside one UTC day" in TIMER
 
 
-def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
+def test_current_integrated_release_pointer_and_nested_product_manifest_are_exact() -> None:
     functional = "d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d"
+    integrated_runtime = "60a540f1f3ead08e112d378f3df778000c189abb"
     serialization_and_binding = "8caad7764f0f1c136ffe1d1e69d5a468a9d3593f"
     prior_functional = "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
     launch_taxonomy = "c8f0d7753de01086b5a32d33bd8737b2c174d3f8"
     source_alias = "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62"
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
     manifest_name = "product_opportunities_v37_release_manifest_d2c13dd.json"
-    assert functional in RUNBOOK
-    assert RUNBOOK.count(f"--candidate-sha {functional}") == 2
+    assert integrated_runtime in RUNBOOK
+    assert RUNBOOK.count(f"--candidate-sha {integrated_runtime}") == 2
+    assert f"--candidate-sha {functional}" not in RUNBOOK
     assert f"--candidate-sha {prior_functional}" not in RUNBOOK
     assert prior_functional in COMPLETION_AUDIT
     assert functional in COMPLETION_MATRIX
     assert "e13419ff59dc3b4cb90a0b0b24b0d227d9d82ddb" in COMPLETION_MATRIX
     assert manifest_name in RUNBOOK
     assert "generationModeration.ts" in RUNBOOK
-    assert "1054 tests" in RUNBOOK
-    assert "Web registry passed 132/132" in RUNBOOK
-    assert "migration-contract group passed 132/132" in RUNBOOK
-    assert "generated 70/70" in RUNBOOK
+    assert "1125 passed, 2 skipped, 77 subtests" in RUNBOOK
+    assert "203/203" in RUNBOOK
+    assert "210 tracked / 203 run / 7 justified exclusions" in RUNBOOK
+    assert "71/71" in RUNBOOK
+    assert "product_opportunities_v37_integrated_release_manifest_60a540f1.json" in RUNBOOK
+    assert "product_opportunities_v37_integrated_pre_stage_handoff_20260829.md" in RUNBOOK
     assert "Implementation PASS / Production NOT LIVE" in COMPLETION_MATRIX
     assert "Production P0 BLOCK" in COMPLETION_MATRIX
     assert (
@@ -295,13 +302,51 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     ).returncode == 0
 
 
-def test_stage1_cutover_commands_bind_the_current_functional_candidate() -> None:
-    functional = "d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d"
+def test_stage1_cutover_commands_bind_the_integrated_runtime_candidate() -> None:
+    runtime = "60a540f1f3ead08e112d378f3df778000c189abb"
     candidate_bindings = re.findall(
         r"--candidate-sha ([0-9a-f]{40})",
         RUNBOOK,
     )
-    assert candidate_bindings == [functional, functional]
+    assert candidate_bindings == [runtime, runtime]
+
+
+def test_integrated_handoff_enforces_migration_order_and_fail_closed_rollback() -> None:
+    runtime = "60a540f1f3ead08e112d378f3df778000c189abb"
+    standalone = "d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d"
+    assert f"--candidate-sha {runtime}" in INTEGRATED_HANDOFF
+    assert f"--candidate-sha {standalone}" not in INTEGRATED_HANDOFF
+    assert "READY_FOR_PREVIEW_NOT_PRODUCTION" in INTEGRATED_HANDOFF
+    assert "scan 100 / write cap 50 / atomic cap 20" in INTEGRATED_HANDOFF
+    assert "units <> 1" in INTEGRATED_HANDOFF
+    assert "raises P0001 before dropping the column" in INTEGRATED_HANDOFF
+    assert "Never edit quantities or force-drop" in INTEGRATED_HANDOFF
+
+    forward = [
+        "backend/db/migrate_v63_product_opportunities_v1.sql",
+        "backend/db/migrate_v66_creem_subscription_units.sql",
+        "backend/db/migrate_v67_remove_connection_if_unscheduled.sql",
+    ]
+    rollback = [
+        "backend/db/rollback_v67_remove_connection_if_unscheduled.sql",
+        "backend/db/rollback_v66_creem_subscription_units.sql",
+        "backend/db/rollback_v63_product_opportunities_v1.sql",
+    ]
+    assert [INTEGRATED_HANDOFF.index(path) for path in forward] == sorted(
+        INTEGRATED_HANDOFF.index(path) for path in forward
+    )
+    assert [INTEGRATED_HANDOFF.index(path) for path in rollback] == sorted(
+        INTEGRATED_HANDOFF.index(path) for path in rollback
+    )
+    for digest in (
+        "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
+        "41cb068ab89f55cc887a68daef8921f6ef32f4f9e697efcb30a5da3c007d0de0",
+        "df0208cfc2087056ed78b16fa816ae423cafa6b4435d85fcc69bc9648a9752e3",
+        "2197fa7860f4642f6fb19aba0012090d2c201ce7fa913940c8e5ac635a1ae0f7",
+        "6c93bf07f546d5ed476d354cddc625872fe75d8e40d80ac6c73b67bfd98fe0ba",
+        "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
+    ):
+        assert digest in INTEGRATED_HANDOFF
 
 
 def test_current_preauthorization_receipts_are_read_only_and_not_cutover_receipts() -> None:
