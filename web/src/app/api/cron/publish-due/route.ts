@@ -195,7 +195,7 @@ export async function GET(req: Request): Promise<Response> {
     // until the consume actually runs; a null key means nothing was charged and
     // nothing can be refunded.
     let meterKey: string | null = null;
-    // Whether THIS row's consume actually charged a unit (v67 `replayed:false`). Row
+    // Whether THIS row's consume actually charged a unit (v68 `replayed:false`). Row
     // scope like meterKey, for the same reason: the outer catch settles too.
     let meterFresh = false;
     const meterReference = typeof row.draft_id === "string" ? row.draft_id : null;
@@ -209,7 +209,7 @@ export async function GET(req: Request): Promise<Response> {
       // publish derives the IDENTICAL key on purpose (see the consume comment below).
       // So a re-claim whose consume merely REPLAYED must not release: the unit belongs
       // to the attempt that charged it, which may well have delivered. `fresh` is
-      // v67's own `replayed:false`. `off` / `insufficient` / `error` consumes are
+      // v68's own `replayed:false`. `off` / `insufficient` / `error` consumes are
       // excluded too — none of them charged here.
       // Consequence worth stating, because it is the rule working as specified, not a
       // gap: this route is at-least-once, so a death after a not_sent failure but

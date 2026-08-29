@@ -146,7 +146,7 @@ export async function POST(req: Request) {
   // called from either publish route yet, so this mirrors the pins route's
   // current shadow-only behavior rather than inventing a new enforce switch here).
   let meterKey: string | null = null;
-  // Whether THIS request's consume actually charged a unit (v67 `replayed:false`).
+  // Whether THIS request's consume actually charged a unit (v68 `replayed:false`).
   // Read by the refund gate below — see the comment there.
   let meterFresh = false;
   if (postId) {
@@ -394,7 +394,7 @@ export async function POST(req: Request) {
    * this block would refund the delivered Pin. The same shape refunds a preceding
    * `delivery_unknown`, and a same-day retry of an already-successful publish refunds
    * an earned unit.
-   * So: release only when THIS request's own consume was fresh (v67 `replayed:false`
+   * So: release only when THIS request's own consume was fresh (v68 `replayed:false`
    * — this request inserted the consume event, on K or on a re-armed K:r<n> after an
    * earlier refund). `off` / `insufficient` / `error` consumes are excluded for the
    * same reason: they charged nothing here, so a release could only hit another

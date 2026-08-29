@@ -570,7 +570,7 @@ function assertNotReleased(): void {
   });
 
   await test("fresh gate: a consume on a RE-ARMED key (K:r1 after a refund) IS fresh and DOES release", async () => {
-    // The gate must not degrade into "never refund on a retry". v67 re-arms a refunded
+    // The gate must not degrade into "never refund on a retry". v68 re-arms a refunded
     // family, so the next consume really charges again — and its own failure really is
     // refundable. `replayed:false` is exactly that signal, whichever arm it landed on.
     rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"

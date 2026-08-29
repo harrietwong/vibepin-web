@@ -150,7 +150,7 @@ export async function POST(req: Request) {
   // key that was consumed — re-deriving it would recompute the UTC bucket and could
   // land on a different day (and refund nothing).
   let meterKey: string | null = null;
-  // Whether THIS request's consume actually charged a unit (v67 `replayed:false`).
+  // Whether THIS request's consume actually charged a unit (v68 `replayed:false`).
   // The refund gate below reads it — see the comment there for why a replayed consume
   // must never be released.
   let meterFresh = false;
@@ -219,7 +219,7 @@ export async function POST(req: Request) {
     // retry of this same draft, while `usage_release_scheduled_post` takes only
     // (user, K, reason) — it refunds the family's standing consume regardless of who
     // asks. Without this gate, a request whose consume merely REPLAYED could give
-    // back a unit another attempt charged and delivered. `fresh` is v67's own
+    // back a unit another attempt charged and delivered. `fresh` is v68's own
     // `replayed:false`, i.e. "this request inserted the consume event".
     // Deliberately also excludes `off` / `insufficient` / `error` consumes: none of
     // them charged anything here, so a release after one of them could only hit a

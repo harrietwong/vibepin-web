@@ -307,7 +307,7 @@ export const EXCLUDED: Record<string, string> = {
     "Fails loudly rather than skipping when credentials are absent, like the other " +
     "test-db-* channels.",
   "test-db-post-release":
-    "REAL-POSTGRES integration test for the v67 scheduled-post REFUND path — writes and " +
+    "REAL-POSTGRES integration test for the v68 scheduled-post REFUND path — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
     "rather than the hermetic `npm test` gate. The refund rule (PRD v3.2 §5.3/§5.4) is " +
     "settled almost entirely inside plpgsql: whether a refunded publish gets CHARGED " +

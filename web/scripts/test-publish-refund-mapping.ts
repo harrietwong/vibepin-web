@@ -23,7 +23,7 @@
  * and failing to refund a `not_sent` charges for something that never happened.
  *
  * THE ASSERTION THAT MATTERS MOST is "providerStatus missing → NO release". Every
- * pre-v67 error object lacked that field, and a mapping that fell back to reading
+ * pre-v68 error object lacked that field, and a mapping that fell back to reading
  * message text would classify those as rejections and refund them. The classifier
  * reads exactly two fields; this suite proves the absence of them keeps the charge.
  *
@@ -238,7 +238,7 @@ function assertNotReleased(): void {
 }
 
 /**
- * ── A STATEFUL LEDGER, MIRRORING v67's KEY FAMILY ──────────────────────────────
+ * ── A STATEFUL LEDGER, MIRRORING v68's KEY FAMILY ──────────────────────────────
  *
  * The default `rpcBehaviour` above is stateless: every consume answers
  * `replayed:false`. That is fine for single-request cells, and useless for the
@@ -251,7 +251,7 @@ function assertNotReleased(): void {
  *   release:  n = number of `K:release:*`; find the standing consume K_eff;
  *             present → write K:release:<n+1>, decrement; absent → nothing_to_release
  *
- * This is a faithful reduction of migrate_v67_scheduled_post_release.sql (minus the
+ * This is a faithful reduction of migrate_v68_scheduled_post_release.sql (minus the
  * locking, which single-threaded tests cannot exercise). Its purpose is to make
  * `replayed` REAL, because `replayed` is what the fresh-consume gate reads — a fake
  * that always says `replayed:false` would report every one of the cases below as
