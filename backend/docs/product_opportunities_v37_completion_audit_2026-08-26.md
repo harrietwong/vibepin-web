@@ -15,9 +15,9 @@ already live. No production Product Opportunity row was created by this audit.
 The current deployment-topology candidate is
 `codex/product-v37-manifest-b229`. It descends from production remote
 `b22930ebe73847cf35bc44be789414902ae6b599`; its functional tip is
-`a299a17dae428dae69d55f4262f5301804fb35e7`; and its exact Product boundary is
+`9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc`; and its exact Product boundary is
 the 81-artifact
-`backend/docs/product_opportunities_v37_release_manifest_a299a17.json`. This tip
+`backend/docs/product_opportunities_v37_release_manifest_9a22c16.json`. This tip
 inherits the reviewed Product implementation from `351e479`, the 17:15
 Asia/Shanghai UTC-day-safe Tracking schedule from `01dcb53`, and restores the
 `classify-chain` route required by the already-installed Crawl OnSuccess wrapper.
@@ -43,7 +43,8 @@ the Usage/Metering production files that a whole-tree deployment of the former
 `99efabc` candidate would also have shipped.
 
 The Product-only candidate was validated from its clean committed functional
-and contract-test state: backend 1011 passed with 2 live-only skips; Web 132/132
+and contract-test state: backend 1039 passed with 2 live-only skips and 77
+subtests; Web 132/132
 passed; TypeScript passed; a clean `npm ci` installed 417
 packages; `npm audit --audit-level=low` found zero vulnerabilities; the
 production build generated 70/70 static pages; the built localhost site passed
@@ -165,9 +166,14 @@ engine-specific raw count, is the release invariant. Evidence:
 `backend/docs/product_opportunities_v37_local_postgres_replay_20260828T084744Z.json`
 and
 `backend/docs/product_opportunities_v37_production_postgres_version_probe_20260828T083053Z.json`.
-Database semantics are now proven locally; one isolated Supabase test-project
-execution is still required to prove the Management API multi-session platform
-path before production.
+Database semantics are now proven locally and on an isolated PostgreSQL 17.6
+Supabase test project. The authorized rollback-only run applied the exact
+migration, observed 158 catalog objects, passed the exact two-session `55P03`
+duplicate block plus authenticated/anonymous Saved Products isolation, and
+rolled the catalog back to zero. An independent final SELECT confirmed no v3.7
+relations or advisory locks remained. The test project has no production legacy
+Product tables, so production legacy-integrity proof remains separate. Evidence:
+`backend/docs/product_opportunities_v37_supabase_test_replay_20260829T021513Z.json`.
 
 The historical integration candidate is
 `codex/product-v37-security-deps`. Its prequalified integration base

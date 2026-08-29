@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "candidateCommit": "a299a17dae428dae69d55f4262f5301804fb35e7",
-  "integrationCommit": "a299a17dae428dae69d55f4262f5301804fb35e7",
+  "candidateCommit": "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc",
+  "integrationCommit": "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc",
   "launchTaxonomyCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
   "sourceProvenanceAliasCommit": "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62",
   "classifyChainRepairCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
@@ -70,9 +70,9 @@
     },
     {
       "path": "backend/product_opportunity_manifest.py",
-      "gitBlobSha1": "9878e28f067e5a9524ed7032dff49176a683b54b",
-      "sha256": "a9f3618d7fb78c075fa59f341f269d176e53ad42979142cee90836ec5bfcc693",
-      "bytes": 28135
+      "gitBlobSha1": "9e46ed5290f04056b074facee444381100fb6eb5",
+      "sha256": "b4260c292bb8988730181bbaa31c52292fb0d41a7e4398e39d97befa416579be",
+      "bytes": 28403
     },
     {
       "path": "backend/product_opportunity_tracking.py",
@@ -514,5 +514,6 @@
   "schemaApplyGuardCommit": "3ae8b995683b8c361be95ce96550c601e60d486b",
   "stage1VerifierCommit": "187765fb9a0d8b1c00c3b505d483ed86aeacae59",
   "admissionReceiptHardeningCommit": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
-  "postgresCanaryCommit": "a299a17dae428dae69d55f4262f5301804fb35e7"
+  "postgresCanaryCommit": "a299a17dae428dae69d55f4262f5301804fb35e7",
+  "liveManifestVerifierFixCommit": "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
 }

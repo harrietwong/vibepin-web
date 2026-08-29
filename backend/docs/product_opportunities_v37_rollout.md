@@ -19,9 +19,9 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `a299a17dae428dae69d55f4262f5301804fb35e7`, and exact
+functional tip `9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc`, and exact
 81-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_a299a17.json`.
+`backend/docs/product_opportunities_v37_release_manifest_9a22c16.json`.
 Earlier branch pointers and manifests are chronological evidence only.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
@@ -74,7 +74,7 @@ allowed for Product Supply output.
 This reconstruction preserves the Product release's required
 `generationModeration.ts` dependency and Studio `Suspense` build boundary while
 excluding the unrelated Usage/Metering implementation and tests. From the clean
-committed Product-only state, the full backend suite passed 1011 tests with 2
+committed Product-only state, the full backend suite passed 1039 tests with 2
 live-only skips, the Web registry passed 132/132 with zero
 failures, full TypeScript passed, and the production build generated 70/70
 static pages. A clean `npm ci` installed 417 packages, `npm audit
@@ -556,9 +556,13 @@ probe read no business row and performed no mutation; it is not concurrency or
 RLS execution evidence.
 The probe temporarily touches two existing user IDs inside the transaction but
 never returns those IDs and persists no row. Unit orchestration and native
-PostgreSQL 17 replay are PASS, but one execution through the Supabase Management
-API against an isolated test project remains mandatory before any
-production use; this runbook does not authorize that execution.
+PostgreSQL 17 replay are PASS. The separately authorized isolated Supabase test
+project replay is also PASS: exact migration, two-session lock/RLS canary and
+finally rollback completed with catalog `0 -> 158 -> 0`; an independent final
+SELECT found zero v3.7 relations and zero advisory locks. This closes the
+Supabase platform gate only. Because that project has no production legacy
+Product tables, the production legacy-integrity gate remains mandatory. Receipt:
+`backend/docs/product_opportunities_v37_supabase_test_replay_20260829T021513Z.json`.
 
 ```powershell
 $env:VIBEPIN_PRODUCT_STAGE2_CANARY_MODE = "production"

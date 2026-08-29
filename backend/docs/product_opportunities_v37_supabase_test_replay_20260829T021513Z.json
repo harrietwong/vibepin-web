@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-29T02:15:13.509732Z",
+  "operation": "Product Opportunities v3.7 isolated Supabase test-project migration, platform canary, and full schema rollback",
+  "verdict": "PASS",
+  "authorization": {
+    "grantedByUser": true,
+    "scope": "isolated Supabase test project only",
+    "productionDatabaseMutation": false,
+    "deploy": false,
+    "push": false,
+    "timerChange": false
+  },
+  "candidate": {
+    "baseCommit": "146a56ea8c9cce82f4910586033d124f7424b18f",
+    "manifestPath": "backend/docs/product_opportunities_v37_test_canary_manifest_20260829T021051Z.json",
+    "manifestSha256": "6e861cfad4e092cd602e4c831a9ef10e1058bb86ffa955faa635e56274d2b335",
+    "manifestGitBlobSha1": "80eb396029812e36960855c139954655f723d4cf",
+    "migrationSha256": "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
+    "rollbackSha256": "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
+    "catalogQuerySha256": "1d0ff2369649f4f01f42be2f55abb6a4b85d24e93c365afd05ebe2dbabb6f035",
+    "prerequisiteQuerySha256": "41c250d9400cf7962582036360f25379faa5f093b44a325bcd5fc8006bb9a4c70"
+  },
+  "target": {
+    "projectRefSha256": "341bc9f4b583916b416959433caf4dddb5bbc7b1a607c898652ad128e8594f5a",
+    "status": "ACTIVE_HEALTHY",
+    "sameOrganizationAsProduction": true,
+    "postgresServerVersionNum": "170006",
+    "authUserCount": 19,
+    "legacyPinProductsPresent": false,
+    "legacyPinSaveSnapshotsPresent": false
+  },
+  "manifestEvidence": {
+    "rows": 1,
+    "productFamily": "physical",
+    "sourceCategory": "fashion",
+    "sourcePinId": "383791199525872982",
+    "canonicalUrlSha256": "c078bb5e5a1596160786f486542a45b6b5f7c9fc9203f69dc4cb18bfa375564a",
+    "directPdp": true,
+    "merchantPageProvenImage": true,
+    "pinterestHostedImage": false,
+    "pinEvidenceSourceArtifact": "backend/tools/t2_batch1_candidates.json",
+    "pinEvidenceSourceArtifactSha256": "25003a44b179983914549689bddb1efceda444f13480669bf964e8820b900eec0",
+    "pinRevalidatedLiveThisRetry": false,
+    "interpretation": "The accepted manifest reuses a pinned previously audited Source Pin artifact. It does not claim that the Pin was successfully revalidated live during this retry."
+  },
+  "liveAcquisitionAttempts": [
+    {
+      "candidate": "initial Pinterest bootstrap attempt",
+      "outcome": "not accepted as evidence",
+      "reason": "The request returned HTTP 200 but the result object was not captured by the calling session, so no live-Pin PASS is claimed."
+    },
+    {
+      "candidate": "OPI",
+      "outcome": "rejected before merchant request",
+      "reason": "The source category was not in the reviewed launch taxonomy."
+    },
+    {
+      "candidate": "TableclothsFactory",
+      "outcome": "rejected",
+      "reason": "The merchant page returned HTTP 200 but did not prove a usable merchant-hosted product image."
+    },
+    {
+      "candidate": "June Rings",
+      "outcome": "rejected before merchant request",
+      "reason": "The wedding-family candidate had no merchant-proven product type."
+    },
+    {
+      "candidate": "OFUURE",
+      "outcome": "accepted after minimal verifier repair",
+      "reason": "A bounded 301 www redirect ended at the same normalized PDP identity; the merchant page then proved the direct PDP, name and non-Pinterest image."
+    }
+  ],
+  "execution": {
+    "catalogObjectsBefore": 0,
+    "catalogObjectsAfterApply": 158,
+    "catalogObjectsAfterRollback": 0,
+    "canary": {
+      "productRowsBefore": 0,
+      "productRowsAfter": 0,
+      "currentRowsBefore": 0,
+      "currentRowsAfter": 0,
+      "retiredRowsBefore": 0,
+      "retiredRowsAfter": 0,
+      "savedRowsBefore": 0,
+      "savedRowsAfter": 0,
+      "holderReachedPostAdmissionLock": true,
+      "concurrentDuplicateBlocked": true,
+      "concurrentDuplicateSqlstate": "55P03",
+      "twoExistingUsersUsed": true,
+      "eachUserReadOnlyOwnSavedRow": true,
+      "authenticatedDirectWriteBlocked": true,
+      "anonymousReadBlocked": true,
+      "sentinel": "V37_ROLE_CANARY_PASS",
+      "productionRowsPersisted": 0
+    },
+    "locksReleased": true,
+    "advisoryLocksAfter": 0,
+    "cleanup": "finally rollback completed"
+  },
+  "independentFinalCatalogSelect": {
+    "httpStatus": 201,
+    "productOpportunitiesRelationPresent": false,
+    "savedProductOpportunitiesRelationPresent": false,
+    "advisoryLocks": 0
+  },
+  "codeFindingsDuringLivePreparation": [
+    {
+      "severity": "P1",
+      "file": "backend/product_opportunity_manifest.py",
+      "finding": "The DNS public-address guard referenced ipaddress without importing it, causing a fail-closed NameError before merchant HTTP.",
+      "minimalRepair": "Import the Python standard-library ipaddress module and add public/private resolution regression coverage."
+    },
+    {
+      "severity": "P2",
+      "file": "backend/product_opportunity_manifest.py",
+      "finding": "A valid www/non-www redirect chain was rejected when both URLs normalized to the same canonical PDP identity.",
+      "minimalRepair": "Always validate bounded hop status, public URLs, continuity and final target; treat a same-identity chain as transport proof rather than identity-migration provenance."
+    }
+  ],
+  "validationAfterRepair": {
+    "focusedManifestAndAdmissionTests": 146,
+    "backendPassed": 1039,
+    "backendSkipped": 2,
+    "backendSubtestsPassed": 77,
+    "failures": 0
+  },
+  "independentReview": {
+    "requested": true,
+    "maxTurnsPerAttempt": 50,
+    "attempts": 2,
+    "verdictReceived": false,
+    "reason": "Both Claude Opus read-only review attempts failed before analysis with HTTP 403 Request not allowed. This is an advisor authentication failure, not a code-review verdict and not a test failure."
+  },
+  "scopeLimit": "This PASS proves the isolated Supabase platform path for schema application, two-session concurrency, RLS/server-only write behavior, exact rollback and zero residue. Because the test project has no production legacy Product tables, it does not prove production legacy-integrity preservation, production deployment, production data quality, timer automation, or live Pinterest revalidation."
+}
