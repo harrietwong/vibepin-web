@@ -118,6 +118,7 @@ export const CORE: string[] = [
   "test-support-inbox",
   // Sync / storage
   "test-pin-draft-sync",
+  "test-pin-draft-conditional-write",
   "test-pin-draft-promote",
   "test-schedule-timezone",
   "test-publish-due-claim",
