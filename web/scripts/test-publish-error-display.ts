@@ -41,9 +41,15 @@ test("no category but a code: re-derived (needs_reconnect → auth)", () => {
     "studioBoard.card.publishError.auth");
 });
 
-test("no category but a code: board_not_owned → content", () => {
+test("no category but a code: board_not_owned → specific safe board message", () => {
   assert.equal(getPublishErrorDisplayKey({ publishError: "board 12 not owned", errorCategory: undefined, publishErrorCode: "board_not_owned" }),
-    "studioBoard.card.publishError.content");
+    "studioBoard.card.publishError.board");
+});
+
+test("common failures map to distinct customer-safe reasons", () => {
+  assert.equal(getPublishErrorDisplayKey({ publishError: "provider timeout", publishErrorCode: "network_error" }), "studioBoard.card.publishError.timeout");
+  assert.equal(getPublishErrorDisplayKey({ publishError: "invalid image dimensions", publishErrorCode: "invalid_image_url" }), "studioBoard.card.publishError.image");
+  assert.equal(getPublishErrorDisplayKey({ publishError: "invalid link", publishErrorCode: "invalid_link" }), "studioBoard.card.publishError.link");
 });
 
 test("publishError with no category/code and no auth-or-content signal → transient", () => {
@@ -62,6 +68,8 @@ test("every returned key exists in the English catalog and never echoes the raw 
     { publishError: RAW, errorCategory: "auth" as const, publishErrorCode: undefined },
     { publishError: RAW, errorCategory: "content" as const, publishErrorCode: undefined },
     { publishError: RAW, errorCategory: "transient" as const, publishErrorCode: undefined },
+    { publishError: "board unavailable", errorCategory: undefined, publishErrorCode: "board_not_owned" },
+    { publishError: "timeout", errorCategory: undefined, publishErrorCode: "network_error" },
     { publishError: undefined, errorCategory: undefined, publishErrorCode: undefined },
   ];
   for (const c of cases) {

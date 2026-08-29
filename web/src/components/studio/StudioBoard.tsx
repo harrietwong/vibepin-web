@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon } from "lucide-react";
+import { UploadCloud, Upload, Loader2, Check, Clock, ArrowRight, CalendarClock as CalendarClockIcon, Images, Rows3, X, AlertTriangle, Sparkles } from "lucide-react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { usePinBoardDrafts, type BoardFilter } from "@/hooks/usePinBoardDrafts";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
@@ -21,7 +21,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import * as assetStore from "@/lib/assetStore";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { publishPin, startPinterestConnect, fetchPinterestDefaultBoard } from "@/lib/pinterestClient";
+import { startPinterestConnect, fetchPinterestDefaultBoard, savePinterestDefaultBoard } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
@@ -29,9 +29,12 @@ import { beginPublish, endPublish, isActionablePublishFailure, isActionablePubli
 import { FailureBanner, useFailureBannerDismiss } from "@/components/shared/FailureBanner";
 import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { readStoredTarget } from "@/lib/studio/publishTarget";
+import { getCachedConnections } from "@/lib/social/connectionsCache";
+import { migrateMultiUploadMode, patchPublishingPrefs, resolveDefaultDestinations } from "@/lib/publishingPrefsStore";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
+import { measureImageFile } from "@/lib/studio/measureImageFile";
 import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { type SelectedReference } from "@/lib/studio/selectedReferences";
@@ -44,19 +47,35 @@ import { AiVersionDrawer, type AiVersionDrawerSetup, type AiVersionOptions } fro
 import { StudioBoardSkeleton } from "@/components/studio/StudioBoardSkeleton";
 import { BUI } from "@/components/studio/boardUI";
 import { CanonicalProductPicker } from "@/components/studio/CanonicalProductPicker";
-import { selectionFromLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
-import { EMPTY_TOUCHED } from "@/lib/pinMetadata";
+import { selectionFromLinkedProduct, toLinkedProduct, resolveProductPublicUrl, type CanonicalProductSelection } from "@/lib/studio/productSelection";
+import { EMPTY_TOUCHED, type LinkedProduct } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
+import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
+import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
+import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
+import {
+  partitionBulkPublish, summarizeDeleteImpact, summarizeBulkPublish,
+  type BulkPublishOutcomeRow, type BulkPublishSummary,
+} from "@/lib/studio/bulkActions";
+import { BulkPublishSheet, BulkDeleteConfirm, blockerText } from "@/components/studio/BulkActionSheets";
+import { BatchEditDrawer, type BatchApplyOpts, type BatchPinRow } from "@/components/studio/BatchEditDrawer";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 type AiDrawerState =
   // `product` on the version variant carries a RETRY's own product forward, so a
   // failed run that chose a different product than its parent is not re-inherited
   // from the parent on retry.
-  | { mode: "version"; draft: PinDraft; product?: CanonicalProductSelection }
+  | { mode: "version"; draft: PinDraft; product?: CanonicalProductSelection; targetMediaId?: string }
   | { mode: "scratch"; product?: CanonicalProductSelection }
   | null;
+
+// Never surface local QA/demo fixtures as if they were a customer's Pinterest board.
+// The stored ID is left untouched for diagnostics; customer-facing pickers and labels
+// only use real board names.
+function isInternalBoardName(name: string | null | undefined): boolean {
+  return /^(qa board|vibepin sandbox demo board|sandbox demo board)$/i.test(name?.trim() ?? "");
+}
 
 // Deep link into /app/plan that reopens the Edit-details drawer for a specific Pin.
 // Reuses the SAME "?modal=publish&pinId=…" contract Plan already parses (see the
@@ -70,6 +89,8 @@ function planDeepLink(draftId: string): string {
 // "unscheduled" (PRD 5.1/6): Create Pins should default to the work still ahead of
 // the user, not a mixed "All" view dominated by already-scheduled/posted cards.
 const FILTER_STORAGE_KEY = "vp:studio:filter";
+const PLAN_PINNED_STORAGE_KEY = "vp:studio:plan-pinned";
+type MultiUploadMode = "together" | "separate";
 const VALID_FILTERS: BoardFilter[] = ["all", "unscheduled", "scheduled", "posted", "failed"];
 function readStoredFilter(): BoardFilter {
   if (typeof window === "undefined") return "unscheduled";
@@ -194,13 +215,15 @@ export function StudioBoard() {
   // admits only source === "ai_generated_from_upload" cards with a ready quality judge,
   // so the wider input cannot change which ids come back.
   const topPickIds = useMemo(() => deriveTopPickIds(allItems.map(x => x.draft)), [allItems]);
+  const recentBoardName = useMemo(() => allItems
+    .map(item => item.draft.boardName?.trim())
+    .find(name => !!name && !isInternalBoardName(name)) || "", [allItems]);
   const { boards, loading: boardsLoading, disconnected, needsReconnect, error: boardsErr, refresh: refreshBoards } = usePinterestBoards();
+  const customerBoards = useMemo(() => boards.filter(board => !isInternalBoardName(board.name)), [boards]);
   // No usable board access = no connection OR a connection needing re-auth. Used to gate
   // scheduling/publishing (distinct from a transient boards API failure).
   const noBoardAccess = disconnected || needsReconnect;
   const boardsError = boardsErr ? "Couldn't load boards. Please try again." : undefined;
-  const isDev = process.env.NODE_ENV !== "production";
-
   // Draft-store hydration gate. The store's SSR/server snapshot is empty and the
   // real localStorage-backed snapshot only becomes authoritative on the client. To
   // avoid briefly rendering the "empty upload zone" (a false empty state) when
@@ -209,11 +232,25 @@ export function StudioBoard() {
   // once mounted. This is separate from the experience decision (which is already
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
+  const [planPinned, setPlanPinned] = useState(false);
+  // PRD 0826 §24 — the board tells the Plan sidebar when a schedule just succeeded, so
+  // the sidebar can highlight the new item (when it is open) or count it on its trigger
+  // (when it is not). A list, not a single id: a batch of N must move the badge by N.
+  const [lastScheduled, setLastScheduled] = useState<PlanScheduleSignal | undefined>(undefined);
+  const announceScheduled = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    setLastScheduled({ ids, at: Date.now() });
+  }, []);
   const didInitFilterRef = useRef(false);
   useEffect(() => {
     if (didInitFilterRef.current) return;
     didInitFilterRef.current = true;
     setHydrated(true);
+    try {
+      // Intentional hydration restore: localStorage is unavailable during SSR.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPlanPinned(window.localStorage.getItem(PLAN_PINNED_STORAGE_KEY) === "true");
+    } catch { /* preference remains session-default */ }
     // URL query param wins over session memory (reload-durable deep link). Falls back to
     // the sessionStorage-remembered filter when no valid ?filter= is present.
     const urlFilter = parseFilterParam(searchParams.get("filter"));
@@ -236,6 +273,11 @@ export function StudioBoard() {
     void reconcileGeneratingDrafts();
   }, [searchParams]);
 
+  const handlePlanPinnedChange = useCallback((next: boolean) => {
+    setPlanPinned(next);
+    try { window.localStorage.setItem(PLAN_PINNED_STORAGE_KEY, String(next)); } catch { /* in-memory preference still works */ }
+  }, []);
+
   const [uploading, setUploading] = useState(false);
   // Per-file upload status: "Uploading 2/5…" while a multi-file batch runs.
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
@@ -246,43 +288,153 @@ export function StudioBoard() {
   const [aiSetupCache, setAiSetupCache] = useState<Record<string, AiVersionDrawerSetup>>({});
   const [aiGenerating, setAiGenerating] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
+  const [productPickerTargetId, setProductPickerTargetId] = useState<string | null>(null);
+  const [pendingUploadFiles, setPendingUploadFiles] = useState<File[] | null>(null);
+  const [uploadChoice, setUploadChoice] = useState<MultiUploadMode>("together");
+  const [rememberUploadChoice, setRememberUploadChoice] = useState(false);
+  const [batchEditOpen, setBatchEditOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const shopifyEnabled = isShopifyIntegrationEnabled();
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * PRD §17 — the destinations NEW content should be seeded with, narrowed to the
+   * accounts that are connected right now. Recomputed per creation (not memoized on
+   * mount) so a default whose account was disconnected mid-session stops being applied
+   * immediately. When the connections cache is empty we deliberately seed NOTHING:
+   * an unverified default would pin fresh content to an account that may be gone.
+   */
+  const defaultDestinationsForNewContent = useCallback(() => {
+    const cached = getCachedConnections();
+    if (!cached) return [];
+    const connectedIds = new Set(
+      cached.platforms.flatMap(platform =>
+        platform.accounts.filter(a => a.connectionStatus === "connected").map(a => a.id)),
+    );
+    return resolveDefaultDestinations(connectedIds);
+  }, []);
 
   const flashSaved = useCallback(() => { setSaving(true); setTimeout(() => setSaving(false), 300); }, []);
   const openFilePicker = useCallback(() => fileRef.current?.click(), []);
 
   const hasCards = items.length > 0 || counts.all > 0;
   const aiSetupKey = aiDrawer?.mode === "version" ? aiDrawer.draft.id : aiDrawer?.mode === "scratch" ? "scratch" : null;
+  const batchPins = useMemo<BatchPinRow[]>(() => allItems.map(({ draft }) => ({
+    pinId: draft.id,
+    sessionId: draft.generationSessionId || "create-pins",
+    groupIdx: 0,
+    pinIdx: 0,
+    imageUrl: draft.imageUrl,
+    title: draft.title || "",
+    description: draft.description || "",
+    altText: draft.altText || "",
+    destinationUrl: draft.destinationUrl || "",
+    plannedDate: draft.scheduledDate || "",
+    plannedTime: draft.scheduledTime,
+    plannedAt: draft.plannedAt,
+    postedAt: draft.postedAt,
+    addedToPlanAt: draft.addedToPlanAt,
+    planningStatus: draft.publishError ? "failed" : draft.postedAt ? "posted" : draft.plannedAt || draft.scheduledDate ? "planned" : "not_added",
+    boardSuggestion: draft.boardName || "",
+    boardId: draft.boardId,
+    boardName: draft.boardName,
+    metadataDraft: draft.metadataDraft,
+    linkedProductId: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.productId,
+    linkedProductTitle: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.title,
+    linkedProductUrl: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.productUrl,
+    linkedProductImageUrl: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.imageUrl,
+    linkedProductSource: draft.linkedProducts?.find(item => item.productId === draft.primaryProductId)?.source,
+    taggedProducts: draft.linkedProducts,
+    taggedCount: draft.linkedProducts?.length,
+    category: draft.category,
+    mediaCount: contentMedia(draft).length,
+    publishTo: contentDestinations(draft).map(destination => destination.provider).join(", ") || "pinterest",
+  })), [allItems]);
+  const selectedBatchPins = useMemo(() => batchPins.filter(pin => selectedIds.has(pin.pinId)), [batchPins, selectedIds]);
 
-  // ── Upload → one board draft per image ─────────────────────────────────────
-  const handleFiles = useCallback(async (files: FileList) => {
-    // Snapshot to an array up front: the <input> onChange resets `value=""` right
-    // after calling us, which empties the live FileList before this async loop reads
-    // it. Array.from captures the File references before that happens.
-    const arr = Array.from(files);
+  // PRD §17 replaced the load-time board prefill that used to live here.
+  //
+  // That effect walked EVERY boardless draft on load and rewrote it to the
+  // remembered Board — so a Draft the merchant had deliberately left without a
+  // Board, and content already Scheduled or Posted, silently changed underneath
+  // them, and it happened again on every reload. §17 is explicit that a default
+  // "only prefills NEW content; never rewrites existing Draft/Scheduled/Posted",
+  // so the prefill now happens once, at creation, in pinDraftStore.createBoardDraft
+  // (seeded by `defaultDestinationsForNewContent` below).
+
+  const handleBatchApply = useCallback(({ rowEdits }: BatchApplyOpts) => {
+    Object.entries(rowEdits).forEach(([id, edit]) => {
+      const patch: Partial<PinDraft> = {
+        title: edit.title,
+        description: edit.description,
+        altText: edit.altText,
+        destinationUrl: edit.destinationUrl,
+        scheduledDate: edit.plannedDate,
+        scheduledTime: edit.plannedTime,
+        plannedAt: edit.plannedAt,
+        boardId: edit.boardId,
+        boardName: edit.boardName,
+      };
+      Object.keys(patch).forEach(key => patch[key as keyof PinDraft] === undefined && delete patch[key as keyof PinDraft]);
+      pinDraftStore.updateDraft(id, patch);
+    });
+    flashSaved();
+  }, [flashSaved]);
+
+  // ── Upload → one Content with N media, or N separate Contents ──────────────
+  const processFiles = useCallback(async (arr: File[], mode: MultiUploadMode) => {
     if (!arr.length) return;
+    const seedDestinations = defaultDestinationsForNewContent();
     setUploading(true);
     setUploadProgress({ done: 0, total: arr.length });
     const batchId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     let ok = 0;
     const failedNames: string[] = [];
+    const uploaded: Array<{ publicUrl: string; file: File; index: number; width?: number; height?: number }> = [];
     for (let i = 0; i < arr.length; i++) {
       try {
         const { publicUrl } = await uploadPinImage(arr[i]);
-        const created = pinDraftStore.createBoardDraft({
-          imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${i}`,
-          title: arr[i].name.replace(/\.[^.]+$/, "").slice(0, 100),
-        });
-        // Kick off background image analysis + keyword prep immediately — the card is
-        // already created, so this never blocks upload.
-        void startImageAnalysis(created.id);
+        // Measured from the File while we still hold the bytes — the hosted URL
+        // cannot be measured without a second network round trip, and without
+        // dimensions the carousel ratio rules can only say "unverified".
+        const { width, height } = await measureImageFile(arr[i]);
+        uploaded.push({ publicUrl, file: arr[i], index: i, width, height });
         ok++;
       } catch {
         // A failed file never blocks or rolls back the successful ones.
         failedNames.push(arr[i].name);
       }
       setUploadProgress({ done: i + 1, total: arr.length });
+    }
+    if (mode === "together" && uploaded.length) {
+      const first = uploaded[0];
+      const created = pinDraftStore.createBoardDraft({
+        imageUrl: first.publicUrl,
+        media: uploaded.map(({ publicUrl, file, index, width, height }) => ({
+          id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
+          altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
+        })),
+        source: "uploaded_image", idempotencyKey: `${batchId}:content`,
+        title: first.file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+        defaultDestinations: seedDestinations,
+      });
+      void startImageAnalysis(created.id);
+    } else {
+      uploaded.forEach(({ publicUrl, file, index, width, height }) => {
+        const created = pinDraftStore.createBoardDraft({
+          imageUrl: publicUrl, source: "uploaded_image", idempotencyKey: `${batchId}:${index}`,
+          // Explicit single-item media: the imageUrl-only path lets the store
+          // synthesize a media item, and that synthetic item has nowhere to carry
+          // the dimensions we just measured.
+          media: [{
+            id: `${batchId}:media:${index}`, kind: "image", url: publicUrl,
+            altText: file.name.replace(/\.[^.]+$/, ""), source: "upload", width, height,
+          }],
+          title: file.name.replace(/\.[^.]+$/, "").slice(0, 100),
+          defaultDestinations: seedDestinations,
+        });
+        void startImageAnalysis(created.id);
+      });
     }
     setUploading(false);
     setUploadProgress(null);
@@ -292,7 +444,32 @@ export function StudioBoard() {
       const more = failedNames.length > 3 ? tr("studioBoard.toast.uploadFailedAndMore").replace("{n}", String(failedNames.length - 3)) : "";
       toast.error(`${tr("studioBoard.toast.uploadFailedPrefix")}${shown}${more}${tr("studioBoard.toast.uploadFailedSuffix")}`);
     }
-  }, [flashSaved, tr]);
+  }, [defaultDestinationsForNewContent, flashSaved, tr]);
+
+  const handleFiles = useCallback((files: FileList | File[]) => {
+    const arr = Array.from(files);
+    if (!arr.length) return;
+    if (arr.length === 1) { void processFiles(arr, "separate"); return; }
+    // PRD §12: the merchant's standing answer wins; "ask" (the default) opens the dialog.
+    // migrate… adopts a pre-prefs answer from the old browser key exactly once.
+    const stored = migrateMultiUploadMode().multiUploadDefault;
+    if (stored !== "ask") { void processFiles(arr, stored); return; }
+    setUploadChoice("together");
+    setRememberUploadChoice(false);
+    setPendingUploadFiles(arr);
+  }, [processFiles]);
+
+  const continueMultiUpload = useCallback(() => {
+    const files = pendingUploadFiles;
+    if (!files) return;
+    if (rememberUploadChoice) {
+      // Stored as a preference, not a browser key: it syncs with the merchant's other
+      // publishing prefs and is editable in Settings instead of only resettable there.
+      patchPublishingPrefs({ multiUploadDefault: uploadChoice });
+    }
+    setPendingUploadFiles(null);
+    void processFiles(files, uploadChoice);
+  }, [pendingUploadFiles, processFiles, rememberUploadChoice, uploadChoice]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
@@ -325,7 +502,12 @@ export function StudioBoard() {
       }
     }
     pinDraftStore.updateDraft(id, next); flashSaved();
-    if (patch.boardId) setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
+    if (patch.boardId) {
+      setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
+      // Remember the board the merchant just picked as their default for the next Pin.
+      const boardName = patch.boardName?.trim() || boards.find(board => board.id === patch.boardId)?.name || null;
+      void savePinterestDefaultBoard({ boardId: patch.boardId, boardName }).catch(() => {});
+    }
     if ("title" in patch || "description" in patch) {
       setFieldErrors(prev => {
         const cur = pinDraftStore.getDraft(id);
@@ -334,7 +516,7 @@ export function StudioBoard() {
         return { ...prev, [id]: next };
       });
     }
-  }, [flashSaved]);
+  }, [boards, flashSaved]);
 
   // AI Copy generation now lives inside <PinAICopyPanel> (shared across Create Pins,
   // Plan edit, and Batch Edit). The card applies results via onPersist → updateDraft.
@@ -365,6 +547,7 @@ export function StudioBoard() {
     setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
     const result = ensureScheduledPlanTime(id);
     if (result.ok) {
+      announceScheduled([id]);
       // PRD 5.2 — success toast gets an "Open in Plan" action that deep-links to the
       // exact Pin's edit drawer in Plan (same ?modal=publish&pinId= contract the
       // post-OAuth restore flow already uses there).
@@ -372,17 +555,23 @@ export function StudioBoard() {
     } else {
       toast.error(result.toast);
     }
-  }, [noBoardAccess, tr]);
+  }, [announceScheduled, noBoardAccess, tr]);
 
   // ── Publish now (from ⋮) ───────────────────────────────────────────────────
-  const handlePublish = useCallback(async (id: string) => {
+  // Gating and toasts live here (they are card UI); the publish ITSELF is
+  // publishContent(), the one function every surface goes through — see its header
+  // for why four divergent publish paths was the defect.
+  const handlePublish = useCallback(async (id: string, options?: { onlyPending?: boolean }) => {
     let d = pinDraftStore.getDraft(id); if (!d) return;
     if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
+    const destinations = contentDestinations(d);
+    const pinterestTargets = destinations.filter(destination => destination.provider === "pinterest");
+    const socialTargets = destinations.filter(destination => destination.provider !== "pinterest");
     // Publishing straight from the card never opens the details drawer, so the drawer's
     // board auto-fill never ran for this draft. Without this, a user who has a default
     // board set is still told to "complete required details" — the board they picked
     // last time simply was never written onto this draft. Adopt it here before gating.
-    if (!d.boardId?.trim() && !noBoardAccess) {
+    if (pinterestTargets.length && !d.boardId?.trim() && !noBoardAccess) {
       try {
         // Default board OF THE PIN'S TARGET connection (PRD §14): a draft already
         // pinned to account B must never adopt account A's default board just because
@@ -390,11 +579,17 @@ export function StudioBoard() {
         // which is the pre-multi-account behaviour.
         const fallback = await fetchPinterestDefaultBoard(undefined, readStoredTarget(d) || undefined);
         if (fallback?.boardId) {
+          // The board lives on the draft; contentDestinations() reads it back onto the
+          // Pinterest destination, so there is no second place to keep in step.
           d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "" }) ?? d;
         }
       } catch { /* leave the draft as-is; the readiness gate below reports it */ }
     }
-    if (noBoardAccess || !isPinReady(draftReadiness(d))) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
+    // Pinterest readiness only gates the Pinterest destinations; a Content going only
+    // to Instagram/Facebook must not be blocked by a missing board.
+    const pinterestReady = !pinterestTargets.length || (!noBoardAccess && isPinReady(draftReadiness(d)));
+    if (!pinterestReady && !socialTargets.length) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
+    // Field length is a property of the Content itself, so it blocks every destination.
     const lenErrors = pinFieldErrors({ title: d.title, description: d.description });
     if (lenErrors.title || lenErrors.description) {
       setActiveId(id);
@@ -402,48 +597,98 @@ export function StudioBoard() {
       toast.error(tr("studioBoard.toast.fieldTooLong"));
       return;
     }
-    if (!beginPublish(id)) return;
-    pinDraftStore.updateDraft(id, { publishError: undefined });
-    try {
-      const res = await publishPin({ boardId: d.boardId, imageUrl: d.imageUrl, title: d.title || undefined, description: d.description || undefined, link: d.destinationUrl || undefined, altText: d.altText || undefined, sourcePinId: id, draftId: id, source: "immediate", connectionId: readStoredTarget(d) || undefined });
-      pinDraftStore.updateDraft(id, {
-        postedAt: new Date().toISOString(), remotePinId: res.pin.id, remotePinUrl: res.pin.url,
-        publishError: undefined, failureType: undefined, errorCategory: undefined, publishErrorCode: undefined,
-        // Adopt-once (PRD §14): a draft that had no pinned target keeps the connection
-        // it actually published through, so every later retry/action stays on it.
-        ...(!readStoredTarget(d) && res.connectionId ? { targetConnectionId: res.connectionId } : {}),
-      });
-      toast.success(tr("studioBoard.toast.publishSuccess"));
-    } catch (e) {
-      const err = e as { code?: string; message?: string };
-      // ISO, matching DraftDetailsDrawer.tsx's previousScheduledTime convention (not a
-      // bare local "YYYY-MM-DDTHH:mm" string) so all writers of this field agree.
-      const localPlanned = d.plannedAt || d.scheduledDate;
-      const prevScheduled = localPlanned
-        ? new Date(`${localPlanned.slice(0, 10)}T${(d.scheduledTime?.trim() || localPlanned.slice(11, 16) || "09:00")}:00`).toISOString()
-        : undefined;
-      pinDraftStore.updateDraft(id, {
-        publishError: err?.message || tr("studioBoard.toast.publishFailed"),
-        failureType: "publish",
-        errorCategory: mapPublishErrorToCategory(err?.code, err?.message),
-        publishErrorCode: err?.code,
-        previousScheduledTime: prevScheduled,
-        scheduledDate: "",
-        scheduledTime: "",
-      });
-      toast.error(tr("studioBoard.toast.publishFailed"));
-    } finally { endPublish(id); }
+    // publishContent takes the shared in-flight lock itself, resolves the destinations
+    // from the stored intent, media-checks each one, and writes the per-destination
+    // records plus the derived legacy fields. Nothing about the record is decided here.
+    // Default is Retry semantics (re-send only what has not published). A republish of
+    // an edited Posted Content passes onlyPending:false so the NEW content goes to every
+    // destination it names — otherwise editing a published Pin would publish nothing.
+    const outcome = await publishContent(id, { onlyPending: options?.onlyPending ?? true });
+    if (outcome.blocked === "locked") return;
+    if (outcome.blocked) { toast.error(tr("studioBoard.toast.publishFailed")); return; }
+    // A Retry with nothing left to send. Neutral, not an error: nothing failed, and
+    // without this branch it falls through to "0 published, 0 failed" → publishFailed,
+    // which tells the merchant a publish broke when in fact it was already done.
+    if (outcome.nothingToRetry) { toast.info(tr("studioBoard.toast.nothingToRetry")); return; }
+    const publishedCount = outcome.published.length;
+    const failedCount = outcome.failed.length;
+    if (publishedCount && failedCount) {
+      toast.info(tr("studioBoard.toast.publishPartial")
+        .replace("{published}", String(publishedCount))
+        .replace("{failed}", String(failedCount)));
+    } else if (publishedCount) toast.success(tr("studioBoard.toast.publishSuccess"));
+    else toast.error(tr("studioBoard.toast.publishFailed"));
   }, [noBoardAccess, tr]);
 
-  // ── Top-level "Select product" → AI drawer ─────────────────────────────────
-  // Selecting a product now opens the SAME AiVersionDrawer as "Create with AI",
-  // prefilled with the product, instead of silently creating a bare draft. No draft
-  // exists until the user Generates — cancelling leaves nothing behind. The drawer
-  // derives the Website URL and requests this product's own recommendations.
+  const handleCustomSchedule = useCallback((id: string, date: string, time: string) => {
+    const d = pinDraftStore.getDraft(id); if (!d) return;
+    if (noBoardAccess || !isPinReady(draftReadiness(d))) {
+      setActiveId(id);
+      if (!d.boardId?.trim() && !noBoardAccess) {
+        setScheduleErrors(prev => ({ ...prev, [id]: tr("studioBoard.toast.chooseBoardToSchedule") }));
+      }
+      toast.error(tr("studioBoard.toast.completeDetailsToSchedule"));
+      return;
+    }
+    if (!date || !time) return;
+    setScheduleErrors(prev => (prev[id] ? { ...prev, [id]: "" } : prev));
+    const updated = pinDraftStore.smartScheduleDraft(id, { plannedDate: date, plannedTime: time }, null, { source: "manual" });
+    if (updated) {
+      flashSaved();
+      announceScheduled([id]);
+      toast.success(tr("studioBoard.toast.customTimeScheduled")
+        .replace("{date}", date)
+        .replace("{time}", time), {
+        action: { label: tr("studioBoard.toast.openInPlan"), onClick: () => { window.location.href = planDeepLink(id); } },
+      });
+    }
+  }, [announceScheduled, flashSaved, noBoardAccess, tr]);
+
+  // ── Product → Pin / attach product ─────────────────────────────────────────
+  // A product selected from My Products, Product Opportunities, Shopify, Etsy or a
+  // URL import carries its real product URL. We use it only when Website URL is empty;
+  // a creator's hand-entered destination is never overwritten.
+  //
+  // Two entry points share this one canonical picker (0ab49bb: one Product Picker,
+  // not two competing modals):
+  //   • a card's "Attach product" sets productPickerTargetId → link onto that draft;
+  //   • the top-level "Select product" has no target → open the SAME AiVersionDrawer
+  //     as "Create with AI", prefilled with the product. No draft exists until the
+  //     user Generates, so cancelling leaves nothing behind.
   const handleProductSelect = useCallback((selections: CanonicalProductSelection[]) => {
     setShowProductPicker(false);
+    const targetId = productPickerTargetId;
+    setProductPickerTargetId(null);
     const product = selections[0];
-    const chosenImageUrl = product?.imageUrl ?? "";
+    if (!product) return;
+    const chosenImageUrl = product.imageUrl ?? "";
+
+    if (targetId) {
+      const current = pinDraftStore.getDraft(targetId);
+      if (!current) return;
+      const linkedProduct = toLinkedProduct(product);
+      const productUrl = resolveProductPublicUrl(product);
+      const existing = current.linkedProducts ?? [];
+      const sameProduct = (item: LinkedProduct) =>
+        (!!linkedProduct.productId && item.productId === linkedProduct.productId)
+        || (!!linkedProduct.productUrl && item.productUrl === linkedProduct.productUrl);
+      const remainingProducts = existing.filter(item => !sameProduct(item));
+      const nextProducts = product.asPrimary ? [linkedProduct, ...remainingProducts] : [...remainingProducts, linkedProduct];
+      pinDraftStore.updateDraft(targetId, {
+        linkedProducts: nextProducts,
+        primaryProductId: product.asPrimary || existing.length === 0 ? linkedProduct.productId : current.primaryProductId,
+        // Only fills an EMPTY Website URL — a creator's hand-entered destination is
+        // never overwritten (create-pin PRD Section J).
+        ...(!current.destinationUrl.trim() && productUrl ? {
+          destinationUrl: productUrl,
+          destinationUrlSource: PRODUCT_DERIVED_URL_SOURCE,
+        } : {}),
+      });
+      flashSaved();
+      toast.success(tr("studioBoard.toast.linkedProduct"));
+      return;
+    }
+
     if (!chosenImageUrl) { toast.error(tr("studioBoard.toast.productNoImage")); return; }
     // Drop any cached scratch setup so a NEW product never inherits a previous scratch
     // session's references/settings. (A retry seeds this key deliberately and opens the
@@ -454,14 +699,30 @@ export function StudioBoard() {
       return rest;
     });
     setAiDrawer({ mode: "scratch", product });
-  }, [tr]);
+  }, [flashSaved, productPickerTargetId, tr]);
 
   // ── AI drawers ─────────────────────────────────────────────────────────────
-  const handleGenerateAiImage = useCallback((d: PinDraft) => setAiDrawer({ mode: "version", draft: d }), []);
+  // The card names WHICH image to regenerate (the selected thumbnail = the cover).
+  // It rides the drawer state so the completion path can replace that one media item
+  // instead of the whole set — regenerating image 3 of 4 must not delete the other 3.
+  const handleGenerateAiImage = useCallback((d: PinDraft, mediaId?: string) =>
+    setAiDrawer({ mode: "version", draft: d, targetMediaId: mediaId }), []);
   const handleCreateWithAi = useCallback(() => setAiDrawer({ mode: "scratch" }), []);
   const handleAiGenerate = useCallback(async (opts: AiVersionOptions) => {
     if (!aiDrawer) return;
     const parent = aiDrawer.mode === "version" ? aiDrawer.draft : null;
+    // Which media item a result replaces, and on which draft. Only meaningful when the
+    // generation lands back on the SAME Content the merchant clicked Regenerate on:
+    // version mode also creates brand-new placeholder cards, and an id from the parent
+    // would name nothing there (completeGeneratedDraft falls back to media[0], which is
+    // correct for a new card and wrong to force). Threaded as a pair for that reason.
+    const regenerateTarget = parent && aiDrawer.mode === "version" && aiDrawer.targetMediaId
+      ? { draftId: parent.id, mediaId: aiDrawer.targetMediaId }
+      : null;
+    const replaceMetaFor = (draftId: string): { replaceMediaId?: string } =>
+      regenerateTarget && regenerateTarget.draftId === draftId
+        ? { replaceMediaId: regenerateTarget.mediaId }
+        : {};
     setAiGenerating(true);
     // Regenerating from an existing pin (version mode) is a "regenerate" action.
     if (parent) track("regenerate_clicked", { draftId: parent.id });
@@ -562,8 +823,10 @@ export function StudioBoard() {
       model: resolveModelLabel(undefined, opts.modelKey),
       modelKey: opts.modelKey,
     };
+    const seedDestinations = defaultDestinationsForNewContent();
     const placeholders = Array.from({ length: requested }, (_, i) =>
       pinDraftStore.createBoardDraft({
+        defaultDestinations: seedDestinations,
         // Placeholder shows the parent image while generating; scratch mode has none.
         imageUrl: parent?.imageUrl ?? "",
         source: "ai_generated_from_upload",
@@ -612,7 +875,7 @@ export function StudioBoard() {
           const placeholder = placeholders[slot];
           if (!placeholder) return;
           if (status === "done" && url) {
-            pinDraftStore.completeGeneratedDraft(placeholder.id, url);
+            pinDraftStore.completeGeneratedDraft(placeholder.id, url, replaceMetaFor(placeholder.id));
             void startImageAnalysis(placeholder.id);
             doneCount++;
           } else {
@@ -641,6 +904,7 @@ export function StudioBoard() {
         pinDraftStore.completeGeneratedDraft(placeholders[i].id, url, {
           generationId: result.generationRequestId,
           assetKey: `gen:${requestId}:${i}`,
+          ...replaceMetaFor(placeholders[i].id),
         });
         void startImageAnalysis(placeholders[i].id);
         // Phase C: grade AI results in parallel (independent of copy analysis).
@@ -657,6 +921,7 @@ export function StudioBoard() {
           model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
           generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
           sourceGenerationId: result.generationRequestId, sourceAssetKey: `gen:${requestId}:extra:${i}`,
+          defaultDestinations: seedDestinations,
         });
         void startImageAnalysis(extra.id);
         void startQualityJudge(extra.id);
@@ -713,15 +978,120 @@ export function StudioBoard() {
         else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
       },
     });
-  }, [aiDrawer, tr]);
+  }, [aiDrawer, defaultDestinationsForNewContent, tr]);
 
 
-  const handleDelete = useCallback((d: PinDraft) => {
-    if (typeof window !== "undefined" && !window.confirm(tr("studioBoard.confirm.deleteDraft"))) return;
-    if (d.source === "ai_generated_from_upload") track("generation_deleted", { draftId: d.id });
-    pinDraftStore.deleteDraft(d.id); toast.success(tr("studioBoard.toast.draftDeleted"));
+  // ── Bulk actions (PRD §19/§30) ──────────────────────────────────────────────
+  // Deletion is confirmed through ONE dialog for both the bulk bar and a single card:
+  // the bare window.confirm this replaced said "cannot be undone" about a Posted Pin,
+  // which reads as "your live Pinterest post is going away" — the opposite of what
+  // happens. `pendingDeleteIds` is the queue; a single card is a queue of one.
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
+  const [bulkPublishOpen, setBulkPublishOpen] = useState(false);
+  const [bulkPublishProgress, setBulkPublishProgress] = useState<{ current: number; total: number } | null>(null);
+  const [bulkPublishSummary, setBulkPublishSummary] = useState<BulkPublishSummary | null>(null);
+
+  const selectedDrafts = useMemo(
+    () => allItems.filter(item => selectedIds.has(item.draft.id)).map(item => item.draft),
+    [allItems, selectedIds],
+  );
+  const deleteImpact = useMemo(() => {
+    if (!pendingDeleteIds) return null;
+    const byId = new Map(allItems.map(item => [item.draft.id, item.draft]));
+    const drafts = pendingDeleteIds
+      .map(id => byId.get(id) ?? pinDraftStore.getDraft(id))
+      .filter((d): d is PinDraft => !!d);
+    return summarizeDeleteImpact(drafts);
+  }, [pendingDeleteIds, allItems]);
+
+  const handleDelete = useCallback((d: PinDraft) => { setPendingDeleteIds([d.id]); }, []);
+
+  const runDelete = useCallback(() => {
+    if (!deleteImpact) return;
+    // Unschedule BEFORE deleting: a scheduled Content whose row disappears while its
+    // slot still exists is a job pointing at nothing at due time.
+    for (const id of deleteImpact.unscheduleIds) pinDraftStore.removeFromWeeklyPlan(id);
+    for (const id of deleteImpact.ids) {
+      const draft = pinDraftStore.getDraft(id);
+      if (draft?.source === "ai_generated_from_upload") track("generation_deleted", { draftId: id });
+      pinDraftStore.deleteDraft(id);
+    }
+    const deleted = deleteImpact.ids;
+    setSelectedIds(previous => {
+      const next = new Set(previous);
+      for (const id of deleted) next.delete(id);
+      return next;
+    });
+    setPendingDeleteIds(null);
+    toast.success(deleted.length === 1
+      ? tr("studioBoard.toast.draftDeleted")
+      : tr("studioBoard.bulk.toast.deleted").replace("{n}", String(deleted.length)).replace("{plural}", deleted.length === 1 ? "" : "s"));
+  }, [deleteImpact, tr]);
+
+  const bulkPublishPartition = useMemo(
+    () => partitionBulkPublish(selectedDrafts, { untitled: tr("studioBoard.bulk.untitled") }),
+    [selectedDrafts, tr],
+  );
+
+  const runBulkPublish = useCallback(async () => {
+    // Exactly the `ready` set the sheet showed — never a freshly recomputed one. A
+    // partition computed a second time could differ (a sibling tab published one), and
+    // the merchant would have confirmed a different action than the one performed.
+    const targets = bulkPublishPartition.ready;
+    if (!targets.length) return;
+    setBulkPublishProgress({ current: 0, total: targets.length });
+    const rows: BulkPublishOutcomeRow[] = [];
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      setBulkPublishProgress({ current: i + 1, total: targets.length });
+      // Sequential, and through publishContent so the shared per-draft in-flight lock
+      // still protects against a card publish racing this loop.
+      const outcome = await publishContent(target.id, { onlyPending: true });
+      if (outcome.blocked === "locked") {
+        rows.push({ id: target.id, title: target.title, status: "skipped", message: tr("studioBoard.bulkPublish.alreadyPublishing") });
+      } else if (outcome.blocked) {
+        // Something changed between the sheet and now — report the current reason
+        // rather than a generic failure.
+        const blockers = explainPublishBlockers(pinDraftStore.getDraft(target.id) ?? { id: target.id, imageUrl: "" });
+        rows.push({
+          id: target.id, title: target.title, status: "skipped",
+          message: blockers.map(b => blockerText(tr, b)).join(" ") || tr("studioBoard.blocker.unknown"),
+        });
+      } else if (outcome.nothingToRetry) {
+        // Everything this Content names had already published — the partition's own
+        // `alreadyPublished` bucket normally catches this, but a sibling tab can publish
+        // between the sheet and this loop. Skipped, not failed: nothing went wrong.
+        rows.push({ id: target.id, title: target.title, status: "skipped", message: tr("studioBoard.toast.nothingToRetry") });
+      } else if (outcome.published.length) {
+        rows.push({
+          id: target.id, title: target.title, status: "published",
+          publishedProviders: Array.from(new Set(outcome.published.map(r => r.provider))),
+        });
+      } else {
+        // Never a bare "Publish failed": the destination's own reason is what the
+        // merchant can act on, and publishContent always records one.
+        rows.push({
+          id: target.id, title: target.title, status: "failed",
+          message: outcome.failed.map(r => r.errorMessage).find(Boolean) || tr("studioBoard.blocker.unknown"),
+        });
+      }
+    }
+    setBulkPublishSummary(summarizeBulkPublish(rows));
+    setBulkPublishProgress(null);
+  }, [bulkPublishPartition, tr]);
+
+  const closeBulkPublish = useCallback(() => {
+    // Only a completed run clears the selection: a cancelled sheet leaves the merchant
+    // exactly where they were.
+    if (bulkPublishSummary) setSelectedIds(new Set());
+    setBulkPublishOpen(false);
+    setBulkPublishSummary(null);
+    setBulkPublishProgress(null);
+  }, [bulkPublishSummary]);
+  const handleArchive = useCallback((d: PinDraft) => {
+    pinDraftStore.archiveDraft(d.id); toast.success(tr("studioBoard.toast.archived"));
+    setSelectedIds(previous => { const next = new Set(previous); next.delete(d.id); return next; });
   }, [tr]);
-  const handleArchive = useCallback((d: PinDraft) => { pinDraftStore.archiveDraft(d.id); toast.success(tr("studioBoard.toast.archived")); }, [tr]);
   const handleDuplicate = useCallback((id: string) => { pinDraftStore.duplicateDraft(id); toast.success(tr("studioBoard.toast.duplicated")); }, [tr]);
   const handleConnect = useCallback(() => { void startPinterestConnect(); }, []);
 
@@ -775,10 +1145,22 @@ export function StudioBoard() {
     toast.success(tr("studioBoard.toast.savedToReferences"));
   }, [tr]);
 
-  // Failed card "Try again": publish-failed → retry the real publish; generation-
-  // failed → reopen the AI drawer (parent draft as source when the lineage exists).
+  // Failed card "Try again": publish-failed → retry the real publish; generation-failed
+  // → reopen the AI drawer (parent draft as source when the lineage exists).
+  //
+  // The test is `isActionablePublishFailure` — the SAME rule PinBoardCard uses to decide
+  // which Try Again it is rendering (`isPublishFailure`, which also gates the
+  // generation-only "Regenerate" menu item). Keying on the legacy `publishError` field
+  // having text was a second, weaker rule: that field is DERIVED from the destination
+  // rows and is cleared by a partial success, so a Content whose only problem was one
+  // failed destination fell into the else-branch and opened the AI image drawer —
+  // offering to regenerate an image for a publish failure. Two rules for one question is
+  // how the card's button and the handler behind it came to disagree.
+  //
+  // Retry semantics come from handlePublish's default (`onlyPending ?? true`): only what
+  // has not published is re-sent.
   const handleTryAgain = useCallback((d: PinDraft) => {
-    if (d.publishError?.trim()) { void handlePublish(d.id); return; }
+    if (isActionablePublishFailure(d)) { void handlePublish(d.id); return; }
     const parent = d.parentDraftId ? pinDraftStore.getDraft(d.parentDraftId) : null;
     // Restore the failed card's OWN generation group reference, so retrying a failed
     // reference group regenerates against the same reference instead of reopening a
@@ -885,7 +1267,8 @@ export function StudioBoard() {
   }
 
   return (
-    <div data-testid="studio-board" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, background: BUI.bg }}>
+    <div data-testid="studio-board" style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0, background: BUI.bg, position: "relative", overflow: "hidden" }}>
+      <div data-testid="studio-board-content" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
       <input ref={fileRef} type="file" accept={ACCEPT} multiple data-testid="board-upload-input" style={{ display: "none" }}
         onChange={e => { if (e.target.files?.length) void handleFiles(e.target.files); e.target.value = ""; }} />
 
@@ -912,9 +1295,6 @@ export function StudioBoard() {
               <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: BUI.text }}>{tr("studioBoard.title")}</h1>
               <p style={{ margin: "2px 0 0", fontSize: 12.5, color: BUI.textSec }}>{tr("studioBoard.subtitle")}</p>
             </div>
-            {isDev && (
-              <span data-testid="studio-board-v2-marker" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.3, color: "#fff", background: BUI.gradient, borderRadius: 999, padding: "2px 10px" }}>Studio Board V2</span>
-            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
             {savedIndicator}
@@ -927,21 +1307,64 @@ export function StudioBoard() {
             side by side. Only shown once the board has cards — the empty state has its own
             upload-first zone with a "Create from your store?" product entry. */}
         {hasCards && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button type="button" data-testid="board-upload-more" onClick={openFilePicker} disabled={uploading}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <button type="button" data-testid="board-create-ai" onClick={handleCreateWithAi}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+              <Sparkles style={{ width: 13, height: 13 }} /> {tr("studioBoard.aiDrawer.createWithAi")}
+            </button>
+            <button type="button" data-testid="board-upload-more" onClick={openFilePicker} disabled={uploading}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 9, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.textSec, fontSize: 12, fontWeight: 750, cursor: "pointer", fontFamily: "inherit" }}>
               {uploading ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : <Upload style={{ width: 13, height: 13 }} />}
               {uploading && uploadProgress ? ` ${tr("studioBoard.uploadingProgress").replace("{done}", String(uploadProgress.done)).replace("{total}", String(uploadProgress.total))}` : ` ${tr("studioBoard.uploadMore")}`}
             </button>
             {shopifyEnabled && (
-              <button type="button" data-testid="board-select-product" onClick={() => setShowProductPicker(true)}
+              <button type="button" data-testid="board-select-product" onClick={() => { setProductPickerTargetId(null); setShowProductPicker(true); }}
                 style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: BUI.textSec, background: "none", border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
                 {tr("studioBoard.selectProduct")}
               </button>
             )}
+            {/* Bulk bar (PRD §19): count · Edit · Publish · Delete · Clear. Deliberately
+                lightweight — no embedded forms; Edit opens the batch workspace. Edit is
+                available for ONE selected Pin too: gating it at ≥2 made a merchant
+                deselect-and-reselect to reach the same editor. "Select all" spans the
+                current filter result only, which is what the merchant can see. */}
+            {selectedIds.size > 0 && (
+              <div data-testid="bulk-bar" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <span data-testid="bulk-selected-count" style={{ fontSize: 11.5, fontWeight: 800, color: BUI.text }}>
+                  {tr("studioBoard.bulk.selectedCount").replace("{n}", String(selectedIds.size))}
+                </span>
+                <button type="button" data-testid="bulk-select-all" onClick={() => setSelectedIds(new Set(items.map(item => item.draft.id)))}
+                  style={{ border: 0, background: "none", color: BUI.purple, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
+                  {tr("studioBoard.bulk.selectAll")}
+                </button>
+                <button type="button" data-testid="bulk-edit" onClick={() => setBatchEditOpen(true)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                  <Rows3 style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulk.edit")}
+                </button>
+                <button type="button" data-testid="bulk-publish" onClick={() => { setBulkPublishSummary(null); setBulkPublishProgress(null); setBulkPublishOpen(true); }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                  {tr("studioBoard.bulk.publish")}
+                </button>
+                <button type="button" data-testid="bulk-delete" onClick={() => setPendingDeleteIds(Array.from(selectedIds))}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: "#dc2626", background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
+                  {tr("studioBoard.bulk.delete")}
+                </button>
+                <button type="button" data-testid="bulk-clear" onClick={() => setSelectedIds(new Set())}
+                  style={{ border: 0, background: "none", color: BUI.textSec, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 4 }}>
+                  {tr("studioBoard.bulk.clearSelection")}
+                </button>
+              </div>
+            )}
           </div>
         )}
         <StudioBoardFilters value={filter} counts={counts} onChange={setFilter} />
+        {filter !== "failed" && publishFailureCount > 0 && (
+          <button type="button" data-testid="studio-failure-notice" onClick={() => setFilter("failed", "publish")}
+            style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6, padding: 0, border: 0, background: "none", color: "#b45309", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            <AlertTriangle style={{ width: 12, height: 12 }} />
+            {publishFailureCount} {publishFailureCount === 1 ? "destination needs" : "destinations need"} attention · Review
+          </button>
+        )}
       </div>
 
       {/* Body */}
@@ -1005,7 +1428,7 @@ export function StudioBoard() {
               {tr("studioBoard.empty.noImageCreateWithAi")} <ArrowRight style={{ width: 13, height: 13 }} />
             </button>
             {shopifyEnabled && (
-              <button type="button" data-testid="board-select-product-empty" onClick={() => setShowProductPicker(true)}
+              <button type="button" data-testid="board-select-product-empty" onClick={() => { setProductPickerTargetId(null); setShowProductPicker(true); }}
                 style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "none", padding: 4, fontSize: 12, fontWeight: 700, color: BUI.purple, cursor: "pointer", fontFamily: "inherit" }}>
                 {tr("studioBoard.empty.createFromStoreSelectProduct")} <ArrowRight style={{ width: 13, height: 13 }} />
               </button>
@@ -1037,19 +1460,30 @@ export function StudioBoard() {
             <p style={{ margin: 0, fontSize: 12.5 }}>{tr("studioBoard.empty.nothingHereSub")}</p>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, alignItems: "start" }}>
+          <div data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planPinned
+            ? "repeat(auto-fill, minmax(248px, 1fr))"
+            : "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, alignItems: "start" }}>
             {items.map(({ draft, lifecycle }) => (
               <PinBoardCard
                 key={draft.id} draft={draft} lifecycle={lifecycle} publishing={isPublishing(draft.id)}
                 topPick={topPickIds.has(draft.id)}
+                fallbackBoardName={recentBoardName}
+                selected={selectedIds.has(draft.id)}
+                onSelectedChange={(id, selected) => setSelectedIds(previous => {
+                  const next = new Set(previous);
+                  if (selected) next.add(id); else next.delete(id);
+                  return next;
+                })}
                 active={activeId === draft.id} onSetActive={setActiveId}
-                boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}
+                boards={customerBoards} boardsLoading={boardsLoading} disconnected={disconnected}
                 needsReconnect={needsReconnect} boardsError={boardsError} onRetryBoards={refreshBoards}
                 boardFieldError={scheduleErrors[draft.id] || undefined}
                 titleFieldError={fieldErrors[draft.id]?.title}
                 descriptionFieldError={fieldErrors[draft.id]?.description}
                 onPersist={handlePersist}
-                onSchedule={handleSchedule} onGenerateAiImage={handleGenerateAiImage} onPublish={handlePublish}
+                onSchedule={handleSchedule} onCustomSchedule={handleCustomSchedule}
+                onSelectProduct={(pin) => { setProductPickerTargetId(pin.id); setShowProductPicker(true); }}
+                onGenerateAiImage={handleGenerateAiImage} onPublish={handlePublish}
                 onDelete={handleDelete} onArchive={handleArchive} onDuplicate={handleDuplicate}
                 onUnschedule={handleUnschedule} onMoveToUnscheduled={handleMoveToUnscheduled}
                 onDownload={(d) => { void handleDownload(d); }}
@@ -1090,12 +1524,106 @@ export function StudioBoard() {
 
       {showProductPicker && (
         <CanonicalProductPicker
-          hasPrimary={false}
+          // When attaching to an existing card, the new product only becomes primary
+          // if that card does not already have one.
+          hasPrimary={!!(productPickerTargetId && pinDraftStore.getDraft(productPickerTargetId)?.primaryProductId)}
           selectionMode="single"
           onSelect={handleProductSelect}
-          onClose={() => setShowProductPicker(false)}
+          onClose={() => { setShowProductPicker(false); setProductPickerTargetId(null); }}
         />
       )}
+      <BatchEditDrawer
+        open={batchEditOpen}
+        pins={selectedBatchPins}
+        source="weekly_plan"
+        onClose={() => setBatchEditOpen(false)}
+        onApply={handleBatchApply}
+        onGenerateMetadata={() => toast.info("Select rows, then use Generate copy to fill missing details.")}
+        onScheduleSelected={ids => {
+          // Only the ones that actually took a slot are announced: a draft that failed
+          // validation is still unscheduled, and counting it would put a "+1" on the
+          // Plan trigger pointing at nothing.
+          const scheduled = ids.filter(id => ensureScheduledPlanTime(id).ok);
+          announceScheduled(scheduled);
+          toast.success(`${ids.length} ${ids.length === 1 ? "content item" : "content items"} scheduled.`);
+        }}
+        // No result-writing here any more. This used to FABRICATE a Pinterest
+        // "published" row for every id the batch reported — a record no publish had
+        // produced, which outranked the real one and could claim a destination
+        // published when only Pinterest was attempted. The batch drawer now publishes
+        // through publishContent(), which writes the real per-destination rows; this
+        // callback is only the queue/refresh signal it always should have been.
+        onPublishComplete={() => { /* results are written by publishContent */ }}
+      />
+      {bulkPublishOpen && (
+        <BulkPublishSheet
+          tr={tr}
+          partition={bulkPublishPartition}
+          progress={bulkPublishProgress}
+          summary={bulkPublishSummary}
+          onConfirm={() => { void runBulkPublish(); }}
+          onClose={closeBulkPublish}
+        />
+      )}
+      {deleteImpact && (
+        <BulkDeleteConfirm
+          tr={tr}
+          impact={deleteImpact}
+          onConfirm={runDelete}
+          onClose={() => setPendingDeleteIds(null)}
+        />
+      )}
+      {pendingUploadFiles && (
+        <div data-testid="multi-upload-modal" role="dialog" aria-modal="true" aria-labelledby="multi-upload-title"
+          style={{ position: "fixed", inset: 0, zIndex: 360, background: "rgba(15,23,42,0.42)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ width: "min(720px, 94vw)", borderRadius: 16, border: `1px solid ${BUI.border}`, background: BUI.surface, boxShadow: "0 24px 70px rgba(15,23,42,0.24)", padding: 22 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <h2 id="multi-upload-title" style={{ margin: 0, fontSize: 18, color: BUI.text }}>You&apos;ve uploaded {pendingUploadFiles.length} images</h2>
+                <p style={{ margin: "5px 0 0", fontSize: 12.5, color: BUI.textSec }}>How would you like to publish them?</p>
+              </div>
+              <button type="button" aria-label="Cancel" onClick={() => setPendingUploadFiles(null)} style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4 }}><X style={{ width: 17, height: 17 }} /></button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginTop: 18 }}>
+              <UploadChoiceCard selected={uploadChoice === "together"} icon={<Images style={{ width: 20, height: 20 }} />} title="Publish together"
+                description="Use all images in one carousel or multi-image post." visual="stack" onClick={() => setUploadChoice("together")} />
+              <UploadChoiceCard selected={uploadChoice === "separate"} icon={<Rows3 style={{ width: 20, height: 20 }} />} title="Publish separately"
+                description={`Create ${pendingUploadFiles.length} separate posts, one image per post.`} visual="rows" onClick={() => setUploadChoice("separate")} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 18 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: BUI.textSec, cursor: "pointer" }}>
+                <input type="checkbox" checked={rememberUploadChoice} onChange={e => setRememberUploadChoice(e.target.checked)} /> Don&apos;t show this again
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={() => setPendingUploadFiles(null)} style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+                <button type="button" data-testid="multi-upload-continue" onClick={continueMultiUpload} style={{ padding: "8px 17px", borderRadius: 8, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Continue</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+      <StudioPlanSidebar drafts={allItems.map(item => item.draft)} pinned={planPinned} onPinnedChange={handlePlanPinnedChange} lastScheduled={lastScheduled} />
     </div>
+  );
+}
+
+function UploadChoiceCard({ selected, icon, title, description, visual, onClick }: {
+  selected: boolean; icon: React.ReactNode; title: string; description: string; visual: "stack" | "rows"; onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={selected}
+      style={{ padding: 16, minHeight: 172, borderRadius: 12, border: `1.5px solid ${selected ? BUI.purple : BUI.border}`, background: selected ? "rgba(124,58,237,0.045)" : BUI.surface, color: BUI.text, textAlign: "left", cursor: "pointer", fontFamily: "inherit" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 800, color: selected ? BUI.purple : BUI.text }}>{icon}{title}</span>
+        <span style={{ width: 18, height: 18, borderRadius: "50%", border: `1.5px solid ${selected ? BUI.purple : BUI.borderHi}`, background: selected ? BUI.purple : "transparent", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{selected ? <Check style={{ width: 12, height: 12 }} /> : null}</span>
+      </div>
+      <p style={{ margin: "8px 0 14px", fontSize: 11.5, lineHeight: 1.5, color: BUI.textSec }}>{description}</p>
+      <div style={{ height: 72, display: "flex", alignItems: "center", justifyContent: "center", gap: visual === "rows" ? 7 : 0 }}>
+        {(visual === "stack" ? [0, 1, 2] : [0, 1, 2]).map((item, index) => (
+          <span key={item} style={{ width: 44, height: 62, borderRadius: 7, border: `1px solid ${BUI.border}`, background: `linear-gradient(145deg, rgba(124,58,237,${0.08 + index * 0.03}), rgba(14,165,233,0.08))`, boxShadow: visual === "stack" ? "0 5px 12px rgba(15,23,42,0.10)" : "none", marginLeft: visual === "stack" && index ? -16 : 0, transform: visual === "stack" ? `translateY(${Math.abs(index - 1) * 3}px)` : "none" }} />
+        ))}
+      </div>
+    </button>
   );
 }

@@ -28,6 +28,10 @@ export type ReferenceCandidateRow = {
   sourceUrl?: string | null;      // pin_samples.source_url  (merchant/source page)
   pinterestUrl?: string | null;   // pin_samples.pinterest_url (the Pinterest pin)
   saveCount?: number | null;
+  /** pin_samples.scraped_at — ISO-8601 crawl timestamp. Used ONLY as a freshness tie-break
+   *  inside the ranker; it is never surfaced (ReferenceRecommendation / toRecommendation are
+   *  unchanged, so it can never reach the wire). Missing/blank counts as OLDEST. */
+  scrapedAt?: string | null;
   referenceQualityScore?: number | null;
   visualFormat?: string | null;
   humanPresence?: string | null;      // 'none' | 'hands' | 'partial' | 'full'
@@ -863,6 +867,106 @@ function byIdAsc(a: ScoredReference, b: ScoredReference): number {
 }
 
 /**
+ * Deterministic final tie-break: freshest crawl first, then id ascending.
+ *
+ * `scrapedAt` lives on the ROW, not on `ScoredReference` — the scored shape is the
+ * display-safe one and must not start carrying crawl metadata — so the values are threaded in
+ * through the id→row map the ranker already builds. Comparison is plain lexicographic over the
+ * ISO-8601 string (same-format ISO sorts chronologically); missing / blank collapses to `""`,
+ * which under DESC sorts last, i.e. an unknown crawl date is treated as the OLDEST.
+ *
+ * With no `scrapedAt` present anywhere (every value `""`) this is identical to `byIdAsc`.
+ */
+function byScrapedAtDescThenIdAsc(
+  a: ScoredReference,
+  b: ScoredReference,
+  rowById: ReadonlyMap<string, ReferenceCandidateRow>,
+): number {
+  const av = (rowById.get(a.id)?.scrapedAt ?? "").trim();
+  const bv = (rowById.get(b.id)?.scrapedAt ?? "").trim();
+  if (av !== bv) return av < bv ? 1 : -1;
+  return byIdAsc(a, b);
+}
+
+/**
+ * How many leading words define a cluster. See `keywordClusterKey` — this truncation is the
+ * load-bearing part of the key, not an optimization.
+ */
+const KEYWORD_CLUSTER_HEAD_WORDS = 3;
+
+/**
+ * Order-free identity of a crawl keyword — the unit the cluster cap rate-limits.
+ *
+ * Words come from `distinctiveWords` + `normalizeWord` (the SAME normalization the evidence
+ * path uses), deduped in order of appearance; only the first `KEYWORD_CLUSTER_HEAD_WORDS` are
+ * kept, then sorted and joined.
+ *
+ * ── Why the head truncation ──
+ * Keying on the FULL word set was MEASURED to be far too fine on the live fashion pool: for a
+ * "Gold Hoop Earrings" product with cap = 2, the top 9 were still 9 back-to-school pins,
+ * because `back to school outfit inspo`, `back 2 school outfits senior`,
+ * `back to school outfits boys`, `back to school outfit inspo high school`,
+ * `back 2 school outfits uniform` and `back to school outfits 2026-2027` each formed their OWN
+ * cluster — one distinct tail word was enough to escape the cap. Truncating to the head
+ * collapses all six onto `"back outfit school"`, which is the theme a user actually perceives.
+ *
+ * Sorting AFTER truncation keeps the key order-insensitive within the head, so
+ * `"outfit ideas summer"` and `"summer outfit ideas"` agree (`ideas` is a stop word).
+ *
+ * ── Known limit (deliberate, stated rather than hidden) ──
+ * This is a heuristic over the HEAD of the keyword, so a variant that front-loads a modifier —
+ * `"senior back to school outfits"` → `back school senior` — still forms its own cluster. Real
+ * crawl keywords lead with the theme, which is why every measured variant above collapses;
+ * widening the window would start merging genuinely different themes instead.
+ *
+ * An empty key means "no usable keyword". Callers must NOT rate-limit those rows — otherwise a
+ * pool of keyword-less pins would all collapse into one cluster and get capped as if identical.
+ */
+export function keywordClusterKey(sourceKeyword?: string | null): string {
+  const normalized = Array.from(new Set(distinctiveWords(sourceKeyword).map(normalizeWord)));
+  return normalized.slice(0, KEYWORD_CLUSTER_HEAD_WORDS).sort().join(" ");
+}
+
+/**
+ * Keyword-cluster diversity pass over ALREADY-SORTED tiers.
+ *
+ * Purely a REORDER, never a filter: rows past `cap` in a cluster are demoted to the end rather
+ * than dropped, so both the "empty-result rate is 0% by construction" property and the
+ * membership of the merged list survive. Only positions move — which is also why
+ * `deriveRecommendationBasis` is unaffected (tiers and membership are identical).
+ *
+ * The cluster counter is SHARED across the two tier scans, so a Tier-2 row in a cluster Tier-1
+ * already exhausted is demoted too: the cap is a property of the output set, not of a tier.
+ */
+function applyKeywordClusterCap(
+  tier1: ScoredReference[],
+  tier2: ScoredReference[],
+  cap: number,
+  rowById: ReadonlyMap<string, ReferenceCandidateRow>,
+): ScoredReference[] {
+  const counts = new Map<string, number>();
+  const split = (items: ScoredReference[]) => {
+    const kept: ScoredReference[] = [];
+    const overflow: ScoredReference[] = [];
+    for (const s of items) {
+      const key = keywordClusterKey(rowById.get(s.id)?.sourceKeyword);
+      if (!key) { kept.push(s); continue; }   // no keyword → never rate-limited
+      const used = counts.get(key) ?? 0;
+      if (used < cap) {
+        counts.set(key, used + 1);
+        kept.push(s);
+      } else {
+        overflow.push(s);
+      }
+    }
+    return { kept, overflow };
+  };
+  const first = split(tier1);
+  const second = split(tier2);
+  return [...first.kept, ...second.kept, ...first.overflow, ...second.overflow];
+}
+
+/**
  * Tier-aware ranking for the product-aware POST path.
  *
  * ── Tier 1 — genuine product evidence ──
@@ -873,17 +977,25 @@ function byIdAsc(a: ScoredReference, b: ScoredReference): number {
  *   fashion mean result count 0.9 of 12). Several products with plenty of real evidence die
  *   to it: `Reading comprehension and fluency worksheet` has 71 evidence-bearing candidates
  *   and a best relevance of 0.250. The floor, not the evidence, was doing the killing.
- *   order: productEvidenceScore DESC → score DESC → id ASC.
+ *   order: productEvidenceScore DESC → score DESC → scrapedAt DESC → id ASC.
  *
  * ── Tier 2 — category inspiration ──
  *   admission: displayable, unconditional. NO floor at all. This is what makes the
  *   empty-result rate 0% BY CONSTRUCTION.
- *   order: score DESC → id ASC.
+ *   order: score DESC → scrapedAt DESC → id ASC.
  *
  * ── Merge ──
  *   Tier 1 first, then Tier 2 backfill to `limit`. Deduped ACROSS tiers by id AND imageUrl.
  *   If Tier 1 is empty the result is Tier 2 in full. A missing product evidence signal can
  *   NEVER produce an empty list.
+ *
+ * ── Optional keyword-cluster cap (`opts.keywordClusterCap`) ──
+ *   OFF by default. Omitting `opts`, or passing `undefined` / `<= 0`, runs exactly the merge
+ *   above. When on, each `source_keyword` cluster (see `keywordClusterKey`) may occupy at most
+ *   `cap` of the leading slots; the remainder are DEMOTED (never dropped) behind the Tier-2
+ *   keeps. Final order: Tier-1 keeps → Tier-2 keeps → Tier-1 overflow → Tier-2 overflow.
+ *   `recommendationTier` and the returned membership are untouched, so the honest basis does
+ *   not move with the cap.
  *
  * Callers get in-category scoping from the pool query; this function does not re-filter by
  * category, so `rows` must already be the intended pool.
@@ -892,11 +1004,15 @@ export function rankReferencesTiered(
   rows: ReferenceCandidateRow[],
   input: ReferenceScoringInput,
   limit = 12,
+  opts?: { keywordClusterCap?: number },
 ): ScoredReference[] {
   const contextSet = buildContextSet(input);
   const evidenceCtx = buildProductEvidenceContext(input);
 
   const seen = new Set<string>();
+  /** id → source row, so the tie-break and the cluster cap can read `scrapedAt` /
+   *  `sourceKeyword` without widening the display-safe `ScoredReference` shape. */
+  const rowById = new Map<string, ReferenceCandidateRow>();
   const tier1: { s: ScoredReference; evidence: number }[] = [];
   const tier2: ScoredReference[] = [];
 
@@ -905,16 +1021,22 @@ export function rankReferencesTiered(
     if (seen.has(row.id) || seen.has(row.imageUrl)) continue; // cross-tier dedupe by id AND imageUrl
     seen.add(row.id);
     seen.add(row.imageUrl);
+    rowById.set(row.id, row);
     const s = scoreReference(row, input, contextSet);
     const evidence = productEvidenceScore(row, evidenceCtx, input.category);
     if (evidence > 0) tier1.push({ s: { ...s, recommendationTier: "product_evidence" }, evidence });
     else tier2.push(asCategoryInspiration(s));
   }
 
-  tier1.sort((a, b) => (b.evidence - a.evidence) || (b.s.score - a.s.score) || byIdAsc(a.s, b.s));
-  tier2.sort((a, b) => (b.score - a.score) || byIdAsc(a, b));
+  tier1.sort((a, b) =>
+    (b.evidence - a.evidence) || (b.s.score - a.s.score) || byScrapedAtDescThenIdAsc(a.s, b.s, rowById));
+  tier2.sort((a, b) => (b.score - a.score) || byScrapedAtDescThenIdAsc(a, b, rowById));
 
-  const merged = [...tier1.map(t => t.s), ...tier2];
+  const ranked1 = tier1.map(t => t.s);
+  const cap = opts?.keywordClusterCap;
+  const merged = cap != null && cap > 0
+    ? applyKeywordClusterCap(ranked1, tier2, cap, rowById)
+    : [...ranked1, ...tier2];
   return limit > 0 ? merged.slice(0, limit) : merged;
 }
 

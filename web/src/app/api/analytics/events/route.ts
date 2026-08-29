@@ -11,35 +11,20 @@
  *  - v41 table not applied    → 204 (dropped; client has no retry/outbox).
  *  - Nothing valid to insert  → 204.
  * Only genuine DB failures are logged; the client never reads this response.
+ *
+ * Auth + insert + degrade rules live in lib/server/recordEvent.ts so server-side
+ * callers (reference-candidates) record events through the identical path.
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
-import { createServerClient } from "@/lib/supabase";
 import { normalizeAnalyticsEvents } from "@/lib/analyticsIngest";
+import { recordAnalyticsEvents } from "@/lib/server/recordEvent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const TABLE = "analytics_events";
 const noContent = () => new Response(null, { status: 204 });
 
-/** v41 analytics_events not applied yet → drop silently (mirror of pin-drafts degrade). */
-function isMissingTableError(err: { code?: string; message?: string } | null): boolean {
-  if (!err) return false;
-  const message = err.message ?? "";
-  return (
-    err.code === "PGRST205"
-    || err.code === "42P01"
-    || message.includes("Could not find the table")
-    || (message.includes("relation") && message.includes("does not exist"))
-  );
-}
-
 export async function POST(req: Request) {
-  // Unauthenticated events are dropped (204), never rejected — keeps the caller silent.
-  const userId = await getUserIdFromSameOriginSession(req);
-  if (!userId) return noContent();
-
   let body: unknown;
   try {
     body = await req.json();
@@ -50,19 +35,14 @@ export async function POST(req: Request) {
   const rows = normalizeAnalyticsEvents(body);
   if (rows.length === 0) return noContent();
 
-  const db = createServerClient();
-  const { error } = await db.from(TABLE).insert(
+  // Never throws; unauthenticated batches are dropped inside (204, never rejected).
+  await recordAnalyticsEvents(
+    req,
     rows.map(r => ({
-      workspace_id: userId,   // effective workspace == user today
-      user_id:      userId,
-      draft_id:     r.draft_id,
-      event_name:   r.event_name,
-      payload:      r.payload,
+      event_name: r.event_name,
+      draft_id:   r.draft_id,
+      payload:    r.payload ?? undefined,
     })),
   );
-
-  if (error && !isMissingTableError(error)) {
-    console.error("[analytics/events POST] insert error:", error.message);
-  }
   return noContent();
 }

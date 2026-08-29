@@ -18,11 +18,13 @@ import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import { resolvePlan } from "@/lib/server/entitlements";
 import { checkAllowance, recordUsage } from "@/lib/server/usage";
+import { platformName } from "@/lib/social/platforms";
 import {
   buildPromotedColumns,
   PROMOTED_COLUMN_KEYS,
   buildScheduleColumns,
   buildScheduledAt,
+  blockedScheduleDestinations,
   SCHEDULE_COLUMN_KEYS,
 } from "./promote";
 
@@ -251,6 +253,9 @@ export async function PUT(req: Request) {
   // one scheduled_post metered event). Only tracked when the scheduled_at column
   // exists; skipped entirely otherwise.
   const newlyScheduledDraftIds: string[] = [];
+  // Drafts in this request that ask to be scheduled to a destination we cannot
+  // honour at due time. Collected, then REFUSED below — never quietly stripped.
+  const unschedulable: Array<{ draftId: string; providers: string[] }> = [];
   for (const d of incoming) {
     const rowMs = existingMs.get(d.draftId);
     const incMs = parseMs(d.updatedAt)!;
@@ -260,6 +265,14 @@ export async function PUT(req: Request) {
       const incomingScheduledAt = buildScheduledAt(p);
       const wasScheduled = existingScheduled.get(d.draftId) ?? false;
       if (incomingScheduledAt && !wasScheduled) newlyScheduledDraftIds.push(d.draftId);
+      // A future-dated Pin may only name destinations whose intent we can actually
+      // persist and replay. Today that is Pinterest alone: boardId and
+      // targetConnectionId ride the draft and the due worker reads them back, while
+      // an Instagram/Facebook choice is not stored anywhere and would be dropped in
+      // silence. Refusing here (not just in the UI) is the point — the client can be
+      // stale or bypassed entirely.
+      const blocked = blockedScheduleDestinations(p);
+      if (blocked.length) unschedulable.push({ draftId: d.draftId, providers: blocked });
     }
     rows.push({
       vibepin_user_id: userId,
@@ -278,6 +291,27 @@ export async function PUT(req: Request) {
       // publish_claimed_at leaves any existing lock on the row untouched.
       ...(_scheduleColumnsMissing ? {} : buildScheduleColumns(p)),
     });
+  }
+
+  // ── Schedulable-destination gate ──────────────────────────────────────────
+  // Before the upsert, so an unsupported scheduled destination is never persisted
+  // and never silently discarded. 422 (not 400): the request is well-formed, the
+  // capability is temporarily unavailable.
+  if (unschedulable.length > 0) {
+    const names = [...new Set(unschedulable.flatMap(u => u.providers))]
+      .map(p => platformName(p as Parameters<typeof platformName>[0]));
+    return Response.json(
+      {
+        error: "destination_not_schedulable",
+        code: "destination_not_schedulable",
+        drafts: unschedulable,
+        userMessage:
+          names.length === 1
+            ? `Scheduling to ${names[0]} is temporarily unavailable. You can still publish now.`
+            : `Scheduling to ${names.join(" and ")} is temporarily unavailable. You can still publish now.`,
+      },
+      { status: 422 },
+    );
   }
 
   // ── Scheduled-post quota gate ─────────────────────────────────────────────

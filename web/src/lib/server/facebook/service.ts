@@ -638,9 +638,17 @@ export type PublishToPageInput = {
    */
   imageUrl?: string | null;
   /**
+   * The full media set in display order (cover first). ≥2 entries publish a real
+   * MULTI-PHOTO feed post; 1 or absent falls back to `imageUrl` and the request is
+   * byte-for-byte what it has always been. Count limits belong to the caller
+   * (checkFacebookMedia) — nothing is dropped here.
+   */
+  imageUrls?: readonly string[] | null;
+  /**
    * Destination link, appended to the message for a photo post. Graph's `link`
-   * param belongs to /feed only — on /photos it is silently ignored, so for a
-   * photo we fold the URL into the caption instead of pretending it took.
+   * param belongs to /feed only — on /photos it is silently ignored, and on a
+   * /feed post it is REJECTED alongside `attached_media` — so for any photo post
+   * we fold the URL into the message instead of pretending it took.
    */
   link?: string | null;
 };
@@ -784,16 +792,31 @@ export async function publishToPage(
   input: PublishToPageInput,
 ): Promise<PublishToPageResult> {
   const message = (input.message ?? "").trim();
-  const imageUrl = (input.imageUrl ?? "").trim();
   const link = (input.link ?? "").trim();
+  // The media set in display order. `imageUrl` stays the single-image contract, so a
+  // caller that never learned about `imageUrls` behaves exactly as it did before.
+  const imageUrls = (input.imageUrls ?? [])
+    .map(u => (typeof u === "string" ? u.trim() : ""))
+    .filter(Boolean);
+  const imageUrl = imageUrls[0] ?? (input.imageUrl ?? "").trim();
+  const allImages = imageUrls.length ? imageUrls : imageUrl ? [imageUrl] : [];
 
-  if (imageUrl && !isPubliclyFetchableImage(imageUrl)) {
-    throw new FacebookApiError(
-      "The image must be a publicly reachable http(s) URL for Facebook to fetch it",
-      422,
-      "publish_image_not_public",
-    );
+  for (const url of allImages) {
+    if (!isPubliclyFetchableImage(url)) {
+      throw new FacebookApiError(
+        "The image must be a publicly reachable http(s) URL for Facebook to fetch it",
+        422,
+        "publish_image_not_public",
+      );
+    }
   }
+
+  // ≥2 images is a different Graph shape entirely (unpublished photos + a feed post
+  // that attaches them), so it gets its own function rather than branching this one.
+  if (allImages.length > 1) {
+    return publishMultiPhotoToPage(pageToken, pageId, allImages, message, link);
+  }
+
   if (!imageUrl && !message) {
     throw new FacebookApiError(
       "A Facebook post needs either text or an image",
@@ -871,6 +894,127 @@ export async function publishToPage(
     `post_id=${externalPostId}`,
   );
   return { externalPostId, permalink: fallback, permalinkFallback: true };
+}
+
+/**
+ * Publish a MULTI-PHOTO feed post (2+ images in one post).
+ *
+ * Graph's shape, in order:
+ *   1. POST /{page-id}/photos with `url` and `published=false` for each image →
+ *      an UNPUBLISHED photo id per image. Unpublished on purpose: a published
+ *      photo would appear as its own post, so the merchant would see N separate
+ *      single-photo posts instead of one gallery.
+ *   2. POST /{page-id}/feed with `message` and
+ *      `attached_media=[{"media_fbid":…},…]` in the SAME order — that array is
+ *      the display order of the gallery.
+ *
+ * `link` is NOT sent: Graph rejects `link` together with `attached_media`, so the
+ * destination URL is folded into the message exactly as the single-photo path
+ * folds it into the caption. Sending it would fail the whole post.
+ *
+ * ALL-OR-NOTHING: if any photo upload fails, the error propagates and no feed post
+ * is created. A partial gallery would publish a Content the merchant never
+ * approved — and the already-uploaded photos stay unpublished, so nothing of it is
+ * visible on the Page.
+ *
+ * SECURITY: the page token rides in the POST body, never a URL; errors and logs
+ * never echo the body, the URL, or the token.
+ */
+async function publishMultiPhotoToPage(
+  pageToken: string,
+  pageId: string,
+  imageUrls: readonly string[],
+  message: string,
+  link: string,
+): Promise<PublishToPageResult> {
+  // 1 — upload each photo unpublished, in order.
+  const mediaFbids: string[] = [];
+  for (const url of imageUrls) {
+    const photoBody = new URLSearchParams({
+      access_token: pageToken,
+      url,
+      published: "false",
+    });
+    const photoRes = await fetch(`${FACEBOOK_GRAPH_URL}/${encodeURIComponent(pageId)}/photos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: photoBody.toString(),
+    });
+    const photoJson = (await photoRes.json().catch(() => ({}))) as { id?: unknown } & Record<string, unknown>;
+
+    fbDebug(
+      `POST /{pageId}/photos[published=false] status=${photoRes.status}`,
+      `token[${tokenFingerprint(pageToken)}]`,
+      describeGraphError(photoJson),
+      `page_id=${pageId}`,
+      `photo_index=${mediaFbids.length}`,
+      `id=${typeof photoJson.id === "string" ? photoJson.id : "-"}`,
+    );
+
+    if (!photoRes.ok || hasGraphError(photoJson)) {
+      throw publishGraphError(photoJson, photoRes.status);
+    }
+    const photoId = typeof photoJson.id === "string" && photoJson.id ? photoJson.id : null;
+    if (!photoId) {
+      throw new FacebookApiError(
+        "Facebook accepted an image but returned no photo id",
+        502,
+        "publish_no_post_id",
+      );
+    }
+    mediaFbids.push(photoId);
+  }
+
+  // 2 — one feed post attaching them all, in the same order.
+  const feedBody = new URLSearchParams({ access_token: pageToken });
+  // `link` is deliberately absent (Graph refuses it beside attached_media) — the
+  // destination URL is appended to the message so the merchant's traffic path survives.
+  const fullMessage = [message, link].filter(Boolean).join("\n\n");
+  if (fullMessage) feedBody.set("message", fullMessage);
+  feedBody.set("attached_media", JSON.stringify(mediaFbids.map(id => ({ media_fbid: id }))));
+
+  const feedRes = await fetch(`${FACEBOOK_GRAPH_URL}/${encodeURIComponent(pageId)}/feed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: feedBody.toString(),
+  });
+  const feedJson = (await feedRes.json().catch(() => ({}))) as {
+    id?: unknown;
+    post_id?: unknown;
+  } & Record<string, unknown>;
+
+  fbDebug(
+    `POST /{pageId}/feed[attached_media] status=${feedRes.status}`,
+    `token[${tokenFingerprint(pageToken)}]`,
+    describeGraphError(feedJson),
+    `page_id=${pageId}`,
+    `photo_count=${mediaFbids.length}`,
+    `id=${typeof feedJson.id === "string" ? feedJson.id : "-"}`,
+  );
+
+  if (!feedRes.ok || hasGraphError(feedJson)) {
+    throw publishGraphError(feedJson, feedRes.status);
+  }
+
+  const externalPostId =
+    (typeof feedJson.post_id === "string" && feedJson.post_id ? feedJson.post_id : null)
+    ?? (typeof feedJson.id === "string" && feedJson.id ? feedJson.id : null);
+  if (!externalPostId) {
+    throw new FacebookApiError(
+      "Facebook accepted the post but returned no post id",
+      502,
+      "publish_no_post_id",
+    );
+  }
+
+  const permalink = await fetchPostPermalink(pageToken, externalPostId);
+  if (permalink) return { externalPostId, permalink, permalinkFallback: false };
+
+  fbDebug(
+    `permalink_url unavailable — falling back to constructed URL`,
+    `post_id=${externalPostId}`,
+  );
+  return { externalPostId, permalink: `https://www.facebook.com/${externalPostId}`, permalinkFallback: true };
 }
 
 /**

@@ -16,10 +16,27 @@ import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/p
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
 import { getCachedConnections, setCachedConnections, SOCIAL_CONNECTIONS_CHANGED_EVENT } from "@/lib/social/connectionsCache";
-import { PINTEREST_DISCONNECTED_EVENT } from "@/lib/pinterestClient";
+import {
+  PINTEREST_DISCONNECTED_EVENT,
+  fetchPinterestBoards,
+  fetchPinterestDefaultBoard,
+  savePinterestDefaultBoard,
+} from "@/lib/pinterestClient";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const CONNECTIONS_TIMEOUT_MS = 3000;
+
+/**
+ * One ticked ACCOUNT. Several entries may share a provider — that is the whole point:
+ * two Pinterest accounts are two destinations, each with its own board.
+ */
+export type SelectedAccount = {
+  provider: string;
+  id: string;
+  /** Pinterest only: the board THIS account publishes to. Cleared when it is unticked. */
+  boardId?: string;
+  boardName?: string;
+};
 
 function defaultSummaries(): PlatformConnectionSummary[] {
   return SOCIAL_PROVIDERS.map((provider): PlatformConnectionSummary => ({
@@ -50,6 +67,7 @@ function DestinationRow({
   onConnect,
   connecting,
   checkingConnection,
+  scheduleMode,
 }: {
   summary: PlatformConnectionSummary;
   selected: boolean;
@@ -58,6 +76,8 @@ function DestinationRow({
   onConnect?: () => void;
   connecting?: boolean;
   checkingConnection?: boolean;
+  /** True when the caller is choosing destinations for a FUTURE-DATED publish. */
+  scheduleMode?: boolean;
 }) {
   const { t } = useLocale();
   const meta = PLATFORMS[summary.provider];
@@ -66,12 +86,19 @@ function DestinationRow({
   // (mock returns coming_soon / not_implemented), but even a stray "connected" DB
   // row must not make an unimplemented platform selectable for publishing.
   const publishable = summary.connected && meta.liveConnect;
+  // In schedule mode a platform we cannot replay at due time is not selectable —
+  // but it stays visible and keeps its account identity, because the account IS
+  // connected. Hiding the row, or showing "Not connected", would both be lies.
+  const blockedForSchedule = !!scheduleMode && publishable && !meta.liveSchedule;
+  const actionable = publishable && !blockedForSchedule;
   // Any live platform can be connected from right here. Previously only Pinterest
   // offered this, so an unconnected Facebook Page was a dead row: the merchant
   // was told "Not connected" with no way forward, and had to find Settings on
   // their own and then navigate back to the Pin they were publishing.
   const canConnectHere = !publishable && meta.liveConnect && !!onConnect && !checkingConnection;
-  const statusText = !meta.liveConnect
+  const statusText = blockedForSchedule
+    ? t("publishDestinations.schedulingUnavailable")
+    : !meta.liveConnect
     ? t("publishDestinations.comingSoon")
     : publishable
       ? t("publishDestinations.connected")
@@ -80,7 +107,7 @@ function DestinationRow({
         : t("publishDestinations.notConnected");
 
   function handleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (!publishable) return;
+    if (!actionable) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onToggle();
@@ -89,12 +116,13 @@ function DestinationRow({
 
   return (
     <div
-      role={publishable ? "checkbox" : "group"}
-      aria-checked={publishable ? selected : undefined}
-      aria-disabled={!publishable}
-      tabIndex={publishable ? 0 : -1}
+      role={actionable ? "checkbox" : "group"}
+      aria-checked={actionable ? selected : undefined}
+      aria-disabled={!actionable}
+      data-schedule-blocked={blockedForSchedule ? "true" : undefined}
+      tabIndex={actionable ? 0 : -1}
       data-testid={`publish-dest-${summary.provider}`}
-      onClick={publishable ? onToggle : undefined}
+      onClick={actionable ? onToggle : undefined}
       onKeyDown={handleKeyDown}
       style={{
         display: "flex",
@@ -104,8 +132,8 @@ function DestinationRow({
         padding: "8px 10px",
         borderTop: `1px solid ${UI.border}`,
         background: selected ? "rgba(59,130,246,0.08)" : "transparent",
-        cursor: publishable ? "pointer" : "default",
-        opacity: publishable || canConnectHere ? 1 : 0.62,
+        cursor: actionable ? "pointer" : "default",
+        opacity: actionable || canConnectHere ? 1 : 0.62,
       }}
     >
       <span
@@ -186,6 +214,89 @@ function DestinationRow({
   );
 }
 
+/**
+ * The board ONE ticked Pinterest account publishes to.
+ *
+ * Boards are per-account, so the list is fetched with this account's connection id —
+ * listing "the" boards would show whichever account the server defaults to. The last
+ * board chosen for THIS account seeds the field (`fetchPinterestDefaultBoard(id)`) and
+ * a new choice is remembered against it (`savePinterestDefaultBoard(board, id)`), so a
+ * merchant publishing to two accounts does not re-pick both boards every time.
+ *
+ * It never auto-picks: an account with no remembered board shows "Choose a board" and
+ * the destination is refused at publish time rather than landing somewhere unintended.
+ */
+function AccountBoardSelect({
+  connectionId,
+  value,
+  onChange,
+}: {
+  connectionId: string;
+  value: string;
+  onChange: (board: { boardId: string; boardName: string } | null) => void;
+}) {
+  const { t } = useLocale();
+  const [boards, setBoards] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const seededRef = useRef(false);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetchPinterestBoards(undefined, undefined, connectionId)
+      .then(result => {
+        if (!alive) return;
+        setBoards(result.items.map(b => ({ id: b.id, name: b.name })));
+      })
+      .catch(() => { if (alive) setBoards([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [connectionId]);
+
+  // Seed from THIS account's remembered board, once, and only while the field is
+  // still empty — never overwrite a board the merchant just chose.
+  useEffect(() => {
+    if (seededRef.current || value) return;
+    seededRef.current = true;
+    let alive = true;
+    void fetchPinterestDefaultBoard(undefined, connectionId)
+      .then(board => {
+        if (!alive || !board?.boardId) return;
+        onChangeRef.current({ boardId: board.boardId, boardName: board.boardName ?? "" });
+      })
+      .catch(() => { /* no remembered board — the merchant picks one */ });
+    return () => { alive = false; };
+  }, [connectionId, value]);
+
+  return (
+    <div style={{ padding: "0 10px 8px 60px" }}>
+      <select
+        data-testid={`publish-dest-board-${connectionId}`}
+        aria-label={t("publishDestinations.boardLabel")}
+        value={value}
+        onChange={e => {
+          const boardId = e.target.value;
+          if (!boardId) { onChange(null); return; }
+          const board = boards.find(b => b.id === boardId);
+          onChange({ boardId, boardName: board?.name ?? "" });
+          // Remembered against THIS connection, so the other account's board is untouched.
+          void savePinterestDefaultBoard({ boardId, boardName: board?.name ?? "" }, connectionId).catch(() => {});
+        }}
+        style={{
+          width: "100%", padding: "5px 7px", borderRadius: 7,
+          border: `1px solid ${UI.border}`, background: UI.surface2,
+          color: UI.text, fontSize: 11, fontFamily: "inherit",
+        }}
+      >
+        <option value="">{loading ? t("publishDestinations.boardLoading") : t("publishDestinations.boardPlaceholder")}</option>
+        {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
+    </div>
+  );
+}
+
 export function PublishDestinations({
   selected,
   onSelectedChange,
@@ -193,6 +304,8 @@ export function PublishDestinations({
   connectingPinterest,
   pinterestConnected,
   pinterestAccountName,
+  scheduleMode,
+  onSummariesChange,
   renderDetails,
   selectedAccountIds,
   onSelectedAccountIdsChange,
@@ -205,12 +318,26 @@ export function PublishDestinations({
    * platform participates at all; this narrows it to particular accounts, so a
    * caller that does not care about accounts keeps working unchanged.
    */
-  selectedAccountIds?: Array<{ provider: string; id: string }>;
-  onSelectedAccountIdsChange?: (next: Array<{ provider: string; id: string }>) => void;
+  selectedAccountIds?: SelectedAccount[];
+  onSelectedAccountIdsChange?: (next: SelectedAccount[]) => void;
   onConnectPinterest?: () => void;
   connectingPinterest?: boolean;
   pinterestConnected?: boolean;
   pinterestAccountName?: string | null;
+  /**
+   * True when the chosen destinations are for a FUTURE-DATED publish. Platforms
+   * whose scheduled intent we cannot yet persist and replay are shown, keep their
+   * account identity, but cannot be ticked. Publish now leaves this false and is
+   * completely unaffected.
+   */
+  scheduleMode?: boolean;
+  /**
+   * Reports the loaded per-platform connection summaries upward. The parent needs
+   * them to record WHICH account a scheduled destination refers to — the drawer
+   * itself only tracks Pinterest connections, while Instagram/Facebook accounts
+   * are known here.
+   */
+  onSummariesChange?: (summaries: PlatformConnectionSummary[]) => void;
   /**
    * Extra controls that belong to ONE destination (PRD 0809 §3) — Pinterest's account
    * and board. Rendered directly under that platform's row so a Board list is never
@@ -283,6 +410,12 @@ export function PublishDestinations({
     void load();
   }, [load]);
 
+  // Hand the loaded accounts to the parent so a scheduled destination can be
+  // recorded against a real connection id rather than a platform name.
+  useEffect(() => {
+    if (onSummariesChange) onSummariesChange(summaries);
+  }, [summaries, onSummariesChange]);
+
 
   // Disconnecting Pinterest in Settings while this drawer sits open behind it (e.g.
   // Settings opened as an overlay) doesn't unmount this component, so nothing would
@@ -328,28 +461,38 @@ export function PublishDestinations({
     if (live.length !== selected.length) onSelectedChange(live);
   }, [selected, onSelectedChange]);
 
-  // An account counts as selected when it is explicitly listed, OR when nothing
-  // has been narrowed yet — connecting a second account should not silently stop
-  // publishing to the first. Explicit selection only starts once the merchant
-  // unticks something.
+  /**
+   * An account is selected only when it is EXPLICITLY listed.
+   *
+   * It used to read "listed, or nothing narrowed yet ⇒ all". Once several accounts on
+   * one platform can each be their own destination, that default silently publishes to
+   * every connected account the moment a second one is connected — the merchant ticks
+   * Instagram and two Pages receive the post. Fail closed instead: with several accounts
+   * and none ticked, nothing is written and the caller's ambiguity error blocks publish.
+   * The single-account case never reaches here (the account rows are not rendered).
+   */
   function accountChecked(id: string): boolean {
-    return !selectedAccountIds?.length || selectedAccountIds.some(a => a.id === id);
+    return !!selectedAccountIds?.some(a => a.id === id);
   }
 
-  function toggleAccount(provider: SocialProvider, id: string) {
+  function toggleAccount(provider: SocialProvider, id: string, label?: string) {
     if (!onSelectedAccountIdsChange) return;
-    const current = selectedAccountIds?.length
-      ? selectedAccountIds
-      // First untick materialises the implicit "all" into a concrete list, so
-      // removing one account does not read as "select only this one".
-      : summaries.flatMap(s =>
-          s.accounts
-            .filter(a => a.connectionStatus === "connected")
-            .map(a => ({ provider: s.provider as string, id: a.id })));
+    const current = selectedAccountIds ?? [];
     const next = current.some(a => a.id === id)
+      // Unticking drops the account's board with it (§18): a board id belongs to one
+      // account, and keeping it would silently re-apply on a re-tick.
       ? current.filter(a => a.id !== id)
-      : [...current, { provider: provider as string, id }];
+      : [...current, { provider: provider as string, id, ...(label ? { accountLabel: label } : {}) }];
     onSelectedAccountIdsChange(next);
+  }
+
+  /** Set (or clear) the board of ONE ticked Pinterest account. */
+  function setAccountBoard(id: string, board: { boardId: string; boardName: string } | null) {
+    if (!onSelectedAccountIdsChange) return;
+    onSelectedAccountIdsChange((selectedAccountIds ?? []).map(a =>
+      a.id === id
+        ? { provider: a.provider, id: a.id, ...(board ? { boardId: board.boardId, boardName: board.boardName } : {}) }
+        : a));
   }
 
   function toggle(provider: SocialProvider) {
@@ -400,6 +543,7 @@ export function PublishDestinations({
               summary={summary}
               selected={selected.includes(provider)}
               onToggle={() => toggle(provider)}
+              scheduleMode={scheduleMode}
               onConnect={
                 provider === "pinterest"
                   ? onConnectPinterest
@@ -414,14 +558,15 @@ export function PublishDestinations({
             />
             {showAccounts && multi.map(acct => {
               const checked = accountChecked(acct.id);
+              const label = acct.providerAccountUsername ?? acct.providerAccountName ?? acct.id.slice(0, 8);
               return (
+                <Fragment key={acct.id}>
                 <button
-                  key={acct.id}
                   type="button"
                   role="checkbox"
                   aria-checked={checked}
                   data-testid={`publish-dest-${provider}-account-${acct.id}`}
-                  onClick={() => toggleAccount(provider, acct.id)}
+                  onClick={() => toggleAccount(provider, acct.id, label ?? undefined)}
                   style={{
                     display: "flex", alignItems: "center", gap: 8,
                     padding: "6px 10px 6px 42px", border: "none",
@@ -445,6 +590,17 @@ export function PublishDestinations({
                     {acct.providerAccountName ?? acct.providerAccountUsername ?? acct.id.slice(0, 8)}
                   </span>
                 </button>
+                {/* Each ticked Pinterest account picks its OWN board — boards belong to
+                    one account, so a shared board field would publish the second
+                    account's Pin into the first account's board. */}
+                {checked && provider === "pinterest" && (
+                  <AccountBoardSelect
+                    connectionId={acct.id}
+                    value={selectedAccountIds?.find(a => a.id === acct.id)?.boardId ?? ""}
+                    onChange={board => setAccountBoard(acct.id, board)}
+                  />
+                )}
+                </Fragment>
               );
             })}
             </Fragment>

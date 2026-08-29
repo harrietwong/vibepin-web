@@ -24,6 +24,15 @@ import { isActionablePublishFailure } from "./studio/pinLifecycle";
 import { getContentTemplates } from "./i18n/contentTemplates";
 import { readResolvedContentLanguage, type LanguageCode } from "./i18n/config";
 import type { QualityScores, QualityVerdict } from "./ai-copy/judgeVerdict";
+// Type-only: erased at build time, so this cannot create a runtime import cycle
+// (recommendationRequest itself imports nothing at runtime).
+import type { AnalysisErrorCode } from "./studio/recommendationRequest";
+import {
+  contentMedia,
+  mediaId,
+  type ContentMedia,
+  type DestinationPublishResult,
+} from "./contentDraftModel";
 
 const STORE_KEY       = "vp:pin_drafts:v1";
 const MAX_DRAFTS      = 500;
@@ -59,6 +68,30 @@ export type DraftStatus = "needs_review" | "needs_link" | "ready";
 export interface PinDraft {
   id:                  string;
   imageUrl:            string;
+  /** Stable Content identity. Legacy single-image rows fall back to `id`. */
+  contentId?:           string;
+  /** Ordered media collection. Legacy rows synthesize one item from imageUrl. */
+  media?:               ContentMedia[];
+  /** The media used for card/grid previews. Defaults to the first media item. */
+  coverMediaId?:        string;
+  /**
+   * One durable record per destination of the last publish (PRD §27).
+   *
+   * Publish INTENT is not here — it is `scheduledDestinations` below, the single
+   * source of truth the cron worker and the server job tables also read. These are
+   * the RESULTS of acting on that intent, and the legacy publish fields
+   * (postedAt / remotePinId / socialPosts) are derived FROM them.
+   */
+  destinationResults?:  DestinationPublishResult[];
+  /**
+   * `published` rows superseded by a LATER publish of the same destination.
+   *
+   * Editing a Posted Content and publishing again overwrites its result row (results
+   * are keyed by destination). Without this, the Pin that is actually live on the
+   * platform — and its permalink — silently disappeared from the card the moment a
+   * second publish started. Append-only history; never read by the publish path.
+   */
+  previousResults?:     DestinationPublishResult[];
   keyword:             string;
   category:            string;
   title:               string;
@@ -145,6 +178,27 @@ export interface PinDraft {
   targetConnectionId?:  string;
   /** Username snapshot of that account at selection time (display only, never a key). */
   targetAccountLabel?:  string;
+  /**
+   * Where this Pin is meant to publish when its scheduled time arrives — the
+   * merchant's INTENT, captured at schedule time and frozen there.
+   *
+   * Distinct from `socialPosts`, which records what a publish attempt actually
+   * achieved. Intent is written before anything happens and never rewritten by an
+   * outcome; results are written after. Conflating the two is what let a
+   * three-platform schedule silently become a Pinterest-only publish.
+   *
+   * A snapshot on purpose: changing the workspace default account, connecting a
+   * new one, or editing Settings must never re-point a Pin that is already
+   * scheduled. Only the merchant editing THIS Pin changes it.
+   *
+   * Rides the v38 payload sync (whole draft is serialized, no field whitelist at
+   * any layer) and the due-time worker already selects the full payload — so this
+   * needs no migration and no query change.
+   *
+   * Absent on drafts scheduled before this existed; `resolveScheduledDestinations`
+   * derives the equivalent Pinterest-only intent for those rather than backfilling.
+   */
+  scheduledDestinations?: ScheduledDestination[];
   /** Remote Pinterest Pin id captured after a successful publish. */
   remotePinId?:        string;
   /** Real Pinterest Pin URL returned at publish time. Legacy drafts (published
@@ -190,6 +244,10 @@ export interface PinDraft {
   // All optional so drafts persisted before this feature keep working unchanged.
   /** Lifecycle of the background image analysis started right after upload. */
   imageAnalysisStatus?:    "pending" | "ready" | "failed";
+  /** Why the last analysis failed (only meaningful with status "failed"); cleared on success. */
+  imageAnalysisError?:     AnalysisErrorCode;
+  /** Seconds from the 429 `Retry-After` header, so the UI can say when to try again. */
+  imageAnalysisRetryAfter?: number;
   /** 1-2 sentence description of what is visible in the image. */
   imageSummary?:           string;
   visibleObjects?:         string[];
@@ -241,7 +299,35 @@ export interface SocialPostRef {
    * field existed simply omit the line.
    */
   accountName?: string;
+  /** Same value as accountName, under the name the Content model uses. */
+  accountLabel?: string;
+  /** WHICH connected account published it — the result key's other half. */
+  socialConnectionId?: string;
 }
+
+/**
+ * One destination a scheduled Pin is meant to publish to.
+ *
+ * Identity is `socialConnectionId` — the account row. Labels and board names are
+ * display snapshots taken at capture time and are NEVER used as keys: an account
+ * can be renamed, and a stale label must not silently re-target a publish.
+ */
+export type ScheduledDestination = {
+  /** "pinterest" | "instagram" | "facebook". Typed as string for the same reason
+   *  SocialPostRef does: this module is imported by server code and stays free of
+   *  the social platform catalog. Callers narrow via isSocialProvider. */
+  provider: string;
+  /** social_connections row id. The only field that identifies the account. */
+  socialConnectionId: string;
+  /** Handle/page name as it read when the merchant chose it. Display only. */
+  accountLabel?: string;
+  /** Pinterest board id. Absent for platforms that have no board concept. */
+  boardId?: string;
+  /** Board name as it read at capture time. Display only. */
+  boardName?: string;
+  /** When this intent was captured — lets us tell a fresh choice from a stale one. */
+  capturedAt: string;
+};
 
 /**
  * Quality Judge result cached on a generated draft. `status` mirrors the async
@@ -310,14 +396,66 @@ function ok(): boolean { return typeof window !== "undefined"; }
 let _memData: StoreData | null = null;
 let _persistFailed = false;
 
+/**
+ * Bring one draft's persisted media in line with "the cover IS media[0]".
+ *
+ * Drafts written before that rule can name a cover sitting at any index; the card
+ * showed it while every publish path led with media[0], so what the merchant saw
+ * was not what went out. Fix by MOVING the named item to the front (never by
+ * rewriting coverMediaId to media[0], which would silently discard the merchant's
+ * actual choice), then make imageUrl agree.
+ *
+ * Returns null when nothing changed. That matters: this runs over every draft on
+ * every cold load, and bumping updatedAt on untouched drafts would push the whole
+ * board through the sync outbox for no reason.
+ */
+function normalizeDraftMedia(draft: PinDraft): PinDraft | null {
+  // Only drafts that actually carry a media[] array. Materializing the legacy
+  // single-image fallback here would rewrite every old draft on first load.
+  const media = draft.media?.filter(item => item?.id && item?.url);
+  if (!media?.length) return null;
+
+  let next = media;
+  const coverIndex = draft.coverMediaId ? media.findIndex(item => item.id === draft.coverMediaId) : -1;
+  if (coverIndex > 0) {
+    next = [media[coverIndex], ...media.filter((_, i) => i !== coverIndex)];
+  }
+  const cover = next[0];
+  const orderChanged = next !== media;
+  const idChanged = draft.coverMediaId !== cover.id;
+  const urlChanged = draft.imageUrl !== cover.url;
+  if (!orderChanged && !idChanged && !urlChanged) return null;
+  return {
+    ...draft,
+    media: next,
+    coverMediaId: cover.id,
+    imageUrl: cover.url,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function load(): StoreData {
   if (!ok()) return { drafts: {} };
   if (_memData) return _memData;
+  let changed = false;
   try {
     const raw = localStorage.getItem(STORE_KEY);
     const p = raw ? (JSON.parse(raw) as Partial<StoreData>) : {};
-    _memData = { drafts: p.drafts ?? {} };
+    const drafts = p.drafts ?? {};
+    // The one-time cover normalization runs HERE, at the single point where
+    // persisted data enters the session (mergeServerDrafts covers the other
+    // entry point, rows arriving mid-session). Putting it in a caller instead
+    // would leave whichever caller ran first reading un-normalized drafts.
+    for (const [id, draft] of Object.entries(drafts)) {
+      const fixed = normalizeDraftMedia(draft);
+      if (fixed) { drafts[id] = fixed; changed = true; }
+    }
+    _memData = { drafts };
   } catch { _memData = { drafts: {} }; }
+  // Persist the repair so it happens once, not on every reload. No emit(): load()
+  // runs inside getSnapshot during render, and dispatching a store event there
+  // would re-enter React's subscription mid-render.
+  if (changed && _memData) persist(_memData);
   return _memData;
 }
 
@@ -500,6 +638,7 @@ export function createDraft(input: {
  */
 export function createBoardDraft(input: {
   imageUrl:         string;
+  media?:           ContentMedia[];
   source:           PinBoardSource;
   idempotencyKey?:  string;
   title?:           string;
@@ -532,6 +671,26 @@ export function createBoardDraft(input: {
   /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
   sourceGenerationId?: string;
   sourceAssetKey?:     string;
+  /**
+   * PRD §17 — the merchant's Default Publishing Destinations, already narrowed to
+   * accounts that are still connected (see `resolveDefaultDestinations`).
+   *
+   * It is an INPUT rather than a lookup inside this function on purpose: this module
+   * is imported by server code, while "which accounts are connected right now" is a
+   * browser-session fact. Passing it in keeps the store free of that dependency and
+   * makes the prefill rule testable as a pure transformation.
+   *
+   * The defaults seed NEW content only. Nothing anywhere re-applies them to existing
+   * drafts — that was the §12 load-time effect this replaces, which rewrote every
+   * boardless draft on the board each time Create Pins loaded.
+   */
+  defaultDestinations?: ReadonlyArray<{
+    provider: string;
+    socialConnectionId: string;
+    boardId?: string;
+    boardName?: string;
+    accountLabel?: string;
+  }>;
 }): PinDraft {
   const data = load();
 
@@ -542,17 +701,52 @@ export function createBoardDraft(input: {
   }
 
   const now = new Date().toISOString();
+  const id = genId();
+  const normalizedMedia = input.media?.filter(item => item.id && item.url) ?? [];
+  const initialMedia = normalizedMedia.length ? normalizedMedia : (input.imageUrl ? [{
+    id: mediaId(id, 0), kind: "image" as const, url: input.imageUrl,
+    altText: input.altText?.trim(), source: input.source === "uploaded_image" ? "upload" as const : "ai" as const,
+  }] : []);
+  const cover = initialMedia[0];
+
+  // PRD §17 prefill. Only NEW content reaches here, so applying the defaults cannot
+  // disturb anything the merchant has already drafted, scheduled or posted. Legacy
+  // Pinterest fields are mirrored from the Pinterest entry so the due-time worker and
+  // any un-migrated read path see exactly the same destination as the intent record.
+  const seeded = (input.defaultDestinations ?? [])
+    .filter(d => d && typeof d.socialConnectionId === "string" && d.socialConnectionId.trim())
+    .map<ScheduledDestination>(d => {
+      const entry: ScheduledDestination = {
+        provider: d.provider,
+        socialConnectionId: d.socialConnectionId.trim(),
+        capturedAt: now,
+      };
+      if (d.accountLabel?.trim()) entry.accountLabel = d.accountLabel.trim();
+      if (d.boardId?.trim())      entry.boardId      = d.boardId.trim();
+      if (d.boardName?.trim())    entry.boardName    = d.boardName.trim();
+      return entry;
+    });
+  const seededPinterest = seeded.find(d => d.provider === "pinterest");
+
   const draft: PinDraft = {
-    id:                  genId(),
-    imageUrl:            input.imageUrl,
+    id,
+    contentId:           id,
+    imageUrl:            cover?.url ?? input.imageUrl,
+    media:               initialMedia,
+    coverMediaId:        cover?.id,
     keyword:             input.keyword ?? "",
     category:            input.category ?? "",
     title:               input.title?.trim() ?? "",
     description:         input.description?.trim() ?? "",
     altText:             input.altText?.trim() ?? "",
     destinationUrl:      input.destinationUrl?.trim() ?? "",
-    boardId:             "",
-    boardName:           "",
+    boardId:             seededPinterest?.boardId   ?? "",
+    boardName:           seededPinterest?.boardName ?? "",
+    ...(seeded.length ? { scheduledDestinations: seeded } : {}),
+    ...(seededPinterest ? {
+      targetConnectionId: seededPinterest.socialConnectionId,
+      ...(seededPinterest.accountLabel ? { targetAccountLabel: seededPinterest.accountLabel } : {}),
+    } : {}),
     weeklyPlanItemId:    "",
     generationSessionId: input.generationSessionId ?? "",
     scheduledDate:       "",
@@ -594,14 +788,30 @@ export function createBoardDraft(input: {
 export function completeGeneratedDraft(
   id: string,
   imageUrl: string,
-  meta?: { generationId?: string; assetKey?: string },
+  meta?: { generationId?: string; assetKey?: string; replaceMediaId?: string },
 ): PinDraft | null {
   const data = load();
   const draft = data.drafts[id];
   if (!draft) return null;
+  // A generated image lands in ONE media slot. The previous version assigned
+  // `media: [only the new image]`, which deleted every other image the merchant
+  // had added to the Content the moment one generation finished.
+  const existing = contentMedia(draft);
+  const targetId = meta?.replaceMediaId && existing.some(item => item.id === meta.replaceMediaId)
+    ? meta.replaceMediaId
+    : existing[0]?.id;
+  const generatedMediaId = targetId ?? mediaId(draft.contentId || draft.id, 0);
+  const nextMedia: ContentMedia[] = targetId
+    ? existing.map(item => (item.id === targetId
+        ? { ...item, url: imageUrl, source: "ai" as const, width: undefined, height: undefined }
+        : item))
+    : [{ id: generatedMediaId, kind: "image", url: imageUrl, source: "ai" }];
+  const cover = nextMedia[0];
   const updated: PinDraft = {
     ...draft,
-    imageUrl,
+    imageUrl: cover?.url ?? imageUrl,
+    media: nextMedia,
+    coverMediaId: cover?.id ?? generatedMediaId,
     generationStatus: "completed",
     // Persist the server generation id + a stable asset key so the AI-adoption metric can
     // join on ids, not image-URL strings. Only set when provided (legacy callers unchanged).
@@ -613,6 +823,228 @@ export function completeGeneratedDraft(
   persist(data);
   emit();
   return updated;
+}
+
+/**
+ * Commit a new media list for one Content and re-derive the cover from it.
+ *
+ * Every media mutation funnels through here so the invariant "cover === media[0]"
+ * can never be forgotten by one call site: coverMediaId and the legacy imageUrl
+ * are OUTPUTS of the list order, never independent inputs.
+ */
+function writeMedia(id: string, draft: PinDraft, media: ContentMedia[]): PinDraft | null {
+  const cover = media[0];
+  if (!cover) return draft; // a Content cannot be left without media
+  const data = load();
+  const updated: PinDraft = {
+    ...draft,
+    media,
+    coverMediaId: cover.id,
+    imageUrl: cover.url,
+    updatedAt: new Date().toISOString(),
+  };
+  data.drafts[id] = updated;
+  persist(data); emit(); syncPinMetadataStore(updated);
+  return updated;
+}
+
+/** Add media to one Content without creating another user-visible Draft. */
+export function addMedia(id: string, items: Omit<ContentMedia, "id">[]): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft || !items.length) return draft;
+  const existing = contentMedia(draft);
+  const additions = items.filter(item => item.url).map((item, index) => ({ ...item, id: mediaId(draft.contentId || draft.id, existing.length + index) }));
+  if (!additions.length) return draft;
+  // Appended at the end, so media[0] — and therefore the cover — is untouched.
+  return writeMedia(id, draft, [...existing, ...additions]);
+}
+
+/**
+ * Copy media between Contents. The source remains unchanged by design.
+ *
+ * Width/height ride along with the copy: they were measured from the original
+ * file and describe the same image, so re-measuring would be pointless and
+ * dropping them would silently make a carousel's ratio check unverifiable.
+ *
+ * The insertion index is clamped to ≥1 on a non-empty target. Dropping a copy
+ * onto the first thumbnail would otherwise take over the cover — and "copy never
+ * changes the cover" is the rule that wins here, because changing what a Content
+ * leads with is a deliberate act (setCoverMedia), not a side effect of a drag.
+ */
+export function copyMedia(sourceId: string, mediaItemId: string, targetId: string, targetIndex?: number): PinDraft | null {
+  const source = getDraft(sourceId);
+  const target = getDraft(targetId);
+  if (!source || !target || sourceId === targetId) return target;
+  const item = contentMedia(source).find(candidate => candidate.id === mediaItemId);
+  if (!item) return target;
+  const next = contentMedia(target);
+  const copy = { ...item, id: mediaId(target.contentId || target.id, next.length) };
+  const floor = next.length ? 1 : 0;
+  const index = targetIndex === undefined ? next.length : Math.max(floor, Math.min(targetIndex, next.length));
+  next.splice(index, 0, copy);
+  return writeMedia(targetId, target, next);
+}
+
+/** Reorder a Content's media. Whatever lands at index 0 becomes the cover. */
+export function reorderMedia(id: string, orderedIds: string[]): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  const current = contentMedia(draft);
+  const byId = new Map(current.map(item => [item.id, item]));
+  const ordered = orderedIds.map(mediaItemId => byId.get(mediaItemId)).filter((item): item is ContentMedia => !!item);
+  current.forEach(item => { if (!ordered.some(candidate => candidate.id === item.id)) ordered.push(item); });
+  return writeMedia(id, draft, ordered);
+}
+
+/**
+ * Choose the cover: MOVE that item to index 0. Cover and lead image are the same
+ * thing, so "make this the cover" and "make this first" are one operation — the
+ * previous version only rewrote coverMediaId and left the item where it was,
+ * which is exactly how the card and the published carousel came to disagree.
+ */
+export function setCoverMedia(id: string, mediaItemId: string): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  const current = contentMedia(draft);
+  const selected = current.find(item => item.id === mediaItemId);
+  if (!selected) return draft;
+  return writeMedia(id, draft, [selected, ...current.filter(item => item.id !== mediaItemId)]);
+}
+
+/** Remove one media item. The next item in order inherits the cover. */
+export function removeMedia(id: string, mediaItemId: string): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  const next = contentMedia(draft).filter(item => item.id !== mediaItemId);
+  if (!next.length) return draft; // a Content cannot be left without media
+  return writeMedia(id, draft, next);
+}
+
+/**
+ * Replace ONE media item's asset in place — same id, same position.
+ *
+ * This is what "regenerate this image" and "re-upload this slot" need: the item
+ * keeps its identity, so the media order, the cover, and any per-item selection
+ * in the UI all survive the swap. Replacing by remove+add would move the item to
+ * the end and, for media[0], silently hand the cover to its neighbour.
+ */
+export function replaceMedia(
+  id: string,
+  mediaItemId: string,
+  patch: { url: string; width?: number; height?: number; source?: ContentMedia["source"]; altText?: string },
+): PinDraft | null {
+  const draft = getDraft(id);
+  if (!draft) return null;
+  if (!patch?.url) return draft;
+  const current = contentMedia(draft);
+  const index = current.findIndex(item => item.id === mediaItemId);
+  if (index < 0) return draft;
+  const next = current.slice();
+  next[index] = {
+    ...current[index],
+    url: patch.url,
+    // A replaced asset has NEW dimensions; keeping the old ones would make the
+    // ratio check lie. `undefined` (unmeasured) is honest, a stale number is not.
+    width: patch.width,
+    height: patch.height,
+    ...(patch.source ? { source: patch.source } : {}),
+    ...(patch.altText !== undefined ? { altText: patch.altText } : {}),
+  };
+  return writeMedia(id, draft, next);
+}
+
+/**
+ * Split media OUT of one Content into a separate Content per item (PRD §13).
+ *
+ * The escape hatch for a media set a platform will not take as one post. Pinterest
+ * caps carousels at five and refuses mixed aspect ratios; when the merchant's six
+ * images or their odd-shaped one break that, the choices are "crop it" (a tool that
+ * does not exist yet) and "publish it on its own". This is the second one.
+ *
+ * The split items LEAVE the source — that is the whole point: the source is left with
+ * a set the platform accepts, rather than with the same problem plus some copies of
+ * it elsewhere. `copyMedia` is the non-destructive sibling for drag-to-share.
+ *
+ * What the new Contents inherit is what makes them the same POST, differently framed:
+ * title, description, website URL and the destination intent (`scheduledDestinations`
+ * plus the legacy Pinterest board fields the due-time worker still reads). What they
+ * must NOT inherit is anything about a specific publish ATTEMPT — result rows, remote
+ * pin ids, failure fields — or a schedule. They are created unscheduled on purpose:
+ * the merchant asked for separate posts, not for N posts firing into the same slot.
+ *
+ * Invariants:
+ *   - the source always keeps ≥1 item. Splitting "everything" keeps media[0], because
+ *     a Content with no media is not a Content; it is a broken card.
+ *   - ids requested that this Content does not have are ignored, not an error — the
+ *     card's notice can name an item a concurrent edit has already removed.
+ *   - each new Content gets FRESH media ids. Reusing an id across Contents would make
+ *     two different posts' items indistinguishable to every id-keyed path there is.
+ *
+ * Returns the created drafts (empty when nothing was splittable), so the caller can
+ * report how many separate posts it made.
+ */
+export function splitContentMedia(id: string, mediaIds?: readonly string[]): PinDraft[] {
+  const draft = getDraft(id);
+  if (!draft) return [];
+  const current = contentMedia(draft);
+  if (current.length < 2) return [];
+
+  const requested = mediaIds?.length
+    ? current.filter(item => mediaIds.includes(item.id))
+    // No selection = split every item off its own way, which still has to leave the
+    // source with its cover.
+    : current;
+  // Never the last one standing: whatever the request covers, media[0] stays put when
+  // it would otherwise empty the Content.
+  const splitting = requested.length >= current.length
+    ? requested.filter(item => item.id !== current[0].id)
+    : requested;
+  if (!splitting.length) return [];
+
+  const now = new Date().toISOString();
+  const created: PinDraft[] = [];
+  for (const item of splitting) {
+    const child = createBoardDraft({
+      imageUrl: item.url,
+      // createBoardDraft mints the id, so the media id must be minted against it —
+      // hence the two-step (create, then write the media with the real content id).
+      source: draft.source === "ai_generated_from_upload" ? "ai_generated_from_upload" : "uploaded_image",
+      title: draft.title || undefined,
+      description: draft.description || undefined,
+      altText: item.altText || draft.altText || undefined,
+      destinationUrl: draft.destinationUrl || undefined,
+      tags: draft.tags,
+      keyword: draft.keyword || undefined,
+      category: draft.category || undefined,
+      parentDraftId: draft.id,
+    });
+    const written = updateDraft(child.id, {
+      media: [{
+        ...item,
+        id: mediaId(child.contentId || child.id, 0),
+        ...(item.altText ? {} : (draft.altText ? { altText: draft.altText } : {})),
+      }],
+      coverMediaId: undefined, // writeMedia's normalization sets it from media[0]
+      // The destination intent, re-captured now: it is this Content's own record from
+      // here on, and a stale capturedAt would misdate it.
+      ...(draft.scheduledDestinations?.length
+        ? { scheduledDestinations: draft.scheduledDestinations.map(d => ({ ...d, capturedAt: now })) }
+        : {}),
+      boardId: draft.boardId,
+      boardName: draft.boardName,
+      ...(draft.targetConnectionId ? { targetConnectionId: draft.targetConnectionId } : {}),
+      ...(draft.targetAccountLabel ? { targetAccountLabel: draft.targetAccountLabel } : {}),
+    });
+    created.push(written ?? child);
+  }
+
+  // The source loses exactly what left. writeMedia re-derives the cover from media[0],
+  // so splitting the cover off promotes its neighbour rather than leaving a dangling
+  // coverMediaId.
+  const remaining = current.filter(item => !splitting.some(gone => gone.id === item.id));
+  writeMedia(id, draft, remaining);
+
+  return created;
 }
 
 /** Mark a Generating placeholder as failed (per-result or whole-run failure). */
@@ -638,8 +1070,13 @@ export function failStaleGeneratingDrafts(onlyWithoutJobId = false): number {
   let changed = 0;
   for (const d of Object.values(data.drafts)) {
     const s = (d.generationStatus ?? "").toLowerCase();
+    // Worker-mode placeholders carry a generationJobId: the task lives server-side and
+    // survives the reload, so reconcileGeneratingDrafts() judges those via the job API.
     if (onlyWithoutJobId && d.generationJobId) continue;
-    if (isBoardSource(d) && (s === "generating" || s === "running" || s === "pending" || s === "queued")) {
+    // Generation on this board is client-driven regardless of how a legacy/QA row
+    // labelled its source. After a reload there is no live promise left to complete,
+    // so every non-archived in-flight row is stale and must leave the spinner state.
+    if (!d.archivedAt && (s === "generating" || s === "running" || s === "pending" || s === "queued")) {
       data.drafts[d.id] = { ...d, generationStatus: "failed", updatedAt: new Date().toISOString() };
       changed++;
     }
@@ -950,8 +1387,13 @@ export function mergeServerDrafts(
     if (!incoming || typeof incoming.id !== "string" || !incoming.id) continue;
     const local = data.drafts[incoming.id];
     if (local && tsMs(incoming.updatedAt) <= tsMs(local.updatedAt)) continue; // local wins / equal → no-op
-    data.drafts[incoming.id] = incoming;
-    touched.push(incoming);
+    // Second entry point for foreign data: a server row written before the
+    // cover≡media[0] rule must be repaired on the way in, exactly as load() does
+    // for localStorage. Unchanged rows pass through untouched (no updatedAt bump,
+    // so a clean pull does not turn into a push).
+    const normalized = normalizeDraftMedia(incoming) ?? incoming;
+    data.drafts[incoming.id] = normalized;
+    touched.push(normalized);
     applied++;
   }
 

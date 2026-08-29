@@ -77,6 +77,9 @@ export const CORE: string[] = [
   "test-ai-cost-log",
   "test-reference-scoring",
   "test-reference-basis",
+  "test-reference-category",
+  "test-reference-pool",
+  "test-reference-serve",
   "test-product-evidence",
   "test-top-pick",
   // Products / opportunity
@@ -143,6 +146,7 @@ export const CORE: string[] = [
 
 /** Create Pins / Studio board + the Pin editing surfaces. */
 export const STUDIO: string[] = [
+  "test-publishing-prefs",
   "test-studio-flow-regression",
   "test-studio-plan-match",
   "test-studio-generated-section",
@@ -161,6 +165,29 @@ export const STUDIO: string[] = [
   "test-failure-banner",
   "test-publish-error-display",
   "test-publish-failure-consistency",
+  // Multi-image publishing (WS-A 2026-08-27): per-platform media rules + the exact
+  // Pinterest media_source a carousel produces.
+  "test-media-rules",
+  "test-pin-media-source",
+  // WS-B2a 2026-08-27: cover ≡ media[0], load-time normalization of stale covers,
+  // in-place media replacement, and the per-platform issue attribution.
+  "test-content-media-model",
+  // WS-C2 2026-08-27: the card's media compatibility notice (which platform refuses
+  // this set, which thumbnails are at fault, and when to stay silent) and the
+  // "Publish separately" split that is §13's answer while the crop tool is deferred.
+  "test-media-notice",
+  "test-split-content-media",
+  // Create Pins card view model (WS-C1, PRD 0826 §3–§6, §20): variant per lifecycle,
+  // the "1 / N" cover counter, per-destination result rows, and the partial-success
+  // rule (posted + needs attention → Retry, not Publish).
+  "test-card-lifecycle-view",
+  // Bulk operations on the Create Pins board (WS-F, PRD 0826 §19/§30): the
+  // publish partition (fully-published items must never be re-sent), the
+  // per-lifecycle delete impact, and the result summary's reason contract.
+  "test-bulk-actions",
+  // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
+  // future-before-history ordering, state classification, the "+N" trigger badge.
+  "test-plan-sidebar-model",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",
@@ -207,6 +234,14 @@ export const PLAN: string[] = [
   "test-smart-schedule",
   "test-smart-schedule-sync",
   "test-scheduling-consistency",
+  "test-schedule-social-guard",
+  "test-scheduled-destinations",
+  "test-publish-fanout",
+  "test-publish-content",
+  "test-scheduled-account-identity",
+  "test-publish-attempt-ordering",
+  "test-publish-in-flight",
+  "test-scheduled-image-url",
   "test-weekly-plan-slots",
   "test-plan-list-view",
   "test-smart-schedule-config",

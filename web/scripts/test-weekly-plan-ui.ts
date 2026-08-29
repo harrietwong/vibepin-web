@@ -31,6 +31,7 @@ const planSource = readFileSync(join(process.cwd(), "src/components/plan/WeeklyP
 const legacyPlanRoute = readFileSync(join(process.cwd(), "src/app/app/plan/page.tsx"), "utf8");
 const studioPage = readFileSync(join(process.cwd(), "src/app/app/studio/page.tsx"), "utf8");
 const studioFilters = readFileSync(join(process.cwd(), "src/components/studio/StudioBoardFilters.tsx"), "utf8");
+const planSidebar = readFileSync(join(process.cwd(), "src/components/studio/StudioPlanSidebar.tsx"), "utf8");
 const appLayout = readFileSync(join(process.cwd(), "src/app/app/layout.tsx"), "utf8");
 
 function draft(partial: Partial<PinDraft> & Pick<PinDraft, "id">): PinDraft {
@@ -181,7 +182,13 @@ test("Weekly Plan page has week navigation controls", () => {
 test("Plan is one shared Create Pins workspace view", () => {
   assert(studioPage.includes('workspaceView === "plan"'), "Create Pins does not render its Plan view");
   assert(studioPage.includes("@/components/plan/WeeklyPlanWorkspace"), "Create Pins is not using the shared Plan component");
-  assert(studioFilters.includes('/app/studio?view=plan'), "Plan tab does not target Create Pins");
+  // PRD 0826: Plan is no longer a STATUS TAB — the status row is Drafts / Scheduled /
+  // Posted / Failed / All only. The Plan view is entered from the Plan sidebar instead,
+  // so the entry point moved; it must still land on the canonical workspace URL.
+  assert(planSidebar.includes('/app/studio?view=plan'), "Plan sidebar does not target Create Pins' Plan view");
+  assert(!/id:\s*"plan"/.test(studioFilters), "Plan is back as a status tab (PRD 0826 removed it)");
+  // The status tabs themselves must still navigate back to the board from Plan view.
+  assert(studioFilters.includes('/app/studio?filter='), "status tabs cannot navigate back from the Plan view");
   assert(legacyPlanRoute.includes('redirect(`/app/studio?'), "legacy /app/plan is not redirected");
   assert(!appLayout.includes('id: "weekly-plan"'), "standalone Weekly Plan sidebar entry still exists");
 });

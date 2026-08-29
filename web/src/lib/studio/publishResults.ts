@@ -1,20 +1,28 @@
 /**
- * One publish, one row per destination (PRD 0809 §5/§6).
+ * The presentation shape for one publish result row — a VIEW over the one reader.
  *
- * A publish can now fan out to several platforms, which broke the old shape in two ways:
- * a single "Published successfully" spoke for whatever Pinterest did, and one global
- * "View Pin" pointed at Pinterest no matter which platforms actually received the post.
+ * This file used to hold a SECOND derivation of the same fact: it rebuilt the
+ * per-destination result set from `postedAt` / `remotePinId` / `socialPosts[]` while
+ * `contentDestinationResults()` rebuilt it from those same fields PLUS the stored
+ * `destinationResults[]`. Two readers of one fact is how a destination that really
+ * published shows in one surface and not another — and it could not see stored rows
+ * at all, so a per-account failure reason had nowhere to surface.
  *
- * This assembles the durable per-destination result from what is already persisted —
- * Pinterest from the draft's own fields, everything else from `socialPosts[]` — so the
- * modal and the Posted detail read the same thing, and it survives a refresh. Toasts
- * stay what they are: immediate feedback, never the record.
+ * There is now exactly one reader (`contentDestinationResults`). What remains here is
+ * the mapping into the row shape `PublishResults.tsx` renders.
  */
+
+import {
+  contentDestinationResults,
+  canViewExternally as canViewResultExternally,
+  type ContentDraftLike,
+  type DestinationPublishResult,
+} from "../contentDraftModel";
 
 export type PublishResultRow = {
   provider: string;
-  /** "published" today; the shape carries status so a failed row can join later. */
-  status: "published";
+  /** A failed destination now gets a row too, with the reason it failed. */
+  status: "published" | "failed" | "publishing" | "pending";
   /** Which account received it, when we know. Never invented. */
   accountName?: string | null;
   /** Pinterest's board. Absent for platforms that have no equivalent. */
@@ -23,86 +31,54 @@ export type PublishResultRow = {
   postUrl?: string | null;
   postId?: string | null;
   publishedAt?: string | null;
+  /** User-facing failure reason, for a `failed` row. */
+  errorMessage?: string | null;
 };
 
-export type PublishResultSource = {
-  /** Pinterest lives on the draft itself, not in socialPosts. */
-  postedAt?: string | null;
-  remotePinId?: string | null;
-  remotePinUrl?: string | null;
-  boardName?: string | null;
-  targetAccountLabel?: string | null;
-  socialPosts?: Array<{
-    provider: string;
-    postId?: string;
-    postUrl?: string;
-    publishedAt?: string;
-    accountName?: string;
-  }> | null;
-};
+/** The draft fields these rows are read from. A superset is fine. */
+export type PublishResultSource = Partial<ContentDraftLike>;
 
 function clean(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
+export function toPublishResultRow(result: DestinationPublishResult): PublishResultRow {
+  return {
+    provider: result.provider,
+    status: result.status,
+    accountName: clean(result.accountLabel),
+    boardName: clean(result.boardName),
+    postUrl: clean(result.postUrl),
+    postId: clean(result.remoteId),
+    publishedAt: clean(result.publishedAt),
+    errorMessage: clean(result.errorMessage),
+  };
+}
+
 /**
- * Every destination this Pin actually reached, Pinterest first.
+ * Every destination this Content reached (or tried to), in result order.
  *
- * Pinterest counts as published when it has a postedAt or a remote id — the same test the
- * drawer already used for its "published" view, so nothing that used to show a result
- * stops showing one.
+ * Delegates to the single reader, so a stored per-destination record and a legacy
+ * draft with only the old fields both render through the same path.
  */
 export function publishResultRows(draft: PublishResultSource | null | undefined): PublishResultRow[] {
   if (!draft) return [];
-  const rows: PublishResultRow[] = [];
-
-  const pinUrl = clean(draft.remotePinUrl);
-  const pinId = clean(draft.remotePinId);
-  if (clean(draft.postedAt) || pinId || pinUrl) {
-    rows.push({
-      provider: "pinterest",
-      status: "published",
-      accountName: clean(draft.targetAccountLabel),
-      boardName: clean(draft.boardName),
-      // Reconstructing a permalink from the id is a fallback for drafts published before
-      // remotePinUrl existed — not a guess: this is Pinterest's own canonical Pin URL.
-      postUrl: pinUrl ?? (pinId ? `https://www.pinterest.com/pin/${pinId}/` : null),
-      postId: pinId,
-      publishedAt: clean(draft.postedAt),
-    });
-  }
-
-  for (const p of draft.socialPosts ?? []) {
-    const provider = clean(p?.provider);
-    if (!provider || provider === "pinterest") continue;   // Pinterest is handled above
-    rows.push({
-      provider,
-      status: "published",
-      accountName: clean(p.accountName),
-      postUrl: clean(p.postUrl),
-      postId: clean(p.postId),
-      publishedAt: clean(p.publishedAt),
-    });
-  }
-
-  return rows;
+  return contentDestinationResults({ ...draft, id: draft.id ?? "", imageUrl: draft.imageUrl ?? "" })
+    .map(toPublishResultRow);
 }
 
 /**
- * Whether to offer "View on {platform}" for a row.
- *
- * Only a real http(s) permalink earns the action. A missing or malformed URL must render
- * as no button rather than a link that 404s — the PRD's rule that only a genuinely
- * published destination with a real external URL gets a view action.
+ * Whether to offer "View on {platform}" for a row. Only a real http(s) permalink earns
+ * the action — a missing or malformed URL renders as no button rather than a dead link.
  */
 export function canViewExternally(row: Pick<PublishResultRow, "status" | "postUrl">): boolean {
-  if (row.status !== "published") return false;
-  const url = clean(row.postUrl);
-  if (!url) return false;
-  return /^https?:\/\//i.test(url);
+  return canViewResultExternally({
+    status: row.status,
+    postUrl: row.postUrl ?? undefined,
+  });
 }
 
-/** True once this Pin has any durable publish result to show. */
+/** True once this Content has any durable publish result to show. */
 export function hasPublishResults(draft: PublishResultSource | null | undefined): boolean {
   return publishResultRows(draft).length > 0;
 }

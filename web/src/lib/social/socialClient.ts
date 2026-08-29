@@ -151,3 +151,32 @@ export async function publishToSocial(input: {
   if (!res.ok) throw new Error(await readError(res, "Could not publish"));
   return res.json();
 }
+
+/** An attempt that started but has not finished — see /api/publish/in-flight. */
+export type InFlightPublish = {
+  inFlight: boolean;
+  jobId?: string;
+  startedAt?: string;
+  destinations?: Array<{ provider: SocialProvider; status: string }>;
+};
+
+/**
+ * Is a publish for this Pin still running? Used to restore the publishing state
+ * after a refresh: the drawer holds it in memory, so without this a reload
+ * mid-publish showed nothing at all.
+ *
+ * Never throws. A recovery probe that fails must leave the UI as it found it,
+ * not surface an error for a publish the merchant may not even have started.
+ */
+export async function fetchInFlightPublish(postId: string): Promise<InFlightPublish> {
+  if (!postId) return { inFlight: false };
+  try {
+    const res = await fetch(`/api/publish/in-flight?postId=${encodeURIComponent(postId)}`, {
+      headers: await authHeaders(),
+    });
+    if (!res.ok) return { inFlight: false };
+    return await res.json() as InFlightPublish;
+  } catch {
+    return { inFlight: false };
+  }
+}

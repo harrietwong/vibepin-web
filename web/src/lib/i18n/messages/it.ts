@@ -375,6 +375,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "pinDetails.confirmReplaceUrlKeep": "Mantieni URL attuale",
   "pinDetails.confirmReplaceUrlUse": "Usa link prodotto",
   "pinDetails.error.invalidUrl": "Inserisci un URL http:// o https:// valido.",
+  "pinDetails.error.destinationNotSchedulable": "La pianificazione su {platforms} non è temporaneamente disponibile. Puoi comunque pubblicare ora.",
   "pinDetails.error.missingBeforeSchedule": "Aggiungi i dettagli mancanti prima di pianificare.",
   "pinDetails.title.label": "Titolo",
   "pinDetails.title.placeholder": "Aggiungi un titolo",
@@ -423,6 +424,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "publishDestinations.checkingConnection": "Verifica connessione…",
   "publishDestinations.notConnected": "Non connesso",
   "publishDestinations.comingSoon": "In arrivo",
+  "publishDestinations.schedulingUnavailable": "Pianificazione temporaneamente non disponibile",
   "publishDestinations.primary": "Principale",
   "publishDestinations.connected": "Connesso",
   "publishDestinations.redirecting": "Apertura autorizzazione Pinterest...",
@@ -1461,6 +1463,10 @@ const it: Partial<Record<MessageKey, string>> = {
   "pinDrawer.recommended.inspirationDisclaimer": "Sono solo ispirazione di stile — la generazione prende spunti visivi come composizione e atmosfera, senza mai copiare queste immagini.",
   "pinDrawer.recommended.styleCuesUsed": "Spunti di stile usati:",
   "pinDrawer.recommended.viewOnPinterest": "Vedi su Pinterest",
+  "pinDrawer.recommended.analyzeCta": "Analizza questo prodotto per idee su misura",
+  "pinDrawer.recommended.rateLimited": "L'analisi ha un limite di frequenza — riprova tra {seconds}s",
+  "pinDrawer.recommended.noStrongMatch": "Nessuna corrispondenza forte per questo prodotto nella libreria attuale — vengono mostrate ispirazioni per categoria.",
+  "pinDrawer.recommended.showDifferent": "Mostra idee diverse",
 
   // ── pinDrawer: AiVersionDrawer style cue labels ──
   "pinDrawer.styleCue.singleFocus": "focus singolo",

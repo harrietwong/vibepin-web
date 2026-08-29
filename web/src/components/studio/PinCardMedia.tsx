@@ -14,7 +14,7 @@
  * naturally prefers the genuine final generated image when it is valid.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { ImageOff } from "lucide-react";
 import { toProxyUrl } from "@/lib/imageProxy";
@@ -104,10 +104,15 @@ export function resolveInitialFailureMediaUrl(draft: FailureMediaDraft): string 
 export function PinCardMedia({ draft, alt, className, style, placeholderVariant = "generationFailed", generating, hiddenByQuality }: PinCardMediaProps) {
   const { t: tr } = useLocale();
   const chain = useMemo(() => candidateChain(draft), [draft]);
-  const [idx, setIdx] = useState(0);
-
   // A different draft (or an edit that changes the candidate chain) resets the walk.
-  useEffect(() => { setIdx(0); }, [chain]);
+  // Derived DURING RENDER instead of by setting state from an effect: the effect
+  // version rendered the new chain under the OLD index for one frame before
+  // correcting itself. Candidates are URLs, so a newline cannot occur inside one and
+  // is a safe join separator.
+  const chainKey = chain.join("\n");
+  const [cursor, setCursor] = useState({ chainKey, index: 0 });
+  const idx = cursor.chainKey === chainKey ? cursor.index : 0;
+  const advance = () => setCursor({ chainKey, index: idx + 1 });
 
   const current = idx < chain.length ? chain[idx] : null;
 
@@ -143,13 +148,13 @@ export function PinCardMedia({ draft, alt, className, style, placeholderVariant 
       src={toProxyUrl(current)}
       alt={alt}
       loading="lazy"
-      onError={() => setIdx(i => i + 1)}
+      onError={advance}
       onLoad={e => {
         const el = e.currentTarget;
         // A "successfully loaded" 1x1/2x2 pixel is junk (e.g. a stray placeholder PNG
         // data URL) — treat it exactly like a decode error and advance the chain.
         if (el.naturalWidth <= JUNK_IMAGE_MAX_DIMENSION || el.naturalHeight <= JUNK_IMAGE_MAX_DIMENSION) {
-          setIdx(i => i + 1);
+          advance();
         }
       }}
       style={{ width: "100%", height: "100%", objectFit: "cover", display: "block",

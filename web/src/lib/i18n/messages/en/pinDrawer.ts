@@ -215,6 +215,10 @@ export const pinDrawerMessages = {
   "pinDrawer.recommended.inspirationDisclaimer": "These are style inspiration only — generation borrows visual cues like composition and mood, and never copies these images.",
   "pinDrawer.recommended.styleCuesUsed": "Style cues used:",
   "pinDrawer.recommended.viewOnPinterest": "View on Pinterest",
+  "pinDrawer.recommended.analyzeCta": "Analyze this product for tailored ideas",
+  "pinDrawer.recommended.rateLimited": "Analysis is rate-limited — try again in {seconds}s",
+  "pinDrawer.recommended.noStrongMatch": "No strong match for this product in the current library — showing category inspiration.",
+  "pinDrawer.recommended.showDifferent": "Show different ideas",
 
   // ── AiVersionDrawer: style cue labels ──
   "pinDrawer.styleCue.singleFocus": "single focus",

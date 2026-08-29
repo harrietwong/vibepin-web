@@ -174,6 +174,21 @@ const en = {
   "publishing.imageRefresh": "Image refresh reminder",
   "publishing.imageRefreshDesc": "Remind you to refresh Pin images after 90 days to maintain reach.",
 
+  // ── Publishing tab: multiple-image uploads (PRD 12) ──
+  "publishing.multiUpload": "Multiple-image uploads",
+  "publishing.multiUploadAsk": "Ask every time",
+  "publishing.multiUploadTogether": "Publish together",
+  "publishing.multiUploadSeparate": "Publish separately",
+  "publishing.multiUploadHint": "What happens when you upload several images at once.",
+
+  // ── Publishing tab: default destinations (PRD 17) ──
+  "publishing.defaultDestinations": "Default publishing destinations",
+  "publishing.defaultDestinationsDesc": "Where new content is set to publish, before you change it.",
+  "publishing.defaultDestinationNone": "No default",
+  "publishing.defaultBoard": "Default board",
+  "publishing.defaultBoardNone": "No default board",
+  "publishing.defaultDestinationsNote": "Changes apply to new content only. Existing scheduled content won't be changed.",
+
   // ── Smart Schedule tab ──
   "smart.scheduleSettings": "Schedule settings",
   "smart.timezone": "Timezone",
@@ -450,6 +465,7 @@ const en = {
   "pinDetails.confirmReplaceUrlKeep": "Keep current URL",
   "pinDetails.confirmReplaceUrlUse": "Use product link",
   "pinDetails.error.invalidUrl": "Enter a valid http:// or https:// URL.",
+  "pinDetails.error.destinationNotSchedulable": "Scheduling to {platforms} is temporarily unavailable. You can still publish now.",
   "pinDetails.error.missingBeforeSchedule": "Add the missing details before scheduling.",
 
   // ── Pin details: Title section ──
@@ -525,6 +541,7 @@ const en = {
   "publishDestinations.checkingConnection": "Checking connection…",
   "publishDestinations.notConnected": "Not connected",
   "publishDestinations.comingSoon": "Coming soon",
+  "publishDestinations.schedulingUnavailable": "Scheduling temporarily unavailable",
   "publishDestinations.primary": "Primary",
   "publishDestinations.connected": "Connected",
   "publishDestinations.redirecting": "Opening Pinterest authorization...",
@@ -533,6 +550,9 @@ const en = {
   "publishDestinations.connectAccountSuffix": " account in Settings to publish here.",
   "publishDestinations.loadError": "Could not refresh account status.",
   "publishDestinations.tryAgain": "Try again",
+  "publishDestinations.boardLabel": "Board",
+  "publishDestinations.boardPlaceholder": "Choose a board",
+  "publishDestinations.boardLoading": "Loading boards…",
   "publishDestinations.footerConnected": "Connect more accounts to repurpose this product post across platforms. Each account may require a different caption, media format, or account connection.",
   "publishDestinations.footerNone": "Connect accounts to repurpose this product post across platforms. You can publish only after reviewing and approving the content.",
   // ── WP-E sync-status indicator ──

@@ -264,8 +264,15 @@ async function main() {
     const src = readFileSync("src/components/studio/StudioBoard.tsx", "utf8");
     // Slice to the handler's real end, not a fixed byte count — a magic window
     // silently stops covering the code it is meant to assert as the function grows.
+    // The terminator is the useCallback DEP ARRAY, matched by shape rather than by
+    // its literal contents: it was hardcoded to "}, [tr]);", so the moment the
+    // handler gained a dependency the slice ran past the function into unrelated
+    // code and failed on a `createBoardDraft` that is not in this handler at all.
     const start = src.indexOf("const handleProductSelect");
-    const handler = src.slice(start, src.indexOf("}, [tr]);", start) + "}, [tr]);".length);
+    assert.ok(start >= 0, "handleProductSelect must exist");
+    const end = /\n {2}\}, \[[^\]]*\]\);/.exec(src.slice(start));
+    assert.ok(end, "the handler must end in a useCallback dep array");
+    const handler = src.slice(start, start + end.index + end[0].length);
     // The corrective commit replaced silent draft creation with the prefilled drawer.
     // Order-independent: the handler also clears the stale scratch setup cache before
     // opening, so asserting adjacency here would break on unrelated edits.

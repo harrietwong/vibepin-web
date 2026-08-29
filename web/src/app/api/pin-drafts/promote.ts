@@ -1,3 +1,4 @@
+import { isSocialProvider, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
 /**
  * promote.ts — pure helpers that lift the Creative-Intelligence blocks out of a
  * PinDraft `payload` into the v41 pin_drafts promoted columns
@@ -223,3 +224,30 @@ export function buildScheduleColumns(payload: Record<string, unknown>): Promoted
 
 /** Keys added by buildScheduleColumns — stripped on the v42 missing-column fallback. */
 export const SCHEDULE_COLUMN_KEYS: Array<keyof PromotedScheduleColumns> = ["scheduled_at"];
+
+// ── Schedulable-destination rule ─────────────────────────────────────────────
+/**
+ * The destinations a payload asks to publish to, restricted to real providers.
+ * Unknown/garbage entries are dropped here rather than reaching the rule.
+ */
+export function requestedSocialDestinations(payload: Record<string, unknown>): SocialProvider[] {
+  const raw = payload.socialDestinations;
+  return Array.isArray(raw) ? raw.filter(isSocialProvider) : [];
+}
+
+/**
+ * Which of a payload's destinations cannot be honoured at due time.
+ *
+ * Only applies to a payload that is actually being scheduled: publishing now has
+ * no persistence requirement, so an unscheduled draft may name anything.
+ *
+ * Extracted from the PUT handler so the rule can be tested directly. The route
+ * requires a real bearer token (there is deliberately no test bypass on it), so
+ * asserting this through HTTP would need a live session; the handler calls this
+ * exact function, and a test asserts the handler still does.
+ */
+export function blockedScheduleDestinations(payload: Record<string, unknown>): SocialProvider[] {
+  if (!buildScheduledAt(payload)) return [];
+  return unschedulableDestinations(requestedSocialDestinations(payload));
+}
+

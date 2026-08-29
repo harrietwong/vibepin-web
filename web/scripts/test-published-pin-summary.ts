@@ -40,14 +40,30 @@ test("remotePinUrl exists on PinDraft alongside remotePinId", () => {
   assert(/remotePinUrl\??:\s*string/.test(pinDraftStore), "remotePinUrl field missing from PinDraft");
 });
 
-test("publish handler now persists remotePinId (the actual data gap) alongside postedAt", () => {
-  const i = drawer.indexOf("postedAt: new Date().toISOString()");
-  assert(i >= 0, "publish handler must call updateDraft with the publish result");
-  const body = drawer.slice(Math.max(0, i - 300), i + 300);
-  assert(/postedAt: new Date\(\)\.toISOString\(\)/.test(body), "postedAt must still be set on publish");
-  assert(/remotePinId: res\.pin\.id/.test(body), "remotePinId must be captured from the publish result");
-  assert(/remotePinUrl: res\.pin\.url/.test(body), "remotePinUrl must be captured from the publish result");
-  assert(/boardName/.test(body), "boardName must be captured fresh at publish time");
+// This used to grep the DRAWER for a hand-written `postedAt: new Date()...` /
+// `remotePinId: res.pin.id` block. That block is gone, and its absence is the fix,
+// not a regression: the drawer no longer calls publishPin itself — it publishes
+// through publishContent, the one publish function every surface shares, which
+// writes those same fields from the per-destination result rows
+// (legacyFieldsFromResults). Asserting on the drawer's own store write would be
+// asserting that the duplication we just removed is still there. So the assertion
+// moved to where the fields are actually written now.
+test("the publish result still persists postedAt / remotePinId / remotePinUrl — now via the shared publish", () => {
+  assert(/publishContent\(\s*activeDraft\.id/.test(drawer),
+    "the drawer must publish through the shared publishContent, not its own publishPin call");
+  assert(!/await publishPin\(/.test(drawer),
+    "no second Pinterest publish path may remain in the drawer");
+
+  const publishContentSrc = readFileSync(join(root, "src/lib/studio/publishContent.ts"), "utf8");
+  const m = /pinDraftStore\.updateDraft\(draftId, \{\s*\n\s*destinationResults: results,/.exec(publishContentSrc);
+  assert(m !== null, "publishContent must write the result back to the draft");
+  const body = publishContentSrc.slice(m!.index, m!.index + 500);
+  assert(/postedAt: legacy\.postedAt/.test(body), "postedAt must still be set on publish");
+  assert(/remotePinId: legacy\.remotePinId/.test(body), "remotePinId must be captured from the publish result");
+  assert(/remotePinUrl: legacy\.remotePinUrl/.test(body), "remotePinUrl must be captured from the publish result");
+  // The board is carried per destination on the result row, which is what the
+  // published summary reads — fresher than a draft field written alongside it.
+  assert(/boardName/.test(publishContentSrc), "the board must be recorded at publish time");
 });
 
 test("published Pin URL prefers remotePinUrl; reconstructs from remotePinId only as a legacy fallback (single source, kept in sync with Studio's board card)", () => {

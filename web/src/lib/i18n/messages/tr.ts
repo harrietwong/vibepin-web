@@ -426,6 +426,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "pinDetails.confirmReplaceUrlKeep": "Mevcut URL'yi koru",
   "pinDetails.confirmReplaceUrlUse": "Ürün bağlantısını kullan",
   "pinDetails.error.invalidUrl": "Geçerli bir http:// veya https:// URL'si girin.",
+  "pinDetails.error.destinationNotSchedulable": "{platforms} için zamanlama geçici olarak kullanılamıyor. Şimdi yayınlamayı hâlâ kullanabilirsiniz.",
   "pinDetails.error.missingBeforeSchedule": "Zamanlamadan önce eksik bilgileri ekleyin.",
 
   // ── Pin details: Title section ──
@@ -486,6 +487,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "publishDestinations.checkingConnection": "Bağlantı kontrol ediliyor…",
   "publishDestinations.notConnected": "Bağlı değil",
   "publishDestinations.comingSoon": "Çok yakında",
+  "publishDestinations.schedulingUnavailable": "Zamanlama geçici olarak kullanılamıyor",
   "publishDestinations.primary": "Birincil",
   "publishDestinations.connected": "Bağlı",
   "publishDestinations.redirecting": "Pinterest yetkilendirmesi açılıyor...",
@@ -1109,6 +1111,10 @@ const tr: Partial<Record<MessageKey, string>> = {
   "pinDrawer.recommended.inspirationDisclaimer": "Bunlar yalnızca stil ilhamıdır — oluşturma, kompozisyon ve ruh hali gibi görsel ipuçlarından yararlanır ve bu görselleri asla kopyalamaz.",
   "pinDrawer.recommended.styleCuesUsed": "Kullanılan stil ipuçları:",
   "pinDrawer.recommended.viewOnPinterest": "Pinterest'te görüntüle",
+  "pinDrawer.recommended.analyzeCta": "Kişiye özel fikirler için bu ürünü analiz et",
+  "pinDrawer.recommended.rateLimited": "Analiz hız sınırına takıldı — {seconds} saniye sonra tekrar deneyin",
+  "pinDrawer.recommended.noStrongMatch": "Mevcut kitaplıkta bu ürünle güçlü bir eşleşme yok — kategori ilhamı gösteriliyor.",
+  "pinDrawer.recommended.showDifferent": "Farklı fikirler göster",
   "pinDrawer.styleCue.singleFocus": "tek odak",
   "pinDrawer.styleCue.multipleProducts": "birden fazla ürün",
   "pinDrawer.styleCue.styledScene": "stilize sahne",

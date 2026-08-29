@@ -48,7 +48,21 @@ import { BUI, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { addProductToDraft } from "@/lib/pinMetadata";
 import { selectionFromAsset, selectionFromLinkedProduct, toLinkedProduct, type CanonicalProductSelection } from "@/lib/studio/productSelection";
 import { deriveDestinationUrlForProduct } from "@/lib/studio/destinationUrlDerivation";
-import { buildReferenceRequestBody, isCurrentResult, resolveBasis } from "@/lib/studio/recommendationRequest";
+import {
+  buildReferenceRequestBody,
+  classifyAnalysisError,
+  dailySeed,
+  deriveAnalysisState,
+  djb2Hex,
+  imageKeyFor,
+  isCurrentResult,
+  mergeExcludeIds,
+  mergeRefreshedRecommendations,
+  parseRetryAfter,
+  resolveBasis,
+  type AnalysisErrorCode,
+} from "@/lib/studio/recommendationRequest";
+import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import {
   MAX_SELECTED_REFERENCES,
   PINS_PER_REFERENCE_OPTIONS,
@@ -521,6 +535,10 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   // to idle/error. (Set in render on product change, not in an effect body.)
   const [recStatus, setRecStatus] = useState<"idle" | "loading" | "error">("loading");
   const [recReloadKey, setRecReloadKey] = useState(0);
+  // Ids the NEXT request must not serve again ("Show different ideas"). Empty for a
+  // normal load; non-empty only after the user asked for a refresh, which is also what
+  // tells the response handler to merge rather than replace.
+  const [pendingExcludeIds, setPendingExcludeIds] = useState<string[]>([]);
   const [recExpanded, setRecExpanded] = useState(true);
   // Derived, never stored separately — this is what keeps the recommendation grid
   // and the top tray from disagreeing about what is selected.
@@ -557,6 +575,10 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   const [swappedProductAnalysis, setSwappedProductAnalysis] = useState<{
     url: string;
     analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string };
+    /** Why the analysis failed — the UI offers a retry for most codes but never for a rate limit. */
+    error?: AnalysisErrorCode;
+    /** Seconds the server asked us to wait (429 Retry-After), when it sent one. */
+    retryAfter?: number;
   } | null>(null);
   const [recDraftId, setRecDraftId] = useState<string | undefined>(draft?.id);
   if (draft?.id !== recDraftId) {
@@ -566,6 +588,9 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     setSelectedReferences(prev => prev.filter(r => r.source !== "recommended_pin"));
     setRecommendedRefs([]);
     setProductChanged(false);
+    // A refresh session belongs to ONE product on ONE draft: another draft starts from
+    // the full library, not from what the previous draft had already flicked past.
+    setPendingExcludeIds([]);
   }
 
   // Fetch recommendations for ANY draft that has an image — richer context (analysis,
@@ -620,7 +645,47 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     setRecommendationBasis("category_fallback");
     setRecStatus("loading");
     setProductChanged(true);
+    setPendingExcludeIds([]);
   }
+
+  // What the client actually knows about THIS product's image analysis — the draft's
+  // own stored lifecycle when the primary image is the draft's, the in-memory swap-path
+  // record otherwise. The recommendation UI reads this, NOT `recommendationBasis`:
+  // basis says what the server could rank with, state says what we ever gave it. A
+  // missing analysis previously read as "weak library", which is the wrong story and
+  // the wrong fix.
+  const analysisState = deriveAnalysisState({
+    draftImageSelected,
+    draftStatus: liveDraft?.imageAnalysisStatus,
+    draftError: liveDraft?.imageAnalysisError,
+    draftRetryAfter: liveDraft?.imageAnalysisRetryAfter,
+    swapped: swappedProductAnalysis,
+    primaryUrl: primaryProductUrl,
+  });
+
+  // Everything already SHOWN for the current product+draft, so "Show different ideas"
+  // can exclude it. Keyed by scope rather than reset in an effect: a stale accumulation
+  // from a previous product can then never leak into the next product's exclude list,
+  // whatever order the resets and the in-flight response happen to run in.
+  const recScopeKey = `${draft?.id ?? "-"}|${productKey}`;
+  const shownIdsRef = useRef<{ key: string; ids: string[] }>({ key: recScopeKey, ids: [] });
+  // sha-256 of an image url is async; every request (including the first for a url)
+  // awaits it, then caches it so later requests for the same url read synchronously.
+  const imageKeyCacheRef = useRef<Map<string, string>>(new Map());
+  // "Show different ideas" mints the requestId the moment it fires and stashes it here,
+  // so the click's `reference_refreshed` event and the request it triggers (via
+  // recReloadKey) share one id — the server's `reference_recs_served` can then be
+  // joined to the click that caused it, not just to the request that followed it.
+  const nextRequestIdRef = useRef<string | null>(null);
+  const newRequestId = () => globalThis.crypto?.randomUUID?.() ?? djb2Hex(`${Date.now()}:${Math.random()}`);
+  // Drafts this drawer session already kicked an analysis for — one backfill per draft
+  // per open, never a loop.
+  const backfilledRef = useRef<Set<string>>(new Set());
+  // Read at RESPONSE time (the fetch effect does not re-run on selection changes), so a
+  // card the user picked while the refresh was in flight still keeps its slot.
+  const selectedRefIdsRef = useRef<string[]>(selectedRefIds);
+  useLayoutEffect(() => { selectedRefIdsRef.current = selectedRefIds; });
+
   // Analyse a swapped-in product so its recommendations are product-level rather than
   // title/category-only. Best-effort: on failure the request below simply omits
   // imageAnalysis and the API falls back to category_fallback, which the heading
@@ -651,33 +716,100 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
     const tags = (sel?.tags && sel.tags.length ? sel.tags
       : [sel?.category ?? asset?.category, sel?.keyword ?? asset?.keyword, sel?.visualFormat ?? asset?.visualFormat]
           .map(v => (typeof v === "string" ? v.trim() : "")).filter(Boolean));
-    fetch("/api/ai-copy/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        imageUrl: requestUrl,
-        category: sel?.category || asset?.category || undefined,
-        productTitle: sel?.title || asset?.title || undefined,
-        productType: sel?.productType || asset?.productType || undefined,
-        productTags: tags.length ? tags : undefined,
-      }),
-    })
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((data: { analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string } }) => {
+    // Written as an async run (not a .then chain) so the failure branch still has the
+    // Response in scope: a 429 has to be told apart from a real analysis failure, and
+    // only the response carries the status and the Retry-After the server sent.
+    void (async () => {
+      let res: Response | undefined;
+      try {
+        res = await fetch("/api/ai-copy/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            imageUrl: requestUrl,
+            category: sel?.category || asset?.category || undefined,
+            productTitle: sel?.title || asset?.title || undefined,
+            productType: sel?.productType || asset?.productType || undefined,
+            productTags: tags.length ? tags : undefined,
+          }),
+        });
+        if (!res.ok) {
+          if (isStale()) return; // product changed while this was in flight
+          // Record the attempt (keyed by url) so we don't retry in a loop — now WITH the
+          // reason, so the section can offer a retry for a plain failure and a countdown
+          // for a rate limit, instead of silently reporting "category inspiration".
+          setSwappedProductAnalysis({
+            url: requestUrl,
+            error: classifyAnalysisError(new Error(String(res.status)), res.status),
+            retryAfter: res.status === 429 ? parseRetryAfter(res.headers.get("retry-after")) : undefined,
+          });
+          return;
+        }
+        const data = await res.json() as { analysis?: { category?: string; style?: string; colors?: string[]; visibleObjects?: string[]; imageSummary?: string } };
         if (isStale()) return; // product changed while this was in flight
         setSwappedProductAnalysis({ url: requestUrl, analysis: data.analysis });
-      })
-      .catch((e: unknown) => {
+      } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         if (isStale()) return;
-        // Record the attempt (keyed by url) so we don't retry in a loop.
-        setSwappedProductAnalysis({ url: requestUrl });
-      });
+        setSwappedProductAnalysis({ url: requestUrl, error: classifyAnalysisError(e) });
+      }
+    })();
     // Abort a still-inflight analysis when the product changes — its result is stale.
     return () => { controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, draftImageSelected, primaryProductUrl, currentProductKey, swappedProductAnalysis?.url]);
+
+  // Backfill the ONE analysis a draft is supposed to have. Opening a drawer on a draft
+  // that has an image but was never analysed starts it now — this is the actual P0
+  // defect: almost every draft reached the recommender with no analysis at all, so every
+  // product got the same category-level list and "the ideas never change" was the
+  // visible symptom.
+  //
+  // `failed` is deliberately NOT retried automatically: a broken image or a 429 would be
+  // re-sent on every open, which is a real, billable loop. A failure is offered as a
+  // button instead (§3.3).
+  useEffect(() => {
+    // Closing the drawer ends the session: reopening may legitimately retry.
+    if (!open) { backfilledRef.current.clear(); return; }
+    if (!draftImageSelected) return;
+    const d = liveDraft;
+    if (!d?.id || !d.imageUrl) return;
+    // `undefined` is the store's only "never analysed" marker — the stale-discard path
+    // resets to undefined too. ("none" exists only in the derived state, not on a draft.)
+    if (d.imageAnalysisStatus != null) return;
+    if (backfilledRef.current.has(d.id)) return;
+    backfilledRef.current.add(d.id);
+    void startImageAnalysis(d.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, draft?.id, draftImageSelected, liveDraft?.imageUrl, liveDraft?.imageAnalysisStatus]);
+
+  // Rate-limit countdown. Only ever counts the seconds the SERVER asked for: with no
+  // Retry-After we show the retry immediately rather than inventing a wait.
+  //
+  // The clock lives in the effect (reading it during render is impure); the state is
+  // written only from timer callbacks, and `null` means "this window has not ticked
+  // yet", so the first paint shows the full Retry-After instead of flashing 0.
+  const analysisRateLimited = analysisState.errorCode === "rate_limited";
+  const rateLimitTotal = Math.max(0, Math.floor(analysisState.retryAfter ?? 0));
+  const rateLimitKey = analysisRateLimited ? String(rateLimitTotal) : "";
+  const [countdown, setCountdown] = useState<{ key: string; secondsLeft: number | null }>({ key: "", secondsLeft: null });
+  // A new rate-limit window starts its own countdown (adjust-state-during-render, as above).
+  if (countdown.key !== rateLimitKey) setCountdown({ key: rateLimitKey, secondsLeft: null });
+  const analysisRetrySeconds = analysisRateLimited ? (countdown.secondsLeft ?? rateLimitTotal) : 0;
+  useEffect(() => {
+    if (!analysisRateLimited || rateLimitTotal <= 0) return;
+    const endsAt = Date.now() + rateLimitTotal * 1000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      setCountdown({ key: rateLimitKey, secondsLeft: left });
+      // Stops itself at zero — the retry button takes over from there.
+      if (left > 0) timer = setTimeout(tick, 1000);
+    };
+    timer = setTimeout(tick, 1000);
+    return () => { if (timer) clearTimeout(timer); };
+  }, [analysisRateLimited, rateLimitTotal, rateLimitKey]);
 
   useEffect(() => {
     // No draft requirement: recommendations follow the PRIMARY PRODUCT, which exists
@@ -712,20 +844,13 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
           visualFormat: sel.visualFormat ?? selectedAsset?.visualFormat,
         }
       : null;
-    const body = buildReferenceRequestBody({
-      primary: enrichedPrimary,
-      draftImageSelected,
-      draftAnalysis: d ? {
-        title: d.title,
-        category: d.imageCategory || d.category || undefined,
-        style: d.style, colors: d.colors, visibleObjects: d.visibleObjects, imageSummary: d.imageSummary,
-      } : undefined,
-      productAnalysis: swappedProduct,
-    });
+    // Non-empty ONLY after "Show different ideas", which is also what tells the response
+    // handler to merge into the current grid instead of replacing it.
+    const excludeIds = pendingExcludeIds;
     // Transient failures (dev recompile 500s, flaky network) must not permanently blank
     // the section for this drawer session — retry a couple of times before giving up.
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    const attempt = (retriesLeft: number) => {
+    const attempt = (retriesLeft: number, body: ReturnType<typeof buildReferenceRequestBody>) => {
       fetch("/api/reference-candidates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -733,11 +858,26 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         body: JSON.stringify(body),
       })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: RecommendationBasis }) => {
+        .then((data: { items?: ReferenceRecommendation[]; recommendationBasis?: RecommendationBasis; served?: { ids?: string[] } }) => {
           // Guard: the product changed while this was in flight → discard (§4).
           if (isStale()) return;
           const items = Array.isArray(data.items) ? data.items : [];
-          setRecommendedRefs(items);
+          // A refresh replaces only the slots the user did NOT pick; a normal load
+          // replaces the whole grid (merging there would keep a previous load's cards
+          // alive after an analysis upgrade).
+          if (excludeIds.length) {
+            setRecommendedRefs(prev => mergeRefreshedRecommendations(
+              prev, selectedRefIdsRef.current, items, prev.length || items.length,
+            ));
+          } else {
+            setRecommendedRefs(items);
+          }
+          // Remember what has now been shown so the NEXT refresh can exclude it. The
+          // server's own `served.ids` is authoritative; the items are the fallback when a
+          // response arrives without the serving block (older server, test fixture).
+          const servedIds = Array.isArray(data.served?.ids) ? data.served.ids : items.map(i => i.id);
+          const carried = shownIdsRef.current.key === recScopeKey ? shownIdsRef.current.ids : [];
+          shownIdsRef.current = { key: recScopeKey, ids: mergeExcludeIds(carried, servedIds) };
           // Field is always present per the final contract; passing the item count
           // additionally collapses an EMPTY list to Category inspiration, so the UI
           // can never carry a product-level claim with nothing to back it.
@@ -747,14 +887,62 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
         .catch((e: unknown) => {
           if (e instanceof DOMException && e.name === "AbortError") return;
           if (isStale()) return;
-          if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1), 1500); return; }
+          if (retriesLeft > 0) { retryTimer = setTimeout(() => attempt(retriesLeft - 1, body), 1500); return; }
           // Exhausted retries: surface an error+retry state rather than showing an
           // empty grid that looks like a legitimate "no recommendations" (§4.9).
           setRecommendedRefs([]);
           setRecStatus("error");
         });
     };
-    attempt(2);
+    void (async () => {
+      // Serving context (contract §1.1): who asked, for which image, under which analysis
+      // state, with which day's seed, and what has already been shown. Every field is
+      // optional server-side; sending it is what lets a served list be explained after the
+      // fact instead of guessed at — including "this product never had an analysis".
+      // A refresh click already minted this id (see handleShowDifferent); a normal open
+      // mints its own so the pair still lines up when nothing was refreshed.
+      const requestId = nextRequestIdRef.current ?? newRequestId();
+      nextRequestIdRef.current = null;
+      const cachedImageKey = imageKeyCacheRef.current.get(requestUrl);
+      // The strong key is awaited even on the first request for a url — a djb2 key sent
+      // once can never be joined to the SHA-256 key the server logs going forward.
+      const imageKey = cachedImageKey ?? await imageKeyFor(requestUrl).catch(() => djb2Hex(requestUrl));
+      if (!cachedImageKey) imageKeyCacheRef.current.set(requestUrl, imageKey);
+      // The product (or the whole drawer) may have moved on while we awaited the digest.
+      if (isStale()) return;
+      const body = buildReferenceRequestBody({
+        primary: enrichedPrimary,
+        draftImageSelected,
+        draftAnalysis: d ? {
+          title: d.title,
+          category: d.imageCategory || d.category || undefined,
+          style: d.style, colors: d.colors, visibleObjects: d.visibleObjects, imageSummary: d.imageSummary,
+        } : undefined,
+        productAnalysis: swappedProduct,
+        serve: {
+          draftId: draft?.id,
+          requestId,
+          imageKey,
+          analysisSource: analysisState.source,
+          analysisStatus: analysisState.status,
+          // Stable for a UTC day: reopening the drawer shows the same sample instead of
+          // churning, and the library still rotates tomorrow with nothing stored.
+          seed: dailySeed(draft?.id ?? imageKey, new Date()),
+          excludeIds: excludeIds.length ? excludeIds : undefined,
+        },
+      });
+      // Client half of the server's `reference_recs_served`. Joined on requestId the pair
+      // shows which analysis state each served list was produced under, which is what makes
+      // a high category_fallback rate attributable rather than merely observed.
+      track("reference_recs_requested", {
+        draftId: draft?.id ?? null,
+        requestId,
+        imageKey,
+        analysisSource: analysisState.source,
+        analysisStatus: analysisState.status,
+      });
+      attempt(2, body);
+    })();
     // Aborting on product change guarantees the previous product's late response
     // cannot write recommendedRefs / basis / status for the new product.
     return () => { controller.abort(); if (retryTimer) clearTimeout(retryTimer); };
@@ -764,6 +952,53 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
   }, [open, draft?.id, recsEligible, analysisReady, hasLinkedProducts, draftImageSelected, primaryProductUrl, currentProductKey, swappedProductAnalysis, recReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const REC_LIMIT = MAX_SELECTED_REFERENCES;
+
+  /**
+   * "Show different ideas" — ask for another sample from the same product's library.
+   *
+   * Everything already shown (plus everything picked) is excluded, so the next response
+   * is genuinely different rather than the same top-N re-ranked. Picked cards keep their
+   * slots (see mergeRefreshedRecommendations); only the rest are replaced.
+   *
+   * The heading may honestly flip to "Category inspiration" afterwards: once the
+   * product-level matches are used up, what is left IS category backfill, and saying so
+   * is the point.
+   */
+  const handleShowDifferent = () => {
+    const shown = shownIdsRef.current.key === recScopeKey ? shownIdsRef.current.ids : [];
+    const next = mergeExcludeIds(shown, selectedRefIds);
+    setPendingExcludeIds(next);
+    setRecStatus("loading");
+    // Mint the id NOW, before the request exists, so the click event and the request it
+    // triggers (via recReloadKey below) carry the same requestId.
+    const requestId = newRequestId();
+    nextRequestIdRef.current = requestId;
+    // The fetch effect re-runs on this key; pendingExcludeIds is intentionally NOT a
+    // dependency of it, or setting both would fire two requests for one click.
+    setRecReloadKey(k => k + 1);
+    track("reference_refreshed", { draftId: draft?.id ?? null, requestId, excludedCount: next.length });
+  };
+
+  /**
+   * Analyse this product now — the manual half of the backfill.
+   *
+   * Allowed after a failure too (the drawer never retries a failure on its own): the
+   * single-flight map in startImageAnalysis makes a double click one request, not two.
+   * On the swap path there is no draft to write to, so dropping the in-memory record for
+   * this url is what makes the stateless analyse effect run again.
+   */
+  const handleAnalyzeCta = () => {
+    if (draftImageSelected && liveDraft?.id) { void startImageAnalysis(liveDraft.id); return; }
+    setSwappedProductAnalysis(null);
+  };
+
+  // Which of the three honest states the recommendation section reports. Driven by the
+  // ANALYSIS state, not by `recommendationBasis`: "we never looked at your product" and
+  // "we looked and found nothing close" are different facts and need different offers.
+  const showRateLimitedNotice = analysisRateLimited && analysisRetrySeconds > 0;
+  const showAnalyzeCta = !showRateLimitedNotice
+    && (analysisState.status === "none" || analysisState.status === "failed");
+  const showNoStrongMatch = analysisState.status === "ready" && recommendationBasis === "category_fallback";
   /**
    * Toggle a recommended Pin as a real Style Reference.
    *
@@ -1195,18 +1430,54 @@ export function AiVersionDrawer({ draft, open, generating, title, initialSetup, 
 
             {recsEligible && recommendedRefs.length > 0 && (
               <section data-testid="recommended-references" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <button type="button" onClick={() => setRecExpanded(v => !v)}
-                  style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-                  {recExpanded ? <ChevronDown style={{ width: 14, height: 14, color: BUI.textSec }} /> : <ChevronRight style={{ width: 14, height: 14, color: BUI.textSec }} />}
-                  <h3 data-testid="recommended-heading" data-basis={recommendationBasis} style={{ margin: 0, fontSize: 13, fontWeight: 850, color: BUI.text }}>
-                    {recommendationBasis === "category_fallback"
-                      ? tr("pinDrawer.recommended.headingCategory")
-                      : tr("pinDrawer.recommended.heading")}
-                  </h3>
-                  {selectedRefIds.length > 0 && (
-                    <span style={{ fontSize: 10.5, fontWeight: 800, color: BUI.purple }}>{selectedRefIds.length}/{REC_LIMIT}</span>
-                  )}
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button type="button" onClick={() => setRecExpanded(v => !v)}
+                    style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                    {recExpanded ? <ChevronDown style={{ width: 14, height: 14, color: BUI.textSec }} /> : <ChevronRight style={{ width: 14, height: 14, color: BUI.textSec }} />}
+                    <h3 data-testid="recommended-heading" data-basis={recommendationBasis} style={{ margin: 0, fontSize: 13, fontWeight: 850, color: BUI.text }}>
+                      {recommendationBasis === "category_fallback"
+                        ? tr("pinDrawer.recommended.headingCategory")
+                        : tr("pinDrawer.recommended.heading")}
+                    </h3>
+                    {selectedRefIds.length > 0 && (
+                      <span style={{ fontSize: 10.5, fontWeight: 800, color: BUI.purple }}>{selectedRefIds.length}/{REC_LIMIT}</span>
+                    )}
+                  </button>
+                  {/* A SIBLING of the expand toggle, never nested inside it: a button in a
+                      button is invalid HTML and every refresh click would also collapse
+                      the section the user is trying to refresh. */}
+                  <button type="button" data-testid="recommended-show-different"
+                    onClick={handleShowDifferent} disabled={recStatus === "loading"}
+                    style={{ flexShrink: 0, padding: "5px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`,
+                      background: BUI.surface2, color: BUI.text, fontSize: 10.5, fontWeight: 800,
+                      cursor: recStatus === "loading" ? "default" : "pointer", opacity: recStatus === "loading" ? 0.55 : 1,
+                      fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    {tr("pinDrawer.recommended.showDifferent")}
+                  </button>
+                </div>
+                {/* The honest reason this list is what it is. Rate limit first (a retry
+                    there is a cost loop, so it is a countdown, not a button), then "we
+                    never analysed this product" (offer to), then "we did analyse it and
+                    nothing in the library was close" (nothing to offer — no button). */}
+                {showRateLimitedNotice && (
+                  <p data-testid="recommended-rate-limited"
+                    style={{ margin: 0, fontSize: 11, lineHeight: 1.45, color: BUI.textSec }}>
+                    {tr("pinDrawer.recommended.rateLimited").replace("{seconds}", String(analysisRetrySeconds))}
+                  </p>
+                )}
+                {showAnalyzeCta && (
+                  <button type="button" data-testid="recommended-analyze-cta" onClick={handleAnalyzeCta}
+                    style={{ alignSelf: "flex-start", padding: "6px 12px", borderRadius: 8, border: `1px solid ${BUI.border}`,
+                      background: BUI.surface2, color: BUI.text, fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                    {tr("pinDrawer.recommended.analyzeCta")}
+                  </button>
+                )}
+                {showNoStrongMatch && (
+                  <p data-testid="recommended-no-strong-match"
+                    style={{ margin: 0, fontSize: 11, lineHeight: 1.45, color: BUI.textSec }}>
+                    {tr("pinDrawer.recommended.noStrongMatch")}
+                  </p>
+                )}
                 <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.45, color: BUI.textSec }}>
                   {tr("pinDrawer.recommended.inspirationDisclaimer")}
                 </p>

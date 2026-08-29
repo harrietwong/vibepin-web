@@ -14,6 +14,31 @@
 
 import type { PinDraft } from "@/lib/pinDraftStore";
 import { sanitizeHandoffField } from "@/lib/weeklyPlanHandoff";
+import {
+  hasFailedDestination,
+  hasPublishedDestination,
+  type ContentDraftLike,
+} from "@/lib/contentDraftModel";
+
+/** The Content-model fields a lifecycle predicate may consult when they happen to be
+ *  present. Every one is optional: the narrow Pick<> call sites (plan card status, the
+ *  banner identity, the week-scoped Plan filters, the test fixtures) must keep
+ *  compiling and must keep their pre-Content answers. */
+type ContentDestinationHints = Partial<
+  Pick<ContentDraftLike, "id" | "imageUrl" | "destinationResults" | "socialPosts"
+    | "remotePinId" | "remotePinUrl" | "postedAt" | "publishError" | "boardId" | "boardName">
+>;
+
+/** contentDestinationResults() needs id + imageUrl to synthesize legacy destinations.
+ *  A narrow Pick without them cannot describe a multi-destination Content at all, so we
+ *  answer "no destination signal" rather than fabricating one from a partial record. */
+function destinationSignal(
+  d: ContentDestinationHints,
+  probe: (draft: ContentDraftLike) => boolean,
+): boolean {
+  if (typeof d.id !== "string") return false;
+  return probe({ ...d, id: d.id, imageUrl: d.imageUrl ?? "" } as ContentDraftLike);
+}
 
 export type PinLifecycle = "generating" | "failed" | "unscheduled" | "scheduled" | "posted";
 
@@ -29,8 +54,14 @@ function isGenerationFailed(d: Pick<PinDraft, "generationStatus">): boolean {
   return s === "failed" || s === "error";
 }
 
-export function isPosted(d: Pick<PinDraft, "postedAt" | "remotePinId">): boolean {
-  return !!sanitizeHandoffField(d.postedAt) || !!sanitizeHandoffField(d.remotePinId);
+/** Posted also when ANY destination published. A Content that reached Pinterest but
+ *  failed on Instagram is Posted (and simultaneously surfaces in Failed for repair);
+ *  getPinLifecycle() below checks posted BEFORE failed, so partial success never
+ *  demotes a Content to "failed". */
+export function isPosted(d: Pick<PinDraft, "postedAt" | "remotePinId"> & ContentDestinationHints): boolean {
+  return !!sanitizeHandoffField(d.postedAt)
+    || !!sanitizeHandoffField(d.remotePinId)
+    || destinationSignal(d, hasPublishedDestination);
 }
 export function isScheduledLifecycle(d: Pick<PinDraft, "scheduledDate" | "plannedAt">): boolean {
   return !!sanitizeHandoffField(d.scheduledDate) || !!sanitizeHandoffField(d.plannedAt);
@@ -76,7 +107,12 @@ export function mapPublishErrorToCategory(code?: string, message?: string): Erro
     c === "board_not_owned" ||
     c === "invalid_image_url" ||
     c === "invalid_link" ||
-    c === "bad_request"
+    c === "bad_request" ||
+    // Media-set failures: the image count / aspect ratios must change before this
+    // Pin can publish, so retrying the same payload is guaranteed to fail again.
+    c === "carousel_too_few" ||
+    c === "carousel_too_many" ||
+    c === "carousel_aspect_mismatch"
   ) return "content";
 
   // transient — explicitly safe to retry (do NOT let the message heuristics below
@@ -101,16 +137,21 @@ export function mapPublishErrorToCategory(code?: string, message?: string): Erro
  *  Plan and Create Pins are one workspace (PRD v1.1 §6.3) and share this one set;
  *  the Plan week view only layers a time-range filter on top (see …InWeek below). */
 export function isActionablePublishFailure(
-  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+  d: Pick<PinDraft, "failureType" | "publishError" | "archivedAt"> & ContentDestinationHints,
 ): boolean {
-  return d.failureType === "publish"
-    && !!sanitizeHandoffField(d.publishError)
-    && !d.archivedAt;
+  // Archived is the one absolute veto: an archived Content is off every board, so no
+  // per-destination failure can pull it back into the actionable set.
+  if (d.archivedAt) return false;
+  // A Content whose per-destination results carry a failure is actionable even when the
+  // legacy single-Pin failureType was never written (fan-out publishes each destination
+  // independently, so one can fail while the draft-level fields describe the other).
+  if (destinationSignal(d, hasFailedDestination)) return true;
+  return d.failureType === "publish" && !!sanitizeHandoffField(d.publishError);
 }
 
 /** Full-population actionable publish failures (Plan and Create Pins use this set). */
 export function listActionablePublishFailures<
-  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt">,
+  T extends Pick<PinDraft, "failureType" | "publishError" | "archivedAt"> & ContentDestinationHints,
 >(drafts: T[]): T[] {
   return drafts.filter(isActionablePublishFailure);
 }
@@ -118,7 +159,7 @@ export function listActionablePublishFailures<
 type PublishFailureSchedule = Pick<
   PinDraft,
   "failureType" | "publishError" | "archivedAt" | "previousScheduledTime" | "scheduledDate" | "plannedAt"
->;
+> & ContentDestinationHints;
 
 function datePart(value?: string): string | null {
   const clean = sanitizeHandoffField(value);
@@ -149,7 +190,7 @@ export function listActionablePublishFailuresInWeek<T extends PublishFailureSche
  *  Now equivalent to listActionablePublishFailures().length — it additionally excludes
  *  archived drafts, which is the intended fix (archived failures are off the board). */
 export function countPublishFailures(
-  drafts: Pick<PinDraft, "failureType" | "publishError" | "archivedAt">[],
+  drafts: (Pick<PinDraft, "failureType" | "publishError" | "archivedAt"> & ContentDestinationHints)[],
 ): number {
   return listActionablePublishFailures(drafts).length;
 }
