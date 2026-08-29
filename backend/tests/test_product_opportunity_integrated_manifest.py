@@ -12,7 +12,7 @@ MANIFEST_PATH = (
     REPO_ROOT
     / "backend"
     / "docs"
-    / "product_opportunities_v37_integrated_release_manifest_b8037c96.json"
+    / "product_opportunities_v37_integrated_release_manifest_60a540f1.json"
 )
 
 
@@ -36,7 +36,7 @@ def _manifest() -> dict[str, object]:
 def test_integrated_manifest_is_preview_only_and_complete() -> None:
     manifest = _manifest()
 
-    assert manifest["schemaVersion"] == 1
+    assert manifest["schemaVersion"] == 2
     assert manifest["candidateBranch"] == "codex/product-v37-central-integrate-0829"
     assert manifest["verdict"] == "READY_FOR_PREVIEW_NOT_PRODUCTION"
     datetime.fromisoformat(str(manifest["generatedAtUtc"]).replace("Z", "+00:00"))
@@ -48,7 +48,7 @@ def test_integrated_manifest_is_preview_only_and_complete() -> None:
 
     artifacts = manifest["artifacts"]
     assert isinstance(artifacts, list)
-    assert manifest["artifactCount"] == len(artifacts) == 29
+    assert manifest["artifactCount"] == len(artifacts) == 34
     paths = [str(row["path"]) for row in artifacts]
     assert len(paths) == len(set(paths))
 
@@ -67,7 +67,9 @@ def test_integrated_manifest_binds_all_frozen_source_commits() -> None:
     assert manifest["productionAnchor"] == "5bcc1a6a0068347c6397b463c713aba82e45a6d9"
     assert manifest["fourLineMergeCommit"] == "385b9e07456007593572466f537f0e44bb8c0264"
     assert manifest["gateFixCommit"] == "16b499796fc9cd2a6ee75b24b30d22a807b0f172"
-    assert runtime_commit == "b8037c96fc4a468dbcee7ced984c9db29cdaedc2"
+    assert manifest["boundedTraceCommit"] == "b8037c96fc4a468dbcee7ced984c9db29cdaedc2"
+    assert manifest["rollbackCommit"] == "60a540f1f3ead08e112d378f3df778000c189abb"
+    assert runtime_commit == "60a540f1f3ead08e112d378f3df778000c189abb"
     assert manifest["runtimeTree"] == _git("rev-parse", f"{runtime_commit}^{{tree}}")
 
     for source_commit in [manifest["productionAnchor"], *expected_sources.values()]:
@@ -103,19 +105,32 @@ def test_integrated_manifest_artifact_hashes_match_git_blobs() -> None:
 def test_integrated_manifest_migration_order_and_gate_receipts_are_exact() -> None:
     manifest = _manifest()
     assert manifest["migrationOrder"] == [
-        "backend/db/migrate_v63_product_opportunities_v1.sql",
-        "backend/db/migrate_v66_creem_subscription_units.sql",
-        "backend/db/migrate_v67_remove_connection_if_unscheduled.sql",
+        {
+            "forward": "backend/db/migrate_v63_product_opportunities_v1.sql",
+            "rollback": "backend/db/rollback_v63_product_opportunities_v1.sql",
+        },
+        {
+            "forward": "backend/db/migrate_v66_creem_subscription_units.sql",
+            "rollback": "backend/db/rollback_v66_creem_subscription_units.sql",
+        },
+        {
+            "forward": "backend/db/migrate_v67_remove_connection_if_unscheduled.sql",
+            "rollback": "backend/db/rollback_v67_remove_connection_if_unscheduled.sql",
+        },
     ]
-    assert not any("v68" in str(path) for path in manifest["migrationOrder"])
+    assert not any("v68" in str(step) for step in manifest["migrationOrder"])
 
     gates = manifest["gates"]
     assert gates == {
-        "backend": "1117 passed, 2 skipped, 77 subtests",
+        "backend": "1125 passed, 2 skipped, 77 subtests",
         "automationContract": "35 passed",
         "webCoreStudioPlan": "203/203 passed",
         "productOpportunityWebContracts": "7/7 passed",
         "generationModerationGate": "106 passed",
+        "integratedMigrationRollbackSource": "4 passed",
+        "integratedMigrationRollbackPglite": (
+            "PASS: v66 fail-closed+preserved, v67 forward+rollback, both idempotent"
+        ),
         "testRegistry": "210 tracked, 203 run, 7 justified exclusions",
         "typecheck": "exit 0",
         "i18n": "2860 English keys, 18 locale catalogs",

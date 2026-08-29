@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "generatedAtUtc": "2026-08-29T11:25:25.8821323Z",
+  "schemaVersion": 2,
+  "generatedAtUtc": "2026-08-29T11:32:34.2812098Z",
   "candidateBranch": "codex/product-v37-central-integrate-0829",
   "productionAnchor": "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
   "sourceCommits": {
@@ -11,226 +11,274 @@
   },
   "fourLineMergeCommit": "385b9e07456007593572466f537f0e44bb8c0264",
   "gateFixCommit": "16b499796fc9cd2a6ee75b24b30d22a807b0f172",
-  "runtimeCandidateCommit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
-  "runtimeTree": "848a1a39eb2e3eb9c2170b4dcca04c20770f3cff",
-  "evidenceCommit": "c1533d1f1b05b0d4207202b32e9473f76596b6a8",
-  "artifactCount": 29,
+  "boundedTraceCommit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+  "rollbackCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
+  "runtimeCandidateCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
+  "runtimeTree": "94b5994fdcd46077b0b52092238863c0896e37ea",
+  "evidenceCommit": "e620be61883a7d41c70395c574559204411c9e06",
+  "artifactCount": 34,
   "artifacts": [
     {
       "path": "backend/docs/product_opportunities_v37_release_manifest_d2c13dd.json",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "b9f76cfb8c9a9d19958f06acd761de61ccd6a571",
       "sha256": "25d49424d316fc97f9d37707f9075e42b707c56c962c2d9854b70695c87f95e1",
       "bytes": 21901
     },
     {
       "path": "backend/db/migrate_v63_product_opportunities_v1.sql",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "76224bc7e6a3bcb69f04203a9135ea42142f4c6c",
       "sha256": "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
       "bytes": 74223
     },
     {
       "path": "backend/db/rollback_v63_product_opportunities_v1.sql",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "41a749e73e5cda29f17717c011701b8c714fdf89",
       "sha256": "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
       "bytes": 3046
     },
     {
       "path": "backend/db/migrate_v66_creem_subscription_units.sql",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "5a1241d57314a563098fe7fdbcdcaf371ce8625e",
       "sha256": "41cb068ab89f55cc887a68daef8921f6ef32f4f9e697efcb30a5da3c007d0de0",
       "bytes": 2614
     },
     {
+      "path": "backend/db/rollback_v66_creem_subscription_units.sql",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
+      "gitBlobSha1": "38a287b4c6646dfcbe49e7646318eac3d0c68750",
+      "sha256": "6c93bf07f546d5ed476d354cddc625872fe75d8e40d80ac6c73b67bfd98fe0ba",
+      "bytes": 1194
+    },
+    {
       "path": "backend/db/migrate_v67_remove_connection_if_unscheduled.sql",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "dffcf43ca78da85aceabd8ed51cb44181ca703f5",
       "sha256": "df0208cfc2087056ed78b16fa816ae423cafa6b4435d85fcc69bc9648a9752e3",
       "bytes": 6687
     },
     {
+      "path": "backend/db/rollback_v67_remove_connection_if_unscheduled.sql",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
+      "gitBlobSha1": "8c250dab4458166a051fea16ad3152a0790af246",
+      "sha256": "2197fa7860f4642f6fb19aba0012090d2c201ce7fa913940c8e5ac635a1ae0f7",
+      "bytes": 352
+    },
+    {
       "path": "backend/deploy/systemd/vibepin-product-supply.service",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "64815f0e0c06d7805708649eefc92b1c6d2aa4a4",
       "sha256": "51f78a4eb235d6c5b13f83cf727173f3b3427a6ff7c863e2024657e8b9312a20",
       "bytes": 3403
     },
     {
       "path": "backend/deploy/systemd/vibepin-product-supply.timer",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "f42db219557262f1c02d30402d2c3c0d15e13bf1",
       "sha256": "9b046ec96db1b2861f087d2f8c51f910661f72c7455a1b2fd91fbdc320068e1a",
       "bytes": 1170
     },
     {
       "path": "backend/deploy/systemd/vibepin-product-opportunity-admission.service",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "76d7485c31a29d4a19e17c2597078a0d299c40b7",
       "sha256": "7be37e3b0606cadc01c874ca19fc7f97050489ad3113d40c24b6b666aabeea22",
       "bytes": 979
     },
     {
       "path": "backend/deploy/systemd/vibepin-product-opportunity-admission.timer",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "dd6bf79ca5c1248f955e3dfcfe247ec2a26f9a70",
       "sha256": "554d6ba4e0362b691aae9c334091999e1c2a5e0b282ee2273d947282a663be4c",
       "bytes": 568
     },
     {
       "path": "backend/deploy/systemd/vibepin-product-tracking.service",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "a65216178d8ea97e9281a8e8fd61702a2bd2f1a9",
       "sha256": "b8621d95a22e1dd89057c97efba7d26417f191e4568e4083fd9dd7154e76e74f",
       "bytes": 861
     },
     {
       "path": "backend/deploy/systemd/vibepin-product-tracking.timer",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "d6bef00de1acaed4b07fee8d0b6c5b279873046c",
       "sha256": "7739fc1c637e4016e902edb252847d44163e0fe80effd084000b3f1e24e474a5",
       "bytes": 1086
     },
     {
       "path": "backend/product_harvest.py",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "407f7e697b5a1d2c0b9bcd15f4ee5f7aff0767d9",
       "sha256": "d3ee7600767f2d46d8e8fb705ea3c51af80223faaae2cf6fe1a3815c518a3ea2",
       "bytes": 57772
     },
     {
       "path": "backend/shop_the_look_expand.py",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "ea0848361b2313e9913ebdc6a05a539ca2a6f88d",
       "sha256": "8dfd2681e001c05ef44308e873d40b91665d53015e675d65da23f85e72d1bdf0",
       "bytes": 116632
     },
     {
       "path": "backend/supply_core.py",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "ef8e1721a6ec21ee70b7947dca28fc6d8579d073",
       "sha256": "deb5407517e6ac6d864d6d39d48a031d54928eaff21c8050c04eecc704bdf7e6",
       "bytes": 56045
     },
     {
       "path": "backend/product_opportunity_tracking.py",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "8c76f35d5738d3619fab5731ab310bfd4315b2d7",
       "sha256": "0af2c05c5dc5a072a21bea6cdb044f82e012a655eeeaf1b1435682024dfda851",
       "bytes": 35297
     },
     {
       "path": "backend/tests/test_product_opportunity_automation_contract.py",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "4c42d441231f87b9c91b1a0e84a7612333f742d1",
       "sha256": "e3f4dd8f22e50cdb5aca5d2c36c4f8f8a3c974ee1748563119d7bd35a7f1bc14",
       "bytes": 40797
     },
     {
+      "path": "backend/tests/test_integrated_migration_rollbacks.py",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
+      "gitBlobSha1": "53e4a6e6ce340e5a4ac67a5a94d0a153344d0959",
+      "sha256": "16f7aa9e11c31d38fb75857d5ae6f71842c3923c1c75c1cfcc1598e9ba6f39d3",
+      "bytes": 1783
+    },
+    {
+      "path": "backend/tests/pglite_v37/package.json",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
+      "gitBlobSha1": "8c23cf3c50efa07c6cdd5830b7794ef140813da2",
+      "sha256": "6e6a83af414dac8a53fedc4ed49f5e0334496521d8a51113b5230ffa94fc1741",
+      "bytes": 293
+    },
+    {
+      "path": "backend/tests/pglite_v37/verify-integrated-rollbacks.mjs",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
+      "gitBlobSha1": "3af52fb0f2363a8f67e010affdf6c136e78c4827",
+      "sha256": "ab2b11f16bfeda1df13b3e0ac3be6bc64ab16db15c3eec51f33648d2ba39df37",
+      "bytes": 6091
+    },
+    {
       "path": "web/package.json",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "ab0c7f423c57faa7e5ebd4767102fa566af669b5",
       "sha256": "53172841be83be9475042ca408205b51b0358cb71432ec63580944990f0280d0",
       "bytes": 6564
     },
     {
       "path": "web/package-lock.json",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "ab2fda34459fe5089ae42962d3a5a74d7af75f0a",
       "sha256": "26ba489b45a3f6d2fa9dea3d898f5547b1b5e3426d64c118bd345833392cffb8",
       "bytes": 255954
     },
     {
       "path": "web/src/app/api/generate/route.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "3d5ebedc3b7d4150850e2831bbe2923ce35cee3a",
       "sha256": "f8796788d900da0217e2eb2d1138fab736e391b294f17920613ba0dbe6669666",
       "bytes": 62855
     },
     {
       "path": "web/src/app/api/integrations/shopify/connect/route.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "bbdb8f34ab5960cbcbc21e768d1ceb48deec842d",
       "sha256": "094640923c49a8badd8c77d7b9dbc68e9c75afce84adbd0289f910721e463cd9",
       "bytes": 3630
     },
     {
       "path": "web/src/lib/server/shopify/connectPrep.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "e939ff612ed476f54943d11284b5b522fc03653c",
       "sha256": "0d7882f6de9efb86d482b23ef084bde4e78918c389636d29f2c8c28472ac19f1",
       "bytes": 2422
     },
     {
       "path": "web/src/lib/server/productOpportunityAccess.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "a3842249379130e328024011e0b6e6e68281dad5",
       "sha256": "b798e3a40e76a627906b3e5501ab95767a728f6a7f92ee0e9b636f3c313336c4",
       "bytes": 1478
     },
     {
       "path": "web/src/lib/server/productOpportunities.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "5e0be38ce5b2ea116e0db9a519014067ecb4d81a",
       "sha256": "f8b2e9f9a79f86b70f355b7815d43f54e5e0a65a2e1e5ad5a254f9339f89bf30",
       "bytes": 24537
     },
     {
       "path": "web/src/components/products/ProductOpportunitiesV1.tsx",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "a23e4b69257b2fe0ef27a67c0d48f846d1112ec2",
       "sha256": "185b61e71cd3b92414410436db217a3269f469fde1ed93bf8a16d88755302784",
       "bytes": 31410
     },
     {
       "path": "web/src/app/api/product-opportunities/route.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "42709c84fea5a36b6f382b65e7614dafdf08db6d",
       "sha256": "35a657af2630eda8dc357c232caefef4be97a1b032921cfd0bce9f76da7927b2",
       "bytes": 2432
     },
     {
       "path": "web/src/app/api/product-opportunities/[id]/route.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "5d67810cf30c2c104b461b88c60d36c268b57898",
       "sha256": "7c3650338418a66bccb5990de38c7ecdf340f4916baaf3bdc2a2a90e179e3155",
       "bytes": 941
     },
     {
       "path": "web/src/app/api/saved-product-opportunities/route.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "35f6d8692dbefe389cbd0e5a8b6846d5d21edd64",
       "sha256": "ec2dee3fe382c8a7fd912f4ea01d95ee4e441979e99bb1e42b573269ddf2af0f",
       "bytes": 2705
     },
     {
       "path": "web/scripts/test-generation-moderation-gate.ts",
-      "commit": "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
       "gitBlobSha1": "f60efc03b022e520e952f075aa77c0ccb4f24167",
       "sha256": "c1e34a154002794287d8c5f48a189a3ea8eaca54a80f5122ec1f61fbcfbe4bc3",
       "bytes": 68261
     },
     {
       "path": "docs/审查报告/中央集成候选-四线语义集成报告-20260829.md",
-      "commit": "c1533d1f1b05b0d4207202b32e9473f76596b6a8",
-      "gitBlobSha1": "58d02921cda9b19baccfa949f7ef7d2179c40080",
-      "sha256": "d939923a00a6cc0fec258be1373e01becaa32a4e5e887efe9bbfd2b866aee1b8",
-      "bytes": 14960
+      "commit": "e620be61883a7d41c70395c574559204411c9e06",
+      "gitBlobSha1": "a571c0a6f8f2735612f096426d757e29ed71941a",
+      "sha256": "45cdecf0ac028a4b66a0545abcee7c8b382ae203ffcea966f40559405d17c2c4",
+      "bytes": 16433
     }
   ],
   "migrationOrder": [
-    "backend/db/migrate_v63_product_opportunities_v1.sql",
-    "backend/db/migrate_v66_creem_subscription_units.sql",
-    "backend/db/migrate_v67_remove_connection_if_unscheduled.sql"
+    {
+      "forward": "backend/db/migrate_v63_product_opportunities_v1.sql",
+      "rollback": "backend/db/rollback_v63_product_opportunities_v1.sql"
+    },
+    {
+      "forward": "backend/db/migrate_v66_creem_subscription_units.sql",
+      "rollback": "backend/db/rollback_v66_creem_subscription_units.sql"
+    },
+    {
+      "forward": "backend/db/migrate_v67_remove_connection_if_unscheduled.sql",
+      "rollback": "backend/db/rollback_v67_remove_connection_if_unscheduled.sql"
+    }
   ],
   "gates": {
-    "backend": "1117 passed, 2 skipped, 77 subtests",
+    "backend": "1125 passed, 2 skipped, 77 subtests",
     "automationContract": "35 passed",
     "webCoreStudioPlan": "203/203 passed",
     "productOpportunityWebContracts": "7/7 passed",
     "generationModerationGate": "106 passed",
+    "integratedMigrationRollbackSource": "4 passed",
+    "integratedMigrationRollbackPglite": "PASS: v66 fail-closed+preserved, v67 forward+rollback, both idempotent",
     "testRegistry": "210 tracked, 203 run, 7 justified exclusions",
     "typecheck": "exit 0",
     "i18n": "2860 English keys, 18 locale catalogs",
