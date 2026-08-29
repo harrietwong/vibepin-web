@@ -344,13 +344,19 @@ export async function PUT(req: Request) {
     );
   }
 
-  // ── Destination-EXISTS gate (the write half of the remove race) ───────────
-  // Remove is now atomic — an account with live schedules is not deleted (v67).
-  // This is the other direction: a schedule WRITTEN after the account went away.
-  // A tab open since before the removal would otherwise persist a schedule naming
-  // a row that no longer exists, and the cron would inherit the very orphan the
-  // delete guard exists to prevent. The client cannot be the authority here,
-  // because a stale client IS the failure.
+  // ── Destination-EXISTS gate ───────────────────────────────────────────────
+  // A schedule WRITTEN after the account went away. A tab open since before the
+  // removal would otherwise persist a schedule naming a row that no longer
+  // exists, and the cron would inherit an orphan no screen can explain. The
+  // client cannot be the authority here, because a stale client IS the failure.
+  //
+  // This validation and the write below are SEPARATE TRANSACTIONS, so a removal
+  // committing between them is accepted by both — and by the atomic remove (v67)
+  // too, which found no schedule to block on at the time it ran. That
+  // interleaving is an ACCEPTED RESIDUAL (owner decision, 2026-08-29): the whole
+  // consequence is a schedule that fails at publish time with
+  // `target_disconnected`, a visible failure on a Content that was never posted.
+  // No duplicate post, no silent success. See scheduledDestinationsAvailable.ts.
   //
   // 422, like the gate above: the request is well formed, the destination is not
   // usable. A distinct code (`destination_unavailable`) because the remedy is
