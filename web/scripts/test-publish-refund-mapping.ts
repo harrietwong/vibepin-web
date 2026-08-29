@@ -72,6 +72,18 @@ let socialPublishBehaviour: () => Promise<unknown> = async () => ({
 /** Records whether a provider was reached at all — the blocking-site tests assert on this. */
 let providerCallCount = 0;
 
+/**
+ * ── PRE-DISPATCH FAILURE INJECTION (Codex round 8, High 2) ────────────────────
+ * The social route consumes its unit BEFORE it looks anything up, so every step
+ * between the consume and the first `publishPost` is charged-but-unsent territory.
+ * These two stand-ins let a cell make exactly one of those steps throw and assert
+ * the unit is handed back as `not_sent` — nothing reached a platform.
+ */
+let summarizeBehaviour: () => Promise<unknown> = async () => [
+  { provider: "facebook", accounts: [CONNECTED_FB] },
+];
+let createPublishJobBehaviour: () => Promise<unknown> = async () => "job-1";
+
 function fakeSupabaseClient() {
   const missing = { code: "42P01", message: "relation does not exist (test fake)" };
   function builder(): Record<string, unknown> {
@@ -141,9 +153,19 @@ const origLoad = (Module as unknown as { _load: (...a: unknown[]) => unknown }).
   if (request === "@/lib/social/server/socialConnectionStore" || request.endsWith("/social/server/socialConnectionStore")) {
     return {
       findConnection: async () => CONNECTED_FB,
-      summarizeConnections: async () => [
-        { provider: "facebook", accounts: [CONNECTED_FB] },
-      ],
+      summarizeConnections: async () => summarizeBehaviour(),
+    };
+  }
+  // The job-row writer. Faked so a cell can make `createPublishJob` throw (a v32 table
+  // missing, Supabase down) — a pre-dispatch failure that must refund. Delegates to the
+  // REAL module for everything else, including the `export * from "./publishRules"`
+  // re-exports the route also reads, so this stays a complete stand-in.
+  if (request === "@/lib/social/publishFanout" || request.endsWith("/social/publishFanout")) {
+    const real = origLoad.call(this, request, parent, isMain) as Record<string, unknown>;
+    return {
+      ...real,
+      createPublishJob: async () => createPublishJobBehaviour(),
+      recordOutcomes: async () => {},
     };
   }
   // The provider registry — the ONLY place a real network call could originate.
@@ -178,6 +200,8 @@ async function test(name: string, fn: () => Promise<void>) {
   socialPublishBehaviour = async () => ({
     ok: true, status: "published", externalPostId: "fb-1", externalPostUrl: "https://facebook/1",
   });
+  summarizeBehaviour = async () => [{ provider: "facebook", accounts: [CONNECTED_FB] }];
+  createPublishJobBehaviour = async () => "job-1";
   process.env.USAGE_METERING_MODE = "shadow";
   delete process.env.USAGE_ENFORCE_SCHEDULED_POSTS;
   try { await fn(); console.log(`  PASS  ${name}`); passed++; }
@@ -960,6 +984,74 @@ function ledgerConsumeKeys(): string[] {
       post: { imageUrls: [] },
     } as never) as { status: string };
     assert.equal(r.status, "not_implemented");
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // PRE-DISPATCH THROWS — charged, but nothing was ever sent (Codex round 8, High 2)
+  // ══════════════════════════════════════════════════════════════════════════════
+  /**
+   * The social route consumes its unit BEFORE it resolves destinations or writes the
+   * job row. Every one of those steps can throw (Supabase unavailable, a v32 table
+   * missing, a bug), and before this fix the throw unwound straight out of the handler
+   * with the unit still charged — although no platform had been contacted. That is
+   * `not_sent` by the §A.4 table, the same state the loop already refunds when a
+   * destination has no connected account.
+   *
+   * The gate is deliberately narrow, and these cells pin BOTH sides of it: only a
+   * FRESH consume may be released (a replay would refund another route's standing
+   * charge — round 7's High 1), and only BEFORE the first dispatch (afterwards we
+   * cannot prove the post was not created, so the charge stands as delivery_unknown).
+   */
+
+  await test("social / pre-dispatch: summarizeConnections THROWS after a fresh consume → refund not_sent", async () => {
+    summarizeBehaviour = async () => { throw new Error("supabase unavailable"); };
+    await assert.rejects(
+      () => socialPOST(socialReq("pd_s_sumthrow")),
+      /supabase unavailable/,
+      "the original error must propagate unchanged — the refund is a side effect, not a swallow",
+    );
+    assert.equal(consumeCalls().length, 1, "the unit was charged before the throw");
+    assert.equal(providerCallCount, 0, "no provider may be reached on this path");
+    assertReleased("not_sent", deriveScheduledPostKey(OWNER, "pd_s_sumthrow"));
+  });
+
+  await test("social / pre-dispatch: createPublishJob THROWS after a fresh consume → refund not_sent", async () => {
+    createPublishJobBehaviour = async () => { throw new Error("publish_jobs missing"); };
+    await assert.rejects(
+      () => socialPOST(socialReq("pd_s_jobthrow")),
+      /publish_jobs missing/,
+    );
+    assert.equal(providerCallCount, 0, "no provider may be reached on this path");
+    assertReleased("not_sent", deriveScheduledPostKey(OWNER, "pd_s_jobthrow"));
+  });
+
+  await test("social / pre-dispatch: a REPLAYED consume is NEVER released, however early the throw", async () => {
+    // The whole point of the fresh-only gate. A replay charged nothing HERE, so a
+    // release could only hand back the unit some other route (or attempt) is standing
+    // on — e.g. /api/pinterest/pins, which may already have published the Pin.
+    rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"
+      ? { data: { ok: true, replayed: true }, error: null }
+      : { data: { ok: true, replayed: false }, error: null };
+    summarizeBehaviour = async () => { throw new Error("supabase unavailable"); };
+    await assert.rejects(() => socialPOST(socialReq("pd_s_replay_sum")), /supabase unavailable/);
+    assertNotReleased();
+
+    createPublishJobBehaviour = async () => { throw new Error("publish_jobs missing"); };
+    summarizeBehaviour = async () => [{ provider: "facebook", accounts: [CONNECTED_FB] }];
+    await assert.rejects(() => socialPOST(socialReq("pd_s_replay_job")), /publish_jobs missing/);
+    assertNotReleased();
+  });
+
+  await test("social / post-dispatch: a throw once dispatch has STARTED keeps the charge", async () => {
+    // Guards the `dispatchStarted` half of the gate: the provider was entered, so we
+    // cannot prove the post was not created. delivery_unknown, charge stands. (The
+    // inner catch already handles a thrown provider; this asserts the OUTER catch does
+    // not additionally refund it.)
+    socialPublishBehaviour = async () => { throw new Error("socket hang up mid-flight"); };
+    const res = await socialPOST(socialReq("pd_s_postdispatch"));
+    assert.equal(res.status, 200, "a thrown provider is still a normal per-destination failure");
+    assert.equal(providerCallCount, 1, "the provider WAS entered");
+    assertNotReleased();
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
