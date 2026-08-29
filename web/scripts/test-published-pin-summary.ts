@@ -41,9 +41,9 @@ test("remotePinUrl exists on PinDraft alongside remotePinId", () => {
 });
 
 test("publish handler now persists remotePinId (the actual data gap) alongside postedAt", () => {
-  const i = drawer.indexOf("pinDraftStore.updateDraft(activeDraft.id, {");
+  const i = drawer.indexOf("postedAt: new Date().toISOString()");
   assert(i >= 0, "publish handler must call updateDraft with the publish result");
-  const body = drawer.slice(i, i + 300);
+  const body = drawer.slice(Math.max(0, i - 300), i + 300);
   assert(/postedAt: new Date\(\)\.toISOString\(\)/.test(body), "postedAt must still be set on publish");
   assert(/remotePinId: res\.pin\.id/.test(body), "remotePinId must be captured from the publish result");
   assert(/remotePinUrl: res\.pin\.url/.test(body), "remotePinUrl must be captured from the publish result");

@@ -68,7 +68,12 @@ function read(): CreateBasket {
 
 function write(basket: CreateBasket): void {
   if (typeof window === "undefined") return;
-  basket.updatedAt = new Date().toISOString();
+  // LWW sync requires every local mutation to move the clock forward. Two
+  // writes can occur in the same millisecond (notably add -> media offload),
+  // so a plain new Date().toISOString() can leave the timestamp unchanged and
+  // cause the second payload to be skipped as an equal-version no-op.
+  const previousMs = basketTsMs(basket.updatedAt);
+  basket.updatedAt = new Date(Math.max(Date.now(), previousMs + 1)).toISOString();
   persistRaw(basket);
 }
 

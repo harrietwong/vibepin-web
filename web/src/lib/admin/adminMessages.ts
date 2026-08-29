@@ -95,6 +95,7 @@ const en = {
   "today.funnel.reached": "reached",
   "today.funnel.stuck": "stuck",
   "today.funnel.splitNote": "{exact} exact · {inferred} inferred",
+  "today.funnel.splitNote.empty": "No publishes yet — nothing to attribute.",
 
   "today.topCreators.title": "This Week's Top Creators",
   "today.topCreators.note": "Ships in P1 — not yet built.",
@@ -111,6 +112,11 @@ const en = {
   "today.dataQuality.inferred": "Inferred",
   "today.dataQuality.exact": "Exact",
 
+  "time.relative.justNow": "just now",
+  "time.relative.minutesAgo": "{n}m ago",
+  "time.relative.hoursAgo": "{n}h ago",
+  "time.relative.daysAgo": "{n}d ago",
+
   "blocker.publish_failure.label": "Publish failure",
   "blocker.pinterest_disconnected.label": "Pinterest disconnected",
   "blocker.generation_failures.label": "Generation failures",
@@ -125,6 +131,19 @@ const en = {
 
   "blocker.evidence.publishFailure": "{count} failed publish attempt(s)",
   "blocker.evidence.publishFailureWithCode": "{count} failed publish attempt(s) · code {code}",
+  "blocker.evidence.generationFailuresWithType": "{count} failed generation(s) in the last 24h · latest: {typeLabel}",
+
+  "genError.rate_limited": "Rate limited",
+  "genError.safety_blocked": "Blocked by safety filter",
+  "genError.image_load_failed": "Image failed to load",
+  "genError.model_returned_text": "Model returned text, not an image",
+  "genError.api_auth_error": "Provider auth error",
+  "genError.api_payload_error": "Invalid request to provider",
+  "genError.api_server_error": "Provider server error",
+  "genError.provider_busy": "Provider busy",
+  "genError.user_generation_limit": "User generation limit reached",
+  "genError.configuration_error": "Configuration error",
+  "genError.unknown_error": "Unknown error",
   "blocker.evidence.pinterestDisconnected.disconnected": "Account disconnected",
   "blocker.evidence.pinterestDisconnected.needsReconnect": "Needs reconnect",
   "blocker.evidence.generationFailures": "{count} failed generation(s) in the last 24h",
@@ -136,6 +155,13 @@ const en = {
   "funnel.stage.firstGeneration": "First generation",
   "funnel.stage.firstPublish": "First publish",
   "funnel.stage.repeatPublish": "Repeat publish",
+
+  "today.accounts.excluded": "Excluded {test} test account(s) and {internal} internal account(s)",
+  "today.accounts.showAll": "Show all",
+  "today.accounts.includingAll": "Showing test and internal accounts",
+  "today.accounts.customersOnly": "Real customers only",
+  "today.accountKind.test": "Test",
+  "today.accountKind.internal": "Internal",
 
   // ── Customer 360 additions ───────────────────────────────────────────────
   "c360.alerts.title": "Open Blockers",
@@ -205,6 +231,7 @@ const zh: Record<keyof typeof en, string> = {
   "today.funnel.reached": "已到达",
   "today.funnel.stuck": "卡在此",
   "today.funnel.splitNote": "{exact} 精确 · {inferred} 推断",
+  "today.funnel.splitNote.empty": "尚无发布数据可归因。",
 
   "today.topCreators.title": "本周 Top 创作者",
   "today.topCreators.note": "将在 P1 上线 —— 尚未构建。",
@@ -221,6 +248,11 @@ const zh: Record<keyof typeof en, string> = {
   "today.dataQuality.inferred": "推断",
   "today.dataQuality.exact": "精确",
 
+  "time.relative.justNow": "刚刚",
+  "time.relative.minutesAgo": "{n} 分钟前",
+  "time.relative.hoursAgo": "{n} 小时前",
+  "time.relative.daysAgo": "{n} 天前",
+
   "blocker.publish_failure.label": "发布失败",
   "blocker.pinterest_disconnected.label": "Pinterest 已断开",
   "blocker.generation_failures.label": "生成失败",
@@ -235,6 +267,19 @@ const zh: Record<keyof typeof en, string> = {
 
   "blocker.evidence.publishFailure": "{count} 次发布失败",
   "blocker.evidence.publishFailureWithCode": "{count} 次发布失败 · 错误码 {code}",
+  "blocker.evidence.generationFailuresWithType": "{count} 次生成失败 · 最近：{typeLabel}",
+
+  "genError.rate_limited": "触发频率限制",
+  "genError.safety_blocked": "被安全策略拦截",
+  "genError.image_load_failed": "图片加载失败",
+  "genError.model_returned_text": "模型返回了文本而非图片",
+  "genError.api_auth_error": "服务商鉴权失败",
+  "genError.api_payload_error": "请求参数不合法",
+  "genError.api_server_error": "服务商服务端错误",
+  "genError.provider_busy": "服务商繁忙",
+  "genError.user_generation_limit": "已达用户生成上限",
+  "genError.configuration_error": "配置错误",
+  "genError.unknown_error": "未知错误",
   "blocker.evidence.pinterestDisconnected.disconnected": "账号已断开连接",
   "blocker.evidence.pinterestDisconnected.needsReconnect": "需要重新连接",
   "blocker.evidence.generationFailures": "近24小时内 {count} 次生成失败",
@@ -246,6 +291,13 @@ const zh: Record<keyof typeof en, string> = {
   "funnel.stage.firstGeneration": "首次生成",
   "funnel.stage.firstPublish": "首次发布",
   "funnel.stage.repeatPublish": "重复发布",
+
+  "today.accounts.excluded": "已排除 {test} 个测试账号、{internal} 个内部账号",
+  "today.accounts.showAll": "显示全部",
+  "today.accounts.includingAll": "正在显示测试与内部账号",
+  "today.accounts.customersOnly": "只看真实客户",
+  "today.accountKind.test": "测试",
+  "today.accountKind.internal": "内部",
 
   // ── Customer 360 additions ───────────────────────────────────────────────
   "c360.alerts.title": "未解决阻塞",

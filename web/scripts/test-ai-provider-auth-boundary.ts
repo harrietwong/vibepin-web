@@ -91,7 +91,12 @@ const originalLoad = (Module as any)._load;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
   if (request.includes("server/authUser")) {
-    return { getUserIdFromBearerOrCookies: fakeGetUserIdFromBearerOrCookies };
+    return {
+      getUserIdFromBearerOrCookies: fakeGetUserIdFromBearerOrCookies,
+      // Cost attribution on analyze/quality-judge is best-effort and uses the
+      // same origin-session helper. Keep that seam aligned with the route API.
+      getUserIdFromSameOriginSession: fakeGetUserIdFromBearerOrCookies,
+    };
   }
   if (request.includes("ai-copy/visionServer")) {
     // Wrap the REAL module so pure helpers (CopyError, normalizeCopyLength,

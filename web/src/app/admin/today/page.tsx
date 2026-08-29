@@ -14,27 +14,38 @@ import {
 } from "lucide-react";
 import { getCurrentSuperAdmin } from "@/lib/server/superAdmin";
 import { getActionCenter, type BlockerItem, type BlockerType } from "@/lib/server/adminActionCenter";
+import type { AccountKind } from "@/lib/server/adminAccountKind";
 import { getActivationFunnel, type StageCount } from "@/lib/server/adminActivationFunnel";
 import { getAiAdoption } from "@/lib/server/adminAiAdoption";
-import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY } from "@/lib/admin/adminConsoleKeys";
+import { BLOCKER_LABEL_KEY, BLOCKER_ACTION_KEY, FUNNEL_STAGE_KEY, ACCOUNT_KIND_KEY } from "@/lib/admin/adminConsoleKeys";
 import { AdminT, AdminTFmt } from "../AdminT";
+import { BlockerReason } from "../_components/BlockerReason";
 import type { AdminMessageKey } from "@/lib/admin/adminMessages";
 
 export const dynamic = "force-dynamic";
 
 // ── formatters ───────────────────────────────────────────────────────────────
 
-function fmtRelative(iso: string | null): string {
-  if (!iso) return "—";
+// Returns a catalog key + interpolation vars so the value renders in the admin
+// language via <AdminTFmt>, or null for an un-parseable/absent instant (caller
+// renders the em-dash placeholder). Never emits hardcoded English.
+function relativeParts(iso: string | null): { key: AdminMessageKey; vars: Record<string, number> } | null {
+  if (!iso) return null;
   const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "—";
+  if (!Number.isFinite(t)) return null;
   const diff = Date.now() - t;
   const mins = Math.round(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return { key: "time.relative.justNow", vars: {} };
+  if (mins < 60) return { key: "time.relative.minutesAgo", vars: { n: mins } };
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  if (hrs < 24) return { key: "time.relative.hoursAgo", vars: { n: hrs } };
+  return { key: "time.relative.daysAgo", vars: { n: Math.round(hrs / 24) } };
+}
+
+function Relative({ iso }: { iso: string | null }) {
+  const parts = relativeParts(iso);
+  if (!parts) return <>—</>;
+  return <AdminTFmt k={parts.key} vars={parts.vars} />;
 }
 
 function fmtNum(v: number | null | undefined): string {
@@ -83,6 +94,27 @@ function InferredChip() {
   );
 }
 
+/**
+ * Small marker next to an email when the row is NOT a real customer. Rendered
+ * only in the include-everything view (customers carry no chip at all), so the
+ * operator can always tell which rows are noise.
+ */
+function AccountKindChip({ kind }: { kind: AccountKind }) {
+  const key = ACCOUNT_KIND_KEY[kind];
+  if (!key) return null;
+  const tone = kind === "internal"
+    ? { bg: "rgba(99,102,241,0.12)", fg: "#4338CA" }
+    : { bg: "rgba(245,158,11,0.14)", fg: "#B45309" };
+  return (
+    <span
+      className="ml-1.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-black uppercase align-middle"
+      style={{ background: tone.bg, color: tone.fg }}
+    >
+      <AdminT k={key} />
+    </span>
+  );
+}
+
 // ── Action Center ──────────────────────────────────────────────────────────
 
 function BlockerBadge({ type }: { type: BlockerType }) {
@@ -94,28 +126,6 @@ function BlockerBadge({ type }: { type: BlockerType }) {
       <AdminT k={BLOCKER_LABEL_KEY[type]} />
     </span>
   );
-}
-
-function BlockerReason({ item }: { item: BlockerItem }) {
-  const e = item.evidence;
-  switch (item.blockerType) {
-    case "publish_failure":
-      return e.publishErrorCode ? (
-        <AdminTFmt k="blocker.evidence.publishFailureWithCode" vars={{ count: e.failedPublishCount ?? 1, code: e.publishErrorCode }} />
-      ) : (
-        <AdminTFmt k="blocker.evidence.publishFailure" vars={{ count: e.failedPublishCount ?? 1 }} />
-      );
-    case "pinterest_disconnected":
-      return <AdminT k={e.disconnectReason === "disconnected" ? "blocker.evidence.pinterestDisconnected.disconnected" : "blocker.evidence.pinterestDisconnected.needsReconnect"} />;
-    case "generation_failures":
-      return <AdminTFmt k="blocker.evidence.generationFailures" vars={{ count: e.failedGenerationCount ?? 0 }} />;
-    case "signup_not_connected":
-      return <AdminTFmt k="blocker.evidence.signupNotConnected" vars={{ hours: e.ageHours ?? 0 }} />;
-    case "connected_not_creating":
-      return <AdminTFmt k="blocker.evidence.connectedNotCreating" vars={{ hours: e.ageHours ?? 0 }} />;
-    default:
-      return null;
-  }
 }
 
 function ActionCenterCard({ items, available, windowHours }: { items: BlockerItem[]; available: boolean; windowHours: number }) {
@@ -147,6 +157,7 @@ function ActionCenterCard({ items, available, windowHours }: { items: BlockerIte
                       <Link href={`/admin/users/${item.userId}`} className="font-semibold text-indigo-700 hover:underline">
                         {item.email ?? item.userId}
                       </Link>
+                      <AccountKindChip kind={item.accountKind} />
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -154,7 +165,7 @@ function ActionCenterCard({ items, available, windowHours }: { items: BlockerIte
                         {item.dataQuality === "inferred" && <InferredChip />}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-gray-600">{fmtRelative(item.firstSeenAt)}</td>
+                    <td className="px-3 py-2.5 text-gray-600"><Relative iso={item.firstSeenAt} /></td>
                     <td className="px-3 py-2.5 text-gray-700"><BlockerReason item={item} /></td>
                     <td className="px-4 py-2.5 text-gray-500"><AdminT k={BLOCKER_ACTION_KEY[item.blockerType]} /></td>
                   </tr>
@@ -191,9 +202,13 @@ function FunnelBar({ stage, cohortSize, split }: { stage: StageCount; cohortSize
       <div className="h-2.5 w-full overflow-hidden rounded-full" style={{ background: "var(--admin-surface-2, #F1F5F9)" }}>
         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "linear-gradient(90deg,#6366F1,#4338CA)" }} />
       </div>
-      {split && (split.exact > 0 || split.inferred > 0) && (
+      {split && (
         <p className="mt-1 text-[10.5px] text-gray-400">
-          <AdminTFmt k="today.funnel.splitNote" vars={{ exact: split.exact, inferred: split.inferred }} />
+          {split.exact === 0 && split.inferred === 0 ? (
+            <AdminT k="today.funnel.splitNote.empty" />
+          ) : (
+            <AdminTFmt k="today.funnel.splitNote" vars={{ exact: split.exact, inferred: split.inferred }} />
+          )}
         </p>
       )}
     </div>
@@ -210,14 +225,52 @@ function TrendArrow({ direction }: { direction: -1 | 0 | 1 }) {
 
 // ── page ────────────────────────────────────────────────────────────────────
 
-export default async function AdminTodayPage() {
+/**
+ * Banner explaining WHICH population the page is currently reporting on, with
+ * the one-click toggle to the other view. Always rendered — an operator must
+ * never have to guess whether the numbers above include the founders' own
+ * accounts. Counts come from the action center (the whole-user-table pass);
+ * the funnel and adoption report their own, cohort/row-scoped tallies, and
+ * summing the three would double-count the same people.
+ */
+function AccountScopeNote({ includeNonCustomers, excluded }: { includeNonCustomers: boolean; excluded: { test: number; internal: number } }) {
+  return (
+    <p className="mt-2 text-[12px]" style={{ color: "var(--admin-text-muted, #9CA3AF)" }}>
+      {includeNonCustomers ? (
+        <>
+          <AdminT k="today.accounts.includingAll" />
+          {" · "}
+          <Link href="/admin/today" className="font-semibold text-indigo-700 hover:underline">
+            <AdminT k="today.accounts.customersOnly" />
+          </Link>
+        </>
+      ) : (
+        <>
+          <AdminTFmt k="today.accounts.excluded" vars={{ test: excluded.test, internal: excluded.internal }} />
+          {" · "}
+          <Link href="/admin/today?accounts=all" className="font-semibold text-indigo-700 hover:underline">
+            <AdminT k="today.accounts.showAll" />
+          </Link>
+        </>
+      )}
+    </p>
+  );
+}
+
+export default async function AdminTodayPage({ searchParams }: { searchParams: Promise<{ accounts?: string }> }) {
   const admin = await getCurrentSuperAdmin();
   if (!admin) redirect("/app?admin=forbidden");
 
+  // `?accounts=all` opts into the unfiltered view; anything else (including the
+  // absent param) means the default: real customers only.
+  const { accounts } = await searchParams;
+  const includeNonCustomers = accounts === "all";
+  const options = { includeNonCustomers };
+
   const [actionCenter, funnel, adoption] = await Promise.all([
-    getActionCenter(),
-    getActivationFunnel(),
-    getAiAdoption(),
+    getActionCenter(undefined, options),
+    getActivationFunnel(undefined, options),
+    getAiAdoption(undefined, options),
   ]);
 
   const allWarnings = [...actionCenter.warnings, ...funnel.warnings, ...adoption.warnings];
@@ -236,6 +289,7 @@ export default async function AdminTodayPage() {
           </div>
           <h1 className="text-[25px] font-black tracking-tight text-gray-950"><AdminT k="today.title" /></h1>
           <p className="mt-1 text-[13px] text-gray-500"><AdminT k="today.subtitle" /></p>
+          <AccountScopeNote includeNonCustomers={includeNonCustomers} excluded={actionCenter.excluded} />
         </div>
 
         {allWarnings.length > 0 && (
