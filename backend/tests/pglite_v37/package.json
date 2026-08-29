@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node verify-v63.mjs"
+    "test": "node verify-v63.mjs",
+    "test:integrated-rollbacks": "node verify-integrated-rollbacks.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8"
