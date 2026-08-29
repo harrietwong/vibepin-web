@@ -1968,6 +1968,12 @@ export function SocialAccountsPanel() {
         // Say so and keep the row: retrying is the entire remedy, and a generic
         // failure would leave the merchant wondering whether it half-happened.
         toast.error(err.message || tr("socialPanel.toast.scheduleCheckFailed"));
+      } else if (err.code === "remove_unavailable") {
+        // The server's atomic remove guard (the SQL function that checks the
+        // schedules and deletes in one statement) is not reachable, so it refused
+        // to delete rather than fall back to a delete that could strand schedules.
+        // Same shape of message as the check failure: nothing changed, retry.
+        toast.error(err.message || tr("socialPanel.toast.removeUnavailable"));
       } else {
         // Everything else, including the removal refused because the schedules the
         // merchant asked to cancel could not all be cancelled (409

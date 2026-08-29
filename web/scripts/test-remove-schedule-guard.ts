@@ -13,6 +13,11 @@
  *  3. 有排程又没说怎么处理 → 409 schedules_exist + 服务端计数,什么都不删。
  *  4. 撤销凭据必须排在取消成功之后。取消失败时行必须完好无损(令牌还在),
  *     否则"保住的"账号发不了它保住的那些排程。
+ *  5. 删除这一步必须走 RPC remove_social_connection_if_unscheduled(v67):
+ *     预查和删除是两次往返,中间另一个标签页排的内容会活下来指向一行已经不存在
+ *     的账号。RPC 把"查"和"删"合成一条语句,是唯一的权威。RPC 说 deleted=false
+ *     且还有排程 → 409,一行都不删;RPC 根本不在(迁移没跑)→ 503 且**不得**
+ *     退回普通 delete —— 那个退路本身就是这个缺陷。
  *
  * Run: npx tsx scripts/test-remove-schedule-guard.ts
  */
@@ -44,13 +49,29 @@ let countOutcome: { count: number; readFailed: boolean } = { count: 0, readFaile
 let cancelOutcome = { cleared: 0, failed: 0, readFailed: false };
 let pinCountOutcome: { count: number; readFailed: boolean } = { count: 0, readFailed: false };
 let pinCancelOutcome = { cleared: 0, failed: 0, readFailed: false };
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// RPC 的下一次返回值。默认:删成功。
+let rpcResult: { data: any; error: any } = { data: [{ deleted: true, scheduled_count: 0 }], error: null };
+let rpcArgs: Array<Record<string, unknown>> = [];
+/* eslint-enable @typescript-eslint/no-explicit-any */
+const RPC = "rpc:remove_social_connection_if_unscheduled";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const originalLoad = (Module as any)._load;
 (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
   // 假 supabase:这些用例一行真实数据库都不碰。
   if (/[\\/]lib[\\/]supabase(\.ts)?$/.test(request) || request === "@/lib/supabase") {
-    return { createServerClient: () => ({ from: () => ({}) }) };
+    return {
+      createServerClient: () => ({
+        from: () => ({}),
+        // 删除这一步现在是一次 RPC。参数也断言:错传 uid/连接 id 会删掉别人的行。
+        rpc: async (fn: string, args: Record<string, unknown>) => {
+          log.push(`rpc:${fn}`);
+          rpcArgs.push(args);
+          return rpcResult;
+        },
+      }),
+    };
   }
   // 鉴权:恒定同一个用户。
   if (/[\\/]server[\\/]authUser(\.ts)?$/.test(request) || request === "@/lib/server/authUser") {
@@ -85,13 +106,15 @@ const originalLoad = (Module as any)._load;
         id: CONN, provider: "facebook", authProvider: "official",
         externalConnectionId: null,
       }),
-      deleteConnection: async () => { log.push("delete"); },
+      // 仍然打桩并记日志:路由不该再调它了,一旦调用日志里会立刻冒出 plainDelete。
+      deleteConnection: async () => { log.push("plainDelete"); },
     };
   }
   if (/[\\/]server[\\/]pinterest[\\/]connectionStore(\.ts)?$/.test(request)
     || request === "@/lib/server/pinterest/connectionStore") {
     return {
-      deleteConnection: async () => { log.push("delete"); },
+      deleteConnection: async () => { log.push("plainDelete"); },
+      forgetConnection: () => { log.push("forgetCache"); },
       disconnect: async () => { log.push("softDisconnect"); },
     };
   }
@@ -136,8 +159,11 @@ await test("客户端没要求取消时,服务端仍然自己查了一遍 ——
   // 关键:即使 cancelScheduled 没传,countStrict 也必须出现在日志里。
   // 旧代码在这条路径上什么都不查,直接删。
   assert.ok(log.includes("countStrict"), "remove 必须无条件查一次排程");
-  assert.deepEqual(log, ["countStrict", "revoke", "delete"],
-    "查 → 撤销 → 删除;查在最前面");
+  assert.deepEqual(log, ["countStrict", "revoke", RPC],
+    "查 → 撤销 → 原子删除;查在最前面,删除走 RPC 而不是普通 delete");
+  assert.ok(!log.includes("plainDelete"), "不得再走不带排程检查的普通 delete");
+  assert.deepEqual(rpcArgs.at(-1), { p_user_id: UID, p_connection_id: CONN },
+    "RPC 必须同时带 uid 和连接 id —— 少一个就会删到别人的行");
 });
 
 await test("读排程失败 → 503 schedule_check_failed,一行都不删、也不撤销凭据", async () => {
@@ -173,8 +199,8 @@ await test("取消成功 → 取消在前、撤销其次、删除最后", async 
   assert.equal(res.status, 200);
   const body = await res.json() as { cancelledScheduled?: number };
   assert.equal(body.cancelledScheduled, 2);
-  assert.deepEqual(log, ["cancel", "revoke", "delete"],
-    "顺序就是契约:取消 → 撤销 → 删除");
+  assert.deepEqual(log, ["cancel", "revoke", RPC],
+    "顺序就是契约:取消 → 撤销 → 原子删除");
 });
 
 await test("取消失败 → 行完好无损:没撤销、没删除(否则保住的账号发不出保住的排程)", async () => {
@@ -238,7 +264,8 @@ await test("Pinterest:没有排程 → 查完就删", async () => {
     pinterestRequest(`mode=remove&connectionId=${CONN}`),
   );
   assert.equal(res.status, 200);
-  assert.deepEqual(log, ["countStrict", "delete"]);
+  assert.deepEqual(log, ["countStrict", RPC, "forgetCache"],
+    "查 → 原子删除 → 清缓存(行在 SQL 里没的,本模块的缓存必须手动告知)");
 });
 
 await test("Pinterest:带 cancelScheduled 时取消在删除之前,且取消失败就不删", async () => {
@@ -248,7 +275,7 @@ await test("Pinterest:带 cancelScheduled 时取消在删除之前,且取消失�
   );
   assert.equal(res.status, 200);
   // 这条路径不再单独预查:取消自己会读,并且会报 readFailed。
-  assert.deepEqual(log, ["cancel", "delete"], "取消 → 删除,且不重复预查");
+  assert.deepEqual(log, ["cancel", RPC, "forgetCache"], "取消 → 原子删除,且不重复预查");
 
   log = []; pinCancelOutcome = { cleared: 0, failed: 1, readFailed: false };
   res = await pinterestRoute.DELETE(

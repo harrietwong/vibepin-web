@@ -740,6 +740,7 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.accountRemoved": "帳號已移除",
   "socialPanel.toast.accountRemoveFailed": "無法移除該帳號，請重試。",
   "socialPanel.toast.scheduleCheckFailed": "無法確認該帳號還有哪些已排程的內容，因此沒有移除。請重試。",
+  "socialPanel.toast.removeUnavailable": "暫時無法安全移除該帳號，因此未做任何變更。請幾分鐘後重試。",
   "socialPanel.toast.accountDisconnected": "帳號已中斷連接",
   "socialPanel.toast.accountDisconnectFailed": "無法中斷該帳號的連接，請重試。",
   "socialPanel.toast.pinterestDisconnected": "Pinterest 已中斷連接",

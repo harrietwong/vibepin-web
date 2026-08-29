@@ -52,7 +52,11 @@
  */
 
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
-import { deleteConnection, disconnect } from "@/lib/server/pinterest/connectionStore";
+import { disconnect, forgetConnection } from "@/lib/server/pinterest/connectionStore";
+import {
+  removeConnectionIfUnscheduled,
+  removeUnavailableMessage,
+} from "@/lib/server/social/removeConnectionIfUnscheduled";
 import {
   cancelScheduledForConnection,
   countScheduledForConnection,
@@ -190,8 +194,8 @@ export async function DELETE(req: Request) {
     //
     // This is also why the credentials are only invalidated AFTER a successful
     // cancel (Codex #2): a refused remove must leave the account able to publish the
-    // schedules it kept. `disconnect()` / `deleteConnection()` below are the first
-    // writes to the row, and both are past every refusal.
+    // schedules it kept. `disconnect()` / the remove RPC below are the first writes
+    // to the row, and both are past every refusal.
     let cancelOutcome: { cleared: number; failed: number; readFailed: boolean } | null = null;
     if (connectionId && cancelScheduled) {
       cancelOutcome = await cancelScheduledForConnection(
@@ -227,7 +231,39 @@ export async function DELETE(req: Request) {
           { status: 409 },
         );
       }
-      await deleteConnection(uid, connectionId);
+      // THE DELETE IS THE GUARD (Codex P0 #1). The strict pre-count above is UX; it
+      // is a separate round trip, so a Pin scheduled in another tab between the two
+      // used to survive the delete and go on naming a connection that no longer
+      // exists. This RPC counts and deletes in ONE statement and is the authority.
+      const removal = await removeConnectionIfUnscheduled(createServerClient(), uid, connectionId);
+      if (removal.outcome === "unavailable") {
+        // Fail CLOSED — never fall back to the plain delete, which IS the race.
+        const userMessage = removeUnavailableMessage();
+        console.error(`[pinterest/disconnect] remove guard unavailable (${removal.reason}) — account kept`);
+        return Response.json(
+          { ok: false, code: "remove_unavailable", userMessage, error: userMessage },
+          { status: 503 },
+        );
+      }
+      if (removal.outcome === "blocked") {
+        // A schedule landed after the pre-count (or after the cancel). Same answer
+        // as the pre-count's refusal, on the server's number; nothing was deleted.
+        const userMessage = schedulesExistMessage(removal.scheduledCount);
+        return Response.json(
+          {
+            ok: false,
+            code: "schedules_exist",
+            scheduledCount: removal.scheduledCount,
+            userMessage,
+            error: userMessage,
+          },
+          { status: 409 },
+        );
+      }
+      // The row is gone (or was already gone — this endpoint is idempotent). The
+      // delete happened in SQL, so this module's row cache has to be told by hand,
+      // or a read inside the 120s TTL keeps serving a removed account.
+      forgetConnection(uid, connectionId);
       return Response.json({ ok: true, removed: true, disconnected: true, cancelledScheduled });
     }
     await disconnect(uid, connectionId);
