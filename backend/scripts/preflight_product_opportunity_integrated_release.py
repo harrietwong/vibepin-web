@@ -31,6 +31,8 @@ CURRENT_HANDOFF_PATH = (
 SUPERSEDED_HANDOFF_PATH = (
     "backend/docs/product_opportunities_v37_pre_stage_handoff_20260829T075822Z.md"
 )
+SELF_PATH = "backend/scripts/preflight_product_opportunity_integrated_release.py"
+SELF_TEST_PATH = "backend/tests/test_product_opportunity_integrated_preflight.py"
 EXPECTED_MIGRATIONS = [
     {
         "forward": "backend/db/migrate_v63_product_opportunities_v1.sql",
@@ -256,7 +258,13 @@ def audit_release(
             if head_blob != blob:
                 errors.append(f"artifact differs at expected HEAD: {path}")
 
-    for required_path in (RUNBOOK_PATH, CURRENT_HANDOFF_PATH, SUPERSEDED_HANDOFF_PATH):
+    for required_path in (
+        RUNBOOK_PATH,
+        CURRENT_HANDOFF_PATH,
+        SUPERSEDED_HANDOFF_PATH,
+        SELF_PATH,
+        SELF_TEST_PATH,
+    ):
         if required_path not in artifact_paths:
             errors.append(f"operational artifact is not manifest-bound: {required_path}")
 

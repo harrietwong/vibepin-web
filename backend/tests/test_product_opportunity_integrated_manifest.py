@@ -48,7 +48,7 @@ def test_integrated_manifest_is_preview_only_and_complete() -> None:
 
     artifacts = manifest["artifacts"]
     assert isinstance(artifacts, list)
-    assert manifest["artifactCount"] == len(artifacts) == 39
+    assert manifest["artifactCount"] == len(artifacts) == 41
     paths = [str(row["path"]) for row in artifacts]
     assert len(paths) == len(set(paths))
 

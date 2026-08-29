@@ -41,7 +41,7 @@ def test_integrated_preflight_audits_real_candidate_without_external_access() ->
         "expectedBranch": "codex/product-v37-central-integrate-0829",
         "runtimeCandidateCommit": preflight.EXPECTED_RUNTIME,
         "manifestSha256": _manifest_sha256(),
-        "artifactCount": 39,
+        "artifactCount": 41,
         "readyForPreviewHandoff": True,
         "readyForProduction": False,
         "errors": [],
@@ -106,3 +106,26 @@ def test_integrated_preflight_rejects_unsafe_artifact_paths() -> None:
     assert preflight._safe_relative_path("backend/file.py") == "backend/file.py"
     for unsafe in ("", "../secret", "/absolute", "backend\\file.py", None, 1):
         assert preflight._safe_relative_path(unsafe) is None
+
+
+def test_integrated_preflight_and_test_are_required_manifest_artifacts() -> None:
+    assert preflight.SELF_PATH == (
+        "backend/scripts/preflight_product_opportunity_integrated_release.py"
+    )
+    assert preflight.SELF_TEST_PATH == (
+        "backend/tests/test_product_opportunity_integrated_preflight.py"
+    )
+    handoff = (
+        REPO_ROOT
+        / "backend/docs/product_opportunities_v37_integrated_pre_stage_handoff_20260829.md"
+    ).read_text(encoding="utf-8")
+    for token in (
+        preflight.SELF_PATH,
+        "--expected-head $head",
+        "--expected-branch codex/product-v37-central-integrate-0829",
+        "--expected-manifest-sha256 $manifestSha",
+        "mutation=false",
+        "networkAccess=false",
+        "readyForProduction=false",
+    ):
+        assert token in handoff

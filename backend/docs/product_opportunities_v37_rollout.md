@@ -37,6 +37,11 @@ Web core/studio/plan `203/203`; Product contracts `7/7`; moderation gate
 `106/106`; registry `210 tracked / 203 run / 7 justified exclusions`; TypeScript
 exit 0; i18n `2860` English keys across `18` locale catalogs; production build
 `71/71`; integrated manifest/automation contract and PGlite rollback gates PASS.
+Before any external command, run
+`backend/scripts/preflight_product_opportunity_integrated_release.py` with the
+exact frozen HEAD, branch and current integrated-manifest SHA-256. It is an
+offline read-only gate and must return `PASS_READY_FOR_PREVIEW_HANDOFF`; its
+success is not production evidence.
 
 The current release line closes four deployment-review findings without changing
 Product eligibility or volume. Metric rows convert every timezone-aware anchor timestamp

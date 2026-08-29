@@ -27,6 +27,24 @@ docs/test-only branch tip. Immediately before handoff, freeze the final branch
 tip, run the integrated manifest test from a clean checkout and recompute the
 manifest file SHA-256 for the deployment receipt.
 
+From the repository root, the mandatory zero-network/zero-write handoff preflight
+is:
+
+```powershell
+$head = (git rev-parse HEAD).Trim()
+$manifest = "backend/docs/product_opportunities_v37_integrated_release_manifest_60a540f1.json"
+$manifestSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash.ToLower()
+py backend/scripts/preflight_product_opportunity_integrated_release.py `
+  --repo-root . `
+  --expected-head $head `
+  --expected-branch codex/product-v37-central-integrate-0829 `
+  --expected-manifest-sha256 $manifestSha
+```
+
+Require exit 0 and `PASS_READY_FOR_PREVIEW_HANDOFF`. The receipt must also say
+`mutation=false`, `networkAccess=false`, `readyForProduction=false`, and contain
+zero errors. This preflight does not make Preview or production ready by itself.
+
 ## Migration order and rollback identity
 
 Forward order is exact:
@@ -56,8 +74,9 @@ Evidence/history; it does not drop the schema.
 
 ## Ordered execution gates
 
-1. Re-resolve the final central branch tip and prove it descends from the runtime
-   candidate and all four frozen source lines. Re-run manifest/hash/ancestry,
+1. Re-resolve the final central branch tip and run the mandatory offline preflight.
+   It must prove the clean checkout descends from the runtime candidate and all
+   four frozen source lines. Re-run manifest/hash/ancestry,
    full backend, registered Web tests, TypeScript, i18n and production build.
 2. Record the current legacy Supply timer/service state. Require the service
    inactive, both Product writer locks free and the next trigger at least 30

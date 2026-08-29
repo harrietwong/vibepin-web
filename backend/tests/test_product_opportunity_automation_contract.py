@@ -251,7 +251,9 @@ def test_current_integrated_release_pointer_and_nested_product_manifest_are_exac
     assert integrated_manifest["runtimeCandidateCommit"] == (
         "60a540f1f3ead08e112d378f3df778000c189abb"
     )
-    assert integrated_manifest["artifactCount"] == 39
+    assert integrated_manifest["artifactCount"] == 41
+    assert "preflight_product_opportunity_integrated_release.py" in RUNBOOK
+    assert "PASS_READY_FOR_PREVIEW_HANDOFF" in RUNBOOK
     assert set(integrated_manifest["externalGates"].values()) == {False}
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))

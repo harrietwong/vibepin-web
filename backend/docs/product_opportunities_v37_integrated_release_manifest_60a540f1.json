@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAtUtc": "2026-08-29T12:06:40.0927897Z",
+  "generatedAtUtc": "2026-08-29T12:13:49.2799636Z",
   "candidateBranch": "codex/product-v37-central-integrate-0829",
   "productionAnchor": "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
   "sourceCommits": {
@@ -15,8 +15,8 @@
   "rollbackCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeCandidateCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeTree": "94b5994fdcd46077b0b52092238863c0896e37ea",
-  "evidenceCommit": "efd9e31a54c9a9cd37a81e3b45ca93445eb32513",
-  "artifactCount": 39,
+  "evidenceCommit": "34d0431ee69c6c6795c8f804b0909bd72679fe93",
+  "artifactCount": 41,
   "artifacts": [
     {
       "path": "backend/docs/product_opportunities_v37_completion_matrix_20260829.md",
@@ -173,6 +173,13 @@
       "bytes": 35297
     },
     {
+      "path": "backend/scripts/preflight_product_opportunity_integrated_release.py",
+      "commit": "34d0431ee69c6c6795c8f804b0909bd72679fe93",
+      "gitBlobSha1": "c79415acb28ad8a7c414e123d5180788b8d26f51",
+      "sha256": "8ec778b7d765bc3174c128a0634c825be5fec4349b09baca88c90d871c1c2549",
+      "bytes": 13936
+    },
+    {
       "path": "backend/tests/test_product_opportunity_automation_contract.py",
       "commit": "efd9e31a54c9a9cd37a81e3b45ca93445eb32513",
       "gitBlobSha1": "7032136959406706679ef8e4a38d985030281a0c",
@@ -185,6 +192,13 @@
       "gitBlobSha1": "53e4a6e6ce340e5a4ac67a5a94d0a153344d0959",
       "sha256": "16f7aa9e11c31d38fb75857d5ae6f71842c3923c1c75c1cfcc1598e9ba6f39d3",
       "bytes": 1783
+    },
+    {
+      "path": "backend/tests/test_product_opportunity_integrated_preflight.py",
+      "commit": "34d0431ee69c6c6795c8f804b0909bd72679fe93",
+      "gitBlobSha1": "9d25d5ec70ccfb777fd95522982fef4d8e2e9f2a",
+      "sha256": "d2d6c753bc887d25e85de2924c624989e1aa96159a0d6ba31953d17714d23b9f",
+      "bytes": 3840
     },
     {
       "path": "backend/tests/pglite_v37/package.json",
