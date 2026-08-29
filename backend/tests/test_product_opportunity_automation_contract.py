@@ -21,7 +21,7 @@ COMPLETION_AUDIT = (
     ROOT / "docs" / "product_opportunities_v37_completion_audit_2026-08-26.md"
 ).read_text(encoding="utf-8")
 COMPLETION_MATRIX = (
-    ROOT / "docs" / "product_opportunities_v37_completion_matrix_20260828.md"
+    ROOT / "docs" / "product_opportunities_v37_completion_matrix_20260829.md"
 ).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
     ROOT / "docs" / "product_opportunities_v37_release_manifest_d2c13dd.json"
@@ -179,7 +179,8 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert RUNBOOK.count(f"--candidate-sha {functional}") == 2
     assert f"--candidate-sha {prior_functional}" not in RUNBOOK
     assert prior_functional in COMPLETION_AUDIT
-    assert prior_functional in COMPLETION_MATRIX
+    assert functional in COMPLETION_MATRIX
+    assert "e13419ff59dc3b4cb90a0b0b24b0d227d9d82ddb" in COMPLETION_MATRIX
     assert manifest_name in RUNBOOK
     assert "generationModeration.ts" in RUNBOOK
     assert "1054 tests" in RUNBOOK
@@ -188,7 +189,9 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert "generated 70/70" in RUNBOOK
     assert "Implementation PASS / Production NOT LIVE" in COMPLETION_MATRIX
     assert "Production P0 BLOCK" in COMPLETION_MATRIX
-    assert "plan affects which products are accessible, not their facts" in COMPLETION_MATRIX
+    assert "INTEGRATED DEPLOY CANDIDATE: NOT BUILT" in COMPLETION_MATRIX
+    assert "Integrated deploy candidate BLOCK" in COMPLETION_MATRIX
+    assert "FULL PRD P0 OBJECTIVE: NOT COMPLETE" in COMPLETION_MATRIX
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["candidateCommit"] == functional
