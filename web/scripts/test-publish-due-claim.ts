@@ -549,6 +549,11 @@ test("payloadAfterSuccess: the Pinterest-only path archives the superseded Pin t
 // are killed before persisting is re-published 10 minutes later (a real double post).
 const routeSrc = readFileSync("src/app/api/cron/publish-due/route.ts", "utf8");
 const persistSrc = readFileSync("src/app/api/cron/publish-due/persistRow.ts", "utf8");
+// The compare-and-set loop itself moved to a shared module so the two
+// schedule-cancel writers could use the same one instead of each growing a
+// near-copy. The assertions below follow it there: the invariants are unchanged,
+// only their address is.
+const casSrc = readFileSync("src/lib/server/db/casUpdate.ts", "utf8");
 
 test("CLAIM_BUDGET_MS leaves headroom under maxDuration", () => {
   const declared = /export const maxDuration = (\d+)/.exec(routeSrc);
@@ -605,7 +610,7 @@ test("no persist carries a clock captured before the publish", () => {
     "a clock captured at claim time is stale by the time the persist runs");
   assert.ok(!/payloadAfter(Outcomes|Failure)\(/.test(routeSrc),
     "the route must not build a payload itself — persistRow re-reads the row first");
-  assert.match(persistSrc, /const nowIso = new Date\(\)\.toISOString\(\);/,
+  assert.match(casSrc, /const nowIso = new Date\(\)\.toISOString\(\);/,
     "the timestamp must be taken between the re-read and the write");
 });
 
@@ -614,10 +619,14 @@ test("every persist merges onto the RE-READ payload, never the claimed snapshot"
   // does not merge the results into the merchant's draft, it REPLACES their draft.
   const at = persistSrc.indexOf("async function readMergeWrite(");
   assert.ok(at > 0, "there must be one read-merge-write path, not one per call site");
-  const body = persistSrc.slice(at, persistSrc.indexOf("export async function mergeOutcomesIntoRow("));
-  assert.match(body, /const \{ snapshot, error \} = await io\.read\(row\);/,
+  // The path is still single, and it is still the only way a persist writes —
+  // it now delegates the loop to the shared CAS module rather than owning it.
+  assert.match(persistSrc.slice(at), /casReadMergeWrite</,
+    "readMergeWrite must go through the shared compare-and-set loop");
+  const body = casSrc.slice(casSrc.indexOf("export async function casReadMergeWrite"));
+  assert.match(body, /const \{ snapshot, error \} = await io\.read\(ref\);/,
     "it must re-read the row");
-  assert.ok(body.indexOf("io.read(row)") < body.indexOf("io.update(row"),
+  assert.ok(body.indexOf("io.read(ref)") < body.indexOf("io.update(ref"),
     "the read must precede the write");
   assert.match(body, /if \(!snapshot\) return \{ error: null, gone: true \};/,
     "a row deleted during the publish must not be re-created from this run's copy");
@@ -632,7 +641,10 @@ test("every persist merges onto the RE-READ payload, never the claimed snapshot"
 });
 
 test("the schedule clears only when it is still the one this run claimed", () => {
-  assert.match(persistSrc, /const scheduleUnchanged = \(snapshot\.scheduled_at \?\? null\) === \(row\.scheduled_at \?\? null\);/,
+  // Compared against the schedule this RUN claimed — the question is always "is
+  // this still the slot we published for?". It is now the argument readMergeWrite
+  // hands the shared loop's build, rather than a local const.
+  assert.match(persistSrc, /\(snapshot\.scheduled_at \?\? null\) === \(row\.scheduled_at \?\? null\)/,
     "rescheduling during a publish must not be silently cancelled by that publish");
   assert.match(persistSrc, /const clearSchedule = !options\.deferred && scheduleUnchanged;/);
   assert.match(persistSrc, /\.\.\.\(clearSchedule \? \{ scheduled_at: null \} : \{\}\)/,
@@ -1461,8 +1473,7 @@ test("CAS: updated_at is passed through as the raw string the database returned"
 test("CAS: both writers go through the conditional path", () => {
   // The incremental writer and the final persist share readMergeWrite, so neither can
   // regress to an unconditional write without the other.
-  const merge = persistSrc.slice(persistSrc.indexOf("async function readMergeWrite("));
-  const body = merge.slice(0, merge.indexOf("export async function mergeOutcomesIntoRow("));
+  const body = casSrc.slice(casSrc.indexOf("export async function casReadMergeWrite"));
   assert.match(body, /for \(let attempt = 1; attempt <= CAS_ATTEMPTS; attempt\+\+\)/);
   assert.match(body, /if \(matched\) return \{ error: null \}/);
   assert.match(body, /CAS exhausted/, "exhaustion is loud");

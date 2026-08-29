@@ -21,6 +21,8 @@
  * time and will simply resolve to a surviving account after the removal.
  */
 
+import { casReadMergeWrite, type ObservedRow } from "@/lib/server/db/casUpdate";
+
 export const PIN_DRAFTS_TABLE = "pin_drafts";
 
 /**
@@ -76,6 +78,16 @@ export interface ScheduledDraftRow {
   draft_id: string;
   payload: Record<string, unknown>;
   publish_claimed_at?: string | null;
+  /** The slot the row was on when it was read — half of the compare-and-set. */
+  scheduled_at?: string | null;
+  /**
+   * The row's LWW stamp, exactly as the database returned it — the other half.
+   *
+   * It must go back into the filter as the SAME STRING: Postgres timestamptz keeps
+   * microseconds, and a value round-tripped through `new Date().toISOString()` is
+   * truncated to milliseconds, matching nothing, making every write a CAS miss.
+   */
+  updated_at?: string | null;
 }
 
 /**
@@ -221,11 +233,17 @@ export async function cancelScheduledForConnection(
   db: DbLike,
   uid: string,
   connectionId: string,
-  nowIso: string,
+  // Kept in the signature (the route passes it) but each row is stamped at ITS OWN
+  // write time instead: a stamp taken before the loop is already older than an edit
+  // made while the loop ran, and the client's LWW merge would push that edit back.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  nowIso?: string,
 ): Promise<CancelScheduledOutcome> {
   if (!str(connectionId)) return { cleared: 0, failed: 0, readFailed: false };
   const { data, error } = await scheduledForConnectionQuery(
-    db, uid, connectionId, "vibepin_user_id, draft_id, payload",
+    // scheduled_at/updated_at ride along so the first attempt already has an
+    // observed state to condition its write on, with no extra round trip.
+    db, uid, connectionId, "vibepin_user_id, draft_id, payload, scheduled_at, updated_at",
   );
   if (error) {
     if (isMissingSchemaError(error)) return { cleared: 0, failed: 0, readFailed: false };
@@ -237,22 +255,104 @@ export async function cancelScheduledForConnection(
   let cleared = 0;
   let failed = 0;
   for (const row of rows) {
-    const { error: updateError } = await db
-      .from(PIN_DRAFTS_TABLE)
-      .update({
-        payload: payloadAfterScheduleCancelled(row.payload ?? {}, nowIso),
-        scheduled_at: null,        // drop out of the cron's due scan
-        publish_claimed_at: null,  // release any stale lock so the row isn't half-held
-        updated_at: nowIso,        // keep the column in step with payload.updatedAt (LWW)
-      })
-      .eq("vibepin_user_id", uid)
-      .eq("draft_id", row.draft_id);
-    if (updateError) {
-      console.error("[pinterest/disconnect] schedule cancel failed:", updateError.message);
+    const result = await cancelOneRow(db, uid, connectionId, row);
+    if (result.error) {
+      console.error("[pinterest/disconnect] schedule cancel failed:", result.error);
       failed++;
       continue;
     }
+    // `gone` (deleted underneath us) and `skipped` (the row no longer targets this
+    // connection) are both no-op SUCCESS: the schedule being cancelled does not
+    // exist any more, which is what was asked for. Counting either as failed would
+    // block a remove that is now perfectly safe.
+    if (result.gone || result.skipped) continue;
     cleared++;
   }
   return { cleared, failed, readFailed: false };
+}
+
+/**
+ * Un-schedule ONE row, compare-and-set.
+ *
+ * The old write read the payload, edited a stale copy, and updated by user + draft
+ * id alone — so an edit or a reschedule made in between was overwritten wholesale,
+ * silently. Since this function's outcome decides whether the ACCOUNT may be
+ * deleted, that overwrite is how a merchant loses a schedule they just made and
+ * the account it published through, in one action.
+ *
+ * Re-read, recompute from the row as it is NOW, condition the write on what that
+ * recomputation saw. Three misses fail loudly and write nothing; the caller counts
+ * that as `failed`, and a failed cancel refuses the remove — the merchant retries
+ * and their account is still there.
+ */
+async function cancelOneRow(
+  db: DbLike,
+  uid: string,
+  connectionId: string,
+  row: ScheduledDraftRow,
+) {
+  type Patch = Record<string, unknown>;
+  let usedInitialSnapshot = false;
+  return casReadMergeWrite<ScheduledDraftRow, ScheduledDraftRow, Patch>(
+    {
+      // The first attempt reuses the snapshot the candidate scan already read; every
+      // later attempt is a genuine re-read, which is what makes the merge land on
+      // the row as it now is.
+      read: async ref => {
+        if (!usedInitialSnapshot) {
+          usedInitialSnapshot = true;
+          return { snapshot: ref, error: null };
+        }
+        const { data: fresh, error: readError } = await db
+          .from(PIN_DRAFTS_TABLE)
+          .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at")
+          .eq("vibepin_user_id", uid)
+          .eq("draft_id", ref.draft_id)
+          .maybeSingle();
+        if (readError) {
+          if (isMissingSchemaError(readError)) return { snapshot: null, error: null };
+          return { snapshot: null, error: readError.message };
+        }
+        return { snapshot: (fresh ?? null) as ScheduledDraftRow | null, error: null };
+      },
+      update: async (ref, values, observed) => {
+        let q = db
+          .from(PIN_DRAFTS_TABLE)
+          .update(values)
+          .eq("vibepin_user_id", uid)
+          .eq("draft_id", ref.draft_id);
+        // `.eq` never matches NULL in SQL — an unscheduled row needs `.is`.
+        q = observed.scheduled_at === null
+          ? q.is("scheduled_at", null)
+          : q.eq("scheduled_at", observed.scheduled_at);
+        q = observed.updated_at === null
+          ? q.is("updated_at", null)
+          : q.eq("updated_at", observed.updated_at);
+        // `.select` is what makes PostgREST report the affected rows; without it a
+        // no-match is indistinguishable from a successful write.
+        const { data: touched, error: writeError } = await q.select("draft_id");
+        if (writeError) return { error: writeError.message, matched: false };
+        return { error: null, matched: Array.isArray(touched) && touched.length > 0 };
+      },
+    },
+    row,
+    (snapshot): ObservedRow => ({
+      scheduled_at: snapshot.scheduled_at ?? null,
+      updated_at: snapshot.updated_at ?? null,
+    }),
+    (snapshot, writeIso) => {
+      // Recomputed from the CURRENT payload every attempt, and re-checked against
+      // the target: if the row was re-pointed at another account while we worked,
+      // un-scheduling it would cancel a Pin that is not ours to cancel.
+      if (!payloadTargetsConnection(snapshot.payload, connectionId)) return null;
+      return {
+        payload: payloadAfterScheduleCancelled(snapshot.payload ?? {}, writeIso),
+        scheduled_at: null,        // drop out of the cron's due scan
+        publish_claimed_at: null,  // release any stale lock so the row isn't half-held
+        updated_at: writeIso,      // keep the column in step with payload.updatedAt (LWW)
+      };
+    },
+    "pinterest/disconnect",
+    ref => `draft_id=${ref.draft_id} user=${uid}`,
+  );
 }

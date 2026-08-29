@@ -28,6 +28,11 @@
  */
 
 import {
+  casReadMergeWrite,
+  CAS_ATTEMPTS,
+  type ObservedRow,
+} from "@/lib/server/db/casUpdate";
+import {
   applyDestinationResults,
   payloadAfterFailure,
   payloadAfterOutcomes,
@@ -58,11 +63,15 @@ export interface RowSnapshot {
   updated_at: string | null;
 }
 
-/** What the write was conditional ON — the row as the merge read it. */
-export interface ObservedRow {
-  scheduled_at: string | null;
-  updated_at: string | null;
-}
+/**
+ * What the write was conditional ON — the row as the merge read it.
+ *
+ * Re-exported rather than redefined: the CAS loop itself now lives in
+ * lib/server/db/casUpdate.ts, where the two schedule-cancel writers can use the
+ * same one instead of each growing their own near-copy.
+ */
+export type { ObservedRow };
+export { CAS_ATTEMPTS };
 
 export type ReadRow = (row: DueRowRef) => Promise<{ snapshot: RowSnapshot | null; error: string | null }>;
 /**
@@ -88,9 +97,6 @@ export interface WriteResult {
   gone?: boolean;
 }
 
-/** How many times a merge is redone when the row moves underneath it. */
-const CAS_ATTEMPTS = 3;
-
 /**
  * Read → merge → write, where the write applies only if the row is still what was read.
  *
@@ -101,46 +107,35 @@ const CAS_ATTEMPTS = 3;
  * `scheduled_at` on a slot it had never read. The merchant's new schedule vanished with
  * no error anywhere.
  *
- * PostgREST has no read-modify-write transaction, but it can make the UPDATE
- * conditional: filtering on the `scheduled_at` and `updated_at` that were observed makes
- * the write apply only while the row still looks that way. Zero affected rows means it
- * moved, and the answer is to re-read and re-merge onto the NEW row — never to write
- * anyway.
+ * The loop itself is `casReadMergeWrite`; this wrapper supplies the one thing that is
+ * specific to publishing — `scheduleUnchanged`, which is compared against the schedule
+ * this RUN claimed rather than against the previous attempt, because the question is
+ * always "is this still the slot we published for?".
  *
- * Bounded at `CAS_ATTEMPTS`, because a row being rewritten faster than this run can read
- * it is a live-lock, not a retry. Exhausted, it fails loudly and writes nothing: the
- * caller (persistOutcomes) logs the outcomes it could not store and deliberately keeps
- * the claim, which is strictly safer than overwriting a merchant's edit.
+ * Exhausted, it fails loudly and writes nothing: the caller (persistOutcomes) logs the
+ * outcomes it could not store and deliberately keeps the claim, which is strictly safer
+ * than overwriting a merchant's edit.
  */
 async function readMergeWrite(
   io: RowIo,
   row: DueRowRef,
   build: (snapshot: RowSnapshot, nowIso: string, scheduleUnchanged: boolean) => Record<string, unknown>,
 ): Promise<WriteResult> {
-  for (let attempt = 1; attempt <= CAS_ATTEMPTS; attempt++) {
-    const { snapshot, error } = await io.read(row);
-    if (error) return { error };
-    // Deleted mid-publish. Re-creating it from this run's snapshot would resurrect a
-    // Content the merchant threw away.
-    if (!snapshot) return { error: null, gone: true };
-    const nowIso = new Date().toISOString();
-    // Compared against the schedule this RUN claimed, not against the previous attempt:
-    // the question is always "is this still the slot we published for?".
-    const scheduleUnchanged = (snapshot.scheduled_at ?? null) === (row.scheduled_at ?? null);
-    const observed: ObservedRow = {
+  const result = await casReadMergeWrite<DueRowRef, RowSnapshot, Record<string, unknown>>(
+    io,
+    row,
+    snapshot => ({
       scheduled_at: snapshot.scheduled_at ?? null,
       updated_at: snapshot.updated_at ?? null,
-    };
-    const { error: writeError, matched } = await io.update(row, build(snapshot, nowIso, scheduleUnchanged), observed);
-    if (writeError) return { error: writeError };
-    if (matched) return { error: null };
-    // CAS miss: the row changed between the read and the write. Loop to merge onto it.
-  }
-  const message =
-    `row changed under every one of ${CAS_ATTEMPTS} merge attempts`
-    + ` (draft_id=${row.draft_id} user=${row.vibepin_user_id})`;
-  console.error(`[persistRow] CAS exhausted, nothing written: ${message}`);
-  return { error: message };
+    }),
+    (snapshot, nowIso) =>
+      build(snapshot, nowIso, (snapshot.scheduled_at ?? null) === (row.scheduled_at ?? null)),
+    "persistRow",
+    ref => `draft_id=${ref.draft_id} user=${ref.vibepin_user_id}`,
+  );
+  // `skipped` cannot happen here — this build never returns null — so the shape the
+  // publisher sees is exactly the one it saw before the loop was extracted.
+  return result.gone ? { error: null, gone: true } : { error: result.error };
 }
 
 /**
