@@ -19,10 +19,19 @@ used to skip an earlier stage or its rollback receipt.
 
 Current release pointer: branch `codex/product-v37-manifest-b229`, exact
 production remote base `b22930ebe73847cf35bc44be789414902ae6b599`,
-functional tip `9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc`, and exact
+functional tip `8caad7764f0f1c136ffe1d1e69d5a468a9d3593f`, and exact
 81-artifact Product boundary
-`backend/docs/product_opportunities_v37_release_manifest_9a22c16.json`.
+`backend/docs/product_opportunities_v37_release_manifest_8caad77.json`.
 Earlier branch pointers and manifests are chronological evidence only.
+
+The current tip closes two deployment-review findings without changing Product
+eligibility or volume. Metric rows convert every timezone-aware anchor timestamp
+to ISO 8601 before the PostgREST JSON boundary, so a non-empty refresh cannot
+fail local JSON encoding. Supply, Tracking and standalone metric apply paths now
+bind `SUPABASE_URL` to an explicit expected project before database reads,
+Pinterest access or writes; direct core calls cannot bypass that check. The
+reviewed environment keys must be configured during staging and are not inferred
+from a service-role key.
 
 The first permanent-timer receipt exposed one whole-Pin timeout at Pin 79. The
 current tip does not raise the 120-second safety wall or weaken the zero-render-
