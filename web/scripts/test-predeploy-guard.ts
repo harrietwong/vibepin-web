@@ -192,6 +192,20 @@ async function main() {
     assertEq(checkModel({ OPENAI_API_KEY: "sk-abc", AI_COPY_TEXT_MODEL: "gpt-4o-mini" }).length, 0, "openai pinned");
   });
 
+  await test("credential + IMPLAUSIBLE AI_COPY_TEXT_MODEL → refused (Codex round 5: nonblank is not enough)", () => {
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "not a model" }).length, 1, "embedded whitespace");
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "a".repeat(121) }).length, 1, "121 chars");
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "-leading-dash" }).length, 1, "illegal first char");
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "gemini 2.5" }).length, 1, "space");
+    assert(/plausible/.test(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "not a model" })[0]), "message says why");
+  });
+
+  await test("credential + plausible-but-unusual ids → accepted (no allow-list by design)", () => {
+    assertEq(checkModel({ OPENAI_API_KEY: "sk-abc", AI_COPY_TEXT_MODEL: "openai/gpt-4o-mini:latest" }).length, 0, "slash + colon");
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "gemini-3.1-flash-image-preview" }).length, 0, "dots + dashes");
+    assertEq(checkModel({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "a".repeat(120) }).length, 0, "exactly 120 chars");
+  });
+
   await test("AI_COPY_VISION_MODEL is NOT required by this check", () => {
     // Only the text model is pinned at deploy time; the vision fallback chain is
     // deliberately left intact and unpoliced.

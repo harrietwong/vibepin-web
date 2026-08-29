@@ -276,6 +276,35 @@ async function main() {
     assertEq(cfg.visionModel, "gemini-2.5-flash", "vision keeps its own (multi-source) fallback chain, no throw");
   });
 
+  // -- Codex round 5: a NONBLANK but implausible id must behave exactly like unset --
+  await test("UNIT: production + IMPLAUSIBLE AI_COPY_TEXT_MODEL (embedded space) -> accessing .textModel throws ai_copy_model_unset (503)", async () => {
+    const cfg = await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production", AI_COPY_TEXT_MODEL: "not a model" }, () => providerConfig());
+    let thrown: unknown;
+    try { void cfg.textModel; } catch (e) { thrown = e; }
+    assert(thrown instanceof CopyError, "throws a CopyError");
+    const err = thrown as { code: string; status: number };
+    assertEq(err.code, "ai_copy_model_unset", "same code as unset — one fail-closed path");
+    assertEq(err.status, 503, "http status");
+  });
+
+  await test("UNIT: production + 121-char AI_COPY_TEXT_MODEL -> throws ai_copy_model_unset", async () => {
+    const cfg = await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production", AI_COPY_TEXT_MODEL: "a".repeat(121) }, () => providerConfig());
+    let thrown: unknown;
+    try { void cfg.textModel; } catch (e) { thrown = e; }
+    assert(thrown instanceof CopyError, "throws a CopyError");
+    assertEq((thrown as { code: string }).code, "ai_copy_model_unset", "code");
+  });
+
+  await test("UNIT: production + plausible-but-unusual id (slash/colon) -> used as-is (no allow-list)", async () => {
+    const cfg = await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production", AI_COPY_TEXT_MODEL: "openai/gpt-4o-mini:latest" }, () => providerConfig());
+    assertEq(cfg.textModel, "openai/gpt-4o-mini:latest", "syntactically plausible ids pass; semantic validity is the provider's call");
+  });
+
+  await test("UNIT: non-production + IMPLAUSIBLE AI_COPY_TEXT_MODEL -> falls back to the hardcoded default", async () => {
+    const cfg = await withEnv({ LINAPI_KEY: "lin-abc", AI_COPY_TEXT_MODEL: "not a model" }, () => providerConfig());
+    assertEq(cfg.textModel, "gemini-2.5-flash", "outside production an implausible id falls back (with a log), never throws");
+  });
+
   // -- Integration: the actual text-generation call site never reaches the provider -
 
   const realFetch = global.fetch;
@@ -377,6 +406,22 @@ async function main() {
         assertEq(res.status, 503, "http status");
         assertEq(json.error, "ai_copy_model_unset", "error code");
       });
+      assertEq(routeSeen.generateCopyFromAnalysisCalls, 0, "generateCopyFromAnalysis never called");
+    },
+  );
+
+  await test(
+    "ROUTE (vision-fallback): production + IMPLAUSIBLE AI_COPY_TEXT_MODEL -> 503 ai_copy_model_unset, ZERO provider calls (Codex round 5)",
+    async () => {
+      resetRouteSeen();
+      await withEnv({ LINAPI_KEY: "lin-abc", VERCEL_ENV: "production", AI_COPY_TEXT_MODEL: "not a model" }, async () => {
+        const { res, json } = await postAiCopy(visionFallbackBody());
+        assertEq(res.status, 503, "http status");
+        assertEq(json.error, "ai_copy_model_unset", "error code");
+      });
+      assertEq(routeSeen.analyzeAndWriteCopyCalls, 0, "analyzeAndWriteCopy never called");
+      assertEq(routeSeen.analyzeImageStructuredCalls, 0, "analyzeImageStructured never called");
+      assertEq(routeSeen.chatJsonCalls, 0, "chatJson never called");
       assertEq(routeSeen.generateCopyFromAnalysisCalls, 0, "generateCopyFromAnalysis never called");
     },
   );

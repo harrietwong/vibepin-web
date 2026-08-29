@@ -180,17 +180,33 @@ export function providerConfig() {
   // unhandled rejection.
   const rawTextModel = (process.env.AI_COPY_TEXT_MODEL || "").trim();
   const isProduction = process.env.VERCEL_ENV === "production";
-  if (rawTextModel) {
+  // A NONBLANK but implausible id (embedded whitespace, illegal characters, >120 chars)
+  // is treated exactly like an unset one: PRD v3.2 §6.5 says "missing OR invalid" fails
+  // closed in production. The syntactic contract is isPlausibleModelId (modelId.ts) and
+  // predeploy-guard check 8 mirrors the same rule; semantic validity (does the provider
+  // know this id) is deliberately left to the provider's own error at call time — an
+  // unknown id yields a provider error, never a silent fallback.
+  const rawTextModelLength = rawTextModel.length; // captured before the type guard narrows rawTextModel
+  const textModelPlausible = isPlausibleModelId(rawTextModel);
+  if (textModelPlausible) {
     cfg.textModel = rawTextModel;
   } else if (!isProduction) {
+    if (rawTextModelLength > 0) {
+      try {
+        console.warn(JSON.stringify({ event: "ai_copy_model_implausible", length: rawTextModelLength }));
+      } catch {
+        /* logging must never itself throw */
+      }
+    }
     cfg.textModel = useLinapi ? "gemini-2.5-flash" : "gpt-4o-mini";
   } else {
+    const reason = rawTextModelLength > 0 ? "implausible" : "unset";
     Object.defineProperty(cfg, "textModel", {
       enumerable: true,
       configurable: true,
       get(): string {
         try {
-          console.warn(JSON.stringify({ event: "ai_copy_model_unset" }));
+          console.warn(JSON.stringify({ event: "ai_copy_model_unset", reason }));
         } catch {
           /* logging must never itself throw into the caller */
         }

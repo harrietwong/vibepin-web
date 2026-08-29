@@ -42,6 +42,7 @@ export const CORE: string[] = [
   // Pinterest
   "test-pinterest-oauth",
   "test-pinterest-integrations-repair",
+  "test-pinterest-route-helpers",
   "test-pinterest-connection-consistency",
   "test-pinterest-client-dedupe",
   "test-published-pin-summary",

@@ -281,6 +281,46 @@ async function load(mode: string) {
     }
   });
 
+  // -- Codex round 5: blank/whitespace primary salt must not select an empty HMAC key --
+  await test("signImmediateBucket: production with USAGE_REQUEST_KEY_SALT=\"\" falls through to the service-role key (never signs with an empty key)", async () => {
+    const saved = { salt: process.env.USAGE_REQUEST_KEY_SALT, svc: process.env.SUPABASE_SERVICE_ROLE_KEY, env: process.env.VERCEL_ENV };
+    process.env.USAGE_REQUEST_KEY_SALT = "";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "svc-key-for-test";
+    process.env.VERCEL_ENV = "production";
+    try {
+      const m = await load("shadow");
+      const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+      const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15", mintedAtMs);
+      assert.equal(typeof sig, "string", "signs because a real (service-role) salt is available");
+      assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig, mintedAtMs, mintedAtMs + 1000), true, "verifies with the same resolved salt");
+      // The key must be the service-role value, not "": a signature computed over an
+      // empty key would be publicly reproducible.
+      const { createHmac } = await import("node:crypto");
+      const emptyKeySig = createHmac("sha256", "").update(`u-1|pd_x|2026-08-15|${mintedAtMs}`).digest("hex");
+      assert.notEqual(sig, emptyKeySig, "must NOT equal an empty-key HMAC");
+    } finally {
+      if (saved.salt === undefined) delete process.env.USAGE_REQUEST_KEY_SALT; else process.env.USAGE_REQUEST_KEY_SALT = saved.salt;
+      if (saved.svc === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = saved.svc;
+      if (saved.env === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = saved.env;
+    }
+  });
+
+  await test("signImmediateBucket: production with whitespace-only primary salt and NO service-role key returns null", async () => {
+    const saved = { salt: process.env.USAGE_REQUEST_KEY_SALT, svc: process.env.SUPABASE_SERVICE_ROLE_KEY, env: process.env.VERCEL_ENV };
+    process.env.USAGE_REQUEST_KEY_SALT = "   ";
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.VERCEL_ENV = "production";
+    try {
+      const m = await load("shadow");
+      const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15", Date.parse("2026-08-15T12:00:00.000Z"));
+      assert.equal(sig, null, "whitespace is absent, and absent + production = refuse to sign");
+    } finally {
+      if (saved.salt === undefined) delete process.env.USAGE_REQUEST_KEY_SALT; else process.env.USAGE_REQUEST_KEY_SALT = saved.salt;
+      if (saved.svc === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = saved.svc;
+      if (saved.env === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = saved.env;
+    }
+  });
+
 
   // Cross-route parity (pins path vs. social path deriving the identical key for
   // the same Content) is proven at the real-route level in

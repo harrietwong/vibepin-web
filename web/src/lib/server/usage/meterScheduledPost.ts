@@ -123,15 +123,28 @@ export function immediateBucketForNow(nowMs: number = Date.now()): string {
  * HMAC both read it from here, so the two never drift onto different secrets.
  * No new env var: same fallback chain deriveScheduledPostKey has always used.
  */
+/** The configured salt, or null when neither env var carries a usable value. Blank
+ *  and whitespace-only values are ABSENT here — Codex round 5: `??` let
+ *  `USAGE_REQUEST_KEY_SALT=""` select the empty string as the HMAC key while the
+ *  default-salt guard (truthiness) said a real salt was in use. Both the salt and the
+ *  "is this the public default?" answer now come from this one function. */
+function configuredUsageSalt(): string | null {
+  const primary = (process.env.USAGE_REQUEST_KEY_SALT ?? "").trim();
+  if (primary) return primary;
+  const service = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  if (service) return service;
+  return null;
+}
+
 function usageRequestSalt(): string {
-  return process.env.USAGE_REQUEST_KEY_SALT ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "vibepin-usage";
+  return configuredUsageSalt() ?? "vibepin-usage";
 }
 
 /** True when neither real salt env var is set, so `usageRequestSalt()` fell all the
  *  way through to the hardcoded `"vibepin-usage"` default — a value that is public
  *  (it lives in this source file) and therefore not a secret at all. */
 function isUsingDefaultUsageSalt(): boolean {
-  return !process.env.USAGE_REQUEST_KEY_SALT && !process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return configuredUsageSalt() === null;
 }
 
 /** Emits `usage_meter_salt_default` at most once per process (Fix 5 below signs
