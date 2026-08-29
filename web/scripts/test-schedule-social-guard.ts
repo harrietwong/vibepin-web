@@ -27,6 +27,7 @@ import {
 } from "../src/lib/social/platforms";
 import {
   blockedScheduleDestinations,
+  buildScheduledAt,
   requestedSocialDestinations,
   requiredScheduleConnectionIds,
 } from "../src/app/api/pin-drafts/promote";
@@ -387,6 +388,75 @@ section("the PUT route wires the destination-exists gate correctly");
   check("the gate runs BEFORE the upsert",
     route.indexOf("unavailableScheduleDestinations(") < route.indexOf(".upsert("),
     "refusing after the write would leave the orphan schedule stored");
+}
+
+// ── the promoted schedule of a POSTED Content ─────────────────────────
+// `scheduled_at` is the ONLY thing the cron scans. Nulling it whenever a published
+// marker is present made every reschedule of a Posted Content unrunnable — the
+// merchant picked a new slot, the card showed it, and nothing ever ran. Neither the
+// drawer/card path (smartScheduleDraft / assignDraftToDate / bulkUpdateDrafts) nor the
+// 409 re-base clears postedAt/remotePinId, so this covers the deliberate reschedule
+// AND the re-based retry. The guard is not removed, only narrowed: a schedule that is
+// not later than the post is still the stale-client copy and is still nulled.
+section("promote: a reschedule made AFTER the post survives promotion");
+{
+  const posted = "2026-08-20T10:00:00.000Z";
+  const withMarkers = (patch: Record<string, unknown>) => ({
+    postedAt: posted,
+    remotePinId: "pin9",
+    scheduleTimezone: "UTC",
+    ...patch,
+  });
+
+  check("a schedule LATER than postedAt is promoted, not nulled",
+    buildScheduledAt(withMarkers({ plannedAt: "2026-08-21T09:00" })) === "2026-08-21T09:00:00.000Z",
+    `got ${String(buildScheduledAt(withMarkers({ plannedAt: "2026-08-21T09:00" })))}`);
+
+  check("a schedule EARLIER than postedAt is still nulled (the stale-client copy)",
+    buildScheduledAt(withMarkers({ plannedAt: "2026-08-19T09:00" })) === null);
+
+  check("a schedule EQUAL to postedAt is nulled (strictly-later, not >=)",
+    buildScheduledAt(withMarkers({ plannedAt: "2026-08-20T10:00" })) === null);
+
+  check("date+time reschedule after the post is promoted too",
+    buildScheduledAt(withMarkers({ scheduledDate: "2026-08-22", scheduledTime: "14:30" }))
+      === "2026-08-22T14:30:00.000Z");
+
+  check("no published markers ⇒ the schedule is promoted unchanged",
+    buildScheduledAt({ plannedAt: "2026-08-19T09:00", scheduleTimezone: "UTC" })
+      === "2026-08-19T09:00:00.000Z",
+    "an unposted draft must be unaffected by the published-marker rule");
+
+  check("no published markers and no schedule ⇒ null",
+    buildScheduledAt({ title: "t" }) === null);
+
+  // LEGACY: remotePinId without a readable postedAt cannot be compared. Nulling keeps
+  // the old behaviour; trusting updatedAt instead would let ANY future schedule pass,
+  // and those rows may carry no destinationResults at all → every destination owed →
+  // a double post.
+  check("legacy remotePinId with no postedAt is nulled",
+    buildScheduledAt({ remotePinId: "pin9", plannedAt: "2036-08-21T09:00", scheduleTimezone: "UTC" }) === null);
+
+  check("an unparseable postedAt is nulled",
+    buildScheduledAt({ postedAt: "not-a-date", plannedAt: "2036-08-21T09:00", scheduleTimezone: "UTC" }) === null);
+
+  // The timezone the schedule is stamped in decides the instant that gets compared.
+  check("the comparison uses the resolved instant, not the wall-clock",
+    buildScheduledAt({
+      postedAt: "2026-08-21T12:00:00.000Z",
+      remotePinId: "pin9",
+      plannedAt: "2026-08-21T09:00",
+      scheduleTimezone: "America/Los_Angeles",
+    }) === "2026-08-21T16:00:00.000Z",
+    "09:00 in Los Angeles is 16:00Z — later than a 12:00Z post, so it stands");
+
+  check("a reschedule that resolves BEFORE the post is nulled across zones",
+    buildScheduledAt({
+      postedAt: "2026-08-21T20:00:00.000Z",
+      remotePinId: "pin9",
+      plannedAt: "2026-08-21T09:00",
+      scheduleTimezone: "America/Los_Angeles",
+    }) === null);
 }
 
 console.log(`\nSchedule social guard: ${pass} passed, ${fail} failed\n`);
