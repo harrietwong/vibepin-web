@@ -139,6 +139,26 @@ export interface PublishResult {
    * means the post exists and the charge stands regardless of status.
    */
   providerResourceId?: string | null;
+  /**
+   * True when this failure was decided BEFORE any network call to the platform: a
+   * missing/undecryptable credential, no Page or professional account selected, a
+   * required image absent, a local media-rule refusal. Nothing was sent, so nothing
+   * can exist on the platform.
+   *
+   * Why the flag has to exist rather than being inferred: these failures carry no
+   * `providerStatus` (correctly — no provider answered), and "no status observed" is
+   * the exact signature of a timeout, which the product charges for
+   * (`delivery_unknown`, see lib/server/usage/deliveryOutcome.ts). Without the flag
+   * the two are indistinguishable and a merchant is billed a scheduled-post unit for
+   * "Connect a Facebook Page first." — a request that never left our process.
+   * `preNetwork: true` classifies as `not_sent`, which is refundable.
+   *
+   * NEVER set it on a failure that DID reach the platform, even one carrying no
+   * status (a socket reset mid-request): the whole point of `delivery_unknown` is
+   * that we cannot prove the post was not created, and asserting otherwise would
+   * hand out refunds for real deliveries.
+   */
+  preNetwork?: boolean;
 }
 
 export interface DisconnectInput {

@@ -150,6 +150,10 @@ export async function POST(req: Request) {
   // key that was consumed — re-deriving it would recompute the UTC bucket and could
   // land on a different day (and refund nothing).
   let meterKey: string | null = null;
+  // Whether THIS request's consume actually charged a unit (v67 `replayed:false`).
+  // The refund gate below reads it — see the comment there for why a replayed consume
+  // must never be released.
+  let meterFresh = false;
   if (meterIdentity) {
     meterKey = deriveScheduledPostKey(uid, meterIdentity, undefined, meteringBucket);
     const consumed = await consumeScheduledPost({
@@ -158,6 +162,7 @@ export async function POST(req: Request) {
       referenceId: meterIdentity,
       metadata: { source: "immediate" },
     });
+    meterFresh = consumed.kind === "consumed" && consumed.fresh === true;
 
     // ── A.4.0 BLOCKING SITE — refuse over-quota BEFORE touching Pinterest ───────
     // Until now `insufficient` was recorded and discarded: the scheduled-post
@@ -209,6 +214,21 @@ export async function POST(req: Request) {
    */
   const settleMetering = async (outcome: DeliveryOutcome): Promise<void> => {
     if (!meterKey || !meterIdentity) return;
+    // ── ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + High 2) ────
+    // The key K is shared with /api/publish/social (same Content) and with a same-day
+    // retry of this same draft, while `usage_release_scheduled_post` takes only
+    // (user, K, reason) — it refunds the family's standing consume regardless of who
+    // asks. Without this gate, a request whose consume merely REPLAYED could give
+    // back a unit another attempt charged and delivered. `fresh` is v67's own
+    // `replayed:false`, i.e. "this request inserted the consume event".
+    // Deliberately also excludes `off` / `insufficient` / `error` consumes: none of
+    // them charged anything here, so a release after one of them could only hit a
+    // PRIOR attempt's consume.
+    // Residual, deferred to publish-action identity (PRD v3.2 §21 5A): two CONCURRENT
+    // attempts on the same key where the fresh one fails and the replaying one
+    // succeeds still refunds a delivered publish. A same-day retry AFTER a success is
+    // not a residual — it is correctly non-refundable, the unit was earned.
+    if (!meterFresh) return;
     if (!isRefundable(outcome)) return;
     await releaseScheduledPost({
       userId: uid,

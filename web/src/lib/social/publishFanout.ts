@@ -172,10 +172,13 @@ export async function dispatchDestination(
           ? `Publishing to ${platformName(provider)} is coming soon.`
           : result.error ?? "Publishing is not available for this platform yet.",
       // Carried through for the usage refund decision only (deliveryOutcome.ts).
-      // `not_implemented` never reached a platform, so it is pre-network.
+      // `not_implemented` never reached a platform, so it is pre-network — and so is
+      // any failure the provider decided before dispatching (`result.preNetwork`:
+      // missing credentials, no account selected, a local media-rule refusal), which
+      // carries no providerStatus and would otherwise read as a timeout and be charged.
       providerStatus: result.providerStatus ?? null,
       providerResourceId: result.providerResourceId ?? result.externalPostId ?? null,
-      preNetwork: result.status === "not_implemented",
+      preNetwork: result.status === "not_implemented" || result.preNetwork === true,
     };
   } catch (err) {
     // A provider implementation that THREW rather than returning a typed failure.
