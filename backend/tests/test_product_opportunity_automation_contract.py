@@ -176,6 +176,8 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     core_functional = "351e47912ce44fc34728097041dbfdd95889081a"
     manifest_name = "product_opportunities_v37_release_manifest_d2c13dd.json"
     assert functional in RUNBOOK
+    assert RUNBOOK.count(f"--candidate-sha {functional}") == 2
+    assert f"--candidate-sha {prior_functional}" not in RUNBOOK
     assert prior_functional in COMPLETION_AUDIT
     assert prior_functional in COMPLETION_MATRIX
     assert manifest_name in RUNBOOK
@@ -237,7 +239,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
 
 
 def test_stage1_cutover_commands_bind_the_current_functional_candidate() -> None:
-    functional = "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
+    functional = "d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d"
     candidate_bindings = re.findall(
         r"--candidate-sha ([0-9a-f]{40})",
         RUNBOOK,

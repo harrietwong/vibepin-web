@@ -664,7 +664,7 @@ py scripts/audit_product_opportunity_schema_v37.py baseline `
   --project-ref jaxteelkecvlozdrdoog `
   --expected-project-ref jaxteelkecvlozdrdoog `
   --expected-query-sha256 3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c `
-  --candidate-sha 9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc `
+  --candidate-sha d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d `
   --output $baseline
 $baselineSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $baseline).Hash.ToLower()
 ```
@@ -690,7 +690,7 @@ py scripts/audit_product_opportunity_schema_v37.py post-apply `
   --project-ref jaxteelkecvlozdrdoog `
   --expected-project-ref jaxteelkecvlozdrdoog `
   --expected-query-sha256 2c482caca84b779dd60d94be8f0f7010162701fea5d0abfa3d773328d69c8b43 `
-  --candidate-sha 9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc `
+  --candidate-sha d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d `
   --baseline-receipt $baseline `
   --expected-baseline-sha256 $baselineSha `
   --max-baseline-age-seconds 900 `
