@@ -7,6 +7,7 @@ import {
   validateImportUrl,
 } from "../src/lib/productUrlImport";
 import { parseProductImportUrls, autoSelectTopCandidates } from "../src/lib/productUrlImportClient";
+import { isPublicIpAddress, safeOutboundUrl } from "../src/app/api/fetch-og/safeOutboundUrl";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -368,6 +369,61 @@ async function run() {
 
   console.log("\n── Provider adapter tests ───────────────────────────────────────────────");
   await runProviderTests();
+
+  console.log("\n── Safe outbound URL tests ─────────────────────────────────────────────");
+  const publicDns = async () => [
+    { address: "93.184.216.34", family: 4 },
+    { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
+  ];
+
+  await test("12. safe outbound guard accepts hosts whose DNS answers are all public", async () => {
+    const url = await safeOutboundUrl("https://example.com/path", publicDns);
+    assert(url.hostname === "example.com", "expected public hostname to pass");
+  });
+
+  await test("13. safe outbound guard rejects credentials and non-HTTP schemes", async () => {
+    for (const input of ["file:///etc/passwd", "https://user:pass@example.com"]) {
+      let rejected = false;
+      try { await safeOutboundUrl(input, publicDns); } catch { rejected = true; }
+      assert(rejected, `expected rejection for ${input}`);
+    }
+  });
+
+  await test("14. safe outbound guard rejects private and non-standard IP literals", async () => {
+    for (const input of [
+      "http://127.0.0.1",
+      "http://10.0.0.1",
+      "http://169.254.169.254/latest/meta-data",
+      "http://[::1]",
+      "http://[fe80::1]",
+      "http://127.1",
+      "http://0177.0.0.1",
+      "http://2130706433",
+    ]) {
+      let rejected = false;
+      try { await safeOutboundUrl(input, publicDns); } catch { rejected = true; }
+      assert(rejected, `expected rejection for ${input}`);
+    }
+  });
+
+  await test("15. safe outbound guard rejects mixed public/private DNS answers", async () => {
+    let rejected = false;
+    try {
+      await safeOutboundUrl("https://example.com", async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ]);
+    } catch { rejected = true; }
+    assert(rejected, "expected mixed DNS answers to be rejected");
+  });
+
+  await test("16. safe outbound IP classifier rejects mapped and private addresses", () => {
+    assert(isPublicIpAddress("8.8.8.8"), "public IPv4 should pass");
+    assert(isPublicIpAddress("2606:4700:4700::1111"), "public IPv6 should pass");
+    assert(!isPublicIpAddress("192.168.1.1"), "private IPv4 should fail");
+    assert(!isPublicIpAddress("::ffff:127.0.0.1"), "mapped loopback should fail");
+    assert(!isPublicIpAddress("fc00::1"), "unique-local IPv6 should fail");
+  });
 
   console.log(`\nProduct URL import tests: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
