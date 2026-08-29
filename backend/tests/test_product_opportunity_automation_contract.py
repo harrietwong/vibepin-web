@@ -207,6 +207,15 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     ).returncode == 0
 
 
+def test_stage1_cutover_commands_bind_the_current_functional_candidate() -> None:
+    functional = "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
+    candidate_bindings = re.findall(
+        r"--candidate-sha ([0-9a-f]{40})",
+        RUNBOOK,
+    )
+    assert candidate_bindings == [functional, functional]
+
+
 def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
     references = set(
         re.findall(
