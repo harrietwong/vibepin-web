@@ -195,10 +195,31 @@ export async function GET(req: Request): Promise<Response> {
     // until the consume actually runs; a null key means nothing was charged and
     // nothing can be refunded.
     let meterKey: string | null = null;
+    // Whether THIS row's consume actually charged a unit (v67 `replayed:false`). Row
+    // scope like meterKey, for the same reason: the outer catch settles too.
+    let meterFresh = false;
     const meterReference = typeof row.draft_id === "string" ? row.draft_id : null;
     const deliveries: DeliveryOutcome[] = [];
     const settleMetering = async (): Promise<void> => {
       if (!meterKey) return;
+      // ── ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + High 2) ──
+      // `usage_release_scheduled_post` takes only (user, K, reason) and refunds the
+      // family's standing consume regardless of which attempt asks, while K is shared
+      // — this row's key is (draft_id, scheduled_at), and a re-claim of an unfinished
+      // publish derives the IDENTICAL key on purpose (see the consume comment below).
+      // So a re-claim whose consume merely REPLAYED must not release: the unit belongs
+      // to the attempt that charged it, which may well have delivered. `fresh` is
+      // v67's own `replayed:false`. `off` / `insufficient` / `error` consumes are
+      // excluded too — none of them charged here.
+      // Consequence worth stating, because it is the rule working as specified, not a
+      // gap: this route is at-least-once, so a death after a not_sent failure but
+      // before the release leaves the re-claim on a replayed consume, and that
+      // re-claim's own failure is no longer refundable. The unit stays with the first
+      // attempt. Do not "fix" this by dropping the gate.
+      // Residual, deferred to publish-action identity (PRD v3.2 §21 5A): two
+      // CONCURRENT attempts on one key where the fresh one fails and the replaying one
+      // succeeds still refunds a delivered publish.
+      if (!meterFresh) return;
       const outcome = aggregateDelivery(deliveries);
       if (!isRefundable(outcome)) return;
       await releaseScheduledPost({
@@ -242,6 +263,7 @@ export async function GET(req: Request): Promise<Response> {
         referenceId: meterReference,
         metadata: { source: "scheduled-cron" },
       });
+      meterFresh = consumed.kind === "consumed" && consumed.fresh === true;
 
       // ── A.4.0 BLOCKING SITE — over-quota rows never reach a provider ──────────
       // The cron path cannot answer 402 to anyone, so the refusal is written into

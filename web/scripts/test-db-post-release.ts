@@ -347,6 +347,56 @@ async function cleanup(): Promise<number> {
     if (used !== 0) throw new Error(`expected the counter to floor at 0, got ${used}`);
   });
 
+  await test("RPC LEVEL: a release after a REPLAYED consume still refunds — the route gate is the only enforcement", async () => {
+    // Codex round 7, High 1 + High 2. `usage_release_scheduled_post` receives only
+    // (user, K, reason). It carries NO attempt identity, so it structurally cannot
+    // tell "the caller that charged this unit is asking for it back" apart from "a
+    // different caller, whose own consume merely REPLAYED, is asking". It refunds the
+    // family's standing consume either way.
+    //
+    // This case exists to pin that fact in the real database rather than assert a
+    // guard that is not there:
+    //   consume K       → charged (fresh)
+    //   consume K again → replayed, charged nothing (the second route / the retry)
+    //   release K       → STILL refunds, taking the unit the FIRST consume earned
+    //
+    // There is no safe one-line RPC guard: the migration would have to be told which
+    // attempt is asking, which means a new parameter and a caller-side identity that
+    // does not exist yet (publish-action identity, PRD v3.2 §21 5A). So the fix lives
+    // where the information IS available — in the routes, which each know whether
+    // THEIR OWN consume came back `replayed:false`, and refuse to release otherwise
+    // (see the `meterFresh` gates in /api/pinterest/pins, /api/publish/social and
+    // /api/cron/publish-due, and test-publish-refund-mapping / test-cron-refund-mapping
+    // for the cross-route evidence). The migration is deliberately UNCHANGED.
+    const acct = await makeAccount("replayed-then-release");
+    const key = `${KEY_PREFIX}:replayed-then-release`;
+
+    const { data: first } = await consume(acct.userId, key);
+    if ((first as { replayed?: boolean })?.replayed !== false) {
+      throw new Error(`setup: the first consume must be fresh, got ${JSON.stringify(first)}`);
+    }
+    const { data: second } = await consume(acct.userId, key);
+    if ((second as { replayed?: boolean })?.replayed !== true) {
+      throw new Error(`setup: the second consume must replay, got ${JSON.stringify(second)}`);
+    }
+    if ((await readPostsUsed(acct.id)) !== 1) throw new Error("setup: two consumes must charge once");
+
+    // The replaying caller asks for a refund. The RPC has no way to refuse it.
+    const { data: rel, error } = await release(acct.userId, key, "rejected");
+    if (error) throw new Error(error.message);
+    const r = rel as { ok?: boolean; replayed?: boolean };
+    if (r?.ok !== true || r?.replayed !== false) {
+      throw new Error(
+        `the RPC was expected to refund (it cannot distinguish callers); got ${JSON.stringify(rel)}. ` +
+        "If this now REFUSES, the migration gained a guard and this test's premise — and the route " +
+        "comments naming the gate as the only enforcement point — must be revisited.",
+      );
+    }
+    const used = await readPostsUsed(acct.id);
+    if (used !== 0) throw new Error(`expected the RPC to have decremented, used=${used}`);
+    console.log("        observed: the RPC cannot distinguish a replaying caller — the route gate is load-bearing");
+  });
+
   await test("cleanup: every row this run created has been removed", async () => {
     const removed = await cleanup();
     console.log(`        removed ${removed} account(s) (cascade) for run ${RUN_ID}`);

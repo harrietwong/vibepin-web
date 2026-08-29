@@ -2711,6 +2711,17 @@ const id: Partial<Record<MessageKey, string>> = {
   "studioBoard.toast.fieldTooLong": "Persingkat judul atau deskripsi sebelum menjadwalkan atau memublikasikan.",
   "studioCreative.direction.moderationNotice": "Prompt disaring sebelum pembuatan. Konten seksual, NSFW, eksploitatif, berbahaya, ilegal, deepfake, dan manipulasi wajah dilarang.",
   "studioCreative.direction.moderationNoticeLink": "Lihat kebijakan",
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Anda telah menggunakan semua gambar AI yang termasuk dalam paket Anda saat ini. Tingkatkan paket Anda untuk membuat lebih banyak gambar.",
+  "studioBoard.limit.text.allUsed": "Anda telah menggunakan semua pembuatan teks AI yang termasuk dalam paket Anda saat ini. Tingkatkan paket Anda untuk terus membuat konten AI.",
+  "studioBoard.limit.post.allUsed": "Anda telah menggunakan semua postingan terjadwal yang termasuk dalam paket Anda saat ini. Tingkatkan paket Anda untuk menjadwalkan atau memublikasikan lebih banyak postingan.",
+  "studioBoard.limit.upgradeCta": "Lihat paket",
+  "studioBoard.limit.reachedTitle": "Batas paket tercapai",
+  "studioBoard.limit.image.overRequestTitle": "Sisa gambar AI tidak cukup",
+  "studioBoard.limit.image.overRequestBody": "Anda meminta {requested} gambar tetapi hanya tersisa {remaining} dalam paket Anda saat ini. Buat gambar yang tersisa saja, atau tingkatkan paket Anda untuk mendapatkan lebih banyak.",
+  "studioBoard.limit.image.generateRemaining": "Buat {remaining} saja",
+  "studioBoard.limit.image.generateOneRemaining": "Buat 1 saja",
 };
 
 export default id;

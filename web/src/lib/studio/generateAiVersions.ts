@@ -11,6 +11,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { PINS_PER_REFERENCE_OPTIONS } from "@/lib/studio/selectedReferences";
+import { LimitReachedError, parseLimitReachedResponse } from "@/lib/usage/limitReached";
 
 const MAX_PINS_PER_REFERENCE = Math.max(...PINS_PER_REFERENCE_OPTIONS);
 
@@ -162,7 +163,14 @@ export async function generateAiVersions(opts: {
       styleReference: opts.styleReference,
     })),
   });
-  if (!res.ok) throw new Error(`Generation failed (${res.status})`);
+  if (!res.ok) {
+    // A usage refusal is NOT a generation failure: the run loop must stop the whole
+    // batch and let the user decide (product decision #6), instead of failing this
+    // group's placeholders and marching into an identical 402 for the next group.
+    const limit = await parseLimitReachedResponse(res);
+    if (limit) throw new LimitReachedError(limit);
+    throw new Error(`Generation failed (${res.status})`);
+  }
   const body = await res.json() as {
     ok?: boolean;
     urls?: string[];
@@ -216,7 +224,13 @@ export async function enqueueGeneration(opts: {
     try { code = ((await res.json()) as { error?: string }).error || code; } catch { /* ignore */ }
     throw new Error(code);
   }
-  if (!res.ok) throw new Error(`Generation failed (${res.status})`);
+  if (!res.ok) {
+    // Same refusal handling as the inline path: enforcement can refuse either mode,
+    // and the caller must not see a usage limit as a generic failure.
+    const limit = await parseLimitReachedResponse(res);
+    if (limit) throw new LimitReachedError(limit);
+    throw new Error(`Generation failed (${res.status})`);
+  }
 
   const body = await res.json() as { jobId?: string; slots?: number };
   if (!body.jobId || typeof body.slots !== "number") return null; // inline-mode shape — caller falls back

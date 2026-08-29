@@ -2743,6 +2743,17 @@ const ru: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Сократите заголовок или описание перед планированием или публикацией.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Вы использовали все ИИ-изображения, включённые в ваш текущий тариф. Перейдите на более высокий тариф, чтобы создавать больше изображений.",
+  "studioBoard.limit.text.allUsed": "Вы использовали все ИИ-генерации текста, включённые в ваш текущий тариф. Перейдите на более высокий тариф, чтобы продолжить создавать ИИ-контент.",
+  "studioBoard.limit.post.allUsed": "Вы использовали все запланированные публикации, включённые в ваш текущий тариф. Перейдите на более высокий тариф, чтобы планировать или публиковать больше.",
+  "studioBoard.limit.upgradeCta": "Посмотреть тарифы",
+  "studioBoard.limit.reachedTitle": "Достигнут лимит тарифа",
+  "studioBoard.limit.image.overRequestTitle": "Недостаточно ИИ-изображений",
+  "studioBoard.limit.image.overRequestBody": "Вы запросили {requested} изображений, но в текущем тарифе осталось только {remaining}. Создайте оставшиеся изображения или перейдите на более высокий тариф.",
+  "studioBoard.limit.image.generateRemaining": "Создать {remaining} вместо этого",
+  "studioBoard.limit.image.generateOneRemaining": "Создать 1 вместо этого",
 };
 
 export default ru;

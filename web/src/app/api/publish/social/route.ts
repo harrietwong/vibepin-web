@@ -146,6 +146,9 @@ export async function POST(req: Request) {
   // called from either publish route yet, so this mirrors the pins route's
   // current shadow-only behavior rather than inventing a new enforce switch here).
   let meterKey: string | null = null;
+  // Whether THIS request's consume actually charged a unit (v67 `replayed:false`).
+  // Read by the refund gate below — see the comment there.
+  let meterFresh = false;
   if (postId) {
     const rawBucket = body.meteringBucket;
     let bucketOverride: string | undefined;
@@ -172,6 +175,7 @@ export async function POST(req: Request) {
       referenceId: postId,
       metadata: { source: "social_immediate" },
     });
+    meterFresh = consumed.kind === "consumed" && consumed.fresh === true;
 
     // ── A.4.0 BLOCKING SITE — refuse over-quota BEFORE any provider dispatch ────
     // Before this, `insufficient` was recorded and thrown away here too, so the
@@ -267,10 +271,14 @@ export async function POST(req: Request) {
         // bearer-verified session user — never a client-supplied value.
         userId: uid,
       });
-      // `not_implemented` never reached a platform → pre-network, refundable.
+      // `not_implemented` never reached a platform → pre-network, refundable. So is
+      // any failure the provider itself decided before dispatching (`result.preNetwork`
+      // — missing credentials, no Page/account selected, a local media-rule refusal):
+      // those carry no providerStatus and would otherwise be indistinguishable from a
+      // timeout, i.e. charged as `delivery_unknown`. See lib/social/types.ts.
       deliveries.push(classifyDelivery({
         ok: result.ok,
-        preNetwork: result.status === "not_implemented",
+        preNetwork: result.status === "not_implemented" || result.preNetwork === true,
         providerStatus: result.providerStatus,
         providerResourceId: result.providerResourceId ?? result.externalPostId ?? null,
       }));
@@ -324,7 +332,29 @@ export async function POST(req: Request) {
    * platforms) contribute NOTHING: they are not attempts, and counting them as
    * `not_sent` would refund a Content whose real destinations all published.
    */
-  if (meterKey && postId) {
+  /**
+   * ── ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + High 2) ──────
+   * This route deliberately consumes UNCONDITIONALLY (see the long comment above the
+   * consume), which for a multi-platform publish means it lands on the key
+   * /api/pinterest/pins already charged — as a REPLAY, no second unit. That replay is
+   * what makes one Content cost one unit, and it is also what made refunding here
+   * dangerous: `usage_release_scheduled_post` takes only (user, K, reason), so it
+   * refunds the family's standing consume no matter which route asks. Pinterest could
+   * publish the Pin (charge earned), every social target could then be rejected, and
+   * this block would refund the delivered Pin. The same shape refunds a preceding
+   * `delivery_unknown`, and a same-day retry of an already-successful publish refunds
+   * an earned unit.
+   * So: release only when THIS request's own consume was fresh (v67 `replayed:false`
+   * — this request inserted the consume event, on K or on a re-armed K:r<n> after an
+   * earlier refund). `off` / `insufficient` / `error` consumes are excluded for the
+   * same reason: they charged nothing here, so a release could only hit another
+   * attempt's consume.
+   * Residual, deferred to publish-action identity (PRD v3.2 §21 5A): two CONCURRENT
+   * attempts on the same key where the fresh one fails and the replaying one succeeds
+   * still refunds a delivered publish. A same-day retry after a prior SUCCESS is not a
+   * residual — correctly non-refundable, the unit was earned.
+   */
+  if (meterKey && postId && meterFresh) {
     const outcome: DeliveryOutcome = aggregateDelivery(deliveries);
     if (isRefundable(outcome)) {
       await releaseScheduledPost({

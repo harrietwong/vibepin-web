@@ -2950,6 +2950,17 @@ const es: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Acorta el título o la descripción antes de programar o publicar.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Has usado todas las imágenes de IA incluidas en tu plan actual. Mejora tu plan para generar más imágenes.",
+  "studioBoard.limit.text.allUsed": "Has usado todas las generaciones de texto con IA incluidas en tu plan actual. Mejora tu plan para seguir generando contenido con IA.",
+  "studioBoard.limit.post.allUsed": "Has usado todas las publicaciones programadas incluidas en tu plan actual. Mejora tu plan para programar o publicar más.",
+  "studioBoard.limit.upgradeCta": "Ver planes",
+  "studioBoard.limit.reachedTitle": "Límite del plan alcanzado",
+  "studioBoard.limit.image.overRequestTitle": "No quedan suficientes imágenes de IA",
+  "studioBoard.limit.image.overRequestBody": "Solicitaste {requested} imágenes, pero solo quedan {remaining} en tu plan actual. Genera las imágenes restantes o mejora tu plan para obtener más.",
+  "studioBoard.limit.image.generateRemaining": "Generar {remaining} en su lugar",
+  "studioBoard.limit.image.generateOneRemaining": "Generar 1 en su lugar",
 };
 
 export default es;

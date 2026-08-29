@@ -315,7 +315,19 @@ export function verifyImmediateBucket(
 
 export type ScheduledPostConsume =
   | { kind: "off" }
-  | { kind: "consumed"; replayed: boolean }
+  /**
+   * `replayed` — the ledger already had an event under this attempt's effective key,
+   * so nothing was charged by THIS call.
+   * `fresh` — its exact inverse (`!replayed`), named for what the refund gate actually
+   * needs to ask: "did THIS request charge a unit?" v67's consume writes under the key
+   * family's CURRENT arm (K when the family has no releases, K:r<n> after n of them),
+   * so a consume that lands on a newly re-armed key after a prior refund is `fresh:true`
+   * — it really did charge again — while a second route (or a same-day retry) collapsing
+   * onto an existing event is `fresh:false`.
+   *
+   * ONLY a fresh consume may be released. See `releaseScheduledPost`'s header.
+   */
+  | { kind: "consumed"; replayed: boolean; fresh: boolean }
   | { kind: "insufficient" }
   | { kind: "error"; message: string };
 
@@ -371,12 +383,17 @@ export async function consumeScheduledPost(args: ConsumeScheduledPostArgs): Prom
     const result = data as { ok?: boolean; replayed?: boolean; reason?: string } | null;
 
     if (result?.ok) {
+      const replayed = Boolean(result.replayed);
       logEvent("scheduled_post_consumed", {
         userId: args.userId,
-        replayed: Boolean(result.replayed),
+        replayed,
         mode,
       });
-      return { kind: "consumed", replayed: Boolean(result.replayed) };
+      // `fresh` is the RPC's own answer, not a guess: v67 returns replayed:false ONLY
+      // when it inserted a new consume event under the family's current arm (K, or
+      // K:r<n> after n refunds). That is precisely "this request charged a unit", which
+      // is the only condition under which the caller may later release one.
+      return { kind: "consumed", replayed, fresh: !replayed };
     }
 
     // v55's RPC answers with `insufficient_capacity`; the shorter `insufficient`
@@ -440,6 +457,40 @@ export function scheduledPostLimitResponseBody() {
  * `delivery_unknown` is deliberately charged: a timeout is trivially reproducible,
  * so refunding it would be an advertised free-publish bypass. The product accepts
  * over-charging in that narrow case rather than under-charging in the general one.
+ *
+ * ── ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + High 2) ──────
+ * The key K is SHARED: /api/pinterest/pins and /api/publish/social both derive it
+ * for the same Content, and a same-day retry of an immediate publish derives it
+ * again. Exactly one of those calls charges a unit; every other call collapses into
+ * a replay. But `usage_release_scheduled_post` takes only (user, K, reason) — it has
+ * no attempt identity, so it refunds the family's standing consume no matter WHICH
+ * caller asks. That let a route give back a unit it never charged:
+ *
+ *   HIGH 1  pins consumes K fresh and DELIVERS (sent → keep) → social consumes the
+ *           SAME K (replayed) → all social targets rejected → social releases K,
+ *           refunding a Pin that is live. Same shape refunds a preceding
+ *           `delivery_unknown` Pinterest attempt.
+ *   HIGH 2  publish succeeds once (K kept) → retry the same draft later the same day
+ *           with a deliberately invalid destination → consume replays K → refundable
+ *           failure → release refunds the EARNED unit. A repeatable free publish.
+ *
+ * The rule that closes both, in ONE place — the route gate, not here:
+ *
+ *     a route may call releaseScheduledPost ONLY when its OWN consume in THIS
+ *     request came back `kind === "consumed"` with `fresh === true`.
+ *
+ * A replayed consume means the unit was already earned by, or is owned by, another
+ * attempt — never release it. (`off` / `insufficient` / `error` consumes are not
+ * fresh either, and are equally not releasable: none of them charged anything, and
+ * calling release after one of them would target a PRIOR attempt's consume.)
+ *
+ * RESIDUAL, deliberately deferred: two CONCURRENT attempts on the same key where the
+ * fresh one fails and the replaying one succeeds still refunds a delivered publish —
+ * the fresh attempt legitimately owns the unit it charged, and nothing in the current
+ * ledger tells it that a sibling in flight delivered. Fixing that needs publish-action
+ * identity (PRD v3.2 §21 5A) so the release names an ATTEMPT rather than a family.
+ * A same-day retry after a prior SUCCESS is NOT a residual: it is correctly
+ * non-refundable, because the unit was earned by the publish that landed.
  *
  * The caller passes the SAME key it consumed with — never a re-derived one (an
  * immediate publish's key contains a UTC date bucket that may have been relayed

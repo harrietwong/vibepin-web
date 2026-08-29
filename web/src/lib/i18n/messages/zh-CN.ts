@@ -2839,6 +2839,17 @@ const zhCN: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "请缩短标题或描述后再排期或发布。",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "您已用完当前套餐包含的全部 AI 图片。升级套餐即可生成更多图片。",
+  "studioBoard.limit.text.allUsed": "您已用完当前套餐包含的全部 AI 文案生成次数。升级套餐即可继续生成 AI 内容。",
+  "studioBoard.limit.post.allUsed": "您已用完当前套餐包含的全部定时发布次数。升级套餐即可排程或发布更多内容。",
+  "studioBoard.limit.upgradeCta": "查看套餐",
+  "studioBoard.limit.reachedTitle": "已达套餐上限",
+  "studioBoard.limit.image.overRequestTitle": "剩余 AI 图片不足",
+  "studioBoard.limit.image.overRequestBody": "您请求生成 {requested} 张图片，但当前套餐仅剩 {remaining} 张。可改为生成剩余数量，或升级套餐获取更多。",
+  "studioBoard.limit.image.generateRemaining": "改为生成 {remaining} 张",
+  "studioBoard.limit.image.generateOneRemaining": "改为生成 1 张",
 };
 
 export default zhCN;

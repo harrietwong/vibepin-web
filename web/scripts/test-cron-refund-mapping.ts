@@ -513,6 +513,157 @@ function assertNotReleased(): void {
     assert.equal(publishPinCalls, 1, "the global mode alone must block nothing");
   });
 
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + High 2)
+  // ══════════════════════════════════════════════════════════════════════════════
+  //
+  // `usage_release_scheduled_post` takes only (user, K, reason): it refunds the key
+  // family's standing consume regardless of WHICH attempt asks. This route's key is
+  // (draft_id, scheduled_at), and a re-claim of an unfinished publish derives the
+  // IDENTICAL key on purpose — that collapsing is what stops the at-least-once
+  // publisher double-charging. Which means a re-claim whose consume merely REPLAYED
+  // must not release: the unit belongs to the attempt that charged it, and that
+  // attempt may well have delivered.
+  //
+  // The ledger fake here is deliberately minimal — the cron route runs ONE row per
+  // request, so "was this row's own consume fresh?" is a single boolean, and driving
+  // it directly is both sufficient and unambiguous.
+
+  await test("fresh gate: a REPLAYED consume never releases, even on a refundable failure", async () => {
+    // The re-claim case. A previous attempt charged K; this one lands on the same key
+    // and the ledger reports replayed. Its own failure is refundable-looking, but the
+    // unit is not this attempt's to give back.
+    rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"
+      ? { data: { ok: true, replayed: true }, error: null }
+      : { data: { ok: true, replayed: false }, error: null };
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "Board not found", code: "board_not_owned", status: 403,
+    });
+    await GET(cronReq());
+    assert.equal(consumeCalls().length, 1, "the row still tried to charge");
+    assertNotReleased();
+  });
+
+  await test("fresh gate: a REPLAYED consume never releases a `rejected` provider failure either", async () => {
+    rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"
+      ? { data: { ok: true, replayed: true }, error: null }
+      : { data: { ok: true, replayed: false }, error: null };
+    publishPinBehaviour = async () => {
+      const e = new PinterestApiError("Insufficient scope", 403, "pinterest_api_error");
+      (e as unknown as { providerStatus: number }).providerStatus = 403;
+      (e as unknown as { providerResourceId: string | null }).providerResourceId = null;
+      throw e;
+    };
+    await GET(cronReq());
+    assertNotReleased();
+  });
+
+  await test("fresh gate: a REPLAYED consume never releases from the OUTER catch either", async () => {
+    // The row-level throw path has its own settleMetering() call site; the gate has to
+    // hold there too, not just after the per-destination loop.
+    rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"
+      ? { data: { ok: true, replayed: true }, error: null }
+      : { data: { ok: true, replayed: false }, error: null };
+    publishPinBehaviour = async () => { throw new NotConnectedError(); };
+    await GET(cronReq());
+    assertNotReleased();
+  });
+
+  await test("fresh gate: a consume on a RE-ARMED key (K:r1 after a refund) IS fresh and DOES release", async () => {
+    // The gate must not degrade into "never refund on a retry". v67 re-arms a refunded
+    // family, so the next consume really charges again — and its own failure really is
+    // refundable. `replayed:false` is exactly that signal, whichever arm it landed on.
+    rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"
+      ? { data: { ok: true, replayed: false, scheduled_posts_used: 1 }, error: null }
+      : { data: { ok: true, replayed: false }, error: null };
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "Board not found", code: "board_not_owned", status: 403,
+    });
+    await GET(cronReq());
+    assertReleased("not_sent", KEY);
+  });
+
+  await test("fresh gate: an `insufficient` consume in SHADOW never releases (it charged nothing)", async () => {
+    // Shadow does not block, so the row still publishes and can fail refundably.
+    // Releasing after a refused consume could only hit a PRIOR attempt's charge.
+    process.env.USAGE_METERING_MODE = "shadow";
+    rpcBehaviour = () => ({ data: { ok: false, reason: "insufficient_capacity" }, error: null });
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "Board not found", code: "board_not_owned", status: 403,
+    });
+    await GET(cronReq());
+    assertNotReleased();
+  });
+
+  await test("fresh gate: a consume that ERRORED never releases", async () => {
+    rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"
+      ? { data: null, error: { message: "simulated ledger outage" } }
+      : { data: { ok: true, replayed: false }, error: null };
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "Board not found", code: "board_not_owned", status: 403,
+    });
+    const res = await GET(cronReq());
+    const body = await res.json() as { failed: number };
+    assert.equal(body.failed, 1, "fail-open: the row still fails normally");
+    assertNotReleased();
+  });
+
+  // ── Provider-internal pre-network failures reach this route through the fan-out ─
+  await test("medium: a fan-out destination flagged preNetwork → not_sent → REFUND", async () => {
+    // dispatchDestination copies PublishResult.preNetwork onto the DestinationOutcome
+    // and this route reads it (`f.preNetwork`). A credential/media refusal inside
+    // official.ts therefore refunds here too, instead of being charged as a timeout.
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "Board not found", code: "board_not_owned", status: 403,
+    });
+    duePayload = {
+      boardId: "b1",
+      imageUrl: "https://example.com/a.png",
+      scheduledDestinations: [
+        { provider: "pinterest", socialConnectionId: "conn-pin-1", boardId: "b1", capturedAt: DUE_AT },
+        { provider: "facebook", socialConnectionId: "conn-fb-1", capturedAt: DUE_AT },
+      ],
+    };
+    fanOutBehaviour = async () => [{
+      provider: "facebook",
+      status: "failed",
+      socialConnectionId: "conn-fb-1",
+      error: "Connect a Facebook Page first.",
+      providerStatus: null,
+      providerResourceId: null,
+      preNetwork: true,
+    }];
+    await GET(cronReq());
+    // Pinterest not_sent + Facebook not_sent → one refund for the Content.
+    assertReleased("not_sent", KEY);
+  });
+
+  await test("medium: a fan-out destination with NO status and NO preNetwork stays delivery_unknown", async () => {
+    // The conservative side of the same rule: an unflagged, statusless failure could be
+    // a timeout, and the product charges for those.
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "Board not found", code: "board_not_owned", status: 403,
+    });
+    duePayload = {
+      boardId: "b1",
+      imageUrl: "https://example.com/a.png",
+      scheduledDestinations: [
+        { provider: "pinterest", socialConnectionId: "conn-pin-1", boardId: "b1", capturedAt: DUE_AT },
+        { provider: "facebook", socialConnectionId: "conn-fb-1", capturedAt: DUE_AT },
+      ],
+    };
+    fanOutBehaviour = async () => [{
+      provider: "facebook",
+      status: "failed",
+      socialConnectionId: "conn-fb-1",
+      error: "something went wrong",
+      providerStatus: null,
+      providerResourceId: null,
+    }];
+    await GET(cronReq());
+    assertNotReleased();
+  });
+
   console.log(`\n${passed} passed, ${failed} failed.`);
   if (failed > 0) process.exit(1);
 })();
