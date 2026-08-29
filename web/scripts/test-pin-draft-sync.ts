@@ -498,7 +498,8 @@ async function main() {
    */
   async function raceDuringPublish(
     key: string,
-    edit: Parameters<typeof store.updateDraft>[1],
+    /** The merchant's in-flight edit; `null` = they touched nothing during the PUT. */
+    edit: Parameters<typeof store.updateDraft>[1] | null,
     serverPatch: Record<string, unknown> = {},
   ) {
     const srv = createMockServer();
