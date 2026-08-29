@@ -113,14 +113,18 @@ export function parseLimitReached(status: number, body: unknown): LimitReached |
 /**
  * The count we can honestly offer as a one-click adjustment (product decision #6).
  *
- * ONLY the recurring allowance counts: bonus images are out of scope this phase
- * (they are passed through but not spendable through this path), so offering
- * recurring+bonus would promise capacity the retry cannot actually draw on.
- * Returns 0 when the server did not tell us — an unknown remainder must degrade to
- * the plain upgrade message, never to a silent smaller request.
+ * R = recurring + bonus: both allowances are spendable through this path, so the
+ * one-click retry must offer the combined remainder, not just the recurring slice.
+ * Returns null when the server told us NEITHER number (both fields absent/unparsed) —
+ * an unknown remainder must degrade to the plain upgrade message, never to a silent
+ * "generate 0 instead". A server-confirmed zero (recurring 0 + bonus 0, i.e. "all
+ * used") is a real, honest 0 and is returned as such — callers treat 0 as "no offer"
+ * the same way they always have, but it is a known 0, not a stand-in for unknown.
  */
-export function offerableRemaining(parsed: LimitReached): number {
-  return parsed.availableRecurring ?? 0;
+export function offerableRemaining(parsed: LimitReached): number | null {
+  const { availableRecurring, availableBonus } = parsed;
+  if (availableRecurring === null && availableBonus === null) return null;
+  return (availableRecurring ?? 0) + (availableBonus ?? 0);
 }
 
 /**

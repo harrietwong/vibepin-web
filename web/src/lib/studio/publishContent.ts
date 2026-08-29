@@ -47,7 +47,7 @@ import {
   type PublishMediaItem,
 } from "../publish/mediaRules";
 import { publishPin, type AttachedProduct, type PinterestClientError } from "../pinterestClient";
-import { publishToSocial } from "../social/socialClient";
+import { publishToSocial, SocialApiError } from "../social/socialClient";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "./pinLifecycle";
 
 export type PublishContentOptions = {
@@ -545,9 +545,14 @@ export async function publishContent(
         }
       } catch (error) {
         const message = (error as Error)?.message || "Publishing failed.";
+        // A SocialApiError (e.g. a 402 scheduled_post_limit_reached refusal) carries the
+        // server's machine-readable code; anything else (network failure, generic 5xx)
+        // has none, and this stays undefined exactly as it did before — the message is
+        // still shown, StudioBoard's limit UI just does not fire for it.
+        const errorCode = error instanceof SocialApiError ? error.code : undefined;
         errors.push({ provider: "social", error });
         for (const destination of socialTargets) {
-          outcomes.push({ ...baseRow(destination, "failed", submittedAt), errorMessage: message });
+          outcomes.push({ ...baseRow(destination, "failed", submittedAt), errorCode, errorMessage: message });
         }
       }
     }

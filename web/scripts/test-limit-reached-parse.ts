@@ -71,7 +71,8 @@ async function main() {
     assert.ok(parsed);
     assert.equal(parsed.availableRecurring, 2);
     assert.equal(parsed.availableBonus, 5);
-    assert.equal(offerableRemaining(parsed), 2);
+    // R = recurring + bonus: both allowances are spendable through this path.
+    assert.equal(offerableRemaining(parsed), 7);
   });
 
   test("camelCase counts are read", () => {
@@ -81,6 +82,23 @@ async function main() {
     assert.ok(parsed);
     assert.equal(parsed.availableRecurring, 3);
     assert.equal(parsed.availableBonus, 0);
+    assert.equal(offerableRemaining(parsed), 3);
+  });
+
+  test("recurring 0 + bonus only → offers the bonus alone", () => {
+    const parsed = parseLimitReached(402, {
+      code: "ai_image_limit_reached", available_recurring: 0, available_bonus: 2,
+    });
+    assert.ok(parsed);
+    assert.equal(offerableRemaining(parsed), 2);
+  });
+
+  test("recurring 0 + bonus 0 → offers 0 (a known zero: all used)", () => {
+    const parsed = parseLimitReached(402, {
+      code: "ai_image_limit_reached", available_recurring: 0, available_bonus: 0,
+    });
+    assert.ok(parsed);
+    assert.equal(offerableRemaining(parsed), 0);
   });
 
   test("MISSING counts → null, not 0 (the production body carries neither)", () => {
@@ -94,8 +112,17 @@ async function main() {
     assert.ok(parsed);
     assert.equal(parsed.availableRecurring, null);
     assert.equal(parsed.availableBonus, null);
-    // An unknown remainder is not offerable — it degrades to the upgrade message.
-    assert.equal(offerableRemaining(parsed), 0);
+    // An unknown remainder (BOTH fields missing) is not offerable as a number at all —
+    // it degrades to the upgrade message, never to a guessed "0 instead".
+    assert.equal(offerableRemaining(parsed), null);
+  });
+
+  test("only recurring missing, bonus known → offerable is the known bonus alone", () => {
+    const parsed = parseLimitReached(402, { code: "ai_image_limit_reached", available_bonus: 4 });
+    assert.ok(parsed);
+    assert.equal(parsed.availableRecurring, null);
+    assert.equal(parsed.availableBonus, 4);
+    assert.equal(offerableRemaining(parsed), 4);
   });
 
   test("explicit zero survives as 0 (distinct from missing)", () => {
