@@ -51,8 +51,18 @@ import { rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRu
 import {
   consumeScheduledPost,
   deriveScheduledPostKey,
+  releaseScheduledPost,
+  scheduledPostLimitResponseBody,
+  usageEnforceFor,
   classifyImmediateBucket,
 } from "@/lib/server/usage/meterScheduledPost";
+import {
+  aggregateDelivery,
+  classifyDelivery,
+  isRefundable,
+  readProviderSignal,
+  type DeliveryOutcome,
+} from "@/lib/server/usage/deliveryOutcome";
 import { logEvent } from "@/lib/server/usage/meterGeneration";
 
 export const dynamic = "force-dynamic";
@@ -135,6 +145,7 @@ export async function POST(req: Request) {
   // branch — see meterScheduledPost.ts's scheduledPostLimitResponseBody(), NOT
   // called from either publish route yet, so this mirrors the pins route's
   // current shadow-only behavior rather than inventing a new enforce switch here).
+  let meterKey: string | null = null;
   if (postId) {
     const rawBucket = body.meteringBucket;
     let bucketOverride: string | undefined;
@@ -151,12 +162,27 @@ export async function POST(req: Request) {
         bucketOverride = rawBucket as string;
       }
     }
-    await consumeScheduledPost({
+    // Kept so a refund below releases the EXACT key that was charged — including a
+    // relayed bucket override. Re-deriving at refund time could resolve to a
+    // different UTC day and refund nothing.
+    meterKey = deriveScheduledPostKey(uid, postId, undefined, bucketOverride);
+    const consumed = await consumeScheduledPost({
       userId: uid,
-      key: deriveScheduledPostKey(uid, postId, undefined, bucketOverride),
+      key: meterKey,
       referenceId: postId,
       metadata: { source: "social_immediate" },
     });
+
+    // ── A.4.0 BLOCKING SITE — refuse over-quota BEFORE any provider dispatch ────
+    // Before this, `insufficient` was recorded and thrown away here too, so the
+    // scheduled-post enforce flag gated nothing on the social path either. Placed
+    // ahead of createPublishJob as well as the dispatch loop: a refused publish must
+    // leave no half-written job row claiming an attempt that never happened. No
+    // refund — an `insufficient` consume charged nothing to give back. In shadow
+    // this branch is unreachable and the route behaves exactly as before.
+    if (consumed.kind === "insufficient" && usageEnforceFor("scheduled_post")) {
+      return Response.json(scheduledPostLimitResponseBody(), { status: 402 });
+    }
   } else {
     // No draft identity on the request — never charge a key that could collide
     // across drafts. Direct API callers that omit postId are simply unmetered.
@@ -176,6 +202,9 @@ export async function POST(req: Request) {
   const jobId = await createPublishJob(db, uid, postId, productId);
 
   const outcomes: DestOutcome[] = [];
+  // Parallel to `outcomes`, but only for targets we actually ATTEMPTED — the refund
+  // classification (below) must not see skips, which are not delivery failures.
+  const deliveries: DeliveryOutcome[] = [];
   for (const raw of requested) {
     const provider = (raw as { provider?: unknown }).provider;
     if (!isSocialProvider(provider)) continue;
@@ -216,6 +245,8 @@ export async function POST(req: Request) {
       : summary?.accounts.find(a => a.connectionStatus === "connected") ?? null;
 
     if (!connection || connection.connectionStatus !== "connected") {
+      // Refused here, before any network call → `not_sent`, refundable.
+      deliveries.push(classifyDelivery({ preNetwork: true }));
       outcomes.push({
         provider,
         status: "failed",
@@ -236,6 +267,13 @@ export async function POST(req: Request) {
         // bearer-verified session user — never a client-supplied value.
         userId: uid,
       });
+      // `not_implemented` never reached a platform → pre-network, refundable.
+      deliveries.push(classifyDelivery({
+        ok: result.ok,
+        preNetwork: result.status === "not_implemented",
+        providerStatus: result.providerStatus,
+        providerResourceId: result.providerResourceId ?? result.externalPostId ?? null,
+      }));
       outcomes.push({
         provider,
         status: result.ok ? "published" : "failed",
@@ -252,11 +290,49 @@ export async function POST(req: Request) {
             : result.error ?? "Publishing is not available for this platform yet.",
       });
     } catch (err) {
+      // A provider that THREW instead of returning a typed failure. The two provider
+      // fields are read off it if present; otherwise this is `delivery_unknown` and
+      // the charge stands — we cannot prove the post was not created.
+      deliveries.push(classifyDelivery(readProviderSignal(err)));
       outcomes.push({
         provider,
         status: "failed",
         socialConnectionId: connection.id,
         error: (err as Error).message || "Publishing failed.",
+      });
+    }
+  }
+
+  /**
+   * ── DELIVERY TRI-STATE → REFUND (design §A.4; PRD v3.2 §5.3/§5.4) ────────────
+   * One Content = one charged unit however many platforms it fans out to, so the
+   * refund decision is singular too — `aggregateDelivery` collapses the per-target
+   * classifications:
+   *
+   *   not_sent  (REFUND)  every attempted target failed before leaving us: no
+   *                       connected account for it, a platform we cannot publish to
+   *                       (`not_implemented`), or the route refused it outright.
+   *   rejected  (REFUND)  every attempted target got a real platform 4xx and no post
+   *                       id back.
+   *   sent      (CHARGE)  ANY target published. Refunding a partial success would
+   *                       make adding one deliberately broken destination a free
+   *                       publish for all the others.
+   *   delivery_unknown    any target timed out / 5xx'd / reported no status, or
+   *             (CHARGE)  nothing was attempted at all.
+   *
+   * `skipped` targets (Pinterest, which has its own route, and coming-soon
+   * platforms) contribute NOTHING: they are not attempts, and counting them as
+   * `not_sent` would refund a Content whose real destinations all published.
+   */
+  if (meterKey && postId) {
+    const outcome: DeliveryOutcome = aggregateDelivery(deliveries);
+    if (isRefundable(outcome)) {
+      await releaseScheduledPost({
+        userId: uid,
+        key: meterKey,
+        reason: outcome,
+        referenceId: postId,
+        metadata: { source: "social_immediate", route: "publish_social" },
       });
     }
   }

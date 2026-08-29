@@ -41,6 +41,28 @@ export class PinterestApiError extends Error {
   code: string;
   /** Pinterest API's own code field (numeric string like "2"), when present. Never a VibePin code. */
   pinterestApiCode?: string;
+  /**
+   * The HTTP status PINTEREST ITSELF returned — set ONLY where this error is built
+   * from a real HTTP response (see `request()` below). Usage refunds read this and
+   * nothing else to decide whether a failed publish was `rejected` (provider said no,
+   * created nothing → refund) or `delivery_unknown` (we never learned → keep the
+   * charge). See lib/server/usage/deliveryOutcome.ts.
+   *
+   * DELIBERATELY SEPARATE FROM `status`. `status` is the HTTP status WE answer the
+   * client with, and the subclasses below set it to values no provider ever sent —
+   * NotConnectedError uses 409, NeedsReconnectError uses 401. If refund logic read
+   * `status`, "your Pinterest account is not connected" (never touched the network)
+   * would classify as a provider 4xx rejection. `providerStatus` stays undefined on
+   * every error that did not come from a Pinterest response, and an undefined status
+   * classifies as `delivery_unknown` — the side that keeps the charge.
+   */
+  providerStatus?: number;
+  /**
+   * A resource id Pinterest returned despite the error, if any. Present means the
+   * Pin exists and the charge stands regardless of status. Undefined is the normal
+   * case for a rejection.
+   */
+  providerResourceId?: string | null;
   constructor(message: string, status: number, code = "pinterest_error", pinterestApiCode?: string) {
     super(message);
     this.name = "PinterestApiError";
@@ -622,7 +644,17 @@ export class PinterestClient {
         await this.hooks.markReconnect(this.connectionId);
         throw new MissingPinterestScopesError(extractMissingScopes(json));
       }
-      throw new PinterestApiError(msg, res.status, "pinterest_api_error", pinterestApiCode);
+      const apiError = new PinterestApiError(msg, res.status, "pinterest_api_error", pinterestApiCode);
+      // The ONE place a Pinterest HTTP status is a real observed provider status.
+      // Everything downstream that decides a usage refund reads this field, never
+      // `status` and never the message (deliveryOutcome.ts's two-field rule).
+      apiError.providerStatus = res.status;
+      // Some Pinterest error bodies still carry the created resource. If one does,
+      // the Pin exists and the publish must stay charged even though this threw.
+      const errorResourceId =
+        body && typeof body.id === "string" && body.id.trim() ? body.id.trim() : null;
+      apiError.providerResourceId = errorResourceId;
+      throw apiError;
     }
     return json as T;
   }

@@ -119,6 +119,26 @@ export interface PublishResult {
    */
   accountName?: string | null;
   error?: string | null;
+  /**
+   * The HTTP status the PLATFORM itself returned, when one was really observed.
+   * Usage refunds (lib/server/usage/deliveryOutcome.ts) read this and
+   * `providerResourceId` — and nothing else, never `error` text — to decide whether
+   * a failed publish is `rejected` (platform said no and created nothing → refund
+   * the scheduled-post unit) or `delivery_unknown` (we never learned what happened →
+   * keep the charge).
+   *
+   * Undefined means NO platform status was observed. That is the honest answer for
+   * every failure decided before the network call (no connection, no Page selected,
+   * media rules, `not_implemented`) and for every transport error that never
+   * produced a response. Undefined classifies as `delivery_unknown`, i.e. the charge
+   * stands — the deliberately conservative side.
+   */
+  providerStatus?: number | null;
+  /**
+   * A resource id the platform returned even though `ok` is false, if any. Present
+   * means the post exists and the charge stands regardless of status.
+   */
+  providerResourceId?: string | null;
 }
 
 export interface DisconnectInput {

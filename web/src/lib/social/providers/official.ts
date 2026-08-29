@@ -131,7 +131,13 @@ export const officialProvider: SocialPublishingProvider = {
       const message = err instanceof FacebookApiError
         ? err.message
         : "Could not publish to Facebook. Please try again.";
-      return { ok: false, status: "failed", error: message };
+      // Graph's OWN status, only when Graph really answered. Anything else (a
+      // socket error, a timeout, a bug in our code) leaves it null, which the
+      // refund classifier reads as `delivery_unknown` and keeps the charge —
+      // deliberately, since we cannot prove the post was not created. See
+      // lib/server/usage/deliveryOutcome.ts.
+      const providerStatus = err instanceof FacebookApiError ? err.status : null;
+      return { ok: false, status: "failed", error: message, providerStatus, providerResourceId: null };
     }
   },
 
@@ -214,6 +220,8 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
     const message = err instanceof InstagramApiError
       ? err.message
       : "Could not publish to Instagram. Please try again.";
-    return { ok: false, status: "failed", error: message };
+    // Same contract as the Facebook branch: a real Instagram status or nothing.
+    const providerStatus = err instanceof InstagramApiError ? err.status : null;
+    return { ok: false, status: "failed", error: message, providerStatus, providerResourceId: null };
   }
 }
