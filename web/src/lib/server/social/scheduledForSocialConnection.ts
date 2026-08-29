@@ -350,12 +350,17 @@ async function cancelOneRow(
           .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at")
           .eq("vibepin_user_id", uid)
           .eq("draft_id", ref.draft_id)
-          .maybeSingle();
+          // `.limit(1)` rather than `.maybeSingle()`: identical against PostgREST
+          // (user_id + draft_id is unique), and it keeps this read on the same chain
+          // shape every other query in these modules uses, so a test fake that is
+          // honest about the rest of the module stays honest about this too.
+          .limit(1);
         if (error) {
           if (isMissingSchemaError(error)) return { snapshot: null, error: null };
           return { snapshot: null, error: error.message };
         }
-        return { snapshot: (data ?? null) as ScheduledDraftRow | null, error: null };
+        const rows = (Array.isArray(data) ? data : []) as ScheduledDraftRow[];
+        return { snapshot: rows[0] ?? null, error: null };
       },
       update: async (ref, values, observed) => {
         let q = db

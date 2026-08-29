@@ -208,7 +208,11 @@ await testAsync("cancel 写回:scheduled_at 置空、释放 claim、按 (user, d
     { vibepin_user_id: "u1", draft_id: "d1", payload: { targetConnectionId: "c1", scheduledDate: "2026-08-09" } },
     { vibepin_user_id: "u1", draft_id: "d2", payload: { targetConnectionId: "c1", scheduledTime: "09:00" } },
   ];
-  const { db, chains } = makeFakeDb([{ data: rows }, { data: null }, { data: null }]);
+  // 写回现在是 compare-and-set:update 以 .select("draft_id") 结尾,返回的行数就是
+  // "有没有命中"。空数组=行在读之后被人改过(CAS 未命中),不是成功 —— 所以每次
+  // 写回的假结果必须回一行,否则这里测的是重试逻辑而不是写回内容。
+  const matched = (id: string) => ({ data: [{ draft_id: id }] });
+  const { db, chains } = makeFakeDb([{ data: rows }, matched("d1"), matched("d2")]);
   const now = "2026-08-07T10:00:00.000Z";
   const outcome = await cancelScheduledForConnection(db, "u1", "c1", now);
   assert.deepEqual(outcome, { cleared: 2, failed: 0, readFailed: false });
@@ -219,10 +223,16 @@ await testAsync("cancel 写回:scheduled_at 置空、释放 claim、按 (user, d
     const patch = update!.args[0] as Record<string, unknown>;
     assert.equal(patch.scheduled_at, null, "必须置空 scheduled_at,否则 cron 照样发");
     assert.equal(patch.publish_claimed_at, null, "顺带释放锁,避免半持有的行");
-    assert.equal(patch.updated_at, now);
+    // 时间戳现在取自**写入那一刻**,不是循环开始前传进来的那个。循环跑到一半时
+    // 商家做的编辑,比一个循环前取的戳要新 —— 用旧戳写回,客户端的 LWW 会把那次
+    // 编辑连同排程一起推回来。所以断言的是"有一个合法且与 payload 一致的戳"。
+    const stamp = patch.updated_at as string;
+    assert.ok(typeof stamp === "string" && !Number.isNaN(Date.parse(stamp)),
+      "必须写一个真实的时间戳");
     const payload = patch.payload as Record<string, unknown>;
     assert.equal(payload.scheduledDate, "");
-    assert.equal(payload.updatedAt, now);
+    assert.equal(payload.updatedAt, stamp,
+      "列与 payload.updatedAt 必须同一个值,否则 LWW 两边打架");
 
     const eqs = eqPairs(calls);
     assert.ok(eqs.some(([c, v]) => c === "vibepin_user_id" && v === "u1"), "写回也必须限定用户");
@@ -238,7 +248,7 @@ await testAsync("单行写回失败只跳过该行,但必须报告 failed(Codex 
   const { db } = makeFakeDb([
     { data: rows },
     { error: { code: "XX000", message: "boom" } },
-    { data: null },
+    { data: [{ draft_id: "d2" }] },
   ]);
   const outcome = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
   assert.equal(outcome.cleared, 1, "一行失败不应吞掉另一行的成功");
@@ -282,10 +292,14 @@ test("Pinterest remove:取消没全清就不许删(Codex #6)", () => {
     "删除前必须同时检查 readFailed 与 failed");
   assert.match(routeSrc, /code: "schedule_cancel_failed"/);
   assert.match(routeSrc, /status: 409/);
-  // 守卫必须在 deleteConnection 之前;否则它只是个装饰。
+  // 守卫必须在删除之前;否则它只是个装饰。删除这一步现在是原子 RPC
+  // (remove_social_connection_if_unscheduled,v67)——查和删在一条 SQL 语句里,
+  // 不再是先 count 再 deleteConnection 的两次往返。断言跟着那一步走。
   const guardAt = routeSrc.indexOf("cancelOutcome.readFailed || cancelOutcome.failed > 0");
-  const deleteAt = routeSrc.indexOf("await deleteConnection(uid, connectionId)");
+  const deleteAt = routeSrc.indexOf("removeConnectionIfUnscheduled(");
   assert.ok(guardAt > 0 && deleteAt > guardAt, "守卫必须挡在删除之前");
+  assert.ok(!/await deleteConnection\(uid, connectionId\)/.test(routeSrc),
+    "不得再走不带排程检查的普通 delete —— 那正是被修掉的竞态");
   // 409 的响应体要能被客户端读成一句人话(parseErrorResponse 只认 body.error)。
   assert.match(routeSrc, /error: userMessage/,
     "客户端的 parseErrorResponse 读 body.error,少了它商家只会看到 HTTP 状态");
@@ -389,9 +403,13 @@ test("软断开与硬移除是两个不同的服务端动作,默认永远是软�
     "软断开必须在 deleteConnection 之前返回(保留行)",
   );
   const cancelAt = socialRoute.indexOf("cancelScheduledForSocialConnection(");
-  const deleteAt = socialRoute.indexOf("await deleteConnection(uid, connectionId)");
+  // 删除这一步现在是原子 RPC(remove_social_connection_if_unscheduled,v67):
+  // 查排程和删行在同一条 SQL 语句里。断言跟着那一步走,顺序契约本身没变。
+  const deleteAt = socialRoute.indexOf("removeConnectionIfUnscheduled(");
   assert.ok(cancelAt > 0 && deleteAt > cancelAt,
     "取消排程必须发生在删除之前:否则中途失败会留下一个没有账号、cron 却照发的排程");
+  assert.ok(!/await deleteConnection\(uid, connectionId\)/.test(socialRoute),
+    "不得再走不带排程检查的普通 delete —— 那正是被修掉的竞态");
   // 顺序还不够——取消还必须真的成功(Codex #6)。
   const guardAt = socialRoute.indexOf("outcome.readFailed || outcome.failed > 0");
   assert.ok(guardAt > cancelAt && deleteAt > guardAt,

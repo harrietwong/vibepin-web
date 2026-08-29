@@ -433,7 +433,12 @@ await testAsync("cancel:多目的地行保住排程,单目的地行才 scheduled
       payload: { scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-2", capturedAt: "x" }] },
     },
   ];
-  const { db, chains } = makeFakeDb([{ data: rows }, { data: null }, { data: null }]);
+  // 写回现在是 compare-and-set:update 以 .select("draft_id") 结尾,返回的行数就是
+  // "有没有命中"。空数组=行在读之后被人改过(CAS 未命中),不是成功 —— 所以每次
+  // 写回的假结果必须回一行。
+  const { db, chains } = makeFakeDb([
+    { data: rows }, { data: [{ draft_id: "multi" }] }, { data: [{ draft_id: "solo" }] },
+  ]);
   const now = "2026-08-27T10:00:00.000Z";
   const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", now);
   assert.deepEqual(outcome, { cleared: 2, failed: 0, readFailed: false },
@@ -458,10 +463,14 @@ await testAsync("cancel:多目的地行保住排程,单目的地行才 scheduled
   const solo = updates[1].patch;
   assert.equal(solo.scheduled_at, null, "最后一条腿被移除后必须退出 cron 的扫描");
   assert.equal(solo.publish_claimed_at, null, "顺带释放锁,避免半持有的行");
-  assert.equal(solo.updated_at, now);
+  // 时间戳取自写入那一刻(见 casUpdate.ts):循环前取的戳会比循环期间的编辑还旧,
+  // 客户端 LWW 会据此把那次编辑连同排程一起推回来。
+  const soloStamp = solo.updated_at as string;
+  assert.ok(typeof soloStamp === "string" && !Number.isNaN(Date.parse(soloStamp)));
   const soloPayload = solo.payload as Record<string, unknown>;
   assert.deepEqual(soloPayload.scheduledDestinations, []);
-  assert.equal(soloPayload.updatedAt, now);
+  assert.equal(soloPayload.updatedAt, soloStamp,
+    "列与 payload.updatedAt 必须同一个值,否则 LWW 两边打架");
 
   for (const u of updates) {
     assert.ok(eqPairs(u.calls).some(([c, v]) => c === "vibepin_user_id" && v === "u1"), "写回必须限定用户");
@@ -483,7 +492,8 @@ await testAsync("destinations 清空时必须同时清 scheduled_at(否则 legac
       scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-1", capturedAt: "x" }],
     },
   }];
-  const { db, chains } = makeFakeDb([{ data: rows }, { data: null }]);
+  // CAS 写回以 .select("draft_id") 结尾,空数组=未命中(要重试),所以假结果回一行。
+  const { db, chains } = makeFakeDb([{ data: rows }, { data: [{ draft_id: "legacy" }] }]);
   await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z");
   const patch = (chains[1].find(c => c.method === "update")!.args[0]) as Record<string, unknown>;
   assert.equal(patch.scheduled_at, null,
@@ -495,7 +505,9 @@ await testAsync("单行写回失败只跳过该行,但必须报告 failed(Codex 
     { vibepin_user_id: "u1", draft_id: "d1", payload: { scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-1", capturedAt: "x" }] } },
     { vibepin_user_id: "u1", draft_id: "d2", payload: { scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-1", capturedAt: "x" }] } },
   ];
-  const { db } = makeFakeDb([{ data: rows }, { error: { code: "XX000", message: "boom" } }, { data: null }]);
+  const { db } = makeFakeDb([
+    { data: rows }, { error: { code: "XX000", message: "boom" } }, { data: [{ draft_id: "d2" }] },
+  ]);
   const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z");
   assert.equal(outcome.cleared, 1, "一行失败不应吞掉另一行的成功");
   // 剩下那一行仍然指向即将被删除的账号。只回 cleared 的话,这次调用与
@@ -521,7 +533,7 @@ await testAsync("全部清干净时 failed=0,路由才被允许删除", async ()
   const rows = [
     { vibepin_user_id: "u1", draft_id: "d1", payload: { scheduledDestinations: [{ provider: "facebook", socialConnectionId: "fb-1", capturedAt: "x" }] } },
   ];
-  const { db } = makeFakeDb([{ data: rows }, { data: null }]);
+  const { db } = makeFakeDb([{ data: rows }, { data: [{ draft_id: "d1" }] }]);
   const outcome = await cancelScheduledForSocialConnection(db, "u1", "fb-1", "2026-08-27T10:00:00.000Z");
   assert.deepEqual(outcome, { cleared: 1, failed: 0, readFailed: false });
 });
@@ -589,8 +601,12 @@ test("Pinterest Remove 是硬删:走 mode=remove,且缺 connectionId 直接 400"
   assert.match(route, /if \(remove && !connectionId\)/, "不点名就不得硬删");
   assert.match(route, /status: 400/, "静默降级成软断开会报告已移除,而 slot 还占着");
   const cancelAt = route.indexOf("cancelScheduledForConnection(");
-  const deleteAt = route.indexOf("await deleteConnection(uid, connectionId)");
+  // 删除这一步现在是原子 RPC(remove_social_connection_if_unscheduled,v67):
+  // 数排程和删行在同一条 SQL 语句里,不再是两次往返。顺序契约不变,只是换了地址。
+  const deleteAt = route.indexOf("removeConnectionIfUnscheduled(");
   assert.ok(cancelAt > 0 && deleteAt > cancelAt, "取消排程必须在删除之前");
+  assert.ok(!/await deleteConnection\(uid, connectionId\)/.test(route),
+    "路由不得再走不带排程检查的普通 delete —— 那正是被修掉的竞态");
   // 而且必须取消成功才准删(Codex #6):否则"已移除"是一句假话。
   const guardAt = route.indexOf("cancelOutcome.readFailed || cancelOutcome.failed > 0");
   assert.ok(guardAt > cancelAt && deleteAt > guardAt, "删除守卫必须夹在取消与删除之间");

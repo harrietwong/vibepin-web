@@ -72,6 +72,8 @@ function makeDb(rows: FakeRow[], opts: FakeDbOptions = {}) {
 
   function makeSelect(cols: string) {
     const filters: Array<(r: FakeRow) => boolean> = [];
+    // 非 null 表示这是一次单行重读(CAS 未命中之后的那一次),而不是候选扫描。
+    let limited: number | null = null;
     const chain: any = {
       eq(col: string, val: unknown) {
         if (col === "vibepin_user_id") filters.push(r => r.vibepin_user_id === val);
@@ -83,20 +85,18 @@ function makeDb(rows: FakeRow[], opts: FakeDbOptions = {}) {
       },
       not() { filters.push(r => r.scheduled_at !== null); return chain; },
       is() { return chain; },
-      // 单行重读走 maybeSingle —— 也就是 CAS 未命中之后的那一次。
-      maybeSingle() {
-        stats.selects++;
-        stats.rereads++;
-        if (opts.rereadMissing) return Promise.resolve({ data: null, error: null });
-        const hit = rows.filter(r => filters.every(f => f(r)))[0] ?? null;
-        // 返回拷贝:调用方拿到的必须是快照而不是活引用,否则"在旧副本上重放"这个
-        // 缺陷会被假表本身掩盖掉。
-        return Promise.resolve({ data: hit ? structuredClone(hit) : null, error: null });
-      },
+      // CAS 未命中之后的单行重读走 .limit(1) —— 和模块里其它查询同一种链形。
+      limit(n: number) { limited = n; stats.rereads++; return chain; },
       then(resolve: (v: unknown) => void) {
         stats.selects++;
         void cols;
-        const hits = rows.filter(r => filters.every(f => f(r))).map(r => structuredClone(r));
+        if (limited !== null && opts.rereadMissing) {
+          return Promise.resolve({ data: [], error: null }).then(resolve);
+        }
+        // 返回拷贝:调用方拿到的必须是快照而不是活引用,否则"在旧副本上重放"这个
+        // 缺陷会被假表本身掩盖掉。
+        let hits = rows.filter(r => filters.every(f => f(r))).map(r => structuredClone(r));
+        if (limited !== null) hits = hits.slice(0, limited);
         return Promise.resolve({ data: hits, error: null }).then(resolve);
       },
     };
