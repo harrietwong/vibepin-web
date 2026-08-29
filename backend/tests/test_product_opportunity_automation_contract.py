@@ -79,6 +79,13 @@ PREAUTH_BACKUP = json.loads(
         / "product_opportunities_v37_pre_authorization_backup_inventory_20260829T024627Z.json"
     ).read_text(encoding="utf-8")
 )
+VPS_READONLY_PARITY = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_vps_readonly_parity_20260829T025149Z.json"
+    ).read_text(encoding="utf-8")
+)
 V63_MIGRATION_PATH = ROOT / "db" / "migrate_v63_product_opportunities_v1.sql"
 V63_MIGRATION = V63_MIGRATION_PATH.read_text(encoding="utf-8")
 STAGE1_BACKUP = json.loads(
@@ -253,6 +260,31 @@ def test_current_preauthorization_receipts_are_read_only_and_not_cutover_receipt
     assert PREAUTH_BACKUP["pitr_enabled"] is False
     assert PREAUTH_BACKUP["restore_tested"] is False
     assert PREAUTH_BACKUP["cutover_eligible"] is False
+
+
+def test_current_vps_parity_receipt_cannot_be_misreported_as_deployed() -> None:
+    functional = "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
+    assert VPS_READONLY_PARITY["candidateCommit"] == functional
+    assert VPS_READONLY_PARITY["mutation"] is False
+    assert VPS_READONLY_PARITY["verdict"] == "BLOCK_FOR_CANDIDATE_DEPLOYMENT"
+    assert VPS_READONLY_PARITY["summary"] == {
+        "totalFiles": 11,
+        "existingFiles": 5,
+        "missingFiles": 6,
+        "matchingFiles": 1,
+        "mismatchedExistingFiles": 4,
+    }
+    supply = VPS_READONLY_PARITY["units"]["vibepin-product-supply.timer"]
+    assert supply["UnitFileState"] == "enabled"
+    assert supply["ActiveState"] == "active"
+    for unit in (
+        "vibepin-product-opportunity-admission.service",
+        "vibepin-product-opportunity-admission.timer",
+        "vibepin-product-tracking.service",
+        "vibepin-product-tracking.timer",
+        "vibepin-pin-classify.timer",
+    ):
+        assert VPS_READONLY_PARITY["units"][unit]["LoadState"] == "not-found"
 
 
 def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:

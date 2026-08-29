@@ -69,6 +69,13 @@ metric history or a disabled timer is live.
   `backend/docs/product_opportunities_v37_pre_authorization_baseline_20260829T024547Z.json`
   and
   `backend/docs/product_opportunities_v37_pre_authorization_backup_inventory_20260829T024627Z.json`.
+- A read-only VPS parity audit found only 1/11 critical candidate files matching,
+  four installed files with different hashes and six Admission/Tracking files
+  absent. The existing legacy Product Supply timer is enabled/active; all new
+  v3.7 Admission/Tracking units are absent and the standalone classify timer is
+  still absent. This is safe current-state evidence but a deployment BLOCK.
+  Evidence:
+  `backend/docs/product_opportunities_v37_vps_readonly_parity_20260829T025149Z.json`.
 
 ## Data quality decision
 

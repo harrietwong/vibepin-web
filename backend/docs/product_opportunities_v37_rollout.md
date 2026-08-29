@@ -465,6 +465,17 @@ Current Stage 0 data/catalog result: PASS. Production remains unchanged. Items
 refreshed at the actual cutover checkpoint, so this result permits Stage 1
 authorization review and does not authorize applying the migration.
 
+The latest read-only VPS parity audit is intentionally a deployment BLOCK, not
+a missing-evidence placeholder. Of 11 candidate-critical runtime/unit files,
+only the existing Product Supply wrapper matches `9a22c163`; four installed
+files differ and six Admission/Tracking files do not exist. The legacy Product
+Supply timer is already enabled/active and waiting for its next scheduled run,
+while Admission and Tracking units are absent and the standalone classify timer
+remains absent. No file, unit or timer was changed. Before any v3.7 install,
+stage the exact candidate bytes separately, run hash readback and
+`systemd-analyze verify`, and keep every new timer disabled. Evidence:
+`backend/docs/product_opportunities_v37_vps_readonly_parity_20260829T025149Z.json`.
+
 ## Stage 1 — Additive database foundation
 
 Authorization-review evidence is now closed locally but production execution is
