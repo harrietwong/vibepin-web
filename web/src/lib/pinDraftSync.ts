@@ -375,10 +375,14 @@ async function flush(): Promise<void> {
         // what is stored. Reconcile instead of insisting: re-base onto the server's
         // copy, keeping only the fields edited since THIS chunk was sent (see
         // reconcileStale), and send the merged result once.
-        const conflicted = await reconcileStale(res, chunk);
+        // Ids the server has TOMBSTONED: reconcileStale applied the deletion, and
+        // they must be acked rather than retried — re-sending would revive the row.
+        const dropped = new Set<string>();
+        const conflicted = await reconcileStale(res, chunk, dropped);
         // Everything the server DID apply in that request is durable; only the
-        // conflicted ids still owe a write.
-        ackEntries(chunk.filter(c => !conflicted.has(c.id)));
+        // conflicted ids still owe a write. A dropped id owes nothing.
+        ackEntries(chunk.filter(c => !conflicted.has(c.id) || dropped.has(c.id)));
+        for (const id of dropped) conflicted.delete(id);
         if (conflicted.size === 0) continue;
 
         const retry = rebuildChunk(conflicted);
@@ -394,7 +398,10 @@ async function flush(): Promise<void> {
           // exactly like a successful sync.
           // Fold the SECOND conflict's current row in as well, so the next cycle
           // starts from what is actually stored instead of repeating this dance.
-          await reconcileStale(res2, retry);
+          const dropped2 = new Set<string>();
+          await reconcileStale(res2, retry, dropped2);
+          // A row tombstoned by the second conflict owes nothing either.
+          ackEntries(retry.filter(c => dropped2.has(c.id)));
           console.warn(
             `[pinDraftSync] draft(s) still stale after one merge+retry — deferred to the next sync: ${[...conflicted].join(", ")}`,
           );
@@ -465,11 +472,28 @@ async function putChunk(token: string, chunk: PutChunk): Promise<Response> {
   });
 }
 
+/**
+ * The row the 409 hands back, as the route writes it (`readCurrentRow`).
+ *
+ * The COLUMNS matter as much as the payload. `updated_at` is what the route's LWW
+ * compares the retry against and can be newer than `payload.updatedAt` (a write that
+ * touches only columns — a tombstone, the draft-cap sweep — never rewrites the
+ * payload). `deleted_at` is the ONLY signal that the row was tombstoned meanwhile:
+ * the DELETE path writes columns exclusively, so a payload-only view of the row still
+ * looks alive.
+ */
+interface StaleCurrentRow {
+  payload?: unknown;
+  updated_at?: string | null;
+  scheduled_at?: string | null;
+  deleted_at?: string | null;
+}
+
 /** The 409 body: `stale[]` always, plus a `current` mirror of stale[0] for single-draft clients. */
 interface StaleConflictBody {
   code?: string;
-  stale?: Array<{ draftId?: string; current?: { payload?: unknown; updated_at?: string } | null }>;
-  current?: { payload?: unknown; updated_at?: string } | null;
+  stale?: Array<{ draftId?: string; current?: StaleCurrentRow | null }>;
+  current?: StaleCurrentRow | null;
 }
 
 /**
@@ -495,8 +519,23 @@ interface StaleConflictBody {
  * A conflict with no `current` (the row vanished between the failed write and the
  * server's re-read) is still returned as conflicted: nothing to re-base onto, so
  * the retry simply re-sends what we have, and the next cycle sees whatever landed.
+ *
+ * A row that is TOMBSTONED, though, is not re-based and not retried — it is applied.
+ * The delete happened on the server (another device, the draft cap), and re-sending
+ * the local copy would revive it (route.ts writes `deleted_at: null` on a newer PUT),
+ * so the draft the merchant deleted would keep coming back. `mergeServerDrafts` is
+ * exactly how the startup pull applies a server deletion, including its rule that a
+ * newer LOCAL edit survives the tombstone — same question, so the same answer.
+ *
+ * `ids` collects the drafts whose outbox entry must be dropped rather than retried:
+ * with the draft gone locally, `rebuildChunk` would skip it and its entry would sit
+ * in the outbox forever, holding `pendingCount` at 1 with nothing left to send.
  */
-async function reconcileStale(res: Response, chunk: PutChunk): Promise<Set<string>> {
+async function reconcileStale(
+  res: Response,
+  chunk: PutChunk,
+  dropped?: Set<string>,
+): Promise<Set<string>> {
   const conflicted = new Set<string>();
   let body: StaleConflictBody | null = null;
   try { body = (await res.json()) as StaleConflictBody; } catch { body = null; }
@@ -516,13 +555,32 @@ async function reconcileStale(res: Response, chunk: PutChunk): Promise<Set<strin
     const id = typeof e?.draftId === "string" ? e.draftId : null;
     if (!id) continue;
     conflicted.add(id);
-    const payload = e?.current?.payload;
+    const current = e?.current ?? null;
+
+    // Tombstoned on the server → apply the deletion, do not re-base and do not retry.
+    const deletedAt = typeof current?.deleted_at === "string" ? current.deleted_at.trim() : "";
+    if (deletedAt) {
+      mergeServerDrafts([], [{ id, deletedAt }]);
+      // Whether or not the local copy survived (a newer local edit does), this write
+      // is finished as far as THIS cycle is concerned: there is nothing to re-base a
+      // retry onto. Drop the entry so the outbox does not stall on a draft that may
+      // no longer exist; a surviving local draft is re-diffed on the next store write.
+      dropped?.add(id);
+      continue;
+    }
+
+    const payload = current?.payload;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) continue;
     const server = payload as unknown as PinDraft;
     if (typeof server.id !== "string" || !server.id) continue;
     const sent = sentById.get(id);
     if (!sent) continue;
-    rebaseDraftOnServer(server, sent);
+    // The row's own columns ride along: `updated_at` can be newer than the payload's,
+    // and stamping the retry below it is what turns a real edit into `skippedStale`.
+    rebaseDraftOnServer(server, sent, {
+      updatedAt:   typeof current?.updated_at === "string" ? current.updated_at : null,
+      scheduledAt: typeof current?.scheduled_at === "string" ? current.scheduled_at : null,
+    });
   }
 
   // A 409 the client cannot parse must not be treated as success: assume the whole

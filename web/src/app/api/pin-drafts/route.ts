@@ -553,6 +553,15 @@ type CurrentRow = {
   payload: Record<string, unknown> | null;
   updated_at: string | null;
   scheduled_at: string | null;
+  /**
+   * The tombstone marker, and the reason it must be here. A DELETE writes ONLY the
+   * columns (`deleted_at` + `updated_at`); it never rewrites `payload`. So a client
+   * handed just the payload cannot tell a concurrently-deleted row from a live one:
+   * it re-bases onto a payload that still looks alive, retries, and the draft the
+   * merchant deleted on another device stays on this one. Nothing else in the 409
+   * body carries this.
+   */
+  deleted_at: string | null;
 };
 
 /** 23505 = unique_violation: our INSERT hit the (vibepin_user_id, draft_id) key. */
@@ -567,6 +576,8 @@ function isUniqueViolation(err: { code?: string; message?: string } | null): boo
  *
  * `scheduled_at` is only selected when the v42 column is known to exist — asking for
  * it on a database without it would turn the conflict response itself into a 500.
+ * `deleted_at` needs no such latch: the GET path selects it unconditionally, so the
+ * column is guaranteed wherever this table exists.
  * A null result (the row vanished entirely between the failed write and this read)
  * is still a conflict; the client gives up for this cycle rather than guessing.
  */
@@ -576,14 +587,16 @@ async function readCurrentRow(
   draftId: string,
   scheduledAtAvailable: boolean,
 ): Promise<CurrentRow | null> {
-  const cols = scheduledAtAvailable ? "payload, updated_at, scheduled_at" : "payload, updated_at";
+  const cols = scheduledAtAvailable
+    ? "payload, updated_at, deleted_at, scheduled_at"
+    : "payload, updated_at, deleted_at";
   const { data, error } = (await db
     .from(TABLE)
     .select(cols)
     .eq("vibepin_user_id", userId)
     .eq("draft_id", draftId)
     .maybeSingle()) as unknown as {
-      data: { payload?: unknown; updated_at?: unknown; scheduled_at?: unknown } | null;
+      data: { payload?: unknown; updated_at?: unknown; scheduled_at?: unknown; deleted_at?: unknown } | null;
       error: { message?: string } | null;
     };
   if (error || !data) return null;
@@ -591,6 +604,7 @@ async function readCurrentRow(
     payload:      (data.payload ?? null) as Record<string, unknown> | null,
     updated_at:   (data.updated_at ?? null) as string | null,
     scheduled_at: (data.scheduled_at ?? null) as string | null,
+    deleted_at:   (data.deleted_at ?? null) as string | null,
   };
 }
 

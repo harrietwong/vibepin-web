@@ -105,7 +105,17 @@ function createMockServer(initial: Row[] = []) {
           const cur = staleCurrent.get(c.draftId) ?? rows.get(c.draftId) ?? null;
           return {
             draftId: c.draftId,
-            current: cur ? { payload: cur.payload, updated_at: cur.updatedAt, scheduled_at: null } : null,
+            // The COLUMNS, as readCurrentRow returns them. `updated_at` is the row's
+            // own clock (which a column-only write moves without touching the
+            // payload) and `deleted_at` is the only place a tombstone shows up.
+            current: cur
+              ? {
+                  payload: cur.payload,
+                  updated_at: cur.updatedAt,
+                  scheduled_at: null,
+                  deleted_at: cur.deletedAt ?? null,
+                }
+              : null,
           };
         });
         return json({ error: "stale", code: "stale", stale, current: stale[0].current, applied, skippedStale }, 409);
@@ -679,20 +689,104 @@ async function main() {
       "the stamp is the store's, not one invented at send time");
   });
 
+  // ── The row's OWN columns, which the payload does not always agree with ────
+
+  await test("409: the retry stamp uses the row's updated_at COLUMN, not just payload.updatedAt", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s7.png", source: "uploaded_image", title: "local" });
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    // A write that moved the COLUMN without rewriting the payload — a tombstone, the
+    // draft-cap sweep, any column-only UPDATE. The payload's own updatedAt is left
+    // behind, so a retry stamped from the payload alone is OLDER than the row: the
+    // route answers 200 skippedStale, the client treats that as success and drops the
+    // outbox entry, and the write is silently gone.
+    const columnAt = new Date(Date.now() + 120_000).toISOString();
+    const stalePayloadAt = new Date(Date.now() - 120_000).toISOString();
+    const row = serverDraft(a.id, columnAt, { title: "server-won" });
+    (row.payload as Record<string, unknown>).updatedAt = stalePayloadAt;
+    srv.staleNext([a.id], 1, [row]);
+
+    store.updateDraft(a.id, { title: "local-edit" });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 4_000);
+
+    const puts = srv.putCalls().slice(putsBefore);
+    assert.equal(puts.length, 2, `409 → exactly one retry (saw ${puts.length} PUTs)`);
+    const retry = puts[1].body!.drafts![0] as unknown as { updatedAt: string; payload: Record<string, unknown> };
+    assert.ok(
+      Date.parse(retry.updatedAt) >= Date.parse(columnAt),
+      `the retry must clear the ROW's clock, not the payload's (${retry.updatedAt} vs column ${columnAt})`,
+    );
+    assert.equal(retry.payload.updatedAt, retry.updatedAt, "payload and envelope must agree");
+    // …and the server must therefore have ACCEPTED it rather than skipping it stale.
+    assert.equal(srv.rows.get(a.id)!.updatedAt, retry.updatedAt,
+      "a retry older than the row is answered 200 skippedStale — acknowledged, never written");
+    // The edit landed BEFORE the PUT went out, so it is part of `sent`: the delta is
+    // empty and the server's row is adopted whole (the s1 case above, unchanged). What
+    // this test is about is the STAMP, and the stamp must be the row's.
+    assert.equal(store.getDraft(a.id)!.title, "server-won",
+      "with no in-flight edit the server's copy is adopted — only the stamp comes from the column");
+    assert.equal(store.getDraft(a.id)!.updatedAt, retry.updatedAt,
+      "the stamp is the store's, not one invented at send time");
+  });
+
+  await test("409: a row TOMBSTONED on the server is applied locally, never retried back to life", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s8.png", source: "uploaded_image", title: "local" });
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    // Deleted on another device while this write was in flight. The DELETE writes
+    // COLUMNS only — the payload still looks perfectly alive — so `deleted_at` is the
+    // one thing that can tell the client. Stamped ahead of the local edit, which is
+    // the case where the deletion is what the merchant last asked for.
+    const deletedAt = new Date(Date.now() + 120_000).toISOString();
+    const tombstone = { ...serverDraft(a.id, deletedAt), deletedAt };
+    srv.staleNext([a.id], 1, [tombstone]);
+
+    store.updateDraft(a.id, { title: "local-edit" });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 4_000);
+    await sleep(60); // any retry PUT would have gone out inside this window
+
+    const puts = srv.putCalls().slice(putsBefore);
+    assert.equal(puts.length, 1,
+      `a tombstoned row must not be re-sent — route.ts writes deleted_at: null on a newer PUT, `
+      + `so the retry would revive the draft the merchant deleted (saw ${puts.length} PUTs)`);
+    assert.equal(store.getDraft(a.id), null,
+      "the local draft must be dropped the same way the startup pull applies a server deletion");
+    assert.equal(sync.__getPinDraftSyncDebug().outboxSize, 0,
+      "the outbox entry must be dropped, not orphaned — rebuildChunk skips a missing draft, "
+      + "so leaving it would hold pendingCount at 1 forever with nothing left to send");
+    assert.ok(srv.rows.get(a.id)!.deletedAt, "the server row must still be a tombstone");
+  });
+
   // ── Source contract ─────────────────────────────────────────────────────────
 
-  await test("source: reconcileStale re-bases field-level and never calls whole-payload mergeServerDrafts", () => {
+  await test("source: reconcileStale re-bases field-level and never LWWs a live server payload", () => {
     const src = fs
       .readFileSync(path.join(__dirname_, "../src/lib/pinDraftSync.ts"), "utf8")
       .replace(/\r\n?/g, "\n");
     const start = src.indexOf("async function reconcileStale");
     assert.ok(start > 0, "reconcileStale must still exist");
     const body = src.slice(start, src.indexOf("function rebuildChunk"));
-    assert.ok(
-      !/\bmergeServerDrafts\s*\(/.test(body),
-      "whole-payload LWW in the 409 path is the defect: a local edit made during a publish is NEWER, "
-      + "so LWW keeps the entire pre-publish copy and the retry resurrects the cleared schedule",
-    );
+    // The defect this guards is whole-PAYLOAD LWW: handing a server payload to
+    // mergeServerDrafts here keeps the local pre-publish copy (it is newer) and the
+    // retry resurrects the cleared schedule. Applying a TOMBSTONE through the same
+    // helper is the opposite — no payload is merged, and it is how the pull path
+    // already applies a server deletion. So the contract is the first argument being
+    // empty, not the helper being unmentioned.
+    for (const call of body.match(/\bmergeServerDrafts\s*\([\s\S]{0,40}/g) ?? []) {
+      assert.match(call, /mergeServerDrafts\s*\(\s*\[\s*\]/,
+        "the 409 path may only apply DELETIONS through mergeServerDrafts, never server payloads: "
+        + "a local edit made during a publish is NEWER, so LWW would keep the entire pre-publish "
+        + `copy and the retry would resurrect the cleared schedule (found: ${call.trim()})`,
+      );
+    }
     assert.ok(/\brebaseDraftOnServer\s*\(/.test(body), "the 409 path must re-base field-level");
     assert.ok(/sentById|c\.draft/.test(body),
       "the delta needs the payload that was SENT — without that snapshot there is nothing to diff against");
