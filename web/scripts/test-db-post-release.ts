@@ -1,5 +1,5 @@
 /**
- * v67 — scheduled-post REFUND (release) + consume key re-arming, against REAL Postgres.
+ * v68 — scheduled-post REFUND (release) + consume key re-arming, against REAL Postgres.
  *
  * The refund rule (PRD v3.2 §5.3/§5.4, decisions #4 and #8) is only half a TS
  * concern. The half that decides whether a merchant is charged twice lives entirely
@@ -30,7 +30,7 @@
  * Writes and deletes real rows in the ISOLATED test project only — never production.
  * The target ref is printed and asserted BEFORE any write (assertNotProduction).
  *
- * REQUIRES migrate_v67_scheduled_post_release.sql to be applied to the TEST project.
+ * REQUIRES migrate_v68_scheduled_post_release.sql to be applied to the TEST project.
  * If it is not, every test here fails loudly with "function does not exist" — which
  * is the correct outcome: a green run against a database without the function would
  * be a green run that verified nothing.
@@ -167,7 +167,7 @@ async function cleanup(): Promise<number> {
 }
 
 (async () => {
-  console.log("=== REAL POSTGRES — v67 scheduled-post release (refund) ===");
+  console.log("=== REAL POSTGRES — v68 scheduled-post release (refund) ===");
   console.log(`  target project ref : ${cfg.projectRef}`);
   console.log(`  run id             : ${RUN_ID}`);
   console.log("  (writes and deletes real rows; never production)\n");
@@ -177,7 +177,7 @@ async function cleanup(): Promise<number> {
     const { error } = await release(acct.userId, `${KEY_PREFIX}:preflight`);
     if (error) {
       throw new Error(
-        `RPC unreachable — has migrate_v67_scheduled_post_release.sql been applied to ${cfg.projectRef}? ${error.message}`,
+        `RPC unreachable — has migrate_v68_scheduled_post_release.sql been applied to ${cfg.projectRef}? ${error.message}`,
       );
     }
   });
