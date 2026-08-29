@@ -419,7 +419,9 @@ async function main() {
     const puts = srv.putCalls().slice(putsBefore);
     assert.equal(puts.length, 2, `409 → exactly one retry (saw ${puts.length} PUTs)`);
     assert.deepEqual(puts[1].body!.drafts!.map(d => d.draftId), [a.id], "the retry carries only the conflicted draft");
-    // The merge is LWW: the server copy was newer, so it won locally too.
+    // Nothing was edited between the send and the 409, so the delta is empty and the
+    // server's row is adopted whole. (It is newer here too, but that is no longer what
+    // decides it — see the re-base cases below.)
     assert.equal(store.getDraft(a.id)!.title, "server-won", "the server's newer copy must be merged in, not ignored");
   });
 
