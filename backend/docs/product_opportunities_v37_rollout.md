@@ -445,7 +445,16 @@ production project ref and functional candidate SHA. No SQL mutation was execute
 2. Query PostgreSQL catalogs—not only PostgREST OpenAPI—and confirm no v63 table,
    view, function, trigger, policy or index with incompatible definitions already
    exists. If one does, stop and produce a schema diff.
-3. Confirm Product Supply, Product Tracking, and metric UI flags remain disabled.
+3. Read back Product Supply, Admission and Tracking unit state; do not assume all
+   Product timers are disabled. The current legacy Product Supply timer is
+   enabled and may continue its separately reviewed discovery schedule until a
+   specifically authorized cutover window. Before capturing the <=900-second
+   Stage 1 baseline, require the Product Supply service to be inactive and its
+   next timer trigger to be at least 30 minutes in the future. If either check
+   fails, do not capture/reuse a baseline and do not apply v63. Any authorized
+   temporary timer stop must preserve and later restore its exact prior state;
+   installing v3.7 must not silently retire legacy intake. Admission, Tracking
+   and both metric UI flags must remain absent/disabled at this stage.
 4. Confirm the deployment candidate contains no unrelated billing, social
    publishing, or other unfinished work. If the full-Web integration branch is
    used, permit only the separately reviewed four-file route-module build unit
@@ -475,6 +484,14 @@ remains absent. No file, unit or timer was changed. Before any v3.7 install,
 stage the exact candidate bytes separately, run hash readback and
 `systemd-analyze verify`, and keep every new timer disabled. Evidence:
 `backend/docs/product_opportunities_v37_vps_readonly_parity_20260829T025149Z.json`.
+
+The enabled legacy Supply timer creates a real cutover race: its write path can
+change `pin_products` or `pin_save_snapshots` after a baseline is captured. The
+post-apply checksum verifier will fail closed if that happens, but the operator
+must prevent the overlap rather than relying on a failed migration window.
+Immediately before the baseline, use read-only `systemctl show` to prove the
+Supply service is inactive and the next trigger is at least 30 minutes away.
+This check does not authorize stopping or changing the timer.
 
 ## Stage 1 — Additive database foundation
 

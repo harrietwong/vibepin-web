@@ -287,6 +287,16 @@ def test_current_vps_parity_receipt_cannot_be_misreported_as_deployed() -> None:
         assert VPS_READONLY_PARITY["units"][unit]["LoadState"] == "not-found"
 
 
+def test_stage1_runbook_accounts_for_the_enabled_legacy_supply_timer() -> None:
+    assert "Confirm Product Supply, Product Tracking, and metric UI flags remain disabled" not in RUNBOOK
+    assert "current legacy Product Supply timer is" in RUNBOOK
+    assert "enabled" in RUNBOOK
+    assert "Product Supply service to be inactive" in RUNBOOK
+    assert "next timer trigger to be at least 30 minutes in the future" in RUNBOOK
+    assert "do not capture/reuse a baseline and do not apply v63" in RUNBOOK
+    assert "must preserve and later restore its exact prior state" in RUNBOOK
+
+
 def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:
     references = set(
         re.findall(
