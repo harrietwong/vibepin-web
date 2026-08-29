@@ -13,6 +13,7 @@ import type {
   SocialProvider,
 } from "./types";
 import { freshAccessToken } from "@/lib/supabaseBrowser";
+import { parseLimitReached, type LimitReached } from "@/lib/usage/limitReached";
 
 async function authHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -31,6 +32,61 @@ async function readError(res: Response, fallback: string): Promise<string> {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * A publish-route refusal that carries a machine-readable `code` (and, for the three
+ * usage-limit codes, the parsed `limit`) instead of only prose. publishContent.ts maps
+ * this onto a DestinationPublishResult's `errorCode` so StudioBoard's limit UI (the
+ * "Generate/schedule more" dialog wiring keyed off `errorCode`) fires for a social-only
+ * refusal exactly as it already does for a Pinterest one — see limitMessageKeyForCode's
+ * callers in StudioBoard.tsx.
+ *
+ * Deliberately NOT `LimitReachedError` (lib/usage/limitReached.ts): that type's `.limit`
+ * only carries `kind` ("scheduled_post"), not the raw server code string StudioBoard
+ * indexes by. This carries both — `code` for the UI, `limit` for callers that want the
+ * parsed recurring/bonus counts too.
+ */
+export class SocialApiError extends Error {
+  readonly status: number;
+  /** The server's machine-readable code, e.g. "scheduled_post_limit_reached". Undefined
+   *  when the failed response carried no recognizable code (a generic 4xx/5xx). */
+  readonly code?: string;
+  /** Populated only when `code` is one of the three usage-limit refusals. */
+  readonly limit?: LimitReached;
+  constructor(message: string, status: number, code?: string, limit?: LimitReached) {
+    super(message);
+    this.name = "SocialApiError";
+    this.status = status;
+    this.code = code;
+    this.limit = limit;
+  }
+}
+
+/**
+ * Read a failed response's body ONCE and build the richest error it supports: a
+ * usage-limit refusal keeps its `code` and parsed `limit`; any other body with a `code`
+ * field keeps just the code; anything else falls back to the existing prose-only Error
+ * shape (never throws on a body that is not JSON).
+ */
+async function readSocialApiError(res: Response, fallback: string): Promise<SocialApiError> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return new SocialApiError(fallback, res.status);
+  }
+  const record = (body && typeof body === "object" && !Array.isArray(body))
+    ? body as Record<string, unknown>
+    : undefined;
+  const limit = parseLimitReached(res.status, body) ?? undefined;
+  const code = limit
+    ? (typeof record?.code === "string" ? record.code : typeof record?.error_type === "string" ? record.error_type : undefined)
+    : (typeof record?.code === "string" ? record.code : undefined);
+  const message = (record && typeof record.error === "string" && record.error.trim())
+    ? record.error
+    : fallback;
+  return new SocialApiError(message, res.status, code, limit);
 }
 
 async function fetchSocialApi(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -161,7 +217,7 @@ export async function publishToSocial(input: {
     headers: await authHeaders(),
     body: JSON.stringify(input),
   });
-  if (!res.ok) throw new Error(await readError(res, "Could not publish"));
+  if (!res.ok) throw await readSocialApiError(res, "Could not publish");
   return res.json();
 }
 

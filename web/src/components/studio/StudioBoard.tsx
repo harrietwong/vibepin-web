@@ -758,7 +758,10 @@ export function StudioBoard() {
     retryContext: { parent: PinDraft | null; targetMediaId?: string },
   ) => {
     setAiGenerating(false);
-    const remaining = Math.min(offerableRemaining(limit), Math.max(0, requested - 1));
+    const offerable = offerableRemaining(limit);
+    // `null` means the server told us neither the recurring nor the bonus remainder —
+    // unknown must degrade to the plain upgrade message, never to a guessed "0 instead".
+    const remaining = offerable === null ? 0 : Math.min(offerable, Math.max(0, requested - 1));
     setLimitPrompt({ limit, requested, remaining, retryOpts: remaining > 0 ? retryOpts : null, retryContext });
   }, []);
 

@@ -37,14 +37,15 @@ async function test(name: string, fn: () => void | Promise<void>): Promise<void>
 }
 
 /** The server's ai_image refusal, with the remaining counts the enforce path knows. */
-function imageLimitBody(availableRecurring: number | null) {
+function imageLimitBody(availableRecurring: number | null, availableBonus: number | null = 0) {
   return {
     ok: false,
     error_type: "ai_image_limit_reached",
     code: "ai_image_limit_reached",
     error: "You have reached your AI image limit for this billing period.",
     urls: [],
-    ...(availableRecurring === null ? {} : { available_recurring: availableRecurring, available_bonus: 0 }),
+    ...(availableRecurring === null ? {} : { available_recurring: availableRecurring }),
+    ...(availableBonus === null ? {} : { available_bonus: availableBonus }),
   };
 }
 
@@ -82,12 +83,17 @@ async function main() {
     let settledToastShown = false;
     let limitStopped = false;
 
-    const deps = (opts: Opts, refuse: (n: number) => boolean, availableRecurring: number | null) => ({
+    const deps = (
+      opts: Opts,
+      refuse: (n: number) => boolean,
+      availableRecurring: number | null,
+      availableBonus: number | null = 0,
+    ) => ({
       store: store as never,
       generate: async ({ setup }: { setup: Opts }) => {
         requestedCounts.push(setup.count);
         if (refuse(setup.count)) {
-          const parsed = parseLimitReached(402, imageLimitBody(availableRecurring));
+          const parsed = parseLimitReached(402, imageLimitBody(availableRecurring, availableBonus));
           assert.ok(parsed, "fixture must parse as a limit");
           throw new LimitReachedError(parsed);
         }
@@ -98,7 +104,10 @@ async function main() {
       // Mirrors StudioBoard: record + suppress the generic settled toast.
       onLimitReached: (limit: NonNullable<ReturnType<typeof parseLimitReached>>, ctx: { retryCount: number }) => {
         limitStopped = true;
-        const remaining = Math.min(offerableRemaining(limit), Math.max(0, ctx.retryCount - 1));
+        const offerable = offerableRemaining(limit);
+        // Mirrors StudioBoard: null (both fields unknown) degrades to 0/no-offer, never a
+        // guessed retry count.
+        const remaining = offerable === null ? 0 : Math.min(offerable, Math.max(0, ctx.retryCount - 1));
         prompt = { remaining, requested: ctx.retryCount, retryOpts: remaining > 0 ? opts : null };
       },
       onSettled: () => { if (!limitStopped) settledToastShown = true; },
@@ -169,7 +178,7 @@ async function main() {
     // is what the retry actually generates against.
     const parent = store.createBoardDraft({
       imageUrl: "https://cdn/parent.jpg",
-      source: "upload",
+      source: "uploaded_image",
       idempotencyKey: "parent-1",
     });
     const ui = makeUi();
@@ -220,17 +229,54 @@ async function main() {
     assert.equal(store.getAllDrafts().length, 0);
   });
 
-  await test("server omits the counts → treated as R=0, never guessed", async () => {
+  await test("server omits BOTH counts → unknown, degrades to upgrade message, never guessed", async () => {
     reset();
     const ui = makeUi();
     const opts = { ...baseOpts, count: 4 };
-    // This is the CURRENT production body: aiImageLimitResponseBody() ships no counts.
-    await runAiGeneration({ parent: null, opts }, ui.deps(opts, () => true, null) as never);
+    // Both fields absent (not even a bonus of 0): the server told us nothing at all.
+    await runAiGeneration({ parent: null, opts }, ui.deps(opts, () => true, null, null) as never);
 
     const staged = ui.prompt;
     assert.ok(staged);
     assert.equal(staged.remaining, 0);
     assert.equal(staged.retryOpts, null, "an unknown remainder must not be re-requested");
+  });
+
+  // ── R = recurring + bonus: both allowances are spendable through this path ──────
+  await test("recurring 0 + bonus 2, requested 4 → dialog offers \"Generate 2 instead\"", async () => {
+    reset();
+    const ui = makeUi();
+    const opts = { ...baseOpts, count: 4 };
+    await runAiGeneration({ parent: null, opts }, ui.deps(opts, () => true, 0, 2) as never);
+
+    const staged = ui.prompt;
+    assert.ok(staged, "a limit prompt must be staged");
+    assert.equal(staged.remaining, 2, "R = recurring(0) + bonus(2) = 2");
+    assert.ok(staged.retryOpts, "R>0 must offer the one-click adjustment");
+  });
+
+  await test("recurring 3 + bonus 1, requested 4 → offers 4 (the combined remainder)", async () => {
+    reset();
+    const ui = makeUi();
+    const opts = { ...baseOpts, count: 5 };
+    await runAiGeneration({ parent: null, opts }, ui.deps(opts, () => true, 3, 1) as never);
+
+    const staged = ui.prompt;
+    assert.ok(staged, "a limit prompt must be staged");
+    assert.equal(staged.remaining, 4, "R = recurring(3) + bonus(1) = 4");
+    assert.ok(staged.retryOpts, "R>0 must offer the one-click adjustment");
+  });
+
+  await test("recurring 0 + bonus 0 → no offer (all used, a KNOWN zero)", async () => {
+    reset();
+    const ui = makeUi();
+    const opts = { ...baseOpts, count: 4 };
+    await runAiGeneration({ parent: null, opts }, ui.deps(opts, () => true, 0, 0) as never);
+
+    const staged = ui.prompt;
+    assert.ok(staged);
+    assert.equal(staged.remaining, 0);
+    assert.equal(staged.retryOpts, null, "a known zero must NOT offer a retry");
   });
 
   // ── multi-group: the batch STOPS, it does not 402 once per reference ─────────
