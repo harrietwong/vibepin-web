@@ -2699,6 +2699,17 @@ const vi: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Rút ngắn tiêu đề hoặc mô tả trước khi lên lịch hoặc đăng.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Bạn đã dùng hết số ảnh AI có trong gói hiện tại. Hãy nâng cấp gói để tạo thêm ảnh.",
+  "studioBoard.limit.text.allUsed": "Bạn đã dùng hết số lần tạo văn bản AI có trong gói hiện tại. Hãy nâng cấp gói để tiếp tục tạo nội dung AI.",
+  "studioBoard.limit.post.allUsed": "Bạn đã dùng hết số bài đăng đã lên lịch có trong gói hiện tại. Hãy nâng cấp gói để lên lịch hoặc đăng thêm bài.",
+  "studioBoard.limit.upgradeCta": "Xem các gói",
+  "studioBoard.limit.reachedTitle": "Đã đạt giới hạn của gói",
+  "studioBoard.limit.image.overRequestTitle": "Không còn đủ ảnh AI",
+  "studioBoard.limit.image.overRequestBody": "Bạn đã yêu cầu {requested} ảnh nhưng gói hiện tại chỉ còn {remaining}. Hãy tạo số ảnh còn lại, hoặc nâng cấp gói để có thêm.",
+  "studioBoard.limit.image.generateRemaining": "Tạo {remaining} thay vì vậy",
+  "studioBoard.limit.image.generateOneRemaining": "Tạo 1 thay vì vậy",
 };
 
 export default vi;

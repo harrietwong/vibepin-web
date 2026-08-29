@@ -21,6 +21,7 @@ import type { LinkedProduct } from "@/lib/pinMetadata";
 import { planReferenceGroups } from "@/lib/studio/selectedReferences";
 import { resolveProductPublicUrl, toLinkedProduct } from "@/lib/studio/productSelection";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
+import { isLimitReachedError, type LimitReached } from "@/lib/usage/limitReached";
 
 /**
  * The draft-store surface this run needs. Typed off the real module so a fake in a
@@ -31,6 +32,12 @@ export type GenerationStore = {
   updateDraft: (id: string, patch: Partial<PinDraft>) => void;
   completeGeneratedDraft: (id: string, url: string) => void;
   failGeneratedDraft: (id: string) => void;
+  /**
+   * Hard delete. Used ONLY for the placeholders of a batch that a usage limit
+   * refused: those Pins were never attempted, so leaving them as FAILED cards (with
+   * a Retry that would hit the same 402) would be a lie about what happened.
+   */
+  deleteDraft: (id: string) => void;
 };
 
 export type GenerationResult = { urls: string[] };
@@ -46,6 +53,12 @@ export type RunAiGenerationDeps = {
   onPlaceholdersReady?: (totalPins: number) => void;
   onGroupProgress?: (current: number, total: number) => void;
   onSettled?: (summary: { okCount: number; failCount: number }) => void;
+  /**
+   * The server refused on usage. Fired at most ONCE per run, after every untouched
+   * placeholder has been removed. `retryCount` is the per-group count that was
+   * refused, so the UI can offer "generate R instead" against the same request shape.
+   */
+  onLimitReached?: (limit: LimitReached, context: { retryCount: number }) => void;
   now?: () => number;
   randomId?: () => string;
 };
@@ -95,7 +108,14 @@ export function resolveProductLinkPatch(
 export async function runAiGeneration(
   input: RunAiGenerationInput,
   deps: RunAiGenerationDeps,
-): Promise<{ okCount: number; failCount: number; requestId: string; totalPins: number }> {
+): Promise<{
+  okCount: number;
+  failCount: number;
+  requestId: string;
+  totalPins: number;
+  /** Non-null when the run was stopped by a usage limit rather than finishing. */
+  limitReached: LimitReached | null;
+}> {
   const { parent, opts } = input;
   const { store, generate, resolveModelLabel } = deps;
   const now = deps.now ?? (() => Date.now());
@@ -165,7 +185,9 @@ export async function runAiGeneration(
   // second call with 429, so parallel groups would fail the 2nd and 3rd outright.
   let okCount = 0;
   let failCount = 0;
+  let limitReached: LimitReached | null = null;
   for (const group of groups) {
+    if (limitReached) break;
     const placeholders = groupPlaceholders[group.index];
     deps.onGroupProgress?.(group.index + 1, groups.length);
     try {
@@ -195,13 +217,32 @@ export async function runAiGeneration(
         // promised exactly totalPins, so there is nothing to report to the user.
         console.warn(`[runAiGeneration] provider returned ${discarded} image(s) beyond the requested count; discarded`);
       }
-    } catch {
+    } catch (err) {
+      // ── USAGE REFUSAL: stop the batch, do not fail-and-continue ────────────────
+      // Every remaining group would send an identical request to a server that just
+      // said "no capacity", producing one 402 per group and a board full of failed
+      // cards. The user gets ONE decision point instead (product decision #6).
+      if (isLimitReachedError(err)) {
+        limitReached = err.limit;
+        // This group was refused before any image existed, and the later groups were
+        // never attempted at all. Neither produced a Pin, so both are DELETED rather
+        // than marked failed — a failed card offers a Retry that cannot succeed.
+        for (let i = group.index; i < groups.length; i++) {
+          groupPlaceholders[i].forEach(p => store.deleteDraft(p.id));
+        }
+        break;
+      }
       // This reference failed; keep going so the others still produce results.
       placeholders.forEach(p => store.failGeneratedDraft(p.id));
       failCount += placeholders.length;
     }
   }
 
+  if (limitReached) {
+    // Fired AFTER cleanup so the UI never renders a dialog over orphaned placeholders.
+    deps.onLimitReached?.(limitReached, { retryCount: perGroup });
+  }
+
   deps.onSettled?.({ okCount, failCount });
-  return { okCount, failCount, requestId, totalPins };
+  return { okCount, failCount, requestId, totalPins, limitReached };
 }

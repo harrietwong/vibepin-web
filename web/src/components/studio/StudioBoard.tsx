@@ -39,6 +39,9 @@ import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { type SelectedReference } from "@/lib/studio/selectedReferences";
 import { runAiGeneration } from "@/lib/studio/runAiGeneration";
+import { isLimitReachedError, limitMessageKeyForCode, offerableRemaining, type LimitReached } from "@/lib/usage/limitReached";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
 import { deriveTopPickIds } from "@/lib/studio/topPick";
@@ -287,6 +290,17 @@ export function StudioBoard() {
   const [aiDrawer, setAiDrawer] = useState<AiDrawerState>(null);
   const [aiSetupCache, setAiSetupCache] = useState<Record<string, AiVersionDrawerSetup>>({});
   const [aiGenerating, setAiGenerating] = useState(false);
+  /**
+   * The usage limit the server just refused a generation with, plus enough context to
+   * re-issue the SAME request at the remaining count (product decision #6: never
+   * silently generate fewer, never exceed the limit — ask, and offer one click).
+   *
+   * `retryOpts` is the exact AiVersionOptions of the refused run, so the confirm path
+   * only has to override `count`. Null when no limit dialog is open.
+   */
+  const [limitPrompt, setLimitPrompt] = useState<
+    { limit: LimitReached; requested: number; remaining: number; retryOpts: AiVersionOptions | null } | null
+  >(null);
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [productPickerTargetId, setProductPickerTargetId] = useState<string | null>(null);
   const [pendingUploadFiles, setPendingUploadFiles] = useState<File[] | null>(null);
@@ -617,7 +631,20 @@ export function StudioBoard() {
         .replace("{published}", String(publishedCount))
         .replace("{failed}", String(failedCount)));
     } else if (publishedCount) toast.success(tr("studioBoard.toast.publishSuccess"));
-    else toast.error(tr("studioBoard.toast.publishFailed"));
+    else {
+      // A scheduled-post quota refusal is a billing state, not a broken publish: show
+      // the PRD sentence with a Billing link instead of the generic "publish failed",
+      // at neutral severity. PRD v3.2 §5. Exactly one toast either way.
+      const limitKey = outcome.failed.map(r => limitMessageKeyForCode(r.errorCode)).find(Boolean);
+      if (limitKey) {
+        toast.message(tr(limitKey as Parameters<typeof tr>[0]), {
+          action: {
+            label: tr("studioBoard.limit.upgradeCta"),
+            onClick: () => { window.location.href = SETTINGS_BILLING_PATH; },
+          },
+        });
+      } else toast.error(tr("studioBoard.toast.publishFailed"));
+    }
   }, [noBoardAccess, tr]);
 
   const handleCustomSchedule = useCallback((id: string, date: string, time: string) => {
@@ -708,6 +735,35 @@ export function StudioBoard() {
   const handleGenerateAiImage = useCallback((d: PinDraft, mediaId?: string) =>
     setAiDrawer({ mode: "version", draft: d, targetMediaId: mediaId }), []);
   const handleCreateWithAi = useCallback(() => setAiDrawer({ mode: "scratch" }), []);
+  /**
+   * A generation was refused for lack of quota. Decide between the two PRD outcomes
+   * and stage the dialog; the actual re-request happens only on the user's click.
+   *
+   * R > 0  → the over-request confirmation with a one-click "generate R instead".
+   * R === 0 or unknown → the plain upgrade message. `null` (the server did not tell
+   *   us what remains) is deliberately treated as "cannot offer an adjustment": we
+   *   will not guess a number and re-request against it.
+   */
+  const handleGenerationLimit = useCallback((limit: LimitReached, requested: number, retryOpts: AiVersionOptions) => {
+    setAiGenerating(false);
+    const remaining = Math.min(offerableRemaining(limit), Math.max(0, requested - 1));
+    setLimitPrompt({ limit, requested, remaining, retryOpts: remaining > 0 ? retryOpts : null });
+  }, []);
+
+  /** Dismiss the quota dialog. Placeholders were already removed by the run itself. */
+  const dismissLimitPrompt = useCallback(() => setLimitPrompt(null), []);
+
+  /**
+   * Settings -> Billing. Navigates the same way every other cross-surface jump in
+   * this file does (window.location, as with planDeepLink) rather than introducing a
+   * router dependency: /app/settings/billing is a real route that the app shell
+   * auto-opens the Billing tab for.
+   */
+  const openBillingSettings = useCallback(() => {
+    setLimitPrompt(null);
+    window.location.href = SETTINGS_BILLING_PATH;
+  }, []);
+
   const handleAiGenerate = useCallback(async (opts: AiVersionOptions) => {
     if (!aiDrawer) return;
     const parent = aiDrawer.mode === "version" ? aiDrawer.draft : null;
@@ -740,7 +796,17 @@ export function StudioBoard() {
     // Probing FIRST matters: runAiGeneration creates placeholders eagerly, so
     // letting it run before we know the mode would leave orphan cards behind in
     // worker mode.
-    const workerProbe = await enqueueGeneration({ source: parent, setup: opts }).catch(() => "error" as const);
+    // A usage refusal must be distinguishable from a generic worker error: the first
+    // opens the quota dialog, the second shows "couldn't generate". Catching them into
+    // one "error" sentinel (as this did) would show the wrong message for a 402.
+    const workerProbe = await enqueueGeneration({ source: parent, setup: opts })
+      .catch((err: unknown) => (isLimitReachedError(err) ? { limit: err.limit } : ("error" as const)));
+    if (workerProbe && typeof workerProbe === "object" && "limit" in workerProbe) {
+      // No placeholder cards exist yet on this path, so there is nothing to clean up.
+      setAiDrawer(null);
+      handleGenerationLimit(workerProbe.limit, Math.max(1, opts.count || 1), opts);
+      return;
+    }
     if (workerProbe === "error") {
       // Worker path errored (e.g. 503 generation_unavailable) — surface it rather than
       // silently falling back to the (likely also broken) inline path. No placeholder
@@ -757,6 +823,7 @@ export function StudioBoard() {
       // tests with a real store and a fake generate() — see test-ai-generation-run.
       const batchToastId = `gen-batch-${Date.now()}`;
       let groupTotal = 1;
+      let limitStopped = false;
       await runAiGeneration({ parent, opts }, {
         store: pinDraftStore,
         generate: ({ styleReference, batchRequestId, setup }) =>
@@ -785,8 +852,18 @@ export function StudioBoard() {
             );
           }
         },
+        onLimitReached: (limit, { retryCount }) => {
+          // Stop the batch UI and hand the decision to the user. The run has already
+          // removed every placeholder it did not fill, so nothing is left dangling.
+          if (groupTotal > 1) toast.dismiss(batchToastId);
+          limitStopped = true;
+          handleGenerationLimit(limit, retryCount, opts);
+        },
         onSettled: ({ okCount, failCount }) => {
           if (groupTotal > 1) toast.dismiss(batchToastId);
+          // A usage refusal is NOT "we could not generate": the dialog explains it.
+          // Without this guard a red error toast would render UNDER the dialog.
+          if (limitStopped) return;
           if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
           else if (okCount) toast.success(parent
             ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
@@ -857,7 +934,15 @@ export function StudioBoard() {
     let enqueued: Awaited<ReturnType<typeof enqueueGeneration>> = null;
     try {
       enqueued = await enqueueGeneration({ source: parent, setup: opts });
-    } catch {
+    } catch (err) {
+      // A usage refusal is not a failure of these Pins: nothing was attempted, so the
+      // placeholders are DELETED (not failed — a failed card offers a Retry that would
+      // hit the same 402) and the user gets the quota dialog instead of an error toast.
+      if (isLimitReachedError(err)) {
+        placeholders.forEach(ph => pinDraftStore.deleteDraft(ph.id));
+        handleGenerationLimit(err.limit, Math.max(1, opts.count || 1), opts);
+        return;
+      }
       // Worker path errored (e.g. 503 generation_unavailable) — fail these placeholders
       // outright rather than silently falling back to the (likely also broken) inline path.
       placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
@@ -941,6 +1026,7 @@ export function StudioBoard() {
     // tests with a real store and a fake generate() — see test-ai-generation-run.
     const batchToastId = `gen-batch-${Date.now()}`;
     let groupTotal = 1;
+    let limitStopped = false;
     await runAiGeneration({ parent, opts }, {
       store: pinDraftStore,
       generate: ({ styleReference, batchRequestId, setup }) =>
@@ -969,8 +1055,18 @@ export function StudioBoard() {
           );
         }
       },
+      onLimitReached: (limit, { retryCount }) => {
+        // Stop the batch UI and hand the decision to the user. The run has already
+        // removed every placeholder it did not fill, so nothing is left dangling.
+        if (groupTotal > 1) toast.dismiss(batchToastId);
+        limitStopped = true;
+        handleGenerationLimit(limit, retryCount, opts);
+      },
       onSettled: ({ okCount, failCount }) => {
         if (groupTotal > 1) toast.dismiss(batchToastId);
+        // A usage refusal is NOT "we could not generate": the dialog explains it.
+        // Without this guard a red error toast would render UNDER the dialog.
+        if (limitStopped) return;
         if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
         else if (okCount) toast.success(parent
           ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
@@ -978,7 +1074,25 @@ export function StudioBoard() {
         else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
       },
     });
-  }, [aiDrawer, defaultDestinationsForNewContent, tr]);
+  }, [aiDrawer, defaultDestinationsForNewContent, handleGenerationLimit, tr]);
+
+  /**
+   * "Generate R instead" (product decision #6, option B).
+   *
+   * Re-issues the SAME request with count clamped to what the plan actually has left.
+   * This only ever runs from the user's click — the code never silently downshifts a
+   * request, which is the whole point of the confirmation.
+   *
+   * One simplification: a multi-reference batch plans count-per-reference, so R is
+   * applied as the per-group count. The dialog is raised by the first group that was
+   * refused, and R is the total remaining, so this can never exceed the balance.
+   */
+  const confirmGenerateRemaining = useCallback(async () => {
+    const prompt = limitPrompt;
+    if (!prompt?.retryOpts || prompt.remaining <= 0) return;
+    setLimitPrompt(null);
+    await handleAiGenerate({ ...prompt.retryOpts, count: prompt.remaining });
+  }, [handleAiGenerate, limitPrompt]);
 
 
   // ── Bulk actions (PRD §19/§30) ──────────────────────────────────────────────
@@ -1070,9 +1184,15 @@ export function StudioBoard() {
       } else {
         // Never a bare "Publish failed": the destination's own reason is what the
         // merchant can act on, and publishContent always records one.
+        // A scheduled-post quota refusal is shown with the PRD's sentence rather than
+        // the server's raw prose, and only once per Content (this is the single place
+        // a bulk row's failure message is composed). PRD v3.2 §5.
+        const limitKey = outcome.failed.map(r => limitMessageKeyForCode(r.errorCode)).find(Boolean);
         rows.push({
           id: target.id, title: target.title, status: "failed",
-          message: outcome.failed.map(r => r.errorMessage).find(Boolean) || tr("studioBoard.blocker.unknown"),
+          message: limitKey
+            ? tr(limitKey as Parameters<typeof tr>[0])
+            : outcome.failed.map(r => r.errorMessage).find(Boolean) || tr("studioBoard.blocker.unknown"),
         });
       }
     }
@@ -1532,6 +1652,42 @@ export function StudioBoard() {
           onClose={() => { setShowProductPicker(false); setProductPickerTargetId(null); }}
         />
       )}
+
+      {/* ── Usage limit reached (PRD v3.2 §4.3, product decision #6) ─────────────
+          Two shapes from ONE state. When the plan still has images left we ask
+          before adjusting; when it has none (or the server did not say how many
+          remain) we show the upgrade message with a link to Billing. Either way the
+          user decides — nothing is re-requested without a click. */}
+      {limitPrompt && (
+        limitPrompt.remaining > 0 && limitPrompt.retryOpts ? (
+          <ConfirmDialog
+            open
+            testId="limit-over-request"
+            title={tr("studioBoard.limit.image.overRequestTitle")}
+            body={tr("studioBoard.limit.image.overRequestBody")
+              .replace("{requested}", String(limitPrompt.requested))
+              .replace("{remaining}", String(limitPrompt.remaining))}
+            confirmLabel={limitPrompt.remaining === 1
+              ? tr("studioBoard.limit.image.generateOneRemaining")
+              : tr("studioBoard.limit.image.generateRemaining").replace("{remaining}", String(limitPrompt.remaining))}
+            onConfirm={() => { void confirmGenerateRemaining(); }}
+            onCancel={dismissLimitPrompt}
+          />
+        ) : (
+          <ConfirmDialog
+            open
+            testId="limit-upgrade"
+            title={tr("studioBoard.limit.reachedTitle")}
+            body={tr(limitPrompt.limit.kind === "ai_text" ? "studioBoard.limit.text.allUsed"
+              : limitPrompt.limit.kind === "scheduled_post" ? "studioBoard.limit.post.allUsed"
+              : "studioBoard.limit.image.allUsed")}
+            confirmLabel={tr("studioBoard.limit.upgradeCta")}
+            onConfirm={openBillingSettings}
+            onCancel={dismissLimitPrompt}
+          />
+        )
+      )}
+
       <BatchEditDrawer
         open={batchEditOpen}
         pins={selectedBatchPins}

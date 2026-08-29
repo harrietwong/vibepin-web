@@ -3058,6 +3058,17 @@ const it: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Accorcia il titolo o la descrizione prima di programmare o pubblicare.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Hai utilizzato tutte le immagini IA incluse nel tuo piano attuale. Passa a un piano superiore per generare altre immagini.",
+  "studioBoard.limit.text.allUsed": "Hai utilizzato tutte le generazioni di testo IA incluse nel tuo piano attuale. Passa a un piano superiore per continuare a generare contenuti IA.",
+  "studioBoard.limit.post.allUsed": "Hai utilizzato tutti i post programmati inclusi nel tuo piano attuale. Passa a un piano superiore per programmare o pubblicare altri post.",
+  "studioBoard.limit.upgradeCta": "Vedi i piani",
+  "studioBoard.limit.reachedTitle": "Limite del piano raggiunto",
+  "studioBoard.limit.image.overRequestTitle": "Immagini IA rimanenti insufficienti",
+  "studioBoard.limit.image.overRequestBody": "Hai richiesto {requested} immagini ma nel tuo piano attuale ne restano solo {remaining}. Genera invece le immagini rimanenti oppure passa a un piano superiore.",
+  "studioBoard.limit.image.generateRemaining": "Genera invece {remaining}",
+  "studioBoard.limit.image.generateOneRemaining": "Genera invece 1",
 };
 
 export default it;

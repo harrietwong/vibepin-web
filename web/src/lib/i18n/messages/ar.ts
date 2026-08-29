@@ -2693,6 +2693,17 @@ const ar: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "اختصر العنوان أو الوصف قبل الجدولة أو النشر.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "لقد استخدمت جميع صور الذكاء الاصطناعي المضمّنة في خطتك الحالية. قم بترقية خطتك لإنشاء المزيد من الصور.",
+  "studioBoard.limit.text.allUsed": "لقد استخدمت جميع عمليات إنشاء النصوص بالذكاء الاصطناعي المضمّنة في خطتك الحالية. قم بترقية خطتك لمواصلة إنشاء محتوى بالذكاء الاصطناعي.",
+  "studioBoard.limit.post.allUsed": "لقد استخدمت جميع المنشورات المجدولة المضمّنة في خطتك الحالية. قم بترقية خطتك لجدولة أو نشر المزيد من المنشورات.",
+  "studioBoard.limit.upgradeCta": "عرض الخطط",
+  "studioBoard.limit.reachedTitle": "تم بلوغ حد الخطة",
+  "studioBoard.limit.image.overRequestTitle": "لم تتبقَّ صور ذكاء اصطناعي كافية",
+  "studioBoard.limit.image.overRequestBody": "لقد طلبت {requested} صورة ولكن لم يتبقَّ سوى {remaining} في خطتك الحالية. أنشئ الصور المتبقية بدلاً من ذلك، أو قم بترقية خطتك للحصول على المزيد.",
+  "studioBoard.limit.image.generateRemaining": "أنشئ {remaining} بدلاً من ذلك",
+  "studioBoard.limit.image.generateOneRemaining": "أنشئ صورة واحدة بدلاً من ذلك",
 };
 
 export default ar;

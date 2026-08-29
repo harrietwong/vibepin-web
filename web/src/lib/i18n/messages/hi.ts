@@ -2689,6 +2689,17 @@ const hi: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "शेड्यूल या प्रकाशित करने से पहले शीर्षक या विवरण छोटा करें।",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "आपने अपनी वर्तमान योजना में शामिल सभी AI छवियों का उपयोग कर लिया है। अधिक छवियाँ बनाने के लिए अपनी योजना अपग्रेड करें।",
+  "studioBoard.limit.text.allUsed": "आपने अपनी वर्तमान योजना में शामिल सभी AI टेक्स्ट जेनरेशन का उपयोग कर लिया है। AI सामग्री बनाना जारी रखने के लिए अपनी योजना अपग्रेड करें।",
+  "studioBoard.limit.post.allUsed": "आपने अपनी वर्तमान योजना में शामिल सभी शेड्यूल पोस्ट का उपयोग कर लिया है। अधिक पोस्ट शेड्यूल या प्रकाशित करने के लिए अपनी योजना अपग्रेड करें।",
+  "studioBoard.limit.upgradeCta": "योजनाएँ देखें",
+  "studioBoard.limit.reachedTitle": "योजना की सीमा पूरी हो गई",
+  "studioBoard.limit.image.overRequestTitle": "पर्याप्त AI छवियाँ शेष नहीं",
+  "studioBoard.limit.image.overRequestBody": "आपने {requested} छवियाँ माँगी थीं, लेकिन आपकी वर्तमान योजना में केवल {remaining} शेष हैं। इसके बजाय शेष छवियाँ बनाएँ, या अधिक के लिए अपनी योजना अपग्रेड करें।",
+  "studioBoard.limit.image.generateRemaining": "इसके बजाय {remaining} बनाएँ",
+  "studioBoard.limit.image.generateOneRemaining": "इसके बजाय 1 बनाएँ",
 };
 
 export default hi;
