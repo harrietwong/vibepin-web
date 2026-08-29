@@ -441,6 +441,7 @@ function runGenerator(
 ): Promise<NextResponse> {
   return new Promise((resolve) => {
     const child = spawn(
+      /* turbopackIgnore: true */
       PYTHON_BIN,
       [GENERATOR_SCRIPT, "--from-stdin"],
       {

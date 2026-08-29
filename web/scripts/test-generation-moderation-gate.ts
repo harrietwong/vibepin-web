@@ -57,6 +57,7 @@ process.env.FASTAPI_URL = "http://127.0.0.1:1"; // unroutable → health fetch t
 // Isolated lock root so real lock dirs never collide / persist.
 import os from "node:os";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 process.env.VIBEPIN_GENERATION_LOCK_DIR = path.join(os.tmpdir(), `vibepin-modgate-${Date.now()}`);
 
 export {};
@@ -454,6 +455,17 @@ const freshUser = () => `u_hard_${++uniqueUserSeq}_${Math.random().toString(36).
 
 async function main() {
   console.log("\nGeneration route moderation-gate tests\n");
+
+  await test("inline Python spawn is excluded from Turbopack project-wide tracing", () => {
+    const routeSource = readFileSync(
+      new URL("../src/app/api/generate/route.ts", import.meta.url),
+      "utf8",
+    );
+    assert(
+      /spawn\(\s*\/\*\s*turbopackIgnore:\s*true\s*\*\/\s*PYTHON_BIN/.test(routeSource),
+      "dynamic inline spawn must not make the production worker route trace the whole web project",
+    );
+  });
 
   await test("allow → dispatch invoked exactly once", async () => {
     const { status, json } = await runWith("allow", fullBody());
