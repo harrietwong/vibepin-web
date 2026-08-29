@@ -2,16 +2,29 @@
  * scheduledDestinationsAvailable.ts — refuse to STORE a schedule aimed at an
  * account that cannot publish it.
  *
- * The remove path is now atomic: an account with live schedules is not deleted
- * (remove_social_connection_if_unscheduled, v67). That closes one direction of
- * the race. This closes the other, and both are needed — otherwise the merchant
- * removes an account, a tab that has been open since before the removal syncs,
- * and a brand-new schedule is written naming the row that just went away. The
- * cron then owns exactly the orphan the delete guard exists to prevent, and no
- * screen can explain it because the account it names is gone.
+ * The case: the merchant removes an account, a tab that has been open since
+ * before the removal syncs, and a brand-new schedule is written naming the row
+ * that just went away. The cron would then own an orphan no screen can explain,
+ * because the account it names is gone. Refusing the WRITE is what this does.
  *
  * Deliberately NOT a check the client can be trusted with. A stale tab is the
  * whole failure mode, so the authority has to be the write path itself.
+ *
+ * What this does NOT close, stated plainly because the previous version of this
+ * comment claimed otherwise: the validation below and the write that follows it
+ * are SEPARATE TRANSACTIONS. A removal that commits in between is accepted by
+ * both — the read saw a live account, the write stores the schedule naming it —
+ * and the atomic remove (remove_social_connection_if_unscheduled, v67) does not
+ * catch it either, because at the moment it ran there was no schedule to find.
+ * Neither guard is wrong; they simply do not share a transaction.
+ *
+ * That interleaving is an ACCEPTED RESIDUAL (owner decision, 2026-08-29). Its
+ * whole consequence is a schedule that fails at publish time with
+ * `target_disconnected` — a visible, explainable failure on a Content that was
+ * never posted. There is no duplicate post and no silent success. Closing it
+ * would mean holding a lock across the connection read and the draft write for
+ * every batched PUT of up to 50 drafts, which costs more than the failure it
+ * prevents.
  *
  * Server-only: it reads the connection store. The rule that decides WHICH ids
  * matter is the pure `requiredScheduleConnectionIds` in api/pin-drafts/promote.ts,
