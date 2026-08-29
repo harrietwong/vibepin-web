@@ -5,7 +5,8 @@
  * Covers: diff/outbox, LWW merge (local newer / server newer / equal), tombstone
  * convergence (both directions), first-load migration, cursor-paginated pull,
  * >50 batch chunking, backoff retry queue (never drops the outbox), 202 deferred
- * degradation, the 200KB payload guard, and idempotent init.
+ * degradation, the 200KB payload guard, idempotent init, and the 409-stale
+ * reconciliation (merge the server's current row, retry ONCE, then defer).
  */
 
 import assert from "node:assert";
@@ -46,6 +47,12 @@ function createMockServer(initial: Row[] = []) {
   const log: Array<{ method: string; url: string; body?: { drafts?: Array<{ draftId: string }>; draftIds?: string[]; deletedAt?: string } }> = [];
   let failCount = 0;
   let deferWrites = false;
+  // Drafts the next PUT(s) must answer 409 stale for, and the row the client is
+  // handed as `current`. This is the server having lost its compare-and-set:
+  // the stored row moved between the LWW read and the conditional write.
+  let staleIds = new Set<string>();
+  let staleFor = 0;              // how many more PUTs still answer 409
+  const staleCurrent = new Map<string, Row>();
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -68,12 +75,26 @@ function createMockServer(initial: Row[] = []) {
     }
     if (deferWrites) return json({ deferred: true }, 202);
     if (method === "PUT") {
+      const drafts = body.drafts as Array<{ draftId: string; updatedAt: string; payload: Record<string, unknown> }>;
+      const conflicts = staleFor > 0 ? drafts.filter(d => staleIds.has(d.draftId)) : [];
+      if (staleFor > 0) staleFor--;
       let applied = 0, skippedStale = 0;
-      for (const d of body.drafts as Array<{ draftId: string; updatedAt: string; payload: Record<string, unknown> }>) {
+      for (const d of drafts) {
+        if (conflicts.some(c => c.draftId === d.draftId)) continue; // conditional write matched nothing
         const ex = rows.get(d.draftId);
         if (ex && Date.parse(d.updatedAt) < Date.parse(ex.updatedAt)) { skippedStale++; continue; }
         rows.set(d.draftId, { draftId: d.draftId, updatedAt: d.updatedAt, payload: d.payload });
         applied++;
+      }
+      if (conflicts.length > 0) {
+        const stale = conflicts.map(c => {
+          const cur = staleCurrent.get(c.draftId) ?? rows.get(c.draftId) ?? null;
+          return {
+            draftId: c.draftId,
+            current: cur ? { payload: cur.payload, updated_at: cur.updatedAt, scheduled_at: null } : null,
+          };
+        });
+        return json({ error: "stale", code: "stale", stale, current: stale[0].current, applied, skippedStale }, 409);
       }
       return json({ applied, skippedStale });
     }
@@ -94,6 +115,15 @@ function createMockServer(initial: Row[] = []) {
     rows, log, fetchImpl,
     failNext: (n: number) => { failCount = n; },
     defer: (on: boolean) => { deferWrites = on; },
+    /** Answer 409 stale for these drafts on the next `times` PUT(s), handing back `current`. */
+    staleNext: (ids: string[], times: number, current?: Row[]) => {
+      staleIds = new Set(ids);
+      staleFor = times;
+      staleCurrent.clear();
+      for (const r of current ?? []) staleCurrent.set(r.draftId, r);
+      // The server copy the client must converge on IS the stored row.
+      for (const r of current ?? []) rows.set(r.draftId, r);
+    },
     live: () => [...rows.values()].filter(r => !r.deletedAt),
     putCalls: () => log.filter(l => l.method === "PUT"),
     deleteCalls: () => log.filter(l => l.method === "DELETE"),
@@ -347,6 +377,121 @@ async function main() {
     await until(() => srv1.live().some(r => r.draftId === a.id), 3_000);
     assert.equal(srv2.log.length, 0, "second init's fetch must never be used");
     assert.equal(srv1.putCalls().length, 1, "exactly one PUT — no double subscription");
+  });
+
+  // ── 409 stale reconciliation ────────────────────────────────────────────────
+  // The server refuses a write whose compare-and-set lost. What must NOT happen is
+  // the client shrugging: an unhandled 409 would land in the generic error path,
+  // back off, and re-send the very same older payload for as long as it takes to
+  // win — which is exactly the blind overwrite the server change exists to stop.
+
+  await test("409 stale: client merges the server's current row and retries ONCE", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s1.png", source: "uploaded_image", title: "local" });
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    // Another writer moved the row forward; the next PUT loses its CAS once.
+    const future = new Date(Date.now() + 120_000).toISOString();
+    srv.staleNext([a.id], 1, [serverDraft(a.id, future, { title: "server-won" })]);
+
+    store.updateDraft(a.id, { title: "local-edit" });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 4_000);
+
+    const puts = srv.putCalls().slice(putsBefore);
+    assert.equal(puts.length, 2, `409 → exactly one retry (saw ${puts.length} PUTs)`);
+    assert.deepEqual(puts[1].body!.drafts!.map(d => d.draftId), [a.id], "the retry carries only the conflicted draft");
+    // The merge is LWW: the server copy was newer, so it won locally too.
+    assert.equal(store.getDraft(a.id)!.title, "server-won", "the server's newer copy must be merged in, not ignored");
+  });
+
+  await test("409 twice: the cycle stops at two PUTs — deferred to the NEXT pass, never dropped", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s2.png", source: "uploaded_image", title: "local" });
+    const srv = createMockServer();
+    // A visible cycle boundary: the debounce is what separates "this cycle" from
+    // "the next pass", so it has to be longer than the window we measure in.
+    const SLOW = { ...FAST, debounceMs: 250 };
+    sync.initPinDraftSync(getToken, { ...SLOW, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const future = new Date(Date.now() + 120_000).toISOString();
+      srv.staleNext([a.id], 2, [serverDraft(a.id, future, { title: "server-won" })]);
+      store.updateDraft(a.id, { title: "local-edit-2" });
+      await until(() => srv.putCalls().length - putsBefore >= 2, 4_000);
+      await sleep(120); // well inside the 250ms debounce → any third PUT here is a third ATTEMPT
+      assert.equal(
+        srv.putCalls().length - putsBefore, 2,
+        `a second 409 must stop THIS cycle at 2 PUTs (saw ${srv.putCalls().length - putsBefore})`,
+      );
+      assert.ok(
+        warnings.some(w => w.includes("still stale") && w.includes(a.id)),
+        "giving up silently would look exactly like a successful sync — it must warn",
+      );
+      assert.ok(sync.__getPinDraftSyncDebug().outboxSize >= 1, "the entry must stay in the outbox, not be dropped");
+
+      // …and it must come BACK. A stranded outbox entry (pendingCount stuck at 1
+      // until some unrelated edit happens) is the silent drop, just slower. The
+      // next pass carries the merged payload, so it converges instead of re-sending
+      // the losing copy — which is why re-arming is not a hot loop.
+      await until(() => srv.putCalls().length - putsBefore >= 3, 3_000);
+      const third = srv.putCalls().slice(putsBefore)[2];
+      assert.deepEqual(third.body!.drafts!.map(d => d.draftId), [a.id]);
+      assert.equal(
+        (third.body!.drafts![0] as unknown as { payload: { title?: string } }).payload.title,
+        "server-won",
+        "the next pass must send the MERGED payload, not the older local copy",
+      );
+      await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 3_000);
+    } finally {
+      console.warn = realWarn;
+      sync.__resetPinDraftSyncForTests();
+    }
+  });
+
+  await test("409 merge never resurrects schedule fields the server cleared", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s3.png", source: "uploaded_image", title: "sched" });
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    // The local copy still believes it is scheduled.
+    store.updateDraft(a.id, {
+      scheduledDate: "2026-07-01", scheduledTime: "09:00", plannedAt: "2026-07-01T09:00:00.000Z",
+    });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 3_000);
+
+    // Meanwhile the cron published it: results written, schedule cleared, row newer.
+    const future = new Date(Date.now() + 120_000).toISOString();
+    const published = serverDraft(a.id, future, {
+      scheduledDate: "", scheduledTime: "", plannedAt: "",
+      destinationResults: [{ provider: "pinterest", status: "published", remotePinUrl: "https://pin/9" }],
+      previousResults: [{ provider: "pinterest", status: "published" }],
+    });
+    srv.staleNext([a.id], 1, [published]);
+
+    store.updateDraft(a.id, { title: "edited-after-publish" });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 4_000);
+
+    const retry = srv.putCalls().slice(putsBefore).at(-1)!;
+    const sent = retry.body!.drafts![0] as unknown as { payload: Record<string, unknown> };
+    assert.equal(sent.payload.scheduledDate, "", "the retry must not re-send a schedule the server cleared");
+    assert.equal(sent.payload.scheduledTime, "");
+    assert.equal(sent.payload.plannedAt, "");
+    assert.ok(sent.payload.destinationResults, "published results must survive the merge into the retry");
+    assert.ok(sent.payload.previousResults, "previousResults must survive the merge too");
+    const local = store.getDraft(a.id)! as unknown as Record<string, unknown>;
+    assert.equal(local.scheduledDate, "", "cleared schedule must stay cleared locally");
+    assert.ok(local.destinationResults, "published results must be present locally");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
