@@ -2713,6 +2713,17 @@ const de: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Kürze Titel oder Beschreibung, bevor du planst oder veröffentlichst.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Sie haben alle in Ihrem aktuellen Tarif enthaltenen KI-Bilder verbraucht. Führen Sie ein Upgrade durch, um weitere Bilder zu generieren.",
+  "studioBoard.limit.text.allUsed": "Sie haben alle in Ihrem aktuellen Tarif enthaltenen KI-Textgenerierungen verbraucht. Führen Sie ein Upgrade durch, um weiter KI-Inhalte zu generieren.",
+  "studioBoard.limit.post.allUsed": "Sie haben alle in Ihrem aktuellen Tarif enthaltenen geplanten Beiträge verbraucht. Führen Sie ein Upgrade durch, um weitere Beiträge zu planen oder zu veröffentlichen.",
+  "studioBoard.limit.upgradeCta": "Tarife ansehen",
+  "studioBoard.limit.reachedTitle": "Tariflimit erreicht",
+  "studioBoard.limit.image.overRequestTitle": "Nicht genügend KI-Bilder übrig",
+  "studioBoard.limit.image.overRequestBody": "Sie haben {requested} Bilder angefordert, aber in Ihrem aktuellen Tarif sind nur noch {remaining} übrig. Generieren Sie stattdessen die verbleibenden Bilder oder führen Sie ein Upgrade durch.",
+  "studioBoard.limit.image.generateRemaining": "Stattdessen {remaining} generieren",
+  "studioBoard.limit.image.generateOneRemaining": "Stattdessen 1 generieren",
 };
 
 export default de;

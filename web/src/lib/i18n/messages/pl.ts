@@ -2669,6 +2669,17 @@ const pl: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Skróć tytuł lub opis przed zaplanowaniem lub opublikowaniem.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Wykorzystałeś wszystkie obrazy AI zawarte w Twoim obecnym planie. Ulepsz plan, aby generować więcej obrazów.",
+  "studioBoard.limit.text.allUsed": "Wykorzystałeś wszystkie generowania tekstu AI zawarte w Twoim obecnym planie. Ulepsz plan, aby dalej generować treści AI.",
+  "studioBoard.limit.post.allUsed": "Wykorzystałeś wszystkie zaplanowane posty zawarte w Twoim obecnym planie. Ulepsz plan, aby planować lub publikować więcej postów.",
+  "studioBoard.limit.upgradeCta": "Zobacz plany",
+  "studioBoard.limit.reachedTitle": "Osiągnięto limit planu",
+  "studioBoard.limit.image.overRequestTitle": "Za mało pozostałych obrazów AI",
+  "studioBoard.limit.image.overRequestBody": "Poprosiłeś o {requested} obrazów, ale w Twoim obecnym planie pozostało tylko {remaining}. Wygeneruj pozostałe obrazy albo ulepsz plan, aby uzyskać więcej.",
+  "studioBoard.limit.image.generateRemaining": "Wygeneruj zamiast tego {remaining}",
+  "studioBoard.limit.image.generateOneRemaining": "Wygeneruj zamiast tego 1",
 };
 
 export default pl;

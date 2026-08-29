@@ -17,7 +17,8 @@
 import { forwardRef, useCallback, useImperativeHandle, useMemo, useState } from "react";
 import { Sparkles, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
-import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
+import { generatePinterestPinCopy, isRateLimitError, isTextLimitReachedError } from "@/lib/ai-copy/generatePinCopy";
+import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import type { CopyContextBundle, PinCopyLength } from "@/lib/ai-copy/types";
 import type { PinMetadataDraft } from "@/lib/pinMetadata";
 import type { PinterestBoard } from "@/lib/pinterestClient";
@@ -199,7 +200,20 @@ export const PinAICopyPanel = forwardRef<PinAICopyPanelHandle, PinAICopyPanelPro
       // how app/app/studio/page.tsx treats /api/generate's user_generation_limit.
       // Reuses the existing rate-limit strings (translated in all 20 locales) rather
       // than the raw server message.
-      if (isRateLimitError(err)) {
+      if (isTextLimitReachedError(err)) {
+        // The plan's AI text allowance is spent (PRD v3.2 §6.4). Waiting does not fix
+        // it, so this gets the PRD's upgrade sentence and a Billing link rather than
+        // the "service busy" wording used for the 429 below. Neutral severity: the
+        // user did nothing wrong. Shown ONCE per attempt, like every other branch here.
+        const limitMsg = tr("studioBoard.limit.text.allUsed");
+        setErrorMsg(limitMsg);
+        toast.message(limitMsg, {
+          action: {
+            label: tr("studioBoard.limit.upgradeCta"),
+            onClick: () => { window.location.href = SETTINGS_BILLING_PATH; },
+          },
+        });
+      } else if (isRateLimitError(err)) {
         toast.message(tr("history.error.rateLimited.label"), { description: tr("studio.error.serviceBusy.body") });
       } else {
         toast.error(msg);

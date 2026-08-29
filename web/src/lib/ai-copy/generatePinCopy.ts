@@ -1,4 +1,5 @@
 import { applyDraftToPinFields, generatePinMetadataDraft } from "@/lib/pinMetadata";
+import { parseLimitReached } from "@/lib/usage/limitReached";
 import type { LinkedProduct } from "@/lib/pinMetadata";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { track, trackLatency } from "@/lib/analytics";
@@ -36,6 +37,15 @@ export class PinCopyError extends Error {
 /** True when `err` is the rate-limit stop (429), so the UI can soften the toast. */
 export function isRateLimitError(err: unknown): err is PinCopyError {
   return err instanceof PinCopyError && err.code === "rate_limited";
+}
+
+/**
+ * True when the server refused because the plan's AI text allowance is spent (402
+ * ai_text_limit_reached). Distinct from `rate_limited`: waiting does NOT fix this, so
+ * the UI must show the PRD's upgrade message instead of "try again in a moment".
+ */
+export function isTextLimitReachedError(err: unknown): err is PinCopyError {
+  return err instanceof PinCopyError && err.code === "ai_text_limit_reached";
 }
 
 const UI_STAGE_YIELD_MS = 40;
@@ -304,6 +314,14 @@ export async function generatePinterestPinCopy(input: GeneratePinterestPinCopyIn
     // counted the request as `ai_copy_quality_failed` in telemetry, corrupting the
     // quality-failure rate. It gets its OWN event and its own error code so the UI
     // can use the neutral toast severity.
+    // 402 = the plan's AI text allowance is spent (PRD v3.2 §6.4). Not a quality
+    // failure and not a provider failure, so it gets neither telemetry bucket — and
+    // crucially not the generic "we couldn't generate good copy" message, which would
+    // blame the image for what is a billing state.
+    const usageLimit = parseLimitReached(res.status, body);
+    if (usageLimit?.kind === "ai_text") {
+      throw new PinCopyError("ai_text_limit_reached", usageLimit.message || "AI text limit reached.");
+    }
     if (res.status === 429) {
       const retryAfter = Number(res.headers.get("retry-after"));
       track("ai_copy_rate_limited", {

@@ -332,4 +332,39 @@ export const studioBoardMessages = {
   // Trigger badge: how many schedules landed while the panel was closed. It never
   // opens the panel by itself — it only counts, and clears the next time it opens.
   "studioBoard.plan.newSinceLastOpen": "{n} newly scheduled since you last opened Plan",
+
+  // ── Usage limits (PRD v3.2 §4.3 / §6.4, product decision #6) ────────────────
+  // Shown when the server refuses a metered action for lack of remaining quota.
+  //
+  // The two "allUsed" sentences are the PRD's own frontend copy, quoted verbatim
+  // from §4.3 (images) and §6.4 (text) — they are product-approved wording, not
+  // paraphrases, so do not "improve" them here. The server sends its own, different
+  // English prose in the 402 body; we deliberately render THESE instead.
+  "studioBoard.limit.image.allUsed":
+    "You have used all AI images included in your current plan. Upgrade your plan to generate more images.",
+  "studioBoard.limit.text.allUsed":
+    "You have used all AI text generations included in your current plan. Upgrade your plan to continue generating AI content.",
+  // Scheduled posts: PRD §5 defines the metering rule but gives no frontend
+  // sentence (unlike §4.3/§6.4), so this mirrors their two-sentence shape using the
+  // server's own noun ("scheduled post limit") to stay consistent with the API.
+  "studioBoard.limit.post.allUsed":
+    "You have used all scheduled posts included in your current plan. Upgrade your plan to schedule or publish more posts.",
+  // The shared call to action next to each message; opens Settings → Billing.
+  "studioBoard.limit.upgradeCta": "View plans",
+  // Dialog heading for the zero-balance case (nothing left to adjust down to). The
+  // over-request heading below is a different situation and must not be reused: there
+  // the user still HAS images, just fewer than they asked for.
+  "studioBoard.limit.reachedTitle": "Plan limit reached",
+
+  // Over-request confirmation (decision #6, option B): the user asked for more
+  // images than remain. We NEVER silently generate fewer and NEVER exceed the
+  // limit — we ask, and offer a one-click adjustment to exactly what is left.
+  "studioBoard.limit.image.overRequestTitle": "Not enough AI images left",
+  // {requested} = what they asked for, {remaining} = what the plan has left.
+  "studioBoard.limit.image.overRequestBody":
+    "You asked for {requested} images but only {remaining} remain in your current plan. Generate the remaining images instead, or upgrade your plan for more.",
+  // The one-click adjustment. Singular/plural split because "Generate 1 images" is
+  // wrong in English and several locales inflect the noun differently.
+  "studioBoard.limit.image.generateRemaining": "Generate {remaining} instead",
+  "studioBoard.limit.image.generateOneRemaining": "Generate 1 instead",
 } as const;
