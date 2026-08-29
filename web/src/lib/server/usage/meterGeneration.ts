@@ -414,7 +414,10 @@ export async function releaseInline(args: {
  * in prod this phase). Consistent with the route's error envelope: a machine-readable
  * `code` the client can branch on, an empty urls[], the request id echoed back.
  */
-export function aiImageLimitResponseBody(generationRequestId: string): Record<string, unknown> {
+export function aiImageLimitResponseBody(
+  generationRequestId: string,
+  availability?: { availableRecurring: number | null; availableBonus: number | null; requested: number },
+): Record<string, unknown> {
   return {
     ok: false,
     error_type: "ai_image_limit_reached",
@@ -422,6 +425,13 @@ export function aiImageLimitResponseBody(generationRequestId: string): Record<st
     error: "You've reached your AI image limit for this billing period. Upgrade or wait for it to reset.",
     urls: [],
     generation_request_id: generationRequestId,
+    ...(availability
+      ? {
+          available_recurring: availability.availableRecurring,
+          available_bonus: availability.availableBonus,
+          requested: availability.requested,
+        }
+      : {}),
   };
 }
 

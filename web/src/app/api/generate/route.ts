@@ -1195,7 +1195,14 @@ export async function POST(req: NextRequest) {
         // ENFORCE, gated by USAGE_ENFORCE_AI_IMAGES (decision #8, 2026-08-28 — the
         // global mode alone blocks nothing): insufficient balance → limit response in
         // the route's error envelope.
-        return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+        return NextResponse.json(
+          aiImageLimitResponseBody(generationRequestId, {
+            availableRecurring: ledger.availableRecurring,
+            availableBonus: ledger.availableBonus,
+            requested: count,
+          }),
+          { status: 402 },
+        );
       }
       // SHADOW fail-open: insufficient / error / skipped → fall through to the plain
       // (unmetered) enqueue so the user still generates. Deliberately inverse to the
@@ -1271,7 +1278,14 @@ export async function POST(req: NextRequest) {
     inlineReservation = await reserveInline({ userId: authUserId, count, generationRequestId });
     if (inlineReservation.kind === "insufficient" && usageEnforceFor("ai_image")) {
       await userLock.release();
-      return NextResponse.json(aiImageLimitResponseBody(generationRequestId), { status: 402 });
+      return NextResponse.json(
+        aiImageLimitResponseBody(generationRequestId, {
+          availableRecurring: inlineReservation.availableRecurring,
+          availableBonus: inlineReservation.availableBonus,
+          requested: count,
+        }),
+        { status: 402 },
+      );
     }
     // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
     // the moderation gate).
