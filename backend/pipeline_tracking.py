@@ -22,6 +22,7 @@ LOCK_TIMEOUTS_SEC: dict[str, int] = {
     "stl-score":     5_400,   # 1.5 h
     "classify":      3_600,   # 1 h
     "opportunities": 5_400,   # 1.5 h (sequential per-keyword upserts)
+    "product-tracking": 9_000, # > 7200s wrapper and 7800s systemd bounds
     "daily":        10_800,   # 3 h
 }
 

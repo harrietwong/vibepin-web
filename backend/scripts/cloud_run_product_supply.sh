@@ -34,8 +34,18 @@ mkdir -p "$LOG_DIR" "$LOCK_DIR"
 # ── Config ────────────────────────────────────────────────────────────────────
 MODE="${1:-${VIBEPIN_CLOUD_MODE:-preflight}}"
 TIMEOUT_SECONDS="${VIBEPIN_TIMEOUT_SECONDS:-2400}"
-LIMIT="${VIBEPIN_SUPPLY_LIMIT:-50}"
-CATEGORY_MIX="${VIBEPIN_CATEGORY_MIX:-fashion:18,womens-fashion:14,home-decor:18}"
+LIMIT="${VIBEPIN_SUPPLY_LIMIT:-20}"
+CATEGORY_MIX="${VIBEPIN_CATEGORY_MIX:-fashion:7,womens-fashion:6,home-decor:7}"
+SINCE_HOURS="${VIBEPIN_SUPPLY_SINCE_HOURS:-168}"
+WRITE_LIMIT="${VIBEPIN_SUPPLY_WRITE_LIMIT:-50}"
+export VIBEPIN_SUPPLY_WRITE_LIMIT="$WRITE_LIMIT"
+SOURCE_REPORT="${VIBEPIN_SUPPLY_SOURCE_REPORT:-}"
+SOURCE_REPORT_ARGS=()
+if [[ -n "$SOURCE_REPORT" ]]; then
+  # Cutover/canary only: explicitly replay a reviewed dry-run source set. Normal
+  # scheduled runs leave this unset and therefore select fresh Source Pins.
+  SOURCE_REPORT_ARGS=(--source-report "$SOURCE_REPORT")
+fi
 APPLY_CONFIRM_TOKEN="APPLY_BOOTSTRAP_PRODUCTS"
 
 # Prefer the project venv if present; otherwise fall back to python3 on PATH.
@@ -60,7 +70,18 @@ if ! flock -n 200; then
   exit 9
 fi
 
-log "mode=$MODE backend=$BACKEND_DIR lockdir=$LOCK_DIR timeout=${TIMEOUT_SECONDS}s"
+log "mode=$MODE backend=$BACKEND_DIR lockdir=$LOCK_DIR timeout=${TIMEOUT_SECONDS}s writeLimit=$WRITE_LIMIT"
+
+if [[ "$MODE" == "apply" ]]; then
+  if [[ -z "${VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF:-}" ]]; then
+    log "REFUSE apply: VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF is missing."
+    exit 5
+  fi
+  if ! "$PY" -c 'import os; from product_opportunity_admission import require_expected_project_ref; require_expected_project_ref(os.environ.get("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF"))'; then
+    log "REFUSE apply: SUPABASE_URL does not match VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF."
+    exit 5
+  fi
+fi
 
 # ── Read-only preflight gate (every mode) ─────────────────────────────────────
 REC="$("$PY" scripts/preflight_product_supply.py 2>>"$RUN_LOG" \
@@ -84,6 +105,8 @@ case "$MODE" in
     log "DRY-RUN: hardened runner (navigates Pinterest, writes NO DB rows)."
     "$PY" scripts/run_bootstrap_product_supply.py \
         --limit "$LIMIT" --category-mix "$CATEGORY_MIX" \
+        --since-hours "$SINCE_HOURS" \
+        "${SOURCE_REPORT_ARGS[@]}" \
         --timeout-seconds "$TIMEOUT_SECONDS" \
         2>&1 | tee -a "$RUN_LOG"
     rc="${PIPESTATUS[0]}"
@@ -96,11 +119,13 @@ case "$MODE" in
       log "REFUSE apply: set VIBEPIN_APPLY_CONFIRM=$APPLY_CONFIRM_TOKEN to authorize a real write."
       exit 5
     fi
-    log "APPLY: hardened runner --apply (writes pin_products). cooldown waived by operator confirm."
+    log "APPLY: hardened runner --apply (writes pin_products). normal cooldown gate required."
     "$PY" scripts/run_bootstrap_product_supply.py \
         --limit "$LIMIT" --category-mix "$CATEGORY_MIX" \
+        --since-hours "$SINCE_HOURS" \
+        "${SOURCE_REPORT_ARGS[@]}" \
         --timeout-seconds "$TIMEOUT_SECONDS" \
-        --apply --confirm "$APPLY_CONFIRM_TOKEN" --waive-cooldown \
+        --apply --confirm "$APPLY_CONFIRM_TOKEN" \
         2>&1 | tee -a "$RUN_LOG"
     rc="${PIPESTATUS[0]}"
     log "runner exit=$rc"

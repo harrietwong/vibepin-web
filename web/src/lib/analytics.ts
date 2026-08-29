@@ -45,7 +45,19 @@ export type AnalyticsEvent =
   | "generation_deleted"
   | "generation_judged"
   | "regenerate_clicked"
-  | "draft_published";
+  | "draft_published"
+  // Product Opportunities v3.7. Payloads carry only stable product ids and
+  // coarse UI context; never merchant-page content, prompts, or personal data.
+  | "product_opportunities_viewed"
+  | "product_card_opened"
+  | "pinterest_evidence_clicked"
+  | "external_product_clicked"
+  | "product_saved"
+  | "product_unsaved"
+  | "create_pin_from_product_clicked"
+  | "demand_filter_used"
+  | "trend_filter_used"
+  | "saved_products_viewed";
 
 /**
  * Optional version stamps for an event's payload (PRD v0.2 — "events carry versions").

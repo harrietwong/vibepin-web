@@ -419,6 +419,22 @@ class TestReportTrustVerdict(unittest.TestCase):
                          "partial:some_pins_failed_to_render")
         self.assertEqual(report["aggregate"]["renderFailureCount"], 1)
 
+    def test_whole_pin_timeout_is_counted_and_stage_is_preserved(self):
+        per_pin = [
+            _pin(visibleCardCount=8, productJsonResponses=12),
+            _pin(
+                issue="pin_timeout:120s",
+                timeoutStage="tab_label",
+                renderFailure=True,
+                elapsedSec=120.01,
+            ),
+        ]
+        report = self._report(per_pin, HEALTHY)
+        self.assertEqual(report["aggregate"]["timeoutCount"], 1)
+        self.assertEqual(report["aggregate"]["pinTimeoutCount"], 1)
+        self.assertEqual(report["aggregate"]["pinTimeoutStages"], {"tab_label": 1})
+        self.assertEqual(report["perPin"][1]["timeoutStage"], "tab_label")
+
     def test_unknown_auth_state_is_unverified_not_trusted(self):
         health = {**HEALTHY, "authValid": None, "authSignal": "no_conclusive_marker"}
         per_pin = [_pin(visibleCardCount=8, tabCount=3, productJsonResponses=12)]

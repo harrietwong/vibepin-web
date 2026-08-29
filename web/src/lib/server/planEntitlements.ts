@@ -51,6 +51,8 @@ export type PlanEntitlements = {
   maxStores: number;
   /** Product sync cap per user (before the SHOPIFY_PRODUCT_LIMIT_* env override). */
   maxSyncedProducts: number;
+  /** Complete Product Opportunities visible to the plan; null = full catalog. */
+  maxProductOpportunities: AllowanceValue;
 };
 
 /**
@@ -68,6 +70,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     connectedAccountsPerPlatform: 1,
     maxStores: 0,
     maxSyncedProducts: 0,
+    maxProductOpportunities: 10,
   },
   starter: {
     planKey: "starter",
@@ -79,6 +82,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     connectedAccountsPerPlatform: 1,
     maxStores: 1,
     maxSyncedProducts: 100,
+    maxProductOpportunities: null,
   },
   pro: {
     planKey: "pro",
@@ -90,6 +94,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     connectedAccountsPerPlatform: 2,
     maxStores: 2,
     maxSyncedProducts: 500,
+    maxProductOpportunities: null,
   },
   business: {
     planKey: "business",
@@ -101,6 +106,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanKey, PlanEntitlements> = {
     connectedAccountsPerPlatform: 3,
     maxStores: 3,
     maxSyncedProducts: 1000,
+    maxProductOpportunities: null,
   },
 };
 

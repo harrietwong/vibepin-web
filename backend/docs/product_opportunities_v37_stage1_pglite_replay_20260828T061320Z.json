@@ -1,0 +1,41 @@
+{
+  "replayed_at": "2026-08-28T06:13:20.175Z",
+  "candidate_functional_tip": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
+  "engine": "PGlite 0.5.8 PostgreSQL-compatible in-memory runtime",
+  "harness": "backend/tests/pglite_v37/verify-v63.mjs",
+  "dependency_lock": "backend/tests/pglite_v37/package-lock.json",
+  "command": "cd backend/tests/pglite_v37 && npm ci && npm test",
+  "npm_ci": {
+    "packages_added": 1,
+    "known_vulnerabilities": 0
+  },
+  "limitations": [
+    "PGlite is a single-process PostgreSQL-compatible runtime; this replay does not prove concurrent-writer behavior on production PostgreSQL.",
+    "The harness verifies RLS policy catalog definitions and privilege facts, but does not execute authenticated or anonymous role-isolation sessions.",
+    "A first clean npm ci needs registry access; package-lock.json pins PGlite 0.5.8 and its integrity hash."
+  ],
+  "required_production_followup": [
+    "Run the exact post-apply catalog verifier against the approved production project.",
+    "Run bounded production canaries for concurrency-sensitive uniqueness and authenticated Saved Products isolation before wider rollout."
+  ],
+  "result": {
+    "relations": 10,
+    "functions": 18,
+    "triggers": 9,
+    "policies": 3,
+    "indexes": 4,
+    "constraints": 91,
+    "privilegeFacts": 44,
+    "matchingCatalogObjectsAfterMigration": 238,
+    "emptyBatchRejected": true,
+    "failedBatchAtomic": true,
+    "validAdmission": 1,
+    "rollbackRetired": 1,
+    "retiredCurrentCoexistence": true,
+    "matchingCatalogObjectsAfterCompleteRollback": 0,
+    "legacyCountsAndHashesUnchanged": true
+  },
+  "production_access": false,
+  "production_mutation": false,
+  "verdict": "PASS"
+}

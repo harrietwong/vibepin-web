@@ -1,0 +1,59 @@
+{
+  "audited_at": "2026-08-28T05:50:33.522Z",
+  "candidate_functional_tip": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
+  "release_manifest": "backend/docs/product_opportunities_v37_release_manifest_1946a68.json",
+  "changed_release_artifacts_from_187765f": [
+    "backend/db/migrate_v63_product_opportunities_v1.sql",
+    "backend/product_opportunity_admission.py",
+    "backend/product_opportunity_admission_pipeline.py",
+    "backend/scripts/cloud_run_product_opportunity_admission.sh"
+  ],
+  "validation": {
+    "focused_admission_and_migration_contract": {
+      "passed": 132,
+      "failed": 0
+    },
+    "release_automation_contract": {
+      "passed": 30,
+      "failed": 0
+    },
+    "full_backend": {
+      "passed": 966,
+      "skipped_live_only": 2,
+      "failed": 0,
+      "duration_seconds": 149.08
+    },
+    "shellcheck_exact_git_blobs": {
+      "version": "0.11.0",
+      "files": 4,
+      "exit_code": 0,
+      "excluded_diagnostics": [
+        "SC1091"
+      ],
+      "exclusion_reason": "Intentional runtime-relative cloud_lib.sh source"
+    },
+    "pglite_stage1": {
+      "verdict": "PASS",
+      "matching_catalog_objects_after_migration": 238,
+      "matching_catalog_objects_after_complete_rollback": 0,
+      "empty_batch_rejected": true,
+      "failed_batch_atomic_zero_write": true,
+      "history_preserving_rollback": true,
+      "retired_active_coexistence": true
+    }
+  },
+  "independent_review": {
+    "reviewer": "Claude Opus",
+    "mode": "read-only",
+    "verdict": "APPROVE",
+    "p0_to_p2_findings": 0,
+    "review_focused_tests_passed": 134,
+    "follow_up": "A non-blocking lifecycle-status observation was checked against the rollback RPC; recovery was narrowed to Active rows and the 132-test focused regression passed."
+  },
+  "production_access": false,
+  "production_mutation": false,
+  "deployment": false,
+  "push": false,
+  "timer_changed": false,
+  "verdict": "APPROVE_WITH_CONDITIONS"
+}

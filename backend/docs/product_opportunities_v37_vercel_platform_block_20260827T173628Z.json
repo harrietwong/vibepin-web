@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-27T17:36:28Z",
+  "auditMode": "read_only",
+  "candidateFunctionalTip": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
+  "candidateDocsTipBeforeThisReport": "9495305a76c64a49178b47c2e62b60f1d79ac735",
+  "project": {
+    "scope": "harriets-projects-86e9e358",
+    "name": "web",
+    "id": "prj_dhGFUEZmiktBHuwmCCP7uVNHLsdR"
+  },
+  "authoritativeProjectInspect": {
+    "command": "vercel project inspect web --scope harriets-projects-86e9e358 --yes --no-color",
+    "cliVersion": "58.4.0",
+    "rootDirectory": ".",
+    "nodeVersion": "24.x",
+    "frameworkPreset": "Next.js",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next",
+    "installCommand": "npm install"
+  },
+  "latestProductionDeployment": {
+    "url": "https://web-5nyfzixst-harriets-projects-86e9e358.vercel.app",
+    "createdAt": "2026-08-18T13:16:28.712Z",
+    "status": "Ready",
+    "buildLog": {
+      "installCommand": "npm install",
+      "detectedNextVersion": "16.2.6",
+      "buildCommand": "npm run build",
+      "compiledSuccessfully": true,
+      "typescriptFinished": true,
+      "productRouteGenerated": "/app/products",
+      "deploymentCompleted": true
+    }
+  },
+  "candidateRepositoryContract": {
+    "rootDirectory": "web",
+    "configPath": "web/vercel.json",
+    "installCommand": "npm ci",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next",
+    "nextVersionInPackageJson": "16.3.3",
+    "nextVersionInPackageLock": "16.3.3"
+  },
+  "verdict": "BLOCK",
+  "blockingContradictions": [
+    "Vercel currently reports Root Directory '.' rather than the reviewed 'web' repository boundary",
+    "Vercel currently reports install command 'npm install' rather than the reviewed deterministic 'npm ci' command",
+    "the latest production deployment used Next.js 16.2.6 and predates the 16.3.3 candidate",
+    "there is no immutable Vercel deployment or build log for candidate 6839e7609ddff3f1fe288c48a42918e105a75fc9"
+  ],
+  "requiredBeforePromotion": [
+    "change the Vercel project Root Directory to web under a separately authorized platform change",
+    "prove that web/vercel.json is active and the install step is npm ci",
+    "create an immutable candidate deployment from the exact release commit",
+    "read back a successful build log showing npm ci, Next.js 16.3.3, TypeScript success, and Product routes",
+    "retain the current Ready deployment as the rollback target until candidate verification completes"
+  ],
+  "settingChanged": false,
+  "deploymentCreated": false,
+  "productionMutation": false,
+  "secretsPrinted": false
+}

@@ -83,6 +83,19 @@ class TestWrapperScript(unittest.TestCase):
     def test_enforces_timeout(self):
         self.assertIn("--timeout-seconds", self.txt)
 
+    def test_wrapper_fallback_remains_small_and_explicit(self):
+        self.assertIn('LIMIT="${VIBEPIN_SUPPLY_LIMIT:-20}"', self.txt)
+        self.assertIn(
+            'CATEGORY_MIX="${VIBEPIN_CATEGORY_MIX:-fashion:7,womens-fashion:6,home-decor:7}"',
+            self.txt,
+        )
+        self.assertIn('SINCE_HOURS="${VIBEPIN_SUPPLY_SINCE_HOURS:-168}"', self.txt)
+        self.assertIn('--since-hours "$SINCE_HOURS"', self.txt)
+        self.assertIn('WRITE_LIMIT="${VIBEPIN_SUPPLY_WRITE_LIMIT:-50}"', self.txt)
+        self.assertIn('export VIBEPIN_SUPPLY_WRITE_LIMIT="$WRITE_LIMIT"', self.txt)
+        self.assertIn('SOURCE_REPORT="${VIBEPIN_SUPPLY_SOURCE_REPORT:-}"', self.txt)
+        self.assertIn('SOURCE_REPORT_ARGS=(--source-report "$SOURCE_REPORT")', self.txt)
+        self.assertIn('"${SOURCE_REPORT_ARGS[@]}"', self.txt)
 
 class TestSystemdService(unittest.TestCase):
     @classmethod
@@ -114,6 +127,25 @@ class TestSystemdService(unittest.TestCase):
     def test_default_mode_safe(self):
         self.assertIn("VIBEPIN_CLOUD_MODE=preflight", self.txt)
 
+    def test_service_scans_100_sources_but_keeps_write_cap_in_shared_core(self):
+        self.assertIn("Environment=VIBEPIN_SUPPLY_LIMIT=100", self.txt)
+        self.assertIn(
+            "Environment=VIBEPIN_CATEGORY_MIX="
+            "fashion:29,womens-fashion:22,home-decor:29,digital-products:20",
+            self.txt,
+        )
+        self.assertIn("Environment=VIBEPIN_STL_ALLOW_EXCLUDED=digital-products", self.txt)
+        self.assertNotIn("VIBEPIN_STL_ALLOW_EXCLUDED=beauty", self.txt)
+        self.assertIn("caps rows remaining written at 50 per run", self.txt)
+        self.assertIn("MAX_BATCH=20", self.txt)
+        self.assertIn("Environment=VIBEPIN_SUPPLY_SINCE_HOURS=720", self.txt)
+        self.assertIn("Environment=VIBEPIN_SUPPLY_WRITE_LIMIT=50", self.txt)
+        self.assertNotIn("VIBEPIN_SUPPLY_SOURCE_REPORT", self.txt,
+                         "normal daily service must select fresh source pins")
+
+    def test_100_source_timeouts_preserve_wrapper_before_systemd_order(self):
+        self.assertIn("Environment=VIBEPIN_TIMEOUT_SECONDS=5400", self.txt)
+        self.assertIn("TimeoutStartSec=6300", self.txt)
 
 class TestSystemdTimer(unittest.TestCase):
     @classmethod

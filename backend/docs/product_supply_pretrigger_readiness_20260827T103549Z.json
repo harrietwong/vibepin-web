@@ -1,0 +1,58 @@
+{
+  "auditedAt": "2026-08-27T10:35:49Z",
+  "mode": "read_only_pretrigger",
+  "timer": {
+    "unit": "vibepin-product-supply.timer",
+    "enabled": true,
+    "active": true,
+    "nextTriggerAt": "2026-08-27T15:03:44Z",
+    "serviceEnabledSeparately": false
+  },
+  "deployedConfiguration": {
+    "mode": "apply",
+    "sourcePinLimit": 100,
+    "categoryMix": {
+      "fashion": 36,
+      "womens-fashion": 28,
+      "home-decor": 36
+    },
+    "runWriteLimit": 50,
+    "atomicWriteLimit": 20,
+    "wrapperTimeoutSeconds": 5400,
+    "systemdTimeoutSeconds": 6300,
+    "killMode": "control-group"
+  },
+  "previousTimerRun": {
+    "triggeredAt": "2026-08-26T15:14:21Z",
+    "invocationId": "dfcc31d30bb54edba490078c491d9178",
+    "result": "exit-code",
+    "exitStatus": 10,
+    "reason": "120-minute Pinterest cooldown was not yet satisfied",
+    "elapsedCooldownMinutes": 91.43,
+    "requiredCooldownMinutes": 120,
+    "writes": 0,
+    "interpretation": "expected fail-closed behavior, not a partial apply"
+  },
+  "currentReadiness": {
+    "checkedAt": "2026-08-27T10:35:49Z",
+    "databaseSentinelOk": true,
+    "pinProductsTotal": 4115,
+    "cooldownKnown": true,
+    "cooldownSatisfied": true,
+    "lastPinterestActivityAt": "2026-08-27T05:07:20.984279Z",
+    "elapsedCooldownMinutesAtCheck": 328.52,
+    "projectedCooldownMinutesAtTrigger": 596.38,
+    "recommendation": "SAFE_FOR_APPLY"
+  },
+  "runtimeSafety": {
+    "actualLockDirectory": "/opt/vibepin/locks",
+    "cloudSupplyLock": "free",
+    "pinProductsWriterLock": "free",
+    "matchingProcesses": 0,
+    "otherVibePinTimersBeforeSupply": 0,
+    "newAdmissionTimerInstalled": false,
+    "newTrackingTimerInstalled": false
+  },
+  "caveat": "The direct preflight command was used only for cooldown and DB-sentinel evidence. Its standalone lock-path fields were ignored because the systemd wrapper supplies VIBEPIN_LOCK_DIR=/opt/vibepin/locks; actual lock evidence came from the separate VPS status check.",
+  "authorization": "This report does not authorize a manual start, deployment, timer mutation or production write."
+}

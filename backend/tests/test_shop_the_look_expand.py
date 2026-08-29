@@ -1,4 +1,5 @@
 import json
+import asyncio
 import os
 import pathlib
 import re
@@ -10,9 +11,12 @@ import unittest
 from unittest.mock import MagicMock, call, patch
 
 import httpx
+import pytest
 
 import shop_the_look_expand as stl
 from shop_the_look_expand import (
+    _rejected_candidates_report,
+    NO_PRODUCT_EVIDENCE,
     DISCOVERY_METHOD,
     DISCOVERY_DETAIL,
     V28_REQUIRED_COLUMNS,
@@ -27,6 +31,38 @@ from shop_the_look_expand import (
 )
 
 
+TEST_PROJECT_REF = "testproductv37"
+
+
+@pytest.fixture(autouse=True)
+def _verified_test_project(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF", TEST_PROJECT_REF)
+    monkeypatch.setattr(
+        stl.supply_core,
+        "SUPABASE_URL",
+        f"https://{TEST_PROJECT_REF}.supabase.co",
+    )
+
+
+def test_apply_refuses_missing_project_binding_before_database_or_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(stl.EXPECTED_PROJECT_REF_ENV)
+    monkeypatch.setattr(
+        stl,
+        "_load_previous_spike_ids",
+        lambda: (_ for _ in ()).throw(AssertionError("database selection attempted")),
+    )
+    with pytest.raises(RuntimeError, match="project ref"):
+        asyncio.run(
+            stl.run_shop_the_look_expand(
+                limit=1,
+                category_mix={"fashion": 1},
+                apply=True,
+            )
+        )
+
+
 class TestCategoryMix(unittest.TestCase):
     def test_default_mix(self):
         mix = parse_category_mix(None)
@@ -36,6 +72,51 @@ class TestCategoryMix(unittest.TestCase):
     def test_excluded_categories_rejected(self):
         with self.assertRaises(ValueError):
             parse_category_mix("fashion:40,beauty:10")
+
+    def test_digital_products_requires_explicit_narrow_opt_in(self):
+        with self.assertRaises(ValueError):
+            parse_category_mix(
+                "fashion:29,womens-fashion:22,home-decor:29,digital-products:20"
+            )
+        with unittest.mock.patch.dict(
+            os.environ,
+            {"VIBEPIN_STL_ALLOW_EXCLUDED": "digital-products"},
+        ):
+            mix = parse_category_mix(
+                "fashion:29,womens-fashion:22,home-decor:29,digital-products:20"
+            )
+        self.assertEqual(mix["digital-products"], 20)
+        self.assertEqual(sum(mix.values()), 100)
+
+    def test_reviewed_launch_mix_selects_exact_digital_quota(self):
+        mix = {
+            "fashion": 29,
+            "womens-fashion": 22,
+            "home-decor": 29,
+            "digital-products": 20,
+        }
+
+        def sources(category, _cutoff, *, bootstrap_only, limit):
+            del bootstrap_only, limit
+            return [
+                {
+                    "pin_id": f"{category}-{index}",
+                    "category": category,
+                    "save_count": 1000 - index,
+                    "seed_keyword": f"{category} seed",
+                }
+                for index in range(40)
+            ]
+
+        with patch.object(stl, "_query_sources", side_effect=sources):
+            selected, report = stl.select_source_pins(category_mix=mix)
+        counts = {
+            category: sum(1 for row in selected if row["category"] == category)
+            for category in mix
+        }
+        self.assertEqual(counts, mix)
+        self.assertEqual(report["selectedTotal"], 100)
+        self.assertEqual(report["selectionExhaustion"]["totalShortfall"], 0)
 
 
 class TestNetworkExtraction(unittest.TestCase):
@@ -73,6 +154,83 @@ class TestNetworkExtraction(unittest.TestCase):
         rows = extract_network_candidates(payload)
         self.assertEqual(rows[0]["product_url"], "https://www.ebay.com/itm/987654321")
         self.assertEqual(rows[0]["json_path"], "network_text_fallback")
+
+
+class TestPerPinHardTimeout(unittest.TestCase):
+    def test_complete_pin_extraction_is_bounded(self):
+        async def never_finishes(_page, _source, state):
+            state["_pinStage"] = "tab_label"
+            await asyncio.sleep(60)
+
+        source = {"pin_id": "slow", "category": "fashion", "save_count": 1}
+        with patch.object(stl, "_extract_source_pin", side_effect=never_finishes):
+            result = asyncio.run(stl._extract_source_pin_bounded(
+                object(), source, {}, timeout_seconds=1
+            ))
+        self.assertEqual(result["issue"], "pin_timeout:1s")
+        self.assertTrue(result["renderFailure"])
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["timeoutStage"], "tab_label")
+
+    def test_stalled_generic_tabs_are_individually_bounded_and_capped(self):
+        clicks = 0
+
+        class Locator:
+            async def inner_text(self):
+                return "normal pin body"
+
+        class Mouse:
+            async def wheel(self, _x, _y):
+                return None
+
+        class Tab:
+            async def inner_text(self):
+                await asyncio.sleep(60)
+
+            async def click(self, timeout=None):
+                nonlocal clicks
+                clicks += 1
+
+        class Page:
+            url = "https://www.pinterest.com/pin/slow-tabs/"
+            mouse = Mouse()
+
+            async def goto(self, *_args, **_kwargs):
+                return None
+
+            def locator(self, _selector):
+                return Locator()
+
+            async def evaluate(self, _script):
+                return []
+
+            async def content(self):
+                return "<html>Shop the Pin</html>"
+
+            async def query_selector_all(self, _selector):
+                return [Tab() for _ in range(10)]
+
+        async def no_sleep(_seconds):
+            return None
+
+        state = {"productJsonResponses": 0}
+        with patch.object(stl.asyncio, "sleep", no_sleep), patch.object(
+            stl, "STL_TAB_LABEL_TIMEOUT_SECONDS", 0.001
+        ):
+            result = asyncio.run(stl._extract_source_pin(
+                Page(), {"pin_id": "slow-tabs", "category": "fashion"}, state
+            ))
+
+        self.assertEqual(result["tabCount"], 10)
+        self.assertEqual(clicks, stl.STL_MAX_TABS_PER_PIN)
+        self.assertEqual(state["_pinStage"], "complete")
+
+    def test_timeout_configuration_is_fail_closed(self):
+        with patch.dict(os.environ, {stl.STL_PIN_TIMEOUT_ENV: "301"}):
+            with self.assertRaises(RuntimeError):
+                stl._stl_pin_timeout_seconds()
+        with patch.dict(os.environ, {stl.STL_PIN_TIMEOUT_ENV: "120"}):
+            self.assertEqual(stl._stl_pin_timeout_seconds(), 120)
 
 
 def _make_candidate(pin_id="p1", url="https://www.ebay.com/itm/123456789",
@@ -191,6 +349,59 @@ class TestDryRunReport(unittest.TestCase):
         row = _prepare_candidate(candidate, source, index=0, shop_detected=True, shop_tab_clicked=False)
         self.assertEqual(row["source_category"], "womens-fashion")
 
+    def test_real_source_keyword_and_pin_fields_are_preserved_for_core(self):
+        source = {
+            "pin_id": "p3",
+            "category": "home-decor",
+            "save_count": 321,
+            "source_keyword": "  japandi entryway  ",
+            "title": "Source Pin title",
+            "image_url": "https://i.pinimg.com/originals/source.jpg",
+        }
+        candidate = {
+            "product_url": "https://www.etsy.com/listing/1234567890/item",
+            "product_title": "Pinterest card title is not provenance",
+            "extraction_method": "network_json",
+        }
+
+        row = _prepare_candidate(
+            candidate, source, index=0, shop_detected=True, shop_tab_clicked=False
+        )
+
+        self.assertEqual(row["seed_keyword"], "japandi entryway")
+        self.assertEqual(row["source_pin_title"], "Source Pin title")
+        self.assertEqual(
+            row["source_pin_image_url"],
+            "https://i.pinimg.com/originals/source.jpg",
+        )
+        core_candidate = stl._stl_candidates([row])[0]
+        self.assertEqual(core_candidate["pin"]["seed_keyword"], "japandi entryway")
+        self.assertEqual(core_candidate["pin"]["source_keyword"], "japandi entryway")
+
+    def test_missing_source_keyword_is_not_fabricated(self):
+        source = {
+            "pin_id": "p4",
+            "category": "fashion",
+            "save_count": 99,
+            "title": "Do not use this as a keyword",
+        }
+        candidate = {
+            "product_url": "https://www.ebay.com/itm/123456789",
+            "product_title": "Do not use this either",
+            "extraction_method": "network_json",
+        }
+
+        row = _prepare_candidate(
+            candidate, source, index=0, shop_detected=True, shop_tab_clicked=False
+        )
+
+        self.assertIsNone(row["seed_keyword"])
+        ok, reason = stl.supply_core.assert_evidence(
+            stl._stl_candidates([row])[0]["pin"], row["product_url"]
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "missing_seed_keyword")
+
 
 class TestSourceReportLoading(unittest.TestCase):
     def _make_report(self, **overrides):
@@ -222,6 +433,27 @@ class TestSourceReportLoading(unittest.TestCase):
         self.assertTrue(validation["sourceCountValidated"])
         self.assertEqual(len(validation["sourcePinIds"]), 50)
         self.assertEqual(validation["categoryMixFromSourceReport"]["womens-fashion"], 14)
+
+    def test_frozen_report_preserves_real_source_provenance(self):
+        report = self._make_report()
+        report["perPin"][0].update({
+            "seedKeyword": "minimalist capsule wardrobe",
+            "sourcePinTitle": "Original Pin title",
+            "sourcePinImageUrl": "https://i.pinimg.com/originals/source.jpg",
+        })
+        path = self._write_tmp(report)
+
+        sources, _ = load_and_validate_source_report(
+            path,
+            category_mix={"fashion": 18, "womens-fashion": 14, "home-decor": 18},
+            limit=50,
+        )
+
+        self.assertEqual(sources[0]["seed_keyword"], "minimalist capsule wardrobe")
+        self.assertEqual(sources[0]["title"], "Original Pin title")
+        self.assertEqual(
+            sources[0]["image_url"], "https://i.pinimg.com/originals/source.jpg"
+        )
 
     def test_missing_file_raises(self):
         with self.assertRaises(FileNotFoundError):
@@ -384,54 +616,23 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
     # ── T1-A: _apply_rows calls insert_rows, not upsert ────────────────────
 
     def test_apply_rows_calls_insert_rows_not_upsert(self):
-        """_apply_rows must call db.insert_rows; calling db.upsert must never happen."""
-        insert_calls = []
-        def fake_insert(table, payload, on_conflict=None):
-            insert_calls.append({"table": table, "count": len(payload), "on_conflict": on_conflict})
-            return payload
-
+        """The compatibility seam delegates only to the shared core adapter."""
         rows = self._make_rows()
-        old_db = sys.modules.get("db")
-        sys.modules["db"] = self._inject_fake_db(fake_insert)
-        try:
-            _apply_rows(rows)
-        finally:
-            if old_db is None:
-                sys.modules.pop("db", None)
-            else:
-                sys.modules["db"] = old_db
-
-        self.assertEqual(len(insert_calls), 1, "insert_rows must be called exactly once")
-        self.assertEqual(insert_calls[0]["table"], "pin_products")
-        self.assertIsNone(insert_calls[0]["on_conflict"],
-                          "plain INSERT: no conflict target may be sent")
+        outcome = {"attempted": 2, "inserted": 2, "duplicates": 0,
+                   "failed": 0, "errors": [], "written": 2}
+        with patch.object(stl, "_apply_via_core", return_value=outcome) as delegated:
+            self.assertEqual(_apply_rows(rows), 2)
+        delegated.assert_called_once_with(rows)
+        self.assertEqual(stl._LAST_WRITE_OUTCOME, outcome)
 
     # ── T1-B: NO conflict target — every candidate target is a PARTIAL index ──
 
     def test_apply_rows_sends_no_conflict_target(self):
-        """on_conflict must be None.
-
-        Both plausible targets are PARTIAL unique indexes in production:
-          idx_pin_products_active_normalized_url_hash (normalized_product_url_hash)
-          idx_pin_products_active_parent_source_url   (parent_pin_id, source_url)
-        Naming either one yields 42P10 and destroys the entire batch.
-        """
-        captured = {}
-        def fake_insert(table, payload, on_conflict=None):
-            captured["on_conflict"] = on_conflict
-            return payload
-
-        old_db = sys.modules.get("db")
-        sys.modules["db"] = self._inject_fake_db(fake_insert)
-        try:
-            _apply_rows(self._make_rows())
-        finally:
-            if old_db is None:
-                sys.modules.pop("db", None)
-            else:
-                sys.modules["db"] = old_db
-
-        self.assertIsNone(captured["on_conflict"])
+        """STL no longer contains a direct database write path."""
+        source = pathlib.Path(stl.__file__).read_text(encoding="utf-8")
+        seam = source[source.index("def _apply_rows"):source.index("class _IncrementalWriter")]
+        self.assertNotIn("insert_rows(", seam)
+        self.assertIn("_apply_via_core(rows)", seam)
 
     # ── T1-C: db.insert_rows sends ignore-duplicates, not merge-duplicates ──
 
@@ -574,7 +775,10 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
         self.assertEqual(write_calls, [], "No write must occur for empty row list")
 
 
-class TestPartialIndexWriteRegression(unittest.TestCase):
+class LegacyPartialIndexWriteRegression(unittest.TestCase):
+    # Historical fixture retained as documentation for the removed STL-local
+    # writer. The live contract is exercised at the shared supply_core boundary.
+    __test__ = False
     """Regression for the 2026-08-06 production data-loss bug.
 
     A real VPS run scraped 28/50 pins successfully, then lost 100% of it:
@@ -819,42 +1023,17 @@ class TestLifecycleCoexistence(unittest.TestCase):
         self.assertEqual(result["projectedUpdateCount"], 0)
 
     def test_recollected_retired_url_writes_without_conflict_target(self):
-        """End-to-end: the re-collected retired URL is written by a plain INSERT.
-
-        With a conflict target this row would have died with 42P10; with a
-        merge-upsert it would have overwritten the retired evidence row.
-        """
-        fake_insert_calls = []
-
-        def fake_insert(table, payload, on_conflict=None):
-            fake_insert_calls.append(on_conflict)
-            if on_conflict is not None:
-                raise RuntimeError('{"code":"42P10"}')
-            return payload
-
-        fake_db = types.ModuleType("db")
-        fake_db.insert_rows = fake_insert
-        # No upsert attribute → any merge-upsert attempt raises AttributeError.
-        old_db = sys.modules.get("db")
-        sys.modules["db"] = fake_db
-        try:
-            written = _apply_rows([{
-                "source_pin_id": "p9",
-                "product_url": "https://etsy.com/listing/1/retired-item",
-                "product_title": "Re-collected item",
-                "normalized_product_url": "https://etsy.com/listing/1/retired-item",
-                "normalized_product_url_hash": "hash_retired",
-                "platform": "etsy", "domain": "etsy.com",
-                "source_category": "home-decor", "source_pin_save_count": 1000,
-            }])
-        finally:
-            if old_db is None:
-                sys.modules.pop("db", None)
-            else:
-                sys.modules["db"] = old_db
-
-        self.assertEqual(written, 1)
-        self.assertEqual(fake_insert_calls, [None])
+        """Automatic STL never claims the manual retired-reclaim proof."""
+        candidates = stl._stl_candidates([{
+            "source_pin_id": "p9",
+            "source_pin_url": "https://www.pinterest.com/pin/p9/",
+            "source_pin_save_count": 1000,
+            "source_category": "home-decor",
+            "seed_keyword": "rug",
+            "product_url": "https://etsy.com/listing/1/retired-item",
+            "domain": "etsy.com",
+        }])
+        self.assertEqual(candidates[0]["origin"], "net_new")
 
 
 class TestGotoTimeoutConfig(unittest.TestCase):
@@ -1093,26 +1272,10 @@ class TestApplyRowsCurrencyHonesty(unittest.TestCase):
             "domain": "etsy.com",
             "source_category": "home-decor",
         }]
-        captured = []
-        def fake_insert(table, payload, on_conflict=None):
-            captured.extend(payload)
-            return payload
-
-        old_db = sys.modules.get("db")
-        fake_db = types.ModuleType("db")
-        fake_db.insert_rows = fake_insert
-        sys.modules["db"] = fake_db
-        try:
-            _apply_rows(rows)
-        finally:
-            if old_db is None:
-                sys.modules.pop("db", None)
-            else:
-                sys.modules["db"] = old_db
-
-        self.assertTrue(captured, "insert_rows must have been called")
-        self.assertIsNone(captured[0].get("currency"),
-                          "currency must be NULL when no evidence — not defaulted to USD")
+        candidate = stl._stl_candidates(rows)[0]
+        self.assertNotIn("currency", candidate["pin"])
+        self.assertNotIn("price", candidate["pin"])
+        self.assertNotIn("product_title", candidate["pin"])
 
 
 class TestProductIdeasAPIContract(unittest.TestCase):
@@ -1642,10 +1805,42 @@ class TestIncrementalBatchWrite(unittest.TestCase):
         stl._LAST_WRITE_OUTCOME.update({
             "attempted": len(rows), "inserted": len(rows),
             "duplicates": 0, "failed": 0, "errors": [],
+            "insertedIds": [f"id-{r['source_pin_id']}" for r in rows],
+            "createdAtWindow": ["2026-08-25T00:00:00+00:00",
+                                "2026-08-25T00:00:01+00:00"],
+            "rollback": "DELETE ... exact ids ...",
+            "postWriteVerification": {"allRedLinesPass": True},
         })
         return len(rows)
 
     # ── T1: batching ──────────────────────────────────────────────────────
+    def test_canary_may_lower_run_write_cap_to_one_but_never_raise_above_50(self):
+        with patch.dict(os.environ, {"VIBEPIN_SUPPLY_WRITE_LIMIT": "1"}, clear=False):
+            writer = stl._IncrementalWriter(batch_size=10, enabled=True)
+        self.assertEqual(writer.run_admission_cap, 1)
+        self.assertEqual(writer.batching_report()["runAdmissionCap"], 1)
+
+        for bad in ("0", "51", "not-a-number"):
+            with patch.dict(os.environ, {"VIBEPIN_SUPPLY_WRITE_LIMIT": bad}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    stl._IncrementalWriter(batch_size=10, enabled=True)
+
+    def test_canary_cap_one_reaches_only_one_row(self):
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"canary{i}",
+                                 [f"https://www.etsy.com/listing/{i}/thing"])
+                for i in range(5)]
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(
+                os.environ, {"VIBEPIN_SUPPLY_WRITE_LIMIT": "1"}, clear=False
+            ))
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=5)
+
+        self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [1])
+        self.assertEqual(report["writes"]["pin_products"], 1)
+        self.assertEqual(report["incrementalWrite"]["rowsSkippedRunAdmissionCap"], 4)
+
     def test_twenty_pins_with_batch_ten_writes_twice(self):
         """20 source pins x 1 candidate, batch=10 -> the writer is called twice,
         with 10 rows each. Before this change it was called once, after the
@@ -1664,8 +1859,8 @@ class TestIncrementalBatchWrite(unittest.TestCase):
         self.assertEqual(report["incrementalWrite"]["batchSizePins"], 10)
 
     def test_tail_batch_below_batch_size_is_still_written(self):
-        """25 pins at batch=10 -> 10 + 10 + a 5-row tail. A partial tail that
-        never lands is the same data loss in miniature."""
+        """25 pins at batch=10 -> 10 + 10 + a 5-row tail, all below the
+        user-approved 50-row run ceiling."""
         from contextlib import ExitStack
 
         pins = [self._pin_result(f"pin{i}", [f"https://www.etsy.com/listing/{i}/thing"])
@@ -1675,6 +1870,85 @@ class TestIncrementalBatchWrite(unittest.TestCase):
 
         self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [10, 10, 5])
         self.assertEqual(report["writes"]["pin_products"], 25)
+        self.assertEqual(report["incrementalWrite"]["rowsSkippedRunAdmissionCap"], 0)
+        self.assertEqual(report["incrementalWrite"]["runAdmissionCap"], 50)
+        self.assertEqual(report["incrementalWrite"]["atomicWriteBatchCap"], 20)
+
+    def test_one_large_flush_is_split_20_20_10_and_total_stops_at_50(self):
+        """A high-yield source flush may keep 50 rows, but no individual
+        INSERT/readback/rollback call may exceed the established 20-row unit."""
+        from contextlib import ExitStack
+
+        pins = []
+        for pin_no in range(10):
+            urls = [
+                f"https://www.etsy.com/listing/{pin_no * 6 + j}/thing"
+                for j in range(6)
+            ]
+            pins.append(self._pin_result(f"dense{pin_no}", urls))
+        with ExitStack() as stack:
+            report, apply_mock = self._run(stack, pin_results=pins, batch_size=10)
+
+        self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [20, 20, 10])
+        self.assertEqual(report["writes"]["pin_products"], 50)
+        self.assertEqual(report["incrementalWrite"]["rowsSkippedRunAdmissionCap"], 10)
+        self.assertEqual(report["incrementalWrite"]["runAdmissionSlotsRemaining"], 0)
+        self.assertTrue(all(
+            len(receipt["insertedIds"]) <= 20
+            for receipt in report["writeOutcome"]["batchReceipts"]
+        ))
+
+    def test_failed_merchant_proof_does_not_consume_the_write_cap(self):
+        """The first 10 Source Pins can yield zero verified products without
+        preventing later Source Pins from filling the 20-row write ceiling."""
+        from contextlib import ExitStack
+
+        calls = 0
+
+        def first_batch_finds_nothing(rows):
+            nonlocal calls
+            calls += 1
+            landed = [] if calls == 1 else rows
+            stl._LAST_WRITE_OUTCOME.clear()
+            stl._LAST_WRITE_OUTCOME.update({
+                "attempted": len(rows), "inserted": len(landed),
+                "duplicates": 0, "failed": len(rows) - len(landed), "errors": [],
+                "insertedIds": [f"landed-{calls}-{i}" for i in range(len(landed))],
+                "createdAtWindow": ["lo", "hi"] if landed else None,
+                "rollback": "DELETE exact ids" if landed else None,
+                "postWriteVerification": {"allRedLinesPass": True} if landed else None,
+            })
+            return len(landed)
+
+        pins = [self._pin_result(f"proof{i}", [f"https://www.etsy.com/listing/{i}/thing"])
+                for i in range(25)]
+        with ExitStack() as stack:
+            report, apply_mock = self._run(
+                stack, pin_results=pins, batch_size=10,
+                apply_rows_side_effect=first_batch_finds_nothing,
+            )
+
+        self.assertEqual([len(c.args[0]) for c in apply_mock.call_args_list], [10, 10, 5])
+        self.assertEqual(report["writes"]["pin_products"], 15)
+        self.assertEqual(report["incrementalWrite"]["rowsSkippedRunAdmissionCap"], 0)
+
+    def test_final_report_keeps_exact_ids_and_per_batch_rollback_receipts(self):
+        from contextlib import ExitStack
+
+        pins = [self._pin_result(f"receipt{i}",
+                                 [f"https://www.etsy.com/listing/{i}/thing"])
+                for i in range(12)]
+        with ExitStack() as stack:
+            report, _ = self._run(stack, pin_results=pins, batch_size=10)
+
+        outcome = report["writeOutcome"]
+        self.assertEqual(len(outcome["insertedIds"]), 12)
+        self.assertEqual(len(outcome["batchReceipts"]), 2)
+        self.assertTrue(all(r["rollback"] for r in outcome["batchReceipts"]))
+        self.assertEqual(
+            sum(len(r["insertedIds"]) for r in outcome["batchReceipts"]),
+            outcome["inserted"],
+        )
 
     # ── T2: cross-batch dedup ─────────────────────────────────────────────
     def test_url_written_in_batch_one_is_not_rewritten_in_batch_two(self):
@@ -2170,27 +2444,16 @@ class TestProductEvidenceGate(unittest.TestCase):
         row = self._prepared(image="https://i/x.jpg")
         self.assertTrue(row["merchant"], "merchant is populated but must not leak")
 
-        fake_db = types.ModuleType("db")
-        captured = {}
-        fake_db.insert_rows = lambda table, payload: captured.setdefault("p", payload)
-        with patch.dict(sys.modules, {"db": fake_db}):
-            _apply_rows([row])
-
-        written = captured["p"][0]
-        self.assertIsNone(written["product_name"],
-                          "unknown name must be NULL, never the domain/merchant")
-        self.assertEqual(written["merchant"], row["merchant"],
-                         "merchant keeps its own column")
-        self.assertEqual(written["image_url"], "https://i/x.jpg")
+        candidate = stl._stl_candidates([row])[0]
+        self.assertNotIn("product_name", candidate["pin"])
+        self.assertNotIn("merchant", candidate["pin"])
+        self.assertNotIn("Solid Oak Floating Shelf", repr(candidate))
 
     def test_apply_rows_keeps_a_real_title(self):
         row = self._prepared(title="Solid Oak Floating Shelf")
-        fake_db = types.ModuleType("db")
-        captured = {}
-        fake_db.insert_rows = lambda table, payload: captured.setdefault("p", payload)
-        with patch.dict(sys.modules, {"db": fake_db}):
-            _apply_rows([row])
-        self.assertEqual(captured["p"][0]["product_name"], "Solid Oak Floating Shelf")
+        candidate = stl._stl_candidates([row])[0]
+        self.assertNotIn("product_title", candidate["pin"])
+        self.assertNotIn("Solid Oak Floating Shelf", repr(candidate))
 
     def test_pinterest_product_placeholder_is_gone_from_executable_code(self):
         """The invented fallback name must not exist as a usable string.
@@ -2251,7 +2514,9 @@ class TestIncrementalWriterEvidenceGate(unittest.TestCase):
             side_effect=lambda unique: {"insertCandidates": list(unique)},
         )
 
-    def test_bare_link_never_reaches_the_write(self):
+    def test_bare_card_link_reaches_bounded_merchant_core(self):
+        """Card title/image are untrusted; a valid PDP URL must reach the
+        shared core so the merchant page can prove or reject it."""
         writer = self._writer()
         pending = [
             self._prepared(url="https://www.etsy.com/listing/1/bare"),
@@ -2261,11 +2526,16 @@ class TestIncrementalWriterEvidenceGate(unittest.TestCase):
         with self._passthrough_preflight():
             rows = writer._filter_batch(pending)
 
-        self.assertEqual([r["product_url"] for r in rows],
-                         ["https://www.etsy.com/listing/2/good"])
-        self.assertEqual(writer.evidence_rejected_count, 1)
+        self.assertEqual(
+            [r["product_url"] for r in rows],
+            [
+                "https://www.etsy.com/listing/1/bare",
+                "https://www.etsy.com/listing/2/good",
+            ],
+        )
+        self.assertEqual(writer.evidence_rejected_count, 0)
 
-    def test_rejection_is_visible_in_the_batching_report(self):
+    def test_card_evidence_is_not_reported_as_merchant_rejection(self):
         writer = self._writer()
         with self._passthrough_preflight():
             writer._filter_batch([
@@ -2274,14 +2544,55 @@ class TestIncrementalWriterEvidenceGate(unittest.TestCase):
                                price="9.99"),
             ])
         rep = writer.batching_report()
-        self.assertEqual(rep["rowsRejectedNoProductEvidence"], 2)
-        self.assertEqual(rep["rowsRejectedNoProductEvidenceWithPrice"], 1)
-        self.assertNotEqual(rep["rowsRejectedByAcceptLink"], 2,
-                            "must not be conflated with accept_link rejections")
+        self.assertEqual(rep["rowsRejectedNoProductEvidence"], 0)
+        self.assertEqual(rep["rowsRejectedNoProductEvidenceWithPrice"], 0)
 
-    def test_rejected_candidate_does_not_burn_the_dedup_key(self):
-        """A bare link in batch 1 must not block the same URL arriving with an
-        image in batch 2 — the gate runs before _seen_keys is touched."""
+    def test_merchant_discovery_failure_is_preserved_in_final_write_outcome(self):
+        """A URL that reaches supply_core but fails merchant-page proof must
+        not disappear into the ambiguous attempted=0/written=0 state."""
+        writer = stl._IncrementalWriter(batch_size=1, enabled=True)
+        candidate = self._prepared(
+            url="https://www.etsy.com/listing/99/merchant-proof-fails",
+            image="https://i.pinimg.com/236x/example.jpg",
+        )
+
+        def fail_discovery(_rows):
+            stl._LAST_WRITE_OUTCOME.clear()
+            stl._LAST_WRITE_OUTCOME.update({
+                "candidates": 1,
+                "discovered": 0,
+                "discoveryFailures": 1,
+                "discoveryFailureSamples": [{
+                    "url": "https://www.etsy.com/listing/99/merchant-proof-fails",
+                    "reason": "merchant page did not prove a real image",
+                }],
+                "attempted": 0,
+                "inserted": 0,
+                "duplicates": 0,
+                "failed": 0,
+                "errors": [],
+            })
+            return 0
+
+        with self._passthrough_preflight(), patch.object(
+            stl, "_apply_rows", side_effect=fail_discovery
+        ):
+            writer.add_pin({"candidates": [candidate]})
+
+        outcome = writer.write_outcome()
+        self.assertEqual(outcome["coreCandidates"], 1)
+        self.assertEqual(outcome["merchantDiscovered"], 0)
+        self.assertEqual(outcome["merchantDiscoveryFailures"], 1)
+        self.assertEqual(
+            outcome["merchantDiscoveryFailureSamples"][0]["reason"],
+            "merchant page did not prove a real image",
+        )
+        self.assertEqual(len(outcome["batchReceipts"]), 1)
+        self.assertEqual(outcome["batchReceipts"][0]["coreCandidates"], 1)
+
+    def test_first_valid_pdp_url_owns_dedup_regardless_of_card_fields(self):
+        """A later Pinterest image cannot upgrade merchant proof; one URL gets
+        one bounded merchant fetch regardless of its card metadata."""
         url = "https://www.etsy.com/listing/777/late-evidence"
         writer = self._writer()
         with self._passthrough_preflight():
@@ -2289,11 +2600,10 @@ class TestIncrementalWriterEvidenceGate(unittest.TestCase):
             second = writer._filter_batch(
                 [self._prepared(url=url, image="https://i/late.jpg")]
             )
-        self.assertEqual(first, [])
-        self.assertEqual(len(second), 1, "the real product must still be writable")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
 
-    def test_flush_logs_the_rejection_count(self):
-        """Operators read journalctl, not JSON. The discard must be loud."""
+    def test_flush_sends_bare_card_link_to_merchant_core(self):
         import io
         from contextlib import redirect_stdout
 
@@ -2301,12 +2611,142 @@ class TestIncrementalWriterEvidenceGate(unittest.TestCase):
         writer._pending = [self._prepared(url="https://www.etsy.com/listing/1/bare")]
         writer._pins_since_flush = 1
         buf = io.StringIO()
-        with self._passthrough_preflight(), redirect_stdout(buf):
+        def merchant_reject(_rows):
+            stl._LAST_WRITE_OUTCOME.clear()
+            stl._LAST_WRITE_OUTCOME.update({
+                "candidates": 1,
+                "discovered": 0,
+                "discoveryFailures": 1,
+                "discoveryFailureSamples": [{"reason": "merchant image missing"}],
+                "attempted": 0,
+                "inserted": 0,
+                "duplicates": 0,
+                "failed": 0,
+                "errors": [],
+            })
+            return 0
+
+        with self._passthrough_preflight(), patch.object(
+            stl, "_apply_rows", side_effect=merchant_reject
+        ), redirect_stdout(buf):
             writer.flush(reason="test")
         out = buf.getvalue()
-        self.assertIn("noProductEvidence=1", out)
-        self.assertIn("no title, no image", out)
+        self.assertIn("newRows=1", out)
+        self.assertEqual(writer.write_outcome()["merchantDiscoveryFailures"], 1)
 
+    def test_merchant_discovery_budget_is_not_restored_after_failed_proof(self):
+        writer = stl._IncrementalWriter(batch_size=1, enabled=True)
+        writer._merchant_discovery_slots_remaining = 1
+
+        def merchant_reject(_rows):
+            stl._LAST_WRITE_OUTCOME.clear()
+            stl._LAST_WRITE_OUTCOME.update({
+                "candidates": 1,
+                "discovered": 0,
+                "discoveryFailures": 1,
+                "discoveryFailureSamples": [{"reason": "merchant proof failed"}],
+                "attempted": 0,
+                "inserted": 0,
+                "duplicates": 0,
+                "failed": 0,
+                "errors": [],
+            })
+            return 0
+
+        with self._passthrough_preflight(), patch.object(
+            stl, "_apply_rows", side_effect=merchant_reject
+        ) as apply_mock:
+            writer.add_pin({"candidates": [self._prepared(
+                url="https://www.etsy.com/listing/1/first"
+            )]})
+            writer.add_pin({"candidates": [self._prepared(
+                url="https://www.etsy.com/listing/2/second"
+            )]})
+
+        report = writer.batching_report()
+        self.assertEqual(apply_mock.call_count, 1)
+        self.assertEqual(report["merchantDiscoveryCandidateCap"], 100)
+        self.assertEqual(report["merchantDiscoverySlotsRemaining"], 0)
+        self.assertEqual(report["rowsSkippedMerchantDiscoveryBudget"], 1)
+
+
+
+class TestRejectionCountedBothWays(unittest.TestCase):
+    """Rejections are counted as records AND as distinct URLs.
+
+    The same URL arrives many times in one run, and the evidence gate runs
+    before dedup on purpose, so record counts measure work while distinct-URL
+    counts measure loss. Measured 2026-08-18: 968 records over 544 URLs, and 94
+    no_product_evidence records over 3 URLs. Reporting only records made a
+    3-URL gap look like a 94-product gap.
+    """
+
+    ETSY = "https://www.etsy.com/listing/4348936058/august-days"
+
+    def _rejections(self):
+        rows = [{"product_url": self.ETSY,
+                 "rejection_reason": NO_PRODUCT_EVIDENCE} for _ in range(30)]
+        rows += [{"product_url": "https://blog.example.com/post",
+                  "rejection_reason": "non_commerce_domain"} for _ in range(5)]
+        rows += [{"product_url": "https://other.example.com/x",
+                  "rejection_reason": "non_commerce_domain"}]
+        return rows
+
+    def test_records_and_unique_urls_both_reported(self):
+        r = _rejected_candidates_report(self._rejections())
+        self.assertEqual(r["total"], 36)
+        self.assertEqual(r["totalUnique"], 3)
+
+    def test_per_reason_unique_counts(self):
+        r = _rejected_candidates_report(self._rejections())
+        self.assertEqual(r["byReason"][NO_PRODUCT_EVIDENCE], 30)
+        self.assertEqual(r["byReasonUnique"][NO_PRODUCT_EVIDENCE], 1)
+        self.assertEqual(r["byReasonUnique"]["non_commerce_domain"], 2)
+
+    def test_no_product_evidence_block_carries_unique_count(self):
+        r = _rejected_candidates_report(self._rejections())
+        self.assertEqual(r["noProductEvidence"]["count"], 30)
+        self.assertEqual(r["noProductEvidence"]["uniqueUrls"], 1)
+
+    def test_rows_without_url_do_not_inflate_unique(self):
+        rows = [{"rejection_reason": "missing_product_url"} for _ in range(4)]
+        r = _rejected_candidates_report(rows)
+        self.assertEqual(r["total"], 4)
+        self.assertEqual(r["totalUnique"], 0)
+
+
+class TestShortlinkWiredIntoReport(unittest.TestCase):
+    """_build_report must actually USE the resolver, not just import it.
+
+    The resolver landed as a library first, with no caller: accept_link()
+    defaults resolver=None, so every shortener kept being rejected exactly as
+    before while the code looked finished. This pins the wiring.
+    """
+
+    PDP = "https://www.amazon.com/Widget/dp/B0TESTASIN"
+
+    def _pin(self, url):
+        return [{"candidates": [{"product_url": url,
+                                 "product_title": "A real widget",
+                                 "image_url": "https://i.example/x.jpg"}]}]
+
+    def test_shortlink_is_resolved_and_accepted(self):
+        with patch.object(stl, "ShortlinkResolver") as R:
+            R.return_value = MagicMock()
+            with patch.object(stl, "accept_link",
+                                   return_value=(True, "known_commerce_domain")) as al,                  patch.object(stl, "resolve_link", return_value=self.PDP) as rl:
+                stl._build_report(self._pin("https://amzn.to/3QYT1Ll"), {}, elapsed=1.0, apply=False)
+        self.assertIsNotNone(al.call_args.kwargs.get("resolver"),
+                             "accept_link must receive the run's resolver")
+        rl.assert_called_once()
+
+    def test_stored_url_is_the_resolved_target(self):
+        with patch.object(stl, "ShortlinkResolver", return_value=MagicMock()),              patch.object(stl, "accept_link", return_value=(True, "known_commerce_domain")),              patch.object(stl, "resolve_link", return_value=self.PDP):
+            report, unique = stl._build_report(
+                self._pin("https://amzn.to/3QYT1Ll"), {}, elapsed=1.0, apply=False)
+        self.assertEqual(unique[0]["product_url"], self.PDP,
+                         "an expiring redirect must not be persisted as source_url")
+        self.assertEqual(unique[0]["shortlink_original_url"], "https://amzn.to/3QYT1Ll")
 
 if __name__ == "__main__":
     unittest.main()

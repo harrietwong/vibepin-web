@@ -21,6 +21,7 @@ import {
   SHOPIFY_SETTINGS_PATH,
   normalizeShopInput,
 } from "@/lib/server/shopify/config";
+import { prepareShopifyConnect } from "@/lib/server/shopify/connectPrep";
 import {
   SHOPIFY_OAUTH_STATE_COOKIE,
   shopifyStateCookieOptions,

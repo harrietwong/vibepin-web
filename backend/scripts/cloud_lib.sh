@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # cloud_lib.sh — shared helpers for VibePin cloud wrapper scripts.
 #
-# Sourced by cloud_run_pin_crawl.sh and cloud_run_keyword_trends.sh. Provides:
+# Sourced by the Pin Crawl, Keyword Trends, and Product Tracking wrappers. Provides:
 #   * dir/env setup + Linux-safe lock dir
 #   * flock-based no-overlap guard
 #   * read-only preflight gate (refuse on unsafe state)
@@ -19,7 +19,7 @@ cloud_init() {
   CLOUD_JOB="$1"
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
   BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-  cd "$BACKEND_DIR"
+  cd "$BACKEND_DIR" || return 1
   LOG_DIR="$BACKEND_DIR/logs"
   LOCK_DIR="${VIBEPIN_LOCK_DIR:-/opt/vibepin/locks}"
   export VIBEPIN_LOCK_DIR="$LOCK_DIR"
@@ -45,11 +45,24 @@ cloud_flock() {
   fi
 }
 
+# cloud_network_flock — acquire the cross-job Pinterest network lock after the
+# read-only preflight. If another job wins the small preflight-to-lock race, this
+# fails rather than co-running. Jobs that acquire the same lock internally do not
+# call this helper.
+cloud_network_flock() {
+  local lock="$LOCK_DIR/pinterest_network.lock"
+  exec 202>"$lock"
+  if ! flock -n 202; then
+    cloud_log "REFUSE: another Pinterest network job is active (lock $lock)."
+    exit 8
+  fi
+}
+
 # cloud_preflight_gate — run the read-only preflight; refuse on WAIT/FAIL.
 # This is how every Pinterest-touching job RESPECTS the shared pinterest_network
 # lock + active-worker state (the preflight reports both). Exit 8 if unsafe.
 cloud_preflight_gate() {
-  local raw rec
+  local required="${1:-SAFE_FOR_DRY_RUN}" raw rec
   # preflight EXITS NONZERO by design for WAIT(10)/FAIL(20). Capture its JSON
   # separately and parse the recommendation from that, instead of piping preflight
   # straight into the parser: under `set -o pipefail` the old pipeline returned
@@ -67,7 +80,14 @@ except Exception:
   [ -n "$rec" ] || rec="FAIL"
   cloud_log "preflight recommendation = $rec"
   case "$rec" in
-    SAFE_FOR_DRY_RUN|SAFE_FOR_APPLY) return 0 ;;
+    SAFE_FOR_APPLY) return 0 ;;
+    SAFE_FOR_DRY_RUN)
+      if [[ "$required" == "SAFE_FOR_APPLY" ]]; then
+        cloud_log "REFUSE: preflight permits read-only work but Pinterest cooldown is not satisfied."
+        exit 8
+      fi
+      return 0
+      ;;
     WAIT) cloud_log "REFUSE: preflight WAIT (active Pinterest worker/lock). Try later."; exit 8 ;;
     *)    cloud_log "REFUSE: preflight $rec (environment not safe)."; exit 8 ;;
   esac

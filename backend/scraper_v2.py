@@ -218,16 +218,40 @@ def extract_image_dims(obj: dict) -> tuple[Optional[int], Optional[int]]:
                 pass
     return None, None
 
-def extract_outbound_link(obj: dict) -> Optional[str]:
+def extract_direct_outbound_link(obj: dict) -> Optional[str]:
+    """Return only an outbound URL explicitly carried by the Pin payload.
+
+    This deliberately excludes the legacy ``domain`` fallback used for broad
+    discovery.  A domain-derived homepage is useful as a crawl hint, but it is
+    not evidence that a Pin directly linked to a particular product page.
+    """
     def _ok(url: Any) -> bool:
-        return (isinstance(url, str) and url.startswith("http")
-                and "pinterest.com" not in url)
+        if not isinstance(url, str) or not url.startswith("http"):
+            return False
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+        return not (
+            host == "pinterest.com"
+            or host.endswith(".pinterest.com")
+            or host.startswith("pinterest.")
+            or ".pinterest." in host
+            or host == "pinimg.com"
+            or host.endswith(".pinimg.com")
+            or host.startswith("pinimg.")
+            or ".pinimg." in host
+        )
     for key in ("link", "outbound_link", "product_url"):
         if _ok(obj.get(key)):
             return obj[key]
     url = _nested_get(obj, "rich_metadata.url")
     if _ok(url):
         return url
+    return None
+
+
+def extract_outbound_link(obj: dict) -> Optional[str]:
+    direct = extract_direct_outbound_link(obj)
+    if direct:
+        return direct
     domain = obj.get("domain")
     if isinstance(domain, str) and "." in domain:
         excluded = ("pinterest", "instagram", "facebook", "tiktok", "twitter", "youtube")

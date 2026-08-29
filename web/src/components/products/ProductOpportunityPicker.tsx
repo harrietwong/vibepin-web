@@ -12,6 +12,7 @@ import { cleanProductTitle } from "@/lib/productTitle";
 import { CATEGORIES } from "@/lib/categories";
 import { fetchProductUrlImport } from "@/lib/productUrlImportClient";
 import { deriveProductSaveCount } from "@/lib/productOpportunityCounts";
+import { isNonPinterestMerchantImageUrl } from "@/lib/productImageEvidence";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { toast } from "sonner";
 
@@ -60,7 +61,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 // such. Clicks / outbound clicks / impressions are not exposed by Pinterest to
 // third-party viewers, so they are never shown (not as 0, not as "—").
 // tr is threaded in (this is a pure module-level helper, not a component/hook).
-function productEvidence(p: ProductIdea, tr: (key: MessageKey) => string): { label: string; tooltip: string } {
+function productEvidence(p: ProductIdea, tr: (key: MessageKey) => string): { label: string; tooltip: string } | null {
   const m = p.product_metrics;
   if (m && m.primarySaveKind === "product_pin" && m.aggregateProductPinSaves != null) {
     if (m.uniqueProductPinCount > 1) {
@@ -75,7 +76,9 @@ function productEvidence(p: ProductIdea, tr: (key: MessageKey) => string): { lab
     };
   }
   // Fallback: only source-Pin saves exist — explicitly a source metric.
-  const savesText = fmt(m?.sourcePinSaveCount ?? p.source_pin_save_count);
+  const sourcePinSaves = m?.sourcePinSaveCount ?? p.source_pin_save_count;
+  if (sourcePinSaves == null) return null;
+  const savesText = fmt(sourcePinSaves);
   const label = m && m.productSourcePinCount > 1
     ? tr("products.evidence.savesOnSourcePinWithSources").replace("{saves}", savesText).replace("{n}", String(m.productSourcePinCount))
     : tr("products.evidence.savesOnSourcePin").replace("{saves}", savesText);
@@ -179,10 +182,12 @@ export function ProductOpportunityPicker({
   }
 
   // ── Product Opportunities (selectable) ──────────────────────────────────────
-  const oppSelections = useMemo<{ sel: PickerSelection; meta: string; metaTooltip: string }[]>(() => {
+  const oppSelections = useMemo<{ sel: PickerSelection; meta?: string; metaTooltip?: string }[]>(() => {
     const catId = catFilter !== "All" ? catFilter : null;
     const q = search.trim().toLowerCase();
-    let list = products.filter(p => !!p.image_url);
+    let list = products.filter(
+      p => p.merchant_image_verified && isNonPinterestMerchantImageUrl(p.image_url),
+    );
     if (q) list = list.filter(p =>
       (cleanProductTitle(p.product_name) ?? "").toLowerCase().includes(q) ||
       (p.seed_keyword ?? "").toLowerCase().includes(q) ||
@@ -204,8 +209,8 @@ export function ProductOpportunityPicker({
           productUrl: p.source_url ?? undefined, sourceDomain: p.domain ?? undefined,
           price: fmtPrice(p.price, p.currency) || undefined,
         },
-        meta: ev.label,
-        metaTooltip: ev.tooltip,
+        meta: ev?.label,
+        metaTooltip: ev?.tooltip,
       };
     });
   }, [products, kwCatMap, catFilter, search, sort, tr]);

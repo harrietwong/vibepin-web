@@ -47,7 +47,7 @@ export function bucketCategory(raw?: string | null): string {
 }
 
 interface ApiPin { id: string; image_url: string; category?: string | null; title?: string | null; source_url?: string | null; outbound_link?: string | null; }
-export interface ApiProduct { id: string; image_url: string; product_name?: string | null; seed_keyword?: string | null; price?: number | null; currency?: string | null; source_url?: string | null; opportunity_score?: number | null; }
+export interface ApiProduct { id: string; image_url: string; product_name?: string | null; seed_keyword?: string | null; price?: number | null; currency?: string | null; source_url?: string | null; }
 
 /**
  * Map one Product Opportunity API row to a landing tile.
@@ -56,7 +56,8 @@ export interface ApiProduct { id: string; image_url: string; product_name?: stri
  * exactly when the merchant page could not be read (Etsy-class WAF-403, always). The
  * caption carries that absence through as an EMPTY string; it must NEVER be a
  * fabricated "Product", nor the seed keyword / category / URL / domain standing in for
- * a name we do not have. The tile still conveys category, price and score truthfully.
+ * a name we do not have. The tile may still convey category and merchant price.
+ * Retired Opportunity Score data is deliberately not accepted or mapped here.
  */
 export function mapProductAsset(p: ApiProduct): LandingAsset {
   return {
@@ -67,7 +68,6 @@ export function mapProductAsset(p: ApiProduct): LandingAsset {
     sourceType: "product_opportunity" as const,
     url: p.source_url ?? undefined,
     price: p.price != null ? `${!p.currency || p.currency === "USD" ? "$" : ""}${p.price}` : null,
-    score: p.opportunity_score ?? null,
   };
 }
 
@@ -82,7 +82,7 @@ export function useLandingAssets() {
       try {
         const [pinsRes, prodRes] = await Promise.allSettled([
           fetch("/api/viral-pins?limit=60").then(r => (r.ok ? r.json() : null)),
-          fetch("/api/products/top?limit=60&sort=opportunity").then(r => (r.ok ? r.json() : null)),
+          fetch("/api/products/top?limit=60&sort=most_saved").then(r => (r.ok ? r.json() : null)),
         ]);
         if (!alive) return;
 

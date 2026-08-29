@@ -1,0 +1,21 @@
+{
+  "audited_at": "2026-08-28T00:08:33.958265+00:00",
+  "candidate_functional_tip": "6839e7609ddff3f1fe288c48a42918e105a75fc9",
+  "method": "GET PostgREST OpenAPI schema as service role",
+  "mutation": false,
+  "http_status": 200,
+  "total_paths": 72,
+  "legacy_control_paths": [
+    "/pin_products",
+    "/pin_save_snapshots"
+  ],
+  "v63_matching_paths": [],
+  "v63_path_match_patterns": [
+    "product_opportun",
+    "product_evidence",
+    "product_metric",
+    "saved_product"
+  ],
+  "conclusion": "No PostgREST-exposed v63 Product Opportunity table or RPC currently exists; legacy control paths prove schema discovery was active.",
+  "coverage_limit": "PostgREST OpenAPI cannot prove that a non-exposed table, view, function, trigger, policy or index is absent. Exact PostgreSQL catalog readback through the approved migration channel remains required before Stage 1 apply."
+}

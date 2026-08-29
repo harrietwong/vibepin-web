@@ -29,7 +29,6 @@ const base: ApiProduct = {
   price: 24,
   currency: "USD",
   source_url: "https://shop.example.com/products/matcha-whisk",
-  opportunity_score: 71,
 };
 
 // ── 1. Landing: NULL / blank product_name never becomes "Product" ────────────
@@ -66,10 +65,10 @@ test("landing: a real product_name still displays unchanged", () => {
   assert.equal(a.title, "Bamboo Matcha Whisk (Chasen)");
 });
 
-test("landing: no image path still maps price/score honestly", () => {
+test("landing: missing product name still maps merchant price honestly", () => {
   const a = mapProductAsset({ ...base, product_name: null });
   assert.equal(a.price, "$24");
-  assert.equal(a.score, 71);
+  assert.ok(!("score" in a), "retired Opportunity Score must not cross the landing asset boundary");
 });
 
 // ── 2. Admin data console: caption source assertion ──────────────────────────
@@ -89,11 +88,12 @@ test("admin: product caption never falls back to 'Product'", () => {
   );
 });
 
-test("admin: product caption uses an explicit non-name status for NULL", () => {
+test("admin: product caption uses an explicit non-name message for NULL", () => {
   assert.ok(
-    /caption:\s*\(p\.product_name \?\? ""\)\.trim\(\) \|\| "Name unavailable"/.test(adminSrc),
-    "expected the honest 'Name unavailable' fallback for a NULL product_name",
+    /caption:\s*\(p\.product_name \?\? ""\)\.trim\(\) \|\| "Name not provided"/.test(adminSrc),
+    "expected the honest non-name message for a NULL product_name",
   );
+  assert.ok(!/Name unavailable/.test(adminSrc), "admin Product rows must not expose unavailable status language");
 });
 
 test("admin: seed_keyword still shows truthfully in the SUB line (its correct role)", () => {

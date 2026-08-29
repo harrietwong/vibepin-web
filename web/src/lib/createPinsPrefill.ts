@@ -56,7 +56,14 @@ const SS_PREFIX = "vbp_cp_";
 
 export function savePrefill(prefill: CreatePinsPrefill): string {
   const key = `${SS_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  try { sessionStorage.setItem(key, JSON.stringify(prefill)); } catch { /* SSR / private browsing */ }
+  try { sessionStorage.setItem(key, JSON.stringify(prefill)); } catch { /* legacy callers retain their existing behavior */ }
+  return key;
+}
+
+function savePrefillStrict(prefill: CreatePinsPrefill): string {
+  const key = `${SS_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  try { sessionStorage.setItem(key, JSON.stringify(prefill)); }
+  catch { throw new Error("Create Pins context could not be saved"); }
   return key;
 }
 
@@ -174,6 +181,39 @@ export function buildPrefillFromProductSignal(product: {
   };
 }
 
+/**
+ * Create Pins handoff for a stable Product Opportunity. This pure builder must
+ * never create or remove a Saved Products record: saving and creating are two
+ * independent user actions.
+ */
+export function buildPrefillFromProductOpportunity(product: {
+  id: string;
+  productName: string | null;
+  productImageUrl: string;
+  productUrl: string;
+  domain: string | null;
+  category: string | null;
+}): CreatePinsPrefill {
+  const category = product.category ? ({
+    fashion: "Fashion",
+    "womens-fashion": "Women's Fashion",
+    "home-decor": "Home Decor",
+    "digital-products": "Digital Products",
+  } as Record<string, string>)[product.category] : undefined;
+  return {
+    source: "product_signals",
+    productImages: [{
+      id: product.id,
+      imageUrl: product.productImageUrl,
+      title: product.productName?.trim() || undefined,
+      source: "product_signals",
+      category,
+      productUrl: product.productUrl,
+      sourceDomain: product.domain ?? undefined,
+    }],
+  };
+}
+
 export function buildPrefillFromViralPin(pin: {
   id: string;
   image_url: string;
@@ -281,9 +321,13 @@ export async function openCreatePinsWithDraft(
       if (res.ok) {
         const { draft_id } = await res.json() as { draft_id: string };
         if (draft_id) {
-          // Also save to sessionStorage as a backup (belt-and-suspenders)
-          savePrefill(prefill);
-          navigate(`/app/studio?draft_id=${encodeURIComponent(draft_id)}`);
+          // Use the one-shot session copy immediately, then retain draft_id in
+          // the URL so a refresh can recover the same context from the server.
+          let prefillKey: string | null = null;
+          try { prefillKey = savePrefillStrict(prefill); } catch { /* persisted draft remains authoritative */ }
+          navigate(prefillKey
+            ? `/app/studio?draft_id=${encodeURIComponent(draft_id)}&prefillKey=${encodeURIComponent(prefillKey)}`
+            : `/app/studio?draft_id=${encodeURIComponent(draft_id)}`);
           return;
         }
       }
@@ -291,13 +335,22 @@ export async function openCreatePinsWithDraft(
       // fall through to sessionStorage path
     }
   }
-  // Fallback: sessionStorage only
-  openCreatePins(navigate, prefill);
+  // Product Opportunity fallback is deliberately strict. Legacy openCreatePins
+  // callers keep their existing behavior, while this reviewed handoff refuses
+  // to navigate when no context was actually persisted.
+  const prefillKey = savePrefillStrict(prefill);
+  navigate(`/app/studio?prefillKey=${encodeURIComponent(prefillKey)}`);
 }
 
 // Convert a composer_draft API response (with resolved_* fields) back to CreatePinsPrefill.
 // Used by Studio on mount when ?draft_id= is present.
 export function draftToPrefill(draft: Record<string, unknown>): CreatePinsPrefill | null {
+  // The GET route returns { draft: {...} }. Accept that real wire shape as well
+  // as the inner object used by older direct callers.
+  const nestedDraft = draft.draft;
+  if (nestedDraft && typeof nestedDraft === "object" && !Array.isArray(nestedDraft)) {
+    return draftToPrefill(nestedDraft as Record<string, unknown>);
+  }
   // If the draft already contains a full snapshot, use it directly
   const snapshot = draft.draft_snapshot as CreatePinsPrefill | null | undefined;
   if (snapshot && typeof snapshot === "object" && "source" in snapshot) {
@@ -398,9 +451,11 @@ export function buildPromptFromPrefill(prefill: CreatePinsPrefill): string {
   }
 
   if (hasProducts) {
-    const prodTitle = prefill.productImages![0].title ?? "the product";
+    const productName = prefill.productImages![0].title?.trim();
     return [
-      `Create a Pinterest-native${s ? ` ${s.style}` : ""} Pin featuring "${prodTitle}".`,
+      productName
+        ? `Create a Pinterest-native${s ? ` ${s.style}` : ""} Pin featuring "${productName}".`
+        : `Create a Pinterest-native${s ? ` ${s.style}` : ""} Pin featuring the selected product.`,
       "Keep the product's color, shape, material, and key details recognizable.",
       `Place it naturally in ${s?.prodScene ?? "a clean, aesthetic Pinterest-native scene"}.`,
       "No text overlay. No typography. No watermark. Vertical 2:3 format.",

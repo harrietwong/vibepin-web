@@ -34,12 +34,12 @@ export const PERSONAS: PersonaCardData[] = [
   {
     id: "sellers",
     title: "Ecommerce Sellers",
-    outcome: "Connect your products to Pinterest demand.",
+    outcome: "Connect your products to Pinterest evidence.",
     description:
-      "See what shoppers are interested in, match your products to rising demand, and generate product-aware Pins that drive discovery and sales.",
-    workflow: "Demand → Product → Creative → Traffic",
+      "Review products with a real merchant page, product image, and Pinterest evidence, then generate product-aware Pins for discovery.",
+    workflow: "Evidence → Product → Creative → Traffic",
     benefits: [
-      "Match products to rising interests",
+      "Verify products with Pinterest evidence",
       "Create product-aware Pins",
       "Schedule and auto-publish product campaigns",
     ],
@@ -50,13 +50,13 @@ export const PERSONAS: PersonaCardData[] = [
   {
     id: "affiliate",
     title: "Affiliate Marketers",
-    outcome: "Find what is worth promoting.",
+    outcome: "Research products before promoting them.",
     description:
-      "Discover high-potential niches and products before spending time creating promotional content.",
-    workflow: "Opportunity → Product → Campaign → Traffic",
+      "Review merchant-page and Pinterest evidence before spending time creating promotional content.",
+    workflow: "Evidence → Product → Campaign → Traffic",
     benefits: [
-      "Find products with Pinterest demand",
-      "Compare opportunity and competition",
+      "Find products with auditable Pinterest evidence",
+      "Review recent save signals when enough history exists",
       "Turn products into scheduled Pin campaigns",
     ],
     cta: "Find product opportunities",
@@ -122,7 +122,7 @@ export const WORKFLOW_STORIES: WorkflowStory[] = [
     label: "Seller Workflow",
     title: "Ecommerce Seller Workflow",
     statement:
-      "Match rising Pinterest demand to your catalog, generate product-aware Pins, and schedule a week of shoppable content from one workspace.",
+      "Connect verified products and Pinterest evidence, generate product-aware Pins, and schedule a week of shoppable content from one workspace.",
     result: "One connected product-to-Pin workflow",
     steps: ["Product Signals", "Create Pins", "Weekly Plan", "Auto-Publish"],
   },
@@ -132,9 +132,9 @@ export const WORKFLOW_STORIES: WorkflowStory[] = [
     label: "Affiliate Workflow",
     title: "Affiliate Workflow",
     statement:
-      "Compare opportunity and competition before you create, then turn high-potential products into scheduled promotional Pins.",
-    result: "Opportunity-first promotion planning",
-    steps: ["Opportunity", "Product Pick", "Create Pins", "Schedule"],
+      "Review product and Pinterest evidence before you create, then turn selected products into scheduled promotional Pins.",
+    result: "Evidence-first promotion planning",
+    steps: ["Evidence", "Product Pick", "Create Pins", "Schedule"],
   },
   {
     id: "manager",
@@ -166,12 +166,12 @@ export const FAQ_ITEMS: FaqItem[] = [
   {
     question: "What is a Pinterest opportunity?",
     answer:
-      "A Pinterest opportunity is a topic or product direction supported by multiple signals, such as rising demand, strong Pin engagement, manageable competition, and related product interest. VibePin brings these signals together so you can decide what is worth creating or promoting.",
+      "A Pinterest opportunity is a topic or product direction supported by traceable Pinterest evidence. For Product Opportunities, VibePin also verifies a real merchant page and product image. Recent demand or momentum appears only when enough valid save history exists.",
   },
   {
     question: "What's the difference between Pin Ideas and Product Opportunities?",
     answer:
-      "Pin Ideas help you understand how successful Pinterest content is presented, including its format, visual style, and content angle. Product Opportunities help you identify what may be worth promoting, using product-related Pinterest demand and performance signals. Pin Ideas show you how to create. Product Opportunities show you what to promote.",
+      "Pin Ideas help you understand how Pinterest content is presented, including its format, visual style, and content angle. Product Opportunities connect a real merchant product to auditable Pinterest evidence and, when enough history exists, recent save signals. Pin Ideas support how you create. Product Opportunities provide products you can review, save, or use in Create Pins.",
   },
   {
     question: "Can I use my own products?",
@@ -188,7 +188,7 @@ export const FAQ_ITEMS: FaqItem[] = [
   {
     question: "Where does the data come from?",
     answer:
-      "VibePin analyzes Pinterest demand signals, high-save Pin performance, and related product signals. These inputs are processed into opportunity scores and recommendations that help you make better content decisions.",
+      "VibePin uses official trend inputs where available, observed Pinterest Pin activity, merchant-page evidence, and product links. Product Opportunities do not use a competition badge or an opportunity score; recent demand and momentum are shown only when enough valid history exists.",
   },
   {
     question: "Do I need a Pinterest account?",

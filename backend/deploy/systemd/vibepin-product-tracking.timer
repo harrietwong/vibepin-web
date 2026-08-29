@@ -1,0 +1,24 @@
+# Candidate schedule only. Installing this file does not enable it.
+# 17:15 Asia/Shanghai follows the live 12:00 bounded Crawl -> Classify chain
+# and its mandatory post-Pinterest cooldown. See the arithmetic below.
+# Persistent=false avoids surprise catch-up requests after a reboot.
+[Unit]
+Description=Daily trigger for VibePin Product Opportunity tracking
+
+[Timer]
+# Crawl can start as late as 12:10:01 and has a 7800-second outer bound; its
+# OnSuccess Classify target has a separate 2700-second outer bound. The combined
+# latest finish is 15:05:01. The 120min mandatory Pinterest cooldown then ends at
+# 17:05:01, leaving 9 minutes 59 seconds before full-catalog tracking.
+#
+# Tracking can start as late as 17:20:01 and has a 7800-second outer bound, so it
+# ends by 19:30:01. This stays wholly inside one UTC day (08:00-08:00 Shanghai)
+# and leaves 209 minutes 59 seconds before the 23:00 Product Supply window.
+OnCalendar=*-*-* 17:15:00 Asia/Shanghai
+RandomizedDelaySec=300
+AccuracySec=1s
+Persistent=false
+Unit=vibepin-product-tracking.service
+
+[Install]
+WantedBy=timers.target

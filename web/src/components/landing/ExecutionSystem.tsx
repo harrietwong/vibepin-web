@@ -19,8 +19,8 @@ const CREATE_STEPS = [
 const AI_CHIPS = ["Cozy room scene", "Lifestyle shot", "Natural light", "Earth tones", "Minimal decor"];
 const PROMPT = "Create a Pinterest-native lifestyle image featuring this vase in a cozy boho living room. Warm natural light, neutral tones, textured materials, minimal styling.";
 const WORKFLOW = [
-  { n: 1, icon: Search,       accent: "#FF4D8D", title: "Discover the opportunity",    desc: "Use demand, Pin evidence, and product signals to identify what's worth creating." },
-  { n: 2, icon: Sparkles,     accent: "#A855F7", title: "Create around proven demand", desc: "Generate drafts with products, references, and creative direction already attached." },
+  { n: 1, icon: Search,       accent: "#FF4D8D", title: "Review the evidence",          desc: "Use verified product links and Pinterest evidence to choose useful creative inputs." },
+  { n: 2, icon: Sparkles,     accent: "#A855F7", title: "Create from real inputs",      desc: "Generate drafts with products, references, and creative direction already attached." },
   { n: 3, icon: CalendarDays, accent: "#38BDF8", title: "Plan your week",              desc: "Move the best Pins into a schedule and organize your content week." },
 ];
 const SUMMARY = [
@@ -48,7 +48,7 @@ function CreatePinsFeature({ product, refs, outputs }: { product?: LandingAsset;
       <div className="lg:pt-4">
         <p className="text-[11px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: "#FF4D8D" }}>Create</p>
         <h3 className="text-3xl font-black text-white tracking-tight mb-4 leading-[1.1]">Turn an opportunity into<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>Pinterest-native Pins.</span></h3>
-        <p className="text-[14px] leading-relaxed mb-6" style={{ color: "#8B93A1" }}>Bring products, Pin references, and creative direction into one workspace—so every draft starts with real signal, not a blank prompt.</p>
+        <p className="text-[14px] leading-relaxed mb-6" style={{ color: "#8B93A1" }}>Bring products, Pin references, and creative direction into one workspace—so every draft starts with traceable inputs, not a blank prompt.</p>
         <ul className="space-y-4 mb-7">
           {CREATE_STEPS.map((s, i) => (
             <li key={s.title} className="flex items-start gap-3">
@@ -225,7 +225,7 @@ export default function ExecutionSystem({ pinSamples, products }: { pinSamples: 
         {/* Header */}
         <div className="text-center max-w-[760px] mx-auto mb-14">
           <p className="text-[11px] font-bold uppercase tracking-[0.2em] mb-4" style={{ color: "#A855F7" }}>Execution System</p>
-          <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight leading-[1.05] mb-5">Create around proven demand.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>Plan your week with confidence.</span></h2>
+          <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight leading-[1.05] mb-5">Create from real evidence.<br /><span style={{ background: "linear-gradient(100deg,#FF4D8D,#D946EF 60%,#A855F7)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>Plan your week with confidence.</span></h2>
           <p className="text-[14px] sm:text-[15px] leading-relaxed" style={{ color: "#8B93A1" }}>VibePin brings products, references, and creative direction into one generation workflow—then turns the best outputs into a weekly Pinterest plan.</p>
         </div>
 

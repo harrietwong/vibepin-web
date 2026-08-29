@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-08-28T08:47:44.548576Z",
+  "target": "isolated-local-postgresql",
+  "networkBinding": "127.0.0.1:55437",
+  "database": "vibepin_v37_replay",
+  "confirmationBinding": "LOCAL-V37-ROLLBACK-ONLY:127.0.0.1:55437:vibepin_v37_replay",
+  "serverVersionNum": "170011",
+  "canonicalSqlSha256": {
+    "backend/db/migrate_v63_product_opportunities_v1.sql": "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
+    "backend/db/rollback_v63_product_opportunities_v1.sql": "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
+    "backend/docs/product_opportunities_v37_catalog_query_v1.sql": "1d0ff2369649f4f01f42be2f55abb6a4b85d24e93c365afd05ebe2dbabb6f035",
+    "backend/docs/product_opportunities_v37_stage1_post_apply_query_v1.sql": "2c482caca84b779dd60d94be8f0f7010162701fea5d0abfa3d773328d69c8b43"
+  },
+  "manifestPath": "backend/docs/product_opportunities_v37_release_manifest_a299a17.json",
+  "manifestSha256": "e83d0ad8eec2023a07798593dc396505f0f045d2fb07fa7ba43fa6b55b150c21",
+  "catalogObjects": {
+    "before": 0,
+    "afterApply": 158,
+    "afterRollback": 0
+  },
+  "schemaContract": {
+    "relations": 10,
+    "functions": 18,
+    "triggers": 9,
+    "policies": 3,
+    "indexes": 4,
+    "constraints": 91,
+    "privileges": 44,
+    "newTablesEmpty": true
+  },
+  "legacyBefore": {
+    "products": 1,
+    "snapshots": 1,
+    "product_marker": "legacy-product",
+    "snapshot_marker": "legacy-snapshot"
+  },
+  "legacyAfter": {
+    "products": 1,
+    "snapshots": 1,
+    "product_marker": "legacy-product",
+    "snapshot_marker": "legacy-snapshot"
+  },
+  "canary": {
+    "mode": "rollback-only-postgresql-canary",
+    "projectRef": "local-pg17-v37",
+    "manifestSha256": "e83d0ad8eec2023a07798593dc396505f0f045d2fb07fa7ba43fa6b55b150c21",
+    "canonicalUrlHash": "f9e534a89fbae3ba3fac69f68637d28302a820f03cf3e599e7f2f5131a003b3b",
+    "concurrency": {
+      "holderReachedPostAdmissionLock": true,
+      "duplicateBlockedByActiveIdentity": true,
+      "challengerError": "lock_timeout"
+    },
+    "roleIsolation": {
+      "twoExistingUsers": true,
+      "eachAuthenticatedUserSawOnlyOwnSavedRow": true,
+      "authenticatedDirectWriteBlocked": true,
+      "anonymousReadBlocked": true,
+      "rollbackSentinel": "V37_ROLE_CANARY_PASS"
+    },
+    "before": {
+      "product_rows": 0,
+      "current_rows": 0,
+      "retired_rows": 0,
+      "saved_rows": 0
+    },
+    "after": {
+      "product_rows": 0,
+      "current_rows": 0,
+      "retired_rows": 0,
+      "saved_rows": 0
+    },
+    "productionRowsPersisted": 0,
+    "verdict": "PASS"
+  },
+  "advisoryLocksAfterCanary": 0,
+  "otherDatabaseSessionsAfterCanary": 0,
+  "productionAccess": false,
+  "productionMutation": false,
+  "verdict": "PASS",
+  "cleanup": {
+    "userTables": 0,
+    "fixtureRoles": 0
+  },
+  "evidenceProvenance": {
+    "harnessGeneratedFields": "schemaVersion through cleanup.fixtureRoles",
+    "operatorAppendedFields": [
+      "operatorLifecycleEvidence"
+    ],
+    "operatorLifecycleIsNotEmittedByReplayHarness": true
+  },
+  "operatorLifecycleEvidence": {
+    "distribution": "EDB PostgreSQL 17.11 Windows x64 binaries linked by postgresql.org",
+    "archiveSha256": "6eabdf00d2893713b75db4336a23c3fdf505f056e217ec6e2e95d901750cfea3",
+    "systemInstall": false,
+    "registeredService": false,
+    "databaseDropped": true,
+    "serverStoppedAt": "2026-08-28T08:48:13.646Z",
+    "pgIsReadyAfterStopExitCode": 2,
+    "pgIsReadyAfterStop": "127.0.0.1:55437 - no response"
+  }
+}

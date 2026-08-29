@@ -30,12 +30,21 @@ EnvironmentFile=-/opt/vibepin/backend/.env
 # Non-secret runtime config. Default mode is the SAFE no-op preflight.
 Environment=VIBEPIN_CLOUD_MODE=preflight
 Environment=VIBEPIN_LOCK_DIR=/opt/vibepin/locks
-# 3600 (was 2400). Measured pace on the authenticated VPS run is ~53 s/pin, so a
-# 50-pin run needs ~44 min — at 2400 s the runner tree-killed the 2026-08-06
-# 23:02 run at pin 45/50. The writer is now incremental (flushes every
-# STL_WRITE_BATCH_SIZE pins), so a kill no longer loses everything; this raise
-# is the second half of the fix: let a normal 50-pin run actually finish.
-Environment=VIBEPIN_TIMEOUT_SECONDS=3600
+Environment=VIBEPIN_SUPPLY_LIMIT=100
+Environment=VIBEPIN_CATEGORY_MIX=fashion:29,womens-fashion:22,home-decor:29,digital-products:20
+# Digital Products is a PRD v3.7 launch family. Keep the generic crawler's
+# fail-closed exclusion and opt in only this reviewed category; Beauty remains
+# excluded until its separate evidence audit passes.
+Environment=VIBEPIN_STL_ALLOW_EXCLUDED=digital-products
+Environment=VIBEPIN_SUPPLY_SINCE_HOURS=720
+Environment=VIBEPIN_SUPPLY_WRITE_LIMIT=50
+# --limit counts Source Pins inspected, not products written. The shared core
+# independently caps rows remaining written at 50 per run, while each atomic
+# INSERT/readback/rollback stays at MAX_BATCH=20.
+# The 2026-08-25 production run scanned 100 sources in about 85 minutes and
+# produced only four legacy rows, so retaining the 100-source discovery breadth
+# is necessary. 5400 seconds is the measured wrapper hard bound.
+Environment=VIBEPIN_TIMEOUT_SECONDS=5400
 # Flush scraped products to pin_products every N source pins (default 10).
 Environment=STL_WRITE_BATCH_SIZE=10
 
@@ -47,11 +56,9 @@ ExecStart=/opt/vibepin/backend/scripts/cloud_run_product_supply.sh
 # chromium) dies; defence-in-depth against orphans. Type=oneshot ignores RuntimeMaxSec,
 # so TimeoutStartSec is the correct bound here.
 #
-# MUST stay > VIBEPIN_TIMEOUT_SECONDS. Raised 3000 -> 4200 alongside the 2400 ->
-# 3600 runner timeout: at 3000 systemd would kill first, which inverts the
-# intended order (the runner's own tree-kill writes a report and exits cleanly;
-# a systemd SIGKILL does not). 4200 keeps the same ~600 s headroom as before.
-TimeoutStartSec=4200
+# MUST stay > VIBEPIN_TIMEOUT_SECONDS. The runner's tree-kill must execute first
+# and emit its receipt; systemd remains a 900-second outer safety bound.
+TimeoutStartSec=6300
 TimeoutStopSec=60
 KillMode=control-group
 

@@ -79,7 +79,8 @@ class TestProductSupplyWrapperUnchanged(unittest.TestCase):
         self.assertIn("VIBEPIN_APPLY_CONFIRM", t)
         self.assertIn("APPLY_BOOTSTRAP_PRODUCTS", t)
         # cooldown waive only appears inside the apply path (confirm-gated).
-        self.assertIn("--waive-cooldown", t)
+        self.assertNotIn("--waive-cooldown", t)
+        self.assertIn("normal cooldown gate required", t)
         self.assertIn("exit 5", t)  # apply without confirm refused
 
 

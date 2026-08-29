@@ -1,0 +1,51 @@
+[
+  {
+    "additional_evidence": [],
+    "canonical_product_url": "https://ofuure.com/products/denim-rue-button-up-shirt",
+    "category": "fashion",
+    "discovery_method": "outbound_link",
+    "evidence_type": "source_pin",
+    "external_product_url": "https://ofuure.com/products/denim-rue-button-up-shirt",
+    "merchant": "OFUURE",
+    "pinterest_pin_id": "383791199525872982",
+    "pinterest_pin_url": "https://www.pinterest.com/pin/383791199525872982/",
+    "product_family": "physical",
+    "product_image_source": "merchant_open_graph",
+    "product_image_url": "http://www.ofuure.com/cdn/shop/files/ofuure1066_5b66892d-0c46-4eb5-8c9b-470c1a182834.jpg?v=1763331934",
+    "product_name": "Denim Pinstripe RUE Button Up Shirt",
+    "product_page_verification_method": "merchant_structured_data",
+    "product_page_verified_at": "2026-08-29T02:10:51.606213+00:00",
+    "product_type": null,
+    "provenance": {
+      "image_found_in_merchant_page": true,
+      "legacy_pin_product_id": null,
+      "merchant_field_evidence": [
+        "name:og:title",
+        "image:og:image",
+        "price:og:price:amount",
+        "currency:og/product:price:currency",
+        "merchant:og:site_name"
+      ],
+      "merchant_found_in_page": true,
+      "merchant_page_sha256": "e2c7492e92ec9d0fc1d5f7588619ba26eeb6d6eed9e340d26ed225390d8e4d7f",
+      "merchant_page_url": "https://ofuure.com/products/denim-rue-button-up-shirt",
+      "merchant_value": "OFUURE",
+      "pdp_gate_passed": true,
+      "pin_direct_outbound_url": "https://ofuure.com/products/denim-rue-button-up-shirt",
+      "pin_evidence_source_artifact": "backend/tools/t2_batch1_candidates.json",
+      "pin_evidence_source_sha256": "25003a44b179983914549689bddb1efceda444f13480669bf964e8820b900eec0",
+      "pin_revalidated_live_this_retry": false,
+      "pinterest_pin_id": "383791199525872982",
+      "product_image_url": "http://www.ofuure.com/cdn/shop/files/ofuure1066_5b66892d-0c46-4eb5-8c9b-470c1a182834.jpg?v=1763331934",
+      "product_name_found_in_page": true,
+      "product_name_normalization": "html-unescape+nfkc+whitespace+casefold-v1",
+      "product_name_value": "Denim Pinstripe RUE Button Up Shirt",
+      "source_category": "fashion",
+      "source_pin_direct_outbound_url": "https://ofuure.com/products/denim-rue-button-up-shirt",
+      "source_pin_id": "383791199525872982",
+      "verified_by": "product-opportunity-manifest-v1"
+    },
+    "relationship_method": "direct_outbound_link",
+    "source_category": "fashion"
+  }
+]

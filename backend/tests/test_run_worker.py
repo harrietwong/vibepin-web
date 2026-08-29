@@ -1,8 +1,10 @@
 """Unit tests for run_worker.py job routing."""
 
 import sys
+import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, Mock, patch
 
 import run_worker
 
@@ -63,6 +65,83 @@ class TestRunWorker(unittest.IsolatedAsyncioTestCase):
              patch.object(run_worker.pipeline, "step_opportunities", side_effect=fake_opportunities):
             await run_worker.job_daily(ctx)
         self.assertEqual(calls, ["interests", "trends", "crawl", "classify", "opportunities"])
+
+    async def test_classify_chain_runs_all_three_stages_in_order(self):
+        calls = []
+
+        def stage(name, result):
+            return Mock(side_effect=lambda **_kwargs: calls.append(name) or result)
+
+        reference = stage("reference", {"written": 2})
+        products = stage("products", {"written": 3})
+        opportunities = stage("opportunities", None)
+        modules = {
+            "classify_reference_pins": types.SimpleNamespace(run=reference),
+            "classify_product_signals": types.SimpleNamespace(run=products),
+            "generate_opportunities": types.SimpleNamespace(run=opportunities),
+            "trend_seed_pipeline": types.SimpleNamespace(P0_CATEGORIES={"fashion", "digital-products"}),
+        }
+        ctx = {}
+        with patch.dict(sys.modules, modules):
+            await run_worker.job_classify_chain(ctx, since_hours=26, opp_limit=123)
+
+        self.assertEqual(calls, ["reference", "products", "opportunities"])
+        self.assertTrue(ctx["stats"]["chainOk"])
+        opportunities.assert_called_once_with(category=None, limit=123, dry_run=False)
+
+    async def test_classify_chain_defers_opportunities_and_fails_if_upstream_fails(self):
+        calls = []
+
+        def broken_reference(**_kwargs):
+            calls.append("reference")
+            raise RuntimeError("reference failed")
+
+        def products(**_kwargs):
+            calls.append("products")
+            return {"written": 1}
+
+        opportunities = Mock(side_effect=lambda **_kwargs: calls.append("opportunities"))
+        modules = {
+            "classify_reference_pins": types.SimpleNamespace(run=broken_reference),
+            "classify_product_signals": types.SimpleNamespace(run=products),
+            "generate_opportunities": types.SimpleNamespace(run=opportunities),
+            "trend_seed_pipeline": types.SimpleNamespace(P0_CATEGORIES={"fashion"}),
+        }
+        ctx = {}
+        with patch.dict(sys.modules, modules), self.assertRaisesRegex(
+            RuntimeError, "classify-chain incomplete"
+        ):
+            await run_worker.job_classify_chain(ctx)
+
+        self.assertEqual(calls, ["reference", "products"])
+        opportunities.assert_not_called()
+        self.assertEqual(
+            [step["status"] for step in ctx["stats"]["chain"]],
+            ["failed", "ok", "deferred"],
+        )
+
+    async def test_run_job_routes_classify_chain_under_its_own_lock(self):
+        seen = []
+
+        @contextmanager
+        def fake_pipeline_job(job_type, **_kwargs):
+            seen.append(job_type)
+            yield {"skipped": False, "stats": {}}
+
+        args = types.SimpleNamespace(
+            job="classify-chain",
+            created_by="cloud",
+            since_hours=26,
+            limit=2000,
+        )
+        with patch.object(run_worker, "pipeline_job", fake_pipeline_job), patch.object(
+            run_worker, "job_classify_chain", new_callable=AsyncMock
+        ) as chain:
+            code = await run_worker.run_job(args)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, ["classify-chain"])
+        chain.assert_awaited_once()
 
     def test_job_handlers_registered(self):
         self.assertIn("trends", run_worker.JOB_HANDLERS)

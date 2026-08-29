@@ -27,7 +27,7 @@ _spec.loader.exec_module(t2)
 
 
 def _valid_row(**over):
-    """A fully compliant outbound row (all required evidence, no enrichment)."""
+    """A compliant outbound row with a merchant-proven image and nullable name."""
     url = over.pop("source_url", "https://www.etsy.com/listing/12345/thing")
     row = {
         "parent_pin_id": "pin1", "source_pin_id": "pin1",
@@ -38,9 +38,10 @@ def _valid_row(**over):
         "source_url": url, "canonical_product_url": url,
         "product_url_hash": "h", "normalized_product_url_hash": "h",
         "domain": t2.get_domain(url), "discovery_method": t2.DISCOVERY_METHOD,
-        "product_name": None, "image_url": None, "price": None, "currency": None,
+        "product_name": None, "image_url": "https://cdn.merchant.example/item.jpg",
+        "price": None, "currency": None,
         "merchant": None, "availability": None,
-        "detail_fetch_status": t2.DETAIL_BLOCKED,
+        "detail_fetch_status": t2.DETAIL_AVAILABLE,
         "product_pin_id": None, "inspiration_only": True,
         "is_user_ownable": False, "is_seed": False,
     }
@@ -49,15 +50,15 @@ def _valid_row(**over):
 
 
 def _item(row, rec=None):
-    return {"row": row, "rec": rec or {"evidence": [], "nameFoundInPage": False,
+    return {"row": row, "rec": rec or {"evidence": ["image:og:image"], "nameFoundInPage": False,
                                        "detailFetchStatus": row.get("detail_fetch_status")},
             "origin": "net_new"}
 
 
 class TestAcceptLinkDoesNotBypassRedLines(unittest.TestCase):
-    def test_clean_blocked_row_passes(self):
+    def test_clean_nullable_name_row_with_merchant_image_passes(self):
         ok, v = t2.check_red_lines([_item(_valid_row())])
-        self.assertTrue(ok, f"a clean blocked row should pass, got: {v}")
+        self.assertTrue(ok, f"a clean image-backed row should pass, got: {v}")
 
     def test_retailer_pdp_accepted_but_provenance_still_enforced(self):
         # accept_link ACCEPTS this anthropologie retailer PDP (RL1 passes)...
@@ -65,7 +66,12 @@ class TestAcceptLinkDoesNotBypassRedLines(unittest.TestCase):
         self.assertTrue(t2.accept_link(url)[0])
         ok_clean, _ = t2.check_red_lines([_item(_valid_row(source_url=url,
                                                            domain="anthropologie.com"))])
-        self.assertTrue(ok_clean, "retailer PDP with no name should pass all red lines")
+        self.assertTrue(ok_clean, "retailer PDP with no name but a real image should pass")
+
+    def test_missing_merchant_image_is_blocked(self):
+        ok, v = t2.check_red_lines([_item(_valid_row(image_url=None))])
+        self.assertFalse(ok)
+        self.assertTrue(any("merchant product image is required" in x for x in v), v)
 
     def test_name_without_page_provenance_is_blocked_even_though_url_is_accepted(self):
         # THE ANCHOR CASE: accept_link ACCEPTS the URL, but the row carries a

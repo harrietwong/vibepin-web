@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-29T02:51:49.8834299Z",
+  "operation": "read-only VPS Product Opportunities v3.7 candidate parity audit",
+  "candidateCommit": "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc",
+  "manifest": "backend/docs/product_opportunities_v37_release_manifest_9a22c16.json",
+  "mutation": false,
+  "commands": [
+    "sha256sum",
+    "systemctl show"
+  ],
+  "files": [
+    {
+      "repoPath": "backend/run_worker.py",
+      "remotePath": "/opt/vibepin/backend/run_worker.py",
+      "expectedSha256": "f498f2632e40cce926eb68e6c68b05d2fe5727baf8cdd06f39341bc9cbc57bdc",
+      "actualSha256": "2d0013fe000b6e87b907070d48d6e596ddaa63f78d4f33998e59e63c4f130077",
+      "exists": true,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/scripts/cloud_lib.sh",
+      "remotePath": "/opt/vibepin/backend/scripts/cloud_lib.sh",
+      "expectedSha256": "63a410a23fe0f547194ad6224b6e2dd5d82c7e7ef162a573b0f62a936010e3a0",
+      "actualSha256": "01d7869b9df637e6f74d5316df4633555107c602379fd013139983cc8b166797",
+      "exists": true,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/scripts/cloud_run_product_supply.sh",
+      "remotePath": "/opt/vibepin/backend/scripts/cloud_run_product_supply.sh",
+      "expectedSha256": "361dccde1e4a0764f700f8c0f35cb1262a3e63a0de0832ad02ff967a6a2b4b37",
+      "actualSha256": "361dccde1e4a0764f700f8c0f35cb1262a3e63a0de0832ad02ff967a6a2b4b37",
+      "exists": true,
+      "matchesCandidate": true
+    },
+    {
+      "repoPath": "backend/scripts/cloud_run_product_opportunity_admission.sh",
+      "remotePath": "/opt/vibepin/backend/scripts/cloud_run_product_opportunity_admission.sh",
+      "expectedSha256": "1c001d3ea9bf5bc19aef28193ada8346fa4b7ce91b80d9a4b29451764c0a7137",
+      "actualSha256": null,
+      "exists": false,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/scripts/cloud_run_product_tracking.sh",
+      "remotePath": "/opt/vibepin/backend/scripts/cloud_run_product_tracking.sh",
+      "expectedSha256": "a09ed648e6a63a1e38e70f471e9c6ab9b1372839fbf8b510e3df348beae1599f",
+      "actualSha256": null,
+      "exists": false,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/deploy/systemd/vibepin-product-supply.service",
+      "remotePath": "/etc/systemd/system/vibepin-product-supply.service",
+      "expectedSha256": "51f78a4eb235d6c5b13f83cf727173f3b3427a6ff7c863e2024657e8b9312a20",
+      "actualSha256": "09d8f2ad2708c52c5a4c1bc4159c96e0571db3d5bd4d1759afb5b664d63aaebf",
+      "exists": true,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/deploy/systemd/vibepin-product-supply.timer",
+      "remotePath": "/etc/systemd/system/vibepin-product-supply.timer",
+      "expectedSha256": "9b046ec96db1b2861f087d2f8c51f910661f72c7455a1b2fd91fbdc320068e1a",
+      "actualSha256": "4dfd713bc9a5e827e58855adf02544463f5e2544f40507be40ec890aea60d44e",
+      "exists": true,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/deploy/systemd/vibepin-product-opportunity-admission.service",
+      "remotePath": "/etc/systemd/system/vibepin-product-opportunity-admission.service",
+      "expectedSha256": "7be37e3b0606cadc01c874ca19fc7f97050489ad3113d40c24b6b666aabeea22",
+      "actualSha256": null,
+      "exists": false,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/deploy/systemd/vibepin-product-opportunity-admission.timer",
+      "remotePath": "/etc/systemd/system/vibepin-product-opportunity-admission.timer",
+      "expectedSha256": "554d6ba4e0362b691aae9c334091999e1c2a5e0b282ee2273d947282a663be4c",
+      "actualSha256": null,
+      "exists": false,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/deploy/systemd/vibepin-product-tracking.service",
+      "remotePath": "/etc/systemd/system/vibepin-product-tracking.service",
+      "expectedSha256": "b8621d95a22e1dd89057c97efba7d26417f191e4568e4083fd9dd7154e76e74f",
+      "actualSha256": null,
+      "exists": false,
+      "matchesCandidate": false
+    },
+    {
+      "repoPath": "backend/deploy/systemd/vibepin-product-tracking.timer",
+      "remotePath": "/etc/systemd/system/vibepin-product-tracking.timer",
+      "expectedSha256": "7739fc1c637e4016e902edb252847d44163e0fe80effd084000b3f1e24e474a5",
+      "actualSha256": null,
+      "exists": false,
+      "matchesCandidate": false
+    }
+  ],
+  "summary": {
+    "totalFiles": 11,
+    "existingFiles": 5,
+    "missingFiles": 6,
+    "matchingFiles": 1,
+    "mismatchedExistingFiles": 4
+  },
+  "units": {
+    "vibepin-product-supply.service": {
+      "LoadState": "loaded",
+      "UnitFileState": "disabled",
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "Result": "success",
+      "ExecMainStatus": "0",
+      "FragmentPath": "/etc/systemd/system/vibepin-product-supply.service",
+      "TriggeredBy": "vibepin-product-supply.timer"
+    },
+    "vibepin-product-supply.timer": {
+      "LoadState": "loaded",
+      "UnitFileState": "enabled",
+      "ActiveState": "active",
+      "SubState": "waiting",
+      "Result": "success",
+      "FragmentPath": "/etc/systemd/system/vibepin-product-supply.timer",
+      "Triggers": "vibepin-product-supply.service",
+      "NextElapseUSecRealtime": "Sat 2026-08-29 23:08:49 CST"
+    },
+    "vibepin-product-opportunity-admission.service": {
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "FragmentPath": ""
+    },
+    "vibepin-product-opportunity-admission.timer": {
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "FragmentPath": ""
+    },
+    "vibepin-product-tracking.service": {
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "FragmentPath": ""
+    },
+    "vibepin-product-tracking.timer": {
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "FragmentPath": ""
+    },
+    "vibepin-pin-classify.timer": {
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "FragmentPath": ""
+    }
+  },
+  "verdict": "BLOCK_FOR_CANDIDATE_DEPLOYMENT",
+  "interpretation": "The VPS is safely not running the v3.7 Admission or Tracking units, but it is not byte-equivalent to candidate 9a22c163. Product Supply remains an independently enabled legacy timer. A future rollout must stage and verify exact candidate files before installation, keep all new timers disabled, and must not treat the existing Supply timer as evidence that v3.7 Admission or Tracking is live."
+}

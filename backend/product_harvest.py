@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -74,6 +75,40 @@ def is_amazon_family_domain(domain: str) -> bool:
     """
     return bool(_AMAZON_FAMILY_DOMAIN.search(domain or ""))
 
+
+# The same per-country split, for the two other marketplaces measured in the
+# 2026-08-17 run's `non_commerce_domain` bucket (514 rejections; 13 aliexpress.us
+# and 16 shopee.* among them). AliExpress runs .us/.ru/.es/… and Shopee runs
+# .com.br/.sg/.tw/.co.id/… — one company, one catalogue, one product page shape
+# per family. DOMAIN_RULES carries the single string "aliexpress.com" and no
+# Shopee row at all, so every other storefront fell off the whitelist.
+#
+# Matched HERE and not in DOMAIN_RULES for the reason given above: that table also
+# drives platform classification. A family match is NOT a bypass — the reasons
+# returned below stay out of _PDP_GATE_EXEMPT_REASONS, so every URL must still
+# pass is_product_detail_url().
+#
+# The TLD is anchored (`aliexpress.fakeshop.com` does not match) but the leading
+# `(?:^|\.)` intentionally admits subdomains, because real traffic uses them
+# (he.aliexpress.com, www.aliexpress.us). That also means the Shopee link
+# shortener `s.shopee.com.br` matches the FAMILY — it is stopped one step later
+# by the PDP gate, which finds no product path in `/9pR7XyZ`. Shorteners are
+# deliberately out of scope for this change (they need redirect-following, not a
+# whitelist), and there is a test pinning that they stay rejected.
+_ALIEXPRESS_FAMILY_DOMAIN = re.compile(r"(?:^|\.)aliexpress\.[a-z]{2,3}(?:\.[a-z]{2})?$", re.I)
+_SHOPEE_FAMILY_DOMAIN = re.compile(r"(?:^|\.)shopee\.[a-z]{2,3}(?:\.[a-z]{2})?$", re.I)
+
+
+def is_aliexpress_family_domain(domain: str) -> bool:
+    """True for AliExpress' per-country storefronts (aliexpress.us / .ru / .es / …)."""
+    return bool(_ALIEXPRESS_FAMILY_DOMAIN.search(domain or ""))
+
+
+def is_shopee_family_domain(domain: str) -> bool:
+    """True for Shopee's per-country marketplaces (shopee.com.br / .sg / .tw / …)."""
+    return bool(_SHOPEE_FAMILY_DOMAIN.search(domain or ""))
+
+
 # Never products
 SOCIAL_DOMAINS = {
     "instagram.com", "tiktok.com", "youtube.com", "youtu.be", "facebook.com",
@@ -81,6 +116,250 @@ SOCIAL_DOMAINS = {
 }
 _TRACKING_PARAMS = ("utm_", "fbclid", "gclid", "mc_eid", "mc_cid", "epik", "ref_src")
 _DROP_PARAMS = {"ref", "ref_", "epik", "rs", "crt"}
+
+
+# ── Commerce shortlink resolution ──────────────────────────────────────────
+# MEASURED (2026-08-18 production run): `non_commerce_domain` refused 288 distinct
+# URLs. 72 of them (25%) were not blogs at all — they were commerce SHORTENERS
+# (amzn.to 30, tr.ee 14, a.co 12, amzlink.to 9, pin.it 3, myntr.it 2, liketk.it 2)
+# whose target IS a real product page. A shortener carries no path evidence by
+# construction, so no whitelist can rescue it: the only way to judge `amzn.to/3QYT1Ll`
+# is to ask where it points. Probed the same day:
+#     amzn.to/3QYT1Ll → 301 → amazon.com/ForeFair-…/dp/B0G2LSCLZY   (real PDP)
+#     a.co/d/0XlEbMx  → 404, no Location                            (dead link)
+# so resolution both recovers real supply AND filters dead links for free.
+#
+# THIS IS NOT A BYPASS. Resolution only REWRITES the URL; the resolved URL then runs
+# the complete, unmodified judgement chain (social → domain rules → PDP gate). A
+# shortener that lands on a homepage, a search page or a Pinterest pin is rejected on
+# the target's own merits, exactly as if the target had been the outbound_link.
+#
+# THREE DELIBERATE LIMITS, each preventing a specific failure:
+#   1. WHITELIST-ONLY. A network call is issued if and only if the host is in
+#      SHORTLINK_DOMAINS. accept_link() is called on every candidate in every
+#      harvester (six call sites); making it network-capable for arbitrary hosts
+#      would turn a pure predicate into an SSRF surface and add a round-trip per
+#      candidate. Non-shortener hosts are never touched.
+#   2. ONE HOP. `follow_redirects=False` and a single request. Redirect chains cannot
+#      loop, cannot be used to walk us onto an internal address, and cost a bounded
+#      amount of time. A shortener that points at another shortener is left
+#      unresolved (counted, not silently dropped).
+#   3. OPT-IN. The default `accept_link(url)` stays a PURE function with no I/O — the
+#      resolver must be passed in explicitly. Six call sites, unit tests, and the
+#      red-line checker all keep their current no-network behaviour unchanged, and a
+#      caller that wants resolution has to say so.
+SHORTLINK_DOMAINS = frozenset({
+    "amzn.to",        # Amazon official
+    "a.co",           # Amazon official
+    "amzlink.to",     # Amazon affiliate
+    "tr.ee",          # Linktree short domain (NOT linktr.ee, which is a link-in-bio
+                      # PAGE and stays in SOCIAL_DOMAINS)
+    "myntr.it",       # Myntra (IN)
+    "liketk.it",      # LikeToKnowIt
+    "pin.it",         # Pinterest — resolves to a pin and is then rejected as
+                      # `pinterest_internal`; included so that outcome is MEASURED
+                      # rather than assumed.
+    "s.shopee.com.br",  # Shopee link shortener
+})
+
+# 5s per PHASE: probed 2026-08-18 at 1.7-4.8s per hop against live shorteners.
+# Anything slower is not worth blocking a harvest for — a timeout is recorded as an
+# honest `shortlink_unresolved`, never retried, and never raised into the caller.
+SHORTLINK_TIMEOUT_SEC = 5.0
+
+# MEASURED, and NOT what a reader assumes from the constant above: httpx interprets a
+# bare `timeout=5.0` as FOUR independent 5s budgets (connect, read, write, pool), so a
+# single call can legitimately run ~20s. Observed directly — one live amzn.to
+# resolution took 7.57s and SUCCEEDED, i.e. the 5s figure was never a wall-clock cap.
+# That silently multiplied the worst case per run by 4x (72 shortlinks: 6 min assumed,
+# 24 min actual).
+#
+# So the per-phase timeout is kept as the fast path AND a total wall-clock budget is
+# enforced on top, giving the resolver one honest, bounded cost. The budget is per
+# CALL, not per run: a run's total is bounded by
+# (distinct shortlinks) x SHORTLINK_TOTAL_BUDGET_SEC, which at the measured 72
+# distinct shortlinks is 72 x 8s = 9.6 min worst case against a 105-min allowance.
+SHORTLINK_TOTAL_BUDGET_SEC = 8.0
+
+SHORTLINK_UNRESOLVED = "shortlink_unresolved"
+
+# BLOCKING ANALYSIS (asked explicitly, answered by reading the call graph, not assumed):
+# resolution is SERIAL and blocking, and that is fine HERE — but only here.
+#
+#   `harvest()` is reached from run_worker's `harvest-outbound-products` job, which is
+#   a standalone job: it takes no `pinterest_network.lock`, performs no Pinterest
+#   navigation, and its handler awaits `job_harvest_outbound` and returns. Nothing
+#   else runs concurrently, so a blocking HEAD delays only this job. It is NOT inside
+#   the ~70-minute crawl loop.
+#
+#   COST CEILING: one request per DISTINCT shortlink (the cache guarantees this,
+#   including for failures), each bounded by SHORTLINK_TOTAL_BUDGET_SEC — NOT by
+#   SHORTLINK_TIMEOUT_SEC, which is per-phase and therefore not a wall-clock cap
+#   (see the constants above; measured, a 7.57s call succeeded under `timeout=5.0`).
+#   At the measured 72 distinct shortlinks per run: 72 x 8s = 9.6 min worst case,
+#   with the observed 1.7-4.8s per hop putting the realistic figure near 2-6 minutes.
+#   Against a 105-minute allowance that is affordable, so no concurrency is introduced:
+#   an executor or an async fan-out would add a failure mode (pool exhaustion — the
+#   exact shape of the 2026-08-09 permanent hang) to buy minutes that are not needed.
+#
+#   THE LIMIT THIS DOES NOT COVER: `job_harvest_outbound` is `async def`, so a
+#   blocking call inside it stalls the whole event loop for its duration. Harmless
+#   while the harvest job runs alone. A future caller that resolves shortlinks from
+#   inside an event loop that is ALSO driving Playwright or the crawler (e.g. wiring a
+#   resolver into product_supply_expand or shop_the_look_expand, both of which call
+#   accept_link from coroutines) would stall that loop for up to 5s per shortlink.
+#   That is why resolution is opt-in per call site rather than switched on globally:
+#   such a caller must either run this in a thread executor or accept the stall
+#   deliberately. NOT MEASURED for those call sites — none of them pass a resolver today.
+
+# Reason prefix carried by every verdict reached THROUGH a resolved shortlink, so the
+# report can answer "how much supply did resolution recover, and what happened to the
+# rest?" without a second pass. e.g. `shortlink:known_commerce_domain` (recovered) vs
+# `shortlink:not_product_detail_page:not_a_pdp_path` (target was a homepage).
+SHORTLINK_RESOLVED_PREFIX = "shortlink:"
+
+
+def is_shortlink_domain(domain: str) -> bool:
+    """True only for the explicit shortener whitelist.
+
+    Exact match, no suffix matching: `amzn.to.evil.com` is NOT a shortener, and
+    allowing suffixes would let an attacker-controlled host earn a network call.
+    """
+    return (domain or "").lower() in SHORTLINK_DOMAINS
+
+
+class ShortlinkResolver:
+    """Single-hop, whitelist-only, cached HEAD resolver for commerce shorteners.
+
+    httpx is the client, not curl_cffi and not requests:
+      - it is already a declared runtime dep (requirements-cloud.txt) and is already
+        imported by shop_the_look_expand, the biggest accept_link caller — no new
+        dependency enters the VPS image;
+      - `requests` is NOT in requirements-cloud.txt, so using it would work locally
+        and fail on the worker;
+      - curl_cffi's value is Chrome TLS impersonation for Pinterest's bot defences,
+        which shorteners do not have. It is also the library whose connection-pool
+        checkout has no timeout (the 2026-08-09 permanent-hang root cause), and this
+        code runs inside the harvest loop. httpx's `timeout=` covers connect, read,
+        write AND pool acquisition, so a saturated pool cannot hang the harvest.
+      - httpx.Client is SYNC, matching accept_link's sync call sites. product_harvest
+        has no event loop of its own, and making it async would force `await` on all
+        six callers, two of which (product_supply_spike, shop_the_look_spike) call it
+        from inside Playwright coroutines where a blocking client is the safer shape.
+
+    CACHE: `dict[str, str | None]` keyed by the RAW shortlink URL, holding the
+    resolved URL or None for "tried and failed". Both outcomes are memoised, so a
+    dead shortener repeated 30x across source pins costs one request, not 30 — and
+    the negative cache is what makes that true (caching only successes would leave
+    failures re-requesting every time). The resolver is per-run, not a module global,
+    so a long-lived process cannot pin a stale redirect forever.
+    """
+
+    def __init__(self, *, timeout: float = SHORTLINK_TIMEOUT_SEC,
+                 total_budget: float = SHORTLINK_TOTAL_BUDGET_SEC,
+                 client: Any = None) -> None:
+        self.timeout = timeout
+        self.total_budget = total_budget
+        self._client = client            # injectable for tests; None -> build on demand
+        self._cache: dict[str, str | None] = {}
+        self.attempted = 0               # distinct shortlinks we issued a request for
+        self.resolved = 0                # distinct shortlinks that yielded a target
+        self.failed = 0                  # distinct shortlinks that did not
+        self.cache_hits = 0              # repeat lookups served without a request
+        # Answers arrived, but past the wall-clock budget. Counted separately from
+        # `failed` totals in the report so "the shorteners are slow" is never
+        # misdiagnosed as "the shorteners are broken".
+        self.budget_exceeded = 0
+
+    # ── stats ────────────────────────────────────────────────────────────
+    def stats(self) -> dict[str, int]:
+        return {
+            "attempted": self.attempted,
+            "resolved": self.resolved,
+            "failed": self.failed,
+            "cacheHits": self.cache_hits,
+            "budgetExceeded": self.budget_exceeded,
+        }
+
+    # ── resolution ───────────────────────────────────────────────────────
+    def resolve(self, url: str) -> str | None:
+        """Return the single-hop redirect target, or None if it cannot be resolved.
+
+        Never raises: any transport error, timeout, malformed Location or missing
+        redirect becomes None, which the caller turns into an explicit
+        `shortlink_unresolved` rejection. A shortener must never be able to abort a
+        harvest run.
+        """
+        if not url:
+            return None
+        if url in self._cache:
+            self.cache_hits += 1
+            return self._cache[url]
+
+        self.attempted += 1
+        target = self._head_location(url)
+        if target:
+            self.resolved += 1
+        else:
+            self.failed += 1
+        self._cache[url] = target
+        return target
+
+    def _head_location(self, url: str) -> str | None:
+        started = time.monotonic()
+        try:
+            client = self._ensure_client()
+            resp = client.head(url, follow_redirects=False, timeout=self.timeout)
+        except Exception:
+            # Timeout, DNS failure, TLS error, connection reset — all the same
+            # answer to the only question we asked: we do not know the target.
+            return None
+        # Total wall-clock budget, checked AFTER the call returns because httpx's
+        # per-phase timeouts cannot express one. A response that arrived too late is
+        # discarded rather than used: the point of the budget is a predictable
+        # per-run cost, and honouring a slow answer would defeat it. Recorded as
+        # `shortlink_unresolved` like any other failure — never as an acceptance.
+        if (time.monotonic() - started) > self.total_budget:
+            self.budget_exceeded += 1
+            return None
+        try:
+            status = int(getattr(resp, "status_code", 0) or 0)
+        except Exception:
+            return None
+        if status < 300 or status >= 400:
+            # 404 (dead shortlink) and 200 (shortener answering in-page) both mean
+            # no single-hop target. Dead links being filtered out here is a feature.
+            return None
+        try:
+            location = (resp.headers.get("location") or resp.headers.get("Location") or "")
+        except Exception:
+            return None
+        location = (location or "").strip()
+        # Only an absolute http(s) target is usable. A relative Location would have
+        # to be joined against the SHORTENER's host, which can only ever produce
+        # another shortener URL — that is a second hop, which we do not take.
+        if not location.lower().startswith(("http://", "https://")):
+            return None
+        return location
+
+    def _ensure_client(self):
+        if self._client is None:
+            import httpx  # local import: keeps the cost off runs that never resolve
+            self._client = httpx.Client(
+                follow_redirects=False,
+                timeout=self.timeout,
+                # Shorteners routinely 403 an unidentified client.
+                headers={"User-Agent": "Mozilla/5.0 (compatible; VibePinBot/1.0)"},
+            )
+        return self._client
+
+    def close(self) -> None:
+        client, self._client = self._client, None
+        try:
+            if client is not None and hasattr(client, "close"):
+                client.close()
+        except Exception:
+            pass
 
 
 # ── URL helpers ────────────────────────────────────────────────────────────
@@ -91,6 +370,19 @@ def get_domain(url: str) -> str:
         return host[4:] if host.startswith("www.") else host
     except Exception:
         return ""
+
+
+def _is_pinterest_domain(domain: str) -> bool:
+    return (
+        domain == "pinterest.com"
+        or domain.endswith(".pinterest.com")
+        or domain.startswith("pinterest.")
+        or ".pinterest." in domain
+        or domain == "pinimg.com"
+        or domain.endswith(".pinimg.com")
+        or domain.startswith("pinimg.")
+        or ".pinimg." in domain
+    )
 
 
 def normalize_product_url(url: str) -> str:
@@ -173,6 +465,23 @@ _PDP_RULES: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
      re.compile(r"/pdp/[^/]+|-pdp-[^/]+", re.I)),
     (re.compile(r"(^|\.)shein\.com$", re.I),
      re.compile(r"-p-\d+", re.I)),
+    # Shopee's canonical product URL is /<slug>-i.<shopId>.<itemId> (the slug is
+    # localised free text), with an older /product/<shopId>/<itemId> form still in
+    # circulation. NEITHER matches the generic shapes below, so whitelisting the
+    # domain family alone would have recovered nothing — measured: shopee.com.br
+    # product links returned `no_recognizable_pdp_path` before this rule existed.
+    # Writing it as a DOMAIN rule also makes the gate fail CLOSED for Shopee: the
+    # homepage, /search, /shop/<id>, /mall and the s.shopee.* shortener codes have
+    # no numeric shop/item pair and are therefore rejected as `not_a_pdp_path`
+    # instead of being waved through by the loose generic /product/ shape.
+    (re.compile(r"(^|\.)shopee\.", re.I),
+     re.compile(r"-i\.\d+\.\d+|/product/\d+/\d+", re.I)),
+    # AliExpress product pages are /item/<numericId>.html across every storefront.
+    # The generic /item/ shape already accepted these, but only for domains that
+    # reached the gate; pinning it as a domain rule keeps /store/, /category/ and
+    # /w/wholesale-*.html rejected on their own merits rather than by luck.
+    (re.compile(r"(^|\.)aliexpress\.", re.I),
+     re.compile(r"/item/\d+", re.I)),
     # Teepublic product pages are /<product-category>/<numeric-id>-<slug>
     # (e.g. /t-shirt/77625009-..., /poster-and-art/80640861-...). accept_link()
     # already accepts these via its own precise Teepublic rule and EXEMPTS them from
@@ -308,14 +617,22 @@ def _matches_domain_non_product_path(domain: str, path: str) -> bool:
     return False
 
 
-def accept_link(url: str) -> tuple[bool, str]:
+def accept_link(url: str, resolver: "ShortlinkResolver | None" = None) -> tuple[bool, str]:
     """Return (accepted, reason). Accepts known commerce marketplaces + a few safe,
     path-based product patterns (Shopify /products/, Teepublic product pages).
 
     Every acceptance is then re-checked by the PDP gate (is_product_detail_url), so a
     search/browse/category page on an otherwise-legitimate commerce domain can never be
     accepted as a product. Domains that already have a path-precise product rule
-    (RETAIL_PRODUCT_PATHS, Teepublic) are exempt — their own rule IS the PDP gate."""
+    (RETAIL_PRODUCT_PATHS, Teepublic) are exempt — their own rule IS the PDP gate.
+
+    `resolver` is OPTIONAL and defaults to None, which keeps this function PURE — no
+    I/O, no network, byte-for-byte the behaviour every existing caller and test relies
+    on. Pass a ShortlinkResolver to additionally resolve commerce shorteners
+    (SHORTLINK_DOMAINS); see that class for why resolution is whitelist-only,
+    single-hop and opt-in. Resolution rewrites the URL and nothing else: the resolved
+    URL is judged by this same function, so the PDP gate is never bypassed.
+    """
     if not url or not url.startswith("http"):
         return False, "empty_or_relative"
     parts = urlsplit(url)
@@ -323,7 +640,30 @@ def accept_link(url: str) -> tuple[bool, str]:
     path = (parts.path or "").rstrip("/") or "/"
     if not domain:
         return False, "no_domain"
-    if "pinterest.com" in domain:
+    # ── SHORTLINK RESOLUTION ─────────────────────────────────────────────────
+    # Placed here — after the cheap structural guards, before every judgement rule —
+    # because a shortener's own host and path say nothing about the destination, so
+    # judging them is meaningless. Deciding the target instead means `pin.it/abc` is
+    # reported as `pinterest_internal` and a dead `a.co` link as `shortlink_unresolved`,
+    # rather than both being filed under the misleading `non_commerce_domain`.
+    #
+    # The recursive call passes resolver=None, which is what makes ONE HOP structural
+    # rather than a rule someone must remember: a target that is itself a shortener
+    # reaches this branch with no resolver and stops.
+    if resolver is not None and is_shortlink_domain(domain):
+        target = resolver.resolve(url)
+        if not target:
+            return False, SHORTLINK_UNRESOLVED
+        ok, reason = accept_link(target, resolver=None)
+        # Tag the reason so the report can separate supply RECOVERED by resolution
+        # from supply that arrived as a direct link, and so a resolved-but-still-bad
+        # target keeps its real cause visible instead of hiding behind the shortener.
+        return ok, f"{SHORTLINK_RESOLVED_PREFIX}{reason}"
+
+    # Keep the stricter regional-host guard from the v3.7 evidence work. A
+    # resolved pin.it target may be pinterest.co.uk (or another ccTLD), and a
+    # direct pinimg.* host is also Pinterest evidence rather than a product PDP.
+    if _is_pinterest_domain((parts.hostname or "").lower()):
         return False, "pinterest_internal"
     if domain in SOCIAL_DOMAINS or any(domain.endswith("." + s) for s in SOCIAL_DOMAINS):
         return False, "social_media"
@@ -341,6 +681,22 @@ def accept_link(url: str) -> tuple[bool, str]:
     if not is_pdp:
         return False, f"not_product_detail_page:{pdp_reason}"
     return True, reason
+
+
+def resolve_link(url: str, resolver: "ShortlinkResolver | None") -> str:
+    """Return the URL a harvester should STORE for `url`.
+
+    accept_link() decides the resolved target but returns only a verdict, so a caller
+    that accepts a shortlink would otherwise persist `amzn.to/3QYT1Ll` as source_url —
+    an opaque, expiring redirect instead of the product page it proved. This returns
+    the resolved target for accepted shortlinks (served from the resolver's cache, so
+    it costs no extra request) and the original URL for everything else.
+    """
+    if resolver is None or not url:
+        return url
+    if not is_shortlink_domain(get_domain(url)):
+        return url
+    return resolver.resolve(url) or url
 
 
 def _accept_link_domain_rules(url: str, domain: str, path: str) -> tuple[bool, str]:
@@ -374,6 +730,17 @@ def _accept_link_domain_rules(url: str, domain: str, path: str) -> tuple[bool, s
     # /gp/product/<ASIN> pages actually get in.
     if is_amazon_family_domain(domain):
         return True, "amazon_family_domain"
+    # AliExpress / Shopee per-country storefronts. Same shape as the Amazon branch
+    # directly above and for the same measured reason: aliexpress.com was on the
+    # whitelist while aliexpress.us was rejected as `non_commerce_domain`, and Shopee
+    # was absent entirely. Distinct reasons keep the recovered supply attributable in
+    # rejectedByReason/acceptedByDomain, and neither is PDP-gate-exempt: accept_link()
+    # still runs is_product_detail_url() on every one of these, so homepages, /search,
+    # store and category surfaces stay rejected.
+    if is_aliexpress_family_domain(domain):
+        return True, "aliexpress_family_domain"
+    if is_shopee_family_domain(domain):
+        return True, "shopee_family_domain"
     return False, "non_commerce_domain"
 
 
@@ -476,13 +843,28 @@ def _db_select():
 
 # ── Orchestration ──────────────────────────────────────────────────────────
 
-def _evaluate(pins: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Return (accepted_rows, rejected) after acceptance + content + classify."""
+def _evaluate(pins: list[dict],
+              resolver: "ShortlinkResolver | None" = None,
+              ) -> tuple[list[dict], list[dict], list[dict]]:
+    """Return (accepted_rows, rejected, accepted_via_shortlink).
+
+    When `resolver` is supplied, a commerce shortlink is resolved and the row is built
+    from the RESOLVED url — so `domain`, `canonical_product_url`, `product_url_hash`
+    and `source_url` all describe the actual product page. Storing the shortener
+    instead would leave the row's domain as `amzn.to`, break dedup against the same
+    product arriving as a direct link, and persist a redirect that can expire.
+    The `url` recorded on a REJECTION stays the original shortlink, because that is
+    what the source pin contained and what an operator has to look up.
+    """
     accepted: list[dict] = []
     rejected: list[dict] = []
+    # Audit trail for accepted shortlinks, kept OUT of the row dicts on purpose:
+    # every key in a row is written to pin_products, so an extra bookkeeping field
+    # would become a phantom column (or an insert error). Parallel list instead.
+    accepted_via_shortlink: list[dict] = []
     for pin in pins:
         url = (pin.get("outbound_link") or "").strip()
-        ok, reason = accept_link(url)
+        ok, reason = accept_link(url, resolver=resolver)
         if not ok:
             rejected.append({"pin_id": pin.get("pin_id"), "category": pin.get("category"),
                              "url": url[:120], "reason": reason})
@@ -493,9 +875,70 @@ def _evaluate(pins: list[dict]) -> tuple[list[dict], list[dict]]:
             rejected.append({"pin_id": pin.get("pin_id"), "category": pin.get("category"),
                              "url": url[:120], "reason": f"content:{decision.reason or 'negative'}"})
             continue
-        clf = classify_link(url, pin.get("title"))
-        accepted.append(build_product_row(pin, url, clf))
-    return accepted, rejected
+        stored_url = resolve_link(url, resolver)
+        clf = classify_link(stored_url, pin.get("title"))
+        row = build_product_row(pin, stored_url, clf)
+        accepted.append(row)
+        if str(reason).startswith(SHORTLINK_RESOLVED_PREFIX):
+            accepted_via_shortlink.append(
+                {"shortlink": url[:120], "resolved": stored_url[:160],
+                 "canonical": row["canonical_product_url"],
+                 "reason": str(reason)[len(SHORTLINK_RESOLVED_PREFIX):]})
+    return accepted, rejected, accepted_via_shortlink
+
+
+def _shortlink_report(rejected: list[dict], accepted_via_shortlink: list[dict],
+                      resolver: "ShortlinkResolver | None") -> dict[str, Any]:
+    """Explicit accounting for shortlink resolution — records AND distinct URLs.
+
+    The two counts answer different questions and are both reported for the reason
+    _rejected_candidates_report gives: a single popular shortlink repeats across many
+    source pins, so a RECORD count overstates how much distinct supply is involved,
+    while a DISTINCT count understates the processing work. `attempted/resolved/failed`
+    come from the resolver and are inherently per-distinct-URL (the cache guarantees
+    one request per URL), so they line up with the `*Unique` numbers, not the record
+    numbers — stated here so the two families are not read as disagreeing.
+    """
+    if resolver is None:
+        return {"enabled": False}
+
+    def _uniq(rows: list[dict], key: str) -> int:
+        return len({r.get(key) for r in rows if r.get(key)})
+
+    unresolved = [r for r in rejected if r.get("reason") == SHORTLINK_UNRESOLVED]
+    rejected_after = [r for r in rejected
+                      if str(r.get("reason") or "").startswith(SHORTLINK_RESOLVED_PREFIX)]
+    accepted_after = accepted_via_shortlink
+
+    return {
+        "enabled": True,
+        "domains": sorted(SHORTLINK_DOMAINS),
+        "timeoutSec": SHORTLINK_TIMEOUT_SEC,
+        # Per-distinct-URL by construction (one request per URL, negative cache included).
+        "requests": resolver.stats(),
+        # Records: how many candidate rows went down each path this run.
+        "unresolvedRecords": len(unresolved),
+        "rejectedAfterResolutionRecords": len(rejected_after),
+        # Distinct URLs: how much supply is actually involved.
+        "unresolvedUniqueUrls": _uniq(unresolved, "url"),
+        "rejectedAfterResolutionUniqueUrls": _uniq(rejected_after, "url"),
+        "acceptedAfterResolutionRecords": len(accepted_after),
+        "acceptedAfterResolutionUniqueUrls": _uniq(accepted_after, "canonical"),
+        "acceptedAfterResolutionByReason": dict(Counter(
+            r.get("reason") for r in accepted_after)),
+        "acceptedSamples": [{"from": r.get("shortlink"), "to": r.get("resolved")}
+                            for r in accepted_after[:10]],
+        "rejectedAfterResolutionByReason": dict(Counter(
+            str(r.get("reason") or "")[len(SHORTLINK_RESOLVED_PREFIX):] for r in rejected_after)),
+        "unresolvedSamples": [r.get("url") for r in unresolved[:10]],
+        "countsNote": (
+            "*Records count candidate rows (a shortlink repeats across source pins); "
+            "*UniqueUrls count distinct URLs — use those to judge real supply. "
+            "requests.* are already per-distinct-URL because the resolver caches "
+            "both successes and failures, so requests.attempted == the number of "
+            "distinct shortlinks seen, not the number of records."
+        ),
+    }
 
 
 def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
@@ -516,8 +959,18 @@ def _dedup(rows: list[dict]) -> tuple[list[dict], int]:
 
 def harvest(*, since_hours: int, source: str | None = None,
             categories: list[str] | None = None, limit: int = 600,
-            apply: bool = False) -> dict[str, Any]:
-    """Select → accept → classify → dedup. Dry-run reports; apply writes pin_products."""
+            apply: bool = False, resolve_shortlinks: bool = True,
+            resolver: "ShortlinkResolver | None" = None) -> dict[str, Any]:
+    """Select → accept → classify → dedup. Dry-run reports; apply writes pin_products.
+
+    `resolve_shortlinks` defaults to True because the 2026-08-18 run showed 25% of the
+    `non_commerce_domain` bucket was commerce shorteners hiding real product pages —
+    leaving it off by default would keep discarding that supply silently. It stays a
+    parameter so an operator can turn the network off for a purely offline dry run,
+    and `resolver` is injectable for tests. Constructing a ShortlinkResolver opens NO
+    connection: its httpx client is built on the first actual shortlink, so a run
+    containing none is byte-for-byte the old offline behaviour.
+    """
     select_many = _db_select()
     since_iso = (datetime.now(tz=timezone.utc) - timedelta(hours=since_hours)).isoformat()
     cats = categories or list(P0_CATEGORIES)
@@ -529,7 +982,17 @@ def harvest(*, since_hours: int, source: str | None = None,
                        order="save_count.desc,pin_id.asc", limit=limit or None) or []
     with_outbound = [p for p in pins if (p.get("outbound_link") or "").strip()]
 
-    accepted, rejected = _evaluate(with_outbound)
+    if resolver is None and resolve_shortlinks:
+        resolver = ShortlinkResolver()
+    try:
+        accepted, rejected, accepted_via_shortlink = _evaluate(with_outbound, resolver=resolver)
+    finally:
+        # Release the httpx connection pool even if evaluation raises. A leaked pool
+        # keeps sockets (and on Windows, the event loop's selector) alive for the life
+        # of the process, which matters because the harvest runs inside a long-lived
+        # worker, not a one-shot script.
+        if resolver is not None:
+            resolver.close()
     deduped, dup_count = _dedup(accepted)
 
     # legacy guard: any selected pin not from a bootstrap source?
@@ -568,6 +1031,17 @@ def harvest(*, since_hours: int, source: str | None = None,
         "ecommerceProductLinksAccepted": len(accepted),
         "linksRejected": len(rejected),
         "rejectReasonDistribution": dict(Counter(r["reason"] for r in rejected)),
+        # Distinct-URL twin of the line above. A single URL repeats across source pins,
+        # so the record count above measures WORK while this one measures actual LOSS;
+        # reading the first as the second overstated loss ~30x in a measured STL run
+        # (see shop_the_look_expand._unique_urls). Both are reported so neither
+        # reading happens by accident.
+        "rejectReasonDistributionUnique": {
+            reason: len({r.get("url") for r in rejected
+                         if r.get("reason") == reason and r.get("url")})
+            for reason in {r["reason"] for r in rejected}
+        },
+        "shortlinkResolution": _shortlink_report(rejected, accepted_via_shortlink, resolver),
         "duplicatesByNormalizedUrl": dup_count,
         "projectedInserts": len(inserts),
         "projectedUpdates": len(updates),

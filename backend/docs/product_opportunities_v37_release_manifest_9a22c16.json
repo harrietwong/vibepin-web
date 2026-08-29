@@ -1,0 +1,519 @@
+{
+  "schemaVersion": 2,
+  "candidateCommit": "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc",
+  "integrationCommit": "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc",
+  "launchTaxonomyCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
+  "sourceProvenanceAliasCommit": "5b5f98c0c6d1511a9a24a1695eccfa839e3c7e62",
+  "classifyChainRepairCommit": "58598b4d51504738bcf54cfa400bae2a296b7659",
+  "trackingScheduleHardeningCommit": "01dcb539460bd282cb1542afa1ea4992f1f34659",
+  "trackingFailurePropagationCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "primarySwitchProofCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "evidenceHostHardeningCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "publicProductTruthCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "productionRemoteBase": "b22930ebe73847cf35bc44be789414902ae6b599",
+  "localMasterBase": "b22930ebe73847cf35bc44be789414902ae6b599",
+  "artifactCount": 81,
+  "artifacts": [
+    {
+      "path": "backend/db/migrate_v63_product_opportunities_v1.sql",
+      "gitBlobSha1": "76224bc7e6a3bcb69f04203a9135ea42142f4c6c",
+      "sha256": "6de95674b286b71ce299eb298e28312a2a632e4e1d312cd3752e005ee6d8d3d1",
+      "bytes": 74223
+    },
+    {
+      "path": "backend/db/rollback_v63_product_opportunities_v1.sql",
+      "gitBlobSha1": "41a749e73e5cda29f17717c011701b8c714fdf89",
+      "sha256": "bba932a49e65b7f7f9cf2c38ebaa89a751eab7719c9e17a923abd853acdb9e3c",
+      "bytes": 3046
+    },
+    {
+      "path": "backend/scripts/run_migration.py",
+      "gitBlobSha1": "9257e0439ba481781db84d77e48c9fa75e1a0c78",
+      "sha256": "8f270f9705853ba5fce7b62ba4531a27153d709945f9819ed282e9e6f9fd7c34",
+      "bytes": 20274
+    },
+    {
+      "path": "backend/.env.example",
+      "gitBlobSha1": "449f476ca9a7a032cf3219d8d623f67c83cbd0db",
+      "sha256": "032c65dba3e2b2a997b8e66a4030084d12c89230dda0eb6a0062b798f8b575f7",
+      "bytes": 2316
+    },
+    {
+      "path": "backend/deploy/systemd/vibepin-product-supply.service",
+      "gitBlobSha1": "64815f0e0c06d7805708649eefc92b1c6d2aa4a4",
+      "sha256": "51f78a4eb235d6c5b13f83cf727173f3b3427a6ff7c863e2024657e8b9312a20",
+      "bytes": 3403
+    },
+    {
+      "path": "backend/run_worker.py",
+      "gitBlobSha1": "6af5801762f213cb1a310012c6f4e077a73622dc",
+      "sha256": "f498f2632e40cce926eb68e6c68b05d2fe5727baf8cdd06f39341bc9cbc57bdc",
+      "bytes": 41819
+    },
+    {
+      "path": "backend/shop_the_look_expand.py",
+      "gitBlobSha1": "8128346eaac904c14195be9e5f3abb425a63704f",
+      "sha256": "511a4f8e0eba42d4fba233c49c0eb5ad092b4014719e4492e0bc3530bb1c7ba2",
+      "bytes": 116304
+    },
+    {
+      "path": "backend/product_opportunity_admission.py",
+      "gitBlobSha1": "d70a19df578f164d1547fac68686dfa8f985b0a4",
+      "sha256": "178a0c81c5950d2352e3bd481c48071bbc5c77105c0e63bf534e42b20a9a4361",
+      "bytes": 41019
+    },
+    {
+      "path": "backend/product_opportunity_admission_pipeline.py",
+      "gitBlobSha1": "9151a2a17e82552a7cf3b19a6645d3198962b85f",
+      "sha256": "e21b56f54b54f7a7057eabec6c73a3db500c1efc68810cf664e3fe84f1d87e80",
+      "bytes": 21336
+    },
+    {
+      "path": "backend/product_opportunity_manifest.py",
+      "gitBlobSha1": "9e46ed5290f04056b074facee444381100fb6eb5",
+      "sha256": "b4260c292bb8988730181bbaa31c52292fb0d41a7e4398e39d97befa416579be",
+      "bytes": 28403
+    },
+    {
+      "path": "backend/product_opportunity_tracking.py",
+      "gitBlobSha1": "59bd0430d3e3131973be337443721b403f5a02ce",
+      "sha256": "22156a3b15b6a5cab755ed3f9e8690b5cbc596ef90d1ef2c4e0d85c2d7aed65b",
+      "bytes": 33808
+    },
+    {
+      "path": "backend/product_opportunity_metric_refresh.py",
+      "gitBlobSha1": "fc717f946a5dfcf3da54e90eb30acc8946420629",
+      "sha256": "7d8cfbb630eedd62f893fc8f9651c1a001d556c25bf34971f818eb3384b2acc6",
+      "bytes": 9450
+    },
+    {
+      "path": "backend/product_opportunity_metrics.py",
+      "gitBlobSha1": "9d0808395ba6835063efc8c92ffc92b841a23b0b",
+      "sha256": "7929f0b68a8db32d1f290fa1642a8af533841304dd363c00c89436215f9fb2a6",
+      "bytes": 10826
+    },
+    {
+      "path": "backend/pipeline_tracking.py",
+      "gitBlobSha1": "3c2cceaf096abab0e32ee3429f579b92e8f6a3ef",
+      "sha256": "653772c9be8a7c734a91d616a02961f85cb5df4b6a5a5d0eb71a7f0a0d88c94b",
+      "bytes": 7200
+    },
+    {
+      "path": "backend/product_harvest.py",
+      "gitBlobSha1": "b8cf6c41ffdd3874df4d42201af0cdea1fdaf9d2",
+      "sha256": "2e4d02114be6066e6a41d910a2fa015988b9d4fa02a52afaf47144b6b331eeed",
+      "bytes": 57771
+    },
+    {
+      "path": "backend/supply_core.py",
+      "gitBlobSha1": "34a9182773eb52045136940b722a15cba4613c23",
+      "sha256": "d6fc392f38ef28c9181db91fcff2b11d50577fa109262b9747833f03d0684911",
+      "bytes": 55823
+    },
+    {
+      "path": "backend/tools/t2_harvest.py",
+      "gitBlobSha1": "602a86b1943b3b4b493363025b18ea9ff3e074c3",
+      "sha256": "fa365e13f30aaed27a4328db0b27faf47cb4cfaf7606ef8c4ab6ab07b263cfe1",
+      "bytes": 15483
+    },
+    {
+      "path": "backend/scraper_v2.py",
+      "gitBlobSha1": "2de118736cdf2b6134d608c40e27642fe97dc4c7",
+      "sha256": "1345bb562de7b9ac10ac651fd604925674b42694e26e721a38596d22b597d662",
+      "bytes": 63716
+    },
+    {
+      "path": "backend/scripts/audit_product_opportunity_v37.py",
+      "gitBlobSha1": "790c4f15e52711570c876b9dddc387925f16a8af",
+      "sha256": "19ac62af4bb69316cc7465e14d5a51f152d604627ff802d0014a706d057a166c",
+      "bytes": 13857
+    },
+    {
+      "path": "backend/scripts/cloud_run_product_supply.sh",
+      "gitBlobSha1": "f25a4054e7306e12c6ca95fbb0549635404c759f",
+      "sha256": "361dccde1e4a0764f700f8c0f35cb1262a3e63a0de0832ad02ff967a6a2b4b37",
+      "bytes": 6152
+    },
+    {
+      "path": "backend/scripts/run_bootstrap_product_supply.py",
+      "gitBlobSha1": "a9a153febc5e01f1cad15b651d134b5e0e25244b",
+      "sha256": "58db0447d6b39720d44fa43e96605fae7d5bb802dae9fe5d2bd7a55c9a858dab",
+      "bytes": 15168
+    },
+    {
+      "path": "backend/scripts/product_supply_cutover_v37.py",
+      "gitBlobSha1": "c638cde1beeb470c2414bc0ce5aa47e355a19a29",
+      "sha256": "e0121f17f272599240688e08512ebfc0439cdbc2c0b358872fab789e3cb8b48b",
+      "bytes": 40530
+    },
+    {
+      "path": "backend/scripts/validate_product_supply_merchants.py",
+      "gitBlobSha1": "12e1d789da5455fbc5869af7cbfc17b6c8b0f37b",
+      "sha256": "0d8dd7b0ec55037a070d1818ac2ed8054c473f1d013d3c6ea48366f7bdcfdbc9",
+      "bytes": 11424
+    },
+    {
+      "path": "backend/deploy/systemd/vibepin-product-opportunity-admission.service",
+      "gitBlobSha1": "76d7485c31a29d4a19e17c2597078a0d299c40b7",
+      "sha256": "7be37e3b0606cadc01c874ca19fc7f97050489ad3113d40c24b6b666aabeea22",
+      "bytes": 979
+    },
+    {
+      "path": "backend/deploy/systemd/vibepin-product-opportunity-admission.timer",
+      "gitBlobSha1": "dd6bf79ca5c1248f955e3dfcfe247ec2a26f9a70",
+      "sha256": "554d6ba4e0362b691aae9c334091999e1c2a5e0b282ee2273d947282a663be4c",
+      "bytes": 568
+    },
+    {
+      "path": "backend/deploy/systemd/vibepin-product-tracking.service",
+      "gitBlobSha1": "a65216178d8ea97e9281a8e8fd61702a2bd2f1a9",
+      "sha256": "b8621d95a22e1dd89057c97efba7d26417f191e4568e4083fd9dd7154e76e74f",
+      "bytes": 861
+    },
+    {
+      "path": "backend/deploy/systemd/vibepin-product-tracking.timer",
+      "gitBlobSha1": "d6bef00de1acaed4b07fee8d0b6c5b279873046c",
+      "sha256": "7739fc1c637e4016e902edb252847d44163e0fe80effd084000b3f1e24e474a5",
+      "bytes": 1086
+    },
+    {
+      "path": "backend/scripts/cloud_run_product_opportunity_admission.sh",
+      "gitBlobSha1": "956e5cbb089890ad1ecd67a0df02aee476f230d3",
+      "sha256": "1c001d3ea9bf5bc19aef28193ada8346fa4b7ce91b80d9a4b29451764c0a7137",
+      "bytes": 2858
+    },
+    {
+      "path": "backend/scripts/cloud_run_product_tracking.sh",
+      "gitBlobSha1": "3aab9b64a7aac245ecee5cde46d823037e96819e",
+      "sha256": "a09ed648e6a63a1e38e70f471e9c6ab9b1372839fbf8b510e3df348beae1599f",
+      "bytes": 2226
+    },
+    {
+      "path": "backend/scripts/cloud_lib.sh",
+      "gitBlobSha1": "96cfeffd22c195be40b46eb484d3d1432ba4dfe4",
+      "sha256": "63a410a23fe0f547194ad6224b6e2dd5d82c7e7ef162a573b0f62a936010e3a0",
+      "bytes": 4818
+    },
+    {
+      "path": "backend/scripts/preflight_product_supply.py",
+      "gitBlobSha1": "a3d67e4a7f9b03eaf949b2f8ed0dba0181d8df62",
+      "sha256": "1ec40de130c0453128fe657c20de1e277932b03fe54908052db9643084e70884",
+      "bytes": 15249
+    },
+    {
+      "path": "web/src/lib/server/productOpportunityMetricControls.ts",
+      "gitBlobSha1": "a208ea0b8a05f02d433b103a0bc6dee4042df7d6",
+      "sha256": "55479be6fd9daae23b4dd6cf0c355c41eb1ede1b04cb6cb5f22ac1da0f339d50",
+      "bytes": 2307
+    },
+    {
+      "path": "web/.env.example",
+      "gitBlobSha1": "9902ccf53fd8d8ac4a2387cbb4fea8d1b71b3c94",
+      "sha256": "0e2bc8cffa7abb8085ce94e4a212b3ae7ea9c25c4d6447742b6f1252097cfa15",
+      "bytes": 15325
+    },
+    {
+      "path": "web/src/lib/server/productOpportunities.ts",
+      "gitBlobSha1": "5e0be38ce5b2ea116e0db9a519014067ecb4d81a",
+      "sha256": "f8b2e9f9a79f86b70f355b7815d43f54e5e0a65a2e1e5ad5a254f9339f89bf30",
+      "bytes": 24537
+    },
+    {
+      "path": "web/src/lib/server/productOpportunityAccess.ts",
+      "gitBlobSha1": "a3842249379130e328024011e0b6e6e68281dad5",
+      "sha256": "b798e3a40e76a627906b3e5501ab95767a728f6a7f92ee0e9b636f3c313336c4",
+      "bytes": 1478
+    },
+    {
+      "path": "web/src/lib/server/planEntitlements.ts",
+      "gitBlobSha1": "8ed40b0ccb445123b146c6ca2449517536506e5c",
+      "sha256": "65aed6c4d8fd2dcee5c7b0a74c5aa1cfcc8e6c190fdd9f6c467b1e964303d5e5",
+      "bytes": 6760
+    },
+    {
+      "path": "web/src/lib/productOpportunitiesClient.ts",
+      "gitBlobSha1": "2231f454b418944d5ef395eaff6d4b15cd74f957",
+      "sha256": "2be4427e0513e5279069627bfca0a1f34d3a398ec801279920650f20ce4ef0e9",
+      "bytes": 3173
+    },
+    {
+      "path": "web/src/lib/productTitle.ts",
+      "gitBlobSha1": "b534897900cdd64d6301db385a70a72385d2d216",
+      "sha256": "08da7bea5e0e24ab6e9645be169c67cf97bd25be1f806550cdf382125061e184",
+      "bytes": 4958
+    },
+    {
+      "path": "web/src/lib/productIdeas.ts",
+      "gitBlobSha1": "8e5b87a5159bb32c827d66ad4444843dd2d1f0f3",
+      "sha256": "87016dbe4dbdfcbb29d4cb4b1a54da46bd5d08a360c7aa087dc7f1ac9f60f34a",
+      "bytes": 26070
+    },
+    {
+      "path": "web/src/lib/supabase.ts",
+      "gitBlobSha1": "e30639ab77633f4f764653c8d01405efc209b873",
+      "sha256": "ef03a48e0b68d9b5c58e8e16668a346abecbf8d742e367990df1cb172f7a092b",
+      "bytes": 8146
+    },
+    {
+      "path": "web/src/lib/productImageEvidence.ts",
+      "gitBlobSha1": "a292d935e72bf5f4e352ad3696de1fcbb7d389a2",
+      "sha256": "d0709c7737b3e8d040d3844aa6807f765adb7f1cf866781a293799f3b72c055d",
+      "bytes": 703
+    },
+    {
+      "path": "web/src/lib/createPinsPrefill.ts",
+      "gitBlobSha1": "4799574120bdbc45b646b8a9b329157ac0ea353a",
+      "sha256": "08ecf75f2dec93d94356010e5c0c739ac338ce60ffa0faf7f123320360bd606e",
+      "bytes": 20785
+    },
+    {
+      "path": "web/src/lib/supabaseBrowser.ts",
+      "gitBlobSha1": "b2180ff3a7c13673dd29ee03bffa54b336481d9f",
+      "sha256": "f4e7cd4008fbe85b36ffa8b5069ff29d61e507029ae27c18e27019a975f0f81e",
+      "bytes": 4010
+    },
+    {
+      "path": "web/src/lib/analytics.ts",
+      "gitBlobSha1": "786199949be2bae57bea006e021087aeb17d035e",
+      "sha256": "4726e7b53ac691a8798e88a715bcf57923b42eed1469e2cd83354b080950f1b5",
+      "bytes": 7755
+    },
+    {
+      "path": "web/src/types/css-modules.d.ts",
+      "gitBlobSha1": "e2b48bc71a048212ac37e615f747b931253e3798",
+      "sha256": "00a558ca41e878c67239d4026b1d53eca70a77ab92c0cc5c5240b4fea185e4d4",
+      "bytes": 111
+    },
+    {
+      "path": "web/src/components/products/ProductOpportunitiesV1.tsx",
+      "gitBlobSha1": "a23e4b69257b2fe0ef27a67c0d48f846d1112ec2",
+      "sha256": "185b61e71cd3b92414410436db217a3269f469fde1ed93bf8a16d88755302784",
+      "bytes": 31410
+    },
+    {
+      "path": "web/src/components/products/ProductOpportunitiesV1.module.css",
+      "gitBlobSha1": "a54ac6a7a40368e058e98fecc8ce553e684a1758",
+      "sha256": "5599499f3e9bb3636de29b5c0f003b84c4a4ad74e970d4e92c566acd5784f45e",
+      "bytes": 13535
+    },
+    {
+      "path": "web/src/components/products/ProductOpportunityPicker.tsx",
+      "gitBlobSha1": "1104baa6f66886c47a4b185c5740858d3dcfcf0b",
+      "sha256": "3c6ffdc898fc185708e00a22da6e79a1f31d8bc88616c1d94a9361797d29207d",
+      "bytes": 25727
+    },
+    {
+      "path": "web/src/app/api/products/top/route.ts",
+      "gitBlobSha1": "1e2f36bf6038301b14feb79d38487899c148db13",
+      "sha256": "4debb94a0a89bed3c174b75dfa5d4aec3433961575163d862fbda5b5017630d5",
+      "bytes": 24300
+    },
+    {
+      "path": "web/src/app/api/product/[id]/intelligence/route.ts",
+      "gitBlobSha1": "a6d29ef98caf9473c67b5750b6dabbd76d140a46",
+      "sha256": "bf288b50128d5d3be1ca162fc53aa5581ec93e8db721f139c31900eb5fff1433",
+      "bytes": 729
+    },
+    {
+      "path": "web/src/app/api/product-opportunities/route.ts",
+      "gitBlobSha1": "42709c84fea5a36b6f382b65e7614dafdf08db6d",
+      "sha256": "35a657af2630eda8dc357c232caefef4be97a1b032921cfd0bce9f76da7927b2",
+      "bytes": 2432
+    },
+    {
+      "path": "web/src/app/api/product-opportunities/[id]/route.ts",
+      "gitBlobSha1": "5d67810cf30c2c104b461b88c60d36c268b57898",
+      "sha256": "7c3650338418a66bccb5990de38c7ecdf340f4916baaf3bdc2a2a90e179e3155",
+      "bytes": 941
+    },
+    {
+      "path": "web/src/app/api/saved-product-opportunities/route.ts",
+      "gitBlobSha1": "35f6d8692dbefe389cbd0e5a8b6846d5d21edd64",
+      "sha256": "ec2dee3fe382c8a7fd912f4ea01d95ee4e441979e99bb1e42b573269ddf2af0f",
+      "bytes": 2705
+    },
+    {
+      "path": "web/src/app/api/composer-drafts/route.ts",
+      "gitBlobSha1": "3ddec5d394d86b57d32e8c8a6959ede0c3a32faf",
+      "sha256": "f0809f031355c1bbc35c41e69854afd53d9a6c39b25606f56d892762aadb58b0",
+      "bytes": 6596
+    },
+    {
+      "path": "web/src/app/api/composer-drafts/[id]/route.ts",
+      "gitBlobSha1": "e4b7fe63b16cffa0df6cbe2061dd2482fb7a4d23",
+      "sha256": "087a7dbbdf2e5285654481be851dd53fbf9057e7a7deca162677afafcc096980",
+      "bytes": 4916
+    },
+    {
+      "path": "web/src/app/app/studio/page.tsx",
+      "gitBlobSha1": "ce668012f262d98a69bf4e403d83d9c2c389d59c",
+      "sha256": "893dcd6c22143e0e35b6cec570fb70f2d127336292527084d7f9d9d916d58284",
+      "bytes": 246980
+    },
+    {
+      "path": "web/src/app/app/products/page.tsx",
+      "gitBlobSha1": "7e9a4bf8232337c89f1c14b964acf72e0022f581",
+      "sha256": "f1256925b1edd2a8f4411931b0486e36d71e70ba6c4eea1a1081559f4f64dd83",
+      "bytes": 180
+    },
+    {
+      "path": "web/src/app/app/products/saved/page.tsx",
+      "gitBlobSha1": "1e4822c0524a348f52645473d91735543f8003a3",
+      "sha256": "32e3faec9d14ac08b156903a5aa4b89ac352620031a30249ecdce08bd74df3bb",
+      "bytes": 186
+    },
+    {
+      "path": "web/src/app/page.tsx",
+      "gitBlobSha1": "c450f2109cf2426fe39988cd99ccad9a8cf7a9ee",
+      "sha256": "ef2e3cc427f97744dd09137beba9218280fab897cbc379d7dbc6fcc258e8768b",
+      "bytes": 50242
+    },
+    {
+      "path": "web/src/lib/landingAssets.ts",
+      "gitBlobSha1": "8c98c51a22e0e129a31c85f154316e9c88115885",
+      "sha256": "01407a5b6f5b6bb1079f585c0ddd5a391be848c018bfadf6044f80a9fcaf4d34",
+      "bytes": 5594
+    },
+    {
+      "path": "web/src/components/landing/ExecutionSystem.tsx",
+      "gitBlobSha1": "c088c65d9d773165fcf3fcd6721ceb7df68a2a40",
+      "sha256": "009ee8881180fa7b5ee95c2de5a0bf84a2909cad77706cfa3d3a0f259ebe2fd2",
+      "bytes": 20357
+    },
+    {
+      "path": "web/src/lib/landing/conversionData.ts",
+      "gitBlobSha1": "2af21ee72f6f93d69622c55c455eae56b17ecab5",
+      "sha256": "cf7405cefbaeacdb7be520e8183c697b6925de52e4298c6d7158effec0cd8495",
+      "bytes": 8010
+    },
+    {
+      "path": "web/src/app/admin/data/page.tsx",
+      "gitBlobSha1": "d2d163ccd9004d760edf32602c0e38d3616a03a8",
+      "sha256": "bbc72d0391ddf81be88bf5c6333720b3a285c2d28c77e403f9ab2a09fa77b7df",
+      "bytes": 19661
+    },
+    {
+      "path": "web/src/app/api/generate/route.ts",
+      "gitBlobSha1": "4cede0ba763ca6b5fa16b410cbcfff034ab75e7d",
+      "sha256": "7ea6e96430d694f0213171318094d61cbd1a12dde91bc490f14c8e249beefacf",
+      "bytes": 48789
+    },
+    {
+      "path": "web/src/lib/server/generationModeration.ts",
+      "gitBlobSha1": "366ad3aa0774f88ba9f190a41cde4851b5853ea6",
+      "sha256": "6baf0dcd3c490d1e1a61e4f5ea6453104c674558aa148056c7388a806e996567",
+      "bytes": 6598
+    },
+    {
+      "path": "web/src/app/api/integrations/shopify/connect/route.ts",
+      "gitBlobSha1": "0134f2045962ab7130150e871050aeab774bf4c1",
+      "sha256": "acd6b851ce7a7d8d6c081541854b33182dde1095599639b6e1d99557451765ce",
+      "bytes": 3610
+    },
+    {
+      "path": "web/src/app/api/integrations/shopify/launch/route.ts",
+      "gitBlobSha1": "d53da59ff8e29cec471fa4bb50f72938c3ec8de9",
+      "sha256": "5bb0528c8f470888d236e3784d0ac93174865ae5279db3136518a45f1a1aa610",
+      "bytes": 2493
+    },
+    {
+      "path": "web/src/lib/server/shopify/connectPrep.ts",
+      "gitBlobSha1": "bc084fecc2aed91f16a0d5a7d562286d00f8c70b",
+      "sha256": "b06362b6ea5342dc2aca49e42f017538f8357982fc8254fffd1752e17d222b83",
+      "bytes": 2830
+    },
+    {
+      "path": "web/tsconfig.product-opportunities.json",
+      "gitBlobSha1": "14c1a34d8c9c9719dbb54481619859eb4bbd7452",
+      "sha256": "c93df754e5579ce364226064dfc6c85def16285b8f953072b456bf4ca7fac6ae",
+      "bytes": 781
+    },
+    {
+      "path": "backend/deploy/systemd/vibepin-product-supply.timer",
+      "gitBlobSha1": "f42db219557262f1c02d30402d2c3c0d15e13bf1",
+      "sha256": "9b046ec96db1b2861f087d2f8c51f910661f72c7455a1b2fd91fbdc320068e1a",
+      "bytes": 1170
+    },
+    {
+      "path": "backend/product_supply_receipt_contract.py",
+      "gitBlobSha1": "103d0ed10f9126bb9545e596e28e941c8f3487dc",
+      "sha256": "c691e2c82736ceea9ba4b71f41733c923116160d7fb643d90421c2125e1f9703",
+      "bytes": 8740
+    },
+    {
+      "path": "web/package.json",
+      "gitBlobSha1": "432434e7beb429a96e4d023bb0f9bc09adfa7fb5",
+      "sha256": "17276aedcef9db0a5d06bc8728a358a6e2f53cbcd0b25aac289756d60cc22e49",
+      "bytes": 5432
+    },
+    {
+      "path": "web/package-lock.json",
+      "gitBlobSha1": "ab2fda34459fe5089ae42962d3a5a74d7af75f0a",
+      "sha256": "26ba489b45a3f6d2fa9dea3d898f5547b1b5e3426d64c118bd345833392cffb8",
+      "bytes": 255954
+    },
+    {
+      "path": "web/vercel.json",
+      "gitBlobSha1": "65923bb67eacd7832bb6379030df3fb4d3d7d098",
+      "sha256": "7e982ab62738179d616e8e088fbb417de6a066c9c5a61e44766d2838cb66a431",
+      "bytes": 248
+    },
+    {
+      "path": "web/scripts/test-registry.ts",
+      "gitBlobSha1": "c5d15ad74638d62f0b794733cfc7fd06c525a457",
+      "sha256": "7e5864ded6062b5c5f480fa9ac1335bda985574dc1dbb83ef3c66c3acce29da5",
+      "bytes": 8406
+    },
+    {
+      "path": "web/scripts/test-product-live-truth-verifier.ts",
+      "gitBlobSha1": "c3b19a47a29a4c4484eb01991edfffae5ad7e186",
+      "sha256": "7ebd237746d88ea5d80225aa20c77be5718d5397b094f729226f024f6567f69e",
+      "bytes": 2182
+    },
+    {
+      "path": "web/scripts/verify-product-truth-url.ts",
+      "gitBlobSha1": "0cbe6b1f1d0d3d6bbe9ffed5e41eb79c16d3bd28",
+      "sha256": "e8562d9661d947972beb7a9efbaf2001a0274dee781fddcfcf98e237037d22e5",
+      "bytes": 3977
+    },
+    {
+      "path": "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql",
+      "gitBlobSha1": "7bb675d32d53390420336dee96179e9f022a0d45",
+      "sha256": "3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c",
+      "bytes": 2513
+    },
+    {
+      "path": "backend/docs/product_opportunities_v37_stage1_post_apply_query_v1.sql",
+      "gitBlobSha1": "acd3262c05a2d3092cebc0e89606a5e8977b46e0",
+      "sha256": "2c482caca84b779dd60d94be8f0f7010162701fea5d0abfa3d773328d69c8b43",
+      "bytes": 11943
+    },
+    {
+      "path": "backend/scripts/audit_product_opportunity_schema_v37.py",
+      "gitBlobSha1": "0d75b38cbc9043316d71087c4db2d29bf58075fd",
+      "sha256": "fed2794985e9ec7bd37fdf6001f294b3c545642f48378e62f0b395fde007215d",
+      "bytes": 19440
+    },
+    {
+      "path": "backend/scripts/canary_product_opportunity_postgres_v37.py",
+      "gitBlobSha1": "f59b237b92910d0f67c12ae76fe43654d92347a1",
+      "sha256": "5267ce89c6175e692b1562807e65268365fd866818ae7a0d157bbce6ae0892c9",
+      "bytes": 20220
+    }
+  ],
+  "auditScopeInventoryCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "categoryReadinessAuditCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "sourceCategoryProvenanceCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "sourceCategoryImmutabilityCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "savedTrackingCopyCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "prequalifiedIntegrationBase": "b22930ebe73847cf35bc44be789414902ae6b599",
+  "dependencySecurityCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "deterministicWebInstallCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "liveProductTruthGateCommit": "351e47912ce44fc34728097041dbfdd95889081a",
+  "sourceEvidenceCandidateCommit": "99efabcf8221141a470e73ae8e9765aad866a089",
+  "schemaApplyGuardCommit": "3ae8b995683b8c361be95ce96550c601e60d486b",
+  "stage1VerifierCommit": "187765fb9a0d8b1c00c3b505d483ed86aeacae59",
+  "admissionReceiptHardeningCommit": "1946a68483f7ca225438d7a98c6f897ee7f088c5",
+  "postgresCanaryCommit": "a299a17dae428dae69d55f4262f5301804fb35e7",
+  "liveManifestVerifierFixCommit": "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
+}

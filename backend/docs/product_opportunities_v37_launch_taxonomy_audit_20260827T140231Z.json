@@ -1,0 +1,48 @@
+{
+  "auditedAt": "2026-08-27T14:02:31.995855+00:00",
+  "mode": "production-get-only",
+  "candidateCommit": "c8f0d7753de01086b5a32d33bd8737b2c174d3f8",
+  "productContract": "docs/prd/0825数据功能修改-VibePin_Product_Opportunities_PRD_v3.7_—_产品与技术执行版.md",
+  "legacyInventory": {
+    "rows": 4115,
+    "snapshots": 34073,
+    "technicalMigrationCandidates": 123,
+    "duplicates": 0
+  },
+  "reviewedSourceAndFamilyScope": {
+    "rows": 39,
+    "uniqueProducts": 39,
+    "physical": 31,
+    "digital": 8,
+    "bySourceCategory": {
+      "fashion": 6,
+      "womens-fashion": 2,
+      "home-decor": 10,
+      "digital-products": 7,
+      "wedding": 14
+    },
+    "weddingFamilyProof": {
+      "physical": 13,
+      "digital": 1,
+      "conclusion": "Wedding is a mixed-family acquisition source and cannot determine product_family by itself."
+    }
+  },
+  "pinSamplesExactCounts": {
+    "fashion": 1305,
+    "womens-fashion": 1363,
+    "home-decor": 2403,
+    "digital-products": 7870,
+    "wedding": 1395,
+    "event-planning": 268,
+    "holidays-seasonal": 511
+  },
+  "metricCoverageForReviewedScope": {
+    "today": 0,
+    "anchor7": 0,
+    "anchor14": 0,
+    "anchor30": 0,
+    "fullMetric": 0
+  },
+  "businessConclusion": "The candidate taxonomy can represent all PRD launch categories without rewriting acquisition provenance or collapsing Wedding into Physical. Existing inventory grows from 25 to 39 reviewable source/family candidates, but none is yet a merchant-proofed active v63 Product Opportunity and none has launch-ready trend history.",
+  "safetyBoundary": "No production write, migration, deployment, timer mutation, provider crawl, or request-budget increase occurred. The scheduled 100-source mix remains unchanged pending a separate zero-write supply-distribution review."
+}

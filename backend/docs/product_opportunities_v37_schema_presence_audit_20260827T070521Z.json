@@ -1,0 +1,18 @@
+{
+  "audited_at": "2026-08-27T07:05:21.1763729Z",
+  "method": "GET PostgREST OpenAPI schema as service role",
+  "mutation": false,
+  "total_paths": 72,
+  "legacy_control_paths": [
+    "/pin_products",
+    "/pin_save_snapshots"
+  ],
+  "v63_matching_paths": [],
+  "v63_path_match_patterns": [
+    "product_opportun",
+    "product_evidence",
+    "product_metric",
+    "saved_product"
+  ],
+  "conclusion": "No PostgREST-exposed v63 Product Opportunity table or RPC currently exists; legacy control paths prove schema discovery was active."
+}

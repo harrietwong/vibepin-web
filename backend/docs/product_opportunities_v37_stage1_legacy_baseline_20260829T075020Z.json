@@ -1,0 +1,20 @@
+{
+  "audited_at": "2026-08-29T07:50:30.592347+00:00",
+  "baseline": {
+    "legacy_products": 4115,
+    "legacy_products_md5": "4225202c49f1e726530425ee620e5ff6",
+    "legacy_snapshots": 36672,
+    "legacy_snapshots_md5": "956471caff1d511418e500e0aaace122",
+    "v63_matching_object_count": 0
+  },
+  "baseline_receipt": null,
+  "candidate_sha": "d2c13dd6a4d1e79d0d247fa6cd09d68c04a15b5d",
+  "http_status": 201,
+  "mode": "baseline",
+  "mutation": false,
+  "project_ref": "jaxteelkecvlozdrdoog",
+  "query_file": "backend/docs/product_opportunities_v37_stage1_baseline_query_v1.sql",
+  "query_sha256": "3243cc589731051f173153ff5ef68dc6ffd82af20d2b722cef19d9b4b30f3f5c",
+  "verdict": "PASS",
+  "violations": []
+}

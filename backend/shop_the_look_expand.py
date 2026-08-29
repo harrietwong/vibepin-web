@@ -31,6 +31,8 @@ sys.path.insert(0, str(ROOT / "db"))
 
 from db import select_many  # type: ignore
 from product_harvest import (  # type: ignore
+    ShortlinkResolver,
+    resolve_link,
     BOOTSTRAP_SOURCES,
     accept_link,
     classify_link,
@@ -41,6 +43,10 @@ from product_harvest import (  # type: ignore
 # Single source of truth for the NULL-safe "not retired" dedup filter. Retired
 # rows must never count as "already exists" — see product_lifecycle.py.
 from product_lifecycle import with_not_retired  # type: ignore
+# Product-Supply has exactly one admissibility/enrichment/red-line/write core.
+# Shop-the-Look contributes discovery URLs only; it must never persist card fields.
+import supply_core  # type: ignore
+from product_opportunity_admission import require_expected_project_ref  # type: ignore
 
 DEFAULT_CATEGORY_MIX = {
     "fashion": 18,
@@ -48,6 +54,7 @@ DEFAULT_CATEGORY_MIX = {
     "home-decor": 18,
 }
 EXCLUDED_DEFAULT = frozenset({"beauty", "digital-products"})
+EXPECTED_PROJECT_REF_ENV = "VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF"
 
 # Per-pin Playwright navigation budget. Default 15_000 ms = the previous
 # hard-coded literal, so behaviour is UNCHANGED unless the env var is set.
@@ -57,6 +64,19 @@ EXCLUDED_DEFAULT = frozenset({"beauty", "digital-products"})
 # is a SEPARATE decision — this change only makes it tunable without a deploy.
 STL_GOTO_TIMEOUT_ENV = "STL_GOTO_TIMEOUT_MS"
 STL_GOTO_TIMEOUT_DEFAULT_MS = 15_000
+STL_PIN_TIMEOUT_ENV = "STL_PIN_TIMEOUT_SECONDS"
+STL_PIN_TIMEOUT_DEFAULT_SECONDS = 120
+STL_PIN_TIMEOUT_MIN_SECONDS = 30
+STL_PIN_TIMEOUT_MAX_SECONDS = 300
+# Optional DOM probes must consume only a small part of the whole-Pin budget.
+# Playwright's default timeout is 30 seconds; using it repeatedly for body/tab
+# inspection can otherwise exhaust the 120-second hard wall without identifying
+# which probe stalled.
+STL_DOM_PROBE_TIMEOUT_SECONDS = 5
+STL_DOM_EVAL_TIMEOUT_SECONDS = 8
+STL_TAB_LABEL_TIMEOUT_SECONDS = 1.5
+STL_TAB_CLICK_TIMEOUT_MS = 2_500
+STL_MAX_TABS_PER_PIN = 4
 
 
 def _stl_goto_timeout_ms() -> int:
@@ -76,6 +96,23 @@ def _stl_goto_timeout_ms() -> int:
     return value if value > 0 else STL_GOTO_TIMEOUT_DEFAULT_MS
 
 
+def _stl_pin_timeout_seconds() -> int:
+    """Hard wall-clock budget for the complete processing of one Source Pin."""
+    raw = (os.environ.get(STL_PIN_TIMEOUT_ENV) or "").strip()
+    if not raw:
+        return STL_PIN_TIMEOUT_DEFAULT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{STL_PIN_TIMEOUT_ENV} must be an integer") from exc
+    if not STL_PIN_TIMEOUT_MIN_SECONDS <= value <= STL_PIN_TIMEOUT_MAX_SECONDS:
+        raise RuntimeError(
+            f"{STL_PIN_TIMEOUT_ENV} must be between "
+            f"{STL_PIN_TIMEOUT_MIN_SECONDS} and {STL_PIN_TIMEOUT_MAX_SECONDS}"
+        )
+    return value
+
+
 # Incremental-write batch size, counted in SOURCE PINS (not candidates).
 #
 # WHY THIS EXISTS (2026-08-06 VPS run): the writer used to run once, after
@@ -89,6 +126,11 @@ def _stl_goto_timeout_ms() -> int:
 # Flushing every N pins bounds the loss to at most the last N pins' harvest.
 STL_WRITE_BATCH_SIZE_ENV = "STL_WRITE_BATCH_SIZE"
 STL_WRITE_BATCH_SIZE_DEFAULT = 10
+# One Product Supply run scans at most 100 Source Pins.  A dense Pin can expose
+# many PDP URLs, so the scan bound alone is not a merchant-request bound.  Keep
+# merchant verification separately capped; this counts candidate URLs handed
+# to supply_core conservatively, even when a fetch fails before HTTP completes.
+MAX_MERCHANT_DISCOVERY_CANDIDATES_PER_RUN = 100
 
 
 def _stl_write_batch_size() -> int:
@@ -185,7 +227,17 @@ def load_and_validate_source_report(
         save_count = int(entry.get("saveCount") or 0)
         if not pid:
             continue
-        sources.append({"pin_id": pid, "category": category, "save_count": save_count})
+        sources.append({
+            "pin_id": pid,
+            "category": category,
+            "save_count": save_count,
+            "seed_keyword": (
+                str(entry.get("seedKeyword") or entry.get("sourceKeyword") or "").strip()
+                or None
+            ),
+            "title": entry.get("sourcePinTitle"),
+            "image_url": entry.get("sourcePinImageUrl"),
+        })
         if category:
             category_counts[category] += 1
 
@@ -610,11 +662,21 @@ def _prepare_candidate(candidate: dict, source: dict, *, index: int, shop_detect
     }
     merchant_source = "network_json" if merchant else "domain_fallback"
     merchant = merchant or classification.get("source_platform") or classification.get("domain") or get_domain(url)
+    source_keyword = (
+        str(source.get("seed_keyword") or source.get("source_keyword") or "").strip()
+        or None
+    )
     return {
         "source_pin_id": str(source.get("pin_id") or ""),
         "source_pin_url": f"https://www.pinterest.com/pin/{source.get('pin_id')}/",
+        "source_pin_image_url": source.get("image_url"),
+        "source_pin_title": source.get("title"),
         "source_category": source.get("category"),
         "source_pin_save_count": int(source.get("save_count") or 0),
+        # Real persisted Pin provenance. Never derive this from a card title,
+        # category, or merchant response: a missing source keyword must remain
+        # missing so supply_core can fail closed before any merchant request.
+        "seed_keyword": source_keyword,
         "product_title": title or None,
         "merchant": merchant or None,
         "merchant_source": merchant_source,
@@ -663,6 +725,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     network_before = len(state.get("network") or [])
     responses_before = int(state.get("productJsonResponses") or 0)
 
+    state["_pinStage"] = "navigation"
     try:
         await page.goto(source_url, wait_until="domcontentloaded",
                         timeout=_stl_goto_timeout_ms())
@@ -675,41 +738,69 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     page_url = page.url.lower()
     if "/login" in page_url or "/signup" in page_url:
         return {"source": source, "issue": "login_wall", "candidates": [], "elapsedSec": round(time.monotonic()-started, 2)}
+    state["_pinStage"] = "post_navigation"
     await asyncio.sleep(2.2)
+    state["_pinStage"] = "body_probe"
     try:
-        body_text = ((await page.locator("body").inner_text()) or "")[:10_000].lower()
+        body_text = ((await asyncio.wait_for(
+            page.locator("body").inner_text(),
+            timeout=STL_DOM_PROBE_TIMEOUT_SECONDS,
+        )) or "")[:10_000].lower()
         if "captcha" in body_text or "verify you are human" in body_text:
             return {"source": source, "issue": "captcha", "candidates": [], "elapsedSec": round(time.monotonic()-started, 2)}
     except Exception:
         body_text = ""
+    state["_pinStage"] = "dismiss_overlays"
     try:
-        await page.evaluate("""() => { document.querySelectorAll('[data-test-id*=Signup i],[class*=SignupModal],[aria-modal=true]').forEach(e=>e.remove()); document.body.style.overflow=''; }""")
+        await asyncio.wait_for(
+            page.evaluate("""() => { document.querySelectorAll('[data-test-id*=Signup i],[class*=SignupModal],[aria-modal=true]').forEach(e=>e.remove()); document.body.style.overflow=''; }"""),
+            timeout=STL_DOM_PROBE_TIMEOUT_SECONDS,
+        )
     except Exception:
         pass
+    state["_pinStage"] = "scroll"
     for _ in range(5):
-        await page.mouse.wheel(0, 2200)
+        try:
+            await asyncio.wait_for(
+                page.mouse.wheel(0, 2200), timeout=STL_DOM_PROBE_TIMEOUT_SECONDS
+            )
+        except Exception:
+            # Scrolling is an optional discovery aid. A stuck wheel command must
+            # not masquerade as exhaustion of the whole-Pin wall clock.
+            break
         await asyncio.sleep(0.8)
 
+    state["_pinStage"] = "page_content"
     try:
-        html = await page.content()
+        html = await asyncio.wait_for(
+            page.content(), timeout=STL_DOM_PROBE_TIMEOUT_SECONDS
+        )
     except Exception:
         html = ""
     shop_detected = bool(STL_TEXT.search(html))
 
     tab_count = 0
+    state["_pinStage"] = "tab_discovery"
     try:
-        tabs = await page.query_selector_all('[data-test-id="shopping-tab"], [data-test-id*="shopping-tab" i], [role="tab"]')
+        tabs = await asyncio.wait_for(
+            page.query_selector_all('[data-test-id="shopping-tab"], [data-test-id*="shopping-tab" i], [role="tab"]'),
+            timeout=STL_DOM_PROBE_TIMEOUT_SECONDS,
+        )
         tab_count = len(tabs)
-        for tab in tabs[:10]:
+        for tab in tabs[:STL_MAX_TABS_PER_PIN]:
+            state["_pinStage"] = "tab_label"
             try:
-                label = ((await tab.inner_text()) or "").strip()[:80]
+                label = ((await asyncio.wait_for(
+                    tab.inner_text(), timeout=STL_TAB_LABEL_TIMEOUT_SECONDS
+                )) or "").strip()[:80]
             except Exception:
                 label = ""
             state["chip_label"] = label or None
             if label:
                 chip_labels.append(label)
+            state["_pinStage"] = "tab_click"
             try:
-                await tab.click(timeout=2500)
+                await tab.click(timeout=STL_TAB_CLICK_TIMEOUT_MS)
                 shop_tab_clicked = True
                 await asyncio.sleep(1.0)
             except Exception:
@@ -717,10 +808,12 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     except Exception:
         pass
     state["chip_label"] = None
+    state["_pinStage"] = "post_tabs"
     await asyncio.sleep(1.0)
 
+    state["_pinStage"] = "dom_cards"
     try:
-        dom_cards = await page.evaluate(r"""() => {
+        dom_cards = await asyncio.wait_for(page.evaluate(r"""() => {
           const nodes = Array.from(document.querySelectorAll(
             '[data-test-id*="product" i], [data-test-id*="shop" i], [data-test-id*="lockup" i]'
           )).slice(0, 100);
@@ -732,7 +825,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
             return {index, href: a ? a.href : null, title: text || null,
                     image_url: img ? img.src : null, price};
           });
-        }""")
+        }"""), timeout=STL_DOM_EVAL_TIMEOUT_SECONDS)
     except Exception as exc:
         # Never swallow this: an evaluate() failure means we did NOT look for
         # cards, which is not the same as "there are no cards".
@@ -756,6 +849,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
                 "chip_label": None,
             })
 
+    state["_pinStage"] = "prepare_candidates"
     prepared = [
         _prepare_candidate(c, source, index=i, shop_detected=shop_detected or bool(state.get("network")), shop_tab_clicked=shop_tab_clicked)
         for i, c in enumerate(raw_candidates)
@@ -778,6 +872,7 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
     if render_failure and not issue:
         issue = "render_failure_or_unauthenticated"
 
+    state["_pinStage"] = "complete"
     return {
         "source": source,
         "issue": issue,
@@ -794,6 +889,28 @@ async def _extract_source_pin(page, source: dict, state: dict) -> dict:
         "candidates": prepared,
         "elapsedSec": round(time.monotonic() - started, 2),
     }
+
+
+async def _extract_source_pin_bounded(
+    page, source: dict, state: dict, *, timeout_seconds: int | None = None
+) -> dict:
+    """Run one Pin with a hard wall clock; timeout is an explicit failed Pin."""
+    budget = timeout_seconds or _stl_pin_timeout_seconds()
+    started = time.monotonic()
+    try:
+        return await asyncio.wait_for(
+            _extract_source_pin(page, source, state), timeout=budget
+        )
+    except asyncio.TimeoutError:
+        return {
+            "source": source,
+            "issue": f"pin_timeout:{budget}s",
+            "candidates": [],
+            "pageSkeleton": False,
+            "renderFailure": True,
+            "timeoutStage": str(state.get("_pinStage") or "unknown"),
+            "elapsedSec": round(time.monotonic() - started, 2),
+        }
 
 
 def _previous_spike_delta() -> dict:
@@ -1084,23 +1201,59 @@ def _evidence_rejection_reason(candidate: dict) -> str | None:
     return None
 
 
+def _unique_urls(rows: list[dict]) -> int:
+    """How many DISTINCT product URLs a rejection bucket represents.
+
+    The same URL legitimately arrives many times in one run: it can appear in
+    several source pins, and the evidence gate deliberately runs BEFORE dedup
+    (see the comment at the accept loop) so that an evidence-less copy cannot
+    claim the dedup key and shadow a copy that does carry a title or image.
+
+    That means `len(rejected)` counts WORK, not DISTINCT LOSS, and the two
+    differ a lot: measured 2026-08-18, 968 rejection records covered only 544
+    distinct URLs, and the 94 `no_product_evidence` records were 3 URLs — one
+    Etsy listing repeated ~30 times. Reading the record count as "94 products
+    we failed to capture" overstates the loss thirtyfold. Both numbers are
+    reported so neither reading is available by accident.
+    """
+    return len({r.get("product_url") for r in rows if r.get("product_url")})
+
+
 def _rejected_candidates_report(rejected: list[dict]) -> dict:
     """Explicit accounting for everything this run refused to write.
 
     A discard that does not appear in the report is a silent data loss, so
     every rejection is counted here by reason, with samples that keep the URL
     intact so the decision can be audited (or reversed) from the report alone.
+
+    Counted twice on purpose: `total`/`byReason` are records (processing work),
+    `totalUnique`/`byReasonUnique` are distinct URLs (actual loss). See
+    _unique_urls for why they diverge.
     """
     no_evidence = [r for r in rejected if r.get("rejection_reason") == NO_PRODUCT_EVIDENCE]
     # If a gate-rejected candidate ever carries a price, that is real evidence
     # we threw away and the rule needs revisiting. Measured 0/35 in production
     # today; surfaced so it cannot change unnoticed.
     priced = [r for r in no_evidence if r.get("price")]
+    by_reason_unique = {}
+    for reason in {r.get("rejection_reason") for r in rejected}:
+        by_reason_unique[reason] = _unique_urls(
+            [r for r in rejected if r.get("rejection_reason") == reason]
+        )
+
     return {
         "total": len(rejected),
+        "totalUnique": _unique_urls(rejected),
         "byReason": dict(Counter(r.get("rejection_reason") for r in rejected)),
+        "byReasonUnique": by_reason_unique,
+        "countsNote": (
+            "total/byReason count RECORDS (a URL repeats across source pins and "
+            "across the pre-dedup evidence gate). totalUnique/byReasonUnique "
+            "count DISTINCT URLs — use these to judge how much was actually lost."
+        ),
         "noProductEvidence": {
             "count": len(no_evidence),
+            "uniqueUrls": _unique_urls(no_evidence),
             "rule": (
                 "A candidate must carry a real product_title OR an image_url. "
                 "A bare external URL is a link, not a product. merchant/domain "
@@ -1202,12 +1355,25 @@ def _build_report(
     raw = [c for pin in per_pin for c in pin.get("candidates", [])]
     rejected: list[dict] = []
     accepted_raw: list[dict] = []
+    # One resolver per report, so its cache spans every candidate in the run: a
+    # dead shortener repeated across thirty source pins costs one HEAD, not
+    # thirty. Only SHORTLINK_DOMAINS hosts are ever fetched; everything else
+    # short-circuits without touching the network.
+    shortlink_resolver = ShortlinkResolver()
     for candidate in raw:
         url = candidate.get("product_url") or ""
         if not url:
             rejected.append({**candidate, "rejection_reason": "missing_product_url"})
             continue
-        ok, reason = accept_link(url)
+        ok, reason = accept_link(url, resolver=shortlink_resolver)
+        if ok:
+            # Persist where the shortener actually pointed. Storing amzn.to/xxx
+            # would save an opaque, expiring redirect instead of the product
+            # page it just proved. Served from the resolver cache — no re-fetch.
+            resolved = resolve_link(url, shortlink_resolver)
+            if resolved != url:
+                candidate = {**candidate, "product_url": resolved,
+                             "shortlink_original_url": url}
         if not ok:
             rejected.append({**candidate, "rejection_reason": reason})
             continue
@@ -1275,7 +1441,18 @@ def _build_report(
         "issues": dict(issues),
         "captchaCount": issues.get("captcha", 0),
         "loginWallCount": issues.get("login_wall", 0),
-        "timeoutCount": sum(v for k, v in issues.items() if str(k).startswith("goto_timeout")),
+        "timeoutCount": sum(
+            v for k, v in issues.items()
+            if str(k).startswith(("goto_timeout", "pin_timeout:"))
+        ),
+        "pinTimeoutCount": sum(
+            v for k, v in issues.items() if str(k).startswith("pin_timeout:")
+        ),
+        "pinTimeoutStages": dict(Counter(
+            str(pin.get("timeoutStage") or "unknown")
+            for pin in per_pin
+            if str(pin.get("issue") or "").startswith("pin_timeout:")
+        )),
         "blockCount": sum(v for k, v in issues.items() if "block" in str(k)),
         # Write-plan projections (always present; projectedUpdateCount must be 0)
         "projectedInsertCount": preflight["projectedInsertCount"],
@@ -1350,6 +1527,12 @@ def _build_report(
             "sourcePinId": str(pin.get("source", {}).get("pin_id") or ""),
             "category": pin.get("source", {}).get("category"),
             "saveCount": pin.get("source", {}).get("save_count"),
+            "seedKeyword": (
+                pin.get("source", {}).get("seed_keyword")
+                or pin.get("source", {}).get("source_keyword")
+            ),
+            "sourcePinTitle": pin.get("source", {}).get("title"),
+            "sourcePinImageUrl": pin.get("source", {}).get("image_url"),
             "shopModuleDetected": pin.get("shopModuleDetected", False),
             "shopTabClicked": pin.get("shopTabClicked", False),
             "chipLabels": pin.get("chipLabels", []),
@@ -1361,6 +1544,7 @@ def _build_report(
             "domEvalError": pin.get("domEvalError"),
             "pageSkeleton": pin.get("pageSkeleton", False),
             "renderFailure": pin.get("renderFailure", False),
+            "timeoutStage": pin.get("timeoutStage"),
             "elapsedSec": pin.get("elapsedSec"),
         } for pin in per_pin],
         "writes": {"pin_products": 0},
@@ -1372,185 +1556,109 @@ def _build_report(
     return report, unique
 
 
-def _apply_rows(rows: list[dict]) -> int:
-    """INSERT-only write to pin_products. Never updates existing rows.
+def _stl_candidates(rows: list[dict]) -> list[dict]:
+    """Convert Pinterest cards to URL-only candidates for ``supply_core``.
 
-    WRITE SEMANTICS: PLAIN INSERT (no on_conflict, no resolution=ignore-duplicates).
-
-    WHY NOT ON CONFLICT (fixed 2026-08-06 — this call silently destroyed every
-    scraped product for weeks):
-        v47 replaced the TOTAL unique index on normalized_product_url_hash with a
-        PARTIAL one:
-            idx_pin_products_active_normalized_url_hash
-              UNIQUE (normalized_product_url_hash)
-              WHERE lifecycle_status IS DISTINCT FROM 'retired'
-                AND normalized_product_url_hash IS NOT NULL
-        Postgres cannot infer a PARTIAL unique index from a bare column list, so
-        `on_conflict=normalized_product_url_hash` has no matching arbiter and the
-        whole batch dies with
-            42P10: there is no unique or exclusion constraint matching the
-                   ON CONFLICT specification
-        A real 2026-08-06 VPS run scraped 28/50 pins successfully and then lost
-        100% of it at this line. Same for `parent_pin_id,source_url` — that index
-        (idx_pin_products_active_parent_source_url) is partial too. There is NO
-        plain unique on any business key of this table, so no conflict target
-        can be named without a schema change.
-
-    Precedent followed: backend/tools/t2_harvest.py "WRITE SEMANTICS" (lines
-    46-50) and the v47 COMMENT ON INDEX writer warning both mandate exactly this
-    — plain INSERT, and let a genuine collision surface as a loud 23505 rather
-    than swallow rows.
-
-    Dedup is _preflight_existing() (lifecycle-aware; retired rows are not treated
-    as existing). A late collision — a row that landed between preflight and this
-    write — is a genuine 23505 and is retried per-row so one duplicate cannot
-    discard the other N-1 good rows. Rows that still fail are reported, never
-    silently dropped.
-
-    Requires v28 columns. Call _check_v28_schema() before this in apply path.
+    Card title, merchant, price and image are deliberately discarded. The source
+    Pin fields below are provenance only; ``supply_core.discover`` must revisit
+    the merchant page for every product field or leave that field NULL.
     """
-    from db import insert_rows  # type: ignore
-
-    payload = []
-    for c in rows:
-        # product_name is EVIDENCE, not a label we are obliged to fill.
-        # It used to fall back to merchant -> domain -> "Pinterest product",
-        # which is how 35 production rows ended up named "etsy" / "shein" /
-        # "quay" with no image and no price. merchant and domain already have
-        # their own columns; copying them into product_name only disguised a
-        # missing title as a product. v47 dropped the NOT NULL constraint on
-        # this column (verified live: 68 rows currently hold NULL) exactly so
-        # an unknown name can be recorded as unknown.
-        # The evidence gate guarantees every row here has a title or an image,
-        # so a NULL name always means "image-backed product, name unknown".
-        title = (c.get("product_title") or "").strip()
-        payload.append({
-            "parent_pin_id":            c.get("source_pin_id"),
-            "product_name":             title[:500] if title else None,
-            "source_url":               c.get("product_url"),
-            "canonical_product_url":    c.get("normalized_product_url"),
-            "product_url_hash":         c.get("normalized_product_url_hash"),
-            "domain":                   c.get("domain"),
-            "merchant":                 c.get("merchant"),
-            "image_url":                c.get("image_url"),
-            "price":                    c.get("price"),
-            # NULL when price/currency evidence is absent — never default to USD.
-            "currency":                 c.get("currency") or None,
-            "source_pin_save_count":    c.get("source_pin_save_count", 0),
-            "source_platform":          c.get("platform"),
-            "product_type":             c.get("product_type"),
-            "digital_format":           c.get("digital_format"),
-            "inspiration_only":         True,
-            "is_user_ownable":          False,
-            "discovery_method":         DISCOVERY_METHOD,
-            "discovery_method_detail":  DISCOVERY_DETAIL,
-            "discovery_depth":          0,
-            "discovery_path":           c.get("discovery_path"),
-            "source_pin_id":            c.get("source_pin_id"),
-            "source_pin_url":           c.get("source_pin_url"),
-            # Persisted so Product Ideas category filters work correctly.
-            # womens-fashion must not collapse into generic fashion.
-            "source_category":          c.get("source_category"),
-            "seed_keyword":             c.get("seed_keyword"),
-            "product_card_title":       c.get("product_title"),
-            "product_card_merchant":    c.get("merchant"),
-            "product_card_price":       c.get("price"),
-            "product_card_image_url":   c.get("image_url"),
-            "product_card_position":    c.get("product_card_index"),
-            "extraction_method":        c.get("extraction_method"),
-            "shop_module_detected":     c.get("shop_module_detected"),
-            "shop_tab_clicked":         c.get("shop_tab_clicked"),
-            "product_source_domain":    c.get("domain"),
-            "normalized_product_url_hash": c.get("normalized_product_url_hash"),
+    candidates: list[dict] = []
+    for row in rows:
+        url = (row.get("product_url") or "").strip()
+        if not url:
+            continue
+        pin = {
+            "pin_id": row.get("source_pin_id"),
+            "save_count": int(row.get("source_pin_save_count") or 0),
+            "category": row.get("source_category"),
+            "seed_keyword": row.get("seed_keyword"),
+            "source_keyword": row.get("seed_keyword"),
+            # This remains explicitly Pin evidence. The core uses it only to
+            # reject a merchant image that is actually the source Pin image.
+            "image_url": row.get("source_pin_image_url"),
+            "pinterest_url": row.get("source_pin_url"),
+            "title": row.get("source_pin_title"),
+        }
+        candidates.append({
+            "pin": pin,
+            "url": url,
+            "origin": "net_new",
+            "domain": row.get("domain") or get_domain(url),
         })
-    if not payload:
-        return 0
-    outcome = _insert_with_duplicate_fallback(insert_rows, payload)
+    return candidates
+
+
+def _apply_via_core(rows: list[dict]) -> dict:
+    """Run the sole Product-Supply write path and return an auditable outcome."""
+    if len(rows) > supply_core.MAX_BATCH:
+        raise ValueError(
+            f"Shop-the-Look batch {len(rows)} exceeds MAX_BATCH "
+            f"{supply_core.MAX_BATCH}"
+        )
+    candidates = _stl_candidates(rows)
+    if not candidates:
+        return {
+            "candidates": 0, "discovered": 0, "discoveryFailures": 0,
+            "attempted": 0, "inserted": 0, "duplicates": 0,
+            "failed": 0, "errors": [], "written": 0,
+        }
+
+    with httpx.Client(timeout=60) as db:
+        with httpx.Client(timeout=15) as web:
+            discovered, discovery_failures = supply_core.discover(
+                web, candidates, want=len(candidates)
+            )
+
+        outcome: dict[str, Any] = {
+            "candidates": len(candidates),
+            "discovered": len(discovered),
+            "discoveryFailures": len(discovery_failures),
+            "discoveryFailureSamples": discovery_failures[:5],
+            "attempted": len(discovered),
+            "inserted": 0,
+            "duplicates": 0,
+            "failed": 0,
+            "errors": [],
+            "written": 0,
+        }
+        ok, violations = supply_core.check_red_lines(discovered)
+        outcome["redLinesPassPreWrite"] = ok
+        if not ok:
+            outcome["violations"] = violations
+            outcome["failed"] = len(discovered)
+            outcome["errors"] = violations[:5]
+            return outcome
+        if not discovered:
+            return outcome
+
+        result = supply_core.apply_rows(db, discovered)
+        outcome.update(result)
+        written = int(result.get("written") or 0)
+        outcome["inserted"] = written
+        outcome["duplicates"] = int(result.get("duplicates") or 0)
+        outcome["failed"] = int(result.get("failed") or 0)
+        if result.get("insertError"):
+            outcome["errors"] = [str(result["insertError"])[:300]]
+        if result.get("rolledBack") and not result.get("rollbackComplete"):
+            raise RuntimeError(
+                "Product-Supply post-write verification failed and rollback "
+                "did not prove removal of the entire batch"
+            )
+        return outcome
+
+
+def _apply_rows(rows: list[dict]) -> int:
+    """Compatibility seam used by the incremental writer; always delegates core."""
+    outcome = _apply_via_core(rows)
     _LAST_WRITE_OUTCOME.clear()
     _LAST_WRITE_OUTCOME.update(outcome)
-    if outcome["failed"]:
-        # LOUD: a write we could not complete must never look like a quiet success.
-        print(
-            f"[product-supply-expand] WRITE FAILURES: {outcome['failed']} of "
-            f"{outcome['attempted']} rows did not land "
-            f"(duplicates={outcome['duplicates']}, errors={outcome['failed']}). "
-            f"firstError={outcome['errors'][0] if outcome['errors'] else ''}",
-            flush=True,
-        )
-    return outcome["inserted"]
+    return int(outcome.get("inserted") or 0)
 
 
 # Populated by _apply_rows so the caller can put honest write accounting into the
 # JSON report. Never swallow: every non-inserted row is counted here.
 _LAST_WRITE_OUTCOME: dict = {}
-
-# 23505 = unique_violation. The ONLY error we treat as a benign late collision.
-_PG_UNIQUE_VIOLATION = "23505"
-
-
-def _is_duplicate_error(exc: Exception) -> bool:
-    """True only for a genuine Postgres unique violation (23505).
-
-    Deliberately narrow: 42P10 (no matching ON CONFLICT arbiter), 23514 (CHECK),
-    permission and network errors are NOT duplicates and must stay loud.
-    """
-    return _PG_UNIQUE_VIOLATION in str(exc)
-
-
-def _insert_with_duplicate_fallback(insert_rows, payload: list[dict]) -> dict:
-    """Plain-INSERT the batch; on a genuine 23505 retry row-by-row.
-
-    A single duplicate in a 200-row batch would otherwise abort the whole
-    statement and discard 199 good rows — the data-loss shape we are fixing.
-    Row-by-row retry keeps the good rows and attributes each failure honestly.
-
-    Returns {attempted, inserted, duplicates, failed, errors}. `failed` counts
-    rows lost to NON-duplicate errors; those also re-raise when nothing landed at
-    all, so a broken write can never masquerade as an empty harvest.
-    """
-    attempted = len(payload)
-    try:
-        result = insert_rows("pin_products", payload)
-        inserted = len(result) if result else attempted
-        return {"attempted": attempted, "inserted": inserted,
-                "duplicates": 0, "failed": 0, "errors": []}
-    except Exception as batch_exc:
-        if not _is_duplicate_error(batch_exc):
-            # Not a duplicate (e.g. 42P10, CHECK violation, auth, network).
-            # Fail closed and loud — never degrade to a silent partial write.
-            raise
-        print(
-            f"[product-supply-expand] batch insert hit a duplicate (23505); "
-            f"retrying {attempted} rows individually to preserve the non-duplicate rows",
-            flush=True,
-        )
-
-    inserted = 0
-    duplicates = 0
-    failed = 0
-    errors: list[str] = []
-    for row in payload:
-        try:
-            result = insert_rows("pin_products", [row])
-            inserted += len(result) if result else 1
-        except Exception as row_exc:
-            if _is_duplicate_error(row_exc):
-                duplicates += 1
-            else:
-                failed += 1
-                if len(errors) < 5:
-                    errors.append(str(row_exc)[:300])
-
-    if inserted == 0 and failed:
-        # Nothing landed and it was not merely duplicates → surface the real error.
-        raise RuntimeError(
-            f"insert pin_products failed for all {attempted} rows "
-            f"({failed} errors, {duplicates} duplicates); first error: "
-            f"{errors[0] if errors else 'unknown'}"
-        )
-    return {"attempted": attempted, "inserted": inserted,
-            "duplicates": duplicates, "failed": failed, "errors": errors}
-
 
 class _IncrementalWriter:
     """Flush scraped candidates to pin_products every N source pins.
@@ -1608,12 +1716,23 @@ class _IncrementalWriter:
             "duplicates": 0,
             "failed": 0,
             "errors": [],
+            "insertedIds": [],
+            # Merchant-page enrichment happens inside supply_core after the
+            # Pinterest-card filter.  Preserve that second funnel explicitly;
+            # otherwise a candidate that fails merchant proof is reported only
+            # as attempted=0/written=0 with no auditable reason.
+            "coreCandidates": 0,
+            "merchantDiscovered": 0,
+            "merchantDiscoveryFailures": 0,
+            "merchantDiscoveryFailureSamples": [],
+            "preWriteViolationSamples": [],
         }
+        self.batch_receipts: list[dict] = []
         self.failed_batches: list[dict] = []
         self.rejected_count = 0
-        # Candidates refused by the product-evidence gate (no title AND no
-        # image). Counted separately from accept_link rejections so an
-        # operator can tell "not a product page" from "not product evidence".
+        # Legacy compatibility counters. Pinterest-card title/image are not
+        # merchant evidence, so the automatic writer never rejects on them;
+        # supply_core fetches and proves the merchant PDP independently.
         self.evidence_rejected_count = 0
         self.evidence_rejected_with_price = 0
         self.dedup_skipped_count = 0
@@ -1625,6 +1744,18 @@ class _IncrementalWriter:
         # count only real write ATTEMPTS, which is a different question.
         self._flush_seq = 0
         self.empty_flushes = 0
+        # The user-approved per-run ceiling is 50 verified products. Operators
+        # may LOWER it for a canary through VIBEPIN_SUPPLY_WRITE_LIMIT, never
+        # raise it. The lower
+        # MAX_BATCH=20 remains the atomic INSERT/readback/rollback ceiling, so
+        # raising daily yield never turns one database transaction into 50 rows.
+        self.run_admission_cap = _supply_run_admission_cap()
+        self._admission_slots_remaining = self.run_admission_cap
+        self.run_cap_skipped_count = 0
+        self._merchant_discovery_slots_remaining = (
+            MAX_MERCHANT_DISCOVERY_CANDIDATES_PER_RUN
+        )
+        self.merchant_discovery_budget_skipped_count = 0
 
     # ── intake ────────────────────────────────────────────────────────────
     def add_pin(self, per_pin_result: dict) -> None:
@@ -1660,15 +1791,16 @@ class _IncrementalWriter:
         self._flush_seq += 1
         batch_no = self._flush_seq
 
-        evidence_rejected_before = self.evidence_rejected_count
         rows = self._filter_batch(pending)
-        # Per-flush delta, so the operator sees what THIS batch discarded
-        # rather than a running total that looks like it repeats.
-        no_evidence = self.evidence_rejected_count - evidence_rejected_before
-        evidence_note = (
-            f" noProductEvidence={no_evidence} (bare links: no title, no image)"
-            if no_evidence else ""
-        )
+        if len(rows) > self._admission_slots_remaining:
+            self.run_cap_skipped_count += len(rows) - self._admission_slots_remaining
+            rows = rows[:self._admission_slots_remaining]
+        if len(rows) > self._merchant_discovery_slots_remaining:
+            self.merchant_discovery_budget_skipped_count += (
+                len(rows) - self._merchant_discovery_slots_remaining
+            )
+            rows = rows[:self._merchant_discovery_slots_remaining]
+        evidence_note = ""
         if not rows:
             self.empty_flushes += 1
             print(
@@ -1680,47 +1812,112 @@ class _IncrementalWriter:
             )
             return
 
-        try:
-            _apply_rows(rows)
-        except Exception as exc:  # noqa: BLE001 — counted + reported, never swallowed
-            self.batches_failed += 1
-            attempted = len(rows)
-            self.totals["attempted"] += attempted
-            self.totals["failed"] += attempted
-            detail = f"batch {batch_no}: {type(exc).__name__}: {str(exc)[:300]}"
-            self._record_error(detail)
-            self.failed_batches.append({
-                "batch": batch_no,
-                "reason": reason,
-                "attemptedRows": attempted,
-                "error": detail,
-            })
-            print(
-                f"[product-supply-expand] WRITE BATCH {batch_no} FAILED ({reason}): "
-                f"{attempted} rows did not land — {detail}. Crawl continues; this "
-                f"failure IS counted in the report (cumulativeWritten="
-                f"{self.totals['inserted']}).",
-                flush=True,
-            )
-            return
+        inserted_before = self.totals["inserted"]
+        duplicates_before = self.totals["duplicates"]
+        failed_before = self.totals["failed"]
+        atomic_chunks = [
+            rows[i:i + supply_core.MAX_BATCH]
+            for i in range(0, len(rows), supply_core.MAX_BATCH)
+        ]
+        for atomic_no, chunk in enumerate(atomic_chunks, start=1):
+            try:
+                # Reserve before touching network/DB. Once an auditable outcome
+                # returns, unused slots are restored. If an exception leaves the
+                # landed count uncertain, the full atomic chunk stays consumed.
+                self._admission_slots_remaining -= len(chunk)
+                # Merchant verification attempts are real external work even
+                # when no row is discovered, so this independent budget is
+                # never restored after a failed/no-evidence candidate.
+                self._merchant_discovery_slots_remaining -= len(chunk)
+                _apply_rows(chunk)
+            except Exception as exc:  # noqa: BLE001 — counted + reported, never swallowed
+                self.batches_failed += 1
+                attempted = len(chunk)
+                self.totals["attempted"] += attempted
+                self.totals["failed"] += attempted
+                label = f"{batch_no}.{atomic_no}"
+                detail = f"batch {label}: {type(exc).__name__}: {str(exc)[:300]}"
+                self._record_error(detail)
+                self.failed_batches.append({
+                    "batch": batch_no,
+                    "atomicBatch": atomic_no,
+                    "reason": reason,
+                    "attemptedRows": attempted,
+                    "error": detail,
+                })
+                print(
+                    f"[product-supply-expand] WRITE BATCH {label} FAILED ({reason}): "
+                    f"{attempted} rows did not land — {detail}. Crawl continues; this "
+                    f"failure IS counted in the report (cumulativeWritten="
+                    f"{self.totals['inserted']}).",
+                    flush=True,
+                )
+                continue
 
-        # _apply_rows just repopulated _LAST_WRITE_OUTCOME. Snapshot it NOW —
-        # the next flush clears it. Accumulate, never assign.
-        outcome = dict(_LAST_WRITE_OUTCOME)
-        self.batches_written += 1
-        self.totals["attempted"] += int(outcome.get("attempted") or 0)
-        self.totals["inserted"] += int(outcome.get("inserted") or 0)
-        self.totals["duplicates"] += int(outcome.get("duplicates") or 0)
-        self.totals["failed"] += int(outcome.get("failed") or 0)
-        for err in (outcome.get("errors") or []):
-            self._record_error(f"batch {batch_no}: {err}")
+            # _apply_rows repopulates _LAST_WRITE_OUTCOME. Snapshot it before
+            # the next atomic chunk clears it, then accumulate every field.
+            outcome = dict(_LAST_WRITE_OUTCOME)
+            self.batches_written += 1
+            self.totals["coreCandidates"] += int(outcome.get("candidates") or 0)
+            self.totals["merchantDiscovered"] += int(outcome.get("discovered") or 0)
+            self.totals["merchantDiscoveryFailures"] += int(
+                outcome.get("discoveryFailures") or 0
+            )
+            for sample in outcome.get("discoveryFailureSamples") or []:
+                if len(self.totals["merchantDiscoveryFailureSamples"]) < self.MAX_ERROR_SAMPLES:
+                    self.totals["merchantDiscoveryFailureSamples"].append(sample)
+            for sample in (
+                outcome.get("violations")
+                or outcome.get("preWriteViolations")
+                or []
+            ):
+                if len(self.totals["preWriteViolationSamples"]) < self.MAX_ERROR_SAMPLES:
+                    self.totals["preWriteViolationSamples"].append(sample)
+            self.totals["attempted"] += int(outcome.get("attempted") or 0)
+            self.totals["inserted"] += int(outcome.get("inserted") or 0)
+            self.totals["duplicates"] += int(outcome.get("duplicates") or 0)
+            self.totals["failed"] += int(outcome.get("failed") or 0)
+            inserted = int(outcome.get("inserted") or 0)
+            # Only rows that remain written consume the 50-row run ceiling.
+            self._admission_slots_remaining += max(0, len(chunk) - inserted)
+            inserted_ids = [str(i) for i in (outcome.get("insertedIds") or []) if i]
+            self.totals["insertedIds"].extend(inserted_ids)
+            if outcome.get("candidates") or outcome.get("attempted"):
+                self.batch_receipts.append({
+                    "batch": batch_no,
+                    "atomicBatch": atomic_no,
+                    "coreCandidates": int(outcome.get("candidates") or 0),
+                    "merchantDiscovered": int(outcome.get("discovered") or 0),
+                    "merchantDiscoveryFailures": int(
+                        outcome.get("discoveryFailures") or 0
+                    ),
+                    "merchantDiscoveryFailureSamples": (
+                        outcome.get("discoveryFailureSamples") or []
+                    )[:5],
+                    "preWriteViolationSamples": (
+                        outcome.get("violations")
+                        or outcome.get("preWriteViolations")
+                        or []
+                    )[:5],
+                    "insertedIds": inserted_ids,
+                    "createdAtWindow": outcome.get("createdAtWindow"),
+                    "rollback": outcome.get("rollback"),
+                    "postWriteVerification": outcome.get("postWriteVerification"),
+                    "rolledBack": bool(outcome.get("rolledBack")),
+                    "rollbackComplete": outcome.get("rollbackComplete"),
+                    "rollbackRemovedIds": outcome.get("rollbackRemovedIds"),
+                    "rollbackRemainingIds": outcome.get("rollbackRemainingIds"),
+                })
+            for err in (outcome.get("errors") or []):
+                self._record_error(f"batch {batch_no}.{atomic_no}: {err}")
 
         print(
             f"[product-supply-expand] write batch {batch_no} ({reason}): "
             f"pins={pins_in_batch} batchCandidates={len(pending)} newRows={len(rows)} "
-            f"written={int(outcome.get('inserted') or 0)} "
-            f"duplicates={int(outcome.get('duplicates') or 0)} "
-            f"failed={int(outcome.get('failed') or 0)} "
+            f"atomicBatches={len(atomic_chunks)} "
+            f"written={self.totals['inserted'] - inserted_before} "
+            f"duplicates={self.totals['duplicates'] - duplicates_before} "
+            f"failed={self.totals['failed'] - failed_before} "
             f"cumulativeWritten={self.totals['inserted']}"
             f"{evidence_note}",
             flush=True,
@@ -1732,10 +1929,11 @@ class _IncrementalWriter:
             self.totals["errors"].append(message)
 
     def _filter_batch(self, pending: list[dict]) -> list[dict]:
-        """accept_link → in-batch/cross-batch dedup → DB preflight.
+        """PDP URL gate → in/cross-batch dedup → DB preflight.
 
-        Mirrors _build_report + _preflight_existing so the incremental path and
-        the historical single write agree on what is writable.
+        This stage decides only whether a URL deserves one bounded merchant
+        fetch.  Merchant evidence and every write red line remain solely in
+        supply_core; Pinterest card fields never make a row writable.
         """
         accepted: list[dict] = []
         for candidate in pending:
@@ -1747,14 +1945,10 @@ class _IncrementalWriter:
             if not ok:
                 self.rejected_count += 1
                 continue
-            # Evidence gate — same predicate as _build_report, applied BEFORE
-            # dedup so an evidence-less candidate cannot burn the _seen_keys
-            # entry that a later, better candidate for the same URL needs.
-            if _evidence_rejection_reason(candidate):
-                self.evidence_rejected_count += 1
-                if candidate.get("price"):
-                    self.evidence_rejected_with_price += 1
-                continue
+            # Card title/image/price are deliberately discarded by
+            # _stl_candidates(). A valid PDP URL must reach the bounded shared
+            # core so the merchant page can prove a real non-Pinterest image,
+            # or fail closed there with an auditable discovery reason.
             accepted.append(candidate)
 
         fresh: list[dict] = []
@@ -1784,6 +1978,17 @@ class _IncrementalWriter:
             "duplicates": self.totals["duplicates"],
             "failed": self.totals["failed"],
             "errors": list(self.totals["errors"]),
+            "insertedIds": list(self.totals["insertedIds"]),
+            "batchReceipts": list(self.batch_receipts),
+            "coreCandidates": self.totals["coreCandidates"],
+            "merchantDiscovered": self.totals["merchantDiscovered"],
+            "merchantDiscoveryFailures": self.totals["merchantDiscoveryFailures"],
+            "merchantDiscoveryFailureSamples": list(
+                self.totals["merchantDiscoveryFailureSamples"]
+            ),
+            "preWriteViolationSamples": list(
+                self.totals["preWriteViolationSamples"]
+            ),
         }
 
     def batching_report(self) -> dict:
@@ -1795,20 +2000,31 @@ class _IncrementalWriter:
             "batchesAttempted": self.batches_written + self.batches_failed,
             "batchesWritten": self.batches_written,
             "batchesFailed": self.batches_failed,
-            # Flushes where nothing survived accept_link/dedup/preflight, so no
-            # write was attempted. Counted separately so `flushes` reconciles:
-            # flushes == batchesAttempted + batchesWithNothingNewToWrite.
+            # Flushes where nothing survived accept_link/dedup/preflight.
+            # One source flush may produce multiple atomic write batches.
             "batchesWithNothingNewToWrite": self.empty_flushes,
             "pinsFlushed": self.pins_flushed,
             "rowsInserted": self.totals["inserted"],
             "rowsRejectedByAcceptLink": self.rejected_count,
-            # Bare external links (no title AND no image). These are NOT
-            # products and are never written; the count is surfaced so the
-            # discard is visible in the report, not silent.
+            # Deprecated compatibility fields. Merchant proof failures now
+            # live in writeOutcome.merchantDiscovery* and batch receipts.
             "rowsRejectedNoProductEvidence": self.evidence_rejected_count,
             "rowsRejectedNoProductEvidenceWithPrice": self.evidence_rejected_with_price,
             "rowsSkippedCrossBatchDuplicate": self.dedup_skipped_count,
             "rowsSkippedAlreadyInDb": self.preflight_skipped_count,
+            "rowsSkippedRunAdmissionCap": self.run_cap_skipped_count,
+            "merchantDiscoveryCandidateCap": (
+                MAX_MERCHANT_DISCOVERY_CANDIDATES_PER_RUN
+            ),
+            "merchantDiscoverySlotsRemaining": (
+                self._merchant_discovery_slots_remaining
+            ),
+            "rowsSkippedMerchantDiscoveryBudget": (
+                self.merchant_discovery_budget_skipped_count
+            ),
+            "runAdmissionCap": self.run_admission_cap,
+            "atomicWriteBatchCap": supply_core.MAX_BATCH,
+            "runAdmissionSlotsRemaining": self._admission_slots_remaining,
             "failedBatches": list(self.failed_batches),
             "note": (
                 "Rows are written every batchSizePins source pins, so a run "
@@ -1816,6 +2032,25 @@ class _IncrementalWriter:
                 "cumulative across batches."
             ),
         }
+
+
+def _supply_run_admission_cap() -> int:
+    """Return the configured per-run write cap, fail-closed at the approved 50."""
+    raw = os.environ.get(
+        "VIBEPIN_SUPPLY_WRITE_LIMIT", str(supply_core.MAX_RUN_ADMISSIONS)
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"VIBEPIN_SUPPLY_WRITE_LIMIT must be an integer, got {raw!r}"
+        ) from exc
+    if value <= 0 or value > supply_core.MAX_RUN_ADMISSIONS:
+        raise RuntimeError(
+            "VIBEPIN_SUPPLY_WRITE_LIMIT must be between 1 and "
+            f"{supply_core.MAX_RUN_ADMISSIONS}, got {value}"
+        )
+    return value
 
 
 # Residential-proxy support for the Shop-the-Look Playwright navigation. Reuses the
@@ -2026,6 +2261,12 @@ async def run_shop_the_look_expand(
     validated (engine, mode, count, category distribution) before any crawling
     begins. Fails closed if validation fails.
     """
+    if apply:
+        require_expected_project_ref(
+            os.environ.get(EXPECTED_PROJECT_REF_ENV),
+            supabase_url=supply_core.SUPABASE_URL,
+        )
+
     from playwright.async_api import async_playwright  # type: ignore
 
     mix = dict(category_mix or DEFAULT_CATEGORY_MIX)
@@ -2184,7 +2425,12 @@ async def run_shop_the_look_expand(
                     samples.append(f"{type(exc).__name__}:{str(exc)[:120]}")
                 return
 
-        page.on("response", lambda response: asyncio.create_task(on_response(response)))
+        def attach_response_listener(target_page) -> None:
+            target_page.on(
+                "response", lambda response: asyncio.create_task(on_response(response))
+            )
+
+        attach_response_listener(page)
         auth_check: dict = {"authValid": None, "signal": "not_checked"}
         try:
             await page.goto("https://www.pinterest.com", wait_until="domcontentloaded", timeout=30_000)
@@ -2215,7 +2461,7 @@ async def run_shop_the_look_expand(
             session_health["issue"] = session.get("issue") or "unauthenticated"
 
         for index, source in enumerate(sources, 1):
-            result = await _extract_source_pin(page, source, state)
+            result = await _extract_source_pin_bounded(page, source, state)
             per_pin.append(result)
             print(
                 f"[product-supply-expand] {index}/{len(sources)} pin={source.get('pin_id')} "
@@ -2227,6 +2473,17 @@ async def run_shop_the_look_expand(
                 f"issue={result.get('issue')}",
                 flush=True,
             )
+            if str(result.get("issue") or "").startswith("pin_timeout:"):
+                # A timed-out Playwright page may retain a stuck renderer or
+                # pending protocol command. Reusing it can turn one bad Pin into
+                # 99 false failures, so replace only the page and reattach the
+                # response listener; the authenticated browser context remains.
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                page = await context.new_page()
+                attach_response_listener(page)
             # Write INSIDE the loop (apply mode only). A tree-kill at pin 45/50
             # must not discard the 44 pins already harvested — which is exactly
             # what happened on 2026-08-06 when the only write lived below

@@ -1,0 +1,18 @@
+{
+  "audited_at": "2026-08-28T00:16:49.781609+00:00",
+  "catalogs_checked": [
+    "pg_class",
+    "pg_proc",
+    "pg_trigger",
+    "pg_policies"
+  ],
+  "conclusion": "No matching v63 Product Opportunity relation, function, trigger, policy or index exists in public.",
+  "http_status": 201,
+  "matching_object_count": 0,
+  "matching_objects": [],
+  "method": "Supabase Management API read-only SELECT over PostgreSQL catalogs",
+  "mutation": false,
+  "schemas_checked": [
+    "public"
+  ]
+}

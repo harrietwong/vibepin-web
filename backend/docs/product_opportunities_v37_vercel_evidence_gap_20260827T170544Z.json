@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-08-27T17:05:44Z",
+  "auditMode": "read_only",
+  "candidateFunctionalTip": "f93a29a993594605bffed9115119e8210a6bfcf1",
+  "candidateDocsTipBeforeThisReport": "1fe21f65",
+  "productionRemoteBase": "b22930ebe73847cf35bc44be789414902ae6b599",
+  "localRepositoryEvidence": {
+    "linkedProjectMetadataPresent": false,
+    "expectedRootDirectory": "web",
+    "candidateVercelConfig": "web/vercel.json",
+    "installCommand": "npm ci",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next",
+    "fullBackendTests": "895 passed, 2 skipped",
+    "productSupplyFocusedTests": "264 passed, 35 subtests",
+    "releaseManifestContract": "23 passed"
+  },
+  "platformEvidenceAttempts": {
+    "chromeConnected": true,
+    "signedInProjectTabFound": true,
+    "projectTabTitle": "web – Build and Deployment – Vercel",
+    "projectTabUrl": "https://vercel.com/harriets-projects-86e9e358/web/settings/build-and-deployment",
+    "existingTabClaimAttempts": 2,
+    "existingTabClaimResult": "timed out before page content could be read",
+    "freshSameProfileTabNavigation": "target title and URL reached after navigation wait timed out",
+    "freshTabDomReadResult": "timed out before authoritative setting values could be read"
+  },
+  "verified": false,
+  "verifiedFacts": [
+    "the connected Chrome profile still exposes a Vercel project named web",
+    "the exact Build and Deployment settings URL resolves with the expected page title"
+  ],
+  "factsNotProven": [
+    "Root Directory currently equals web",
+    "the checked-in web/vercel.json is the active platform configuration",
+    "an immutable deployment exists for candidate f93a29a993594605bffed9115119e8210a6bfcf1",
+    "that candidate deployment build log used npm ci and the reviewed Next.js version",
+    "an immutable truth-safe rollback deployment exists"
+  ],
+  "hardStop": "Do not promote the Web release until every unproven platform fact is read back successfully.",
+  "loginAttempted": false,
+  "settingChanged": false,
+  "deploymentCreated": false,
+  "productionMutation": false
+}
