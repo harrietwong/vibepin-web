@@ -1764,6 +1764,7 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.accountRemoved": "账号已移除",
   "socialPanel.toast.accountRemoveFailed": "无法移除该账号,请重试。",
   "socialPanel.toast.scheduleCheckFailed": "无法确认该账号还有哪些已排程的内容,因此没有移除。请重试。",
+  "socialPanel.toast.removeUnavailable": "暂时无法安全移除该账号,因此未做任何更改。请几分钟后重试。",
   "socialPanel.toast.accountDisconnected": "账号已断开连接",
   "socialPanel.toast.accountDisconnectFailed": "无法断开该账号的连接,请重试。",
   "socialPanel.toast.pinterestDisconnected": "Pinterest 已断开连接",

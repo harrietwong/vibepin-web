@@ -28,6 +28,7 @@ import {
 import {
   blockedScheduleDestinations,
   requestedSocialDestinations,
+  requiredScheduleConnectionIds,
 } from "../src/app/api/pin-drafts/promote";
 
 let pass = 0;
@@ -318,6 +319,75 @@ check("no platform is schedule-blocked outside schedule mode",
 const igOff = rowState("instagram", false, true);
 check("a DISCONNECTED Instagram is not mislabelled as schedule-blocked",
   !igOff.blockedForSchedule && !igOff.readsAsConnected);
+
+// ── which accounts a schedule will actually publish through ─────────────────
+// The remove path refuses to delete an account with live schedules. This is the
+// other half: the route refuses to WRITE a schedule aimed at an account that is
+// gone. Both are needed — with only the first, a tab open since before the
+// removal persists a fresh schedule naming the row that just went away.
+//
+// The 口径 has to match resolveScheduledDestinations, or the route validates a
+// different account than the due-time worker will publish through.
+section("requiredScheduleConnectionIds names exactly what will be published through");
+
+check("stored destinations name their accounts",
+  JSON.stringify(requiredScheduleConnectionIds({
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "c-1" },
+      { provider: "facebook", socialConnectionId: "c-2" },
+    ],
+  })) === JSON.stringify(["c-1", "c-2"]));
+
+check("unusable entries are ignored — the worker would not publish them either",
+  JSON.stringify(requiredScheduleConnectionIds({
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "c-1" },
+      { provider: "nonsense", socialConnectionId: "c-x" },  // not a provider
+      { provider: "facebook", socialConnectionId: "   " },  // no account
+    ],
+  })) === JSON.stringify(["c-1"]));
+
+check("duplicates collapse (two accounts on one platform are two ids, one id twice is one)",
+  JSON.stringify(requiredScheduleConnectionIds({
+    scheduledDestinations: [
+      { provider: "pinterest", socialConnectionId: "c-1" },
+      { provider: "pinterest", socialConnectionId: "c-1" },
+    ],
+  })) === JSON.stringify(["c-1"]));
+
+// Legacy: only when nothing usable is stored, because that is exactly when
+// resolveScheduledDestinations derives a Pinterest-only intent from it.
+check("legacy targetConnectionId counts when there are no stored destinations",
+  JSON.stringify(requiredScheduleConnectionIds({ targetConnectionId: "old-1" })) === JSON.stringify(["old-1"]));
+
+check("legacy targetConnectionId is IGNORED once real destinations exist",
+  JSON.stringify(requiredScheduleConnectionIds({
+    targetConnectionId: "old-1",
+    scheduledDestinations: [{ provider: "facebook", socialConnectionId: "c-2" }],
+  })) === JSON.stringify(["c-2"]),
+  "the derivation only happens when the stored list is empty — validating old-1 here would refuse a schedule that never touches it");
+
+check("a payload with no destination intent needs nothing validated",
+  requiredScheduleConnectionIds({}).length === 0);
+
+// The route must run the check only for a payload that is actually being
+// SCHEDULED — publish-now has no persistence requirement, and an unscheduled
+// draft may name anything while the merchant is still editing it.
+section("the PUT route wires the destination-exists gate correctly");
+{
+  const route = readFileSync("src/app/api/pin-drafts/route.ts", "utf8");
+  check("route calls requiredScheduleConnectionIds", route.includes("requiredScheduleConnectionIds("));
+  check("route calls the server-side availability lookup",
+    route.includes("unavailableScheduleDestinations("));
+  check("it collects targets only when the draft is being scheduled",
+    /if \(incomingScheduledAt\) \{[\s\S]{0,240}requiredScheduleConnectionIds\(p\)/.test(route),
+    "an unscheduled draft must not be refused for naming a removed account");
+  check("refusal is 422 destination_unavailable",
+    route.includes('code: "destination_unavailable"') && /destination_unavailable[\s\S]{0,600}status: 422/.test(route));
+  check("the gate runs BEFORE the upsert",
+    route.indexOf("unavailableScheduleDestinations(") < route.indexOf(".upsert("),
+    "refusing after the write would leave the orphan schedule stored");
+}
 
 console.log(`\nSchedule social guard: ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -139,6 +139,8 @@ export const socialPanelMessages = {
   "socialPanel.toast.accountRemoveFailed": "Could not remove that account. Please try again.",
   "socialPanel.toast.scheduleCheckFailed":
     "We couldn't check what's still scheduled through this account, so it wasn't removed. Please try again.",
+  "socialPanel.toast.removeUnavailable":
+    "We couldn't safely remove this account right now, so nothing was changed. Please try again in a few minutes.",
   "socialPanel.toast.accountDisconnected": "Account disconnected",
   "socialPanel.toast.accountDisconnectFailed": "Could not disconnect that account. Please try again.",
   "socialPanel.toast.pinterestDisconnected": "Pinterest disconnected",

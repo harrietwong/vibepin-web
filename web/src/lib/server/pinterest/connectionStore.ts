@@ -618,6 +618,19 @@ export async function deleteConnection(uid: string, connectionId: string): Promi
     .eq("provider", PROVIDER)
     .eq("id", connectionId);
   if (error) throw dbError("remove connection", error.code, error.message);
+  forgetConnection(uid, connectionId);
+}
+
+/**
+ * Drop this connection (and its user's index entry) from the row cache.
+ *
+ * Exported because the remove route no longer deletes through `deleteConnection`:
+ * the delete is now one SQL statement that also checks the schedules
+ * (remove_social_connection_if_unscheduled, migrate_v67), so the row can go away
+ * without this module being the one to do it. The cache still has to be told, or
+ * a read within the 120s TTL keeps serving an account that no longer exists.
+ */
+export function forgetConnection(uid: string, connectionId: string): void {
   dropCachedConnection(connectionId);
   dropCachedUser(uid);
 }

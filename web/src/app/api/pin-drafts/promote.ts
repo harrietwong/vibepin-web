@@ -275,3 +275,46 @@ export function blockedScheduleDestinations(payload: Record<string, unknown>): S
   return unschedulableDestinations(requestedSocialDestinations(payload));
 }
 
+
+// ── Destination-existence rule (the other half of the remove race) ───────────
+/**
+ * The connection ids a scheduled payload will actually try to publish through.
+ *
+ * The remove path now refuses to delete an account while live schedules name it
+ * (remove_social_connection_if_unscheduled, v67). That closes one direction of
+ * the race. This closes the other: a schedule WRITTEN after the account was
+ * removed. Without it, the merchant's browser — which may have been open since
+ * before the removal — happily persists a schedule naming a row that no longer
+ * exists, and the cron inherits exactly the orphan the delete guard exists to
+ * prevent.
+ *
+ * The 口径 mirrors `resolveScheduledDestinations`, because the point is to
+ * validate what the DUE-TIME worker will read, not what the payload happens to
+ * contain:
+ *   - usable `scheduledDestinations[]` entries win, and each names its account.
+ *   - with none, the legacy `targetConnectionId` is the single derived Pinterest
+ *     target — so it is validated only THEN, exactly when it is the thing that
+ *     will be published through.
+ *
+ * Pure on purpose: this file is imported under bare `tsx` by several tests, so
+ * it must not reach a database or import anything server-only. The lookup lives
+ * in `lib/server/social/scheduledDestinationsAvailable.ts`.
+ */
+export function requiredScheduleConnectionIds(payload: Record<string, unknown>): string[] {
+  const raw = payload.scheduledDestinations;
+  const out: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!isUsableDestination(entry)) continue;
+      const id = typeof entry.socialConnectionId === "string" ? entry.socialConnectionId.trim() : "";
+      if (id && !out.includes(id)) out.push(id);
+    }
+  }
+  if (out.length > 0) return out;
+
+  // Legacy single target: only meaningful when nothing usable was stored, which
+  // is precisely when resolveScheduledDestinations derives Pinterest from it.
+  const legacy = payload.targetConnectionId;
+  const legacyId = typeof legacy === "string" ? legacy.trim() : "";
+  return legacyId ? [legacyId] : [];
+}

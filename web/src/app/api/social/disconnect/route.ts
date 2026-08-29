@@ -29,15 +29,16 @@
  */
 
 import { getUserIdFromBearer } from "@/lib/server/authUser";
-import {
-  deleteConnection,
-  findConnection,
-} from "@/lib/social/server/socialConnectionStore";
+import { findConnection } from "@/lib/social/server/socialConnectionStore";
 import {
   cancelScheduledForSocialConnection,
   countScheduledForSocialConnection,
   countScheduledForSocialConnectionStrict,
 } from "@/lib/server/social/scheduledForSocialConnection";
+import {
+  removeConnectionIfUnscheduled,
+  removeUnavailableMessage,
+} from "@/lib/server/social/removeConnectionIfUnscheduled";
 import { getSocialProviderById } from "@/lib/social/providers";
 import { createServerClient } from "@/lib/supabase";
 
@@ -261,8 +262,50 @@ export async function POST(req: Request) {
     // the merchant's other accounts on the same platform are untouched (official.ts
     // forwards connectionId to the Facebook/Instagram stores, whose UPDATE is
     // narrowed by `.eq("id", connectionId)`).
+    //
+    // It still runs BEFORE the delete, and that is forced rather than chosen: the
+    // provider disconnect is itself an UPDATE of this row (disconnectFacebookConnection
+    // reads its metadata and writes back the credential-free copy), so after the
+    // delete there is nothing left to revoke. The residual window is the one case
+    // the RPC below refuses — a schedule created in the last few milliseconds — which
+    // leaves a KEPT account with cleared credentials. That is strictly narrower than
+    // what it replaces (a deleted account with live schedules), it is visible in
+    // Settings as a Disconnected row, and Reconnect repairs it.
     await revokeAtProvider();
-    await deleteConnection(uid, connectionId);
+
+    // THE DELETE IS THE GUARD (Codex P0 #1). The strict pre-count above is UX — it
+    // opens the keep/cancel dialog on a number the merchant can act on — but it is a
+    // separate round trip from the delete, so a schedule created in another tab
+    // between the two used to survive and point at a row that no longer exists. This
+    // RPC counts and deletes in ONE statement; it is the only authority.
+    const removal = await removeConnectionIfUnscheduled(createServerClient(), uid, connectionId);
+    if (removal.outcome === "unavailable") {
+      // Fail CLOSED. Falling back to the plain delete here would restore the exact
+      // race this exists to close, on the databases least likely to be watched.
+      const userMessage = removeUnavailableMessage();
+      console.error(`[social/disconnect POST] remove guard unavailable (${removal.reason}) — account kept`);
+      return Response.json(
+        { ok: false, code: "remove_unavailable", userMessage, error: userMessage },
+        { status: 503 },
+      );
+    }
+    if (removal.outcome === "blocked") {
+      // A schedule landed after the pre-count. Same answer as the pre-count's own
+      // refusal, on the server's number, and nothing was deleted.
+      const userMessage = schedulesExistMessage(removal.scheduledCount);
+      return Response.json(
+        {
+          ok: false,
+          code: "schedules_exist",
+          scheduledCount: removal.scheduledCount,
+          userMessage,
+          error: userMessage,
+        },
+        { status: 409 },
+      );
+    }
+    // "deleted" and "already_gone" are both success: this endpoint is idempotent, and
+    // a row a previous attempt already removed is the outcome the caller asked for.
     return Response.json({ ok: true, mode, cancelledScheduled });
   } catch (err) {
     console.error("[social/disconnect POST]", (err as Error).message);

@@ -29,6 +29,7 @@
  */
 
 import { isUsableDestination } from "@/lib/social/scheduledDestinations";
+import { casReadMergeWrite, type ObservedRow } from "@/lib/server/db/casUpdate";
 import type { ScheduledDestination } from "@/lib/pinDraftStore";
 
 export const PIN_DRAFTS_TABLE = "pin_drafts";
@@ -99,6 +100,16 @@ export interface ScheduledDraftRow {
   vibepin_user_id: string;
   draft_id: string;
   payload: Record<string, unknown>;
+  /** The slot the row was on when it was read — half of the compare-and-set. */
+  scheduled_at?: string | null;
+  /**
+   * The row's LWW stamp, exactly as the database returned it — the other half.
+   *
+   * It must go back into the filter as the SAME STRING: Postgres timestamptz keeps
+   * microseconds, and a value round-tripped through `new Date().toISOString()` is
+   * truncated to milliseconds, matching nothing, making every write a CAS miss.
+   */
+  updated_at?: string | null;
 }
 
 /**
@@ -122,7 +133,9 @@ export interface DbLike {
 function candidateScheduledQuery(db: DbLike, uid: string) {
   return db
     .from(PIN_DRAFTS_TABLE)
-    .select("vibepin_user_id, draft_id, payload")
+    // scheduled_at/updated_at ride along so the cancel's first attempt already has
+    // an observed state to condition its write on, with no extra round trip.
+    .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at")
     .eq("vibepin_user_id", uid)
     .not("scheduled_at", "is", null)
     .is("deleted_at", null)
@@ -258,12 +271,18 @@ export type CancelScheduledOutcome = {
  * Known and accepted for MVP, inherited from the Pinterest module: a row the cron
  * has ALREADY claimed may still finish its in-flight publish. The window is minutes
  * and the outcome is one extra published post, not a corrupted row.
+ *
+ * `nowIso` is kept in the signature (both remove routes pass it) but each row is
+ * now stamped at ITS OWN write time instead: a stamp taken before the loop is
+ * already older than an edit made while the loop was running, and the client's LWW
+ * merge would push that edit — destination and all — straight back.
  */
 export async function cancelScheduledForSocialConnection(
   db: DbLike,
   uid: string,
   connectionId: string,
-  nowIso: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  nowIso?: string,
 ): Promise<CancelScheduledOutcome> {
   if (!str(connectionId)) return { cleared: 0, failed: 0, readFailed: false };
   const { rows, readFailed } = await readCandidates(db, uid, "scheduled fetch");
@@ -273,28 +292,120 @@ export async function cancelScheduledForSocialConnection(
   let failed = 0;
   for (const row of rows) {
     if (!payloadTargetsSocialConnection(row.payload, connectionId)) continue;
-    const { payload, remaining } = payloadAfterDestinationRemoved(
-      row.payload ?? {}, connectionId, nowIso,
-    );
-    const patch: Record<string, unknown> = {
-      payload,
-      updated_at: nowIso, // keep the column in step with payload.updatedAt (LWW)
-    };
-    if (remaining === 0) {
-      patch.scheduled_at = null;       // drop out of the cron's due scan
-      patch.publish_claimed_at = null; // release any stale lock so the row isn't half-held
-    }
-    const { error } = await db
-      .from(PIN_DRAFTS_TABLE)
-      .update(patch)
-      .eq("vibepin_user_id", uid)
-      .eq("draft_id", row.draft_id);
-    if (error) {
-      console.error("[social/disconnect] schedule cancel failed:", error.message);
+    const result = await cancelOneRow(db, uid, row, connectionId);
+    if (result.error) {
+      console.error("[social/disconnect] schedule cancel failed:", result.error);
       failed++;
       continue;
     }
+    // `gone` (row deleted underneath us) and `skipped` (the current payload no
+    // longer targets this account — someone else already removed the destination)
+    // are both no-op SUCCESS: the schedule this was cancelling does not exist any
+    // more, which is the outcome that was asked for. Counting them as cleared
+    // would overstate the work; counting them as failed would block a remove that
+    // is now perfectly safe.
+    if (result.gone || result.skipped) continue;
     cleared++;
   }
   return { cleared, failed, readFailed: false };
+}
+
+/**
+ * Strip this account from ONE row, compare-and-set.
+ *
+ * The old write read the payload, edited a stale copy, and updated by user +
+ * draft id alone. Anything the merchant did in between — an edit, a reschedule,
+ * a destination added from another tab — was overwritten wholesale, with no error
+ * anywhere. Since the outcome of this function decides whether the account may be
+ * DELETED, a silent overwrite here is how a merchant loses a schedule they just
+ * made and the account it published through, in one action.
+ *
+ * So: re-read, recompute from the row AS IT IS NOW, and condition the write on the
+ * `scheduled_at`/`updated_at` that recomputation saw. A miss re-merges onto the new
+ * row; three misses fail loudly and write nothing, which the caller counts as
+ * `failed` — and a failed cancel refuses the remove. Refusing is the point: the
+ * merchant retries and their account is still there.
+ */
+async function cancelOneRow(
+  db: DbLike,
+  uid: string,
+  row: ScheduledDraftRow,
+  connectionId: string,
+) {
+  type Patch = Record<string, unknown>;
+  let attemptedRead = false;
+  return casReadMergeWrite<ScheduledDraftRow, ScheduledDraftRow, Patch>(
+    {
+      // The first attempt reuses the snapshot the candidate scan already read —
+      // re-reading it immediately would be a round trip per row for nothing. Every
+      // LATER attempt is a genuine re-read, which is what makes the merge land on
+      // the row as it now is.
+      read: async ref => {
+        if (!attemptedRead) {
+          attemptedRead = true;
+          return { snapshot: ref, error: null };
+        }
+        const { data, error } = await db
+          .from(PIN_DRAFTS_TABLE)
+          .select("vibepin_user_id, draft_id, payload, scheduled_at, updated_at")
+          .eq("vibepin_user_id", uid)
+          .eq("draft_id", ref.draft_id)
+          // `.limit(1)` rather than `.maybeSingle()`: identical against PostgREST
+          // (user_id + draft_id is unique), and it keeps this read on the same chain
+          // shape every other query in these modules uses, so a test fake that is
+          // honest about the rest of the module stays honest about this too.
+          .limit(1);
+        if (error) {
+          if (isMissingSchemaError(error)) return { snapshot: null, error: null };
+          return { snapshot: null, error: error.message };
+        }
+        const rows = (Array.isArray(data) ? data : []) as ScheduledDraftRow[];
+        return { snapshot: rows[0] ?? null, error: null };
+      },
+      update: async (ref, values, observed) => {
+        let q = db
+          .from(PIN_DRAFTS_TABLE)
+          .update(values)
+          .eq("vibepin_user_id", uid)
+          .eq("draft_id", ref.draft_id);
+        // `.eq` never matches NULL in SQL — an unscheduled row needs `.is`.
+        q = observed.scheduled_at === null
+          ? q.is("scheduled_at", null)
+          : q.eq("scheduled_at", observed.scheduled_at);
+        q = observed.updated_at === null
+          ? q.is("updated_at", null)
+          : q.eq("updated_at", observed.updated_at);
+        // `.select` is what makes PostgREST report the affected rows; without it
+        // there is no way to tell a no-match from a successful write.
+        const { data, error } = await q.select("draft_id");
+        if (error) return { error: error.message, matched: false };
+        return { error: null, matched: Array.isArray(data) && data.length > 0 };
+      },
+    },
+    row,
+    (snapshot): ObservedRow => ({
+      scheduled_at: snapshot.scheduled_at ?? null,
+      updated_at: snapshot.updated_at ?? null,
+    }),
+    (snapshot, writeIso) => {
+      // Recomputed from the CURRENT payload every attempt. This is where a
+      // destination added while we were working is preserved: it is in `snapshot`,
+      // so it survives into `remaining` instead of being erased by a stale copy.
+      if (!payloadTargetsSocialConnection(snapshot.payload, connectionId)) return null;
+      const { payload, remaining } = payloadAfterDestinationRemoved(
+        snapshot.payload ?? {}, connectionId, writeIso,
+      );
+      const patch: Record<string, unknown> = {
+        payload,
+        updated_at: writeIso, // keep the column in step with payload.updatedAt (LWW)
+      };
+      if (remaining === 0) {
+        patch.scheduled_at = null;       // drop out of the cron's due scan
+        patch.publish_claimed_at = null; // release any stale lock so the row isn't half-held
+      }
+      return patch;
+    },
+    "social/disconnect",
+    ref => `draft_id=${ref.draft_id} user=${uid}`,
+  );
 }
