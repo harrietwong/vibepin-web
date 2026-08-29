@@ -168,6 +168,7 @@ async function test(name: string, fn: () => Promise<void>) {
   rpcCalls.length = 0;
   providerCallCount = 0;
   rpcBehaviour = () => ({ data: { ok: true, replayed: false }, error: null });
+  ledger = { events: new Map(), used: 0 };
   publishPinBehaviour = async () => ({
     ok: true,
     pin: { id: "p1", url: "https://pin/1" },
@@ -210,6 +211,80 @@ function assertNotReleased(): void {
     releaseCalls().length, 0,
     `the charge must stand for this state; saw ${JSON.stringify(releaseCalls().map(c => c.args.p_reason))}`,
   );
+}
+
+/**
+ * ── A STATEFUL LEDGER, MIRRORING v67's KEY FAMILY ──────────────────────────────
+ *
+ * The default `rpcBehaviour` above is stateless: every consume answers
+ * `replayed:false`. That is fine for single-request cells, and useless for the
+ * cross-route cases below, whose entire subject is what happens when a SECOND route
+ * lands on a key the FIRST one already charged. Those need the real thing:
+ *
+ *   consume:  n = number of `K:release:*` events → K_eff = K (n=0) | K:r<n>
+ *             K_eff already present → {ok:true, replayed:true}   (charged nothing)
+ *             else insert it        → {ok:true, replayed:false}  (charged one unit)
+ *   release:  n = number of `K:release:*`; find the standing consume K_eff;
+ *             present → write K:release:<n+1>, decrement; absent → nothing_to_release
+ *
+ * This is a faithful reduction of migrate_v67_scheduled_post_release.sql (minus the
+ * locking, which single-threaded tests cannot exercise). Its purpose is to make
+ * `replayed` REAL, because `replayed` is what the fresh-consume gate reads — a fake
+ * that always says `replayed:false` would report every one of the cases below as
+ * passing no matter how the routes were wired.
+ */
+type FamilyLedger = {
+  /** idempotency_key → operation, exactly as usage_events would hold them. */
+  events: Map<string, "consume" | "release">;
+  /** Net units charged, so a test can assert a refund really gave one back. */
+  used: number;
+};
+let ledger: FamilyLedger = { events: new Map(), used: 0 };
+
+function releasesFor(key: string): number {
+  let n = 0;
+  for (const k of ledger.events.keys()) if (k.startsWith(`${key}:release:`)) n++;
+  return n;
+}
+
+function ledgerRpc(fn: string, args: Record<string, unknown>): RpcResult {
+  const key = String(args.p_idempotency_key ?? "");
+  const n = releasesFor(key);
+  const effective = n === 0 ? key : `${key}:r${n}`;
+  if (fn === "usage_consume_scheduled_post") {
+    if (ledger.events.has(effective)) {
+      return { data: { ok: true, replayed: true, scheduled_posts_used: ledger.used }, error: null };
+    }
+    ledger.events.set(effective, "consume");
+    ledger.used += 1;
+    return { data: { ok: true, replayed: false, scheduled_posts_used: ledger.used }, error: null };
+  }
+  if (fn === "usage_release_scheduled_post") {
+    if (!ledger.events.has(effective)) {
+      // Either nothing was ever charged, or every charge was already given back.
+      return n > 0
+        ? { data: { ok: true, replayed: true, reason: "already_released" }, error: null }
+        : { data: { ok: false, reason: "nothing_to_release" }, error: null };
+    }
+    ledger.events.set(`${key}:release:${n + 1}`, "release");
+    ledger.used = Math.max(0, ledger.used - 1);
+    return {
+      data: { ok: true, replayed: false, released_consume_key: effective, scheduled_posts_used: ledger.used },
+      error: null,
+    };
+  }
+  return { data: { ok: true, replayed: false }, error: null };
+}
+
+/** Start a cross-route case: empty ledger, and the RPC fake wired to it. */
+function useLedger(): void {
+  ledger = { events: new Map(), used: 0 };
+  rpcBehaviour = ledgerRpc;
+}
+
+/** Every consume key the ledger actually stored an event under, in insertion order. */
+function ledgerConsumeKeys(): string[] {
+  return [...ledger.events.entries()].filter(([, op]) => op === "consume").map(([k]) => k);
 }
 
 (async () => {
@@ -624,6 +699,267 @@ function assertNotReleased(): void {
     }));
     assert.equal(consumeCalls().length, 0);
     assertNotReleased();
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // CROSS-ROUTE: ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + 2)
+  // ══════════════════════════════════════════════════════════════════════════════
+  //
+  // Every cell above exercises ONE route in isolation, where its consume is always
+  // the family's first and therefore always fresh. The bugs live in the seam: the key
+  // K is SHARED — /api/pinterest/pins and /api/publish/social derive the same K for
+  // one Content, and a same-day retry derives it again — while
+  // `usage_release_scheduled_post` takes only (user, K, reason) and refunds the
+  // family's standing consume no matter which caller asks. So a route whose consume
+  // merely REPLAYED could give back a unit another attempt charged and delivered.
+  //
+  // These cases run the two REAL routes in sequence against the stateful ledger
+  // above, so `replayed` is genuine rather than a hardcoded false. The pins response's
+  // meteringBucket/Sig/MintedAt are relayed into the social request exactly as the
+  // client does — which both pins the shared key (no dependence on the two calls
+  // computing the same UTC day) and exercises the relay path itself.
+
+  /** Run the pins route and hand back the relay triple its response carries. */
+  async function pinsThenRelay(draftId: string): Promise<Record<string, unknown>> {
+    const res = await pinsPOST(req({ boardId: "b1", imageUrl: "https://example.com/a.png", draftId }));
+    const body = await res.json() as Record<string, unknown>;
+    return {
+      meteringBucket: body.meteringBucket,
+      meteringBucketSig: body.meteringBucketSig,
+      meteringBucketMintedAt: body.meteringBucketMintedAt,
+    };
+  }
+
+  function socialReqWithRelay(postId: string, relay: Record<string, unknown>): Request {
+    return req({
+      postId,
+      ...relay,
+      post: { imageUrls: ["https://example.com/img.png"], title: "t", caption: "c" },
+      destinations: [{ provider: "facebook", socialConnectionId: "conn-fb-1" }],
+    });
+  }
+
+  await test("(a) HIGH 1 — pins SENT, then social replays the same key and is rejected -> NO release", async () => {
+    // The headline bug: Pinterest published the Pin (unit earned), the social fan-out
+    // collapsed onto the SAME key as a replay, every social target was rejected, and
+    // the old code released K — refunding a Pin that is live on Pinterest.
+    useLedger();
+    const draftId = "pd_x_sent_then_social";
+    const relay = await pinsThenRelay(draftId);
+    assert.equal(releaseCalls().length, 0, "a successful Pin is never refunded by its own route");
+    const key = deriveScheduledPostKey(OWNER, draftId, undefined, relay.meteringBucket as string);
+    assert.deepEqual(ledgerConsumeKeys(), [key], "pins charged the family's first consume");
+
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Graph said no", providerStatus: 403, providerResourceId: null,
+    });
+    await socialPOST(socialReqWithRelay(draftId, relay));
+
+    const shared = consumeCalls().filter(c => c.args.p_idempotency_key === key);
+    assert.equal(shared.length, 2, "both routes consumed the SAME key (one charge, one replay)");
+    assertNotReleased();
+    assert.equal(ledger.used, 1, "the delivered Pin stays charged");
+  });
+
+  await test("(b) HIGH 1 — pins DELIVERY_UNKNOWN, then social replays and is rejected -> NO release", async () => {
+    // Same shape, worse consequence if it leaked: a timeout is trivially reproducible,
+    // so refunding it through the social route would be a repeatable free publish.
+    useLedger();
+    const draftId = "pd_x_unknown_then_social";
+    publishPinBehaviour = async () => { throw new Error("socket hang up"); };
+    const relay = await pinsThenRelay(draftId);
+    assertNotReleased();
+
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Graph said no", providerStatus: 400, providerResourceId: null,
+    });
+    await socialPOST(socialReqWithRelay(draftId, relay));
+
+    assertNotReleased();
+    assert.equal(ledger.used, 1, "delivery_unknown is charged and stays charged");
+  });
+
+  await test("(c) pins REJECTED refunds K; social's consume is then FRESH on K:r1 and its rejection refunds that", async () => {
+    // The gate must not become "never refund on the second route". When the first
+    // route genuinely gave its unit back, the family RE-ARMS: the social consume lands
+    // on K:r1 and really does charge, so its own rejection is really refundable.
+    // Nothing was delivered anywhere, and the ledger ends at zero.
+    useLedger();
+    const draftId = "pd_x_rejected_then_social";
+    publishPinBehaviour = async () => {
+      const e = new PinterestApiError("Insufficient scope", 403, "pinterest_api_error");
+      (e as unknown as { providerStatus: number }).providerStatus = 403;
+      (e as unknown as { providerResourceId: string | null }).providerResourceId = null;
+      throw e;
+    };
+    const relay = await pinsThenRelay(draftId);
+    const key = deriveScheduledPostKey(OWNER, draftId, undefined, relay.meteringBucket as string);
+    assertReleased("rejected", key);
+    assert.equal(ledger.used, 0, "the pins charge was given back");
+
+    rpcCalls.length = 0;
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Graph said no", providerStatus: 422, providerResourceId: null,
+    });
+    await socialPOST(socialReqWithRelay(draftId, relay));
+
+    assert.deepEqual(
+      ledgerConsumeKeys(), [key, `${key}:r1`],
+      "the refunded family re-armed: the social consume is a NEW charge, not a replay",
+    );
+    assertReleased("rejected", key);
+    assert.equal(ledger.used, 0, "both attempts refunded — nothing was ever delivered");
+  });
+
+  await test("(d) HIGH 2 — same-day retry after a SUCCESS replays the key -> NO release", async () => {
+    // The free-publish bypass: publish once successfully (unit earned), then retry the
+    // same draft the same day with a deliberately broken destination. The consume
+    // replays K, the failure is refundable-looking, and the old code refunded the unit
+    // the SUCCESSFUL publish earned. Correctly non-refundable now — see the route
+    // comments: a same-day retry after a success is not a residual, it is the rule.
+    useLedger();
+    const draftId = "pd_x_sameday_retry";
+    const relay = await pinsThenRelay(draftId);
+    const key = deriveScheduledPostKey(OWNER, draftId, undefined, relay.meteringBucket as string);
+    assert.equal(ledger.used, 1, "the successful publish charged one unit");
+    assertNotReleased();
+
+    rpcCalls.length = 0;
+    // Same day, same draft, same key — but now a typed validation failure (`not_sent`).
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "invalid link", code: "invalid_link", status: 422,
+    });
+    await pinsPOST(req({ boardId: "b1", imageUrl: "https://example.com/a.png", draftId }));
+
+    const retryConsume = consumeCalls();
+    assert.equal(retryConsume.length, 1, "the retry did try to charge");
+    assert.equal(retryConsume[0].args.p_idempotency_key, key, "and derived the SAME key");
+    assert.deepEqual(ledgerConsumeKeys(), [key], "which the ledger collapsed into a replay");
+    assertNotReleased();
+    assert.equal(ledger.used, 1, "the unit the successful publish earned is still charged");
+  });
+
+  await test("(e) social-only FRESH consume, rejected -> still refunds (the gate is not a blanket off-switch)", async () => {
+    useLedger();
+    const postId = "pd_x_socialonly";
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Graph said no", providerStatus: 400, providerResourceId: null,
+    });
+    await socialPOST(socialReq(postId));
+    const key = deriveScheduledPostKey(OWNER, postId);
+    assert.deepEqual(ledgerConsumeKeys(), [key], "no pins call — this consume is the family's first");
+    assertReleased("rejected", key);
+    assert.equal(ledger.used, 0, "refunded");
+  });
+
+  await test("gate: an `insufficient` consume in SHADOW never releases (it charged nothing here)", async () => {
+    // Shadow does not block, so the route publishes anyway and can fail refundably.
+    // Releasing after a refused consume would target a PRIOR attempt's charge.
+    process.env.USAGE_METERING_MODE = "shadow";
+    rpcBehaviour = () => ({ data: { ok: false, reason: "insufficient_capacity" }, error: null });
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "boardId is required", code: "bad_request", status: 400,
+    });
+    await pinsPOST(req({ boardId: "b1", imageUrl: "https://example.com/a.png", draftId: "pd_x_insuff" }));
+    assertNotReleased();
+  });
+
+  await test("gate: a consume that ERRORED never releases", async () => {
+    rpcBehaviour = (fn) => fn === "usage_consume_scheduled_post"
+      ? { data: null, error: { message: "simulated ledger outage" } }
+      : { data: { ok: true, replayed: false }, error: null };
+    publishPinBehaviour = async () => ({
+      ok: false, kind: "validation", error: "boardId is required", code: "bad_request", status: 400,
+    });
+    const res = await pinsPOST(req({ boardId: "b1", imageUrl: "https://example.com/a.png", draftId: "pd_x_cerr" }));
+    assert.equal(res.status, 400, "fail-open: the publish failure is still what the client sees");
+    assertNotReleased();
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // PROVIDER-INTERNAL PRE-NETWORK FAILURES (Codex round 7, Medium)
+  // ══════════════════════════════════════════════════════════════════════════════
+  //
+  // "Connect a Facebook Page first.", missing Instagram credentials, "Instagram posts
+  // need an image.", a local media-rule refusal — all decided inside official.ts
+  // before any Graph call, all carrying no providerStatus (correctly: no provider
+  // answered). "No status observed" is ALSO the signature of a timeout, which the
+  // product charges for, so unflagged these were classified `delivery_unknown` and
+  // billed a scheduled-post unit for a request that never left our process.
+  // `PublishResult.preNetwork` is the disambiguator; these cells prove the routes read
+  // it and that it does NOT leak into failures that really did reach the platform.
+
+  await test("medium / preNetwork: a provider credential refusal -> not_sent -> REFUND", async () => {
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Connect a Facebook Page first.", preNetwork: true,
+    });
+    await socialPOST(socialReq("pd_pn_fbcred"));
+    assertReleased("not_sent", deriveScheduledPostKey(OWNER, "pd_pn_fbcred"));
+  });
+
+  await test("medium / preNetwork: a local media-rule refusal -> not_sent -> REFUND", async () => {
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Instagram allows at most 10 images.", preNetwork: true,
+    });
+    await socialPOST(socialReq("pd_pn_media"));
+    assertReleased("not_sent", deriveScheduledPostKey(OWNER, "pd_pn_media"));
+  });
+
+  await test("medium / preNetwork: missing Instagram image -> not_sent -> REFUND", async () => {
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Instagram posts need an image.", preNetwork: true,
+    });
+    await socialPOST(socialReq("pd_pn_noimg"));
+    assertReleased("not_sent", deriveScheduledPostKey(OWNER, "pd_pn_noimg"));
+  });
+
+  await test("medium / preNetwork does NOT override a real platform 4xx: still `rejected`", async () => {
+    // Both are refundable, so the reason string is the only observable difference —
+    // and it is the audit trail. A provider that answered must never be recorded as
+    // "we never sent it".
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Graph said no", providerStatus: 400, providerResourceId: null,
+    });
+    await socialPOST(socialReq("pd_pn_4xx"));
+    assertReleased("rejected", deriveScheduledPostKey(OWNER, "pd_pn_4xx"));
+  });
+
+  await test("medium / a real platform 5xx stays delivery_unknown — preNetwork must not reach it", async () => {
+    socialPublishBehaviour = async () => ({
+      ok: false, status: "failed", error: "Graph is down", providerStatus: 503, providerResourceId: null,
+    });
+    await socialPOST(socialReq("pd_pn_5xx"));
+    assertNotReleased();
+  });
+
+  // ── official.ts itself: the branches that must carry the flag ─────────────────
+  await test("medium / official.ts: every FB and IG pre-network branch sets preNetwork", async () => {
+    // Calls the REAL provider (not the fake) with credentials/media that make it
+    // refuse locally. No network is reachable from these branches by construction —
+    // each returns before its dynamic import of the service module.
+    const { officialProvider } = await import("../src/lib/social/providers/official");
+    const conn = { id: "conn-1", provider: "facebook", authProvider: "official", connectionStatus: "connected" };
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["facebook, no userId", { provider: "facebook", connection: conn, post: { imageUrls: [] } }],
+      ["instagram, no userId", { provider: "instagram", connection: conn, post: { imageUrls: ["https://x/1.png"] } }],
+      // No image at all is an Instagram-only refusal, decided before any credential read.
+      ["instagram, no image", { provider: "instagram", connection: conn, userId: OWNER, post: { imageUrls: [] } }],
+    ];
+    for (const [label, input] of cases) {
+      const r = await officialProvider.publishPost(input as never) as { ok: boolean; preNetwork?: boolean };
+      assert.equal(r.ok, false, label);
+      assert.equal(r.preNetwork, true, `${label} must be marked pre-network`);
+    }
+  });
+
+  await test("medium / official.ts: an unwired platform stays not_implemented (already pre-network to callers)", async () => {
+    const { officialProvider } = await import("../src/lib/social/providers/official");
+    const r = await officialProvider.publishPost({
+      provider: "tiktok",
+      connection: { id: "c", provider: "tiktok", authProvider: "official", connectionStatus: "connected" },
+      post: { imageUrls: [] },
+    } as never) as { status: string };
+    assert.equal(r.status, "not_implemented");
   });
 
   console.log(`\n${passed} passed, ${failed} failed.`);
