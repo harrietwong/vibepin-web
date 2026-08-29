@@ -150,6 +150,9 @@ function createMockServer(initial: Row[] = []) {
 async function main() {
   const store = await import("../src/lib/pinDraftStore");
   const sync = await import("../src/lib/pinDraftSync");
+  // The route's promotion rule, applied to a retry payload: the client can send a
+  // perfect payload and still end up unrunnable if `scheduled_at` promotes to null.
+  const { buildScheduledAt } = await import("../src/app/api/pin-drafts/promote");
 
   const FAST = { debounceMs: 5, backoffBaseMs: 15, backoffMaxMs: 60, pageSize: 100 };
   const getToken = async () => "test-token";
@@ -577,12 +580,53 @@ async function main() {
     reset();
     // This time they DID touch the schedule. Keeping the server's cleared one would
     // silently discard an instruction the merchant actually gave.
-    const { retry } = await raceDuringPublish("r2", { scheduledDate: "2026-08-20", scheduledTime: "14:30" });
-    assert.equal(retry.payload.scheduledDate, "2026-08-20", "a schedule the merchant re-set must survive");
+    //
+    // The date must be in the FUTURE relative to the publish this races with: the
+    // server row is stamped `postedAt = now`, and the promoted `scheduled_at` a
+    // reschedule earns is the one that is strictly LATER than that post. A hardcoded
+    // past date would be nulled for the right reason and prove nothing.
+    const day = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    const { published, retry } = await raceDuringPublish("r2", { scheduledDate: day, scheduledTime: "14:30" });
+    assert.equal(retry.payload.scheduledDate, day, "a schedule the merchant re-set must survive");
     assert.equal(retry.payload.scheduledTime, "14:30");
-    assert.equal(retry.payload.plannedAt, "2026-08-20T14:30",
+    assert.equal(retry.payload.plannedAt, `${day}T14:30`,
       "the group moves together — plannedAt comes from the same side");
     assert.ok(retry.payload.destinationResults, "their reschedule still must not erase what was published");
+
+    // ── and the RETRY must promote to a runnable schedule ───────────────────
+    // Asserting the payload fields alone was not enough: the payload carried the new
+    // time all along, and the route still promoted `scheduled_at = null` because the
+    // re-based retry (correctly) also carries the server's postedAt/remotePinId. The
+    // cron scans that COLUMN, so the merchant's reschedule silently never ran. This
+    // asserts what the route actually writes for this exact retry payload.
+    assert.ok((published.payload as Record<string, unknown>).postedAt,
+      "fixture check: the server row must be posted, or this asserts nothing");
+    const promoted = buildScheduledAt(retry.payload);
+    assert.ok(promoted, "the re-based retry must promote a NON-NULL scheduled_at — the cron scans it");
+    // Equality against the merchant's chosen time, resolved through the same zone the
+    // store stamped on the draft (never a hardcoded UTC instant: `updateDraft` restamps
+    // scheduleTimezone with the machine's zone, so the instant is machine-dependent).
+    const expected = buildScheduledAt({
+      plannedAt: `${day}T14:30`,
+      scheduleTimezone: retry.payload.scheduleTimezone,
+    });
+    assert.equal(promoted, expected, "the promoted instant must be the merchant's new time");
+    assert.ok(Date.parse(promoted!) > Date.parse((published.payload as Record<string, string>).postedAt),
+      "and it must be later than the post it supersedes — that is what makes it honoured");
+  });
+
+  await test("409 re-base: a STALE pre-publish schedule still promotes to null", async () => {
+    reset();
+    // The other side of the same rule. Here the merchant touched something else, so
+    // the schedule group comes from the SERVER (cleared by the publish) — and even a
+    // payload that somehow kept a pre-publish time must not become due again.
+    const { retry } = await raceDuringPublish("r2b", { title: "edited" });
+    assert.equal(buildScheduledAt(retry.payload), null,
+      "nothing the merchant did asks for a new run, so nothing may be scheduled");
+    assert.equal(
+      buildScheduledAt({ ...retry.payload, plannedAt: "2026-07-01T09:00", scheduleTimezone: "UTC" }),
+      null,
+      "a stale client still holding the pre-publish time must not resurrect the schedule");
   });
 
   await test("409 re-base: no edit during the flight ⇒ the server's row is adopted whole", async () => {
