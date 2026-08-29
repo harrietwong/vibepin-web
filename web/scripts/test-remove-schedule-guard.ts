@@ -293,7 +293,128 @@ await test("Pinterest 软断开(不带 mode)不查排程,保持原有行为", as
   assert.deepEqual(log, ["softDisconnect"], "软断开不查排程,也永远不删行");
 });
 
-console.log("\n=== 4) 面板与这套契约对得上(PRD 0805 §11) ===");
+console.log("\n=== 4) 删除必须是原子的:RPC 才是权威(Codex P0 #1) ===");
+
+// 预查通过、RPC 却拒绝 —— 这正是本条修复存在的理由:两次往返之间,商家在另一个
+// 标签页排了新内容。旧代码这时已经把行删了。
+await test("FB/IG:预查为 0 但 RPC 说还有排程 → 409 schedules_exist,一行都没删", async () => {
+  log = []; rpcArgs = [];
+  countOutcome = { count: 0, readFailed: false };
+  rpcResult = { data: [{ deleted: false, scheduled_count: 2 }], error: null };
+  const res = await socialRoute.POST(socialRequest({ connectionId: CONN, mode: "remove" }));
+  assert.equal(res.status, 409);
+  const body = await res.json() as { code?: string; scheduledCount?: number; userMessage?: string };
+  assert.equal(body.code, "schedules_exist");
+  assert.equal(body.scheduledCount, 2, "要回 RPC 自己数的那个数 —— 它和删除同一条语句,是唯一真过的数");
+  assert.ok((body.userMessage ?? "").includes("2"));
+  assert.ok(!log.includes("plainDelete"), "被拒之后绝不能再退回普通 delete");
+  assert.deepEqual(log, ["countStrict", "revoke", RPC], "RPC 拒绝就到此为止");
+});
+
+await test("FB/IG:RPC 不存在(迁移没跑)→ 503 remove_unavailable,且不得退回普通 delete", async () => {
+  log = []; rpcArgs = [];
+  countOutcome = { count: 0, readFailed: false };
+  rpcResult = { data: null, error: { code: "42883", message: "function ... does not exist" } };
+  const res = await socialRoute.POST(socialRequest({ connectionId: CONN, mode: "remove" }));
+  assert.equal(res.status, 503, "能力不在是暂时性的,用 503");
+  const body = await res.json() as { code?: string; userMessage?: string; ok?: boolean };
+  assert.equal(body.code, "remove_unavailable");
+  assert.equal(body.ok, false);
+  assert.ok((body.userMessage ?? "").length > 0, "必须给商家一句能照做的话");
+  // 这是 fail-closed 的全部内容:退回普通 delete 就等于把刚修掉的竞态原样装回去,
+  // 而且恰好装在最没人盯着的那些数据库上。
+  assert.ok(!log.includes("plainDelete"), "RPC 缺失时绝不能退回普通 delete");
+  assert.deepEqual(log, ["countStrict", "revoke", RPC]);
+});
+
+await test("FB/IG:PostgREST 的 PGRST202 同样算能力缺失", async () => {
+  log = []; countOutcome = { count: 0, readFailed: false };
+  rpcResult = { data: null, error: { code: "PGRST202", message: "Could not find the function" } };
+  const res = await socialRoute.POST(socialRequest({ connectionId: CONN, mode: "remove" }));
+  assert.equal(res.status, 503);
+  assert.equal((await res.json() as { code?: string }).code, "remove_unavailable");
+});
+
+await test("FB/IG:其它 RPC 错误也 fail-closed(503),而不是当成删成功", async () => {
+  log = []; countOutcome = { count: 0, readFailed: false };
+  rpcResult = { data: null, error: { code: "22P02", message: "invalid input syntax for type uuid" } };
+  const res = await socialRoute.POST(socialRequest({ connectionId: CONN, mode: "remove" }));
+  assert.equal(res.status, 503, "不知道删没删成功时,只能说没删");
+  assert.ok(!log.includes("plainDelete"));
+});
+
+await test("FB/IG:deleted=false 且 count=0(行本来就没了)算成功 —— 这个接口是幂等的", async () => {
+  log = []; countOutcome = { count: 0, readFailed: false };
+  rpcResult = { data: [{ deleted: false, scheduled_count: 0 }], error: null };
+  const res = await socialRoute.POST(socialRequest({ connectionId: CONN, mode: "remove" }));
+  assert.equal(res.status, 200, "上一次尝试已经删掉的行,正是调用方想要的结果");
+});
+
+await test("FB/IG:取消排程时的完整顺序 —— 取消 → 撤销 → RPC", async () => {
+  log = []; rpcArgs = [];
+  cancelOutcome = { cleared: 2, failed: 0, readFailed: false };
+  rpcResult = { data: [{ deleted: true, scheduled_count: 0 }], error: null };
+  const res = await socialRoute.POST(
+    socialRequest({ connectionId: CONN, mode: "remove", cancelScheduled: true }),
+  );
+  assert.equal(res.status, 200);
+  // 取消必须在删除之前(半途死掉时,宁可留着能看见的账号也不要留孤儿排程),
+  // 而 RPC 必须是最后一步:它是唯一能保证"删的那一刻确实没有排程"的东西。
+  assert.deepEqual(log, ["cancel", "revoke", RPC]);
+  assert.deepEqual(rpcArgs.at(-1), { p_user_id: UID, p_connection_id: CONN });
+});
+
+await test("Pinterest:RPC 拒绝 → 409;RPC 缺失 → 503;两种情况都不删、不清缓存", async () => {
+  log = []; pinCountOutcome = { count: 0, readFailed: false };
+  rpcResult = { data: [{ deleted: false, scheduled_count: 4 }], error: null };
+  let res = await pinterestRoute.DELETE(pinterestRequest(`mode=remove&connectionId=${CONN}`));
+  assert.equal(res.status, 409);
+  let body = await res.json() as { code?: string; scheduledCount?: number };
+  assert.equal(body.code, "schedules_exist");
+  assert.equal(body.scheduledCount, 4);
+  assert.deepEqual(log, ["countStrict", RPC], "被拒之后不得清缓存(行还在)");
+
+  log = [];
+  rpcResult = { data: null, error: { code: "42883", message: "does not exist" } };
+  res = await pinterestRoute.DELETE(pinterestRequest(`mode=remove&connectionId=${CONN}`));
+  assert.equal(res.status, 503);
+  body = await res.json() as { code?: string };
+  assert.equal(body.code, "remove_unavailable");
+  assert.ok(!log.includes("plainDelete"), "RPC 缺失时绝不能退回普通 delete");
+  assert.ok(!log.includes("forgetCache"), "没删成功就不该清缓存");
+
+  // 复位,免得污染后面的用例。
+  rpcResult = { data: [{ deleted: true, scheduled_count: 0 }], error: null };
+});
+
+console.log("\n=== 5) 迁移文件本身(v67)===");
+
+await test("migrate_v67 存在,且写的就是那条不可分割的语句", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const sql = readFileSync(
+    join(process.cwd(), "..", "backend", "db", "migrate_v67_remove_connection_if_unscheduled.sql"),
+    "utf8",
+  );
+  // 幂等:重跑必须是无操作,否则这条迁移不敢在服务中的库上执行。
+  assert.ok(/create or replace function/i.test(sql), "必须 create or replace(幂等)");
+  assert.ok(/remove_social_connection_if_unscheduled/.test(sql));
+  assert.ok(/security definer/i.test(sql), "跨表删除必须 security definer");
+  assert.ok(/set search_path\s*=\s*public/i.test(sql), "security definer 必须钉死 search_path");
+  // 两种目标口径缺一不可:少了前者放过 Pinterest 老 Pin,少了后者放过 FB/IG。
+  assert.ok(sql.includes("payload->>'targetConnectionId'"), "缺少 Pinterest 的 targetConnectionId 口径");
+  assert.ok(sql.includes("scheduledDestinations") && sql.includes("socialConnectionId"),
+    "缺少多平台 scheduledDestinations 口径");
+  // 候选行的口径必须和 cron 的到期扫描一致,否则会漏掉它真会发的行。
+  assert.ok(/scheduled_at is not null/i.test(sql));
+  assert.ok(/deleted_at is null/i.test(sql));
+  assert.ok(/archived_at is null/i.test(sql));
+  // 函数默认对 PUBLIC 开放,只 grant 不 revoke 等于没限制。
+  assert.ok(/revoke all on function/i.test(sql), "只 grant 不 revoke,'仅 service_role' 就是假的");
+  assert.ok(/grant execute on function[\s\S]*to service_role/i.test(sql));
+});
+
+console.log("\n=== 6) 面板与这套契约对得上(PRD 0805 §11) ===");
 
 await test("面板没有任何一条路径会在有排程时发 cancelScheduled:false", async () => {
   // 这是"规则 #1 + 对话框"能自洽的前提。服务端拒绝"有排程还不取消就删",
@@ -325,6 +446,13 @@ await test("面板没有任何一条路径会在有排程时发 cancelScheduled:
 
   // Keep = 关掉对话框,不发请求。
   assert.ok(!panel.includes("onKeep"), "Keep 现在就是 onDismiss,不该再有独立的 onKeep");
+
+  // 503 remove_unavailable 必须有自己的分支:它说的是"什么都没改,过几分钟再试",
+  // 而通用失败文案会让商家以为账号可能已经半删了。
+  assert.ok(panel.includes('err.code === "remove_unavailable"'),
+    "面板必须认得 remove_unavailable,否则 503 会掉进通用失败文案里");
+  assert.ok(panel.includes("socialPanel.toast.removeUnavailable"),
+    "服务端没给 message 时要有本地化兜底");
 });
 
 console.log(`\n${passed} 项断言全部通过。`);
