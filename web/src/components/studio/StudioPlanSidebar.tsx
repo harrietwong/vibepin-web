@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, ChevronLeft, ChevronRight, PanelRightClose, PanelRightOpen, TriangleAlert } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, PanelRightClose, PanelRightOpen, TriangleAlert, X } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { PublishProvider } from "@/lib/contentDraftModel";
 import { BUI } from "@/components/studio/boardUI";
 import { toProxyUrl } from "@/lib/imageProxy";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
+import { useViewportBucket } from "@/hooks/useViewportBucket";
 import {
   buildWeek,
   countWeekScheduled,
@@ -18,6 +19,7 @@ import {
   startOfWeek,
   weekStartForDate,
   type PlanItemState,
+  type PlanSidebarDay,
   type PlanSidebarItem,
 } from "@/lib/studio/planSidebarModel";
 
@@ -73,6 +75,20 @@ const STATE_COLOR: Record<PlanItemState, string> = {
   failed: "#D97706",
 };
 
+/**
+ * The Plan entry inside Create Pins (PRD 0809 §IX). One component, three forms — the
+ * form is chosen by viewport bucket, never by hover capability:
+ *
+ *   desktop (>= 1280) — the docked, collapsible right panel. Unchanged: hover/focus
+ *                       peeks it, the trigger pins it, pinning reflows the board grid.
+ *   tablet  (768–1279) — the trigger opens a right-side DRAWER over the board. No grid
+ *                       reflow (the panel takes no layout space), scrim, Escape closes.
+ *   mobile  (< 768)   — the trigger opens a FULL-SCREEN overlay with the same content.
+ *
+ * Hover is never the only way in: in every form the trigger is a real <button> with an
+ * accessible label and an onClick, and the two overlay forms attach no hover handlers
+ * at all (a tablet with a mouse must not get hover-driven state changes).
+ */
 export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastScheduled }: {
   drafts: PinDraft[];
   pinned: boolean;
@@ -81,17 +97,40 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
   lastScheduled?: PlanScheduleSignal;
 }) {
   const { t: tr } = useLocale();
+  const bucket = useViewportBucket();
+  // "docked" is the only place the bucket turns into behaviour: it decides whether the
+  // panel participates in layout (desktop) or floats over it (tablet/mobile).
+  const docked = bucket === "desktop";
   const [hoverOpen, setHoverOpen] = useState(false);
+  const [overlayOpen, setOverlayOpen] = useState(false);
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
   const [badge, setBadge] = useState(0);
   const [highlight, setHighlight] = useState<{ id: string; at: number } | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const overlayPanelRef = useRef<HTMLElement | null>(null);
+  // Only restore focus to the trigger if WE moved it into the dialog — otherwise the
+  // first render would steal focus from wherever the user actually was.
+  const restoreFocus = useRef(false);
   // Which §24 signal we already reacted to. State, not a ref, because it is written
   // during render (a ref written during render is not safe under concurrent React).
   const [seenAt, setSeenAt] = useState(() => lastScheduled?.at ?? 0);
-  const open = pinned || hoverOpen;
+  // The one "is the Plan content visible" flag, whatever the form. Everything below
+  // (badge clearing, §24 highlighting, Escape) reads this and stays form-agnostic.
+  const open = docked ? (pinned || hoverOpen) : overlayOpen;
 
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+
+  // A form change (rotating a tablet, dragging a desktop window narrow) must not leave
+  // the other form's "open" flag armed, or the panel reappears unasked on the way back.
+  // Adjusted during render like the two rules below — an effect here would paint one
+  // frame of the new form still carrying the old form's open state.
+  const [lastDocked, setLastDocked] = useState(docked);
+  if (lastDocked !== docked) {
+    setLastDocked(docked);
+    if (docked) setOverlayOpen(false);
+    else setHoverOpen(false);
+  }
 
   // ── State adjusted during render, not in effects ───────────────────────────
   // Both of the rules below are "derive state from props/state", which React wants
@@ -155,18 +194,47 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
     closeTimer.current = setTimeout(() => setHoverOpen(false), 240);
   }, [pinned]);
 
-  // Escape closes an unpinned panel (a pinned one is a layout choice, not a popup —
-  // Escape must not silently undo something the user deliberately pinned).
+  const closeOverlay = useCallback(() => setOverlayOpen(false), []);
+
+  // Escape closes an unpinned desktop panel (a pinned one is a layout choice, not a
+  // popup — Escape must not silently undo something the user deliberately pinned), and
+  // ALWAYS closes the drawer/sheet, which are modal popups by construction.
+  const escapeCloses = docked ? (hoverOpen && !pinned) : overlayOpen;
   useEffect(() => {
-    if (!hoverOpen || pinned) return;
+    if (!escapeCloses) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       if (closeTimer.current) clearTimeout(closeTimer.current);
       setHoverOpen(false);
+      setOverlayOpen(false);
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [hoverOpen, pinned]);
+  }, [escapeCloses]);
+
+  // The overlay forms cover the page, so the page behind them must not scroll away
+  // under the user's finger. Save/restore rather than blanket-clear: another modal may
+  // have set it first.
+  useEffect(() => {
+    if (docked || !overlayOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [docked, overlayOpen]);
+
+  // Dialog focus contract: into the panel on open, back to the trigger on close
+  // (Escape, scrim, or the close button — they all funnel through overlayOpen).
+  useEffect(() => {
+    if (!docked && overlayOpen) {
+      overlayPanelRef.current?.focus();
+      restoreFocus.current = true;
+      return;
+    }
+    if (restoreFocus.current) {
+      restoreFocus.current = false;
+      if (!docked) toggleRef.current?.focus();
+    }
+  }, [docked, overlayOpen]);
 
   function moveWeek(delta: number) {
     setWeekStart(current => {
@@ -176,6 +244,10 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
     });
   }
 
+  const goPrevWeek = () => moveWeek(-1);
+  const goNextWeek = () => moveWeek(1);
+  const goToday = () => setWeekStart(startOfWeek(new Date()));
+
   const end = days[6].date;
   const range = `${weekStart.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
   const countLabel = scheduledCount === 0
@@ -184,15 +256,30 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
       ? tr("studioBoard.plan.oneScheduledThisWeek")
       : tr("studioBoard.plan.scheduledThisWeek").replace("{n}", String(scheduledCount));
   const toggleLabel = pinned ? tr("studioBoard.plan.close") : tr("studioBoard.plan.open");
+  // The overlay forms pin nothing, so "Keep Plan open" would be a lie there — they say
+  // "Open Plan" / "Close Plan" instead.
+  const triggerLabel = docked
+    ? toggleLabel
+    : overlayOpen ? tr("studioBoard.plan.close") : tr("studioBoard.plan.openPanel");
   const badgeLabel = formatBadge(badge);
+  // The trigger only changes shape for the docked panel it is attached to; in the
+  // overlay forms it stays put (a dialog's opener must not move out from under the
+  // pointer, and it is the element focus returns to on close).
+  const railOpen = docked && open;
 
   return (
     <>
-      <button type="button" data-testid="studio-plan-toggle"
-        aria-label={toggleLabel} aria-pressed={pinned} aria-expanded={open}
-        title={badge > 0 ? tr("studioBoard.plan.newSinceLastOpen").replace("{n}", String(badge)) : toggleLabel}
-        onMouseEnter={reveal} onMouseLeave={scheduleClose} onFocus={reveal} onBlur={scheduleClose}
+      <button type="button" data-testid="studio-plan-toggle" ref={toggleRef}
+        aria-label={triggerLabel} aria-pressed={docked ? pinned : undefined} aria-expanded={open}
+        title={badge > 0 ? tr("studioBoard.plan.newSinceLastOpen").replace("{n}", String(badge)) : triggerLabel}
+        onMouseEnter={docked ? reveal : undefined} onMouseLeave={docked ? scheduleClose : undefined}
+        onFocus={docked ? reveal : undefined} onBlur={docked ? scheduleClose : undefined}
         onClick={() => {
+          if (!docked) {
+            // Tablet / mobile: one explicit, keyboard-reachable toggle for the overlay.
+            setOverlayOpen(value => !value);
+            return;
+          }
           if (pinned) {
             setHoverOpen(false);
             onPinnedChange(false);
@@ -202,16 +289,16 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
           }
         }}
         style={{
-          position: "absolute", zIndex: 45, top: open ? 13 : "38%", right: open ? 12 : 0,
-          width: open ? 30 : 28, height: open ? 30 : 44,
-          border: `1px solid ${BUI.border}`, borderRight: open ? `1px solid ${BUI.border}` : "none",
-          borderRadius: open ? 8 : "9px 0 0 9px",
-          background: pinned ? "rgba(124,58,237,0.12)" : BUI.surface,
-          color: pinned ? BUI.purple : BUI.textSec, cursor: "pointer",
-          boxShadow: open ? "none" : "-4px 0 14px rgba(15,23,42,0.08)",
+          position: "absolute", zIndex: 45, top: railOpen ? 13 : "38%", right: railOpen ? 12 : 0,
+          width: railOpen ? 30 : 28, height: railOpen ? 30 : 44,
+          border: `1px solid ${BUI.border}`, borderRight: railOpen ? `1px solid ${BUI.border}` : "none",
+          borderRadius: railOpen ? 8 : "9px 0 0 9px",
+          background: pinned && docked ? "rgba(124,58,237,0.12)" : BUI.surface,
+          color: pinned && docked ? BUI.purple : BUI.textSec, cursor: "pointer",
+          boxShadow: railOpen ? "none" : "-4px 0 14px rgba(15,23,42,0.08)",
           display: "grid", placeItems: "center", padding: 0,
         }}>
-        {pinned ? <PanelRightClose style={{ width: 16, height: 16 }} /> : <PanelRightOpen style={{ width: 16, height: 16 }} />}
+        {pinned && docked ? <PanelRightClose style={{ width: 16, height: 16 }} /> : <PanelRightOpen style={{ width: 16, height: 16 }} />}
         {badgeLabel && (
           <span data-testid="studio-plan-badge"
             style={{
@@ -223,7 +310,7 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
         )}
       </button>
 
-      {open && (
+      {docked && open && (
         <aside data-testid="studio-plan-sidebar" data-pinned={pinned ? "true" : "false"}
           aria-label={tr("studioBoard.plan.title")}
           onMouseEnter={reveal} onMouseLeave={scheduleClose}
@@ -233,46 +320,122 @@ export function StudioPlanSidebar({ drafts, pinned, onPinnedChange, lastSchedule
             position: pinned ? "relative" : "absolute", inset: pinned ? undefined : "0 0 0 auto",
             zIndex: 43, boxShadow: pinned ? "none" : "-14px 0 36px rgba(15,23,42,0.14)",
           }}>
-          <header style={{ padding: "14px 50px 10px 14px", borderBottom: `1px solid ${BUI.border}`, flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <CalendarDays style={{ width: 16, height: 16, color: BUI.purple }} />
-                <strong style={{ fontSize: 14, color: BUI.text }}>{tr("studioBoard.plan.title")}</strong>
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginTop: 12 }}>
-              <button type="button" aria-label={tr("studioBoard.plan.previousWeek")} onClick={() => moveWeek(-1)} style={navButton}><ChevronLeft style={{ width: 14, height: 14 }} /></button>
-              <span style={{ fontSize: 11.5, fontWeight: 750, color: BUI.text }}>{range}</span>
-              <button type="button" aria-label={tr("studioBoard.plan.nextWeek")} onClick={() => moveWeek(1)} style={navButton}><ChevronRight style={{ width: 14, height: 14 }} /></button>
-              <button type="button" onClick={() => setWeekStart(startOfWeek(new Date()))}
-                style={{ ...navButton, width: "auto", padding: "5px 9px", fontSize: 10.5, fontWeight: 700 }}>{tr("studioBoard.plan.today")}</button>
-            </div>
-            <div data-testid="studio-plan-count" style={{ marginTop: 8, fontSize: 10.5, fontWeight: 700, color: BUI.textSec }}>{countLabel}</div>
-          </header>
+          <PlanPanelHeader tr={tr} range={range} countLabel={countLabel}
+            onPrevWeek={goPrevWeek} onNextWeek={goNextWeek} onToday={goToday}
+            padding="14px 50px 10px 14px" />
+          <PlanPanelBody days={days} highlightId={highlight?.id} tr={tr} />
+          <PlanPanelFooter tr={tr} />
+        </aside>
+      )}
 
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 5, minHeight: "100%" }}>
-              {days.map(day => (
-                <div key={day.key} style={{ minWidth: 0, borderRadius: 8, background: day.isToday ? "rgba(124,58,237,0.055)" : BUI.bg, border: `1px solid ${day.isToday ? "rgba(124,58,237,0.20)" : BUI.border}` }}>
-                  <div style={{ padding: "7px 2px", textAlign: "center", borderBottom: `1px solid ${BUI.border}` }}>
-                    <div style={{ fontSize: 8.5, color: BUI.textSec, textTransform: "uppercase" }}>{day.date.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2)}</div>
-                    <div style={{ marginTop: 2, fontSize: 10.5, fontWeight: day.isToday ? 800 : 650, color: day.isToday ? BUI.purple : BUI.text }}>{day.date.getDate()}</div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: 4 }}>
-                    {day.items.map(item => (
-                      <PlanItem key={item.id} item={item} highlighted={item.id === highlight?.id} tr={tr} />
-                    ))}
-                  </div>
-                </div>
+      {!docked && overlayOpen && (
+        <div data-testid="studio-plan-overlay"
+          onClick={event => { if (event.target === event.currentTarget) closeOverlay(); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 340, background: "rgba(15,23,42,0.46)",
+            display: "flex", justifyContent: "flex-end",
+          }}>
+          <section
+            ref={overlayPanelRef} tabIndex={-1}
+            role="dialog" aria-modal="true" aria-label={tr("studioBoard.plan.title")}
+            data-testid={bucket === "mobile" ? "studio-plan-sheet" : "studio-plan-drawer"}
+            data-plan-form={bucket}
+            style={bucket === "mobile"
+              ? {
+                  width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column",
+                  background: BUI.surface, outline: "none",
+                }
+              : {
+                  width: PANEL_WIDTH, maxWidth: "92vw", height: "100%", minHeight: 0,
+                  display: "flex", flexDirection: "column",
+                  background: BUI.surface, borderLeft: `1px solid ${BUI.border}`, outline: "none",
+                  boxShadow: "-14px 0 36px rgba(15,23,42,0.24)",
+                }}>
+            <PlanPanelHeader tr={tr} range={range} countLabel={countLabel}
+              onPrevWeek={goPrevWeek} onNextWeek={goNextWeek} onToday={goToday}
+              onClose={closeOverlay} padding="14px 12px 10px 14px" />
+            <PlanPanelBody days={days} highlightId={highlight?.id} tr={tr} />
+            <PlanPanelFooter tr={tr} />
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Title + week navigation + the "n scheduled this week" line.
+ *  Shared by all three forms so they can never drift apart. The only differences are
+ *  the header padding (the docked panel leaves room for its floating trigger) and the
+ *  close control, which exists only in the overlay forms. */
+function PlanPanelHeader({ tr, range, countLabel, onPrevWeek, onNextWeek, onToday, onClose, padding }: {
+  tr: (key: MessageKey) => string;
+  range: string;
+  countLabel: string;
+  onPrevWeek: () => void;
+  onNextWeek: () => void;
+  onToday: () => void;
+  onClose?: () => void;
+  padding: string;
+}) {
+  return (
+    <header style={{ padding, borderBottom: `1px solid ${BUI.border}`, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <CalendarDays style={{ width: 16, height: 16, color: BUI.purple }} />
+          <strong style={{ fontSize: 14, color: BUI.text }}>{tr("studioBoard.plan.title")}</strong>
+        </div>
+        {onClose && (
+          <button type="button" data-testid="studio-plan-close"
+            aria-label={tr("studioBoard.plan.close")} onClick={onClose}
+            style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4, display: "inline-flex" }}>
+            <X style={{ width: 17, height: 17 }} />
+          </button>
+        )}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginTop: 12 }}>
+        <button type="button" aria-label={tr("studioBoard.plan.previousWeek")} onClick={onPrevWeek} style={navButton}><ChevronLeft style={{ width: 14, height: 14 }} /></button>
+        <span style={{ fontSize: 11.5, fontWeight: 750, color: BUI.text }}>{range}</span>
+        <button type="button" aria-label={tr("studioBoard.plan.nextWeek")} onClick={onNextWeek} style={navButton}><ChevronRight style={{ width: 14, height: 14 }} /></button>
+        <button type="button" onClick={onToday}
+          style={{ ...navButton, width: "auto", padding: "5px 9px", fontSize: 10.5, fontWeight: 700 }}>{tr("studioBoard.plan.today")}</button>
+      </div>
+      <div data-testid="studio-plan-count" style={{ marginTop: 8, fontSize: 10.5, fontWeight: 700, color: BUI.textSec }}>{countLabel}</div>
+    </header>
+  );
+}
+
+/** The seven-day strip. Identical in all three forms — "same content" is the point. */
+function PlanPanelBody({ days, highlightId, tr }: {
+  days: PlanSidebarDay[];
+  highlightId?: string;
+  tr: (key: MessageKey) => string;
+}) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 5, minHeight: "100%" }}>
+        {days.map(day => (
+          <div key={day.key} style={{ minWidth: 0, borderRadius: 8, background: day.isToday ? "rgba(124,58,237,0.055)" : BUI.bg, border: `1px solid ${day.isToday ? "rgba(124,58,237,0.20)" : BUI.border}` }}>
+            <div style={{ padding: "7px 2px", textAlign: "center", borderBottom: `1px solid ${BUI.border}` }}>
+              <div style={{ fontSize: 8.5, color: BUI.textSec, textTransform: "uppercase" }}>{day.date.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2)}</div>
+              <div style={{ marginTop: 2, fontSize: 10.5, fontWeight: day.isToday ? 800 : 650, color: day.isToday ? BUI.purple : BUI.text }}>{day.date.getDate()}</div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: 4 }}>
+              {day.items.map(item => (
+                <PlanItem key={item.id} item={item} highlighted={item.id === highlightId} tr={tr} />
               ))}
             </div>
           </div>
-          <footer style={{ padding: 10, borderTop: `1px solid ${BUI.border}`, display: "flex", gap: 8 }}>
-            <Link href="/app/studio?view=plan" style={{ flex: 1, textAlign: "center", padding: "8px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, color: BUI.text, textDecoration: "none", fontSize: 11.5, fontWeight: 700 }}>{tr("studioBoard.plan.openFullPlanner")}</Link>
-          </footer>
-        </aside>
-      )}
-    </>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlanPanelFooter({ tr }: { tr: (key: MessageKey) => string }) {
+  return (
+    <footer style={{ padding: 10, borderTop: `1px solid ${BUI.border}`, display: "flex", gap: 8 }}>
+      <Link href="/app/studio?view=plan" style={{ flex: 1, textAlign: "center", padding: "8px 10px", borderRadius: 8, border: `1px solid ${BUI.border}`, color: BUI.text, textDecoration: "none", fontSize: 11.5, fontWeight: 700 }}>{tr("studioBoard.plan.openFullPlanner")}</Link>
+    </footer>
   );
 }
 

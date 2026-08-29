@@ -5,10 +5,17 @@
  * Covers: diff/outbox, LWW merge (local newer / server newer / equal), tombstone
  * convergence (both directions), first-load migration, cursor-paginated pull,
  * >50 batch chunking, backoff retry queue (never drops the outbox), 202 deferred
- * degradation, the 200KB payload guard, and idempotent init.
+ * degradation, the 200KB payload guard, idempotent init, and the 409-stale
+ * reconciliation (re-base onto the server's current row FIELD-LEVEL, retry ONCE,
+ * then defer).
  */
 
 import assert from "node:assert";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname_ = path.dirname(fileURLToPath(import.meta.url));
 
 // ── window + localStorage shim (same pattern as test-pin-board-store.ts) ───────
 const mem = new Map<string, string>();
@@ -46,6 +53,19 @@ function createMockServer(initial: Row[] = []) {
   const log: Array<{ method: string; url: string; body?: { drafts?: Array<{ draftId: string }>; draftIds?: string[]; deletedAt?: string } }> = [];
   let failCount = 0;
   let deferWrites = false;
+  // Drafts the next PUT(s) must answer 409 stale for, and the row the client is
+  // handed as `current`. This is the server having lost its compare-and-set:
+  // the stored row moved between the LWW read and the conditional write.
+  let staleIds = new Set<string>();
+  let staleFor = 0;              // how many more PUTs still answer 409
+  const staleCurrent = new Map<string, Row>();
+  // Runs INSIDE a PUT, after the request body is captured and before the response
+  // resolves — i.e. while the request is genuinely in flight. The defect under test
+  // only exists in that window: the merchant edits after the payload has left the
+  // client but before its 409 comes back, so `sent` and the local draft diverge.
+  // Without this the edit lands before the PUT and the two are identical, which is
+  // a different (already-correct) scenario.
+  let onPut: (() => void) | null = null;
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -68,12 +88,27 @@ function createMockServer(initial: Row[] = []) {
     }
     if (deferWrites) return json({ deferred: true }, 202);
     if (method === "PUT") {
+      const drafts = body.drafts as Array<{ draftId: string; updatedAt: string; payload: Record<string, unknown> }>;
+      if (onPut) { const fn = onPut; onPut = null; fn(); }
+      const conflicts = staleFor > 0 ? drafts.filter(d => staleIds.has(d.draftId)) : [];
+      if (staleFor > 0) staleFor--;
       let applied = 0, skippedStale = 0;
-      for (const d of body.drafts as Array<{ draftId: string; updatedAt: string; payload: Record<string, unknown> }>) {
+      for (const d of drafts) {
+        if (conflicts.some(c => c.draftId === d.draftId)) continue; // conditional write matched nothing
         const ex = rows.get(d.draftId);
         if (ex && Date.parse(d.updatedAt) < Date.parse(ex.updatedAt)) { skippedStale++; continue; }
         rows.set(d.draftId, { draftId: d.draftId, updatedAt: d.updatedAt, payload: d.payload });
         applied++;
+      }
+      if (conflicts.length > 0) {
+        const stale = conflicts.map(c => {
+          const cur = staleCurrent.get(c.draftId) ?? rows.get(c.draftId) ?? null;
+          return {
+            draftId: c.draftId,
+            current: cur ? { payload: cur.payload, updated_at: cur.updatedAt, scheduled_at: null } : null,
+          };
+        });
+        return json({ error: "stale", code: "stale", stale, current: stale[0].current, applied, skippedStale }, 409);
       }
       return json({ applied, skippedStale });
     }
@@ -94,6 +129,17 @@ function createMockServer(initial: Row[] = []) {
     rows, log, fetchImpl,
     failNext: (n: number) => { failCount = n; },
     defer: (on: boolean) => { deferWrites = on; },
+    /** Answer 409 stale for these drafts on the next `times` PUT(s), handing back `current`. */
+    staleNext: (ids: string[], times: number, current?: Row[]) => {
+      staleIds = new Set(ids);
+      staleFor = times;
+      staleCurrent.clear();
+      for (const r of current ?? []) staleCurrent.set(r.draftId, r);
+      // The server copy the client must converge on IS the stored row.
+      for (const r of current ?? []) rows.set(r.draftId, r);
+    },
+    /** Run `fn` during the NEXT PUT, while that request is still in flight. */
+    duringNextPut: (fn: () => void) => { onPut = fn; },
     live: () => [...rows.values()].filter(r => !r.deletedAt),
     putCalls: () => log.filter(l => l.method === "PUT"),
     deleteCalls: () => log.filter(l => l.method === "DELETE"),
@@ -347,6 +393,267 @@ async function main() {
     await until(() => srv1.live().some(r => r.draftId === a.id), 3_000);
     assert.equal(srv2.log.length, 0, "second init's fetch must never be used");
     assert.equal(srv1.putCalls().length, 1, "exactly one PUT — no double subscription");
+  });
+
+  // ── 409 stale reconciliation ────────────────────────────────────────────────
+  // The server refuses a write whose compare-and-set lost. What must NOT happen is
+  // the client shrugging: an unhandled 409 would land in the generic error path,
+  // back off, and re-send the very same older payload for as long as it takes to
+  // win — which is exactly the blind overwrite the server change exists to stop.
+
+  await test("409 stale: client merges the server's current row and retries ONCE", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s1.png", source: "uploaded_image", title: "local" });
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    // Another writer moved the row forward; the next PUT loses its CAS once.
+    const future = new Date(Date.now() + 120_000).toISOString();
+    srv.staleNext([a.id], 1, [serverDraft(a.id, future, { title: "server-won" })]);
+
+    store.updateDraft(a.id, { title: "local-edit" });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 4_000);
+
+    const puts = srv.putCalls().slice(putsBefore);
+    assert.equal(puts.length, 2, `409 → exactly one retry (saw ${puts.length} PUTs)`);
+    assert.deepEqual(puts[1].body!.drafts!.map(d => d.draftId), [a.id], "the retry carries only the conflicted draft");
+    // Nothing was edited between the send and the 409, so the delta is empty and the
+    // server's row is adopted whole. (It is newer here too, but that is no longer what
+    // decides it — see the re-base cases below.)
+    assert.equal(store.getDraft(a.id)!.title, "server-won", "the server's newer copy must be merged in, not ignored");
+  });
+
+  await test("409 twice: the cycle stops at two PUTs — deferred to the NEXT pass, never dropped", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s2.png", source: "uploaded_image", title: "local" });
+    const srv = createMockServer();
+    // A visible cycle boundary: the debounce is what separates "this cycle" from
+    // "the next pass", so it has to be longer than the window we measure in.
+    const SLOW = { ...FAST, debounceMs: 250 };
+    sync.initPinDraftSync(getToken, { ...SLOW, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const future = new Date(Date.now() + 120_000).toISOString();
+      srv.staleNext([a.id], 2, [serverDraft(a.id, future, { title: "server-won" })]);
+      store.updateDraft(a.id, { title: "local-edit-2" });
+      await until(() => srv.putCalls().length - putsBefore >= 2, 4_000);
+      await sleep(120); // well inside the 250ms debounce → any third PUT here is a third ATTEMPT
+      assert.equal(
+        srv.putCalls().length - putsBefore, 2,
+        `a second 409 must stop THIS cycle at 2 PUTs (saw ${srv.putCalls().length - putsBefore})`,
+      );
+      assert.ok(
+        warnings.some(w => w.includes("still stale") && w.includes(a.id)),
+        "giving up silently would look exactly like a successful sync — it must warn",
+      );
+      assert.ok(sync.__getPinDraftSyncDebug().outboxSize >= 1, "the entry must stay in the outbox, not be dropped");
+
+      // …and it must come BACK. A stranded outbox entry (pendingCount stuck at 1
+      // until some unrelated edit happens) is the silent drop, just slower. The
+      // next pass carries the merged payload, so it converges instead of re-sending
+      // the losing copy — which is why re-arming is not a hot loop.
+      await until(() => srv.putCalls().length - putsBefore >= 3, 3_000);
+      const third = srv.putCalls().slice(putsBefore)[2];
+      assert.deepEqual(third.body!.drafts!.map(d => d.draftId), [a.id]);
+      assert.equal(
+        (third.body!.drafts![0] as unknown as { payload: { title?: string } }).payload.title,
+        "server-won",
+        "the next pass must send the MERGED payload, not the older local copy",
+      );
+      await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 3_000);
+    } finally {
+      console.warn = realWarn;
+      sync.__resetPinDraftSyncForTests();
+    }
+  });
+
+  // ── The re-base rule (Codex round 5) ────────────────────────────────────────
+  // The sequence that whole-payload LWW cannot survive, and the reason this path
+  // no longer uses it. Note what is NOT in these fixtures: an artificially FUTURE
+  // server timestamp. The old test stamped the server row at now+120s, so LWW won
+  // on timestamp alone and the assertions passed while the defect sat untouched.
+  // Here the server row is stamped BEFORE the local edit — exactly as it happens
+  // in life, where the merchant types while the cron's write is already stored —
+  // so the local copy is genuinely newer and only a field-level merge can be right.
+
+  /**
+   * Run the whole race for one draft and return the payload the RETRY carried.
+   *
+   * The order matters and is the reason for the in-flight hook: the merchant's edit
+   * has to happen AFTER the PUT left the client. If it lands before, `sent` already
+   * contains it, the delta is empty, and the test proves nothing about the defect.
+   *
+   *  1. a scheduled draft is synced, so the server has it and the next PUT's payload
+   *     is the pre-publish copy (schedule and all);
+   *  2. an edit arms the outbox and the PUT goes out carrying that copy;
+   *  3. WHILE it is in flight the cron result becomes the stored row (published,
+   *     schedule cleared) and the merchant edits again → local draft B, strictly
+   *     newer than the row, still based on the pre-publish payload;
+   *  4. the PUT comes back 409 stale with that row as `current`.
+   */
+  async function raceDuringPublish(
+    key: string,
+    /** The merchant's in-flight edit; `null` = they touched nothing during the PUT. */
+    edit: Parameters<typeof store.updateDraft>[1] | null,
+    serverPatch: Record<string, unknown> = {},
+  ) {
+    const srv = createMockServer();
+    const a = store.createBoardDraft({ imageUrl: `https://x/${key}.png`, source: "uploaded_image", title: "sched" });
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    store.updateDraft(a.id, {
+      scheduledDate: "2026-07-01", scheduledTime: "09:00", plannedAt: "2026-07-01T09:00",
+    });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    let published!: Row;
+    srv.duringNextPut(() => {
+      // The cron's write, stamped now — NOT at some artificial future offset. The old
+      // fixture used now+120s, which let whole-payload LWW win on the timestamp and
+      // hid the defect completely.
+      const serverAt = new Date().toISOString();
+      published = serverDraft(a.id, serverAt, {
+        scheduledDate: "", scheduledTime: "", plannedAt: "",
+        title: "sched", // untouched since the send → never part of a delta
+        destinationResults: [{ provider: "pinterest", status: "published", remotePinUrl: "https://pin/9" }],
+        previousResults: [{ provider: "pinterest", status: "published" }],
+        postedAt: serverAt, remotePinId: "pin9", remotePinUrl: "https://pin/9",
+        ...serverPatch,
+      });
+      srv.staleNext([a.id], 1, [published]);
+      // The merchant edits while the request is still out. Their draft is now newer
+      // than the stored row — which is exactly what LWW gets wrong.
+      if (edit) store.updateDraft(a.id, edit);
+    });
+
+    store.updateDraft(a.id, { altText: `touch-${key}` }); // arms the outbox → the PUT goes out
+    await until(() => srv.putCalls().length > putsBefore, 3_000);
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 4_000);
+
+    const retry = srv.putCalls().slice(putsBefore).at(-1)! .body!.drafts![0] as unknown as
+      { payload: Record<string, unknown>; updatedAt: string };
+    return { srv, id: a.id, published, retry, puts: srv.putCalls().length - putsBefore };
+  }
+
+  await test("409 re-base: an edit made DURING the publish keeps its field — and nothing else", async () => {
+    reset();
+    const { srv, id, retry } = await raceDuringPublish("r1", { title: "edited-during-publish" });
+    assert.ok(
+      Date.parse(store.getDraft(id)!.updatedAt) >= Date.parse(srv.rows.get(id)!.updatedAt),
+      "fixture check: the local edit must not be OLDER than the server row, or the defect is masked",
+    );
+
+    // The one field they changed survives…
+    assert.equal(retry.payload.title, "edited-during-publish", "the merchant's edit must not be lost");
+    // …and every field they did NOT touch comes from the server.
+    assert.equal(retry.payload.scheduledDate, "", "an untouched schedule must stay as the server left it");
+    assert.equal(retry.payload.scheduledTime, "");
+    assert.equal(retry.payload.plannedAt, "");
+    assert.deepEqual(retry.payload.destinationResults,
+      [{ provider: "pinterest", status: "published", remotePinUrl: "https://pin/9" }],
+      "the publish results must ride the retry, not be erased by it");
+    assert.deepEqual(retry.payload.previousResults, [{ provider: "pinterest", status: "published" }]);
+    assert.equal(retry.payload.remotePinId, "pin9");
+    assert.equal(retry.payload.remotePinUrl, "https://pin/9");
+
+    // The store must show the server's truth too — leaving the UI on B would tell the
+    // merchant their Content is still scheduled while it is already live.
+    const local = store.getDraft(id)! as unknown as Record<string, unknown>;
+    assert.equal(local.title, "edited-during-publish");
+    assert.equal(local.scheduledDate, "", "the local store must not stay on the pre-publish copy");
+    assert.ok(local.destinationResults, "the merchant must see the publish results");
+    assert.equal(local.status, "needs_review", "status is derived: no schedule left ⇒ not ready");
+  });
+
+  await test("409 re-base: a RESCHEDULE made during the publish is real intent and wins", async () => {
+    reset();
+    // This time they DID touch the schedule. Keeping the server's cleared one would
+    // silently discard an instruction the merchant actually gave.
+    const { retry } = await raceDuringPublish("r2", { scheduledDate: "2026-08-20", scheduledTime: "14:30" });
+    assert.equal(retry.payload.scheduledDate, "2026-08-20", "a schedule the merchant re-set must survive");
+    assert.equal(retry.payload.scheduledTime, "14:30");
+    assert.equal(retry.payload.plannedAt, "2026-08-20T14:30",
+      "the group moves together — plannedAt comes from the same side");
+    assert.ok(retry.payload.destinationResults, "their reschedule still must not erase what was published");
+  });
+
+  await test("409 re-base: no edit during the flight ⇒ the server's row is adopted whole", async () => {
+    reset();
+    // Nothing was edited between the send and the 409: there is no local intent to
+    // preserve, so nothing local may survive.
+    const { published, retry } = await raceDuringPublish("r3", null);
+    for (const k of ["title", "scheduledDate", "scheduledTime", "plannedAt", "destinationResults", "postedAt"]) {
+      assert.deepEqual(retry.payload[k], (published.payload as Record<string, unknown>)[k],
+        `with no local delta the server's ${k} must be sent back unchanged`);
+    }
+  });
+
+  await test("409 re-base: a FAILED publish's cleared schedule is not resurrected either", async () => {
+    reset();
+    // writeFailure clears the schedule WITHOUT setting postedAt, so the server's
+    // "already published ⇒ never due" guard does not cover this case. The group rule
+    // is the only thing between this and a silently re-scheduled retry.
+    const { retry } = await raceDuringPublish("r4", { description: "edited-after-failure" }, {
+      destinationResults: [{ provider: "pinterest", status: "failed" }],
+      previousResults: undefined, postedAt: "", remotePinId: "", remotePinUrl: "",
+      publishError: "board_not_owned", failureType: "publish", errorCategory: "content",
+      publishErrorCode: "board_not_owned",
+    });
+    assert.equal(retry.payload.description, "edited-after-failure");
+    assert.equal(retry.payload.scheduledDate, "", "a schedule cleared by a FAILED publish must stay cleared");
+    assert.equal(retry.payload.plannedAt, "");
+    assert.equal(retry.payload.publishError, "board_not_owned", "the failure framing must reach the merchant");
+    assert.equal(retry.payload.failureType, "publish");
+  });
+
+  await test("409 re-base: untouched scheduledDestinations come from the server", async () => {
+    reset();
+    const { retry } = await raceDuringPublish("r5", { title: "t" },
+      { scheduledDestinations: [{ provider: "pinterest", connectionId: "c-server" }] });
+    assert.deepEqual(retry.payload.scheduledDestinations, [{ provider: "pinterest", connectionId: "c-server" }],
+      "the merchant did not touch destinations, so the server's intent stands");
+  });
+
+  await test("409 re-base: the declared updatedAt is max(local, server) — never older, never invented", async () => {
+    reset();
+    const { srv, id, retry } = await raceDuringPublish("r6", { title: "t" });
+    const serverAt = srv.rows.get(id)!.updatedAt;
+    // Older than the row would be silently skipped by the server's LWW (a green 200
+    // that writes nothing); a fresh Date.now() would race the cron's next write.
+    assert.ok(Date.parse(retry.updatedAt) >= Date.parse(serverAt),
+      `the retry must never declare a stamp OLDER than the row it re-based onto (${retry.updatedAt} vs ${serverAt})`);
+    assert.equal(retry.payload.updatedAt, retry.updatedAt, "payload and envelope must agree");
+    assert.equal(store.getDraft(id)!.updatedAt, retry.updatedAt,
+      "the stamp is the store's, not one invented at send time");
+  });
+
+  // ── Source contract ─────────────────────────────────────────────────────────
+
+  await test("source: reconcileStale re-bases field-level and never calls whole-payload mergeServerDrafts", () => {
+    const src = fs
+      .readFileSync(path.join(__dirname_, "../src/lib/pinDraftSync.ts"), "utf8")
+      .replace(/\r\n?/g, "\n");
+    const start = src.indexOf("async function reconcileStale");
+    assert.ok(start > 0, "reconcileStale must still exist");
+    const body = src.slice(start, src.indexOf("function rebuildChunk"));
+    assert.ok(
+      !/\bmergeServerDrafts\s*\(/.test(body),
+      "whole-payload LWW in the 409 path is the defect: a local edit made during a publish is NEWER, "
+      + "so LWW keeps the entire pre-publish copy and the retry resurrects the cleared schedule",
+    );
+    assert.ok(/\brebaseDraftOnServer\s*\(/.test(body), "the 409 path must re-base field-level");
+    assert.ok(/sentById|c\.draft/.test(body),
+      "the delta needs the payload that was SENT — without that snapshot there is nothing to diff against");
+    // The pull path is where LWW's question ("whose copy is newer") is the right one.
+    assert.ok(/mergeServerDrafts\s*\(/.test(src.slice(0, start)), "the startup pull must still use LWW");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

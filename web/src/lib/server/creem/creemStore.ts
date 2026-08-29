@@ -52,6 +52,8 @@ export type CreemSubscriptionRow = {
   billing_interval: string | null;
   current_period_end: string | null;
   scheduled_cancel: boolean;
+  /** Quantity on the Creem subscription (migrate_v66, renumbered from v63). 1 for every plan. */
+  units: number;
   last_event_at: string | null;
   created_at: string;
   updated_at: string;
@@ -76,8 +78,23 @@ export type UpsertCreemSubscriptionInput = {
   billingInterval: "month" | "year" | null;
   currentPeriodEnd?: string | null;
   scheduledCancel: boolean;
+  /**
+   * Quantity on the subscription (`items[0].units`). Always 1 for a plan; for the
+   * extra-account-slots add-on it is how many extra accounts were bought. Omitted
+   * → 1, so an event whose payload lacks the field can never silently zero a
+   * user's purchased slots.
+   */
+  units?: number | null;
   occurredAt: string;
 };
+
+/** A subscription quantity as a positive integer; anything unusable is 1. */
+export function normalizeUnits(value: unknown): number {
+  const n = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(n)) return 1;
+  const floored = Math.floor(n);
+  return floored >= 1 ? floored : 1;
+}
 
 /** True when the incoming event is at least as recent as the stored one. */
 function isNotStale(storedLastEventAt: string | null, occurredAt: string): boolean {
@@ -194,6 +211,7 @@ export async function upsertCreemSubscription(
     billing_interval: input.billingInterval,
     current_period_end: input.currentPeriodEnd ?? null,
     scheduled_cancel: input.scheduledCancel,
+    units: normalizeUnits(input.units),
     last_event_at: occurredAt,
     updated_at: new Date().toISOString(),
   };

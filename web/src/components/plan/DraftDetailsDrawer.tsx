@@ -30,6 +30,7 @@ import { PinTitleSection } from "@/components/pin-details/PinTitleSection";
 import { PinAltTextSection } from "@/components/pin-details/PinAltTextSection";
 import { toast } from "sonner";
 import type { PinDraft, SocialPostRef } from "@/lib/pinDraftStore";
+import type { DestinationPublishResult } from "@/lib/contentDraftModel";
 import * as pinDraftStore from "@/lib/pinDraftStore";
 import { sanitizeHandoffField, plannableDateISO } from "@/lib/weeklyPlanHandoff";
 import { formatEnglishDateTime, browserTimeZone } from "@/lib/dateTimeFormat";
@@ -77,7 +78,7 @@ import { destinationKey, type PublishDestination, type PublishProvider } from "@
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { fetchInFlightPublish } from "@/lib/social/socialClient";
 import { isSocialProvider, platformName, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
-import { buildScheduledDestinations, hasExplicitIntent, resolveScheduledAccount, AmbiguousScheduleAccountError } from "@/lib/social/scheduledDestinations";
+import { buildScheduledDestinations, hasExplicitIntent, resolveScheduledAccount, withBoardOnPinterestEntry, AmbiguousScheduleAccountError } from "@/lib/social/scheduledDestinations";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { SupportChatModal } from "@/components/support/SupportChatModal";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -117,6 +118,35 @@ function needsPinterestConnect(err?: PinterestClientError | { code?: string; nee
     || err?.code === "not_connected"
     || err?.code === "needs_reconnect"
     || err?.code === "configuration_error";
+}
+
+/**
+ * The destinations a draft was actually scheduled to, as the picker reads a selection.
+ *
+ * Only EXPLICIT intent seeds a selection: a legacy Pin's DERIVED Pinterest destination
+ * is our inference, not the merchant's choice, so it must not appear as though they had
+ * ticked it. Shared by the useState initialiser and the per-draft seed below so the
+ * selection is correct on the FIRST render — PublishDestinations is mounted fresh on
+ * every open, and a selection that only arrives in an effect lets its own
+ * "default Pinterest" path run against an empty/stale value.
+ */
+function seedSocialDestinations(draft: PinDraft | null | undefined): SocialProvider[] {
+  if (!draft || !hasExplicitIntent(draft)) return [];
+  return (draft.scheduledDestinations ?? []).map(d => d.provider).filter(isSocialProvider);
+}
+
+/**
+ * The ACCOUNT half of that intent. Restoring only the platform would drop which account
+ * was chosen, and the next save would have to guess it again — the exact ambiguity
+ * resolveScheduledAccount refuses to resolve.
+ */
+function seedSocialAccountIds(
+  draft: PinDraft | null | undefined,
+): Array<{ provider: string; id: string }> {
+  if (!draft || !hasExplicitIntent(draft)) return [];
+  return (draft.scheduledDestinations ?? [])
+    .filter(d => isSocialProvider(d.provider) && d.provider !== "pinterest" && !!d.socialConnectionId)
+    .map(d => ({ provider: d.provider, id: d.socialConnectionId }));
 }
 
 export type PinDetailsModalProps = {
@@ -222,11 +252,34 @@ export function PinDetailsModal({
   const [supportRequest, setSupportRequest] = useState<{ seedText: string; extra: Record<string, unknown> } | null>(null);
   // Extra repurpose destinations chosen by the merchant (Pinterest is published
   // by the existing flow; these are the additional connected channels).
-  const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>([]);
+  const [socialDestinations, setSocialDestinations] = useState<SocialProvider[]>(
+    () => seedSocialDestinations(open ? draft : null),
+  );
   // Which specific accounts to publish as, on platforms with more than one
   // connected. Empty means "every connected account on the selected platforms" —
   // connecting a second account must not silently narrow an existing habit.
-  const [socialAccountIds, setSocialAccountIds] = useState<Array<{ provider: string; id: string }>>([]);
+  const [socialAccountIds, setSocialAccountIds] = useState<Array<{ provider: string; id: string }>>(
+    () => seedSocialAccountIds(open ? draft : null),
+  );
+  /**
+   * Which draft the selection above was seeded from — the render-time half of the
+   * per-draft seed below (React's documented "adjust state when props change").
+   *
+   * It has to happen DURING RENDER, not in the seed effect: PublishDestinations mounts
+   * fresh on every open and its child effects run BEFORE this component's, so a
+   * selection that only lands in an effect leaves the picker looking at an empty (or
+   * the previous draft's) selection on first render — which is exactly when it decides
+   * whether to apply its Pinterest default. Seeding here means the picker's first
+   * render already sees this Content's real intent and stands down.
+   */
+  const [selectionSeededId, setSelectionSeededId] = useState<string | null>(
+    () => (open && draft ? draft.id : null),
+  );
+  if (open && draft && selectionSeededId !== draft.id) {
+    setSelectionSeededId(draft.id);
+    setSocialDestinations(seedSocialDestinations(draft));
+    setSocialAccountIds(seedSocialAccountIds(draft));
+  }
   // Connection summaries reported by PublishDestinations. Needed to turn a chosen
   // PLATFORM into the specific ACCOUNT the schedule should publish through, and to
   // tell "one obvious account" apart from "several, so the choice must be explicit".
@@ -240,6 +293,11 @@ export function PinDetailsModal({
   // early return: declared below it, the hook count changes between renders and
   // React tears the tree down (error #310).
   const [liveSocialPosts, setLiveSocialPosts] = useState<SocialPostRef[] | null>(null);
+  // The per-destination rows the fan-out actually recorded, for the same reason and
+  // with the same lifetime as liveSocialPosts above. These are the ONLY place a
+  // FAILED destination exists: socialPosts[] records successes, so a drawer reading
+  // just the legacy fields could show a partial failure only as a missing row.
+  const [liveDestinationResults, setLiveDestinationResults] = useState<DestinationPublishResult[] | null>(null);
   // One publish = one toast. Pinterest and the social fan-out complete at
   // different moments, but the merchant clicked once; sharing a toast id lets the
   // later result replace the earlier line with a combined one.
@@ -665,22 +723,13 @@ export function PinDetailsModal({
     setConfirmReplaceUrlOpen(false);
     setPinterestConnected(false);
     setPinterestAccount(null);
-    // Re-open a scheduled Pin showing the destinations it was actually scheduled to.
-    // Only EXPLICIT intent seeds the selection: a legacy Pin's derived Pinterest
-    // destination is our inference, not the merchant's choice, so it must not appear
-    // as though they had ticked it.
-    const explicitIntent = hasExplicitIntent(draft) ? (draft.scheduledDestinations ?? []) : [];
-    setSocialDestinations(explicitIntent.map(d => d.provider).filter(isSocialProvider));
-    // Re-hydrate the ACCOUNT half of that intent too. Restoring only the platform
-    // would drop which account was chosen, and the next save would have to guess it
-    // again — the exact ambiguity resolveScheduledAccount now refuses to resolve.
-    setSocialAccountIds(
-      explicitIntent
-        .filter(d => isSocialProvider(d.provider) && d.provider !== "pinterest" && !!d.socialConnectionId)
-        .map(d => ({ provider: d.provider, id: d.socialConnectionId })),
-    );
+    // The destination selection is NOT seeded here. It is seeded during render
+    // (seedSocialDestinations / seedSocialAccountIds, keyed on selectionSeededId), so
+    // the freshly mounted PublishDestinations sees this Content's real intent on its
+    // FIRST render instead of an empty selection it would default to Pinterest.
     // Scoped to one publish: never carry another Pin's live posts into this one.
     setLiveSocialPosts(null);
+    setLiveDestinationResults(null);
     setIsRedirectingToPinterest(false);
     // The Pin's pinned publish target, straight off the draft. A blank one is NOT
     // adopted here: opening a drawer must not silently decide (and persist) where an
@@ -884,6 +933,22 @@ export function PinDetailsModal({
         }
         throw err;
       }
+    } else if (
+      (activeDraft.scheduledDestinations ?? []).length
+      && (selectedBoard?.id ?? "").trim() !== (activeDraft.boardId ?? "").trim()
+    ) {
+      // Undated Pin that ALREADY carries intent — the Create Pins card's destination
+      // picker writes `scheduledDestinations` with no date condition, so this is reachable.
+      // Nothing above ran, which used to mean the board field moved the legacy fields only
+      // and left the stored entry on the old board; scheduling it later from the card (which
+      // does not rebuild intent) would then publish to a board the merchant had changed away
+      // from. Only the board moves here — an undated Pin has no picked date to freeze the
+      // rest of the intent against.
+      patch.scheduledDestinations = withBoardOnPinterestEntry(
+        activeDraft.scheduledDestinations,
+        activeDraft.targetConnectionId,
+        { boardId: selectedBoard?.id ?? "", boardName: selectedBoard?.name ?? "" },
+      );
     }
     // Setting a date implies the pin is on the plan — keep the flags in sync so
     // it lands on the calendar and leaves the "not added" / "needs date" trays.
@@ -1199,7 +1264,10 @@ export function PinDetailsModal({
       // Mirror the derived socialPosts into local state: the `draft` prop does not
       // re-render for a store write, and this drawer is usually still open.
       const stored = pinDraftStore.getDraft(activeDraft.id);
-      if (stored) setLiveSocialPosts(stored.socialPosts ?? []);
+      if (stored) {
+        setLiveSocialPosts(stored.socialPosts ?? []);
+        setLiveDestinationResults(stored.destinationResults ?? []);
+      }
 
       const pinterestRow = outcome.published.find(r => r.provider === "pinterest");
       if (pinterestRow) {
@@ -1227,24 +1295,20 @@ export function PinDetailsModal({
       const failedNow = outcome.failed.filter(r => destinations.some(d => d.id === r.destinationId));
       if (outcome.published.length) {
         const names = outcome.published.map(r => platformName(r.provider)).join(t("pinDetails.listSeparator"));
-        const withLink = outcome.published.find(r => r.postUrl);
         // One publish, one toast: a combined line naming every destination that
         // received it, under the shared id, replacing the loading spinner.
+        //
+        // No action button (PRD 0809 §V). It linked whichever destination happened to
+        // be first with a permalink and called it "View Pin" — Pinterest's noun — so a
+        // publish that reached three platforms offered exactly one of them, misnamed.
+        // Per-destination "View on {platform}" actions render in Publish results just
+        // below, and unlike a toast they survive a refresh: a toast is immediate
+        // feedback, never the record.
         toast.success(
           outcome.published.length === 1 && outcome.published[0].provider === "pinterest"
             ? t("pinDetails.toast.publishSuccess")
             : `${t("pinDetails.toast.publishSuccess")} ${t("pinDetails.toast.alsoPublishedPrefix")}${names}`,
-          {
-            id: PUBLISH_TOAST_ID,
-            ...(withLink?.postUrl
-              ? {
-                  action: {
-                    label: withLink.provider === "pinterest" ? t("pinDetails.viewPin") : viewOnLabel(withLink.provider),
-                    onClick: () => window.open(withLink.postUrl as string, "_blank", "noopener,noreferrer"),
-                  },
-                }
-              : {}),
-          },
+          { id: PUBLISH_TOAST_ID },
         );
         setPublishError(null);
       }
@@ -1599,6 +1663,10 @@ export function PinDetailsModal({
                         // and never re-renders for a store write, so a Facebook /
                         // Instagram post that landed afterwards was missing here.
                         socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
+                        // Stored rows win in contentDestinationResults, and they are
+                        // the only carrier of a FAILED destination. Omitting them is
+                        // how a partial failure rendered here as an all-published set.
+                        destinationResults: liveDestinationResults ?? activeDraft.destinationResults,
                       })}
                     />
                   </div>
@@ -1940,6 +2008,9 @@ export function PinDetailsModal({
               // Same reason as above: the just-finished fan-out wins over the
               // snapshot the drawer opened with.
               socialPosts: liveSocialPosts ?? activeDraft.socialPosts,
+              // Same reason as the summary above: without these a destination that
+              // failed in the publish that just ran has no row to render at all.
+              destinationResults: liveDestinationResults ?? activeDraft.destinationResults,
             });
             return rows.length ? (
               <div data-testid="draft-publish-success">
@@ -1950,9 +2021,14 @@ export function PinDetailsModal({
         </div>
 
         {/* ── State-based footer (compact; Publish is never the only action).
-            Hidden entirely for a published Pin: the read-only view's single action
-            is "View on Pinterest" in the summary, and the header X closes. ── */}
-        {!isPosted && (
+            Hidden entirely once this Content has published — whether it arrived posted
+            or published in this drawer just now. Its single action used to be one
+            "View Pin" pointing at Pinterest no matter which platforms received the
+            post (PRD 0809 §V); the per-destination "View on {platform}" actions in
+            Publish results above replace it, and the header X closes. A publish that
+            delivered NOTHING leaves `result` null, so the failure path below — the
+            error line, Contact support, Publish now — is untouched. ── */}
+        {!isPosted && !result?.pinUrl && (
         <div style={{ flexShrink: 0, borderTop: `1px solid ${UI.border}`, padding: "10px 16px", background: UI.card }}>
           {publishError && !result && !trialAccess && (
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, margin: "0 0 8px" }}>
@@ -1992,11 +2068,7 @@ export function PinDetailsModal({
               <span data-testid="draft-cta-helper" style={{ fontSize: 10.5, color: UI.textMuted }}>{scheduleHelper}</span>
             )}
             <div style={{ flex: 1 }} />
-            {result?.pinUrl ? (
-                <a data-testid="draft-cta-view-pin" href={result.pinUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
-                  <ExternalLink size={13} /> {t("pinDetails.viewPin")}
-                </a>
-            ) : isFailed ? (
+            {isFailed ? (
               <>
                 <button
                   type="button"

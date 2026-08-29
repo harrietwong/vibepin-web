@@ -36,9 +36,15 @@ import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import { isSocialProvider, platformName, PLATFORMS, type SocialProvider } from "@/lib/social/platforms";
 import { findConnection, summarizeConnections } from "@/lib/social/server/socialConnectionStore";
+import {
+  resolveDestinationConnection,
+  connectAccountMessage,
+  chooseAccountMessage,
+} from "@/lib/social/server/resolveDestinationConnection";
 import { getSocialProviderById } from "@/lib/social/providers";
 import type { SocialConnection, SocialPostPayload } from "@/lib/social/types";
 import { createPublishJob, recordOutcomes } from "@/lib/social/publishFanout";
+import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { rollUpJobStatus, type DestinationOutcome } from "@/lib/social/publishRules";
 
 export const dynamic = "force-dynamic";
@@ -77,6 +83,38 @@ export async function POST(req: Request) {
   const requested = Array.isArray(body.destinations) ? body.destinations : [];
   if (!requested.length) {
     return Response.json({ error: "Select at least one destination to publish." }, { status: 400 });
+  }
+
+  // ── Phase 5B: meter this publish ──────────────────────────────────────────
+  // The frozen contract is ONE unit per piece of content published, no matter how many
+  // platforms it fans out to. This route was never metered, so a social-only publish
+  // (Instagram / Facebook, which never touch /api/pinterest/pins) cost nothing at all —
+  // a free bypass of the quota — while the identical Content published to Pinterest was
+  // charged. The SAME key derivation as the Pinterest route (draft id + UTC date bucket,
+  // salted per user) is what keeps a Pinterest + Instagram publish of one Content at one
+  // unit: both legs derive the same key and the ledger collapses the replay.
+  //
+  // `postId` IS the draft id (publishContent sends `postId: draftId`). With none there is
+  // nothing stable to key on, so metering is skipped rather than keyed on a value that
+  // would either collide across Contents or charge every retry.
+  //
+  // Metered BEFORE any dispatch, so a crash mid-publish still records the action the
+  // merchant took, and fail-open in shadow: consumeScheduledPost never throws, so a
+  // ledger outage cannot stop a publish.
+  const publishableRequests = requested.filter(raw => {
+    const provider = (raw as { provider?: unknown }).provider;
+    // Exactly the destinations the loop below will actually dispatch: Pinterest is
+    // published by its own (already metered) route, and a platform with no publish path
+    // is skipped. A request that dispatches nothing must not be charged.
+    return isSocialProvider(provider) && provider !== "pinterest" && PLATFORMS[provider].liveConnect;
+  });
+  if (postId && publishableRequests.length > 0) {
+    await consumeScheduledPost({
+      userId: uid,
+      key: deriveScheduledPostKey(uid, postId),
+      referenceId: postId,
+      metadata: { source: "immediate" },
+    });
   }
 
   const summaries = await summarizeConnections(uid);
@@ -122,14 +160,29 @@ export async function POST(req: Request) {
       continue;
     }
 
-    const requestedId =
-      typeof (raw as { socialConnectionId?: unknown }).socialConnectionId === "string"
-        ? ((raw as { socialConnectionId: string }).socialConnectionId)
-        : null;
+    // WHICH account this destination means. Falling back to "the first connected
+    // account" — what this route used to do for a destination that named none —
+    // publishes to an account the merchant never chose as soon as two are connected,
+    // and they only find out by seeing the post appear there.
     const summary = byProvider.get(provider);
-    const connection: SocialConnection | null = requestedId
-      ? await findConnection(uid, requestedId)
-      : summary?.accounts.find(a => a.connectionStatus === "connected") ?? null;
+    const choice = resolveDestinationConnection(summary, raw as { socialConnectionId?: unknown });
+    if (choice.kind === "none" || choice.kind === "ambiguous") {
+      outcomes.push({
+        provider,
+        status: "failed",
+        socialConnectionId: null,
+        // Refused BEFORE the provider is called: an ambiguous destination must not
+        // publish anywhere at all. Asking is recoverable; the wrong audience is not.
+        error: choice.kind === "none" ? connectAccountMessage(provider) : chooseAccountMessage(provider),
+      });
+      continue;
+    }
+    // An explicitly named account is resolved through the user-scoped lookup, so an
+    // id belonging to someone else resolves to nothing rather than publishing across
+    // a workspace boundary.
+    const connection: SocialConnection | null = choice.kind === "explicit"
+      ? await findConnection(uid, choice.connectionId)
+      : choice.connection;
 
     if (!connection || connection.connectionStatus !== "connected") {
       outcomes.push({

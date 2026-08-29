@@ -75,24 +75,40 @@ export type SealedState = {
   uid: string;
   exp: number; // epoch ms
   returnTo?: string;
+  /**
+   * The social_connections id this authorization is meant to repair, when the flow
+   * was started as a Reconnect on a specific account. Optional and only ever read
+   * through `?? null`, so a cookie sealed before this field existed still unseals —
+   * an in-flight OAuth round trip is not invalidated by the deploy that adds it.
+   * The callback needs it to know WHICH account the returned one must match; without
+   * it, a reconnect landing on the wrong account is indistinguishable from an
+   * intentional "add a second account" (Codex #5).
+   */
+  rc?: string;
 };
 
 export function generateState(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export function sealState(state: string, uid: string, returnTo?: string): string {
+export function sealState(
+  state: string,
+  uid: string,
+  returnTo?: string,
+  reconnectConnectionId?: string | null,
+): string {
   const payload: SealedState = {
     state,
     uid,
     exp: Date.now() + STATE_TTL_MS,
     ...(returnTo ? { returnTo } : {}),
+    ...(reconnectConnectionId ? { rc: reconnectConnectionId } : {}),
   };
   return cipher.sealJson(payload);
 }
 
 export type StateVerdict =
-  | { ok: true; uid: string; returnTo?: string }
+  | { ok: true; uid: string; returnTo?: string; reconnectConnectionId: string | null }
   | { ok: false; reason: "missing" | "expired" | "mismatch" | "user_mismatch" };
 
 /**
@@ -109,7 +125,15 @@ export function verifyState(
   if (Date.now() > sealed.exp) return { ok: false, reason: "expired" };
   if (!safeEqual(sealed.state, stateParam)) return { ok: false, reason: "mismatch" };
   if (!safeEqual(sealed.uid, sessionUid)) return { ok: false, reason: "user_mismatch" };
-  return { ok: true, uid: sealed.uid, returnTo: sealed.returnTo };
+  return {
+    ok: true,
+    uid: sealed.uid,
+    returnTo: sealed.returnTo,
+    // Absent on a cookie sealed before `rc` existed — normalised to null so the
+    // callback treats it as a plain connect (its pre-fix behaviour) rather than
+    // reading undefined as a reconnect target.
+    reconnectConnectionId: sealed.rc ?? null,
+  };
 }
 
 /**

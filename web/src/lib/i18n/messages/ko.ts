@@ -2645,7 +2645,7 @@ const ko: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "연결을 시작할 수 없습니다",
   "socialPanel.toast.disconnectedSuffix": " 연결이 해제되었습니다",
   "socialPanel.toast.couldNotDisconnect": "연결을 해제할 수 없습니다",
-  "socialPanel.mismatch.title": "다른 Pinterest 계정입니다",
+  "socialPanel.mismatch.title": "다른 {platform} 계정입니다",
   "socialPanel.mismatch.bodyPrefix": "로그인한 계정: ",
   "socialPanel.mismatch.bodyMiddle": " — 다시 연결하려던 계정: ",
   "socialPanel.mismatch.bodySuffix": ". 아무것도 변경되지 않았습니다. 기존 연결은 그대로입니다. 원하는 작업을 선택하세요.",

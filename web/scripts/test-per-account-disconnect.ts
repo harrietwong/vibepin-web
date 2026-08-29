@@ -30,7 +30,7 @@ let passed = 0;
 function test(name: string, fn: () => void) { fn(); passed++; console.log(`  OK  ${name}`); }
 async function testAsync(name: string, fn: () => Promise<void>) { await fn(); passed++; console.log(`  OK  ${name}`); }
 
-const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8").replace(/\r\n?/g, "\n");
 
 // ── 一个记录调用链的假 Supabase ────────────────────────────────────────────────
 // 只实现我们用到的链式方法,并把每一步 (方法, 参数) 记下来,这样"过滤条件对不对"
@@ -115,13 +115,23 @@ test("客户端把 id 放进 query 并编码;不传 id 时 URL 与旧版逐字�
   assert.match(clientSrc, /`\/api\/pinterest\/disconnect\$\{qs \? `\?\$\{qs\}` : ""\}`/);
   // cancelScheduled 只在有 id 时才可能被带上:全量断开不该顺手清排程。
   assert.match(clientSrc, /if \(id && opts\?\.cancelScheduled\) params\.set\("cancelScheduled", "1"\)/);
+  // mode=remove 同理:硬删只能点名一条行。不带 id 的移除就是批量删除,
+  // 产品里没有任何按钮是这个意思。
+  assert.match(clientSrc, /if \(id && opts\?\.mode === "remove"\) params\.set\("mode", "remove"\)/);
 });
 
-test("面板:平台级 Disconnect 仍不带 id,逐账号 Remove 才带 id", () => {
-  assert.match(panelSrc, /disconnectPinterest\(\)\s*\n\s*\.catch/,
-    "平台级 Disconnect 必须继续无参调用(=全量断开)");
-  assert.match(panelSrc, /await disconnectPinterest\(account\.id, \{ cancelScheduled \}\)/,
-    "逐账号 Remove 必须传该账号的 connectionId");
+test("面板:任何 Pinterest 断开/移除都必须带 connectionId(不带 id 的调用已从 UI 移除)", () => {
+  // 反转自旧断言。旧版要求平台级 Disconnect 保持"无参 = 断掉全部",那在单账号
+  // 时看着像"断开我的账号",两个账号时就是静默把两个都断了。PRD 0809 §II 直接
+  // 取消了这个按钮,所以面板里不该再有任何一处无参调用。
+  assert.doesNotMatch(panelSrc, /disconnectPinterest\(\s*\)/,
+    "面板不得再无参调用 disconnectPinterest(那会拆掉该用户全部连接)");
+  assert.match(panelSrc, /await disconnectPinterest\(account\.id, \{ cancelScheduled, mode: "remove" \}\)/,
+    "逐账号 Remove 必须传该账号的 connectionId,并且是 mode=remove 的硬删 —— 软断开会把行留下来继续占额度");
+  assert.match(panelSrc, /await disconnectPinterest\(account\.id\);/,
+    "逐账号 Disconnect(软)同样必须只针对该账号");
+  // 路由本身保留无参语义(可能还有别的调用方),这里只约束 UI。
+  assert.match(routeSrc, /return id \|\| undefined;/);
 });
 
 console.log("\n=== 2) 排程口径:只数钉定到该连接的活跃排程行 ===");
@@ -198,10 +208,14 @@ await testAsync("cancel 写回:scheduled_at 置空、释放 claim、按 (user, d
     { vibepin_user_id: "u1", draft_id: "d1", payload: { targetConnectionId: "c1", scheduledDate: "2026-08-09" } },
     { vibepin_user_id: "u1", draft_id: "d2", payload: { targetConnectionId: "c1", scheduledTime: "09:00" } },
   ];
-  const { db, chains } = makeFakeDb([{ data: rows }, { data: null }, { data: null }]);
+  // 写回现在是 compare-and-set:update 以 .select("draft_id") 结尾,返回的行数就是
+  // "有没有命中"。空数组=行在读之后被人改过(CAS 未命中),不是成功 —— 所以每次
+  // 写回的假结果必须回一行,否则这里测的是重试逻辑而不是写回内容。
+  const matched = (id: string) => ({ data: [{ draft_id: id }] });
+  const { db, chains } = makeFakeDb([{ data: rows }, matched("d1"), matched("d2")]);
   const now = "2026-08-07T10:00:00.000Z";
-  const cleared = await cancelScheduledForConnection(db, "u1", "c1", now);
-  assert.equal(cleared, 2);
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", now);
+  assert.deepEqual(outcome, { cleared: 2, failed: 0, readFailed: false });
 
   for (const calls of chains.slice(1)) {
     const update = calls.find(c => c.method === "update");
@@ -209,10 +223,16 @@ await testAsync("cancel 写回:scheduled_at 置空、释放 claim、按 (user, d
     const patch = update!.args[0] as Record<string, unknown>;
     assert.equal(patch.scheduled_at, null, "必须置空 scheduled_at,否则 cron 照样发");
     assert.equal(patch.publish_claimed_at, null, "顺带释放锁,避免半持有的行");
-    assert.equal(patch.updated_at, now);
+    // 时间戳现在取自**写入那一刻**,不是循环开始前传进来的那个。循环跑到一半时
+    // 商家做的编辑,比一个循环前取的戳要新 —— 用旧戳写回,客户端的 LWW 会把那次
+    // 编辑连同排程一起推回来。所以断言的是"有一个合法且与 payload 一致的戳"。
+    const stamp = patch.updated_at as string;
+    assert.ok(typeof stamp === "string" && !Number.isNaN(Date.parse(stamp)),
+      "必须写一个真实的时间戳");
     const payload = patch.payload as Record<string, unknown>;
     assert.equal(payload.scheduledDate, "");
-    assert.equal(payload.updatedAt, now);
+    assert.equal(payload.updatedAt, stamp,
+      "列与 payload.updatedAt 必须同一个值,否则 LWW 两边打架");
 
     const eqs = eqPairs(calls);
     assert.ok(eqs.some(([c, v]) => c === "vibepin_user_id" && v === "u1"), "写回也必须限定用户");
@@ -220,7 +240,7 @@ await testAsync("cancel 写回:scheduled_at 置空、释放 claim、按 (user, d
   }
 });
 
-await testAsync("单行写回失败只跳过该行,不影响其它行的取消", async () => {
+await testAsync("单行写回失败只跳过该行,但必须报告 failed(Codex #6)", async () => {
   const rows = [
     { vibepin_user_id: "u1", draft_id: "d1", payload: { targetConnectionId: "c1" } },
     { vibepin_user_id: "u1", draft_id: "d2", payload: { targetConnectionId: "c1" } },
@@ -228,10 +248,28 @@ await testAsync("单行写回失败只跳过该行,不影响其它行的取消",
   const { db } = makeFakeDb([
     { data: rows },
     { error: { code: "XX000", message: "boom" } },
-    { data: null },
+    { data: [{ draft_id: "d2" }] },
   ]);
-  const cleared = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
-  assert.equal(cleared, 1, "一行失败不应吞掉另一行的成功");
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
+  assert.equal(outcome.cleared, 1, "一行失败不应吞掉另一行的成功");
+  // 只回 cleared 的老契约里,这一次和"两行都成功清了 1 行"长得一模一样,
+  // 路由据此照删不误。failed 是删除守卫唯一的输入。
+  assert.equal(outcome.failed, 1, "失败的行必须出现在返回值里,否则路由无从判断");
+  assert.equal(outcome.readFailed, false);
+});
+
+await testAsync("读取失败 ≠ 没有排程:readFailed 必须为 true(Codex #6)", async () => {
+  const { db } = makeFakeDb([{ error: { code: "XX000", message: "connection reset" } }]);
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
+  assert.deepEqual(outcome, { cleared: 0, failed: 0, readFailed: true },
+    "查不到就等于不知道有什么排程,绝不能当成'什么都没有'");
+});
+
+await testAsync("缺表/缺列仍然是'确实没有排程',不是失败", async () => {
+  // 可选迁移没跑不该把商家卡在无法移除账号上——这条降级是故意的,别顺手改掉。
+  const { db } = makeFakeDb([{ error: { code: "42P01", message: "does not exist" } }]);
+  const outcome = await cancelScheduledForConnection(db, "u1", "c1", "2026-08-07T10:00:00.000Z");
+  assert.deepEqual(outcome, { cleared: 0, failed: 0, readFailed: false });
 });
 
 console.log("\n=== 4) 路由编排 + UI 决策面 ===");
@@ -246,18 +284,85 @@ test("DELETE 先取消排程再断开,且只在带 id + cancelScheduled=1 时取
     "取消必须发生在断开之前:中途失败时宁可留下'已连接但排程被清',也不要'已移除但 cron 还在发'");
 });
 
+test("Pinterest remove:取消没全清就不许删(Codex #6)", () => {
+  // 这是本任务的核心:取消与删除是同一个决定。读失败被降级成"没有排程"、
+  // 单行写回失败被 log-and-skip,路由却照删——商家看到"已移除",而 cron 手里
+  // 还攥着指向已删除账号的排程行。
+  assert.match(routeSrc, /if \(cancelOutcome && \(cancelOutcome\.readFailed \|\| cancelOutcome\.failed > 0\)\)/,
+    "删除前必须同时检查 readFailed 与 failed");
+  assert.match(routeSrc, /code: "schedule_cancel_failed"/);
+  assert.match(routeSrc, /status: 409/);
+  // 守卫必须在删除之前;否则它只是个装饰。删除这一步现在是原子 RPC
+  // (remove_social_connection_if_unscheduled,v67)——查和删在一条 SQL 语句里,
+  // 不再是先 count 再 deleteConnection 的两次往返。断言跟着那一步走。
+  const guardAt = routeSrc.indexOf("cancelOutcome.readFailed || cancelOutcome.failed > 0");
+  const deleteAt = routeSrc.indexOf("removeConnectionIfUnscheduled(");
+  assert.ok(guardAt > 0 && deleteAt > guardAt, "守卫必须挡在删除之前");
+  assert.ok(!/await deleteConnection\(uid, connectionId\)/.test(routeSrc),
+    "不得再走不带排程检查的普通 delete —— 那正是被修掉的竞态");
+  // 409 的响应体要能被客户端读成一句人话(parseErrorResponse 只认 body.error)。
+  assert.match(routeSrc, /error: userMessage/,
+    "客户端的 parseErrorResponse 读 body.error,少了它商家只会看到 HTTP 状态");
+  assert.match(routeSrc, /cleared: cancelOutcome\.cleared/);
+  assert.match(routeSrc, /failed: cancelOutcome\.failed/);
+});
+
+test("软断开不受守卫影响:行还在,排程发布时会被 target_disconnected 挡住", () => {
+  // 只有硬删是不可逆的那一个。软断开保留行,半清的排程仍然看得见、可重试,
+  // 把守卫扩到那里只会让一个 UI 根本走不到的路径变得更容易失败。
+  const guardAt = routeSrc.indexOf("cancelOutcome.readFailed || cancelOutcome.failed > 0");
+  const softAt = routeSrc.indexOf("await disconnect(uid, connectionId)");
+  assert.ok(softAt > guardAt, "软断开在 remove 分支之后,不经过守卫");
+  assert.match(routeSrc, /if \(remove && connectionId\) \{/);
+});
+
 test("GET 只在带 connectionId 时查排程,否则直接回 0", () => {
   assert.match(routeSrc, /export async function GET\(req: Request\)/);
   assert.match(routeSrc, /if \(!connectionId\) return Response\.json\(\{ ok: true, scheduledCount: 0 \}\)/);
   assert.match(routeSrc, /countScheduledForConnection\(createServerClient\(\), uid, connectionId\)/);
 });
 
-test("UI:0 条不弹框直接移除;>0 才弹 Keep / Cancel 两选一(不做 Reassign)", () => {
+test("UI:0 条不弹框直接移除;>0 弹「取消并移除 / 保留账号」(不做 Reassign)", () => {
   assert.match(panelSrc, /if \(scheduledCount > 0\) \{/);
   assert.match(panelSrc, /setPendingRemoval\(\{ account, label, scheduledCount \}\)/);
-  assert.match(panelSrc, /removeAccount\(account\.provider, account, false\)/, "Keep = 不取消排程");
-  assert.match(panelSrc, /removeAccount\(account\.provider, account, true\)/, "Cancel = 取消排程");
+  assert.match(panelSrc, /removeAccount\(account\.provider, account, true\)/,
+    "对话框里唯一真的会删的分支 = 先取消排程");
   assert.doesNotMatch(panelSrc, /[Rr]eassign/, "Reassign 属二期,不应出现在本轮 UI");
+
+  // PRD 0805 §11:有未来排程时禁止直接移除。"Keep" 保的是账号,不是排程 ——
+  // 旧的第三个选项("保留排程但把账号删了")已经不存在了。它不只是产品上不想要:
+  // 服务端现在会用 409 schedules_exist 拒绝它,所以那个按钮只可能一路弹回同一个
+  // 对话框。这条断言守的就是"面板里不再有任何一处会撞上那个 409"。
+  const zeroAt = panelSrc.indexOf("await removeAccount(provider, account, false)");
+  assert.ok(zeroAt > 0, "计数为 0 的那条直通路径仍然要在");
+  const before = panelSrc.slice(Math.max(0, zeroAt - 700), zeroAt);
+  assert.ok(
+    before.includes("if (scheduledCount > 0) {") && before.includes("return;"),
+    "cancelScheduled=false 只能出现在'已经确认没有排程'之后(其余情况必被服务端拒绝)",
+  );
+  // 全局只此一处 false —— 对话框那条 Keep 分支必须已经删干净。
+  const falseCalls = panelSrc.split("removeAccount(account.provider, account, false)").length - 1;
+  assert.equal(falseCalls, 0, "对话框不得再有'保留排程但移除账号'的调用");
+});
+
+test("对话框只剩两个动作:取消并移除、保留账号(Keep 不再发任何请求)", () => {
+  // Keep 现在就是 onDismiss:纯粹关掉对话框。它和"取消并移除"共用一个组件,
+  // 所以最容易复发的错误是有人把 onKeep 加回来、再接到 removeAccount 上。
+  assert.doesNotMatch(panelSrc, /onKeep/, "onKeep 已经不存在,别再接回来");
+  assert.match(panelSrc, /data-testid="pinterest-remove-cancel-schedules"/);
+  assert.match(panelSrc, /data-testid="pinterest-remove-dismiss"/);
+  assert.doesNotMatch(panelSrc, /data-testid="pinterest-remove-keep"/,
+    "第三个选项的按钮必须消失,而不是留在那里禁用");
+  // 主按钮要把数目说出来:"取消 3 条排程并移除" 比 "取消这些排程" 更难点错。
+  assert.match(panelSrc, /socialPanel\.removeDialog\.cancelPrefix/);
+  assert.match(panelSrc, /socialPanel\.removeDialog\.keepAccount/);
+  const en = read("src/lib/i18n/messages/en/socialPanel.ts");
+  for (const k of ["cancelPrefix", "cancelSuffix", "keepAccount", "bodySuffixV2"]) {
+    assert.ok(en.includes(`"socialPanel.removeDialog.${k}"`), `en 目录缺 ${k}`);
+  }
+  // 正文不能再承诺那个已经不存在的选项。
+  assert.doesNotMatch(panelSrc, /removeDialog\.bodySuffix"/,
+    "正文必须换成 bodySuffixV2 —— 旧文案还在说'可以保留排程'");
 });
 
 test("UI:逐账号 Remove 的乐观更新只摘掉一条,不清空整个平台", () => {
@@ -268,23 +373,92 @@ test("UI:逐账号 Remove 的乐观更新只摘掉一条,不清空整个平台",
     "还有其它账号时平台必须保持已连接");
 });
 
-test("逐账号移除只对 Pinterest 放行(账号行对任何 2+ 账号平台都渲染)", () => {
-  // 计数/断开走的都是 Pinterest 专用路由。把别家的 connectionId 递进去会被 store 的
-  // provider 过滤掉 → 0 行 → 200,UI 会显示"已移除",直到下一次 load 把它变回来。
-  assert.match(panelSrc, /if \(provider !== "pinterest"\) \{/,
-    "非 Pinterest 必须显式失败,而不是静默假成功");
-  assert.doesNotMatch(
-    read("src/components/social/SocialAccountsPanel.tsx").split("function AccountRows")[1]?.slice(0, 400) ?? "",
-    /provider === "pinterest"/,
-    "账号行本身不按平台过滤 —— 所以守卫必须在 handleRemoveAccount 里",
+test("逐账号移除对三家都放行,但计数按 provider 走各自的口径", () => {
+  // 旧版在这里直接拒绝非 Pinterest。现在 FB/IG 也接通了,于是真正的风险换成了
+  // "用错口径":Pinterest 的排程钉在 payload.targetConnectionId,FB/IG 只存在于
+  // payload.scheduledDestinations[]。拿 Pinterest 的端点去问一个 Facebook id,
+  // 会 0 行匹配并自信地回答 0 —— 用户的排程被无声删掉,连提示都没有。
+  assert.doesNotMatch(panelSrc, /per-account removal is not wired for/,
+    "非 Pinterest 的硬拒绝必须已经拆掉");
+  assert.match(
+    panelSrc,
+    /const scheduledCount = provider === "pinterest"\s*\n\s*\? await getScheduledCountForConnection\(account\.id\)\s*\n\s*: await fetchSocialScheduledCount\(account\.id\);/,
+    "计数必须按 provider 分流,不能一个端点管三家",
   );
+  assert.match(panelSrc, /await disconnectSocial\(account\.id, \{ mode: "remove", cancelScheduled \}\)/,
+    "FB/IG 的 Remove 必须是 mode: remove(硬删),并把 Keep/Cancel 的选择透传给服务端");
 });
-test("Keep 分支不重复实现拦截:唯一执行点仍是 Phase C 的 retryBlockReason", () => {
-  // 前提校验(不推断,直接查):Keep 之所以能是"什么都不做",全靠这条已存在的拦截。
+
+test("软断开与硬移除是两个不同的服务端动作,默认永远是软的那个", () => {
+  const socialRoute = read("src/app/api/social/disconnect/route.ts");
+  // 默认值这一行是"旧标签页不会造成更大破坏"的唯一保证:发布前的客户端两个字段
+  // 都不带,如果默认是 remove,一次误点就会删掉账号行。
+  assert.match(socialRoute, /return value === "remove" \? "remove" : "disconnect";/,
+    "只有显式 remove 才是硬删,其余一律软断开");
+  // 软断开分支自己撤销凭据后立刻返回:行保留,永远走不到 deleteConnection。
+  // (硬移除的撤销被挪到了取消之后 —— Codex #2,见下面的顺序断言。)
+  assert.match(
+    socialRoute,
+    /if \(mode === "disconnect"\) \{\s*\n\s*await revokeAtProvider\(\);\s*\n\s*return Response\.json\(\{ ok: true, mode \}\);/,
+    "软断开必须在 deleteConnection 之前返回(保留行)",
+  );
+  const cancelAt = socialRoute.indexOf("cancelScheduledForSocialConnection(");
+  // 删除这一步现在是原子 RPC(remove_social_connection_if_unscheduled,v67):
+  // 查排程和删行在同一条 SQL 语句里。断言跟着那一步走,顺序契约本身没变。
+  const deleteAt = socialRoute.indexOf("removeConnectionIfUnscheduled(");
+  assert.ok(cancelAt > 0 && deleteAt > cancelAt,
+    "取消排程必须发生在删除之前:否则中途失败会留下一个没有账号、cron 却照发的排程");
+  assert.ok(!/await deleteConnection\(uid, connectionId\)/.test(socialRoute),
+    "不得再走不带排程检查的普通 delete —— 那正是被修掉的竞态");
+  // 顺序还不够——取消还必须真的成功(Codex #6)。
+  const guardAt = socialRoute.indexOf("outcome.readFailed || outcome.failed > 0");
+  assert.ok(guardAt > cancelAt && deleteAt > guardAt,
+    "删除守卫必须夹在取消与删除之间");
+  assert.match(socialRoute, /code: "schedule_cancel_failed"/);
+  assert.match(socialRoute, /status: 409/);
+});
+
+await testAsync("断开一个账号不会波及同平台的其它账号", async () => {
+  // 这是本轮唯一"错了就静默毁数据"的点:store 的 UPDATE 若丢掉 .eq("id", …),
+  // 用户点一个账号的 Disconnect 会把同平台另一个账号一起签退,而 UI 完全无感。
+  const fb = read("src/lib/server/facebook/connectionStore.ts");
+  const ig = read("src/lib/server/instagram/connectionStore.ts");
+  for (const [name, src] of [["facebook", fb], ["instagram", ig]] as const) {
+    assert.match(src, /connectionId \? await updateQuery\.eq\("id", connectionId\) : await updateQuery;|connectionId \? await base\.eq\("id", connectionId\) : await base;/,
+      `${name} 的 disconnect 必须在带 id 时收敛到那一行`);
+    assert.match(src, /\.eq\("user_id", uid\)/, `${name} 的 disconnect 必须始终限定 user_id`);
+    assert.match(src, /\.eq\("provider", PROVIDER\)/, `${name} 的 disconnect 必须始终限定 provider`);
+  }
+  // official provider 是路由到 store 的唯一通道 —— 它必须把 connectionId 传下去,
+  // 否则上面两处收敛永远不会被触发。
+  const official = read("src/lib/social/providers/official.ts");
+  assert.match(official, /disconnectFacebookConnection\(input\.userId, input\.connectionId\)/);
+  assert.match(official, /disconnectInstagramConnection\(input\.userId, input\.connectionId\)/);
+
+  // 撤销现在包成 revokeAtProvider():两种模式把它放在序列的不同位置(软断开立刻撤销;
+  // 硬移除要等取消成功之后 —— Codex #2)。点名连接这件事本身没变。
+  // 路由必须把 connectionId 交给 provider.disconnect —— 这是上面那些收敛能被
+  // 触发的唯一前提。少了这一行,store 侧写得再对也永远走"全平台清空"分支。
+  const socialRoute = read("src/app/api/social/disconnect/route.ts");
+  assert.match(
+    socialRoute,
+    /const revokeAtProvider = \(\) => getSocialProviderById\(connection\.authProvider\)\.disconnect\(\{\s*\n\s*userId: uid,\s*\n\s*connectionId,/,
+    "路由必须按连接点名,不能只报 provider",
+  );
+  // 反向守卫:store 里不得存在"带了 id 却仍然全表更新"的写法。
+  for (const [name, src] of [["facebook", fb], ["instagram", ig]] as const) {
+    assert.doesNotMatch(src, /connection_status: "not_connected",[\s\S]{0,400}?\}\)\s*;\s*\n\s*\/\/ no user filter/,
+      `${name} 的 disconnect 不得存在无过滤的写路径`);
+  }
+});
+test("软断开后的排程不重复实现拦截:唯一执行点仍是 Phase C 的 retryBlockReason", () => {
+  // 这条拦截原本是"保留排程但移除账号"那个选项的兜底。那个选项已经没有了
+  // (PRD 0805 §11),但拦截本身仍然是必需的:软断开会留下行,它的排程到点还是会
+  // 被 cron 捞起来,必须在发布时被挡住。前提校验不靠推断,直接查。
   const publishTarget = read("src/lib/studio/publishTarget.ts");
   assert.match(publishTarget, /export type RetryBlockReason = "target_disconnected"/);
   assert.match(publishTarget, /if \(!input\.active\.some\(c => c\.id === stored\)\) return "target_disconnected";/,
-    "目标不在活跃连接里就必须被拦住 —— Keep 分支依赖这一行");
+    "目标不在活跃连接里就必须被拦住 —— 软断开的行依赖这一行");
   // 面板只在注释里提到它,不得自己再实现一遍判定逻辑。
   assert.doesNotMatch(
     panelSrc.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ""),

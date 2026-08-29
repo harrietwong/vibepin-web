@@ -10,6 +10,14 @@
  *    the diff baseline, so local-only / locally-newer drafts naturally enter the
  *    outbox = migration-on-first-load (no one-shot flag needed).
  *  - Flush: 1.5s debounce, batched PUT/DELETE of ≤50 drafts per request.
+ *  - 409 stale (the server's write predicate lost its compare-and-set): RE-BASE the
+ *    conflicted drafts onto the server's CURRENT row — field-level, keeping only
+ *    what the merchant changed while the PUT was in flight (pinDraftStore
+ *    rebaseDraftOnServer) — then retry ONCE. Deliberately NOT the whole-payload
+ *    LWW the pull uses: a local edit made during a publish is newer, so LWW would
+ *    hand back the entire pre-publish copy and resurrect the schedule the cron had
+ *    just cleared. Still stale → give up for this cycle (warn + re-arm a flush);
+ *    never loop, never drop.
  *  - Failures (network / 401 / 5xx / 202 deferred): outbox is NEVER dropped;
  *    exponential backoff capped at 60s keeps retrying. localStorage remains the
  *    offline cache layer, so a dead server costs nothing (§8.3 zero regression).
@@ -24,6 +32,7 @@ import {
   getAllDrafts,
   getDraft,
   mergeServerDrafts,
+  rebaseDraftOnServer,
   type PinDraft,
 } from "./pinDraftStore";
 
@@ -357,15 +366,53 @@ async function flush(): Promise<void> {
 
     for (let i = 0; i < puts.length; i += _opts.batchSize) {
       const chunk = puts.slice(i, i + _opts.batchSize);
-      const res = await fetcher()(_opts.endpoint, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          drafts: chunk.map(c => ({ draftId: c.id, updatedAt: c.draft.updatedAt, payload: c.draft })),
-        }),
-      });
-      if (!res.ok && res.status !== 202) throw new Error(`pin-drafts PUT failed: ${res.status}`);
+      const res = await putChunk(token, chunk);
       if (res.status === 202) throw new DeferredError(); // table not applied yet — keep outbox, retry later
+
+      if (res.status === 409) {
+        // The server refused these drafts because the stored row changed between
+        // its read and its write — the row we are holding is genuinely older than
+        // what is stored. Reconcile instead of insisting: re-base onto the server's
+        // copy, keeping only the fields edited since THIS chunk was sent (see
+        // reconcileStale), and send the merged result once.
+        const conflicted = await reconcileStale(res, chunk);
+        // Everything the server DID apply in that request is durable; only the
+        // conflicted ids still owe a write.
+        ackEntries(chunk.filter(c => !conflicted.has(c.id)));
+        if (conflicted.size === 0) continue;
+
+        const retry = rebuildChunk(conflicted);
+        if (retry.length === 0) { scheduleFlush(); continue; }
+        const res2 = await putChunk(token, retry);
+        if (res2.status === 202) throw new DeferredError();
+        if (res2.status === 409) {
+          // Lost the race twice in one cycle. Stop here on purpose: a third attempt
+          // is the same bet, and looping would hammer the endpoint for as long as
+          // the other writer keeps winning. The entries stay in the outbox and the
+          // next flush picks them up with a freshly merged payload — so this is a
+          // delay, never a dropped edit. Warn, because silence here would look
+          // exactly like a successful sync.
+          // Fold the SECOND conflict's current row in as well, so the next cycle
+          // starts from what is actually stored instead of repeating this dance.
+          await reconcileStale(res2, retry);
+          console.warn(
+            `[pinDraftSync] draft(s) still stale after one merge+retry — deferred to the next sync: ${[...conflicted].join(", ")}`,
+          );
+          // Re-arm a flush. The engine has no periodic timer, so without this the
+          // entry would sit in the outbox until some unrelated store write happens
+          // — pendingCount stuck at 1 forever is the silent drop this must not be.
+          // Bounded work per cycle (one PUT + at most one retry), debounce-spaced,
+          // and each cycle re-merges first, so the payload converges rather than
+          // re-sending the same losing copy.
+          scheduleFlush();
+          continue;
+        }
+        if (!res2.ok) throw new Error(`pin-drafts PUT failed: ${res2.status}`);
+        ackEntries(retry);
+        continue;
+      }
+
+      if (!res.ok) throw new Error(`pin-drafts PUT failed: ${res.status}`);
       ackEntries(chunk);
     }
 
@@ -403,6 +450,101 @@ async function flush(): Promise<void> {
 
 class DeferredError extends Error {
   constructor() { super("pin-drafts deferred (table not applied)"); }
+}
+
+type PutChunk = Array<{ id: string; entry: OutboxEntry; draft: PinDraft }>;
+
+/** One PUT of a chunk. Split out so the 409 retry sends the identical shape. */
+async function putChunk(token: string, chunk: PutChunk): Promise<Response> {
+  return fetcher()(_opts.endpoint, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      drafts: chunk.map(c => ({ draftId: c.id, updatedAt: c.draft.updatedAt, payload: c.draft })),
+    }),
+  });
+}
+
+/** The 409 body: `stale[]` always, plus a `current` mirror of stale[0] for single-draft clients. */
+interface StaleConflictBody {
+  code?: string;
+  stale?: Array<{ draftId?: string; current?: { payload?: unknown; updated_at?: string } | null }>;
+  current?: { payload?: unknown; updated_at?: string } | null;
+}
+
+/**
+ * Re-base the conflicted drafts of this chunk onto the server's CURRENT rows, and
+ * report which ids were refused.
+ *
+ * `chunk` is not just the list of ids: each entry carries the exact `draft` object
+ * that `putChunk` serialized, so it IS the payload the server answered 409 about.
+ * That snapshot is what makes a field-level merge possible at all — local-vs-sent
+ * is precisely the edit the merchant made while the request was in flight, and
+ * everything else can safely come from the server. The merge itself lives in
+ * pinDraftStore.rebaseDraftOnServer, which documents the field rules.
+ *
+ * This must NOT go through `mergeServerDrafts`. That is whole-payload LWW, and
+ * under the race this path exists for the local copy is the newer one while being
+ * wrong: an edit typed during a publish carries the pre-publish schedule with it,
+ * so LWW rejects the server row wholesale and the retry re-sends a schedule the
+ * cron had already cleared — the Content goes out twice. LWW stays where its
+ * question is the right one: the startup pull, where there is no in-flight write
+ * to diff against. Here the question is "which fields did the merchant change",
+ * and only the sent snapshot can answer it.
+ *
+ * A conflict with no `current` (the row vanished between the failed write and the
+ * server's re-read) is still returned as conflicted: nothing to re-base onto, so
+ * the retry simply re-sends what we have, and the next cycle sees whatever landed.
+ */
+async function reconcileStale(res: Response, chunk: PutChunk): Promise<Set<string>> {
+  const conflicted = new Set<string>();
+  let body: StaleConflictBody | null = null;
+  try { body = (await res.json()) as StaleConflictBody; } catch { body = null; }
+
+  const entries = body?.stale?.length
+    ? body.stale
+    : body?.current !== undefined && chunk.length === 1
+      // Single-draft request answered with only the `current` mirror.
+      ? [{ draftId: chunk[0].id, current: body.current }]
+      : [];
+
+  // The payload each conflicted draft was SENT with, by id — the other half of the
+  // diff. Absent (a draft not in this chunk) → no basis for a delta, so no re-base.
+  const sentById = new Map(chunk.map(c => [c.id, c.draft]));
+
+  for (const e of entries) {
+    const id = typeof e?.draftId === "string" ? e.draftId : null;
+    if (!id) continue;
+    conflicted.add(id);
+    const payload = e?.current?.payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) continue;
+    const server = payload as unknown as PinDraft;
+    if (typeof server.id !== "string" || !server.id) continue;
+    const sent = sentById.get(id);
+    if (!sent) continue;
+    rebaseDraftOnServer(server, sent);
+  }
+
+  // A 409 the client cannot parse must not be treated as success: assume the whole
+  // chunk was refused rather than acking writes that may never have happened.
+  if (entries.length === 0) for (const c of chunk) conflicted.add(c.id);
+  return conflicted;
+}
+
+/** Re-read the conflicted drafts from the store AFTER the re-base, for the single retry. */
+function rebuildChunk(ids: Set<string>): PutChunk {
+  const out: PutChunk = [];
+  for (const id of ids) {
+    const draft = getDraft(id);
+    if (!draft) continue; // removed meanwhile → a delete entry covers it
+    if (payloadBytes(draft) > _opts.maxPayloadBytes) continue;
+    const entry = _outbox.get(id);
+    // Send the CURRENT store state — i.e. the re-based draft — under the entry that
+    // is actually in the outbox, so ackEntries' identity check still protects a
+    // concurrent edit.
+    out.push({ id, entry: entry ?? { kind: "put", updatedAt: draft.updatedAt }, draft });
+  }
+  return out;
 }
 
 /** UTF-8 byte length of the serialized draft (matches the server-side check). */

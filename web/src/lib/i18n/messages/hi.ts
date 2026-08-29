@@ -629,7 +629,7 @@ const hi: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "कनेक्शन शुरू नहीं हो सका",
   "socialPanel.toast.disconnectedSuffix": " डिस्कनेक्ट हो गया",
   "socialPanel.toast.couldNotDisconnect": "डिस्कनेक्ट नहीं हो सका",
-  "socialPanel.mismatch.title": "यह एक अलग Pinterest खाता है",
+  "socialPanel.mismatch.title": "यह एक अलग {platform} खाता है",
   "socialPanel.mismatch.bodyPrefix": "आपने साइन इन किया: ",
   "socialPanel.mismatch.bodyMiddle": " — लेकिन आप फिर से कनेक्ट कर रहे थे: ",
   "socialPanel.mismatch.bodySuffix": "। कुछ भी बदला नहीं गया — आपका मौजूदा कनेक्शन सुरक्षित है। चुनें कि आगे क्या करना है।",

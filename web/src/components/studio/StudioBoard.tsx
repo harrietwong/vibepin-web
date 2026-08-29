@@ -52,6 +52,7 @@ import { EMPTY_TOUCHED, type LinkedProduct } from "@/lib/pinMetadata";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
+import { useViewportBucket } from "@/hooks/useViewportBucket";
 import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
 import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
 import {
@@ -233,6 +234,11 @@ export function StudioBoard() {
   // resolved); it only distinguishes "loading drafts" from "empty" vs "loaded".
   const [hydrated, setHydrated] = useState(false);
   const [planPinned, setPlanPinned] = useState(false);
+  // PRD 0809 §IX — the Plan panel only DOCKS on wide desktop. On tablet/mobile it
+  // opens as an overlay that takes no horizontal space, so a "pinned" preference
+  // restored from localStorage must not keep narrowing the board's columns there.
+  const viewportBucket = useViewportBucket();
+  const planDocked = planPinned && viewportBucket === "desktop";
   // PRD 0826 §24 — the board tells the Plan sidebar when a schedule just succeeded, so
   // the sidebar can highlight the new item (when it is open) or count it on its trigger
   // (when it is not). A list, not a single id: a batch of N must move the badge by N.
@@ -1460,7 +1466,7 @@ export function StudioBoard() {
             <p style={{ margin: 0, fontSize: 12.5 }}>{tr("studioBoard.empty.nothingHereSub")}</p>
           </div>
         ) : (
-          <div data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planPinned
+          <div data-testid="studio-board-grid" style={{ display: "grid", gridTemplateColumns: planDocked
             ? "repeat(auto-fill, minmax(248px, 1fr))"
             : "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, alignItems: "start" }}>
             {items.map(({ draft, lifecycle }) => (
@@ -1582,7 +1588,7 @@ export function StudioBoard() {
                 <h2 id="multi-upload-title" style={{ margin: 0, fontSize: 18, color: BUI.text }}>You&apos;ve uploaded {pendingUploadFiles.length} images</h2>
                 <p style={{ margin: "5px 0 0", fontSize: 12.5, color: BUI.textSec }}>How would you like to publish them?</p>
               </div>
-              <button type="button" aria-label="Cancel" onClick={() => setPendingUploadFiles(null)} style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4 }}><X style={{ width: 17, height: 17 }} /></button>
+              <button type="button" aria-label={tr("studioBoard.actions.cancel")} onClick={() => setPendingUploadFiles(null)} style={{ border: "none", background: "transparent", color: BUI.textSec, cursor: "pointer", padding: 4 }}><X style={{ width: 17, height: 17 }} /></button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginTop: 18 }}>
               <UploadChoiceCard selected={uploadChoice === "together"} icon={<Images style={{ width: 20, height: 20 }} />} title="Publish together"
@@ -1595,8 +1601,8 @@ export function StudioBoard() {
                 <input type="checkbox" checked={rememberUploadChoice} onChange={e => setRememberUploadChoice(e.target.checked)} /> Don&apos;t show this again
               </label>
               <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" onClick={() => setPendingUploadFiles(null)} style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-                <button type="button" data-testid="multi-upload-continue" onClick={continueMultiUpload} style={{ padding: "8px 17px", borderRadius: 8, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Continue</button>
+                <button type="button" onClick={() => setPendingUploadFiles(null)} style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${BUI.border}`, background: BUI.surface, color: BUI.text, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{tr("studioBoard.actions.cancel")}</button>
+                <button type="button" data-testid="multi-upload-continue" onClick={continueMultiUpload} style={{ padding: "8px 17px", borderRadius: 8, border: "none", background: BUI.gradient, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{tr("studioBoard.actions.continue")}</button>
               </div>
             </div>
           </div>

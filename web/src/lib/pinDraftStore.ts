@@ -1415,6 +1415,117 @@ export function mergeServerDrafts(
   return { applied, removed };
 }
 
+/**
+ * Re-base one local draft onto the server's CURRENT row after a 409 stale, and
+ * store the result. The counterpart of the write path's compare-and-set, on the
+ * client side.
+ *
+ * NOT last-write-wins, and that is the whole point. `mergeServerDrafts` above
+ * asks one question — whose `updatedAt` is larger — and hands the loser's ENTIRE
+ * payload to the winner. Under the sequence this exists for, the local copy wins
+ * that question while being wrong about almost every field in it:
+ *
+ *   1. the client PUTs draft A, still carrying its schedule;
+ *   2. the cron publishes it, writes `destinationResults`, clears the schedule,
+ *      and stamps the row at write time — so the row is now newer than A;
+ *   3. before the 409 reaches the browser the merchant edits the title, making a
+ *      local draft B whose `updatedAt` is newer than the row;
+ *   4. whole-payload LWW therefore keeps B — including the schedule the cron just
+ *      cleared and minus the results it just wrote;
+ *   5. the retry sends B, passes the server's LWW (it IS newer) and its CAS, and
+ *      `buildScheduledAt` re-derives a `scheduled_at` from B's revived schedule.
+ *
+ * The Content is scheduled again and published a second time. A newer timestamp
+ * says the merchant typed something; it does not say they asked for their whole
+ * pre-publish copy back.
+ *
+ * So the question asked here is narrower and answerable: WHICH FIELDS did the
+ * merchant change while the PUT was in flight? `sent` is the exact payload that
+ * went out, so `local` vs `sent` is precisely that edit and nothing else. Those
+ * fields overlay the server's row; every other field comes from the server —
+ * `destinationResults`, `previousResults`, `postedAt`, `remotePinId/Url`,
+ * `publishError*` / `failureType`, `scheduledDestinations` and the schedule.
+ *
+ * Two group rules, because a field-at-a-time overlay would produce states no
+ * writer ever intended:
+ *
+ *  - The schedule (`scheduledDate` / `scheduledTime` / `plannedAt`) moves as ONE
+ *    unit, keyed on whether ANY of the three changed since the send. Per-field
+ *    would let a date the merchant edited pair with a time the server cleared,
+ *    and a `plannedAt` agreeing with neither. If they did reschedule, that is a
+ *    real intent and it wins; if they did not touch it, the server's is kept —
+ *    so a schedule the merchant never asked for can never come back. This is
+ *    also the only thing standing between a FAILED publish and a re-schedule:
+ *    `writeFailure` clears the schedule without setting `postedAt`, so
+ *    `buildScheduledAt`'s published-guard does not cover that case.
+ *    `scheduleTimezone` rides with whichever side wins the group rather than
+ *    voting in it — it is inert without a date, and `updateDraft` restamps it
+ *    with the date it belongs to.
+ *  - `status` / `planningStatus` are RECOMPUTED from the merged draft instead of
+ *    overlaid, because they are derived (title + description + scheduledDate),
+ *    not authored. B's "ready" was derived from a scheduledDate the merged draft
+ *    no longer has. Recomputing makes this equal to what the store would hold had
+ *    the merchant's edit arrived through `updateDraft` on top of the server's row
+ *    — which is exactly the state being reconstructed. With no local edit at all,
+ *    nothing is recomputed: the server's payload is adopted verbatim.
+ *
+ * `updatedAt` is max(local, server) — never a fresh `Date.now()`. The retry has
+ * to clear the server's LWW (strict `<`, so a tie passes) without inventing a
+ * timestamp newer than a write the cron may be making concurrently.
+ *
+ * Returns the merged draft, or null when the draft is gone locally (deleted
+ * mid-flight — a tombstone covers it and there is nothing to re-base).
+ */
+export function rebaseDraftOnServer(server: PinDraft, sent: PinDraft): PinDraft | null {
+  if (!server || typeof server.id !== "string" || !server.id) return null;
+  const data = load();
+  const local = data.drafts[server.id];
+  if (!local) return null;
+
+  const SCHEDULE_GROUP = ["scheduledDate", "scheduledTime", "plannedAt"] as const;
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+  // The merchant's edit = what the local draft says that the SENT payload did not.
+  // Union of both key sets, so clearing a field counts as an edit too. Identity and
+  // bookkeeping keys are decided by the rules below, never by the diff.
+  const keys = new Set<string>([...Object.keys(sent ?? {}), ...Object.keys(local)]);
+  for (const k of ["id", "createdAt", "updatedAt", "status", "planningStatus", ...SCHEDULE_GROUP]) keys.delete(k);
+
+  const l = local as unknown as Record<string, unknown>;
+  const s = (sent ?? {}) as unknown as Record<string, unknown>;
+  const delta: string[] = [];
+  for (const k of keys) if (!same(l[k], s[k])) delta.push(k);
+
+  const scheduleChanged = SCHEDULE_GROUP.some(k => !same(l[k], s[k]));
+
+  const merged = { ...(server as unknown as Record<string, unknown>) };
+  for (const k of delta) {
+    if (k in l) merged[k] = l[k];
+    else delete merged[k];
+  }
+  if (scheduleChanged) {
+    for (const k of SCHEDULE_GROUP) merged[k] = l[k];
+    merged.scheduleTimezone = l.scheduleTimezone;
+  }
+
+  const touched = delta.length > 0 || scheduleChanged;
+  if (touched) {
+    // Derived, not authored — see the group rules above.
+    const status = recomputeDraftStatus(merged as unknown as PinDraft);
+    merged.status = status;
+    merged.planningStatus = status === "ready" ? "ready" : "needs_review";
+  }
+  merged.updatedAt = tsMs(local.updatedAt) > tsMs(server.updatedAt) ? local.updatedAt : server.updatedAt;
+
+  const next = merged as unknown as PinDraft;
+  const normalized = normalizeDraftMedia(next) ?? next;
+  data.drafts[normalized.id] = normalized;
+  persist(data);
+  emit();
+  syncPinMetadataStore(normalized);
+  return normalized;
+}
+
 // ── Reads ─────────────────────────────────────────────────────────────────────
 
 export function getDraftsByKeyword(keyword: string, category: string): PinDraft[] {

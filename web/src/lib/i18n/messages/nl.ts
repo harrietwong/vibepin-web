@@ -2252,7 +2252,7 @@ const nl: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Kon verbinding niet starten",
   "socialPanel.toast.disconnectedSuffix": " niet meer verbonden",
   "socialPanel.toast.couldNotDisconnect": "Kon verbinding niet verbreken",
-  "socialPanel.mismatch.title": "Dat is een ander Pinterest-account",
+  "socialPanel.mismatch.title": "Dat is een ander {platform}-account",
   "socialPanel.mismatch.bodyPrefix": "Je bent aangemeld als ",
   "socialPanel.mismatch.bodyMiddle": ", maar je was bezig ",
   "socialPanel.mismatch.bodySuffix": " opnieuw te verbinden. Er is niets gewijzigd — je bestaande verbinding is onaangetast. Kies wat je wilt doen.",

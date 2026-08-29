@@ -12,10 +12,52 @@
 import { mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 // Pure URL resolution — no browser globals, safe on the server.
 import { toProxyUrl } from "@/lib/imageProxy";
+// Intent resolution. Both modules are pure and import-safe (no Supabase client built at
+// module load), which is what keeps this file runnable under bare `tsx`.
+import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
+import {
+  pendingDestinations,
+  publishedForSchedule,
+  type AttemptedResult,
+  type DestinationOutcome,
+  type PendingOptions,
+} from "@/lib/social/publishRules";
+// The card path's history rule, reused verbatim so a scheduled republish and a manual
+// one keep the same "Earlier publishes" record. Pure + dependency-free (it only reads
+// mediaRules/scheduledDestinations, both import-safe), so it runs under bare `tsx`.
+import { supersededResults, type DestinationPublishResult } from "@/lib/contentDraftModel";
+import { isSocialProvider, platformName, type SocialProvider } from "@/lib/social/platforms";
+import type { ScheduledDestination } from "@/lib/pinDraftStore";
 
 /** A claim is reclaimable if it was never taken, or the worker that took it is
  *  presumed dead (claim older than this window). Matches the SQL the route runs. */
 export const CLAIM_STALE_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * How long ONE run may keep CLAIMING rows (wall clock, from the top of the handler).
+ *
+ * The platform kills the invocation at `maxDuration` (300s). A row whose publish
+ * succeeded but whose result was never persisted keeps its schedule and its claim, so
+ * ten minutes later it is re-claimed and PUBLISHED AGAIN — a double post. The batch
+ * (20) is not a time bound: one Instagram publish alone polls its container for up to
+ * ~45s, so a slow batch could run past the ceiling mid-row.
+ *
+ * So the run stops TAKING work well before the ceiling, leaving ~100s of headroom for
+ * the row it is already publishing. Rows it never claimed were never touched: they stay
+ * due, unclaimed, and the next tick (~5 min) takes them. Deferring is free; being killed
+ * mid-publish is not.
+ */
+export const CLAIM_BUDGET_MS = 200_000;
+
+/**
+ * The run's HARD deadline and the room reserved for one destination.
+ *
+ * Defined in publishRules (the fan-out enforces them destination by destination) and
+ * re-exported here so every bound this route runs under is readable in one place:
+ * CLAIM_BUDGET_MS stops it taking new ROWS, RUN_DEADLINE_MS stops it starting new
+ * DESTINATIONS. The batch limit bounds neither — it counts rows, not seconds.
+ */
+export { RUN_DEADLINE_MS, DESTINATION_RESERVE_MS } from "@/lib/social/publishRules";
 
 /** ISO timestamp of the stale-claim cutoff: claims at/after this are still "live". */
 export function staleClaimCutoffIso(nowMs: number): string {
@@ -67,7 +109,15 @@ function readMediaUrls(payload: Record<string, unknown>): string[] {
 
 export interface DuePublishInput {
   uid: string;
-  boardId: string;
+  /**
+   * The Pinterest board this Content publishes into — ABSENT when no Pinterest
+   * destination is owed. A Content scheduled only to Instagram/Facebook has no board
+   * and never needed one; requiring it here is what made such a schedule fail with
+   * "Missing image or board" without a single platform it named being attempted.
+   * `destinationPublishInput` re-resolves the board per Pinterest entry and refuses an
+   * entry that has none, so nothing ever reaches Pinterest boardless.
+   */
+  boardId?: string;
   /** The cover image — `imageUrls[0]`, kept for callers on the single-image contract. */
   imageUrl: string;
   /**
@@ -97,22 +147,88 @@ export interface DuePublishInput {
  * exactly the pre-v59 behaviour, and the adoption is written back by payloadAfterSuccess /
  * payloadAfterFailure.
  */
-export function payloadToPublishInput(uid: string, payload: Record<string, unknown>): DuePublishInput | null {
+export function owedDestinations(
+  payload: Record<string, unknown>,
+  options?: PendingOptions,
+): ScheduledDestination[] {
+  const intent = resolveScheduledDestinations(payload as Parameters<typeof resolveScheduledDestinations>[0]);
+  // What already happened, so a row re-claimed after a stale lock does not re-publish an
+  // account that already succeeded. `pendingDestinations` keys that by ACCOUNT, so two
+  // accounts on one platform retry independently — and by SCHEDULE, so a Posted Content
+  // the merchant re-scheduled publishes again instead of quietly losing its new slot.
+  const prior = Array.isArray(payload.destinationResults)
+    ? (payload.destinationResults as AttemptedResult[])
+    : [];
+  if (intent.length) return pendingDestinations(intent, prior, options);
+
+  // ── The draft that names no account at all ────────────────────────────────────
+  // `resolveScheduledDestinations` can only derive intent from a PINNED target, so a
+  // draft with a board but no `targetConnectionId` — every Pin scheduled before
+  // adopt-once wrote one back — resolves to nothing. Once destinations drove the
+  // publish, "nothing owed" made such a row leave the due scan as completed after
+  // being metered, publishing absolutely nothing. It used to publish through
+  // `publishPinForUser` on the DEFAULT connection and adopt it, so that is what is
+  // owed: one Pinterest destination naming no account.
+  //
+  // The empty `socialConnectionId` is the point, not an oversight — it is what makes
+  // `destinationPublishInput` leave `connectionId` unset, so the publish resolves the
+  // default account and the route's adopt-once branch pins it. It is also why the
+  // stored result row keys as `pinterest:legacy`, exactly as it always did.
+  const boardId = firstString(payload.boardId);
+  if (!boardId) return []; // nothing to publish INTO — payloadToPublishInput refuses it
+  // A stale re-claim must not double-post the Pin this row already published — but a
+  // Pin published for an EARLIER schedule must not block the one the merchant just
+  // set, or a legacy Content could never be re-scheduled at all. Same rule as above.
+  if (prior.some(r => r.provider === "pinterest" && publishedForSchedule(r, options?.scheduledAt))) return [];
+  const legacy: ScheduledDestination = {
+    provider: "pinterest",
+    socialConnectionId: "",
+    boardId,
+    capturedAt: new Date().toISOString(),
+  };
+  const boardName = firstString(payload.boardName);
+  if (boardName) legacy.boardName = boardName;
+  return [legacy];
+}
+
+export function payloadToPublishInput(
+  uid: string,
+  payload: Record<string, unknown>,
+  options?: PendingOptions,
+): DuePublishInput | null {
   // A multi-image Content stores its whole media set in `payload.media`, in display
   // order, with the cover first. Older/single-image drafts have no `media` at all —
   // they fall back to `imageUrl`, which is exactly what this function always read.
   const mediaUrls = readMediaUrls(payload);
   const storedImage = mediaUrls[0] || firstString(payload.imageUrl, payload.sourceImageUrl);
   const boardId = firstString(payload.boardId);
-  // A board is still required, but it may live on a Pinterest ENTRY rather than on the
-  // draft: a Content whose only Pinterest destination carries its own board has no
-  // legacy `payload.boardId` at all, and refusing it here would fail a publish that is
-  // perfectly well specified. `destinationPublishInput` re-checks per entry, so an
-  // entry that genuinely has no board is still refused — just individually.
+  // A board may live on a Pinterest ENTRY rather than on the draft: a Content whose only
+  // Pinterest destination carries its own board has no legacy `payload.boardId` at all,
+  // and refusing it here would fail a publish that is perfectly well specified.
+  // `destinationPublishInput` re-checks per entry, so an entry that genuinely has no
+  // board is still refused — just individually.
   const anyEntryBoard = Array.isArray(payload.scheduledDestinations)
     && (payload.scheduledDestinations as Array<Record<string, unknown>>)
       .some(d => d && typeof d === "object" && d.provider === "pinterest" && firstString(d.boardId));
-  if (!storedImage || (!boardId && !anyEntryBoard)) return null;
+  // WHETHER a board is required at all: only when nothing but Pinterest is still owed.
+  //
+  //   - nothing owed (a legacy draft carrying no intent at all) ⇒ every() is true ⇒
+  //     required, i.e. byte-for-byte the behaviour this function always had.
+  //   - Pinterest-only intent (explicit, or derived from the legacy pinned target) ⇒
+  //     required, unchanged.
+  //   - the Content names Instagram/Facebook and NO Pinterest ⇒ NOT required. This is
+  //     the fix: such a Content has no board, never needed one, and used to die here
+  //     with "Missing image or board" without a single named platform being attempted.
+  //   - mixed (Pinterest + Instagram) with no board anywhere ⇒ not required at the
+  //     CONTENT level: the boardless Pinterest entry is refused individually by
+  //     `destinationPublishInput` and gets its own failure row, while Instagram — which
+  //     needs no board — still goes out. Failing the whole Content would punish a
+  //     destination that is perfectly well specified for a defect on a different one.
+  // The SAME owed set the route publishes from — `options` included, or a Content
+  // re-scheduled to Instagram alone could be refused for a board it does not need.
+  const boardRequired = owedDestinations(payload, options).every(d => d.provider === "pinterest");
+  if (!storedImage) return null;
+  if (boardRequired && !boardId && !anyEntryBoard) return null;
   // Resolve to the absolute public URL, exactly as the Publish-now path does
   // (DraftDetailsDrawer passes the image through toProxyUrl before publishing).
   //
@@ -130,7 +246,9 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
   const imageUrls = (mediaUrls.length ? mediaUrls : [storedImage]).map(toProxyUrl);
   return {
     uid,
-    boardId,
+    // Omitted rather than "" when there is none, so the type tells the truth: a
+    // Pinterest publish is only ever built through `destinationPublishInput`.
+    boardId: boardId || undefined,
     imageUrl: imageUrls[0],
     imageUrls,
     title: firstString(payload.title) || undefined,
@@ -141,6 +259,13 @@ export function payloadToPublishInput(uid: string, payload: Record<string, unkno
     connectionId: firstString(payload.targetConnectionId) || undefined,
   };
 }
+
+/**
+ * A Pinterest-ready publish input: the Content's fields with a board RESOLVED. Only
+ * `destinationPublishInput` mints one, which is why nothing can reach Pinterest without
+ * a board even though `DuePublishInput.boardId` is optional.
+ */
+export type PinterestPublishInput = DuePublishInput & { boardId: string };
 
 /** One destination's outcome, in the shape the fan-out layer already produces. */
 export type DestinationOutcomeLike = {
@@ -165,18 +290,27 @@ export type DestinationOutcomeLike = {
  * Keyed `${provider}:${socialConnectionId ?? "legacy"}`, the same key the client uses,
  * so a retry updates the row it belongs to instead of appending a duplicate.
  */
-export function mergeDestinationResults(
-  payload: Record<string, unknown>,
+function priorDestinationResults(payload: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(payload.destinationResults)
+    ? (payload.destinationResults as Array<Record<string, unknown>>)
+    : [];
+}
+
+/** This attempt's rows, in the stored shape — the input to BOTH merges below. */
+function outcomeRows(
   outcomes: readonly DestinationOutcomeLike[],
   nowIso: string,
 ): Array<Record<string, unknown>> {
-  const prior = Array.isArray(payload.destinationResults)
-    ? (payload.destinationResults as Array<Record<string, unknown>>)
-    : [];
-  const rows = outcomes
+  return outcomes
     // `skipped` is "not attempted" — recording an outcome for it would claim
-    // something happened that did not.
-    .filter(o => o.status !== "skipped")
+    // something happened that did not. `pending` is "not attempted YET" (the run ran
+    // out of time before it): the mapping below has only two landing places, so a
+    // pending outcome would be written as FAILED — telling the merchant a platform
+    // rejected a post that was never sent, and inviting them to "retry" a publish
+    // the next run is going to make anyway. It also must not reach
+    // `supersededDestinationResults`, which would archive the live post this
+    // destination still has and drop it from the card.
+    .filter(o => o.status !== "skipped" && o.status !== "pending")
     .map(o => {
       const connectionId = typeof o.socialConnectionId === "string" && o.socialConnectionId.trim()
         ? o.socialConnectionId.trim()
@@ -199,8 +333,137 @@ export function mergeDestinationResults(
       }
       return row;
     });
+}
+
+export function mergeDestinationResults(
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+): Array<Record<string, unknown>> {
+  const prior = priorDestinationResults(payload);
+  const rows = outcomeRows(outcomes, nowIso);
   const fresh = new Set(rows.map(r => r.destinationId));
   return [...prior.filter(r => !fresh.has(r?.destinationId)), ...rows];
+}
+
+/**
+ * The `published` rows this attempt REPLACES, appended to the Content's history.
+ *
+ * A Content that was Posted, then edited and re-scheduled, publishes again into the
+ * same destination — and `mergeDestinationResults` drops the row describing the post
+ * that is still live on the platform, taking its permalink with it. The card path has
+ * always kept it (`supersededResults` → `previousResults[]`, rendered as "Earlier
+ * publishes"); the cron did not, so the SAME Content lost history only when the
+ * scheduler published it. Same helper, same cap, same rule: only `published` rows are
+ * worth keeping, and a row replaced by a FAILED re-attempt is kept too — the earlier
+ * post is still live regardless of how the retry went.
+ */
+/** Do two result rows describe the SAME post on the platform? */
+function samePost(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const field = (r: Record<string, unknown>, k: string) => (typeof r?.[k] === "string" ? r[k] : "");
+  return field(a, "remoteId") === field(b, "remoteId") && field(a, "postUrl") === field(b, "postUrl");
+}
+
+export function supersededDestinationResults(
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+): Array<Record<string, unknown>> {
+  const history = Array.isArray(payload.previousResults)
+    ? (payload.previousResults as Array<Record<string, unknown>>)
+    : [];
+  const rows = outcomeRows(outcomes, nowIso);
+  // A destination's outcome is now written TWICE: once incrementally, the moment the
+  // provider answers, and again by the final persist (which re-reads, so it sees its
+  // own incremental row as the "prior" one). Without this filter the second write
+  // would archive the post it had just recorded — the live Pin would appear in BOTH
+  // destinationResults and previousResults, and "Earlier publishes" would list a post
+  // that was never superseded by anything. A prior row is only superseded when the
+  // fresh row describes a DIFFERENT post.
+  const freshByDestination = new Map(rows.map(r => [r.destinationId, r]));
+  const prior = priorDestinationResults(payload).filter(r => {
+    const fresh = freshByDestination.get(r?.destinationId);
+    return !fresh || !samePost(r, fresh);
+  });
+  // Cast at the boundary only: these are the stored result rows, typed loosely here
+  // because a cron payload is whatever the client last synced.
+  return supersededResults(
+    prior as unknown as DestinationPublishResult[],
+    rows as unknown as DestinationPublishResult[],
+    history as unknown as DestinationPublishResult[],
+  ) as unknown as Array<Record<string, unknown>>;
+}
+
+/**
+ * Write BOTH halves of the result record: what happened now, and the live posts this
+ * attempt superseded. Every payloadAfter* transform goes through here so no path can
+ * record one without the other.
+ *
+ * Exported because the incremental writer (persistRow.ts) applies a single outcome to
+ * a freshly re-read payload and must use the SAME merge — a second, simpler one would
+ * be a second answer to "what does this Content's result set look like now".
+ */
+export function applyDestinationResults(
+  next: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  outcomes: readonly DestinationOutcomeLike[],
+  nowIso: string,
+): void {
+  next.destinationResults = mergeDestinationResults(payload, outcomes, nowIso);
+  const previous = supersededDestinationResults(payload, outcomes, nowIso);
+  if (previous.length) next.previousResults = previous;
+}
+
+/** The reason a destination that was owed produced no result of its own. */
+export function didNotCompleteMessage(provider: SocialProvider): string {
+  return `Publishing to ${platformName(provider)} did not complete.`;
+}
+
+/**
+ * Failed result rows for owed destinations that the fan-out never reported on.
+ *
+ * Two ways a destination can end up with no row: `fanOutDestinations` THREW (one
+ * unhandled error and every remaining platform is lost at once), or it returned fewer
+ * rows than it was given. Both used to be silent — the Content was marked posted from
+ * the Pinterest result and the merchant was never told Instagram had not gone out. A
+ * missing row does not mean "nothing happened", it means "nobody knows", and the only
+ * honest rendering of that is a failure the merchant can see and retry.
+ *
+ * `attempted` is whatever DID report (the fan-out's return value), keyed the same way
+ * the rest of the pipeline keys destinations — provider + account — so a partial
+ * result set only gets rows for the accounts genuinely missing from it. Pinterest
+ * entries are never included: they are dispatched by their own loop, which always
+ * records a row.
+ */
+export function failedRowsForUnattempted(
+  extras: readonly ScheduledDestination[],
+  message: string | ((provider: SocialProvider) => string),
+  attempted: readonly DestinationOutcomeLike[] = [],
+): DestinationOutcome[] {
+  const key = (provider: string, id: unknown) =>
+    `${provider}:${typeof id === "string" && id.trim() ? id.trim() : ""}`;
+  const seen = new Set(attempted.map(o => key(o.provider, o.socialConnectionId)));
+  const rows: DestinationOutcome[] = [];
+  for (const d of extras) {
+    // Pinterest is dispatched by the per-destination loop, which always leaves a row.
+    if (!isSocialProvider(d.provider) || d.provider === "pinterest") continue;
+    const k = key(d.provider, d.socialConnectionId);
+    if (seen.has(k)) continue;
+    seen.add(k); // a duplicated entry must not produce two identical failure rows
+    const row: DestinationOutcome = {
+      provider: d.provider,
+      status: "failed",
+      socialConnectionId: typeof d.socialConnectionId === "string" && d.socialConnectionId.trim()
+        ? d.socialConnectionId.trim()
+        : null,
+      error: (typeof message === "function" ? message(d.provider) : message)
+        || didNotCompleteMessage(d.provider),
+    };
+    // Name the account the merchant chose, so a two-account platform says WHICH one.
+    if (d.accountLabel) row.accountName = d.accountLabel;
+    rows.push(row);
+  }
+  return rows;
 }
 
 /**
@@ -240,7 +503,7 @@ export function payloadAfterSuccess(
   fanned?: readonly DestinationOutcomeLike[],
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, connectionId) };
-  next.destinationResults = mergeDestinationResults(payload, [
+  applyDestinationResults(next, payload, [
     {
       provider: "pinterest",
       status: "published",
@@ -297,14 +560,16 @@ export function payloadAfterFailure(
    * stays untargeted and adopts on the next try.
    */
   connectionId?: string | null,
+  options?: OutcomePersistOptions,
 ): Record<string, unknown> {
+  const clearSchedule = options?.clearSchedule !== false;
   const next = { ...withAdoptedTarget(payload, connectionId) };
   // Bump payload.updatedAt (same reason as payloadAfterSuccess — see comment there):
   // the client's LWW merge compares this field, so it must match the row's updated_at.
   next.updatedAt = nowIso;
   // The failed Pinterest destination gets a row of its own, carrying the reason, so the
   // card shows WHICH destination failed and why — not just a Content-level error.
-  next.destinationResults = mergeDestinationResults(payload, [{
+  applyDestinationResults(next, payload, [{
     provider: "pinterest",
     status: "failed",
     socialConnectionId: firstString(payload.targetConnectionId) || connectionId || null,
@@ -329,13 +594,78 @@ export function payloadAfterFailure(
   next.failureType = "publish";
   next.errorCategory = mapPublishErrorToCategory(fail.code, fail.message);
   if (fail.code) next.publishErrorCode = fail.code;
-  if (previousScheduled) next.previousScheduledTime = previousScheduled;
+  if (clearSchedule && previousScheduled) next.previousScheduledTime = previousScheduled;
 
   // Drop it out of the due scan; the "failed" lifecycle comes from publishError.
+  // Unless the merchant rescheduled while this attempt was running — then the slot
+  // they just chose is theirs, and the failure is recorded without cancelling it.
+  if (clearSchedule) clearScheduleFields(next);
+  return next;
+}
+
+/**
+ * Mark a Content posted from the destination rows it already carries.
+ *
+ * Only ever fills gaps, and only from facts already stored. `postedAt` takes the
+ * newest `publishedAt` among the published rows — NOT the current time: a bookkeeping
+ * pass that stamps itself would claim the Content published the moment a later cron
+ * run happened to look at it, which is wrong on the card and wrong in analytics.
+ */
+function backfillPostedFromResults(next: Record<string, unknown>): void {
+  const rows = Array.isArray(next.destinationResults)
+    ? (next.destinationResults as Array<Record<string, unknown>>)
+    : [];
+  const published = rows.filter(r => r && r.status === "published");
+  if (!published.length) return;
+
+  if (!firstString(next.postedAt)) {
+    const times = published.map(r => firstString(r.publishedAt)).filter(Boolean).sort();
+    if (times.length) next.postedAt = times[times.length - 1];
+  }
+  const pin = published.find(r => r.provider === "pinterest");
+  if (pin) {
+    if (!firstString(next.remotePinId) && firstString(pin.remoteId)) next.remotePinId = pin.remoteId;
+    if (!firstString(next.remotePinUrl) && firstString(pin.postUrl)) next.remotePinUrl = pin.postUrl;
+  }
+  next.generationStatus = "completed";
+  // A post exists. Whatever an earlier attempt's Content-level banner said, it is no
+  // longer what happened — the same clearing the anyPublished branch does.
+  delete next.publishError;
+  delete next.failureType;
+  delete next.errorCategory;
+  delete next.publishErrorCode;
+}
+
+/**
+ * Drop the payload's scheduling fields, so lifecycle stops deriving "scheduled".
+ *
+ * One helper rather than four copies: a clearing site that is added but not gated by
+ * `clearSchedule` is exactly the bug this option exists to prevent.
+ */
+function clearScheduleFields(next: Record<string, unknown>): void {
   next.scheduledDate = "";
   next.scheduledTime = "";
   next.plannedAt = "";
-  return next;
+}
+
+/** How a persist should treat the Content's schedule. */
+export interface OutcomePersistOptions {
+  /**
+   * At least one destination was DEFERRED (the run's deadline arrived first).
+   *
+   * Record what happened, leave the Content scheduled: it is neither posted nor
+   * failed while a destination it named has not been attempted.
+   */
+  deferred?: boolean;
+  /**
+   * May this persist clear the scheduling fields? Default true.
+   *
+   * False when the merchant RESCHEDULED while the Content was publishing: the row's
+   * `scheduled_at` is no longer the one this run claimed, so clearing it would silently
+   * cancel a slot they had just chosen. Their schedule stands; the results are recorded
+   * beside it.
+   */
+  clearSchedule?: boolean;
 }
 
 /**
@@ -372,23 +702,49 @@ export function payloadAfterOutcomes(
    * `publishErrorCode` degrades with it, so the caller passes it in.
    */
   failureCode?: string,
+  options?: OutcomePersistOptions,
 ): Record<string, unknown> {
   const next = { ...withAdoptedTarget(payload, adoptedConnectionId) };
-  next.destinationResults = mergeDestinationResults(payload, outcomes, nowIso);
+  applyDestinationResults(next, payload, outcomes, nowIso);
   // The client's mergeServerDrafts LWW compares this field — see payloadAfterSuccess.
   next.updatedAt = nowIso;
 
-  const attempted = outcomes.filter(o => o.status !== "skipped");
+  // `pending` joins `skipped` here: neither was attempted, and counting a deferred
+  // destination as an attempt would resolve the Content — posted or failed — on the
+  // strength of a publish that has not happened.
+  const clearSchedule = options?.clearSchedule !== false;
+  const attempted = outcomes.filter(o => o.status !== "skipped" && o.status !== "pending");
   const publishedPinterest = attempted.find(o => o.provider === "pinterest" && o.status === "published");
   const anyPublished = attempted.some(o => o.status === "published");
+
+  // ── At least one destination was deferred ──────────────────────────────────
+  // The run ran out of time before it. Whatever DID happen is recorded — a Pin that
+  // published is a fact, and losing it is what makes the next run publish it twice —
+  // but the Content is neither posted nor failed: it is still scheduled, for the
+  // destinations that have not gone out. So the schedule stays, the claim is released
+  // by the caller, and the next run owes exactly the destinations still missing.
+  //
+  // `remotePinId`/`remotePinUrl` are captured here and not left to the completing run:
+  // by then this Pinterest destination has already published and is no longer owed, so
+  // its outcome is not in that run's set and the permalink would reach the legacy
+  // fields never. `postedAt` is NOT set — that is the completing run's to write.
+  if (options?.deferred) {
+    if (publishedPinterest?.externalPostId) next.remotePinId = publishedPinterest.externalPostId;
+    if (publishedPinterest?.externalPostUrl) next.remotePinUrl = publishedPinterest.externalPostUrl;
+    return next;
+  }
 
   // Nothing was ATTEMPTED because nothing was still owed — every destination had
   // already published on an earlier attempt (a stale-claim re-run). That is a
   // completed Content, not a failure: it just needs to leave the due scan.
+  //
+  // It may also need to be MARKED posted. Results are written incrementally now, so
+  // the run that published may have died before it could write `postedAt` — the
+  // destination rows say the post exists and the legacy fields say nothing happened.
+  // This run finishes that job from the rows themselves.
   if (!attempted.length) {
-    next.scheduledDate = "";
-    next.scheduledTime = "";
-    next.plannedAt = "";
+    backfillPostedFromResults(next);
+    if (clearSchedule) clearScheduleFields(next);
     return next;
   }
 
@@ -398,9 +754,7 @@ export function payloadAfterOutcomes(
     if (publishedPinterest?.externalPostUrl) next.remotePinUrl = publishedPinterest.externalPostUrl;
     next.generationStatus = "completed";
     // Clear scheduling so lifecycle derives "posted" and the row is no longer due.
-    next.scheduledDate = "";
-    next.scheduledTime = "";
-    next.plannedAt = "";
+    if (clearSchedule) clearScheduleFields(next);
     delete next.publishError;
     delete next.failureType;
     delete next.errorCategory;
@@ -417,10 +771,8 @@ export function payloadAfterOutcomes(
   next.failureType = "publish";
   next.errorCategory = mapPublishErrorToCategory(failureCode, message);
   if (failureCode) next.publishErrorCode = failureCode;
-  if (previousScheduled) next.previousScheduledTime = previousScheduled;
-  next.scheduledDate = "";
-  next.scheduledTime = "";
-  next.plannedAt = "";
+  if (clearSchedule && previousScheduled) next.previousScheduledTime = previousScheduled;
+  if (clearSchedule) clearScheduleFields(next);
   return next;
 }
 
@@ -452,10 +804,10 @@ export function destinationPublishInput(
   destination: { socialConnectionId?: string | null; boardId?: string | null },
   /** The draft's legacy target — the only entry the draft-level board belongs to. */
   legacyTargetConnectionId: string,
-): DuePublishInput | null {
+): PinterestPublishInput | null {
   const own = typeof destination.boardId === "string" ? destination.boardId.trim() : "";
   const id = typeof destination.socialConnectionId === "string" ? destination.socialConnectionId.trim() : "";
-  const boardId = own || (!id || id === legacyTargetConnectionId ? base.boardId : "");
+  const boardId = own || (!id || id === legacyTargetConnectionId ? base.boardId ?? "" : "");
   if (!boardId) return null;
   return { ...base, boardId, connectionId: id || base.connectionId };
 }

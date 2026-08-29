@@ -635,7 +635,7 @@ const pl: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Nie udało się rozpocząć połączenia",
   "socialPanel.toast.disconnectedSuffix": " rozłączone",
   "socialPanel.toast.couldNotDisconnect": "Nie udało się rozłączyć",
-  "socialPanel.mismatch.title": "To inne konto Pinterest",
+  "socialPanel.mismatch.title": "To inne konto {platform}",
   "socialPanel.mismatch.bodyPrefix": "Zalogowano jako ",
   "socialPanel.mismatch.bodyMiddle": ", ale ponownie łączono ",
   "socialPanel.mismatch.bodySuffix": ". Nic nie zostało zmienione — istniejące połączenie pozostaje nietknięte. Wybierz, co chcesz zrobić.",

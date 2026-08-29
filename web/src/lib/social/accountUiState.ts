@@ -35,6 +35,11 @@ export type AccountUiState =
  */
 export const REQUIRED_PINTEREST_SCOPES_UI = [
   "boards:read",
+  // Required, not optional: Pinterest v5 POST /pins fails 401 code 3
+  // "Missing: ['boards:write']" without it, so a connection lacking it publishes
+  // nothing. It has always been in PRODUCTION_SCOPES; leaving it out of the floor
+  // showed those connections as Connected while every publish failed.
+  "boards:write",
   "pins:read",
   "pins:write",
 ] as const;

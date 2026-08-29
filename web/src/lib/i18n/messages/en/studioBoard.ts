@@ -208,6 +208,7 @@ export const studioBoardMessages = {
   "studioBoard.actions.edit": "Edit",
   "studioBoard.actions.done": "Done",
   "studioBoard.actions.cancel": "Cancel",
+  "studioBoard.actions.continue": "Continue",
   "studioBoard.actions.unschedule": "Unschedule",
   "studioBoard.actions.viewResults": "View results",
   "studioBoard.actions.hideResults": "Hide results",
@@ -313,6 +314,9 @@ export const studioBoardMessages = {
   "studioBoard.plan.title": "Plan",
   "studioBoard.plan.open": "Keep Plan open",
   "studioBoard.plan.close": "Close Plan",
+  // PRD 0809 §IX — tablet/mobile open Plan as an overlay, which pins nothing, so the
+  // trigger there says "Open Plan" rather than the docked panel's "Keep Plan open".
+  "studioBoard.plan.openPanel": "Open Plan",
   "studioBoard.plan.previousWeek": "Previous week",
   "studioBoard.plan.nextWeek": "Next week",
   "studioBoard.plan.today": "Today",

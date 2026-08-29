@@ -54,10 +54,15 @@ export const CORE: string[] = [
   "test-ai-adoption",
   "test-admin-today-i18n",
   "test-account-quota",
+  "test-account-allowance",
   "test-account-identity",
   "test-publish-capability",
+  "test-publish-social-account-guard",
   "test-publish-results",
   "test-per-account-disconnect",
+  "test-social-reconnect-identity",
+  "test-settings-account-actions",
+  "test-remove-schedule-guard",
   // Facebook Page OAuth
   "test-facebook-pages",
   "test-customer360-plan",
@@ -119,9 +124,11 @@ export const CORE: string[] = [
   "test-support-inbox",
   // Sync / storage
   "test-pin-draft-sync",
+  "test-pin-draft-conditional-write",
   "test-pin-draft-promote",
   "test-schedule-timezone",
   "test-publish-due-claim",
+  "test-schedule-cancel-cas",
   "test-expire-reservations-cron",
   "test-publish-events",
   "test-user-store-sync",
@@ -188,6 +195,10 @@ export const STUDIO: string[] = [
   // Create Pins right-side Plan sidebar (WS-D, PRD 0826 §23–§24): week grouping,
   // future-before-history ordering, state classification, the "+N" trigger badge.
   "test-plan-sidebar-model",
+  // Responsive Plan entry (PRD 0809 §IX): the viewport buckets + which form each one
+  // gets (docked panel / tablet drawer / mobile sheet), and that the entry is an
+  // explicit button rather than a hover target on any of them.
+  "test-plan-entry-responsive",
   // Social accounts PRD 2026-08-05 (Phase A 4-state mapping; Phase B identity guard + store;
   // Phase C pinned publish targets).
   "test-account-ui-state",
@@ -237,6 +248,7 @@ export const PLAN: string[] = [
   "test-schedule-social-guard",
   "test-scheduled-destinations",
   "test-publish-fanout",
+  "test-publish-due-fanout-failures",
   "test-publish-content",
   "test-scheduled-account-identity",
   "test-publish-attempt-ordering",

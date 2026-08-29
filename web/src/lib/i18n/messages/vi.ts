@@ -559,7 +559,7 @@ const vi: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Không thể bắt đầu kết nối",
   "socialPanel.toast.disconnectedSuffix": " đã ngắt kết nối",
   "socialPanel.toast.couldNotDisconnect": "Không thể ngắt kết nối",
-  "socialPanel.mismatch.title": "Đây là một tài khoản Pinterest khác",
+  "socialPanel.mismatch.title": "Đây là một tài khoản {platform} khác",
   "socialPanel.mismatch.bodyPrefix": "Bạn đã đăng nhập bằng ",
   "socialPanel.mismatch.bodyMiddle": ", nhưng bạn đang kết nối lại ",
   "socialPanel.mismatch.bodySuffix": ". Không có gì bị thay đổi — kết nối hiện tại của bạn vẫn nguyên vẹn. Hãy chọn việc bạn muốn làm.",

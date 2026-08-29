@@ -33,6 +33,7 @@ import { exchangeCodeForTokens, fetchAccountIdentity } from "@/lib/server/pinter
 import { upsertConnection, listConnections } from "@/lib/server/pinterest/connectionStore";
 import { decideConnect, type AuthorizedAccount, type ExistingConnection } from "@/lib/server/pinterest/connectDecision";
 import { evaluateAccountQuota } from "@/lib/server/pinterest/accountQuota";
+import { isPlaceholderConnectionRow } from "@/lib/social/connectionPlaceholder";
 import { resolvePlan } from "@/lib/server/entitlements";
 
 export const dynamic = "force-dynamic";
@@ -176,10 +177,12 @@ export async function GET(req: NextRequest) {
     const tIdentity = performance.now();
     let account: AuthorizedAccount;
     let existing: ExistingConnection[];
-    // Active = the same predicate listActiveConnections uses (not disconnected AND
-    // token-bearing). Derived from the rows we already read, so the quota re-check
-    // below costs no extra Pinterest/DB round trip.
-    let activeCount = 0;
+    // Slots are held by every row the user has on this provider, whatever its
+    // status (PRD 0805 §11: Disconnect keeps the account and its slot, Remove frees
+    // it) — except a never-connected placeholder row, which is not an account at all.
+    // Derived from the rows we already read, so the quota re-check below costs
+    // no extra Pinterest/DB round trip.
+    let heldCount = 0;
     try {
       const [identity, rows] = await Promise.all([
         fetchAccountIdentity(tokens.accessToken),
@@ -189,7 +192,19 @@ export async function GET(req: NextRequest) {
       // We do NOT guess: with no id, decideConnect can only match an unidentified row
       // (or create), and a reconnect aimed at an identified row is refused below.
       account = identity ?? { id: null, username: null, accountType: null };
-      activeCount = rows.filter(r => !r.disconnected_at && !!r.access_token_encrypted).length;
+      // This count OVERRIDES the grouped one inside the quota check, so it has to
+      // apply the same placeholder rule — otherwise a merchant carrying a default-board
+      // placeholder passes the connect-start gate, authorizes at Pinterest, and is
+      // bounced here on their first real account, with no row Settings would let them
+      // Remove. Same predicate, no extra query: the rows are already in hand.
+      heldCount = rows.filter(
+        r =>
+          !isPlaceholderConnectionRow({
+            hasAccessToken: !!r.access_token_encrypted,
+            disconnectedAt: r.disconnected_at,
+            providerAccountId: r.pinterest_user_id,
+          }),
+      ).length;
       existing = rows.map((r): ExistingConnection => ({
         connectionId: r.id,
         accountId: r.pinterest_user_id,
@@ -225,6 +240,12 @@ export async function GET(req: NextRequest) {
       const url = new URL(res.headers.get("location") ?? "/", req.nextUrl.origin);
       if (decision.expectedUsername) url.searchParams.set("expected", decision.expectedUsername);
       if (decision.gotUsername) url.searchParams.set("got", decision.gotUsername);
+      // The row being repaired rides back too (Codex #3), so "Sign in to the
+      // original" retries THAT connection instead of falling back to accounts[0].
+      // Connect is a full-page navigation, so the panel state that held it is gone.
+      // It is the user's own id, already validated on the way in; the panel checks
+      // it against the live connection list before using it.
+      if (verdict.reconnectConnectionId) url.searchParams.set("target", verdict.reconnectConnectionId);
       const out = NextResponse.redirect(url);
       out.cookies.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 });
       out.cookies.set(OAUTH_RETURN_COOKIE, "", { path: "/", maxAge: 0 });
@@ -236,23 +257,24 @@ export async function GET(req: NextRequest) {
     // slot while this one is away at Pinterest, so the write side has to be the
     // authority. `decideConnect` stays a pure decision — the quota lives here.
     //
-    // Which decisions add an active account:
-    //   create                  → +1 active → blocked at the cap.
-    //   update && revived       → reviving a DISCONNECTED row. Disconnected rows are
-    //                             not counted as used, so bringing one back is also
-    //                             +1 active. Blocked, deliberately: allowing it would
-    //                             let a capped user hold unlimited accounts by
-    //                             disconnecting and re-authorizing in rotation.
-    //   update && !revived      → repairing an already-active row → count unchanged →
-    //                             always allowed (this is Reconnect).
+    // Which decisions add a row:
+    //   create             → a NEW row → +1 held → blocked at the cap.
+    //   update (any kind)  → writes an EXISTING row, revived or not → count unchanged
+    //                        → always allowed. This is Reconnect, and it includes
+    //                        reviving a DISCONNECTED row: that row never stopped
+    //                        holding its slot, so bringing it back consumes nothing.
+    //                        Gating it (as this did while disconnected rows were
+    //                        uncounted) would now strand an at-limit merchant with a
+    //                        slot they occupy but are not allowed to repair — their
+    //                        only way out is Remove, which deletes the row and frees
+    //                        the slot.
     // Fails OPEN on an unexpected error: a tokens-in-hand authorization must not be
     // thrown away because an entitlement read hiccuped.
-    const addsAnAccount =
-      decision.action === "create" || (decision.action === "update" && decision.revived);
+    const addsAnAccount = decision.action === "create";
     if (addsAnAccount) {
       let overLimit = false;
       try {
-        const quota = evaluateAccountQuota(await resolvePlan(uid), activeCount);
+        const quota = await evaluateAccountQuota(uid, await resolvePlan(uid), heldCount);
         overLimit = !quota.canAddAccount;
         if (overLimit) {
           console.warn(

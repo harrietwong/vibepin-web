@@ -2724,7 +2724,7 @@ const tr: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Bağlantı başlatılamadı",
   "socialPanel.toast.disconnectedSuffix": " bağlantısı kesildi",
   "socialPanel.toast.couldNotDisconnect": "Bağlantı kesilemedi",
-  "socialPanel.mismatch.title": "Bu farklı bir Pinterest hesabı",
+  "socialPanel.mismatch.title": "Bu farklı bir {platform} hesabı",
   "socialPanel.mismatch.bodyPrefix": "Şu hesapla giriş yaptınız: ",
   "socialPanel.mismatch.bodyMiddle": " — ancak yeniden bağlamak istediğiniz hesap: ",
   "socialPanel.mismatch.bodySuffix": ". Hiçbir şey değiştirilmedi — mevcut bağlantınız olduğu gibi duruyor. Ne yapmak istediğinizi seçin.",

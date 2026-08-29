@@ -91,10 +91,12 @@ const originalLoad = (Module as any)._load;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
   if (request.includes("server/authUser")) {
+    // Both exports the three routes import. analyze and quality-judge also resolve
+    // a same-origin session for cost attribution (acb6810); faking only the first
+    // export made that call `undefined(req)` — a synchronous TypeError thrown before
+    // `.catch` could attach, so every "→ 200" case died before reaching the seam.
     return {
       getUserIdFromBearerOrCookies: fakeGetUserIdFromBearerOrCookies,
-      // Cost attribution on analyze/quality-judge is best-effort and uses the
-      // same origin-session helper. Keep that seam aligned with the route API.
       getUserIdFromSameOriginSession: fakeGetUserIdFromBearerOrCookies,
     };
   }

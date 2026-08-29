@@ -109,8 +109,12 @@ async function main() {
 
   await test("Social accounts panel owns Pinterest connect/reconnect/disconnect", () => {
     assert(panelSource.includes("social-connect-"), "connect CTA missing");
-    assert(panelSource.includes("social-reconnect-"), "reconnect CTA missing");
-    assert(panelSource.includes("social-disconnect-"), "disconnect CTA missing");
+    // Reconnect/Disconnect are per-ACCOUNT now, not per-platform (PRD 0809 §II).
+    // The platform-level pair was removed because "Disconnect Pinterest" cannot
+    // name which account it means once a merchant has two — it tore down both.
+    assert(panelSource.includes("handleReconnectAccount"), "per-account reconnect handler missing");
+    assert(panelSource.includes("handleDisconnectAccount"), "per-account disconnect handler missing");
+    assert(!panelSource.includes("DisconnectButton"), "platform-level Disconnect must be gone");
     assert(panelSource.includes("startPinterestConnect"), "Pinterest connect handler missing");
     // Board sync is intentionally NOT a user-facing action — boards load automatically
     // wherever they're needed (e.g. the publish drawer).

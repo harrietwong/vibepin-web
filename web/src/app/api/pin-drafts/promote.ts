@@ -1,4 +1,5 @@
 import { isSocialProvider, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
+import { isUsableDestination } from "@/lib/social/scheduledDestinations";
 /**
  * promote.ts — pure helpers that lift the Creative-Intelligence blocks out of a
  * PinDraft `payload` into the v41 pin_drafts promoted columns
@@ -228,11 +229,34 @@ export const SCHEDULE_COLUMN_KEYS: Array<keyof PromotedScheduleColumns> = ["sche
 // ── Schedulable-destination rule ─────────────────────────────────────────────
 /**
  * The destinations a payload asks to publish to, restricted to real providers.
- * Unknown/garbage entries are dropped here rather than reaching the rule.
+ *
+ * READ FROM `scheduledDestinations` — the canonical, PERSISTED intent
+ * (`{provider, socialConnectionId, …}`, written by buildScheduledDestinations).
+ *
+ * It used to read `payload.socialDestinations`, a field NOTHING writes: the drawer's
+ * `socialDestinations` is local React state that never reaches the payload. So this
+ * always returned [], `blockedScheduleDestinations` was always empty, and the PUT
+ * handler's 422 could not fire for any request — a guard wired to a value its
+ * condition can never be true for. A payload that still carries `socialDestinations`
+ * is deliberately IGNORED: it is not intent, nothing at due time reads it, and
+ * honouring it would let a client be refused for a destination it never scheduled.
+ *
+ * Only USABLE entries count (`isUsableDestination`: a real provider AND an account) —
+ * the same filter `resolveScheduledDestinations` applies before dispatch, so this rule
+ * refuses exactly what the due-time worker would otherwise be asked to publish, and
+ * nothing else. Deduped by provider: two Pinterest accounts are one platform here.
  */
 export function requestedSocialDestinations(payload: Record<string, unknown>): SocialProvider[] {
-  const raw = payload.socialDestinations;
-  return Array.isArray(raw) ? raw.filter(isSocialProvider) : [];
+  const raw = payload.scheduledDestinations;
+  if (!Array.isArray(raw)) return [];
+  const out: SocialProvider[] = [];
+  for (const entry of raw) {
+    // isUsableDestination already rejects a non-provider; isSocialProvider is what
+    // NARROWS it (ScheduledDestination.provider is typed `string` on purpose).
+    if (!isUsableDestination(entry) || !isSocialProvider(entry.provider)) continue;
+    if (!out.includes(entry.provider)) out.push(entry.provider);
+  }
+  return out;
 }
 
 /**
@@ -251,3 +275,46 @@ export function blockedScheduleDestinations(payload: Record<string, unknown>): S
   return unschedulableDestinations(requestedSocialDestinations(payload));
 }
 
+
+// ── Destination-existence rule (the other half of the remove race) ───────────
+/**
+ * The connection ids a scheduled payload will actually try to publish through.
+ *
+ * The remove path now refuses to delete an account while live schedules name it
+ * (remove_social_connection_if_unscheduled, v67). That closes one direction of
+ * the race. This closes the other: a schedule WRITTEN after the account was
+ * removed. Without it, the merchant's browser — which may have been open since
+ * before the removal — happily persists a schedule naming a row that no longer
+ * exists, and the cron inherits exactly the orphan the delete guard exists to
+ * prevent.
+ *
+ * The 口径 mirrors `resolveScheduledDestinations`, because the point is to
+ * validate what the DUE-TIME worker will read, not what the payload happens to
+ * contain:
+ *   - usable `scheduledDestinations[]` entries win, and each names its account.
+ *   - with none, the legacy `targetConnectionId` is the single derived Pinterest
+ *     target — so it is validated only THEN, exactly when it is the thing that
+ *     will be published through.
+ *
+ * Pure on purpose: this file is imported under bare `tsx` by several tests, so
+ * it must not reach a database or import anything server-only. The lookup lives
+ * in `lib/server/social/scheduledDestinationsAvailable.ts`.
+ */
+export function requiredScheduleConnectionIds(payload: Record<string, unknown>): string[] {
+  const raw = payload.scheduledDestinations;
+  const out: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!isUsableDestination(entry)) continue;
+      const id = typeof entry.socialConnectionId === "string" ? entry.socialConnectionId.trim() : "";
+      if (id && !out.includes(id)) out.push(id);
+    }
+  }
+  if (out.length > 0) return out;
+
+  // Legacy single target: only meaningful when nothing usable was stored, which
+  // is precisely when resolveScheduledDestinations derives Pinterest from it.
+  const legacy = payload.targetConnectionId;
+  const legacyId = typeof legacy === "string" ? legacy.trim() : "";
+  return legacyId ? [legacyId] : [];
+}

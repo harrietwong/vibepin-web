@@ -137,6 +137,54 @@ async function main() {
     assert.ok(body.indexOf("persistDraft();") < body.indexOf("await publishContent("), "persist must precede the shared publish");
   });
 
+  await test("5/6d. PinBoardCard's board field rewrites the Pinterest entry it speaks for (a board edit IS a destination edit)", () => {
+    const src = readFileSync(join(root, "src/components/studio/PinBoardCard.tsx"), "utf8");
+    // Owner decision 2026-08-27. Before this, persistNow wrote the legacy boardId/boardName
+    // only, so a Content that already carried stored intent showed the NEW board on the card
+    // and published to the OLD one — the cron reads the entry's own board, not the legacy
+    // field. The rewrite must live in persistNow itself: a call anywhere else in this file
+    // would not run on a board-only edit, which is exactly the case that broke.
+    const start = src.indexOf("const persistNow = useCallback((f: PinFieldsValue) => {");
+    const end = src.indexOf("const flush = useCallback(", start);
+    assert.ok(start > -1 && end > start, "persistNow body bounds not found");
+    const body = src.slice(start, end);
+    assert.match(src, /withBoardOnPinterestEntry,[\s\S]{0,200}?from "@\/lib\/social\/scheduledDestinations"/,
+      "PinBoardCard must import the shared entry-rewrite helper, not reimplement it");
+    assert.match(body, /withBoardOnPinterestEntry\(/,
+      "persistNow must route the board edit through withBoardOnPinterestEntry");
+    // Guarded on an actual board change: an unconditional rewrite would make every
+    // keystroke in title/description a destinations writer.
+    assert.match(body, /boardChanged\s*=\s*[^;]*current\.boardId/,
+      "the rewrite must be guarded on the board actually changing");
+    // And it must rewrite the STORED entries, read FRESH from the store — the same
+    // contract 5/6a pins on handlePublish. The flush effect runs the PREVIOUS persistNow
+    // in its cleanup, so intent computed from the closed-over draft would overwrite a
+    // concurrent writer (the picker on this card, AI copy, a sync) whose write landed
+    // during the debounce window.
+    assert.match(body, /const current = getDraft\(draft\.id\) \?\? draft;/,
+      "persistNow must read the draft fresh from the store, not from its closure");
+    assert.match(body, /current\.scheduledDestinations/, "the rewrite must read the stored intent");
+    assert.doesNotMatch(body, /draft\.scheduledDestinations|draft\.targetConnectionId|draft\.boardId/,
+      "persistNow must not read intent off the closed-over draft");
+    assert.doesNotMatch(body, /selectedAccountIds|buildScheduledDestinations|connectionSummaries/,
+      "persistNow must not re-derive intent from picker state");
+  });
+  await test("5/6e. DraftDetailsDrawer moves the board on stored intent for an UNDATED Pin too", () => {
+    const src = readFileSync(join(root, "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
+    // The drawer already rebuilds scheduledDestinations for a DATED Pin (buildScheduledDestinations
+    // inside `if (trimmedDate)`), which covers its board field there. An undated Pin can still
+    // carry stored intent — the card's destination picker writes it with no date condition — and
+    // that branch had the same silent wrong-board gap.
+    assert.match(src, /withBoardOnPinterestEntry[^\n]*from "@\/lib\/social\/scheduledDestinations"/,
+      "the drawer must use the same shared helper");
+    const start = src.indexOf("function persistDraft(): PinDraft | null {");
+    const end = src.indexOf("function ", start + 10);
+    assert.ok(start > -1 && end > start, "persistDraft body bounds not found");
+    const body = src.slice(start, end);
+    assert.match(body, /withBoardOnPinterestEntry\(/, "persistDraft must rewrite the entry's board");
+    assert.match(body, /activeDraft\.scheduledDestinations/, "it must rewrite the STORED intent");
+  });
+
   // ── 7. Double-click Publish sends exactly one request ─────────────────────────
   await test("7. beginPublish/endPublish dedupe concurrent publish attempts for the same id", async () => {
     const lifecycle = await import("../src/lib/studio/pinLifecycle");
@@ -412,6 +460,120 @@ async function main() {
       global.fetch = realFetch;
     }
   });
+
+  // ── 13. A schedule may not name an account that is gone or disconnected ───
+  // The remove path refuses to delete an account with live schedules (v67's
+  // atomic RPC). This is the other direction of the same race: a schedule
+  // WRITTEN after the account went away. A browser tab open since before the
+  // removal syncs its drafts and would otherwise persist a schedule pointing at
+  // a row that no longer exists — the exact orphan the delete guard prevents,
+  // arriving through the front door.
+  //
+  // Exercised against the module the route calls, with the connection store
+  // stubbed: the route itself demands a real bearer token, and the rule worth
+  // asserting is "which ids are refused, and why", not HTTP plumbing.
+  {
+    const Module = (await import("node:module")).default;
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const originalLoad = (Module as any)._load;
+    let stubConnections: Array<{ id: string; provider: string; connectionStatus: string }> = [];
+    let findCalls: string[] = [];
+    (Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
+      if (/[\/]social[\/]server[\/]socialConnectionStore(\.ts)?$/.test(request)
+        || request === "@/lib/social/server/socialConnectionStore") {
+        return {
+          listConnections: async () => stubConnections,
+          // Only the ids the batch reader does not enumerate (synthetic /
+          // provider-reported, which contain ":") may fall through to this.
+          findConnection: async (_uid: string, id: string) => {
+            findCalls.push(id);
+            return stubConnections.find(c => c.id === id) ?? null;
+          },
+        };
+      }
+      return originalLoad.call(this, request, parent, isMain);
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    const { unavailableScheduleDestinations } =
+      await import("../src/lib/server/social/scheduledDestinationsAvailable");
+
+    await test("13a. a connected account is accepted", async () => {
+      stubConnections = [{ id: "c-1", provider: "pinterest", connectionStatus: "connected" }];
+      const out = await unavailableScheduleDestinations("u1", [{ draftId: "d1", connectionIds: ["c-1"] }]);
+      assert.deepEqual(out, []);
+    });
+
+    await test("13b. an account that no longer exists is refused as missing", async () => {
+      stubConnections = [];
+      const out = await unavailableScheduleDestinations("u1", [{ draftId: "d1", connectionIds: ["gone-1"] }]);
+      assert.equal(out.length, 1);
+      assert.equal(out[0].reason, "missing");
+      assert.equal(out[0].draftId, "d1");
+      assert.equal(out[0].connectionId, "gone-1");
+      // Nothing to name: the id resolves to no row, so there is no platform.
+      assert.equal(out[0].provider, null);
+    });
+
+    // The load-bearing one. listConnections still returns a DISCONNECTED
+    // Facebook/Instagram row (its status is not_connected, the row survives), so
+    // presence alone would accept an account that cannot publish anything.
+    await test("13c. a DISCONNECTED account is refused, not accepted for existing", async () => {
+      stubConnections = [{ id: "c-2", provider: "facebook", connectionStatus: "not_connected" }];
+      const out = await unavailableScheduleDestinations("u1", [{ draftId: "d1", connectionIds: ["c-2"] }]);
+      assert.equal(out.length, 1, "a surviving row that cannot publish must still be refused");
+      assert.equal(out[0].reason, "disconnected");
+      assert.equal(out[0].provider, "facebook", "the platform is named so the message can be acted on");
+    });
+
+    await test("13d. only the bad destination is reported; the good one is not", async () => {
+      stubConnections = [{ id: "c-1", provider: "pinterest", connectionStatus: "connected" }];
+      const out = await unavailableScheduleDestinations("u1", [
+        { draftId: "d1", connectionIds: ["c-1", "gone-1"] },
+        { draftId: "d2", connectionIds: ["c-1"] },
+      ]);
+      assert.equal(out.length, 1);
+      assert.equal(out[0].draftId, "d1");
+      assert.equal(out[0].connectionId, "gone-1");
+    });
+
+    await test("13e. an id the batch reader can't enumerate falls back to findConnection", async () => {
+      // The legacy synthetic `pinterest:<uid>` and provider-reported accounts
+      // resolve through a different path than the batch list. Refusing a
+      // merchant's real account because ONE reader doesn't enumerate it would be
+      // a worse failure than the orphan schedule this guards against — so an id
+      // containing ":" gets a second, single-id lookup before it is refused.
+      findCalls = [];
+      // Present to findConnection (the stub searches the same array) but the
+      // batch path is what we are proving is not the only chance it gets.
+      stubConnections = [{ id: "pinterest:u1", provider: "pinterest", connectionStatus: "connected" }];
+      const out = await unavailableScheduleDestinations("u1", [
+        { draftId: "d1", connectionIds: ["pinterest:u1"] },
+      ]);
+      assert.deepEqual(out, [], "a resolvable synthetic id must not be refused");
+    });
+
+    await test("13f. a plain id is NOT retried through findConnection", async () => {
+      // The fallback exists for ids the batch reader structurally cannot return.
+      // Applying it to every id would turn one sync into up to 50 extra reads.
+      findCalls = [];
+      stubConnections = [];
+      const out = await unavailableScheduleDestinations("u1", [
+        { draftId: "d1", connectionIds: ["plain-1"] },
+      ]);
+      assert.equal(out.length, 1);
+      assert.deepEqual(findCalls, [], "a plain uuid must be answered from the one batch read");
+    });
+
+    await test("13g. nothing to validate ⇒ no database read at all", async () => {
+      findCalls = [];
+      const out = await unavailableScheduleDestinations("u1", [{ draftId: "d1", connectionIds: [] }]);
+      assert.deepEqual(out, []);
+      assert.deepEqual(findCalls, []);
+    });
+
+    (Module as any)._load = originalLoad;
+  }
 
   console.log(`\nSchedule/Publish validation contract: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

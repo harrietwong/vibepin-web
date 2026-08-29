@@ -205,7 +205,7 @@ function DestinationRow({
               }}
             >
               {connecting ? <Loader2 size={12} className="animate-spin" /> : <LinkIcon size={12} />}
-              {connecting ? t("publishDestinations.redirecting") : "Connect"}
+              {connecting ? t("publishDestinations.redirecting") : t("socialPanel.action.connect")}
             </button>
           )}
         </div>
@@ -364,7 +364,6 @@ export function PublishDestinations({
   );
   const [hasLoaded, setHasLoaded] = useState(() => !!cached);
   const [error, setError] = useState(false);
-  const didInitSelection = useRef(false);
   const loadSeqRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -392,11 +391,13 @@ export function PublishDestinations({
       setCachedConnections(platforms);
       setHasLoaded(true);
       setError(false);
-      if (!didInitSelection.current) {
-        didInitSelection.current = true;
-        const pinterest = platforms.find(p => p.provider === "pinterest");
-        if (pinterest?.connected) onSelectedChange(["pinterest"]);
-      }
+      // NOTHING about the SELECTION is decided here. This block used to reset the
+      // selection to ["pinterest"] on the first load of every mount, ignoring the
+      // parent's current value — and this component is mounted fresh each time the
+      // Plan drawer opens. A Content scheduled to Pinterest + Instagram, reopened,
+      // therefore had its intent silently rewritten to Pinterest-only, and "Update
+      // schedule" persisted that. The one remaining default lives in the effect below,
+      // which only ever fills an EMPTY selection.
     } catch {
       // A genuine failure (network error / non-OK) — not merely a slow response.
       if (slowWarn) clearTimeout(slowWarn);
@@ -445,13 +446,27 @@ export function PublishDestinations({
   // connected-but-unselected, which made the checkbox impossible to uncheck (it
   // sprang back instantly) and forced every publish through the Pinterest leg.
   // Social-only publishes (e.g. Facebook Page only) are legitimate.
+  //
+  // THE RULE: a non-empty `selected` is the parent's stored intent and is NEVER
+  // overwritten or added to. Only an EMPTY selection may be defaulted, and only once.
+  // Adding Pinterest to a selection that already named other platforms was intent
+  // corruption in both parents: the card persists every selection change
+  // (persistDestinationSelection), so reopening an Instagram-only Content wrote a
+  // Pinterest destination the merchant never chose into its stored intent.
   const didDefaultPinterest = useRef(false);
   useEffect(() => {
     if (didDefaultPinterest.current) return;
+    if (selected.length) {
+      // The parent has a selection of its own. Stand down permanently — including
+      // later, if the merchant unticks everything (that is a choice, not a gap).
+      didDefaultPinterest.current = true;
+      return;
+    }
     const connected = summaries.find(s2 => s2.provider === "pinterest")?.connected ?? !!pinterestConnected;
-    if (!connected || selected.includes("pinterest")) return;
+    // Not connected, or not known yet: decide nothing — the answer may still arrive.
+    if (!connected) return;
     didDefaultPinterest.current = true;
-    onSelectedChange(["pinterest", ...selected.filter(p => p !== "pinterest")]);
+    onSelectedChange(["pinterest"]);
   }, [onSelectedChange, pinterestConnected, summaries, selected]);
 
   // Strip any non-live provider from the selection (e.g. stale persisted state).

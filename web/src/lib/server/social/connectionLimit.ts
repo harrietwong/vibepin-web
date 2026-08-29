@@ -1,11 +1,13 @@
 /**
- * Per-platform connected-account limit — the last advertised allowance that had
- * NO enforcement.
+ * Per-platform connected-account limit for Facebook / Instagram — a thin adapter
+ * over the ONE allowance rule in `accountAllowance.ts`.
  *
- * The pricing page has always promised 1 / 1 / 2 / 3 accounts per platform
- * (free / starter / pro / business), but nothing ever counted: a free user could
- * connect unlimited accounts on all four platforms. planEntitlements.ts is the
- * single source of that number (connectedAccountsPerPlatform).
+ * The pricing page promises 1 / 1 / 2 / 3 accounts per platform (free / starter /
+ * pro / business); `planEntitlements.ts` is the single source of that number
+ * (connectedAccountsPerPlatform), and a user may hold MORE than it by buying extra
+ * account slots (a shared, any-platform pool). Both halves of that rule live in
+ * accountAllowance.ts so Pinterest and Facebook/Instagram cannot drift apart —
+ * this file only keeps the verdict/error shapes its callers already speak.
  *
  * ── WHY THIS IS A HARD CHECK, NOT A METER ──────────────────────────────────────
  * The usage ledger (images / text / posts) is a shadow ACCOUNTING overlay: it
@@ -21,26 +23,30 @@
  * the branch that would add a row asks, which means an at-limit user can always
  * still repair an existing connection.
  *
+ * ── EVERY ROW HELD COUNTS ──────────────────────────────────────────────────────
+ * A slot is occupied by every account row the user holds, connected or not. That is
+ * the product rule, not an implementation detail (PRD 0805 §11): Disconnect keeps
+ * the account — it stays in Settings with a Reconnect — and keeps its slot; REMOVE
+ * hard-deletes the row and is the only action that gives the slot back.
+ *
+ * This is not the old ratchet returning. Back then a disconnect left a row nobody
+ * could see or delete, so the seat was lost forever; now the row is visible on every
+ * platform and Remove frees it. The counting rule and the Remove action are two
+ * halves of one decision — see accountAllowance.ts.
+ *
  * ── GRANDFATHERING ────────────────────────────────────────────────────────────
  * Nothing is revoked. Accounts connected before this shipped stay connected even
- * if they exceed the new ceiling; the user simply cannot add another on that
- * platform until they are back under it. Enforcing retroactively would silently
- * break live publishing for people who did nothing wrong.
+ * if they exceed the ceiling — including after an add-on subscription is canceled;
+ * the user simply cannot add another until they are back under it. Enforcing
+ * retroactively would silently break live publishing for people who did nothing
+ * wrong.
  */
-import { createServerClient } from "@/lib/supabase";
 import { resolvePlan } from "@/lib/server/entitlements";
-import { getPlanEntitlements } from "@/lib/server/planEntitlements";
-
-const TABLE = "social_connections";
+import { evaluateAccountAllowance } from "./accountAllowance";
 
 export type ConnectionLimitVerdict =
   | { allowed: true }
   | { allowed: false; limit: number; current: number; plan: string };
-
-/** A missing social_connections table must not block a connect attempt. */
-function isMissingTable(code?: string): boolean {
-  return code === "PGRST205" || code === "42P01";
-}
 
 /**
  * May `uid` add ONE MORE connection on `provider`?
@@ -49,6 +55,11 @@ function isMissingTable(code?: string): boolean {
  * unresolvable plan): an outage in the limit check must not stop a user from
  * connecting an account they are entitled to. The limit exists to hold the plan
  * ceiling, not to be a second availability dependency on the connect flow.
+ *
+ * `deps` is the legacy injection shape (a plan resolver and a per-provider count).
+ * It is preserved because the callers and tests speak it; both are translated into
+ * the allowance module's own injection points, so an injected count never reaches
+ * the database.
  */
 export async function canConnectAnotherAccount(
   uid: string,
@@ -58,47 +69,29 @@ export async function canConnectAnotherAccount(
     countExisting?: (uid: string, provider: string) => Promise<number | null>;
   },
 ): Promise<ConnectionLimitVerdict> {
-  try {
-    const plan = await (deps?.resolvePlanFn ?? resolvePlan)(uid);
-    const limit = getPlanEntitlements(plan).connectedAccountsPerPlatform;
+  const countExisting = deps?.countExisting;
+  const allowance = await evaluateAccountAllowance(uid, provider, {
+    resolvePlanFn: deps?.resolvePlanFn,
+    // A caller that supplies its own count knows about ONE provider. Feed exactly
+    // that (null = uncountable → fail open) instead of touching the DB.
+    countConnections: countExisting
+      ? async (id: string) => {
+          const count = await countExisting(id, provider);
+          return count === null ? null : { [provider]: count };
+        }
+      : undefined,
+  });
 
-    // null = unlimited by the config's own convention. No plan uses it today,
-    // but honouring it here keeps the semantics consistent with the allowances.
-    if (limit === null) return { allowed: true };
-
-    const current = deps?.countExisting
-      ? await deps.countExisting(uid, provider)
-      : await countConnections(uid, provider);
-
-    // null = we could not count. Fail open rather than guess.
-    if (current === null) return { allowed: true };
-
-    if (current >= limit) return { allowed: false, limit, current, plan };
-    return { allowed: true };
-  } catch (err) {
-    console.warn(
-      "[social] connection limit check unavailable, allowing:",
-      err instanceof Error ? err.message : String(err),
-    );
-    return { allowed: true };
-  }
-}
-
-/** Existing connections for one provider. null when the count is unavailable. */
-async function countConnections(uid: string, provider: string): Promise<number | null> {
-  const { count, error } = await createServerClient()
-    .from(TABLE)
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", uid)
-    .eq("provider", provider);
-
-  if (error) {
-    if (!isMissingTable(error.code)) {
-      console.error("[social] count connections:", error.message);
-    }
-    return null;
-  }
-  return count ?? null;
+  if (allowance.allowed) return { allowed: true };
+  return {
+    allowed: false,
+    // `limit` is what the PLAN includes per platform; purchased slots (already
+    // accounted for in `allowed`) are not folded in, so the refusal keeps naming
+    // the plan's own number.
+    limit: allowance.included ?? 0,
+    current: allowance.held,
+    plan: allowance.plan,
+  };
 }
 
 /**
@@ -127,7 +120,7 @@ export function connectionLimitResponseBody(verdict: Extract<ConnectionLimitVerd
     code: "connected_account_limit_reached",
     error:
       `Your plan includes ${verdict.limit} account${verdict.limit === 1 ? "" : "s"} per platform. ` +
-      "Disconnect one, or upgrade to connect more.",
+      "Remove one, or upgrade to connect more.",
     limit: verdict.limit,
     current: verdict.current,
   };

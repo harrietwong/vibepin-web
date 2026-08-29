@@ -7,6 +7,8 @@
  *   - it is PER PLATFORM: being full on Facebook never blocks Instagram
  *   - only a NEW connection is checked; re-auth of an existing account is not,
  *     so an at-limit user can still repair a connection they already have
+ *   - EVERY row held occupies a slot, disconnected ones included; only Remove
+ *     (a hard delete) frees one (PRD 0805 §11)
  *   - it FAILS OPEN: a missing table / unreachable DB / unresolvable plan lets
  *     the connect through, because a broken limit check must not become a second
  *     availability dependency on OAuth
@@ -115,7 +117,11 @@ function deps(plan: string, count: number | null) {
     const body = L.connectionLimitResponseBody(v);
     assert.equal(body.code, "connected_account_limit_reached");
     assert.equal(body.limit, 1);
-    assert.match(body.error, /Disconnect one, or upgrade/);
+    // Under the row-counting rule only Remove (a hard delete) frees a seat, so the
+    // refusal must not send the merchant to Disconnect — that keeps both the row and
+    // the slot, and they would come back no less full than before.
+    assert.match(body.error, /Remove one, or upgrade/);
+    assert.doesNotMatch(body.error, /Disconnect/i, "Disconnect no longer frees a seat, so it must not be the advice");
     assert.doesNotMatch(body.error, /credit/i, "the retired Credit vocabulary must not reappear");
   });
 
@@ -145,6 +151,44 @@ function deps(plan: string, count: number | null) {
       assert.ok(atCheck < atInsert, `${path}: the check must come BEFORE the insert`);
     }
   });
+
+  await test("disconnected rows STILL count — Disconnect keeps the account and its slot", async () => {
+    // Owner decision 2026-08-27 / PRD 0805 §11. Disconnect is reversible: the row
+    // stays, listed in Settings as "Disconnected" with a Reconnect, and it goes on
+    // holding the seat. So the count must not filter it out. Which rows are counted
+    // is a PostgREST predicate, so it is asserted at the source — no pure function
+    // can prove a query.
+    const allowance = readFileSync("src/lib/server/social/accountAllowance.ts", "utf8");
+    assert.ok(
+      !allowance.includes('.is("disconnected_at", null)'),
+      "a disconnected row keeps its slot (Pinterest writes disconnected_at)",
+    );
+    assert.ok(
+      !allowance.includes('.not("access_token_encrypted", "is", null)'),
+      "a soft-disconnected FB/IG row (token nulled) keeps its slot too",
+    );
+    assert.ok(
+      allowance.includes("export async function countConnectionsByProvider("),
+      "the count is of ROWS held, and is named so",
+    );
+    const limitSrc = readFileSync("src/lib/server/social/connectionLimit.ts", "utf8");
+    assert.ok(
+      !limitSrc.includes('{ count: "exact", head: true }'),
+      "this module still owns no query of its own — one rule, one place",
+    );
+    // The consequence at the seat level: a Free user whose single account is merely
+    // disconnected is still full.
+    assert.equal((await check("u", "facebook", deps("free", 1))).allowed, false);
+  });
+
+  await test("a REMOVED row frees the slot — the row is deleted, so it leaves the count", async () => {
+    // Remove is the hard delete (see test-per-account-disconnect.ts for the routes),
+    // and the only action that gives a seat back. Once the row is gone the same Free
+    // user can connect again — which is why counting every row is not the old
+    // one-way ratchet, where nothing a user could do ever freed a seat.
+    assert.equal((await check("u", "facebook", deps("free", 0))).allowed, true);
+  });
+
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

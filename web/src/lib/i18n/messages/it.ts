@@ -2743,7 +2743,7 @@ const it: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Impossibile avviare la connessione",
   "socialPanel.toast.disconnectedSuffix": " disconnesso",
   "socialPanel.toast.couldNotDisconnect": "Impossibile disconnettere",
-  "socialPanel.mismatch.title": "Questo è un altro account Pinterest",
+  "socialPanel.mismatch.title": "Questo è un altro account {platform}",
   "socialPanel.mismatch.bodyPrefix": "Hai effettuato l'accesso come ",
   "socialPanel.mismatch.bodyMiddle": ", ma stavi ricollegando ",
   "socialPanel.mismatch.bodySuffix": ". Non è stato modificato nulla: la connessione esistente è intatta. Scegli cosa fare.",

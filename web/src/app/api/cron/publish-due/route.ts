@@ -20,21 +20,27 @@
  * publishPinForUser has no idempotency key against Pinterest. A durable idempotency key
  * is the P1 follow-up; the window is small and bounded.
  *
- * maxDuration 300 = current Vercel Hobby cap; the limit ≤ 20 keeps a run well under it.
+ * maxDuration 300 = current Vercel Hobby cap. The batch limit (≤ 20) is a SIZE bound,
+ * not a time bound — one Instagram publish alone can poll for ~45s — so the run also
+ * keeps a wall-clock budget (CLAIM_BUDGET_MS) and stops CLAIMING once it is spent.
+ * Unclaimed rows stay due for the next tick; that is strictly better than being killed
+ * between a successful publish and its persist, which re-publishes the row 10 min later.
  */
 
 import { createServerClient } from "@/lib/supabase";
 import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { PinterestTrialAccessError } from "@/lib/server/pinterest/service";
-import { resolveScheduledDestinations } from "@/lib/social/scheduledDestinations";
 import {
   createPublishJob,
+  deferredOutcome,
   fanOutDestinations,
+  hasTimeForDestination,
   pinterestOutcomeRow,
   recordOutcomes,
+  trialAccessPendingOutcome,
 } from "@/lib/social/publishFanout";
-import { pendingDestinations, type DestinationOutcome } from "@/lib/social/publishRules";
+import type { DestinationOutcome } from "@/lib/social/publishRules";
 import {
   recordPublishEvent,
   recordFailedPublishEvent,
@@ -44,12 +50,22 @@ import {
   type PublishEventBase,
 } from "@/lib/server/publishEvents";
 import {
+  mergeOutcomesIntoRow,
+  writeFailure,
+  writeOutcomes,
+  type FinalWriteOptions,
+  type RowIo,
+} from "./persistRow";
+import {
+  CLAIM_BUDGET_MS,
+  RUN_DEADLINE_MS,
   staleClaimCutoffIso,
   payloadToPublishInput,
-  payloadAfterOutcomes,
-  payloadAfterFailure,
   destinationPublishInput,
   describeThrown,
+  owedDestinations,
+  failedRowsForUnattempted,
+  didNotCompleteMessage,
 } from "./publishDueLogic";
 
 export const runtime = "nodejs";
@@ -58,6 +74,9 @@ export const maxDuration = 300;
 
 const TABLE = "pin_drafts";
 const DUE_LIMIT = 20; // ≤ 20 per run so one invocation stays comfortably under maxDuration.
+/** Pause before the single persist retry — long enough for a transient blip, short
+ *  enough that it cannot itself push the run past maxDuration. */
+const PERSIST_RETRY_DELAY_MS = 500;
 
 type DueRow = {
   vibepin_user_id: string;
@@ -69,6 +88,72 @@ type DueRow = {
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
+}
+
+/**
+ * The two database operations every persist is built from.
+ *
+ * Deliberately narrow. persistRow.ts owns the merge rules — re-read, apply onto the
+ * LATEST payload, stamp at write time — and does not know Supabase exists, which is
+ * what makes those rules testable against a fake row store.
+ */
+function rowIo(db: ReturnType<typeof createServerClient>): RowIo {
+  return {
+    read: async row => {
+      const { data, error } = await db
+        .from(TABLE)
+        // `updated_at` is read so the write can be made conditional on it — see the
+        // compare-and-set in `update` below.
+        .select("payload, scheduled_at, publish_claimed_at, updated_at")
+        .eq("vibepin_user_id", row.vibepin_user_id)
+        .eq("draft_id", row.draft_id)
+        .maybeSingle();
+      if (error) return { snapshot: null, error: error.message };
+      if (!data) return { snapshot: null, error: null };
+      const r = data as {
+        payload?: unknown; scheduled_at?: string | null;
+        publish_claimed_at?: string | null; updated_at?: string | null;
+      };
+      return {
+        snapshot: {
+          payload: (r.payload && typeof r.payload === "object" ? r.payload : {}) as Record<string, unknown>,
+          scheduled_at: r.scheduled_at ?? null,
+          publish_claimed_at: r.publish_claimed_at ?? null,
+          // Passed through as the RAW string PostgREST returned. Parsing and re-
+          // formatting it would drop the microseconds Postgres keeps, and the filter
+          // below would then match nothing, ever.
+          updated_at: r.updated_at ?? null,
+        },
+        error: null,
+      };
+    },
+    /**
+     * Compare-and-set: the write applies only while the row still looks like `observed`.
+     *
+     * Filtering on user + draft_id alone let a reschedule made between the merge's read
+     * and its write be overwritten — the run cleared a slot it had never seen. The two
+     * observed columns are what the merge decided from, so they are what it is
+     * conditional on. `select("draft_id")` makes PostgREST return the affected rows;
+     * none means the row moved, and persistRow re-merges onto the new one.
+     */
+    update: async (row, values, observed) => {
+      let q = db
+        .from(TABLE)
+        .update(values)
+        .eq("vibepin_user_id", row.vibepin_user_id)
+        .eq("draft_id", row.draft_id);
+      // `.eq` never matches NULL in SQL — an unscheduled row needs `.is`.
+      q = observed.scheduled_at === null
+        ? q.is("scheduled_at", null)
+        : q.eq("scheduled_at", observed.scheduled_at);
+      q = observed.updated_at === null
+        ? q.is("updated_at", null)
+        : q.eq("updated_at", observed.updated_at);
+      const { data, error } = await q.select("draft_id");
+      if (error) return { error: error.message, matched: false };
+      return { error: null, matched: Array.isArray(data) && data.length > 0 };
+    },
+  };
 }
 
 /** Quote a value for a PostgREST or=() filter (timestamps contain ':' and '+').
@@ -104,8 +189,17 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const db = createServerClient();
-  const nowMs = Date.now();
+  const io = rowIo(db);
+  // The run's wall clock. Everything time-bounded below measures from here.
+  const startedMs = Date.now();
+  const nowMs = startedMs;
   const nowIso = new Date(nowMs).toISOString();
+  // The instant after which no further DESTINATION may be started. The row budget
+  // below stops the run taking new work; this stops it starting work inside a row it
+  // already holds — a Content with three Instagram accounts is three ~45s container
+  // polls, and being killed part-way through means the accounts that already
+  // published are published again ten minutes later.
+  const deadlineMs = startedMs + RUN_DEADLINE_MS;
 
   // ── 1) SCAN due, live rows ───────────────────────────────────────────────────
   const { data: dueRows, error: scanError } = await db
@@ -122,27 +216,49 @@ export async function GET(req: Request): Promise<Response> {
     .limit(DUE_LIMIT);
 
   if (scanError) {
-    if (isMissingSchemaError(scanError)) return json({ claimed: 0, published: 0, failed: 0, skipped: 0 });
+    if (isMissingSchemaError(scanError)) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
     console.error("[cron/publish-due] scan error:", scanError.message);
     return json({ error: "scan_failed", code: "database_unavailable" }, 503);
   }
 
   const candidates = (dueRows ?? []) as DueRow[];
-  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0 });
+  if (candidates.length === 0) return json({ claimed: 0, published: 0, failed: 0, skipped: 0, deferred: 0 });
 
-  // ── 2) CLAIM atomically. One conditional UPDATE … RETURNING per row: set the lock
-  //    only when the row is still claimable (unclaimed OR the prior claim is stale).
-  //    PostgREST returns exactly the updated rows; a racing worker's claim excludes it. ─
+  // ── 2+3) CLAIM then PUBLISH, one row at a time ───────────────────────────────
+  //
+  // CLAIM is a single atomic conditional UPDATE … RETURNING: the lock is set only when
+  // the row is still claimable (unclaimed OR the prior claim is stale). PostgREST
+  // returns exactly the updated rows; a racing worker's claim excludes it.
+  //
+  // Claiming and publishing are INTERLEAVED on purpose. Claiming all 20 up front takes
+  // milliseconds, so a time check there could never fire — the time is spent publishing.
+  // Interleaved, the seconds row N spends publishing are what stop row N+1 from being
+  // claimed once the budget is gone. A row we never claim is untouched: still due, still
+  // unclaimed, taken by the next tick.
   const staleCutoff = staleClaimCutoffIso(nowMs);
-  const claimed: DueRow[] = [];
+  let claimedCount = 0;
   let skipped = 0;
+  let deferred = 0;
+  let published = 0;
+  let failed = 0;
 
-  for (const row of candidates) {
+  for (const candidate of candidates) {
+    // The budget is checked BEFORE the claim: an unclaimed row costs nothing, while a
+    // claimed row we are killed before finishing is the double-post window.
+    if (Date.now() - startedMs >= CLAIM_BUDGET_MS) {
+      deferred++;
+      continue;
+    }
+
+    // Stamped NOW, not at the top of the run: with claiming interleaved, a row can be
+    // claimed minutes in, and a start-of-run stamp would shorten its 10-minute lock by
+    // exactly that much — another worker could steal a row still being published.
+    const claimIso = new Date().toISOString();
     const { data: won, error: claimError } = await db
       .from(TABLE)
-      .update({ publish_claimed_at: nowIso })
-      .eq("vibepin_user_id", row.vibepin_user_id)
-      .eq("draft_id", row.draft_id)
+      .update({ publish_claimed_at: claimIso })
+      .eq("vibepin_user_id", candidate.vibepin_user_id)
+      .eq("draft_id", candidate.draft_id)
       .or(`publish_claimed_at.is.null,publish_claimed_at.lt.${pgQuote(staleCutoff)}`)
       .select("vibepin_user_id, draft_id, payload, scheduled_at");
 
@@ -152,15 +268,17 @@ export async function GET(req: Request): Promise<Response> {
       skipped++;
       continue;
     }
-    if (won && won.length > 0) claimed.push(won[0] as DueRow);
-    else skipped++; // lost the race to another worker / already-claimed
-  }
+    if (!won || won.length === 0) {
+      skipped++; // lost the race to another worker / already-claimed
+      continue;
+    }
+    const row = won[0] as DueRow;
+    claimedCount++;
+    // No clock is captured here on purpose. Every persist below re-reads the row and
+    // stamps itself at WRITE time (persistRow.ts): a timestamp taken now would already
+    // be older than an edit the merchant makes during the publish, and the client's
+    // LWW merge would push that edit — schedule and all — straight back.
 
-  // ── 3) PUBLISH each claimed row independently ────────────────────────────────
-  let published = 0;
-  let failed = 0;
-
-  for (const row of claimed) {
     // Per-row publish attempt: one publishAttemptId ties this row's attempted →
     // succeeded/failed events. boardId comes from the stored payload (may be "" if the
     // payload is unpublishable). Analytics is best-effort — see lib/server/publishEvents.ts.
@@ -174,12 +292,51 @@ export async function GET(req: Request): Promise<Response> {
     const rowStartedMs = Date.now();
     void recordPublishEvent(db, PUBLISH_EVENT_ATTEMPTED, eventBase);
     try {
-      const input = payloadToPublishInput(row.vibepin_user_id, row.payload);
+      // `scheduled_at` rides into both: what is owed depends on the schedule being
+      // processed, not on whether the destination has ever published. Without it, a
+      // Posted Content the merchant re-scheduled owes nothing, and the run "completes"
+      // it by clearing the slot they just chose.
+      const owedFor = { scheduledAt: row.scheduled_at };
+
+      // ── The destinations this Content still owes ──────────────────────────────
+      // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
+      // here, so it behaves exactly as it did before: no extra platforms are ever
+      // invented for it, and exactly one Pinterest publish happens. A row re-claimed
+      // after a stale lock (this route is at-least-once by construction — see the
+      // header) must not re-publish an account that already succeeded, which is why
+      // this is what is OWED and not what was intended.
+      //
+      // Computed BEFORE the publish input, and that order is load-bearing.
+      // `payloadToPublishInput` asks "does this Content need a Pinterest board?" by
+      // checking that every OWED destination is Pinterest — and `every()` over an
+      // EMPTY set is true. So a Content with nothing left to publish is treated as
+      // needing a board, and an Instagram-only one (which has none, and never needed
+      // one) came back null. That used to be unreachable; since results are persisted
+      // incrementally it is not. Publish to Instagram, die before the final persist,
+      // and the stale re-claim owes nothing, gets null here, and records a Content
+      // that really did publish as "Missing image or board".
+      const owed = owedDestinations(row.payload, owedFor);
+      const priorResults = Array.isArray(row.payload.destinationResults)
+        ? (row.payload.destinationResults as unknown[])
+        : [];
+
+      if (!owed.length && priorResults.length) {
+        // Nothing to publish and a record of what already did: this run is finishing
+        // an earlier one's work, not attempting anything. Complete the Content from
+        // its own stored rows — no publish input, no provider, no failure. Metering is
+        // skipped deliberately: nothing is delivered here, and the charge for this
+        // (draft_id, scheduled_at) was already taken by the run that published.
+        await persistOutcomes(io, row, []);
+        skipped++;
+        continue;
+      }
+
+      const input = payloadToPublishInput(row.vibepin_user_id, row.payload, owedFor);
       if (!input) {
         // Unpublishable payload (missing image/board): record a content failure, don't call Pinterest.
         // NO metering here — the contract charges only actions that really attempt
         // delivery, and this row never reaches Pinterest.
-        await persistFailure(db, row, { message: "Missing image or board — cannot publish", code: "bad_request" }, nowIso);
+        await persistFailure(io, row, { message: "Missing image or board — cannot publish", code: "bad_request" });
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "bad_request",
           message: "Missing image or board — cannot publish",
@@ -205,24 +362,36 @@ export async function GET(req: Request): Promise<Response> {
         metadata: { source: "scheduled-cron" },
       });
 
-      // ── The destinations this Content was scheduled to ────────────────────────
-      // A legacy Pin (scheduled before intent was stored) resolves to Pinterest-only
-      // here, so it behaves exactly as it did before: no extra platforms are ever
-      // invented for it, and exactly one Pinterest publish happens.
-      const intent = resolveScheduledDestinations(row.payload as Parameters<typeof resolveScheduledDestinations>[0]);
-      // What is still owed. A row re-claimed after a stale lock (this route is
-      // at-least-once by construction — see the header) must not re-publish the
-      // account that already succeeded; `pendingDestinations` is keyed by ACCOUNT,
-      // so two accounts on one platform retry independently.
-      const priorResults = Array.isArray(row.payload.destinationResults)
-        ? (row.payload.destinationResults as Array<{ provider: string; status: string; socialConnectionId?: string | null }>)
-        : [];
-      const owed = pendingDestinations(intent, priorResults);
+      // Both reads of the owed set — this one and `payloadToPublishInput`'s
+      // board requirement — take the same `owedFor`, so they can never disagree about
+      // which platforms this run is for.
       const pinterestTargets = owed.filter(d => d.provider === "pinterest");
       const extras = owed.filter(d => d.provider !== "pinterest");
       const legacyTarget = typeof row.payload.targetConnectionId === "string" ? row.payload.targetConnectionId.trim() : "";
 
       const outcomes: DestinationOutcome[] = [];
+      /**
+       * Store ONE destination's outcome now, not at the end of the row.
+       *
+       * Between a provider's acknowledgement and the final persist sat every remaining
+       * destination — minutes, in which a process kill lost the record of a post that
+       * really exists and the next run sent it again. Written immediately, that run
+       * reads a `published` row and owes nothing for it.
+       *
+       * Best-effort by design: a failed bookkeeping write is logged and the publish
+       * continues. The final persist (which retries) is still the authoritative record.
+       */
+      const persistOne = async (outcome: DestinationOutcome): Promise<void> => {
+        // `pending`/`skipped` describe nothing that happened — see outcomeRows.
+        if (outcome.status !== "published" && outcome.status !== "failed") return;
+        const { error: incErr } = await mergeOutcomesIntoRow(io, row, [outcome]);
+        if (incErr) console.error("[cron/publish-due] incremental persist:", incErr);
+      };
+      /** Collect an outcome AND store it. */
+      const record = async (outcome: DestinationOutcome): Promise<void> => {
+        outcomes.push(outcome);
+        await persistOne(outcome);
+      };
       let adoptedConnectionId: string | null = null;
       let firstFailure: { code?: string; message: string } | null = null;
       let trialBlocked = 0;
@@ -233,9 +402,16 @@ export async function GET(req: Request): Promise<Response> {
       // two Pinterest accounts published to one of them and the second silently
       // never happened.
       for (const destination of pinterestTargets) {
+        if (!hasTimeForDestination(Date.now(), deadlineMs)) {
+          // Not a failure and not a skip: nothing was sent, and this destination is
+          // still owed. It keeps the Content scheduled (see the persist below) and the
+          // next run attempts it — and only it.
+          await record(deferredOutcome(destination));
+          continue;
+        }
         const perDestination = destinationPublishInput(input, destination, legacyTarget);
         if (!perDestination) {
-          outcomes.push({
+          await record({
             provider: "pinterest", status: "failed",
             socialConnectionId: destination.socialConnectionId ?? null,
             error: "Choose a Pinterest board before publishing.",
@@ -248,12 +424,12 @@ export async function GET(req: Request): Promise<Response> {
           if (result.ok) {
             // Adopt-once (PRD §14) applies only to a Content that named no account.
             if (!destination.socialConnectionId && result.connectionId) adoptedConnectionId = result.connectionId;
-            outcomes.push(pinterestOutcomeRow(destination, {
+            await record(pinterestOutcomeRow(destination, {
               ok: true, connectionId: result.connectionId,
               pinId: result.pin.id, pinUrl: result.pin.url,
             }));
           } else {
-            outcomes.push(pinterestOutcomeRow(destination, {
+            await record(pinterestOutcomeRow(destination, {
               ok: false, connectionId: result.connectionId, error: result.error,
             }));
             if (!firstFailure) firstFailure = { code: result.code, message: result.error };
@@ -261,13 +437,21 @@ export async function GET(req: Request): Promise<Response> {
         } catch (err) {
           if (err instanceof PinterestTrialAccessError) {
             // Not a failure — the Content is publishable, just not until Pinterest
-            // grants access. Record nothing for this destination so the row keeps its
-            // schedule (handled after the loop).
+            // grants access. It is recorded as PENDING so the row keeps its schedule and
+            // this destination is owed again next run.
+            //
+            // Recording nothing here is what lost a trial-blocked destination in a MIXED
+            // row: with another destination's failure already in `outcomes`, the
+            // "every destination blocked" exemption below was skipped, the final persist
+            // saw nothing pending, cleared the schedule, and this account was never
+            // attempted again. `persistOne` stores nothing for a pending outcome, so the
+            // row still carries no result for it — which is what makes it owed.
             trialBlocked++;
+            await record(trialAccessPendingOutcome(destination));
             continue;
           }
           const described = describeThrown(err);
-          outcomes.push(pinterestOutcomeRow(destination, { ok: false, error: described.message }));
+          await record(pinterestOutcomeRow(destination, { ok: false, error: described.message }));
           if (!firstFailure) firstFailure = described;
         }
       }
@@ -276,6 +460,13 @@ export async function GET(req: Request): Promise<Response> {
       // behaviour exactly — release the claim and leave the payload and scheduled_at
       // untouched, so the row is re-scanned until the account is approved.
       //
+      // "Every one" now reads `outcomes.length === trialBlocked` rather than
+      // `outcomes.length === 0`, because a blocked destination records a pending outcome
+      // instead of nothing. The condition is the same set of rows as before: pending
+      // trial rows are the ONLY thing in `outcomes` here. A row that also failed
+      // elsewhere, or deferred on time, falls through to the ordinary persist — where the
+      // pending row keeps the schedule for it just the same, and the failure is reported.
+      //
       // This deliberately runs BEFORE the fan-out, extras or not. Trial access is an
       // APP-level block, so "every Pinterest entry blocked while IG/FB are also owed"
       // is the ordinary case, not an edge. Falling through would fan out, see a
@@ -283,7 +474,7 @@ export async function GET(req: Request): Promise<Response> {
       // Pinterest entries would then have no result rows and nothing would ever
       // re-attempt them, breaking the promise that the Content keeps its slot until
       // Pinterest approves. The social destinations are re-attempted with it.
-      if (trialBlocked > 0 && outcomes.length === 0) {
+      if (trialBlocked > 0 && outcomes.length === trialBlocked) {
         await releaseClaim(db, row);
         void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, {
           code: "pinterest_trial_access", message: "Pinterest access is still under review",
@@ -295,9 +486,20 @@ export async function GET(req: Request): Promise<Response> {
       // ── Fan out to the non-Pinterest destinations ─────────────────────────────
       // Runs BEFORE the persist so a fan-out crash cannot leave the Content marked
       // posted with no record of the platforms that were still owed.
-      if (extras.length) {
+      if (extras.length && !hasTimeForDestination(Date.now(), deadlineMs)) {
+        // Every extra will be deferred, so no ATTEMPT is made — and no attempt row is
+        // created. `customer360` and `adminOverview` read every `social_publish_jobs`
+        // row as publishing that really happened; a job whose every destination is
+        // pending would surface as activity that did not occur, and roll up to
+        // `failed` when finalized.
+        for (const destination of extras) outcomes.push(deferredOutcome(destination));
+      } else if (extras.length) {
+        // The job id must outlive the try: when the fan-out throws, the attempt still
+        // has to be finalized with the failure rows below. A job row left in
+        // `publishing` forever reads as a publish that is still in flight.
+        let jobId: string | null = null;
         try {
-          const jobId = await createPublishJob(
+          jobId = await createPublishJob(
             db,
             row.vibepin_user_id,
             typeof row.draft_id === "string" ? row.draft_id : null,
@@ -311,28 +513,70 @@ export async function GET(req: Request): Promise<Response> {
             caption: input.description,
             destinationUrl: input.link,
             altText: input.altText,
-          });
+          }, { deadlineMs, onOutcome: persistOne });
           outcomes.push(...fanned);
-          if (jobId) await recordOutcomes(db, jobId, outcomes);
+          // Defensive: an owed destination the fan-out returned no row for is not
+          // "nothing happened", it is "nobody knows" — and silence there reads to the
+          // merchant as a platform that was never even selected.
+          const unreported = failedRowsForUnattempted(extras, didNotCompleteMessage, fanned);
+          outcomes.push(...unreported);
+          if (unreported.length && !firstFailure) {
+            firstFailure = { message: unreported[0].error ?? "Publish failed" };
+          }
         } catch (fanErr) {
           // A fan-out failure must never undo a Pinterest publish that already
-          // succeeded, so it is logged and the Content still completes as posted.
-          console.error("[cron/publish-due] fan-out:", (fanErr as Error).message);
+          // succeeded — but it must never be silent either. Before this, a throw was
+          // logged and nothing else: the owed Instagram/Facebook destinations got no
+          // result row at all, so the Content was marked posted from the Pinterest
+          // result and the merchant had no way to learn the other platforms never
+          // went out. Every owed destination now gets a failed row carrying the reason.
+          const described = describeThrown(fanErr);
+          console.error("[cron/publish-due] fan-out:", described.message);
+          outcomes.push(...failedRowsForUnattempted(extras, described.message));
+          if (!firstFailure) firstFailure = described;
+        }
+        // Recording the attempt must not itself become the reason a delivered publish
+        // is reported as failed: its errors are logged, never thrown to the row's catch.
+        try {
+          if (jobId) await recordOutcomes(db, jobId, outcomes);
+        } catch (recErr) {
+          console.error("[cron/publish-due] record outcomes:", (recErr as Error).message);
         }
       }
 
       if (!outcomes.length) {
         // Nothing was owed at all (every destination had already published on an
         // earlier attempt). Clear the schedule so the row leaves the due scan.
-        await persistOutcomes(db, row, [], nowIso, null);
+        await persistOutcomes(io, row, []);
         skipped++;
+        continue;
+      }
+
+      // Destinations the run had no time to start. They are still owed, so the
+      // Content must keep its schedule — clearing it here is the "lost publish": the
+      // merchant chose three platforms, two went out, and the third silently never
+      // would have.
+      const pending = outcomes.filter(o => o.status === "pending");
+      const reported = outcomes.filter(o => o.status !== "pending" && o.status !== "skipped");
+      if (pending.length && !reported.length) {
+        // The run ran out of time before this row's FIRST destination. Nothing
+        // happened, so nothing is written: release the claim and leave the payload and
+        // scheduled_at exactly as they were, the same shape as the trial-access
+        // exemption above. A payload write here would only bump updatedAt and push a
+        // pointless LWW re-sync to every client.
+        await releaseClaim(db, row);
+        deferred++;
         continue;
       }
 
       // firstFailure carries the platform's stable CODE, which the outcome rows do not:
       // categorizing from the message alone would put a differently-worded
       // needs_reconnect in "transient" and offer the merchant the wrong fix.
-      await persistOutcomes(db, row, outcomes, nowIso, adoptedConnectionId, firstFailure?.code);
+      await persistOutcomes(io, row, outcomes, {
+        connectionId: adoptedConnectionId,
+        failureCode: firstFailure?.code,
+        deferred: pending.length > 0,
+      });
       const anyPublished = outcomes.some(o => o.status === "published");
       if (anyPublished) {
         const pin = outcomes.find(o => o.provider === "pinterest" && o.status === "published");
@@ -373,13 +617,21 @@ export async function GET(req: Request): Promise<Response> {
       // ONE row failed (via mapPublishErrorToCategory → auth/transient) and move on —
       // a single expired account never aborts the batch, and no retry storm (scheduling
       // is cleared so the row leaves the due scan).
-      await persistFailure(db, row, describeThrown(err), nowIso);
+      await persistFailure(io, row, describeThrown(err));
       void recordFailedPublishEvent(db, eventBase, Date.now() - rowStartedMs, err);
       failed++;
     }
   }
 
-  return json({ claimed: claimed.length, published, failed, skipped });
+  if (deferred > 0) {
+    // Visible on purpose: a run that regularly defers is the signal to raise the tick
+    // rate or lower DUE_LIMIT, and silence here would look like the rows never came due.
+    console.warn(
+      `[cron/publish-due] time budget spent after ${Date.now() - startedMs}ms — `
+      + `${deferred} due row(s) left for the next run`,
+    );
+  }
+  return json({ claimed: claimedCount, published, failed, skipped, deferred });
 }
 
 /**
@@ -393,49 +645,77 @@ export async function GET(req: Request): Promise<Response> {
  * before.
  */
 async function persistOutcomes(
-  db: ReturnType<typeof createServerClient>,
+  io: RowIo,
   row: DueRow,
   outcomes: readonly DestinationOutcome[],
-  nowIso: string,
-  connectionId?: string | null,
-  failureCode?: string,
+  options: FinalWriteOptions = {},
 ): Promise<void> {
-  const payload = payloadAfterOutcomes(row.payload, outcomes, nowIso, connectionId, failureCode);
-  const { error } = await db
-    .from(TABLE)
-    .update({
-      payload,
-      status: typeof payload.status === "string" ? payload.status : null,
-      updated_at: nowIso,
-      scheduled_at: null,       // no longer due
-      publish_claimed_at: null, // release the claim
-    })
-    .eq("vibepin_user_id", row.vibepin_user_id)
-    .eq("draft_id", row.draft_id);
-  if (error) console.error("[cron/publish-due] persist success error:", error.message);
+  // The merge rules — re-read, apply onto the LATEST payload, stamp at write time,
+  // clear the schedule only if it is still the one this run claimed — live in
+  // persistRow.ts. Each attempt re-reads, so the retry below cannot write a payload
+  // built from a snapshot the first attempt already found stale.
+  const write = () => writeOutcomes(io, row, outcomes, options);
+
+  // This write is the ONLY record that the publish above happened. Losing it means the
+  // Content stays scheduled and claimed; ten minutes later the claim goes stale and the
+  // row is published AGAIN — a second real post the merchant never asked for. One retry
+  // costs half a second and covers the ordinary transient (a dropped connection, a
+  // PostgREST 5xx).
+  //
+  // It must also NEVER throw: the row's catch calls persistFailure, which would overwrite
+  // a delivered publish as failed AND clear scheduled_at + the claim. So every failure
+  // mode ends here, loudly.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const { error, gone } = await write();
+      if (gone) {
+        // Deleted while it was publishing. Re-creating it from this run's outcomes
+        // would resurrect a Content the merchant threw away.
+        console.warn(`[cron/publish-due] row vanished during publish draft_id=${String(row.draft_id)}`);
+        return;
+      }
+      if (!error) return;
+      if (attempt === 2) {
+        // Nothing else to try. Log everything needed to reconstruct the row by hand —
+        // the outcomes are otherwise lost with the process.
+        console.error(
+          `[cron/publish-due] persist outcomes FAILED after ${attempt} attempts`
+          + ` draft_id=${String(row.draft_id)} user=${row.vibepin_user_id}: ${error}`
+          + ` outcomes=${JSON.stringify(outcomes)}`,
+        );
+        // The claim is deliberately left in place: releasing it here would hand the row
+        // straight back to the next run, which would publish it a second time.
+        return;
+      }
+      console.error("[cron/publish-due] persist outcomes error (retrying):", error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt === 2) {
+        console.error(
+          `[cron/publish-due] persist outcomes THREW after ${attempt} attempts`
+          + ` draft_id=${String(row.draft_id)} user=${row.vibepin_user_id}: ${message}`
+          + ` outcomes=${JSON.stringify(outcomes)}`,
+        );
+        return;
+      }
+      console.error("[cron/publish-due] persist outcomes threw (retrying):", message);
+    }
+    await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
+  }
 }
 
 /** Persist the failure payload (WP-B §11.5 fields + cleared scheduling + cleared claim). */
 async function persistFailure(
-  db: ReturnType<typeof createServerClient>,
+  io: RowIo,
   row: DueRow,
   fail: { message: string; code?: string },
-  nowIso: string,
   connectionId?: string | null,
 ): Promise<void> {
-  const payload = payloadAfterFailure(row.payload, fail, nowIso, connectionId);
-  const { error } = await db
-    .from(TABLE)
-    .update({
-      payload,
-      status: typeof payload.status === "string" ? payload.status : null,
-      updated_at: nowIso,
-      scheduled_at: null,       // drop out of the due scan (no retry storm)
-      publish_claimed_at: null, // release the claim
-    })
-    .eq("vibepin_user_id", row.vibepin_user_id)
-    .eq("draft_id", row.draft_id);
-  if (error) console.error("[cron/publish-due] persist failure error:", error.message);
+  // Read-merge-write, exactly like the outcome persist: a failure must not overwrite an
+  // edit the merchant made while the attempt was running, and it must not cancel a slot
+  // they rescheduled it to in the meantime.
+  const { error } = await writeFailure(io, row, fail, connectionId);
+  if (error) console.error("[cron/publish-due] persist failure error:", error);
 }
 
 /** Release only the claim lock, leaving payload/scheduled_at untouched — used for the

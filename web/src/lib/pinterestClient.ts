@@ -26,6 +26,12 @@ export type PinterestClientError = Error & {
   pinterestCode?: string;
   /** HTTP status from the internal API route (useful for fallback messages). */
   httpStatus?: number;
+  /**
+   * Present on the remove route's `schedules_exist` refusal: how many Pins the
+   * SERVER found still scheduled through the account, counted at delete time. The
+   * Remove dialog shows this number rather than its own earlier estimate.
+   */
+  scheduledCount?: number;
 };
 
 export type PinterestAccount = { id: string | null; username: string | null; accountType: string | null };
@@ -200,6 +206,7 @@ type ParsedError = {
   needsReconnect?: boolean;
   pinterestCode?: string;
   httpStatus: number;
+  scheduledCount?: number;
 };
 
 async function parseErrorResponse(res: Response): Promise<ParsedError> {
@@ -215,6 +222,8 @@ async function parseErrorResponse(res: Response): Promise<ParsedError> {
       needsReconnect: body?.needsReconnect === true,
       pinterestCode: typeof body?.pinterestCode === "string" ? body.pinterestCode : undefined,
       httpStatus,
+      // Carried so the Remove dialog can reopen on the server's own count.
+      scheduledCount: typeof body?.scheduledCount === "number" ? body.scheduledCount : undefined,
     };
   } catch {
     return {
@@ -231,6 +240,7 @@ function toClientError(body: ParsedError): PinterestClientError {
   err.needsReconnect = body.needsReconnect;
   err.pinterestCode = body.pinterestCode;
   err.httpStatus = body.httpStatus;
+  err.scheduledCount = body.scheduledCount;
   return err;
 }
 
@@ -550,17 +560,24 @@ export const PINTEREST_DISCONNECTED_EVENT = "vp:pinterest_disconnected";
  * a connectionId; the "Keep" answer passes nothing, because a kept Pin is already
  * blocked at publish time by the `target_disconnected` retry reason.
  *
- * Both ride in the query string: DELETE request bodies are unreliable across proxies
- * and fetch implementations.
+ * `mode: "remove"` is the HARD delete behind the row’s Remove button — the row is
+ * deleted and its plan slot is freed. The default stays SOFT: the account keeps its
+ * row and shows as "Disconnected" with a Reconnect, still holding its slot
+ * (PRD 0805 §11). Remove is only sent WITH a connectionId; the server refuses an
+ * un-narrowed one rather than mass-deleting.
+ *
+ * All three ride in the query string: DELETE request bodies are unreliable across
+ * proxies and fetch implementations.
  */
 export async function disconnectPinterest(
   connectionId?: string | null,
-  opts?: { cancelScheduled?: boolean },
+  opts?: { cancelScheduled?: boolean; mode?: "disconnect" | "remove" },
 ): Promise<void> {
   const params = new URLSearchParams();
   const id = typeof connectionId === "string" ? connectionId.trim() : "";
   if (id) params.set("connectionId", id);
   if (id && opts?.cancelScheduled) params.set("cancelScheduled", "1");
+  if (id && opts?.mode === "remove") params.set("mode", "remove");
   const qs = params.toString();
 
   // keepalive: callers are optimistic (UI flips before this settles) — the request

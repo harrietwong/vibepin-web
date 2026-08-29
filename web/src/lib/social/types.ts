@@ -44,7 +44,11 @@ export interface PlatformConnectionSummary {
   status: ConnectionStatus;
   /** Whether at least one account is usable for publishing right now. */
   connected: boolean;
-  /** Number of connected accounts for this provider. */
+  /**
+   * Number of account rows the merchant holds on this provider. In the Settings
+   * listing that includes DISCONNECTED rows — they still hold a plan slot until
+   * they are removed. `connected` above, not this, answers "can we publish?".
+   */
   accountCount: number;
   /** Primary connected account name/handle to display, if any. */
   accountName: string | null;

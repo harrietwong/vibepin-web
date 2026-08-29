@@ -22,6 +22,7 @@ export const studioModalsMessages = {
   "studioModals.col.destinationUrl": "Destination URL",
   "studioModals.col.description": "Description",
   "studioModals.col.board": "Board",
+  "studioModals.col.publishTo": "Publish to",
   "studioModals.col.altText": "Alt text",
   "studioModals.col.product": "Product",
   "studioModals.col.publishTime": "Publish time",

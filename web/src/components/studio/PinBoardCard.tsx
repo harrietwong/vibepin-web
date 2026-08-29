@@ -19,7 +19,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle, Sparkles } from "lucide-react";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { hasPersistFailure, retryPersist, subscribe as subscribeDrafts, splitContentMedia, copyMedia } from "@/lib/pinDraftStore";
+import { getDraft, hasPersistFailure, retryPersist, subscribe as subscribeDrafts, splitContentMedia, copyMedia } from "@/lib/pinDraftStore";
 import { toast } from "sonner";
 import { getStatusBadge, isActionablePublishFailure, mapPublishErrorToCategory, type PinLifecycle } from "@/lib/studio/pinLifecycle";
 import { getPublishErrorDisplayKey } from "@/lib/studio/publishErrorDisplay";
@@ -40,6 +40,7 @@ import {
   buildScheduledDestinations,
   legacyPinterestMirror,
   resolveScheduledAccount,
+  withBoardOnPinterestEntry,
   type DestinationPick,
 } from "@/lib/social/scheduledDestinations";
 import type { SelectedAccount } from "@/components/social/PublishDestinations";
@@ -328,6 +329,26 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const saveState: "saved" | "saving" | "failed" = persistFailed ? "failed" : pendingSave ? "saving" : "saved";
 
   const persistNow = useCallback((f: PinFieldsValue) => {
+    // Read the stored record FRESH (same contract as handlePublish): `persistNow` is
+    // rebuilt on every render and the flush effect below runs the PREVIOUS one in its
+    // cleanup, closed over the PREVIOUS draft. Computing intent from that closure would
+    // let a board edit sitting in the debounce window overwrite whatever a concurrent
+    // writer — the destination picker on this very card, AI copy, a sync — had just
+    // stored. The prop is only a fallback for a draft the store no longer has.
+    const current = getDraft(draft.id) ?? draft;
+    const nextBoardId = f.boardId.trim();
+    const storedDestinations = current.scheduledDestinations ?? [];
+    // The board is the one field on this form that is ALSO a publish destination:
+    // changing it here changes where this Content goes (owner decision, 2026-08-27).
+    // Writing only the legacy board left the stored Pinterest entry — what the due-time
+    // worker publishes to — on the old board, so the merchant read the new board off the
+    // card while the Pin went somewhere else.
+    //
+    // The rest of the intent is still one fact with one writer: nothing here is
+    // re-derived from picker state. `withBoardOnPinterestEntry` is a pure rewrite of the
+    // STORED entries, and it runs ONLY when the board actually changed — a title
+    // keystroke can never reach destinations.
+    const boardChanged = nextBoardId !== (current.boardId ?? "").trim();
     props.onPersist(draft.id, {
       title: f.title,
       description: f.description,
@@ -336,9 +357,15 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       boardName: boardName(f.boardId),
       altText: f.altText,
       tags: parseTags(f.tags),
-      // Destinations are NOT written here. They are one fact with one writer
-      // (`persistDestinationSelection` below → `scheduledDestinations`), so a field
-      // edit can never quietly re-derive them from stale component state.
+      ...(boardChanged && storedDestinations.length
+        ? {
+            scheduledDestinations: withBoardOnPinterestEntry(
+              storedDestinations,
+              current.targetConnectionId,
+              { boardId: nextBoardId, boardName: boardName(nextBoardId) },
+            ),
+          }
+        : {}),
     });
   }, [props, draft.id, boardName]);
 

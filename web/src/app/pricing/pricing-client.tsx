@@ -8,6 +8,7 @@ import { ArrowRight, Check, Minus } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
 import {
   ACCOUNTS_HELPER_TEXT,
+  EXTRA_ACCOUNT_HELPER_TEXT,
   COMPARISON_SECTIONS,
   ENTERPRISE_PLAN,
   PRICING_FAQ,
@@ -15,6 +16,10 @@ import {
   PRICING_TIERS,
   type PlanKey,
 } from "@/lib/pricingPlans";
+import {
+  BillingDisabledError,
+  startCreemCheckout,
+} from "@/lib/billing/creemCheckoutClient";
 import { CONTAINER, GradientText, SectionLabel, VibeBtn } from "@/components/landing/conversion/shared";
 import { FaqAccordionItem } from "@/components/landing/conversion/FaqSection";
 import { LandingFooter } from "@/components/landing/conversion/LandingFooter";
@@ -33,43 +38,6 @@ type PaidPlan = Exclude<PlanKey, "free">;
 const PAID_PLANS: readonly PaidPlan[] = ["starter", "pro", "business"];
 function isPaidPlan(id: PlanKey): id is PaidPlan {
   return (PAID_PLANS as readonly PlanKey[]).includes(id);
-}
-
-/** Thrown when checkout is deliberately turned off (CREEM_MODE=disabled → 503). */
-class BillingDisabledError extends Error {
-  constructor() {
-    super("billing_disabled");
-    this.name = "BillingDisabledError";
-  }
-}
-
-/**
- * Start an authenticated Creem checkout for the signed-in buyer. Resolves to the
- * hosted checkout URL. Throws BillingDisabledError when checkout is turned off
- * (503 billing_disabled → the CTA shows a "coming soon" state), or a plain Error
- * on any other failure so the caller can surface the retryable banner.
- */
-async function startCreemCheckout(plan: PaidPlan, interval: "month" | "year"): Promise<string> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  const res = await fetch("/api/billing/creem/checkout", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ plan, interval }),
-  });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string };
-    if (res.status === 503 && err.error === "billing_disabled") {
-      throw new BillingDisabledError();
-    }
-    throw new Error(`checkout endpoint returned ${res.status}`);
-  }
-  const json = (await res.json()) as { url?: string };
-  if (!json.url) throw new Error("checkout endpoint returned no url");
-  return json.url;
 }
 
 function BillingToggle({ yearly, onChange }: { yearly: boolean; onChange: (v: boolean) => void }) {
@@ -677,12 +645,17 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
             </h2>
             <p className="text-[14px] leading-relaxed" style={{ color: "#8B93A1" }}>
               Discover high-save products, trending Pins, and keyword ideas. Generate content with
-              AI. Publish to Pinterest, Instagram, TikTok, and Facebook.
+              AI. Publish to Pinterest, Instagram, and Facebook.
             </p>
           </div>
           <ComparisonTable />
           <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-5" style={{ color: "#6B7280" }}>
             {ACCOUNTS_HELPER_TEXT}
+          </p>
+          {/* The add-on, stated where the account numbers are: someone reading
+              "1 account per platform" is exactly who needs to know it can be raised. */}
+          <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-2" style={{ color: "#8B93A1" }}>
+            {EXTRA_ACCOUNT_HELPER_TEXT}
           </p>
         </div>
       </section>
@@ -730,7 +703,7 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
           </h2>
           <p className="text-[14px] leading-relaxed max-w-[560px] mx-auto mb-8" style={{ color: "#8B93A1" }}>
             Discover products and Pin ideas, generate content with AI, and publish to Pinterest,
-            Instagram, TikTok, and Facebook.
+            Instagram, and Facebook.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <Link href="/signup?plan=free" className={`${VibeBtn} px-8 py-3.5 text-[14px] flex items-center gap-2`}>

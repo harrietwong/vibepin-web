@@ -22,6 +22,10 @@ process.env.CREEM_PRODUCT_PRO_MONTHLY = "prod_pro_m";
 process.env.CREEM_PRODUCT_PRO_YEARLY = "prod_pro_y";
 process.env.CREEM_PRODUCT_BUSINESS_MONTHLY = "prod_business_m";
 process.env.CREEM_PRODUCT_BUSINESS_YEARLY = "prod_business_y";
+// The extra-account-slots add-on (NOT a plan — it is deliberately absent from the
+// plan map, so resolveCreemProduct returns null for it).
+process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY = "prod_extra_m";
+process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY = "prod_extra_y";
 process.env.CREEM_API_KEY = "creem_test_fake";
 // Billing mode: "test" is usable in a non-production runtime (VERCEL_ENV unset,
 // NODE_ENV not "production"), so the happy-path checkout tests exercise the real
@@ -60,11 +64,21 @@ type Fakes = {
   email: string | null;
   checkout: (input: unknown) => Promise<{ checkoutUrl: string }>;
   lastCheckoutInput?: unknown;
+  /** What resolvePlan reports for the buyer — gates the add-on. */
+  plan: "free" | "starter" | "pro" | "business";
+  /**
+   * What getActivePlanInterval reports — the interval of the subscription that
+   * grants the plan. 决策 A: the add-on follows it, and the body never does.
+   * null models a plan with no live sub row (app_metadata cache / whitelist).
+   */
+  planInterval: "month" | "year" | null;
 };
 const fakes: Fakes = {
   uid: "user-123",
   email: "buyer@example.com",
   checkout: async () => ({ checkoutUrl: "https://test-api.creem.io/checkout/abc" }),
+  plan: "pro",
+  planInterval: "month",
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -86,6 +100,13 @@ const originalLoad = (Module as any)._load;
           },
         },
       }),
+    };
+  }
+  // NB: "server/entitlements" does not match "server/planEntitlements".
+  if (request.includes("server/entitlements")) {
+    return {
+      resolvePlan: async () => fakes.plan,
+      getActivePlanInterval: async () => fakes.planInterval,
     };
   }
   if (request.includes("creem/creemClient")) {
@@ -295,6 +316,221 @@ async function main() {
       else process.env.CREEM_WEBHOOK_SECRET = savedSecret;
     }
   });
+
+  // -- Extra account slots add-on ---------------------------------------------
+
+  await test("a Free user cannot buy extra account slots (403 + a message for them)", async () => {
+    fakes.plan = "free";
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", units: 1 }) as never,
+    );
+    assertEq(res.status, 403, "status");
+    const body = (await res.json()) as { error?: string; userMessage?: string };
+    assertEq(body.error, "paid_plan_required", "stable error code");
+    assert(
+      typeof body.userMessage === "string" && body.userMessage.length > 20,
+      "the refusal must carry customer-readable text, not just a code",
+    );
+    fakes.plan = "pro";
+  });
+
+  await test("a paid user buys N slots: add-on product id, units and kind all sent", async () => {
+    fakes.plan = "starter";
+    fakes.planInterval = "month";
+    fakes.lastCheckoutInput = undefined;
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", units: 3 }, "https://vibepin.co") as never,
+    );
+    assertEq(res.status, 200, "status");
+    const input = fakes.lastCheckoutInput as {
+      productId: string;
+      units: number;
+      metadata: { userId: string; kind: string };
+    };
+    assertEq(input.productId, "prod_extra_m", "productId from CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY");
+    assertEq(input.units, 3, "quantity carried to Creem");
+    assertEq(input.metadata.kind, "extra_account", "metadata.kind distinguishes it from a plan");
+    assertEq(input.metadata.userId, "user-123", "metadata.userId still present");
+    fakes.plan = "pro";
+  });
+
+  // ── 决策 A: the add-on's interval FOLLOWS the plan, never the body ───────────
+
+  await test("a yearly-plan buyer gets the yearly add-on product", async () => {
+    fakes.planInterval = "year";
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", units: 1 }, "https://vibepin.co") as never,
+    );
+    assertEq(res.status, 200, "status");
+    assertEq((fakes.lastCheckoutInput as { productId: string }).productId, "prod_extra_y", "yearly id");
+    assertEq(((await res.json()) as { interval?: string }).interval, "year", "reported interval");
+    fakes.planInterval = "month";
+  });
+
+  await test("a monthly-plan buyer gets the monthly add-on product", async () => {
+    fakes.planInterval = "month";
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", units: 1 }, "https://vibepin.co") as never,
+    );
+    assertEq(res.status, 200, "status");
+    assertEq((fakes.lastCheckoutInput as { productId: string }).productId, "prod_extra_m", "monthly id");
+    assertEq(((await res.json()) as { interval?: string }).interval, "month", "reported interval");
+  });
+
+  // The exploit this closes: a monthly subscriber POSTing interval:"year" would
+  // otherwise be sold a yearly-billed add-on at the monthly price's cadence.
+  await test("a client-sent interval is IGNORED — the plan decides", async () => {
+    fakes.planInterval = "month";
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", interval: "year", units: 1 }, "https://vibepin.co") as never,
+    );
+    assertEq(res.status, 200, "status");
+    assertEq(
+      (fakes.lastCheckoutInput as { productId: string }).productId,
+      "prod_extra_m",
+      "monthly plan → monthly product despite interval:\"year\" in the body",
+    );
+    assertEq(((await res.json()) as { interval?: string }).interval, "month", "reported interval");
+  });
+
+  await test("a garbage interval in the body cannot break an add-on checkout", async () => {
+    fakes.planInterval = "year";
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", interval: "fortnight", units: 1 }) as never,
+    );
+    assertEq(res.status, 200, "the add-on branch never reads body.interval");
+    assertEq((fakes.lastCheckoutInput as { productId: string }).productId, "prod_extra_y", "still plan-derived");
+    fakes.planInterval = "month";
+  });
+
+  await test("no live plan sub (interval unknown) → monthly", async () => {
+    fakes.planInterval = null;
+    const res = await route.POST(makeReq({ kind: "extra_account", units: 1 }) as never);
+    assertEq(res.status, 200, "status");
+    assertEq((fakes.lastCheckoutInput as { productId: string }).productId, "prod_extra_m", "defaults monthly");
+    assertEq(((await res.json()) as { interval?: string }).interval, "month", "reported interval");
+    fakes.planInterval = "month";
+  });
+
+  await test("yearly plan + yearly add-on unconfigured → monthly fallback, reported honestly", async () => {
+    const saved = process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY;
+    delete process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY;
+    fakes.planInterval = "year";
+    try {
+      const res = await route.POST(makeReq({ kind: "extra_account", units: 1 }) as never);
+      assertEq(res.status, 200, "the sale is not blocked by a missing yearly product");
+      assertEq(
+        (fakes.lastCheckoutInput as { productId: string }).productId,
+        "prod_extra_m",
+        "falls back to the monthly product",
+      );
+      assertEq(
+        ((await res.json()) as { interval?: string }).interval,
+        "month",
+        "the response SAYS it charged monthly — the client must not claim yearly",
+      );
+    } finally {
+      process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_YEARLY = saved;
+      fakes.planInterval = "month";
+    }
+  });
+
+  await test("bad units are refused (0, over the cap, fractional, string)", async () => {
+    for (const units of [0, 51, 2.5, "3"]) {
+      const res = await route.POST(
+        makeReq({ kind: "extra_account", units }) as never,
+      );
+      assertEq(res.status, 400, `units=${JSON.stringify(units)} must be rejected`);
+    }
+  });
+
+  await test("an unknown kind is refused", async () => {
+    const res = await route.POST(makeReq({ kind: "something_else", interval: "month" }) as never);
+    assertEq(res.status, 400, "status");
+  });
+
+  await test("add-on with no product configured → 500 addon_not_configured", async () => {
+    const saved = process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY;
+    delete process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY;
+    fakes.planInterval = "month";
+    try {
+      const res = await route.POST(
+        makeReq({ kind: "extra_account", units: 1 }) as never,
+      );
+      assertEq(res.status, 500, "status");
+      assertEq(((await res.json()) as { error?: string }).error, "addon_not_configured", "error code");
+    } finally {
+      process.env.CREEM_PRODUCT_EXTRA_ACCOUNT_MONTHLY = saved;
+    }
+  });
+
+  // ── 决策 B: an add-on buyer returns to Settings, a plan buyer to /welcome ────
+
+  await test("add-on success_url returns to Settings → Social accounts with ?addon=success", async () => {
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", units: 1 }, "https://vibepin.co") as never,
+    );
+    assertEq(res.status, 200, "status");
+    const input = fakes.lastCheckoutInput as { successUrl: string; metadata: Record<string, string> };
+    assertEq(
+      input.successUrl,
+      "https://vibepin.co/app/settings/social?addon=success",
+      "the buyer came from Settings to connect an account — that is where they go back",
+    );
+    assertEq(input.metadata.returnTo, "settings_social", "metadata carries the return intent");
+  });
+
+  await test("the add-on return URL honors an allowlisted origin too", async () => {
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", units: 1 }, "http://localhost:3000") as never,
+    );
+    assertEq(res.status, 200, "status");
+    assertEq(
+      (fakes.lastCheckoutInput as { successUrl: string }).successUrl,
+      "http://localhost:3000/app/settings/social?addon=success",
+      "same origin allowlist as the plan flow",
+    );
+  });
+
+  await test("an evil origin still cannot redirect an add-on buyer off-site", async () => {
+    const res = await route.POST(
+      makeReq({ kind: "extra_account", units: 1 }, "https://evil.example.com") as never,
+    );
+    assertEq(res.status, 200, "status");
+    assertEq(
+      (fakes.lastCheckoutInput as { successUrl: string }).successUrl,
+      "https://vibepin.co/app/settings/social?addon=success",
+      "evil origin → default host",
+    );
+  });
+
+  await test("a PLAN purchase still lands on /welcome and carries no returnTo", async () => {
+    const res = await route.POST(
+      makeReq({ plan: "pro", interval: "year" }, "https://vibepin.co") as never,
+    );
+    assertEq(res.status, 200, "status");
+    const input = fakes.lastCheckoutInput as { successUrl: string; metadata: Record<string, string> };
+    assertEq(input.successUrl, "https://vibepin.co/welcome", "onboarding is unchanged");
+    assertEq(input.metadata.returnTo, undefined, "returnTo is add-on only");
+    const json = (await res.json()) as { url?: string; interval?: string };
+    assertEq(json.interval, undefined, "a plan response shape is unchanged: { url } only");
+    assert(typeof json.url === "string", "url still returned");
+  });
+
+  await test("a plan checkout still works with no kind, and is tagged kind=plan", async () => {
+    fakes.lastCheckoutInput = undefined;
+    const res = await route.POST(makeReq({ plan: "starter", interval: "month" }) as never);
+    assertEq(res.status, 200, "status");
+    const input = fakes.lastCheckoutInput as {
+      productId: string;
+      units: number;
+      metadata: { kind: string };
+    };
+    assertEq(input.productId, "prod_starter_m", "unchanged plan behaviour");
+    assertEq(input.metadata.kind, "plan", "defaulted kind");
+    assertEq(input.units, 1, "a plan is one unit");
+  });
+
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

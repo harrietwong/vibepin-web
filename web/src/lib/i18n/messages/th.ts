@@ -556,7 +556,7 @@ const th: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "ไม่สามารถเริ่มการเชื่อมต่อได้",
   "socialPanel.toast.disconnectedSuffix": " ยกเลิกการเชื่อมต่อแล้ว",
   "socialPanel.toast.couldNotDisconnect": "ไม่สามารถยกเลิกการเชื่อมต่อได้",
-  "socialPanel.mismatch.title": "นี่เป็นบัญชี Pinterest คนละบัญชี",
+  "socialPanel.mismatch.title": "นี่เป็นบัญชี {platform} คนละบัญชี",
   "socialPanel.mismatch.bodyPrefix": "คุณลงชื่อเข้าใช้เป็น ",
   "socialPanel.mismatch.bodyMiddle": " แต่คุณกำลังเชื่อมต่อใหม่กับ ",
   "socialPanel.mismatch.bodySuffix": " ไม่มีการเปลี่ยนแปลงใด ๆ — การเชื่อมต่อเดิมของคุณยังคงอยู่ เลือกสิ่งที่ต้องการทำ",

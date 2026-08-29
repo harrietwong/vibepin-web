@@ -547,7 +547,7 @@ const de: Partial<Record<MessageKey, string>> = {
   "socialPanel.toast.couldNotStartConnection": "Verbindung konnte nicht gestartet werden",
   "socialPanel.toast.disconnectedSuffix": " getrennt",
   "socialPanel.toast.couldNotDisconnect": "Trennen nicht möglich",
-  "socialPanel.mismatch.title": "Das ist ein anderes Pinterest-Konto",
+  "socialPanel.mismatch.title": "Das ist ein anderes {platform}-Konto",
   "socialPanel.mismatch.bodyPrefix": "Du hast dich als ",
   "socialPanel.mismatch.bodyMiddle": " angemeldet, wolltest aber ",
   "socialPanel.mismatch.bodySuffix": " erneut verbinden. Es wurde nichts geändert — deine bestehende Verbindung ist unverändert. Wähle, wie es weitergehen soll.",

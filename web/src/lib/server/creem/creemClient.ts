@@ -64,8 +64,15 @@ export type CreateCheckoutInput = {
   customerEmail: string;
   /** Where Creem redirects after a completed payment. */
   successUrl: string;
-  /** Opaque metadata echoed on webhook events (we carry { userId }). */
+  /** Opaque metadata echoed on webhook events (we carry { userId, kind }). */
   metadata: Record<string, string>;
+  /**
+   * Quantity to buy. Creem's checkout accepts `units`, and the resulting
+   * subscription carries it on items[].units — which is how the extra-account-slots
+   * add-on expresses "N extra accounts" as ONE subscription instead of N of them.
+   * Omitted (or 1) for a plan.
+   */
+  units?: number;
 };
 
 /**
@@ -83,6 +90,9 @@ export async function createCheckoutSession(
       customer: { email: input.customerEmail },
       success_url: input.successUrl,
       metadata: input.metadata,
+      // Only sent when a quantity was asked for — a plan checkout keeps the exact
+      // body it has always sent.
+      ...(input.units && input.units > 1 ? { units: input.units } : {}),
     },
   );
   // Raw API is snake_case (checkout_url); accept the camelCase alias defensively.

@@ -593,12 +593,75 @@ export async function disconnect(uid: string, connectionId?: string): Promise<vo
   dropCachedUser(uid);
 }
 
+/**
+ * Remove: DELETE the connection row outright (PRD 0805 §11 “Remove 释放额度”).
+ *
+ * Disconnect and Remove are two different actions on purpose. Disconnect above is
+ * SOFT — tokens nulled, row kept, `disconnected_at` stamped — and the row goes on
+ * holding its plan slot, which is why it stays visible in Settings with a Reconnect.
+ * Remove is the ONLY action that frees a slot, so it has to actually delete the row:
+ * a soft "remove" would report success while the slot stayed occupied forever.
+ *
+ * ALWAYS connection-scoped. There is deliberately no user-wide form: an un-narrowed
+ * hard delete is a mass delete of every Pinterest account the merchant holds, and no
+ * button in the product means that. The caller (the route) refuses a remove without
+ * an id rather than widening it here.
+ *
+ * Idempotent: a 0-row DELETE (already removed, or an id that isn’t theirs) is a
+ * no-op, not an error — same contract as `disconnect`.
+ */
+export async function deleteConnection(uid: string, connectionId: string): Promise<void> {
+  const { error } = await db()
+    .from(TABLE)
+    .delete()
+    .eq("user_id", uid)
+    .eq("provider", PROVIDER)
+    .eq("id", connectionId);
+  if (error) throw dbError("remove connection", error.code, error.message);
+  forgetConnection(uid, connectionId);
+}
+
+/**
+ * Drop this connection (and its user's index entry) from the row cache.
+ *
+ * Exported because the remove route no longer deletes through `deleteConnection`:
+ * the delete is now one SQL statement that also checks the schedules
+ * (remove_social_connection_if_unscheduled, migrate_v67), so the row can go away
+ * without this module being the one to do it. The cache still has to be told, or
+ * a read within the 120s TTL keeps serving an account that no longer exists.
+ */
+export function forgetConnection(uid: string, connectionId: string): void {
+  dropCachedConnection(connectionId);
+  dropCachedUser(uid);
+}
+
 function dbError(action: string, code: string | undefined, message: string): DatabaseError {
   if (isMissingTableError(code, message)) {
     return new DatabaseError("Pinterest connection storage is not set up");
   }
   console.error(`[pinterest] failed to ${action}:`, message);
   return new DatabaseError("Pinterest connection could not be loaded");
+}
+
+/**
+ * WHO this row belongs to, whether or not it is still connected — never tokens.
+ *
+ * `toSafeStatus` below deliberately answers `account: null` for a disconnected or
+ * token-less row: it is the PUBLISH-side projection, where "who is this?" and "can
+ * we publish as them?" are the same question. The Settings listing asks a different
+ * one. A disconnected account keeps its row, keeps its plan slot and offers a
+ * Reconnect, so it has to be shown under its own name — rendering it as
+ * "Pinterest account ••••6972" would leave the merchant guessing which account they
+ * are about to bring back. Identity is not a credential.
+ */
+export function toAccountIdentity(row: PinterestConnectionRow): ConnectionAccount {
+  return {
+    id: row.pinterest_user_id,
+    username: row.pinterest_username,
+    accountType: row.pinterest_account_type,
+    businessName: row.pinterest_display_name ?? null,
+    avatarUrl: row.pinterest_avatar_url ?? null,
+  };
 }
 
 /** Client-safe status projection — never includes tokens. */
@@ -608,13 +671,10 @@ export function toSafeStatus(row: PinterestConnectionRow | null): SafeStatus {
   }
   return {
     connected: true,
-    account: {
-      id: row.pinterest_user_id,
-      username: row.pinterest_username,
-      accountType: row.pinterest_account_type,
-      businessName: row.pinterest_display_name ?? null,
-      avatarUrl: row.pinterest_avatar_url ?? null,
-    },
+    // One definition of identity, shared with the listing projection above, so the
+    // name Settings shows for a disconnected row is the same name it showed while
+    // the row was live.
+    account: toAccountIdentity(row),
     scopes: row.scopes ?? [],
     needsReconnect: row.needs_reconnect || !hasRequiredPinterestScopes(row.scopes),
     lastSyncedAt: row.updated_at ?? null,

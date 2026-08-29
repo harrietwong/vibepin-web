@@ -107,7 +107,13 @@ async function main() {
         payload: {
           id: "QA_API_BYPASS", title: "API BYPASS", imageUrl: "/icon-512.png",
           boardId: "boardA", scheduledDate: "2099-01-01", scheduledTime: "10:00",
-          socialDestinations: ["pinterest", "instagram", "facebook"],
+          // The REAL intent field (the guard reads this; `socialDestinations` is a
+          // field nothing writes and the server now ignores it).
+          scheduledDestinations: [
+            { provider: "pinterest", socialConnectionId: "conn-0", capturedAt: new Date().toISOString() },
+            { provider: "instagram", socialConnectionId: "conn-1", capturedAt: new Date().toISOString() },
+            { provider: "facebook", socialConnectionId: "conn-2", capturedAt: new Date().toISOString() },
+          ],
           updatedAt: new Date().toISOString(),
         },
       }] }),
