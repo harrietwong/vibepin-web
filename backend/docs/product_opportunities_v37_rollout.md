@@ -419,9 +419,11 @@ writes; a hidden receipt ID or pre-write violation cannot be waived by an empty
 top-level ID list. Product-image readback uses parsed host families, including
 regional `pinimg.*` and `pinterest.*` domains, rather than the narrower
 `pinimg.com` substring. A merchant path containing those words is not rejected.
-The scheduled contract intentionally does not accept the local 29/22/29/20
-Digital candidate until that mix receives separate deployment authorization and
-the audit authority is changed in the same reviewed release.
+The historical scheduled contract remains available as the default
+`--scheduled-profile physical-legacy`. The v3.7 Digital launch must be audited with
+`--require-scheduled-run --scheduled-profile launch-v37`; this requires the exact
+29/22/29/20 mix and cannot accept a historical 36/28/36 receipt. The two profiles
+are explicit so neither production generation can be mistaken for the other.
 
 The deployment report must show candidate SHA, deployed SHA, per-file hashes,
 test results, operator, timestamp, and rollback reference. A clean build from the
@@ -931,6 +933,8 @@ search, pagination, direct ID, Saved Products, or client-side requests.
    the Product Tracking timer. A successful receipt from the older Physical-only
    36/28/36 production mix does not qualify the Digital launch candidate and must
    be rejected by automatic v3.7 Admission.
+   Audit the first permanent v3.7 run with
+   `product_supply_cutover_v37.py audit --require-scheduled-run --scheduled-profile launch-v37`.
    Before any apply preflight, configure
    `VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF=<exact-project-ref>`; both the
    wrapper and the direct Python write core fail closed when it is absent or does

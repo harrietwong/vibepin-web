@@ -107,6 +107,36 @@ def provider_run_outcome(pin_observations: list[TrackingObservation]) -> str:
     return "complete"
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def require_single_utc_tracking_day(
+    run_captured_at: datetime,
+    observations: list[TrackingObservation],
+    *,
+    checked_at: datetime,
+) -> None:
+    """Refuse all snapshot writes when one provider run spans UTC dates."""
+    timestamps = [run_captured_at, checked_at]
+    timestamps.extend(
+        observation.captured_at
+        for observation in observations
+        if observation.captured_at is not None
+    )
+    if any(timestamp.tzinfo is None for timestamp in timestamps):
+        raise RuntimeError("tracking UTC-day guard requires timezone-aware timestamps")
+    run_day = run_captured_at.astimezone(timezone.utc).date()
+    observed_days = {
+        timestamp.astimezone(timezone.utc).date()
+        for timestamp in timestamps
+    }
+    if observed_days != {run_day}:
+        raise RuntimeError(
+            "product tracking crossed a UTC day boundary; refusing all snapshot writes"
+        )
+
+
 class RequestStartLimiter:
     """Space request starts while still allowing in-flight overlap."""
 
@@ -641,7 +671,7 @@ def refresh_metrics_after_tracking(now: datetime) -> tuple[int, int, int, int]:
 
 async def run(args: argparse.Namespace) -> dict:
     started_monotonic = time.monotonic()
-    captured_at = datetime.now(timezone.utc)
+    captured_at = _utc_now()
     limit = min(max(1, args.limit), MAX_UNIQUE_PINS_PER_RUN)
     project_ref = None
     if args.apply:
@@ -760,6 +790,12 @@ async def run(args: argparse.Namespace) -> dict:
                     "product tracking provider batch failed: due Pins produced no "
                     "confirmed valid or not-found observation"
                 )
+        require_single_utc_tracking_day(
+            captured_at,
+            observations,
+            checked_at=_utc_now(),
+        )
+        if observations:
             report["written"], report["counterRegressions"] = record_observations(observations)
             report["snapshotWrites"] = report["written"]
         (
@@ -770,7 +806,6 @@ async def run(args: argparse.Namespace) -> dict:
             observations,
             already_valid_pin_ids=set(inventory.already_valid_switch_pin_ids),
         )
-        captured_at = datetime.now(timezone.utc)
         projected_metrics, written_metrics, metric_regressions, stale = refresh_metrics_after_tracking(
             captured_at
         )

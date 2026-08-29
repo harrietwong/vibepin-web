@@ -817,6 +817,112 @@ def test_provider_run_outcome_never_calls_a_total_outage_success(
     assert tracking.provider_run_outcome(observations) == expected
 
 
+def test_utc_day_guard_rejects_cross_day_before_any_write() -> None:
+    run_started = datetime(2026, 8, 27, 23, 59, tzinfo=timezone.utc)
+    next_day = datetime(2026, 8, 28, 0, 1, tzinfo=timezone.utc)
+    observations = [
+        tracking.TrackingObservation(
+            TARGET,
+            "valid",
+            12,
+            captured_at=next_day,
+        )
+    ]
+    with pytest.raises(RuntimeError, match="crossed a UTC day boundary"):
+        tracking.require_single_utc_tracking_day(
+            run_started,
+            observations,
+            checked_at=next_day,
+        )
+
+
+def test_utc_day_guard_accepts_one_utc_day_and_rejects_naive_time() -> None:
+    run_started = datetime(2026, 8, 27, 1, tzinfo=timezone.utc)
+    observation = tracking.TrackingObservation(
+        TARGET,
+        "not_found",
+        None,
+        captured_at=datetime(2026, 8, 27, 23, 59, tzinfo=timezone.utc),
+    )
+    tracking.require_single_utc_tracking_day(
+        run_started,
+        [observation],
+        checked_at=datetime(2026, 8, 27, 23, 59, 59, tzinfo=timezone.utc),
+    )
+    with pytest.raises(RuntimeError, match="timezone-aware"):
+        tracking.require_single_utc_tracking_day(
+            run_started.replace(tzinfo=None),
+            [],
+            checked_at=run_started,
+        )
+
+
+def test_apply_crossing_utc_day_aborts_before_snapshot_switch_or_metric_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import contextmanager
+    import pipeline_tracking
+    import scraper_v2
+
+    run_started = datetime(2026, 8, 27, 23, 59, tzinfo=timezone.utc)
+    next_day = datetime(2026, 8, 28, 0, 1, tzinfo=timezone.utc)
+    observation = tracking.TrackingObservation(
+        TARGET,
+        "valid",
+        12,
+        captured_at=next_day,
+    )
+    batch = tracking.TrackingFetchBatch(
+        observations=[observation],
+        pin_observations=[observation],
+        unique_pins=1,
+        deduped_pins=0,
+        provider_requests_attempted=1,
+        retries=0,
+        attempt_failures={},
+    )
+
+    @contextmanager
+    def unlocked_job(*_args, **_kwargs):
+        yield {}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def fake_fetch(*_args, **_kwargs):
+        return batch
+
+    now_values = iter((run_started, next_day))
+    monkeypatch.setattr(tracking, "_utc_now", lambda: next(now_values))
+    monkeypatch.setattr(tracking, "load_targets", lambda *_args, **_kwargs: INVENTORY)
+    monkeypatch.setattr(tracking, "fetch_observations", fake_fetch)
+    monkeypatch.setattr(scraper_v2, "PinterestSession", lambda **_kwargs: FakeSession())
+    monkeypatch.setattr(pipeline_tracking, "pipeline_job", unlocked_job)
+    monkeypatch.setenv("VIBEPIN_PRODUCT_TRACKING_MODE", "production")
+    monkeypatch.setenv("VIBEPIN_PRODUCT_TRACKING_CONFIRM", tracking.APPLY_CONFIRM)
+    for name in (
+        "record_observations",
+        "switch_validated_primary_evidence",
+        "refresh_metrics_after_tracking",
+    ):
+        monkeypatch.setattr(
+            tracking,
+            name,
+            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(f"{_name} must not write after a UTC-day crossing")
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match="crossed a UTC day boundary"):
+        asyncio.run(
+            tracking.run(SimpleNamespace(apply=True, limit=1, concurrency=1, delay=0.0))
+        )
+
+
 def test_apply_propagates_total_provider_outage_with_unique_pin_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

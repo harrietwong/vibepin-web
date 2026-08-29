@@ -37,11 +37,22 @@ from product_supply_receipt_contract import (
 REMOTE_BACKEND = "/opt/vibepin/backend"
 SERVICE = "vibepin-product-supply.service"
 TIMER = "vibepin-product-supply.timer"
-SCHEDULED_PHYSICAL_MIX = {
-    "fashion": 36,
-    "womens-fashion": 28,
-    "home-decor": 36,
+SCHEDULED_CATEGORY_MIXES = {
+    # Keep the historical production receipt contract inspectable after v3.7.
+    "physical-legacy": {
+        "fashion": 36,
+        "womens-fashion": 28,
+        "home-decor": 36,
+    },
+    # Exact reviewed launch mix used by the v3.7 runner and systemd service.
+    "launch-v37": {
+        "fashion": 29,
+        "womens-fashion": 22,
+        "home-decor": 29,
+        "digital-products": 20,
+    },
 }
+DEFAULT_SCHEDULED_PROFILE = "physical-legacy"
 
 
 def _is_pinterest_hosted_url(value: object) -> bool:
@@ -470,6 +481,7 @@ def audit_latest(
     *,
     require_canary_write: bool,
     require_scheduled_run: bool = False,
+    scheduled_profile: str = DEFAULT_SCHEDULED_PROFILE,
 ) -> dict:
     payload = r'''
 import json
@@ -665,6 +677,7 @@ print(json.dumps(summary, ensure_ascii=False))
         summary,
         require_canary_write=require_canary_write,
         require_scheduled_run=require_scheduled_run,
+        scheduled_profile=scheduled_profile,
     )
     return summary
 
@@ -674,6 +687,7 @@ def _validate_audit_summary(
     *,
     require_canary_write: bool,
     require_scheduled_run: bool = False,
+    scheduled_profile: str = DEFAULT_SCHEDULED_PROFILE,
 ) -> None:
     """Fail closed on canary and scheduled-run contracts without conflating them."""
     if require_canary_write and require_scheduled_run:
@@ -770,8 +784,14 @@ def _validate_audit_summary(
         raise RuntimeError("Product Supply funnel arithmetic does not close")
     if require_scheduled_run:
         _validate_scheduled_origin(summary.get("scheduledOrigin"))
-        if summary.get("categoryMix") != SCHEDULED_PHYSICAL_MIX:
-            raise RuntimeError("scheduled report does not prove the deployed 36/28/36 category mix")
+        expected_mix = SCHEDULED_CATEGORY_MIXES.get(scheduled_profile)
+        if expected_mix is None:
+            raise RuntimeError(f"unknown scheduled audit profile: {scheduled_profile}")
+        if summary.get("categoryMix") != expected_mix:
+            raise RuntimeError(
+                "scheduled report does not prove the reviewed "
+                f"{scheduled_profile} category mix: expected={expected_mix}"
+            )
         if summary.get("runAdmissionCap") != 50:
             raise RuntimeError("scheduled report does not prove the 50-row run cap")
         if writes > 50:
@@ -901,6 +921,12 @@ def main() -> int:
     ap.add_argument("--source-report", default=None)
     ap.add_argument("--require-canary-write", action="store_true")
     ap.add_argument("--require-scheduled-run", action="store_true")
+    ap.add_argument(
+        "--scheduled-profile",
+        choices=tuple(SCHEDULED_CATEGORY_MIXES),
+        default=DEFAULT_SCHEDULED_PROFILE,
+        help="exact category-mix contract for --require-scheduled-run",
+    )
     args = ap.parse_args()
     if args.require_canary_write and args.require_scheduled_run:
         ap.error("--require-canary-write and --require-scheduled-run are mutually exclusive")
@@ -924,6 +950,7 @@ def main() -> int:
                 client,
                 require_canary_write=args.require_canary_write,
                 require_scheduled_run=args.require_scheduled_run,
+                scheduled_profile=args.scheduled_profile,
             )
         elif args.action == "enable":
             enable_timer(client)

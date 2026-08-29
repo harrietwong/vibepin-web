@@ -178,6 +178,17 @@ def scheduled_summary(*, writes: int = 12) -> dict:
     return summary
 
 
+def launch_scheduled_summary(*, writes: int = 12) -> dict:
+    summary = scheduled_summary(writes=writes)
+    summary["categoryMix"] = {
+        "fashion": 29,
+        "womens-fashion": 22,
+        "home-decor": 29,
+        "digital-products": 20,
+    }
+    return summary
+
+
 def test_complete_scheduled_run_contract_accepts_zero_to_fifty_writes() -> None:
     cutover._validate_audit_summary(
         scheduled_summary(writes=0),
@@ -189,6 +200,38 @@ def test_complete_scheduled_run_contract_accepts_zero_to_fifty_writes() -> None:
         require_canary_write=False,
         require_scheduled_run=True,
     )
+
+
+def test_launch_scheduled_profile_accepts_only_exact_v37_mix() -> None:
+    cutover._validate_audit_summary(
+        launch_scheduled_summary(),
+        require_canary_write=False,
+        require_scheduled_run=True,
+        scheduled_profile="launch-v37",
+    )
+    with pytest.raises(RuntimeError, match="launch-v37 category mix"):
+        cutover._validate_audit_summary(
+            scheduled_summary(),
+            require_canary_write=False,
+            require_scheduled_run=True,
+            scheduled_profile="launch-v37",
+        )
+    with pytest.raises(RuntimeError, match="physical-legacy category mix"):
+        cutover._validate_audit_summary(
+            launch_scheduled_summary(),
+            require_canary_write=False,
+            require_scheduled_run=True,
+        )
+
+
+def test_unknown_scheduled_profile_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="unknown scheduled audit profile"):
+        cutover._validate_audit_summary(
+            scheduled_summary(),
+            require_canary_write=False,
+            require_scheduled_run=True,
+            scheduled_profile="future-unreviewed",
+        )
 
 
 @pytest.mark.parametrize(
@@ -430,7 +473,7 @@ def test_pinimg_text_in_a_real_merchant_path_is_not_rejected() -> None:
     [
         ("mode", "dry-run", "apply-mode"),
         ("selectedTotal", 99, "100-Pin scan"),
-        ("categoryMix", {"fashion": 100}, "36/28/36"),
+        ("categoryMix", {"fashion": 100}, "physical-legacy category mix"),
         ("runAdmissionCap", 1, "50-row run cap"),
         ("merchantDiscoveryCandidateCap", 101, "merchant discovery request cap"),
         ("atomicWriteBatchCap", 21, "atomic write cap"),
