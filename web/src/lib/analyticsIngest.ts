@@ -29,7 +29,7 @@ export interface AnalyticsEventRow {
   draft_id:   string | null;
 }
 
-function byteLength(value: unknown): number {
+export function byteLength(value: unknown): number {
   try {
     if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(JSON.stringify(value ?? null)).length;
   } catch { /* fall through */ }

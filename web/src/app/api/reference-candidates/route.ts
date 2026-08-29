@@ -17,10 +17,12 @@ import {
   defaultSeed,
   mergeRoundRobin,
   buildServed,
+  boundedServedPayload,
   utcDayStart,
   type PoolMode,
 } from "@/lib/studio/referenceServe";
 import { recordAnalyticsEvents } from "@/lib/server/recordEvent";
+import { MAX_PAYLOAD_BYTES } from "@/lib/analyticsIngest";
 
 // ── GET /api/reference-candidates ───────────────────────────────────────────
 // Returns reference-eligible pins for the Create Pins reference picker.
@@ -308,6 +310,9 @@ export async function POST(request: Request) {
   let poolIds: string[];
   let excludedCount: number;
   let ranked: ScoredReference[];
+  // Only set on the unknown-roundrobin path when at least one of the four category pools
+  // failed to fetch; the survivors still serve so a single flaky query doesn't 500 the drawer.
+  let degradedPools: string[] | undefined;
 
   if (canonical) {
     // ── Known category ───────────────────────────────────────────────────────────
@@ -339,13 +344,14 @@ export async function POST(request: Request) {
     const seedBase = fields.seed ?? defaultSeed(null, now);
     const pools = await Promise.all(P0_CANONICALS.map(async c => {
       const { data, error } = await fetchPool(db, canonicalizeCategory(c).dbCategories, UNKNOWN_POOL_LIMIT);
-      if (error) return { error, excludedCount: 0, poolIds: [] as string[], ranked: [] as ScoredReference[] };
+      if (error) return { canonical: c, error, excludedCount: 0, poolIds: [] as string[], ranked: [] as ScoredReference[] };
       const sampled = stratifiedSample(((data ?? []) as unknown as PostRow[]).map(toCandidateRow),
         { size: UNKNOWN_SAMPLE_SIZE, seed: `${seedBase}:${c}`, now });
       const kept = sampled
         .filter(r => !excluded.has(r.id))
         .map<ReferenceCandidateRow>(r => ({ ...r, category: c }));
       return {
+        canonical: c,
         error: null,
         excludedCount: sampled.length - kept.length,
         poolIds: kept.map(r => r.id),
@@ -354,15 +360,22 @@ export async function POST(request: Request) {
           { keywordClusterCap: KEYWORD_CLUSTER_CAP }),
       };
     }));
-    const failed = pools.find(p => p.error);
-    if (failed?.error) {
-      console.error("[reference-candidates POST] Supabase error:", failed.error.message);
-      return Response.json({ error: failed.error.message }, { status: 500 });
+    const failedPools = pools.filter(p => p.error);
+    for (const p of failedPools) {
+      console.error("[reference-candidates POST] Supabase error:", p.canonical, p.error!.message);
     }
-    excludedCount = pools.reduce((n, p) => n + p.excludedCount, 0);
-    poolIds = pools.flatMap(p => p.poolIds);
+    if (failedPools.length === pools.length) {
+      // Every pool failed: nothing to serve, preserve the previous all-500 behavior.
+      return Response.json({ error: failedPools[0].error!.message }, { status: 500 });
+    }
+    const healthyPools = pools.filter(p => !p.error);
+    excludedCount = healthyPools.reduce((n, p) => n + p.excludedCount, 0);
+    poolIds = healthyPools.flatMap(p => p.poolIds);
     poolMode = "unknown-roundrobin";
-    ranked = mergeRoundRobin(pools.map(p => p.ranked), results);
+    ranked = mergeRoundRobin(healthyPools.map(p => p.ranked), results);
+    if (failedPools.length > 0) {
+      degradedPools = failedPools.map(p => p.canonical);
+    }
   }
 
   const items = ranked.map(toRecommendation);
@@ -383,16 +396,19 @@ export async function POST(request: Request) {
     excludedCount,
     results: ranked,
     recommendationBasis,
+    degradedPools,
   });
 
   // Best-effort telemetry. recordAnalyticsEvents already swallows everything (and drops
   // silently when there is no session), but the response must not be able to die here, so
-  // the call is belt-and-braces wrapped: `served` and the event are independent.
+  // the call is belt-and-braces wrapped: `served` and the event are independent. The
+  // payload is bounded here (not via analyticsIngest's all-or-nothing truncation) so an
+  // oversized `ids` list degrades gracefully instead of losing every field.
   try {
     await recordAnalyticsEvents(request, [{
       event_name: "reference_recs_served",
       draft_id: fields.draftId ?? null,
-      payload: {
+      payload: boundedServedPayload({
         ...served,
         analysisSource: fields.analysisSource,
         analysisStatus: fields.analysisStatus,
@@ -401,7 +417,7 @@ export async function POST(request: Request) {
         hasMeaningfulTitle: hasText,
         seedPresent: Boolean(fields.seed),
         limit: results,
-      },
+      }, MAX_PAYLOAD_BYTES),
     }]);
   } catch (err) {
     console.error("[reference-candidates POST] event sink error:", err instanceof Error ? err.message : err);

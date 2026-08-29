@@ -21,6 +21,7 @@
 import { poolHash } from "@/lib/studio/referencePool";
 import type { P0Canonical } from "@/lib/studio/referenceCategory";
 import type { RecommendationBasis } from "@/lib/studio/referenceScoring";
+import { byteLength } from "@/lib/analyticsIngest";
 
 /** Where the image analysis in the request came from (client-declared, telemetry only). */
 export type AnalysisSource = "draft" | "stateless" | "none";
@@ -60,6 +61,10 @@ export type Served = {
   tier2Count: number;
   ids: string[];
   recommendationBasis: RecommendationBasis;
+  /** Canonical categories whose pool query failed on the unknown-roundrobin path and were
+   *  excluded from `poolSize` / `poolHash` / `excludedCount` and ranking. Only present when
+   *  at least one pool degraded; a fully-healthy request never carries this key. */
+  degradedPools?: string[];
 };
 
 /** Minimum shape `mergeRoundRobin` / `buildServed` need from a ranked result. */
@@ -180,12 +185,13 @@ export function buildServed(args: {
   excludedCount: number;
   results: TieredResult[];
   recommendationBasis: RecommendationBasis;
+  degradedPools?: string[];
 }): Served {
   const poolIds = Array.isArray(args.poolIds) ? args.poolIds : [];
   const results = Array.isArray(args.results) ? args.results : [];
   const tier1Count = results.filter(r => r?.recommendationTier === PRODUCT_EVIDENCE_TIER).length;
 
-  return {
+  const served: Served = {
     requestId: args.requestId,
     categoryInput: args.categoryInput ?? null,
     categoryCanonical: args.categoryCanonical ?? null,
@@ -198,6 +204,10 @@ export function buildServed(args: {
     ids: results.map(r => r.id),
     recommendationBasis: args.recommendationBasis,
   };
+  if (Array.isArray(args.degradedPools) && args.degradedPools.length > 0) {
+    served.degradedPools = args.degradedPools;
+  }
+  return served;
 }
 
 /**
@@ -209,4 +219,53 @@ export function buildServed(args: {
  */
 export function utcDayStart(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+/** The fields kept when even step 3 of `boundedServedPayload` is still over budget. This
+ *  set is deliberately tiny — no unbounded string/array field — so it is always well under
+ *  `maxBytes` for any 4KiB-class budget. */
+const MINIMAL_SERVED_KEYS = [
+  "requestId",
+  "recommendationBasis",
+  "poolMode",
+  "tier1Count",
+  "tier2Count",
+  "poolSize",
+  "excludedCount",
+  "analysisSource",
+  "analysisStatus",
+] as const;
+
+/**
+ * Bound the size of the `reference_recs_served` analytics payload without going through
+ * `analyticsIngest.normalizePayload`'s all-or-nothing truncation, which would otherwise
+ * replace the whole block with `{_truncated,_bytes}` and lose every field. Degrades in
+ * stages, re-measuring with the same `byteLength` `normalizePayload` uses so the two stay
+ * consistent, and returns as soon as a stage fits. Never mutates `payload`.
+ */
+export function boundedServedPayload(
+  payload: Record<string, unknown>,
+  maxBytes: number,
+): Record<string, unknown> {
+  if (byteLength(payload) <= maxBytes) return payload;
+
+  // Stage 1: drop the `ids` array, keep a count instead.
+  const idsCount = Array.isArray(payload.ids) ? payload.ids.length : 0;
+  const withoutIds: Record<string, unknown> = { ...payload, idsCount, _idsElided: true };
+  delete withoutIds.ids;
+  if (byteLength(withoutIds) <= maxBytes) return withoutIds;
+
+  // Stage 2: also drop poolHash and categoryInput (unbounded-ish / low telemetry value
+  // relative to their size once we are already over budget).
+  const withoutBulky: Record<string, unknown> = { ...withoutIds };
+  delete withoutBulky.poolHash;
+  delete withoutBulky.categoryInput;
+  if (byteLength(withoutBulky) <= maxBytes) return withoutBulky;
+
+  // Stage 3: floor — only the small, bounded fields every event needs to be diagnosable.
+  const minimal: Record<string, unknown> = { idsCount, _idsElided: true };
+  for (const key of MINIMAL_SERVED_KEYS) {
+    if (key in payload) minimal[key] = payload[key];
+  }
+  return minimal;
 }

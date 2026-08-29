@@ -24,10 +24,12 @@ import {
   defaultSeed,
   mergeRoundRobin,
   buildServed,
+  boundedServedPayload,
   MAX_EXCLUDE_IDS,
   type TieredResult,
 } from "../src/lib/studio/referenceServe";
 import { poolHash } from "../src/lib/studio/referencePool";
+import { MAX_PAYLOAD_BYTES, byteLength } from "../src/lib/analyticsIngest";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -335,6 +337,131 @@ test("utcDayStart: quantizes to the UTC day so the sampler tiers cannot drift wi
   // The seed and the tiers rotate on the same boundary.
   assert.equal(defaultSeed("fashion", a), defaultSeed("fashion", new Date("2026-08-28T15:30:00.000Z")));
   assert.notEqual(defaultSeed("fashion", a), defaultSeed("fashion", c));
+});
+
+// ── buildServed: degradedPools ────────────────────────────────────────────────────
+
+test("buildServed: degradedPools is absent by default (contract stays exactly SERVED_KEYS)", () => {
+  const served = buildServed({
+    requestId: "req-degraded-absent",
+    categoryInput: null,
+    categoryCanonical: null,
+    poolMode: "unknown-roundrobin",
+    poolIds: ["a"],
+    excludedCount: 0,
+    results: [T2("a")],
+    recommendationBasis: "category_fallback",
+  });
+  assert.equal("degradedPools" in served, false);
+});
+
+test("buildServed: degradedPools is absent when explicitly passed as an empty array", () => {
+  const served = buildServed({
+    requestId: "req-degraded-empty",
+    categoryInput: null,
+    categoryCanonical: null,
+    poolMode: "unknown-roundrobin",
+    poolIds: ["a"],
+    excludedCount: 0,
+    results: [T2("a")],
+    recommendationBasis: "category_fallback",
+    degradedPools: [],
+  });
+  assert.equal("degradedPools" in served, false);
+});
+
+test("buildServed: degradedPools surfaces the failed canonicals when provided", () => {
+  const served = buildServed({
+    requestId: "req-degraded-present",
+    categoryInput: null,
+    categoryCanonical: null,
+    poolMode: "unknown-roundrobin",
+    poolIds: ["a"],
+    excludedCount: 0,
+    results: [T2("a")],
+    recommendationBasis: "category_fallback",
+    degradedPools: ["beauty", "digital-products"],
+  });
+  assert.deepEqual(served.degradedPools, ["beauty", "digital-products"]);
+});
+
+// ── boundedServedPayload ───────────────────────────────────────────────────────────
+
+test("boundedServedPayload: a payload under budget is returned untouched (same reference)", () => {
+  const payload = {
+    requestId: "req-small",
+    categoryInput: "beauty",
+    categoryCanonical: "beauty",
+    poolMode: "single",
+    poolSize: 3,
+    poolHash: poolHash(["a", "b", "c"]),
+    excludedCount: 0,
+    tier1Count: 1,
+    tier2Count: 2,
+    ids: ["a", "b", "c"],
+    recommendationBasis: "product_analysis",
+  };
+  const out = boundedServedPayload(payload, MAX_PAYLOAD_BYTES);
+  assert.equal(out, payload, "untouched payload should be the same object reference");
+});
+
+test("boundedServedPayload: an oversized ids array is elided to a count, core fields survive", () => {
+  const hugeIds = Array.from({ length: 2000 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+  const payload = {
+    requestId: "req-huge-ids",
+    categoryInput: "fashion",
+    categoryCanonical: "fashion",
+    poolMode: "unknown-roundrobin",
+    poolSize: hugeIds.length,
+    poolHash: poolHash(hugeIds),
+    excludedCount: 4,
+    tier1Count: 8,
+    tier2Count: 4,
+    ids: hugeIds,
+    recommendationBasis: "product_analysis",
+  };
+  const before = JSON.stringify(payload);
+  const out = boundedServedPayload(payload, MAX_PAYLOAD_BYTES);
+  assert.equal(JSON.stringify(payload), before, "input payload must not be mutated");
+  assert.equal("ids" in out, false);
+  assert.equal(out.idsCount, hugeIds.length);
+  assert.equal(out._idsElided, true);
+  assert.equal(out.requestId, "req-huge-ids");
+  assert.equal(out.recommendationBasis, "product_analysis");
+  assert.equal(out.poolMode, "unknown-roundrobin");
+  assert.equal(out.tier1Count, 8);
+  assert.equal(out.tier2Count, 4);
+  assert.ok(byteLength(out) < MAX_PAYLOAD_BYTES, `bounded payload must fit under budget, got ${byteLength(out)}`);
+});
+
+test("boundedServedPayload: an extreme payload (huge categoryInput too) still fits the floor", () => {
+  const hugeIds = Array.from({ length: 2000 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+  const payload = {
+    requestId: "req-extreme",
+    categoryInput: "x".repeat(10 * 1024),
+    categoryCanonical: "fashion",
+    poolMode: "unknown-roundrobin",
+    poolSize: hugeIds.length,
+    poolHash: poolHash(hugeIds),
+    excludedCount: 1,
+    tier1Count: 2,
+    tier2Count: 3,
+    ids: hugeIds,
+    recommendationBasis: "category_fallback",
+    analysisSource: "draft",
+    analysisStatus: "ready",
+  };
+  const before = JSON.stringify(payload);
+  const out = boundedServedPayload(payload, MAX_PAYLOAD_BYTES);
+  assert.equal(JSON.stringify(payload), before, "input payload must not be mutated");
+  assert.ok(byteLength(out) < MAX_PAYLOAD_BYTES, `extreme payload must still fit, got ${byteLength(out)}`);
+  assert.equal(out.requestId, "req-extreme");
+  assert.equal(out.recommendationBasis, "category_fallback");
+  assert.equal(out.poolMode, "unknown-roundrobin");
+  assert.equal(out.tier1Count, 2);
+  assert.equal(out.tier2Count, 3);
+  assert.equal(out.idsCount, hugeIds.length);
+  assert.equal(out._idsElided, true);
 });
 
 console.log(`\n${passed} reference-serve tests passed.`);
