@@ -7,6 +7,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 
 export const runtime     = "nodejs";
 export const maxDuration = 15;
@@ -17,7 +18,12 @@ const BUCKET       = "generated";
 const PREFIX       = "studio/";
 const SESSION_GAP  = 600; // seconds - files within this window are treated as one recovered session
 
-export async function GET() {
+export async function GET(req: Request) {
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   if (!SUPABASE_URL || !SVC_KEY) {
     return NextResponse.json({ entries: [] });
   }
@@ -50,7 +56,7 @@ export async function GET() {
         const ts = parseInt(f.name.split("_")[0], 10);
         return {
           ts,
-          url: `/api/storage-image?path=${PREFIX}${f.name}`,
+          url: `/api/storage-image?path=${encodeURIComponent(`${PREFIX}${f.name}`)}`,
         };
       })
       .filter(f => !isNaN(f.ts) && f.ts > 0)

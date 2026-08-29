@@ -13,6 +13,7 @@
  */
 
 import assert from "node:assert";
+import { authorizeStudioStoragePath } from "../src/lib/server/storagePathAuth";
 
 // ── window + localStorage shim (events routed by type) ─────────────────────────
 const _ls = new Map<string, string>();
@@ -90,6 +91,45 @@ async function main() {
     assets.__resetAssetStoreForTests();
     basket.__resetBasketForTests();
   }
+
+  // ── storage path authorization ─────────────────────────────────────────────
+  await test("storage scope accepts legacy files and the current user's upload subtree", () => {
+    assert.deepStrictEqual(
+      authorizeStudioStoragePath("studio/legacy-file.png", "user-1"),
+      { ok: true, path: "studio/legacy-file.png" },
+    );
+    assert.deepStrictEqual(
+      authorizeStudioStoragePath("studio/uploads/user-1/image.png", "user-1"),
+      { ok: true, path: "studio/uploads/user-1/image.png" },
+    );
+  });
+
+  await test("storage scope rejects another user's upload subtree", () => {
+    assert.deepStrictEqual(
+      authorizeStudioStoragePath("studio/uploads/user-2/image.png", "user-1"),
+      { ok: false, status: 403 },
+    );
+  });
+
+  await test("storage scope rejects traversal, encoded, malformed, and non-studio paths", () => {
+    for (const path of [
+      "../studio/image.png",
+      "/studio/image.png",
+      "studio/image.png/",
+      "studio//image.png",
+      "studio\\image.png",
+      "studio/%2e%2e/image.png",
+      "studio/uploads/user-1",
+      "generated/image.png",
+      "studio/uploads/user-1/evil\u0000.png",
+    ]) {
+      assert.deepStrictEqual(
+        authorizeStudioStoragePath(path, "user-1"),
+        { ok: false, status: 400 },
+        path,
+      );
+    }
+  });
 
   // ── data URL → stable URL, with updatedAt bump ─────────────────────────────
   await test("sweep replaces a product data URL with a stable URL and bumps updatedAt", async () => {
