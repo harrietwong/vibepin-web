@@ -545,7 +545,7 @@ test("boundedServedPayload: floor guarantee holds for a battery of extreme input
   }
 });
 
-test("boundedServedPayload: a pathologically tiny maxBytes still returns something at-or-under budget", () => {
+test("boundedServedPayload: holds its <= maxBytes contract down to the 2-byte floor", () => {
   const payload = {
     requestId: "r".repeat(20_000),
     categoryInput: "x".repeat(10 * 1024),
@@ -566,8 +566,10 @@ test("boundedServedPayload: a pathologically tiny maxBytes still returns somethi
       `maxBytes=${maxBytes}: bounded payload must fit, got ${byteLength(out)}`,
     );
   }
-  // Below the smallest possible non-empty JSON object (`{}` is 2 bytes), there is nothing
-  // left to shed — the function returns `{}` rather than violate the budget.
+  // 2 bytes is exactly `{}`, the smallest JSON object there is: the contract holds here.
+  assert.ok(byteLength(boundedServedPayload(payload, 2)) <= 2, "maxBytes=2 must still fit");
+  // Below 2 the inequality is unsatisfiable by any return value, so the documented contract
+  // stops there. The function stays well-defined — it returns `{}` — but makes no promise.
   assert.deepEqual(boundedServedPayload(payload, 1), {});
   assert.deepEqual(boundedServedPayload(payload, 0), {});
 });

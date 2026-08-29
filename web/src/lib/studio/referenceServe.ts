@@ -262,10 +262,15 @@ const MINIMAL_SERVED_KEYS = [
  * stages, re-measuring with the same `byteLength` `normalizePayload` uses so the two stay
  * consistent, and returns as soon as a stage fits. Never mutates `payload`.
  *
- * The return value is guaranteed to be `<= maxBytes` for any input: the last two stages
- * re-clamp (and, if needed, progressively shrink) every string field of the minimal floor,
- * so an oversized field that reaches this function some other way than `parseServeFields`
- * can never make it return an over-budget payload.
+ * For any `maxBytes >= 2` the return value is guaranteed to be `<= maxBytes`, whatever the
+ * input: the last two stages re-clamp (and, if needed, progressively shrink) every string
+ * field of the minimal floor, so an oversized field that reaches this function some other
+ * way than `parseServeFields` can never make it return an over-budget payload.
+ *
+ * Two is the floor of the guarantee because `{}` — the smallest JSON object that exists —
+ * already costs two bytes. Below that no return value can satisfy the inequality, so the
+ * function keeps the shape and drops the promise rather than the reverse. The only caller
+ * passes MAX_PAYLOAD_BYTES (4096), so this bound is a documentation matter, not a live one.
  */
 export function boundedServedPayload(
   payload: Record<string, unknown>,
@@ -319,7 +324,7 @@ export function boundedServedPayload(
   if (byteLength(floor) <= maxBytes) return floor;
   const smaller: Record<string, unknown> = { _idsElided: true, _floorTruncated: true };
   if (byteLength(smaller) <= maxBytes) return smaller;
-  // `maxBytes` is smaller than any non-empty JSON object can be — there is nothing left to
-  // diagnose with, only the guarantee to keep.
+  // Below 2 bytes even `{}` does not fit; see the contract note above. Returning the empty
+  // object keeps the return TYPE honest for a budget no caller actually uses.
   return {};
 }
