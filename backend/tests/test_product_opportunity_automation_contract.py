@@ -23,6 +23,9 @@ COMPLETION_AUDIT = (
 COMPLETION_MATRIX = (
     ROOT / "docs" / "product_opportunities_v37_completion_matrix_20260829.md"
 ).read_text(encoding="utf-8")
+INTEGRATION_READINESS = (
+    ROOT / "docs" / "product_opportunities_v37_integration_readiness_20260829.md"
+).read_text(encoding="utf-8")
 CURRENT_MANIFEST_PATH = (
     ROOT / "docs" / "product_opportunities_v37_release_manifest_d2c13dd.json"
 )
@@ -192,6 +195,25 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert "INTEGRATED DEPLOY CANDIDATE: NOT BUILT" in COMPLETION_MATRIX
     assert "Integrated deploy candidate BLOCK" in COMPLETION_MATRIX
     assert "FULL PRD P0 OBJECTIVE: NOT COMPLETE" in COMPLETION_MATRIX
+    for exact_sha in (
+        functional,
+        "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
+        "a31dfb136623bbc376771cd9a7c98f11547c87f4",
+        "27c70f90ec69bed64511efb98eb6827b5a427b5f",
+        "68eebbd242889baf3205f2bc3c14396f560a0620",
+        "74be67da08c1861b0b735101bf32d5964ae198cf",
+    ):
+        assert exact_sha in INTEGRATION_READINESS
+    assert "HISTORICAL INTEGRATED BRANCH: REJECT AS STALE" in INTEGRATION_READINESS
+    assert "CURRENT INTEGRATED DEPLOY CANDIDATE: NOT BUILT" in INTEGRATION_READINESS
+    assert "web/src/app/api/generate/route.ts" in INTEGRATION_READINESS
+    assert "backend/shop_the_look_expand.py" in INTEGRATION_READINESS
+    assert "web/src/lib/server/shopify/connectPrep.ts" in INTEGRATION_READINESS
+    assert "web/scripts/test-generation-moderation-gate.ts" in INTEGRATION_READINESS
+    assert "VIBEPIN_TIMEOUT_SECONDS=5400" in INTEGRATION_READINESS
+    assert "usage/meterGeneration" in INTEGRATION_READINESS
+    assert "verify:product-truth" in INTEGRATION_READINESS
+    assert "never hand-edit the lockfile" in INTEGRATION_READINESS.lower()
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["candidateCommit"] == functional
