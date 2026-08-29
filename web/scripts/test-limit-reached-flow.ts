@@ -160,6 +160,35 @@ async function main() {
     assert.equal(generatingCount(), 0);
   });
 
+  await test("confirm on a version-mode run keeps the captured parent", async () => {
+    reset();
+    // Regression guard for a real bug: the retry runs AFTER the drawer closed, so if
+    // it re-derived `parent` from drawer state it would (a) hit the !aiDrawer guard and
+    // do nothing, or (b) lose the parent and orphan the regenerated Pins. StudioBoard
+    // captures the refused run's parent on the prompt; this proves the captured value
+    // is what the retry actually generates against.
+    const parent = store.createBoardDraft({
+      imageUrl: "https://cdn/parent.jpg",
+      source: "upload",
+      idempotencyKey: "parent-1",
+    });
+    const ui = makeUi();
+    const opts = { ...baseOpts, count: 4 };
+    await runAiGeneration({ parent, opts }, ui.deps(opts, () => true, 2) as never);
+
+    const staged = ui.prompt;
+    assert.ok(staged?.retryOpts, "R>0 must offer the adjustment");
+    ui.reset();
+    // The captured context is replayed verbatim; only `count` is overridden.
+    const retryOpts = { ...staged.retryOpts, count: staged.remaining };
+    await runAiGeneration({ parent, opts: retryOpts }, ui.deps(retryOpts, n => n > 2, 2) as never);
+
+    assert.deepEqual(ui.requestedCounts, [2]);
+    const generated = store.getAllDrafts().filter(d => d.parentDraftId === parent.id);
+    assert.equal(generated.length, 2, "the retry must generate against the captured parent");
+    assert.ok(generated.every(d => d.generationStatus === "complete" || !!d.imageUrl));
+  });
+
   // ── cancel: no request, placeholders cleaned ─────────────────────────────────
   await test("cancel → no further request and no leftover placeholders", async () => {
     reset();

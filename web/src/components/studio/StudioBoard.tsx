@@ -299,7 +299,14 @@ export function StudioBoard() {
    * only has to override `count`. Null when no limit dialog is open.
    */
   const [limitPrompt, setLimitPrompt] = useState<
-    { limit: LimitReached; requested: number; remaining: number; retryOpts: AiVersionOptions | null } | null
+    {
+      limit: LimitReached;
+      requested: number;
+      remaining: number;
+      retryOpts: AiVersionOptions | null;
+      /** The refused run's parent/target, so the retry does not need the closed drawer. */
+      retryContext: { parent: PinDraft | null; targetMediaId?: string };
+    } | null
   >(null);
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [productPickerTargetId, setProductPickerTargetId] = useState<string | null>(null);
@@ -744,10 +751,15 @@ export function StudioBoard() {
    *   us what remains) is deliberately treated as "cannot offer an adjustment": we
    *   will not guess a number and re-request against it.
    */
-  const handleGenerationLimit = useCallback((limit: LimitReached, requested: number, retryOpts: AiVersionOptions) => {
+  const handleGenerationLimit = useCallback((
+    limit: LimitReached,
+    requested: number,
+    retryOpts: AiVersionOptions,
+    retryContext: { parent: PinDraft | null; targetMediaId?: string },
+  ) => {
     setAiGenerating(false);
     const remaining = Math.min(offerableRemaining(limit), Math.max(0, requested - 1));
-    setLimitPrompt({ limit, requested, remaining, retryOpts: remaining > 0 ? retryOpts : null });
+    setLimitPrompt({ limit, requested, remaining, retryOpts: remaining > 0 ? retryOpts : null, retryContext });
   }, []);
 
   /** Dismiss the quota dialog. Placeholders were already removed by the run itself. */
@@ -764,16 +776,32 @@ export function StudioBoard() {
     window.location.href = SETTINGS_BILLING_PATH;
   }, []);
 
-  const handleAiGenerate = useCallback(async (opts: AiVersionOptions) => {
-    if (!aiDrawer) return;
-    const parent = aiDrawer.mode === "version" ? aiDrawer.draft : null;
+  const handleAiGenerate = useCallback(async (
+    opts: AiVersionOptions,
+    /**
+     * The "Generate R instead" retry runs AFTER the drawer has closed (every path
+     * nulls aiDrawer before the server can refuse), so it cannot re-derive its parent
+     * from drawer state — without this the retry would hit the `!aiDrawer` guard and
+     * silently do nothing, and a version-mode retry would lose its parent draft and
+     * target media. The refused run's context is captured on the prompt and passed
+     * back in here verbatim.
+     */
+    retryContext?: { parent: PinDraft | null; targetMediaId?: string },
+  ) => {
+    if (!aiDrawer && !retryContext) return;
+    const parent = retryContext
+      ? retryContext.parent
+      : aiDrawer!.mode === "version" ? aiDrawer!.draft : null;
     // Which media item a result replaces, and on which draft. Only meaningful when the
     // generation lands back on the SAME Content the merchant clicked Regenerate on:
     // version mode also creates brand-new placeholder cards, and an id from the parent
     // would name nothing there (completeGeneratedDraft falls back to media[0], which is
     // correct for a new card and wrong to force). Threaded as a pair for that reason.
-    const regenerateTarget = parent && aiDrawer.mode === "version" && aiDrawer.targetMediaId
-      ? { draftId: parent.id, mediaId: aiDrawer.targetMediaId }
+    const retryTargetMediaId = retryContext
+      ? retryContext.targetMediaId
+      : aiDrawer!.mode === "version" ? aiDrawer!.targetMediaId : undefined;
+    const regenerateTarget = parent && retryTargetMediaId
+      ? { draftId: parent.id, mediaId: retryTargetMediaId }
       : null;
     const replaceMetaFor = (draftId: string): { replaceMediaId?: string } =>
       regenerateTarget && regenerateTarget.draftId === draftId
@@ -804,7 +832,7 @@ export function StudioBoard() {
     if (workerProbe && typeof workerProbe === "object" && "limit" in workerProbe) {
       // No placeholder cards exist yet on this path, so there is nothing to clean up.
       setAiDrawer(null);
-      handleGenerationLimit(workerProbe.limit, Math.max(1, opts.count || 1), opts);
+      handleGenerationLimit(workerProbe.limit, Math.max(1, opts.count || 1), opts, { parent, targetMediaId: retryTargetMediaId });
       return;
     }
     if (workerProbe === "error") {
@@ -857,7 +885,7 @@ export function StudioBoard() {
           // removed every placeholder it did not fill, so nothing is left dangling.
           if (groupTotal > 1) toast.dismiss(batchToastId);
           limitStopped = true;
-          handleGenerationLimit(limit, retryCount, opts);
+          handleGenerationLimit(limit, retryCount, opts, { parent, targetMediaId: retryTargetMediaId });
         },
         onSettled: ({ okCount, failCount }) => {
           if (groupTotal > 1) toast.dismiss(batchToastId);
@@ -940,7 +968,7 @@ export function StudioBoard() {
       // hit the same 402) and the user gets the quota dialog instead of an error toast.
       if (isLimitReachedError(err)) {
         placeholders.forEach(ph => pinDraftStore.deleteDraft(ph.id));
-        handleGenerationLimit(err.limit, Math.max(1, opts.count || 1), opts);
+        handleGenerationLimit(err.limit, Math.max(1, opts.count || 1), opts, { parent, targetMediaId: retryTargetMediaId });
         return;
       }
       // Worker path errored (e.g. 503 generation_unavailable) — fail these placeholders
@@ -1060,7 +1088,7 @@ export function StudioBoard() {
         // removed every placeholder it did not fill, so nothing is left dangling.
         if (groupTotal > 1) toast.dismiss(batchToastId);
         limitStopped = true;
-        handleGenerationLimit(limit, retryCount, opts);
+        handleGenerationLimit(limit, retryCount, opts, { parent, targetMediaId: retryTargetMediaId });
       },
       onSettled: ({ okCount, failCount }) => {
         if (groupTotal > 1) toast.dismiss(batchToastId);
@@ -1091,7 +1119,7 @@ export function StudioBoard() {
     const prompt = limitPrompt;
     if (!prompt?.retryOpts || prompt.remaining <= 0) return;
     setLimitPrompt(null);
-    await handleAiGenerate({ ...prompt.retryOpts, count: prompt.remaining });
+    await handleAiGenerate({ ...prompt.retryOpts, count: prompt.remaining }, prompt.retryContext);
   }, [handleAiGenerate, limitPrompt]);
 
 
