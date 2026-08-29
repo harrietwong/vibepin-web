@@ -193,8 +193,43 @@ export async function POST(req: Request) {
     logEvent("usage_meter_skipped", { reason: "no_draft_identity", route: "publish_social" });
   }
 
-  const summaries = await summarizeConnections(uid);
-  const byProvider = new Map(summaries.map(s => [s.provider, s]));
+  const outcomes: DestOutcome[] = [];
+  // Parallel to `outcomes`, but only for targets we actually ATTEMPTED — the refund
+  // classification (below) must not see skips, which are not delivery failures.
+  const deliveries: DeliveryOutcome[] = [];
+
+  /**
+   * ── PRE-DISPATCH THROWS MUST RELEASE A FRESH CONSUME (Codex round 8, High 2) ──
+   * The consume above is taken BEFORE anything is looked up or dispatched, so every
+   * step between it and the first provider call is charged-but-unsent territory: a
+   * throw from `summarizeConnections`, `createPublishJob` or the in-loop
+   * `findConnection` (Supabase unavailable, v32 tables missing, a bug) unwound
+   * straight out of this handler and left the unit charged although NO platform was
+   * ever contacted. That is `not_sent` by the §A.4 table — the same state the loop
+   * already refunds when a destination has no connected account.
+   *
+   * `dispatchStarted` is what keeps this honest, and it is why a plain try/catch
+   * around the two lookups is not enough: `findConnection` runs INSIDE the loop, so
+   * a throw there is pre-dispatch on the first target but post-dispatch on a later
+   * one. Once ANY `publishPost` has been entered we can no longer prove the post was
+   * not created, so a throw from that point on must keep its charge
+   * (`delivery_unknown`) exactly as the existing inner catch decides.
+   *
+   * The try deliberately CLOSES before the settlement block below: with nothing
+   * attempted, `aggregateDelivery([])` is `delivery_unknown` (charged by design), and
+   * letting a settlement-time throw re-enter this catch with `dispatchStarted` still
+   * false would refund it — the very free-publish bypass the settlement comment warns
+   * about.
+   */
+  let dispatchStarted = false;
+  let summaries: Awaited<ReturnType<typeof summarizeConnections>>;
+  let byProvider: Map<SocialProvider, (typeof summaries)[number]>;
+  let db: ReturnType<typeof createServerClient>;
+  let jobId: Awaited<ReturnType<typeof createPublishJob>>;
+
+  try {
+  summaries = await summarizeConnections(uid);
+  byProvider = new Map(summaries.map(s => [s.provider, s]));
 
   // Create the attempt BEFORE dispatching anything. Previously the job row was
   // written only after every provider call returned, so a crash mid-publish left
@@ -202,13 +237,8 @@ export async function POST(req: Request) {
   // refreshed during publishing had no in-flight state to recover — it simply
   // saw nothing. The row starts as `publishing` and is finalized once the
   // outcomes are known.
-  const db = createServerClient();
-  const jobId = await createPublishJob(db, uid, postId, productId);
-
-  const outcomes: DestOutcome[] = [];
-  // Parallel to `outcomes`, but only for targets we actually ATTEMPTED — the refund
-  // classification (below) must not see skips, which are not delivery failures.
-  const deliveries: DeliveryOutcome[] = [];
+  db = createServerClient();
+  jobId = await createPublishJob(db, uid, postId, productId);
   for (const raw of requested) {
     const provider = (raw as { provider?: unknown }).provider;
     if (!isSocialProvider(provider)) continue;
@@ -261,6 +291,9 @@ export async function POST(req: Request) {
     }
 
     try {
+      // From here on we cannot prove the platform was NOT reached: any throw past
+      // this point keeps its charge (`delivery_unknown`), never a pre-dispatch refund.
+      dispatchStarted = true;
       const result = await getSocialProviderById(connection.authProvider).publishPost({
         provider,
         connection,
@@ -309,6 +342,23 @@ export async function POST(req: Request) {
         error: (err as Error).message || "Publishing failed.",
       });
     }
+  }
+  } catch (err) {
+    // Charged, but nothing was ever sent → give the unit back and let the original
+    // error propagate untouched (the caller's response must not change shape because
+    // a refund happened). `releaseScheduledPost` never throws — it catches its own
+    // RPC/transport errors and returns `{kind:"error"}` — so this is fail-open by
+    // construction, exactly like the settlement release below.
+    if (meterKey && postId && meterFresh && !dispatchStarted) {
+      await releaseScheduledPost({
+        userId: uid,
+        key: meterKey,
+        reason: "not_sent",
+        referenceId: postId,
+        metadata: { source: "social_immediate", route: "publish_social", stage: "pre_dispatch" },
+      });
+    }
+    throw err;
   }
 
   /**
