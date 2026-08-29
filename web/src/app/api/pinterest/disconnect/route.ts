@@ -235,6 +235,13 @@ export async function DELETE(req: Request) {
       // is a separate round trip, so a Pin scheduled in another tab between the two
       // used to survive the delete and go on naming a connection that no longer
       // exists. This RPC counts and deletes in ONE statement and is the authority.
+      // ACCEPTED RESIDUAL (owner decision, 2026-08-29). The RPC guarantees that its
+      // count and its delete see one snapshot; it does NOT serialise concurrent
+      // schedule writes (the schedule path is validate-then-upsert in a separate
+      // transaction). A schedule committed in the millisecond after this statement's
+      // snapshot therefore survives, naming a connection that is gone. Bounded and
+      // accepted: it fails at due time with `target_disconnected` — a visible
+      // failure on the schedule, never a duplicate post.
       const removal = await removeConnectionIfUnscheduled(createServerClient(), uid, connectionId);
       if (removal.outcome === "unavailable") {
         // Fail CLOSED — never fall back to the plain delete, which IS the race.

@@ -6,6 +6,8 @@
  *                                    clients can converge local deletes)
  * PUT    { drafts: [{draftId, updatedAt, payload}] } (≤50)
  *                                 → { applied, skippedStale }  (server LWW: incoming.updatedAt < row → skip)
+ *                                 → 409 {code:"stale", stale:[{draftId, current}], current} when a row
+ *                                   changed between the LWW read and the write (see the conditional write)
  * DELETE { draftIds: string[], deletedAt } (≤50)
  *                                 → { applied }                (tombstone; stale deletes skipped)
  *
@@ -247,12 +249,22 @@ export async function PUT(req: Request) {
   const existingMs = new Map<string, number>(
     existing.map(r => [r.draft_id, parseMs(r.updated_at) ?? 0]),
   );
+  // The RAW updated_at each draft was observed with — the compare-and-set value of
+  // the conditional write below. Stored verbatim (never re-parsed or re-formatted):
+  // the write predicate is a string equality against the same column, so anything
+  // that changes the text turns the CAS into a permanent mismatch. A row present
+  // with a NULL updated_at maps to null and is matched with `.is` instead of `.eq`.
+  const observedUpdatedAt = new Map<string, string | null>(
+    existing.map(r => [r.draft_id, (r.updated_at ?? null) as string | null]),
+  );
   // draftId → whether a scheduled_at was ALREADY set on the stored row.
   const existingScheduled = new Map<string, boolean>(
     existing.map(r => [r.draft_id, !!(r.scheduled_at)]),
   );
 
-  const rows: Record<string, unknown>[] = [];
+  // Each entry pairs the columns to write with the draft they belong to, so the
+  // conditional write below can aim its predicate at exactly that row.
+  const rows: Array<{ draftId: string; row: Record<string, unknown> }> = [];
   let skippedStale = 0;
   // Drafts transitioning from NOT-scheduled → scheduled in THIS request (each is
   // one scheduled_post metered event). Only tracked when the scheduled_at column
@@ -292,7 +304,7 @@ export async function PUT(req: Request) {
         if (connectionIds.length) scheduleTargets.push({ draftId: d.draftId, connectionIds });
       }
     }
-    rows.push({
+    rows.push({ draftId: d.draftId, row: {
       vibepin_user_id: userId,
       draft_id:        d.draftId,
       payload:         p,
@@ -308,7 +320,7 @@ export async function PUT(req: Request) {
       // upsert (PostgREST only updates the keys present in each row object), omitting
       // publish_claimed_at leaves any existing lock on the row untouched.
       ...(_scheduleColumnsMissing ? {} : buildScheduleColumns(p)),
-    });
+    } });
   }
 
   // ── Schedulable-destination gate ──────────────────────────────────────────
@@ -394,45 +406,106 @@ export async function PUT(req: Request) {
     }
   }
 
-  if (rows.length > 0) {
-    let { error: upsertError } = await db
-      .from(TABLE)
-      .upsert(rows, { onConflict: "vibepin_user_id,draft_id" });
+  // ── Conditional write (compare-and-set on updated_at) ─────────────────────
+  // This used to be one unconditional upsert, and that is what let a published
+  // schedule disappear. The sequence: a PUT reads the row, passes the LWW check
+  // above, and then — while it is still validating destinations and quota — the
+  // cron CAS-writes destinationResults and clears the schedule (or Remove
+  // CAS-cancels it). The already-admitted PUT then lands and overwrites the row
+  // with its own, older payload: the published results vanish and scheduled_at
+  // comes back, so the pin is published a second time (or survives its own
+  // removal). CAS on the cron and cancel writers cannot prevent this — they win
+  // their own race and are then simply overwritten by a blind later write.
+  //
+  // So the LWW decision is no longer a read followed by a hope. Every write
+  // carries the updated_at it decided against:
+  //   row present at read → UPDATE … WHERE updated_at = <observed>  (`.is` for null)
+  //   row absent at read  → INSERT, and a 23505 unique violation means someone
+  //                         created it meanwhile
+  // Either shape matching nothing means the row moved under us: that draft is not
+  // written at all and comes back as 409 stale with the CURRENT row, so the client
+  // can merge against what is actually stored and retry. Scheduled and unscheduled
+  // drafts alike — an unscheduled draft carries destinationResults too.
+  //
+  // Per draft, not per batch: PostgREST cannot attach a different predicate to each
+  // row of a bulk upsert. The writes are independent (there is no transaction to
+  // roll back), so a conflict on one draft never discards a sibling's write.
+  const staleConflicts: Array<{ draftId: string; current: CurrentRow | null }> = [];
+  const written: string[] = [];
+
+  for (const { draftId, row } of rows) {
+    const observed = observedUpdatedAt.get(draftId) ?? null;
+    const exists = observedUpdatedAt.has(draftId);
+
+    // One attempt = the conditional write, re-runnable for the missing-column retry.
+    // Returns the error (if any) and whether the predicate matched a row.
+    const attempt = async (): Promise<{ error: { code?: string; message?: string } | null; matched: boolean }> => {
+      if (exists) {
+        let q = db.from(TABLE).update(row).eq("vibepin_user_id", userId).eq("draft_id", draftId);
+        // `updated_at = NULL` is never true in SQL, so a null observation has to be
+        // expressed as IS NULL or the write could never match its own row.
+        q = observed === null ? q.is("updated_at", null) : q.eq("updated_at", observed);
+        const { data, error } = await q.select("draft_id");
+        return { error: error ?? null, matched: (data?.length ?? 0) > 0 };
+      }
+      const { error } = await db.from(TABLE).insert(row);
+      return { error: error ?? null, matched: !error };
+    };
+
+    let { error: writeError, matched } = await attempt();
 
     // v41/v42 not applied yet: strip the promoted columns and retry once so the base
     // draft sync keeps working unchanged until the migration lands. A single missing
     // column raises PGRST204 for whichever column PostgREST checks first, so latch BOTH
     // uncertain sets on any missing-column error and strip both before the retry — the
     // one that actually exists is simply re-derived and re-added on the next request
-    // after a restart (the latches self-heal on redeploy).
-    if (upsertError && (!_promotedColumnsMissing || !_scheduleColumnsMissing) && isMissingColumnError(upsertError)) {
+    // after a restart (the latches self-heal on redeploy). Unchanged by the CAS: the
+    // retry re-runs the SAME predicate, so it cannot smuggle a blind write back in.
+    if (writeError && (!_promotedColumnsMissing || !_scheduleColumnsMissing) && isMissingColumnError(writeError)) {
       _promotedColumnsMissing = true;
       _scheduleColumnsMissing = true;
-      for (const row of rows) {
-        for (const key of PROMOTED_COLUMN_KEYS) delete (row as Record<string, unknown>)[key];
-        for (const key of SCHEDULE_COLUMN_KEYS) delete (row as Record<string, unknown>)[key];
+      for (const r of rows) {
+        for (const key of PROMOTED_COLUMN_KEYS) delete r.row[key];
+        for (const key of SCHEDULE_COLUMN_KEYS) delete r.row[key];
       }
-      ({ error: upsertError } = await db
-        .from(TABLE)
-        .upsert(rows, { onConflict: "vibepin_user_id,draft_id" }));
+      ({ error: writeError, matched } = await attempt());
     }
 
-    if (upsertError) {
-      if (isMissingTableError(upsertError)) return deferred();
-      console.error("[pin-drafts PUT] upsert error:", upsertError.message);
+    if (writeError) {
+      if (isMissingTableError(writeError)) return deferred();
+      // The row was created between our read and our insert. That is the insert
+      // half of the same race, and it gets the same answer as a lost CAS.
+      if (isUniqueViolation(writeError)) {
+        staleConflicts.push({ draftId, current: await readCurrentRow(db, userId, draftId, scheduledAtAvailable) });
+        continue;
+      }
+      console.error("[pin-drafts PUT] write error:", writeError.message);
       return jsonError(503, "database_unavailable", "Draft storage is unavailable");
     }
+
+    if (!matched) {
+      // Predicate matched nothing: the row's updated_at is no longer what we read.
+      staleConflicts.push({ draftId, current: await readCurrentRow(db, userId, draftId, scheduledAtAvailable) });
+      continue;
+    }
+    written.push(draftId);
+  }
+
+  if (written.length > 0) {
     await enforceDraftCap(db, userId);
 
     // Meter each newly-scheduled draft AFTER a successful persist. Idempotency key
     // = scheduled_post:<userId>:<draftId> (userId-scoped so a client-generated
     // draftId cannot collide across users) — one metered schedule per draft ever
     // (re-scheduling / retrying the same draft never double-counts). Skip if the
-    // upsert fallback dropped the scheduled_at column (schedule not persisted).
-    // Awaited so the inserts complete before the serverless response returns.
-    if (scheduledAtAvailable && !_scheduleColumnsMissing && newlyScheduledDraftIds.length > 0) {
+    // write fallback dropped the scheduled_at column (schedule not persisted).
+    // Restricted to drafts that were ACTUALLY written: a draft whose CAS lost was
+    // not scheduled by this request, and charging it would bill a schedule that
+    // does not exist. Awaited so the inserts complete before the response returns.
+    const meterable = newlyScheduledDraftIds.filter(id => written.includes(id));
+    if (scheduledAtAvailable && !_scheduleColumnsMissing && meterable.length > 0) {
       await Promise.all(
-        newlyScheduledDraftIds.map(draftId =>
+        meterable.map(draftId =>
           recordUsage({
             ownerId: userId,
             usageType: "scheduled_post",
@@ -447,7 +520,72 @@ export async function PUT(req: Request) {
     }
   }
 
-  return Response.json({ applied: rows.length, skippedStale });
+  // 409 when anything lost its CAS. The non-conflicted drafts of the same batch
+  // were already applied and are reported in `applied` — they are independent
+  // writes, and re-sending them would be the blind overwrite we just removed.
+  // `current` mirrors stale[0] so a single-draft client can read the specced
+  // shape without unpacking the array.
+  if (staleConflicts.length > 0) {
+    return Response.json(
+      {
+        error: "Draft changed on the server since it was read — merge and retry",
+        code: "stale",
+        stale: staleConflicts,
+        current: staleConflicts[0].current,
+        applied: written.length,
+        skippedStale,
+      },
+      { status: 409 },
+    );
+  }
+
+  return Response.json({ applied: written.length, skippedStale });
+}
+
+/** The row shape returned to a client whose write lost the CAS. */
+type CurrentRow = {
+  payload: Record<string, unknown> | null;
+  updated_at: string | null;
+  scheduled_at: string | null;
+};
+
+/** 23505 = unique_violation: our INSERT hit the (vibepin_user_id, draft_id) key. */
+function isUniqueViolation(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  return err.code === "23505" || (err.message ?? "").includes("duplicate key value");
+}
+
+/**
+ * Re-read the row a losing write was aiming at, so the 409 can hand the client the
+ * state it must merge against instead of just saying "no".
+ *
+ * `scheduled_at` is only selected when the v42 column is known to exist — asking for
+ * it on a database without it would turn the conflict response itself into a 500.
+ * A null result (the row vanished entirely between the failed write and this read)
+ * is still a conflict; the client gives up for this cycle rather than guessing.
+ */
+async function readCurrentRow(
+  db: ReturnType<typeof createServerClient>,
+  userId: string,
+  draftId: string,
+  scheduledAtAvailable: boolean,
+): Promise<CurrentRow | null> {
+  const cols = scheduledAtAvailable ? "payload, updated_at, scheduled_at" : "payload, updated_at";
+  const { data, error } = (await db
+    .from(TABLE)
+    .select(cols)
+    .eq("vibepin_user_id", userId)
+    .eq("draft_id", draftId)
+    .maybeSingle()) as unknown as {
+      data: { payload?: unknown; updated_at?: unknown; scheduled_at?: unknown } | null;
+      error: { message?: string } | null;
+    };
+  if (error || !data) return null;
+  return {
+    payload:      (data.payload ?? null) as Record<string, unknown> | null,
+    updated_at:   (data.updated_at ?? null) as string | null,
+    scheduled_at: (data.scheduled_at ?? null) as string | null,
+  };
 }
 
 /** Mirror pinDraftStore's MAX_DRAFTS: beyond 500 live drafts, tombstone the oldest (by payload createdAt). */
