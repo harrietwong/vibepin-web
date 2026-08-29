@@ -55,6 +55,7 @@ PREFLIGHT = BACKEND / "scripts" / "preflight_product_supply.py"
 RUN_WORKER = BACKEND / "run_worker.py"
 
 APPLY_CONFIRM_TOKEN = "APPLY_BOOTSTRAP_PRODUCTS"
+EXPECTED_PROJECT_REF_ENV = "VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF"
 
 # Scheduled runs must select fresh, not-yet-scraped Source Pins. A frozen report is
 # accepted only when an operator explicitly passes --source-report for a reproducible
@@ -294,6 +295,11 @@ def main() -> int:
     if apply and args.confirm != APPLY_CONFIRM_TOKEN:
         _log(f"Refusing apply: pass --confirm {APPLY_CONFIRM_TOKEN} to confirm a real write.")
         return 2
+    if apply:
+        sys.path.insert(0, str(BACKEND))
+        from product_opportunity_admission import require_expected_project_ref
+
+        require_expected_project_ref(os.environ.get(EXPECTED_PROJECT_REF_ENV))
     if args.waive_cooldown:
         if args.confirm != APPLY_CONFIRM_TOKEN:
             _log(f"Refusing --waive-cooldown without --confirm {APPLY_CONFIRM_TOKEN}.")

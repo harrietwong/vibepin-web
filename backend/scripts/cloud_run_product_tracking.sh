@@ -15,6 +15,16 @@ LIMIT="${VIBEPIN_PRODUCT_TRACKING_LIMIT:-2499}"
 cloud_flock
 cloud_log "mode=$MODE backend=$BACKEND_DIR lockdir=$LOCK_DIR timeout=${TIMEOUT_SECONDS}s limit=$LIMIT"
 if [[ "$MODE" == "track" ]]; then
+  if [[ -z "${VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF:-}" ]]; then
+    cloud_log "REFUSE track: VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF is missing."
+    exit 5
+  fi
+  if ! "$PY" -c 'import os; from product_opportunity_admission import require_expected_project_ref; require_expected_project_ref(os.environ.get("VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF"))'; then
+    cloud_log "REFUSE track: SUPABASE_URL does not match VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF."
+    exit 5
+  fi
+fi
+if [[ "$MODE" == "track" ]]; then
   # A real Pinterest run needs measured cooldown evidence, not merely the
   # read-only SAFE_FOR_DRY_RUN state.
   cloud_preflight_gate SAFE_FOR_APPLY

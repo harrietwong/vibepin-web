@@ -805,7 +805,10 @@ Exit condition: canary DB readback and UI review pass with zero fabricated field
 6. Run one manual real tracking canary with all three gates:
    `VIBEPIN_TRACKING_RUN_MODE=track`,
    `VIBEPIN_PRODUCT_TRACKING_MODE=production`, and
-   `VIBEPIN_PRODUCT_TRACKING_CONFIRM=TRACK_ACTIVE_PRODUCTS`.
+   `VIBEPIN_PRODUCT_TRACKING_CONFIRM=TRACK_ACTIVE_PRODUCTS`, plus the independent
+   target binding `VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF=<exact-project-ref>`.
+   The wrapper and Python entry point must reject a missing or mismatched binding
+   before inventory reads or Pinterest requests.
 7. Reconcile provider attempts, unique Pins, deduped fan-out rows, valid/not-found
    snapshots, provider failures, retries, counter regressions, metric writes,
    duration, lock release, and orphan count. Provider failures must not increase
@@ -919,6 +922,10 @@ search, pagination, direct ID, Saved Products, or client-side requests.
    the Product Tracking timer. A successful receipt from the older Physical-only
    36/28/36 production mix does not qualify the Digital launch candidate and must
    be rejected by automatic v3.7 Admission.
+   Before any apply preflight, configure
+   `VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF=<exact-project-ref>`; both the
+   wrapper and the direct Python write core fail closed when it is absent or does
+   not match `SUPABASE_URL`.
    Every atomic batch receipt must also close independently. A receipt with
    inserted IDs must prove the same exact expected/actual IDs, matching readback
    count, all red lines, a concrete created-at window, and an exact rollback

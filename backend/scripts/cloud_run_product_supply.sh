@@ -72,6 +72,17 @@ fi
 
 log "mode=$MODE backend=$BACKEND_DIR lockdir=$LOCK_DIR timeout=${TIMEOUT_SECONDS}s writeLimit=$WRITE_LIMIT"
 
+if [[ "$MODE" == "apply" ]]; then
+  if [[ -z "${VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF:-}" ]]; then
+    log "REFUSE apply: VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF is missing."
+    exit 5
+  fi
+  if ! "$PY" -c 'import os; from product_opportunity_admission import require_expected_project_ref; require_expected_project_ref(os.environ.get("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF"))'; then
+    log "REFUSE apply: SUPABASE_URL does not match VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF."
+    exit 5
+  fi
+fi
+
 # ── Read-only preflight gate (every mode) ─────────────────────────────────────
 REC="$("$PY" scripts/preflight_product_supply.py 2>>"$RUN_LOG" \
         | "$PY" -c 'import sys,json; print(json.load(sys.stdin).get("recommendation","FAIL"))' \

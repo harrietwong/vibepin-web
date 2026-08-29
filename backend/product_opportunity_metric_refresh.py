@@ -20,10 +20,12 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "db"))
 
 from product_opportunity_metrics import MetricPolicy, Observation, calculate_product_metrics
+from product_opportunity_admission import require_expected_project_ref
 
 
 MAX_PRODUCTS_PER_RUN = 5_000
 APPLY_CONFIRM = "REFRESH_PRODUCT_METRICS"
+EXPECTED_PROJECT_REF_ENV = "VIBEPIN_PRODUCT_METRICS_EXPECTED_PROJECT_REF"
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -157,6 +159,11 @@ def build_metric_rows(
             policy=policy,
         )
         data = asdict(metric)
+        for field, value in tuple(data.items()):
+            if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    raise ValueError(f"metric timestamp {field} must be timezone-aware")
+                data[field] = value.isoformat()
         if calibration is None:
             data["trend_status"] = "calibration_pending"
             data["momentum_percent"] = None
@@ -198,6 +205,15 @@ def main() -> int:
     args = parser.parse_args()
     try:
         limit = min(max(1, args.limit), MAX_PRODUCTS_PER_RUN)
+        project_ref = None
+        if args.apply:
+            if os.environ.get("VIBEPIN_PRODUCT_METRICS_MODE") != "production":
+                raise RuntimeError("apply refused: VIBEPIN_PRODUCT_METRICS_MODE must equal production")
+            if os.environ.get("VIBEPIN_PRODUCT_METRICS_CONFIRM") != APPLY_CONFIRM:
+                raise RuntimeError(f"apply refused: VIBEPIN_PRODUCT_METRICS_CONFIRM must equal {APPLY_CONFIRM}")
+            project_ref = require_expected_project_ref(
+                os.environ.get(EXPECTED_PROJECT_REF_ENV)
+            )
         products, evidence, payload = load_inputs(limit)
         rows = build_metric_rows(products, evidence, payload, now=datetime.now(timezone.utc))
         report = {
@@ -209,11 +225,9 @@ def main() -> int:
             "missingPrimaryEvidence": int(payload.get("missingPrimaryEvidence", 0)),
             "written": 0,
         }
+        if project_ref is not None:
+            report["projectRef"] = project_ref
         if args.apply:
-            if os.environ.get("VIBEPIN_PRODUCT_METRICS_MODE") != "production":
-                raise RuntimeError("apply refused: VIBEPIN_PRODUCT_METRICS_MODE must equal production")
-            if os.environ.get("VIBEPIN_PRODUCT_METRICS_CONFIRM") != APPLY_CONFIRM:
-                raise RuntimeError(f"apply refused: VIBEPIN_PRODUCT_METRICS_CONFIRM must equal {APPLY_CONFIRM}")
             if report["exceedsRunBudget"]:
                 raise RuntimeError(
                     f"apply refused: active catalog exceeds the {limit}-product metric budget"

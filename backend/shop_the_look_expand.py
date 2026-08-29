@@ -46,6 +46,7 @@ from product_lifecycle import with_not_retired  # type: ignore
 # Product-Supply has exactly one admissibility/enrichment/red-line/write core.
 # Shop-the-Look contributes discovery URLs only; it must never persist card fields.
 import supply_core  # type: ignore
+from product_opportunity_admission import require_expected_project_ref  # type: ignore
 
 DEFAULT_CATEGORY_MIX = {
     "fashion": 18,
@@ -53,6 +54,7 @@ DEFAULT_CATEGORY_MIX = {
     "home-decor": 18,
 }
 EXCLUDED_DEFAULT = frozenset({"beauty", "digital-products"})
+EXPECTED_PROJECT_REF_ENV = "VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF"
 
 # Per-pin Playwright navigation budget. Default 15_000 ms = the previous
 # hard-coded literal, so behaviour is UNCHANGED unless the env var is set.
@@ -2259,6 +2261,12 @@ async def run_shop_the_look_expand(
     validated (engine, mode, count, category distribution) before any crawling
     begins. Fails closed if validation fails.
     """
+    if apply:
+        require_expected_project_ref(
+            os.environ.get(EXPECTED_PROJECT_REF_ENV),
+            supabase_url=supply_core.SUPABASE_URL,
+        )
+
     from playwright.async_api import async_playwright  # type: ignore
 
     mix = dict(category_mix or DEFAULT_CATEGORY_MIX)

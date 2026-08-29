@@ -1019,6 +1019,12 @@ def apply_rows(db: httpx.Client, rows: list[dict]) -> dict:
     than be silently swallowed. Returns an outcome dict; never raises for a normal
     insert error (records it and returns).
     """
+    from product_opportunity_admission import require_expected_project_ref
+
+    require_expected_project_ref(
+        os.environ.get("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF"),
+        supabase_url=SUPABASE_URL,
+    )
     assert len(rows) <= MAX_BATCH, f"batch {len(rows)} exceeds MAX_BATCH {MAX_BATCH}"
     from datetime import datetime, timezone
     out: dict = {

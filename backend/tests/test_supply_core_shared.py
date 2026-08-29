@@ -12,9 +12,12 @@ re-derived from the merchant page or left NULL — never inherited from the card
 manual T2 harvester and the automatic Shop-the-Look path go through the SAME core.
 """
 import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
+
+import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
 for p in (str(BACKEND), str(BACKEND / "db"), str(BACKEND / "tools")):
@@ -23,6 +26,15 @@ for p in (str(BACKEND), str(BACKEND / "db"), str(BACKEND / "tools")):
 
 import supply_core as core  # noqa: E402
 import shop_the_look_expand as stl  # noqa: E402
+
+
+TEST_PROJECT_REF = "testproductv37"
+
+
+@pytest.fixture(autouse=True)
+def _verified_test_project(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF", TEST_PROJECT_REF)
+    monkeypatch.setattr(core, "SUPABASE_URL", f"https://{TEST_PROJECT_REF}.supabase.co")
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
@@ -103,6 +115,14 @@ class FakeDBClient:
             ]
             return FakeResp(self.delete_status, removed)
         return FakeResp(200, [])
+
+
+def test_apply_rows_refuses_wrong_project_before_database_contact(monkeypatch):
+    monkeypatch.setenv("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF", "wrongproject")
+    db = FakeDBClient()
+    with pytest.raises(RuntimeError, match="does not match"):
+        core.apply_rows(db, [{}])
+    assert db.posts == []
 
 
 # ── A merchant page carrying REAL structured product data ────────────────────

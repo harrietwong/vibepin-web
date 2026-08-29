@@ -33,6 +33,7 @@ MAX_PROVIDER_REQUESTS = 5_000
 SESSION_REQUEST_RESERVE = 2
 POSTGRES_BIGINT_MAX = 2**63 - 1
 APPLY_CONFIRM = "TRACK_ACTIVE_PRODUCTS"
+EXPECTED_PROJECT_REF_ENV = "VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF"
 
 ObservationStatus = Literal["valid", "not_found", "provider_error", "rate_limited"]
 
@@ -642,6 +643,17 @@ async def run(args: argparse.Namespace) -> dict:
     started_monotonic = time.monotonic()
     captured_at = datetime.now(timezone.utc)
     limit = min(max(1, args.limit), MAX_UNIQUE_PINS_PER_RUN)
+    project_ref = None
+    if args.apply:
+        if os.environ.get("VIBEPIN_PRODUCT_TRACKING_MODE") != "production":
+            raise RuntimeError("apply refused: VIBEPIN_PRODUCT_TRACKING_MODE must equal production")
+        if os.environ.get("VIBEPIN_PRODUCT_TRACKING_CONFIRM") != APPLY_CONFIRM:
+            raise RuntimeError(f"apply refused: VIBEPIN_PRODUCT_TRACKING_CONFIRM must equal {APPLY_CONFIRM}")
+        from product_opportunity_admission import require_expected_project_ref
+
+        project_ref = require_expected_project_ref(
+            os.environ.get(EXPECTED_PROJECT_REF_ENV)
+        )
     inventory = load_targets(limit, captured_on=captured_at.date())
     targets = inventory.targets
     report = {
@@ -685,16 +697,14 @@ async def run(args: argparse.Namespace) -> dict:
         "lockReleased": False,
         "orphanCount": None,
     }
+    if project_ref is not None:
+        report["projectRef"] = project_ref
     if not args.apply:
         # Dry-run never creates a Pinterest session or child worker.
         report["orphanCount"] = 0
         report["lockReleased"] = True
         report["durationSeconds"] = round(time.monotonic() - started_monotonic, 3)
         return report
-    if os.environ.get("VIBEPIN_PRODUCT_TRACKING_MODE") != "production":
-        raise RuntimeError("apply refused: VIBEPIN_PRODUCT_TRACKING_MODE must equal production")
-    if os.environ.get("VIBEPIN_PRODUCT_TRACKING_CONFIRM") != APPLY_CONFIRM:
-        raise RuntimeError(f"apply refused: VIBEPIN_PRODUCT_TRACKING_CONFIRM must equal {APPLY_CONFIRM}")
     if inventory.exceeds_run_budget:
         raise RuntimeError(
             f"apply refused: due Primary and switch-candidate Pins exceed the reviewed "

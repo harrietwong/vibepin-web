@@ -10,6 +10,13 @@ import product_opportunity_tracking as tracking
 
 TARGET = tracking.TrackingTarget("product-1", "evidence-1", "123456789012345678")
 INVENTORY = tracking.TrackingInventory([TARGET], 1, 0, False, 0, 1, 1)
+TEST_PROJECT_REF = "testproductv37"
+
+
+@pytest.fixture(autouse=True)
+def _verified_test_project(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SUPABASE_URL", f"https://{TEST_PROJECT_REF}.supabase.co")
+    monkeypatch.setenv(tracking.EXPECTED_PROJECT_REF_ENV, TEST_PROJECT_REF)
 
 
 class FakeResponse:
@@ -672,6 +679,23 @@ def test_apply_fails_before_network_without_both_environment_gates(
     monkeypatch.delenv("VIBEPIN_PRODUCT_TRACKING_CONFIRM", raising=False)
     with pytest.raises(RuntimeError, match="MODE"):
         asyncio.run(tracking.run(SimpleNamespace(apply=True, limit=1, concurrency=1, delay=0.0)))
+
+
+def test_apply_refuses_missing_project_binding_before_database_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VIBEPIN_PRODUCT_TRACKING_MODE", "production")
+    monkeypatch.setenv("VIBEPIN_PRODUCT_TRACKING_CONFIRM", tracking.APPLY_CONFIRM)
+    monkeypatch.delenv(tracking.EXPECTED_PROJECT_REF_ENV)
+    monkeypatch.setattr(
+        tracking,
+        "load_targets",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("database read attempted")),
+    )
+    with pytest.raises(RuntimeError, match="project ref"):
+        asyncio.run(
+            tracking.run(SimpleNamespace(apply=True, limit=1, concurrency=1, delay=0.0))
+        )
 
 
 def test_metric_refresh_is_not_called_by_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:

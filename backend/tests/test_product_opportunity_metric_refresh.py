@@ -1,5 +1,8 @@
+import json
+import sys
 from datetime import datetime, timedelta, timezone
 
+import product_opportunity_metric_refresh as metric_refresh
 from product_opportunity_metric_refresh import build_metric_rows
 from pathlib import Path
 
@@ -117,6 +120,41 @@ def test_product_without_primary_evidence_has_no_metric_row() -> None:
         {"snapshots": [], "calibrations": {}},
         now=NOW,
     ) == []
+
+
+def test_nonempty_metric_rows_are_json_serializable_with_iso_timestamps() -> None:
+    rows = build_metric_rows(
+        [{"id": "p-1", "product_family": "physical"}],
+        [{"id": "ev-1", "product_opportunity_id": "p-1", "pinterest_pin_id": "pin-1"}],
+        {"snapshots": snapshots(), "calibrations": {"physical": calibration(2)}},
+        now=NOW,
+    )
+    encoded = json.dumps(rows)
+    assert NOW.isoformat() in encoded
+    for field in (
+        "latest_snapshot_at",
+        "g30_anchor_at",
+        "current_g7_anchor_at",
+        "previous_g7_anchor_at",
+        "computed_at",
+    ):
+        assert isinstance(rows[0][field], str)
+
+
+def test_apply_refuses_wrong_project_before_database_read(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VIBEPIN_PRODUCT_METRICS_MODE", "production")
+    monkeypatch.setenv("VIBEPIN_PRODUCT_METRICS_CONFIRM", metric_refresh.APPLY_CONFIRM)
+    monkeypatch.setenv(metric_refresh.EXPECTED_PROJECT_REF_ENV, "expectedproject")
+    monkeypatch.setenv("SUPABASE_URL", "https://differentproject.supabase.co")
+    monkeypatch.setattr(
+        metric_refresh,
+        "load_inputs",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("database read attempted")),
+    )
+    monkeypatch.setattr(sys, "argv", ["product_opportunity_metric_refresh.py", "--apply"])
+    assert metric_refresh.main() == 1
 
 
 def test_only_approved_calibration_is_loaded_and_apply_is_complete_catalog_only() -> None:

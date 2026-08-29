@@ -70,15 +70,21 @@ def _host(value: str) -> str:
         return ""
 
 
-def require_expected_project_ref(expected_project_ref: object) -> str:
+def require_expected_project_ref(
+    expected_project_ref: object,
+    *,
+    supabase_url: object | None = None,
+) -> str:
     expected = str(expected_project_ref or "").strip()
     if not PROJECT_REF_RE.fullmatch(expected):
         raise RuntimeError("apply refused: expected Supabase project ref is missing or invalid")
-    if not os.environ.get("SUPABASE_URL"):
+    if supabase_url is None and not os.environ.get("SUPABASE_URL"):
         from dotenv import load_dotenv  # type: ignore
 
         load_dotenv(ROOT / ".env")
-    raw_url = os.environ.get("SUPABASE_URL", "").strip()
+    raw_url = str(
+        supabase_url if supabase_url is not None else os.environ.get("SUPABASE_URL", "")
+    ).strip()
     try:
         parsed_url = urlparse(raw_url)
         parsed_port = parsed_url.port

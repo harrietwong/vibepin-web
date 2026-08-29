@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 WRAPPER = (ROOT / "scripts" / "cloud_run_product_tracking.sh").read_text(encoding="utf-8")
+SUPPLY_WRAPPER = (ROOT / "scripts" / "cloud_run_product_supply.sh").read_text(encoding="utf-8")
 SERVICE = (ROOT / "deploy" / "systemd" / "vibepin-product-tracking.service").read_text(encoding="utf-8")
 TIMER = (ROOT / "deploy" / "systemd" / "vibepin-product-tracking.timer").read_text(encoding="utf-8")
 SUPPLY_TIMER = (ROOT / "deploy" / "systemd" / "vibepin-product-supply.timer").read_text(encoding="utf-8")
@@ -837,6 +838,17 @@ def test_real_tracking_requires_all_three_explicit_gates() -> None:
     assert "TRACK_ACTIVE_PRODUCTS" in WRAPPER
     assert "--apply" in WRAPPER
     assert "cloud_preflight_gate SAFE_FOR_APPLY" in WRAPPER
+    assert "VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF" in WRAPPER
+    assert WRAPPER.index("VIBEPIN_PRODUCT_TRACKING_EXPECTED_PROJECT_REF") < WRAPPER.index(
+        "cloud_preflight_gate SAFE_FOR_APPLY"
+    )
+
+
+def test_real_supply_binds_project_before_preflight() -> None:
+    assert "VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF" in SUPPLY_WRAPPER
+    assert SUPPLY_WRAPPER.index("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF") < SUPPLY_WRAPPER.index(
+        "preflight recommendation"
+    )
 
 
 def test_request_and_timeout_hierarchy_is_bounded() -> None:

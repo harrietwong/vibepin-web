@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import MagicMock, call, patch
 
 import httpx
+import pytest
 
 import shop_the_look_expand as stl
 from shop_the_look_expand import (
@@ -28,6 +29,38 @@ from shop_the_look_expand import (
     load_and_validate_source_report,
     parse_category_mix,
 )
+
+
+TEST_PROJECT_REF = "testproductv37"
+
+
+@pytest.fixture(autouse=True)
+def _verified_test_project(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("VIBEPIN_PRODUCT_SUPPLY_EXPECTED_PROJECT_REF", TEST_PROJECT_REF)
+    monkeypatch.setattr(
+        stl.supply_core,
+        "SUPABASE_URL",
+        f"https://{TEST_PROJECT_REF}.supabase.co",
+    )
+
+
+def test_apply_refuses_missing_project_binding_before_database_or_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(stl.EXPECTED_PROJECT_REF_ENV)
+    monkeypatch.setattr(
+        stl,
+        "_load_previous_spike_ids",
+        lambda: (_ for _ in ()).throw(AssertionError("database selection attempted")),
+    )
+    with pytest.raises(RuntimeError, match="project ref"):
+        asyncio.run(
+            stl.run_shop_the_look_expand(
+                limit=1,
+                category_mix={"fashion": 1},
+                apply=True,
+            )
+        )
 
 
 class TestCategoryMix(unittest.TestCase):
