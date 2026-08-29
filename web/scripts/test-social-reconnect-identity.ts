@@ -108,7 +108,7 @@ function assertEq(a: unknown, b: unknown, msg: string) {
   if (a !== b) throw new Error(`${msg} (expected ${JSON.stringify(b)}, got ${JSON.stringify(a)})`);
 }
 
-const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8").replace(/\r\n?/g, "\n");
 
 /**
  * Source with comments removed.

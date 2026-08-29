@@ -41,7 +41,7 @@ let passed = 0;
 function test(name: string, fn: () => void) { fn(); passed++; console.log(`  OK  ${name}`); }
 async function testAsync(name: string, fn: () => Promise<void>) { await fn(); passed++; console.log(`  OK  ${name}`); }
 
-const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8").replace(/\r\n?/g, "\n");
 
 // ── 记录调用链的假 Supabase(与 test-per-account-disconnect 同款)────────────
 type Call = { method: string; args: unknown[] };

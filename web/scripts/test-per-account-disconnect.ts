@@ -30,7 +30,7 @@ let passed = 0;
 function test(name: string, fn: () => void) { fn(); passed++; console.log(`  OK  ${name}`); }
 async function testAsync(name: string, fn: () => Promise<void>) { await fn(); passed++; console.log(`  OK  ${name}`); }
 
-const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8").replace(/\r\n?/g, "\n");
 
 // ── 一个记录调用链的假 Supabase ────────────────────────────────────────────────
 // 只实现我们用到的链式方法,并把每一步 (方法, 参数) 记下来,这样"过滤条件对不对"
