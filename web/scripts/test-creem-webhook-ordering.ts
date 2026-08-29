@@ -358,6 +358,97 @@ async function main() {
     assertEq(store.get("sub_1")?.user_id ?? null, null, "user_id deferred (null)");
   });
 
+  // == ANNUAL SUBSCRIPTION -> MONTHLY USAGE PERIOD (裁决 #2 / PRD v3.2 §9.1) ======
+  // The webhook hands ensureUsageAccount the subscription current_period_start/end
+  // verbatim. For an ANNUAL plan those are TWELVE months apart, but the product rule is
+  // that annual subscribers get the same MONTHLY allowances, reset MONTHLY, anchored on
+  // the subscription start - billing stays annual. So the account the webhook builds
+  // must carry a ONE-MONTH usage period, with the anchor at the subscription start so
+  // the v56 RPC rolls it monthly from there (including across the year-2 renewal, whose
+  // start lands on the same monthly lattice).
+  //
+  // ensureUsageAccount is driven with an injected `rpc` that CAPTURES the arguments,
+  // so this asserts the exact payload usage_ensure_account would receive - no DB, and
+  // no resolvePlan network call (plan is injected too).
+
+  await test("ANNUAL subscription event builds an account whose period is ONE MONTH, not one year", async () => {
+    const { ensureUsageAccount } = await import("../src/lib/server/usage/ensureAccount");
+
+    const periodStart = "2026-08-28T09:40:00.000Z"; // subscription start
+    const periodEnd = "2027-08-28T09:40:00.000Z"; // +12 months - annual billing
+
+    let captured: Record<string, unknown> | null = null;
+    const outcome = await ensureUsageAccount("user_1", {
+      plan: "pro",
+      hint: { currentPeriodStart: periodStart, currentPeriodEnd: periodEnd },
+      now: new Date("2026-09-05T00:00:00.000Z"), // 8 days into the subscription
+      rpc: async (fn, args) => {
+        assertEq(fn, "usage_ensure_account", "calls the v56 lifecycle RPC");
+        captured = args;
+        return {
+          data: {
+            ok: true,
+            action: "created",
+            account_id: "acc_1",
+            plan_key: "pro",
+            period_start: args.p_period_start,
+            period_end: args.p_period_end,
+            version: 0,
+            rolled_periods: 0,
+          },
+          error: null,
+        };
+      },
+    });
+
+    if (!captured) throw new Error("rpc was never called");
+    const args = captured as Record<string, unknown>;
+
+    assertEq(args.p_period_start, "2026-08-28T09:40:00.000Z", "period_start = subscription start");
+    assertEq(args.p_period_end, "2026-09-28T09:40:00.000Z", "period_end = start + 1 MONTH");
+    assertEq(args.p_period_anchor, periodStart, "anchor = subscription start (RPC rolls monthly from it)");
+
+    // The load-bearing assertion, stated as the design does: one month, not one year.
+    const widthDays =
+      (new Date(String(args.p_period_end)).getTime() -
+        new Date(String(args.p_period_start)).getTime()) /
+      86_400_000;
+    if (widthDays < 28 || widthDays > 31) {
+      throw new Error(`usage period is ${widthDays} days wide - expected a month, not a year`);
+    }
+    if (String(args.p_period_end) === periodEnd) {
+      throw new Error("usage period_end equals the ANNUAL subscription end - allowances would reset yearly");
+    }
+
+    assertEq(outcome.periodEnd, "2026-09-28T09:40:00.000Z", "the returned period is the monthly one");
+  });
+
+  await test("MONTHLY subscription event is unchanged: the hint window is passed through as-is", async () => {
+    // Regression guard for the same code path: a monthly hint window already IS
+    // anchor + 1 month, so the sub-window derivation must reproduce it exactly.
+    const { ensureUsageAccount } = await import("../src/lib/server/usage/ensureAccount");
+
+    const periodStart = "2026-08-28T09:40:00.000Z";
+    const periodEnd = "2026-09-28T09:40:00.000Z";
+
+    let captured: Record<string, unknown> | null = null;
+    await ensureUsageAccount("user_1", {
+      plan: "pro",
+      hint: { currentPeriodStart: periodStart, currentPeriodEnd: periodEnd },
+      now: new Date("2026-09-05T00:00:00.000Z"),
+      rpc: async (_fn, args) => {
+        captured = args;
+        return { data: { ok: true, action: "created", account_id: "acc_1", plan_key: "pro", version: 0, rolled_periods: 0 }, error: null };
+      },
+    });
+
+    if (!captured) throw new Error("rpc was never called");
+    const args = captured as Record<string, unknown>;
+    assertEq(args.p_period_start, periodStart, "monthly period_start verbatim");
+    assertEq(args.p_period_end, periodEnd, "monthly period_end verbatim");
+    assertEq(args.p_period_anchor, periodStart, "monthly anchor verbatim");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }
