@@ -61,6 +61,14 @@ metric history or a disabled timer is live.
   an independent final zero-object/zero-lock SELECT. This is platform evidence,
   not production legacy-integrity evidence. Receipt:
   `backend/docs/product_opportunities_v37_supabase_test_replay_20260829T021513Z.json`.
+- A production GET-only pre-authorization snapshot bound to `9a22c163` found
+  4,115 legacy Products, 35,521 snapshots and zero v63 objects. The latest
+  completed physical backup was locatable, but PITR is disabled and no restore
+  was tested. Both receipts are explicitly non-cutover evidence; the baseline
+  must be recaptured within 900 seconds of an authorized migration. Evidence:
+  `backend/docs/product_opportunities_v37_pre_authorization_baseline_20260829T024547Z.json`
+  and
+  `backend/docs/product_opportunities_v37_pre_authorization_backup_inventory_20260829T024627Z.json`.
 
 ## Data quality decision
 

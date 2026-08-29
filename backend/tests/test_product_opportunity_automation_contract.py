@@ -65,6 +65,20 @@ STAGE0_CATALOG_QUERY_PATH = (
     ROOT / "docs" / "product_opportunities_v37_catalog_query_v1.sql"
 )
 STAGE0_CATALOG_QUERY = STAGE0_CATALOG_QUERY_PATH.read_text(encoding="utf-8")
+PREAUTH_BASELINE = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_pre_authorization_baseline_20260829T024547Z.json"
+    ).read_text(encoding="utf-8")
+)
+PREAUTH_BACKUP = json.loads(
+    (
+        ROOT
+        / "docs"
+        / "product_opportunities_v37_pre_authorization_backup_inventory_20260829T024627Z.json"
+    ).read_text(encoding="utf-8")
+)
 V63_MIGRATION_PATH = ROOT / "db" / "migrate_v63_product_opportunities_v1.sql"
 V63_MIGRATION = V63_MIGRATION_PATH.read_text(encoding="utf-8")
 STAGE1_BACKUP = json.loads(
@@ -214,6 +228,31 @@ def test_stage1_cutover_commands_bind_the_current_functional_candidate() -> None
         RUNBOOK,
     )
     assert candidate_bindings == [functional, functional]
+
+
+def test_current_preauthorization_receipts_are_read_only_and_not_cutover_receipts() -> None:
+    functional = "9a22c163cd08a4374d8aaaaf7ee6adf82ad849bc"
+    assert PREAUTH_BASELINE["candidate_sha"] == functional
+    assert PREAUTH_BASELINE["http_status"] == 201
+    assert PREAUTH_BASELINE["mutation"] is False
+    assert PREAUTH_BASELINE["verdict"] == "PASS"
+    assert PREAUTH_BASELINE["cutover_eligible"] is False
+    assert PREAUTH_BASELINE["baseline"] == {
+        "legacy_products": 4115,
+        "legacy_products_md5": "4225202c49f1e726530425ee620e5ff6",
+        "legacy_snapshots": 35521,
+        "legacy_snapshots_md5": "51a0a89f60b1ab1eaf43158b6ebb29f4",
+        "v63_matching_object_count": 0,
+    }
+
+    assert PREAUTH_BACKUP["candidate_functional_tip"] == functional
+    assert PREAUTH_BACKUP["http_status"] == 200
+    assert PREAUTH_BACKUP["mutation"] is False
+    assert PREAUTH_BACKUP["locatable_completed_backup_proven"] is True
+    assert PREAUTH_BACKUP["latest_completed_backup_id"] == 1507104432
+    assert PREAUTH_BACKUP["pitr_enabled"] is False
+    assert PREAUTH_BACKUP["restore_tested"] is False
+    assert PREAUTH_BACKUP["cutover_eligible"] is False
 
 
 def test_current_release_documents_have_no_broken_json_evidence_paths() -> None:

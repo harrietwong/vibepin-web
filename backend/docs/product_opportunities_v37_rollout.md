@@ -593,6 +593,20 @@ cutover. This receipt is demonstration evidence only and will be stale by the
 actual apply. Evidence:
 `backend/docs/product_opportunities_v37_stage1_legacy_baseline_20260828T041242Z.json`.
 
+A newer pre-authorization GET-only snapshot at `2026-08-29T02:45:47Z`, bound
+to functional candidate `9a22c163`, still found zero v63 objects and 4,115
+legacy Products. Legacy snapshots increased from 34,213 to 35,521, so the
+content checksum also changed as expected; this is direct evidence that no old
+baseline can be reused for cutover. A separate Management API GET located the
+latest completed physical backup `1507104432` from `2026-08-28T14:01:57Z`.
+WAL-G remains enabled, PITR remains disabled and no restore was tested. Both
+receipts explicitly set `cutover_eligible=false`: refresh the backup inventory
+and capture a new baseline no older than 900 seconds immediately before any
+authorized migration. Evidence:
+`backend/docs/product_opportunities_v37_pre_authorization_baseline_20260829T024547Z.json`
+and
+`backend/docs/product_opportunities_v37_pre_authorization_backup_inventory_20260829T024627Z.json`.
+
 `run_migration.py`, the verifier and the rollback-only PostgreSQL canary are part
 of the 81-artifact boundary. Apply now fails before
 the Management API unless the operator explicitly supplies the target project,
