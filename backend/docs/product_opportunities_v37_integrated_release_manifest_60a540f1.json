@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAtUtc": "2026-08-29T11:32:34.2812098Z",
+  "generatedAtUtc": "2026-08-29T11:50:09.5733313Z",
   "candidateBranch": "codex/product-v37-central-integrate-0829",
   "productionAnchor": "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
   "sourceCommits": {
@@ -15,9 +15,23 @@
   "rollbackCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeCandidateCommit": "60a540f1f3ead08e112d378f3df778000c189abb",
   "runtimeTree": "94b5994fdcd46077b0b52092238863c0896e37ea",
-  "evidenceCommit": "e620be61883a7d41c70395c574559204411c9e06",
-  "artifactCount": 34,
+  "evidenceCommit": "62b502f34aba0a2683b647b78ae3b7224901fe83",
+  "artifactCount": 36,
   "artifacts": [
+    {
+      "path": "backend/docs/product_opportunities_v37_completion_matrix_20260829.md",
+      "commit": "62b502f34aba0a2683b647b78ae3b7224901fe83",
+      "gitBlobSha1": "2d131f7673e72a5b6b5401adf575546a65c75908",
+      "sha256": "be9d6689245c4988299f54434b4b1f3bb7d9f61f0713f72be049ab522bec00bd",
+      "bytes": 19257
+    },
+    {
+      "path": "backend/docs/product_opportunities_v37_integration_readiness_20260829.md",
+      "commit": "62b502f34aba0a2683b647b78ae3b7224901fe83",
+      "gitBlobSha1": "f5055898618de9f3211a7e8867878f4796a9ed40",
+      "sha256": "0c6fc94901519d3ed378283c6f685cd14a92ec609cb1244cc42aef7550f6ab8c",
+      "bytes": 12013
+    },
     {
       "path": "backend/docs/product_opportunities_v37_release_manifest_d2c13dd.json",
       "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
@@ -139,10 +153,10 @@
     },
     {
       "path": "backend/tests/test_product_opportunity_automation_contract.py",
-      "commit": "60a540f1f3ead08e112d378f3df778000c189abb",
-      "gitBlobSha1": "4c42d441231f87b9c91b1a0e84a7612333f742d1",
-      "sha256": "e3f4dd8f22e50cdb5aca5d2c36c4f8f8a3c974ee1748563119d7bd35a7f1bc14",
-      "bytes": 40797
+      "commit": "62b502f34aba0a2683b647b78ae3b7224901fe83",
+      "gitBlobSha1": "a22c02bd76f8332d6d3fb68ae6ff489f6a53d07d",
+      "sha256": "82c8692fe5e64cdab1fccdb0be34e41d92037c88d695c42f288ffacf8daa4a13",
+      "bytes": 42000
     },
     {
       "path": "backend/tests/test_integrated_migration_rollbacks.py",

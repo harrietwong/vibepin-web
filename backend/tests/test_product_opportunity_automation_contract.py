@@ -244,7 +244,7 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert integrated_manifest["runtimeCandidateCommit"] == (
         "60a540f1f3ead08e112d378f3df778000c189abb"
     )
-    assert integrated_manifest["artifactCount"] == 34
+    assert integrated_manifest["artifactCount"] == 36
     assert set(integrated_manifest["externalGates"].values()) == {False}
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
