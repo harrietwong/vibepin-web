@@ -1,11 +1,31 @@
 # Product Opportunities v3.7 Integration Readiness — 2026-08-29
 
-This is a local, read-only topology and merge-surface audit. It did not fetch,
-merge, create a worktree, update a ref, push, deploy, apply a migration or touch
-production. Local refs are point-in-time evidence and must be re-resolved by the
-central deployment session immediately before building an integrated candidate.
+This document began as a local, read-only topology and merge-surface audit. That
+pre-integration analysis is retained below as provenance. A central isolated
+worktree has since completed the semantic integration and local gates. Nothing
+has been pushed, deployed or promoted; no migration, VPS, timer or production
+database mutation has occurred.
 
-## Exact audited refs
+## Current authoritative post-integration state
+
+- Branch: `codex/product-v37-central-integrate-0829`
+- Production anchor: `5bcc1a6a0068347c6397b463c713aba82e45a6d9`
+- Frozen inputs: admin `27c70f90ec69bed64511efb98eb6827b5a427b5f`,
+  reference `68eebbd242889baf3205f2bc3c14396f560a0620`, multichannel
+  `4320a4daf0956b026d5707907841104939aec337`, v3.7
+  `cd21adfe357b572b10eddcecac51d59952203993`
+- Four-line semantic merge: `385b9e07456007593572466f537f0e44bb8c0264`
+- Integration gate fix: `16b499796fc9cd2a6ee75b24b30d22a807b0f172`
+- Bounded function trace: `b8037c96fc4a468dbcee7ced984c9db29cdaedc2`
+- Runtime and rollback boundary: `60a540f1f3ead08e112d378f3df778000c189abb`
+- Integrated manifest commit: `90cc83ef81c6e6a147a104dd04d6a1f002379b8d`
+- Manifest: `backend/docs/product_opportunities_v37_integrated_release_manifest_60a540f1.json`
+- Local verdict: `READY_FOR_PREVIEW_NOT_PRODUCTION`
+
+The manifest records every external gate as false. The exact final branch tip
+must still be frozen and rechecked immediately before any Preview handoff.
+
+## Pre-integration audited refs
 
 | Role | Ref | Audited local SHA |
 |---|---|---|
@@ -17,8 +37,9 @@ central deployment session immediately before building an integrated candidate.
 | reference recommendations | `feat/reference-recs-p0-0827` | `68eebbd242889baf3205f2bc3c14396f560a0620` |
 
 The remote-tracking multichannel ref was still older than the audited local ref.
-This document therefore does not claim that any candidate above is the final
-remote deployment input.
+The central integration later selected the independently verified fast-forward
+multichannel input `4320a4daf0956b026d5707907841104939aec337` rather than the
+earlier point-in-time `a31dfb13` shown in this historical table.
 
 ## Historical integrated branch is not the current candidate
 
@@ -188,8 +209,8 @@ Before any Preview deploy:
 
 1. Freeze and record the exact parent SHAs and merge/cherry-pick order.
 2. Recompute merge-tree conflicts; review every resolved production hunk.
-3. Run the complete backend suite. The current v3.7 docs/test head independently
-   passed `1054 passed, 2 skipped, 77 subtests`.
+3. Run the complete backend suite. The integrated tree passed
+   `1125 passed, 2 skipped, 77 subtests`.
 4. Run the exact integrated Web TypeScript, registered test, i18n and production
    build gates; prior v3.7-only numbers cannot validate the integrated tree.
 5. Re-run v3.7 release/manifest automation and all multichannel/admin/reference
@@ -198,6 +219,11 @@ Before any Preview deploy:
    explicitly selected line and no unselected branch.
 7. Keep v63, VPS files, services and timers untouched until the integrated Web
    candidate has passed the local gates.
+
+Items 1–6 are now closed for the local integrated candidate by the central
+integration report and schema-v2 manifest. Item 7 was respected: all external
+gates remain false. This closes local construction only; it does not close the
+fresh baseline, migration, Preview, browser, VPS or timer stages.
 
 After local gates, the production sequence remains: fresh <=900-second baseline,
 v63 apply and post-apply/rollback proof, immutable Preview, authoritative browser
@@ -209,7 +235,8 @@ separately authorized timer rollout.
 ```text
 V3.7 FUNCTIONAL CODE: APPROVE
 HISTORICAL INTEGRATED BRANCH: REJECT AS STALE
-CURRENT INTEGRATED DEPLOY CANDIDATE: NOT BUILT
+CURRENT INTEGRATED DEPLOY CANDIDATE: READY FOR PREVIEW / NOT DEPLOYED
 DIRECT VERCEL DEPLOY OF THE V3.7 BRANCH: BLOCK
-CENTRAL DEPLOYMENT INTEGRATION: READY TO BEGIN AFTER USER AUTHORIZATION
+CENTRAL DEPLOYMENT INTEGRATION: LOCAL GATES COMPLETE
+PRODUCTION WORKFLOW: BLOCKED BY EXTERNAL EVIDENCE GATES
 ```

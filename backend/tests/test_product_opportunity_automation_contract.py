@@ -29,6 +29,11 @@ INTEGRATION_READINESS = (
 CURRENT_MANIFEST_PATH = (
     ROOT / "docs" / "product_opportunities_v37_release_manifest_d2c13dd.json"
 )
+INTEGRATED_MANIFEST_PATH = (
+    ROOT
+    / "docs"
+    / "product_opportunities_v37_integrated_release_manifest_60a540f1.json"
+)
 FIRST_AUTOMATIC_SUPPLY_AUDIT_PATH = (
     ROOT / "docs" / "product_supply_automatic_run_audit_20260828T003013+0800.json"
 )
@@ -192,20 +197,37 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert "generated 70/70" in RUNBOOK
     assert "Implementation PASS / Production NOT LIVE" in COMPLETION_MATRIX
     assert "Production P0 BLOCK" in COMPLETION_MATRIX
-    assert "INTEGRATED DEPLOY CANDIDATE: NOT BUILT" in COMPLETION_MATRIX
-    assert "Integrated deploy candidate BLOCK" in COMPLETION_MATRIX
+    assert (
+        "INTEGRATED DEPLOY CANDIDATE: READY FOR PREVIEW / NOT DEPLOYED"
+        in COMPLETION_MATRIX
+    )
+    assert (
+        "Integrated candidate READY FOR PREVIEW / Production NOT LIVE"
+        in COMPLETION_MATRIX
+    )
     assert "FULL PRD P0 OBJECTIVE: NOT COMPLETE" in COMPLETION_MATRIX
     for exact_sha in (
         functional,
         "5bcc1a6a0068347c6397b463c713aba82e45a6d9",
         "a31dfb136623bbc376771cd9a7c98f11547c87f4",
+        "4320a4daf0956b026d5707907841104939aec337",
         "27c70f90ec69bed64511efb98eb6827b5a427b5f",
         "68eebbd242889baf3205f2bc3c14396f560a0620",
         "74be67da08c1861b0b735101bf32d5964ae198cf",
+        "385b9e07456007593572466f537f0e44bb8c0264",
+        "16b499796fc9cd2a6ee75b24b30d22a807b0f172",
+        "b8037c96fc4a468dbcee7ced984c9db29cdaedc2",
+        "60a540f1f3ead08e112d378f3df778000c189abb",
+        "90cc83ef81c6e6a147a104dd04d6a1f002379b8d",
     ):
         assert exact_sha in INTEGRATION_READINESS
     assert "HISTORICAL INTEGRATED BRANCH: REJECT AS STALE" in INTEGRATION_READINESS
-    assert "CURRENT INTEGRATED DEPLOY CANDIDATE: NOT BUILT" in INTEGRATION_READINESS
+    assert (
+        "CURRENT INTEGRATED DEPLOY CANDIDATE: READY FOR PREVIEW / NOT DEPLOYED"
+        in INTEGRATION_READINESS
+    )
+    assert "CENTRAL DEPLOYMENT INTEGRATION: LOCAL GATES COMPLETE" in INTEGRATION_READINESS
+    assert "PRODUCTION WORKFLOW: BLOCKED BY EXTERNAL EVIDENCE GATES" in INTEGRATION_READINESS
     assert "web/src/app/api/generate/route.ts" in INTEGRATION_READINESS
     assert "backend/shop_the_look_expand.py" in INTEGRATION_READINESS
     assert "web/src/lib/server/shopify/connectPrep.ts" in INTEGRATION_READINESS
@@ -214,6 +236,16 @@ def test_current_product_only_release_pointer_and_manifest_are_exact() -> None:
     assert "usage/meterGeneration" in INTEGRATION_READINESS
     assert "verify:product-truth" in INTEGRATION_READINESS
     assert "never hand-edit the lockfile" in INTEGRATION_READINESS.lower()
+
+    integrated_manifest = json.loads(
+        INTEGRATED_MANIFEST_PATH.read_text(encoding="utf-8")
+    )
+    assert integrated_manifest["verdict"] == "READY_FOR_PREVIEW_NOT_PRODUCTION"
+    assert integrated_manifest["runtimeCandidateCommit"] == (
+        "60a540f1f3ead08e112d378f3df778000c189abb"
+    )
+    assert integrated_manifest["artifactCount"] == 34
+    assert set(integrated_manifest["externalGates"].values()) == {False}
 
     manifest = json.loads(CURRENT_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest["candidateCommit"] == functional

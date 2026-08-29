@@ -9,6 +9,11 @@ Exact implementation boundary:
 - Manifest artifacts: 81 unique paths
 - Documentation/evidence parent before this matrix: `e13419ff59dc3b4cb90a0b0b24b0d227d9d82ddb`
 - Production integration base: `b22930ebe73847cf35bc44be789414902ae6b599`
+- Central integrated branch: `codex/product-v37-central-integrate-0829`
+- Four-line semantic merge: `385b9e07456007593572466f537f0e44bb8c0264`
+- Integrated runtime/rollback boundary: `60a540f1f3ead08e112d378f3df778000c189abb`
+- Integrated manifest: `backend/docs/product_opportunities_v37_integrated_release_manifest_60a540f1.json`
+- Integrated local verdict: `READY_FOR_PREVIEW_NOT_PRODUCTION`
 
 This matrix distinguishes implementation, data readiness and production truth.
 `Implementation PASS` never means that an unapplied schema, disabled or absent
@@ -43,7 +48,7 @@ job, unpromoted Web build, or empty metric history is live.
 | Bounded Tracking automation and health report | 2,499 unique-Pin ceiling, 5,000-request budget, per-request timeout, one retry, rate limiter, global lock, systemd timeout/tree kill, failure propagation, orphan check, UTC-day abort and complete health counters are implemented and tested. | Tracking unit is absent and no first automatic timer run exists. | Implementation PASS / Automatic launch BLOCK |
 | Product analytics events without prompt/secret payloads | All ten P0 events are typed and emitted at list, modal, link, Save, Create Pin and filter surfaces. Payloads contain Product IDs/family/surface/state, not prompts or credentials. | Production event flow is not verified. | Implementation PASS / Live analytics NEEDS EVIDENCE |
 | Rollback preserves truth and history | Additive v63 migration has an exact schema rollback while all new tables are empty. Admission rollback retires exact returned IDs and keeps historical Evidence semantics. VPS and Web rollback require exact stored bytes/deployment identities; no rollback restores fake titles/images or old metrics. | Production migration/deployment has not occurred. | Contract PASS / Production proof pending |
-| Deployment lineage preserves the rest of VibePin | The v3.7 release manifest is pinned to integration base `b22930ebe73847cf35bc44be789414902ae6b599`, and that base is an ancestor of the functional commit. This proves the v3.7 candidate's own lineage, not equivalence with the current production Web tree or the later multichannel, admin-cockpit and reference-recommendation candidates. | A historical integrated branch `74be67da` contains the production lineage but not final v3.7 `d2c13dd6` or the three later candidates. Read-only pairwise merge-tree found 9–10 textual conflicts per selected line. No current merged deploy candidate exists; a standalone Vercel deployment would omit unrelated live/candidate work. See `product_opportunities_v37_integration_readiness_20260829.md`. | Candidate lineage PASS / Integrated deploy candidate BLOCK |
+| Deployment lineage preserves the rest of VibePin | The central branch now contains production anchor `5bcc1a6a`, admin `27c70f90`, reference `68eebbd2`, the independently verified multichannel fast-forward `4320a4da`, and v3.7 `cd21adfe`. The four-line merge `385b9e07`, integration gate fix `16b49979`, bounded function trace `b8037c96`, and fail-closed rollback boundary `60a540f1` are preserved. The schema-v2 integrated manifest binds 34 reviewed artifacts and recomputes their Git/SHA-256 identities. | The integrated candidate remains local: it has not been pushed, deployed, migrated or browser-verified. Historical branch `74be67da` and a standalone v3.7 deployment remain invalid because they omit later selected lines. See `product_opportunities_v37_integration_readiness_20260829.md`. | Integrated candidate READY FOR PREVIEW / Production NOT LIVE |
 
 ## PRD acceptance audit
 
@@ -87,17 +92,20 @@ job, unpromoted Web build, or empty metric history is live.
 
 ## Current validation
 
-- Full backend: `1054 passed`, `2` credential-only skips, `77` subtests.
-- Focused Supply/Tracking/manifest/admission: `199 passed`.
+- Full integrated backend: `1125 passed`, `2` credential-only skips, `77` subtests.
+- Integrated manifest and migration-rollback source tests: `8/8 passed`.
+- PGlite rollback execution: PASS for v66 fail-closed preservation, v67
+  forward/rollback behavior and both idempotency paths.
 - Current release/automation contract: `35 passed`.
-- Exact Web candidate: registry `132/132`; TypeScript exit 0; i18n exit 0;
-  production build generated `70/70` routes.
+- Exact integrated Web candidate: core/studio/plan `203/203`, Product contracts
+  `7/7`, moderation gate `106/106`, registry `210 tracked / 203 run / 7 justified
+  exclusions`, TypeScript exit 0, i18n `2860` English keys across `18` locale
+  catalogs, and production build generated `71/71` routes.
 - Independent code/release review: `APPROVE WITH EXTERNAL GATES`, no P0/P1
   pointer, sequencing or rollback defect.
-- The central deployment controller independently re-opened the exact functional
-  and docs tips, corrected its stale three-defect assessment, and accepted the
-  code as closed. It has not yet rerun the complete gate set on a merged deploy
-  candidate.
+- The central deployment worktree completed the four-line semantic merge and
+  reran the integrated backend, Web, build, manifest, contamination and rollback
+  gates. Its current local verdict is `READY_FOR_PREVIEW_NOT_PRODUCTION`.
 - Candidate verification was run from a clean committed state. This matrix is a
   docs/test-only completion-audit addition; no production mutation was made.
 
@@ -134,26 +142,26 @@ metrics, Saved records or release gates. Consequently:
 | Phase 0 — read-only baseline | PARTIAL PASS | Code/data definitions and current legacy baseline exist. A completed backup is locatable, but the cutover baseline/backup must be refreshed immediately before migration; Preview platform evidence remains incomplete. |
 | Phase 1 — data foundation | CODE READY / NOT LIVE | v63, Admission and Tracking are implemented and tested, but production has zero v63 objects and no first automatic run. |
 | Phase 2 — Shadow Metrics | NOT STARTED IN PRODUCTION | No production Primary history or metrics exists. |
-| Phase 3 — user UI | CANDIDATE READY / NOT LIVE | Candidate builds and contract tests pass; a production-lineage integrated candidate, Preview/browser proof and production promotion evidence are missing. |
+| Phase 3 — user UI | INTEGRATED CANDIDATE READY / NOT LIVE | The production-lineage integrated candidate builds and its contract tests pass. Immutable Preview, browser proof and production promotion evidence are still missing. |
 | Phase 4 — P1 | OUT OF CURRENT P0 RELEASE | Timeline, alerts, emerging and benchmarks are not required to claim P0 completion. |
 
 ## Overall conclusion
 
 ```text
 CODE: APPROVE
-STAGED EXECUTION: READY AFTER EXTERNAL GATES
-INTEGRATED DEPLOY CANDIDATE: NOT BUILT
+STAGED EXECUTION: READY FOR PREVIEW AFTER EXACT HANDOFF CHECKS
+INTEGRATED DEPLOY CANDIDATE: READY FOR PREVIEW / NOT DEPLOYED
 PRODUCTION WORKFLOW: NOT LIVE
 FULL PRD P0 OBJECTIVE: NOT COMPLETE
 ```
 
 The v3.7 implementation is no longer the main blocker. Completion still requires:
 
-1. A clean integrated deployment candidate that preserves current production
-   plus the explicitly selected multichannel/admin/reference candidates, followed
-   by independent TypeScript, test, i18n, production-build and contamination gates.
+1. Freeze the exact central branch tip for handoff, rerun the integrated manifest
+   contract from a clean checkout and do not substitute a standalone source branch.
 2. A fresh completed-backup inventory and <=900-second legacy baseline.
-3. Exact v63 apply plus post-apply catalog/security/legacy-integrity proof.
+3. Exact v63, v66 and v67 sequencing with post-apply catalog/security/
+   legacy-integrity proof and the reviewed rollback boundaries.
 4. Staged one-Product and <=20-row Admission canaries with exact rollback.
 5. Immutable Preview and authoritative Free/paid/Save/Create Pin/truthful-render QA.
 6. Exact VPS byte parity, expected-project environment binding and disabled
