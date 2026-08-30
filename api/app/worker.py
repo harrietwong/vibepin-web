@@ -33,7 +33,6 @@ import asyncio
 import os
 import sys
 import time
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -107,6 +106,8 @@ def sanitize_error(exc: BaseException) -> str:
     raw provider response verbatim beyond a short clamp.
     """
     msg = str(exc) if exc is not None else "unknown_error"
+    category = msg.split("::", 1)[0].strip().lower() if "::" in msg else type(exc).__name__.lower()
+    category = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in category).strip("_")
     # Redact any secret VALUE that may have been echoed into an error string.
     for env_key in _SECRET_ENV_KEYS:
         val = os.environ.get(env_key)
@@ -115,8 +116,7 @@ def sanitize_error(exc: BaseException) -> str:
     # Defence in depth: mask an obvious "Bearer <token>" fragment if present.
     import re as _re
     msg = _re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]{8,}", "Bearer [REDACTED]", msg)
-    msg = msg.replace("\n", " ").strip()
-    return msg[:280] or "unknown_error"
+    return category[:160] or "unknown_error"
 
 
 # ── Phase 4I: usage metering (settle per slot; release on terminal pre-slot fail) ─
@@ -478,7 +478,6 @@ async def run_forever() -> None:
             print(f"[gen-worker] finished job={job['id']} → {status}", file=sys.stderr)
         except Exception as exc:  # keep the loop alive on any transient error
             print(f"[gen-worker] loop error: {sanitize_error(exc)}", file=sys.stderr)
-            traceback.print_exc()
             await asyncio.sleep(POLL_INTERVAL_S)
 
 

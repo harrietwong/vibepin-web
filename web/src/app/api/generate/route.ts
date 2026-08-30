@@ -480,7 +480,7 @@ function runGenerator(
     // Catch spawn errors (ENOENT if Python not found, EPERM, etc.)
     child.on("error", (err: Error) => {
       clearTimeout(timeout);
-      console.error("[generate] spawn error:", err.message);
+      console.error(JSON.stringify({ event: "generator_spawn_failed", errorCategory: err.name || "Error" }));
       resolve(NextResponse.json(
         { ok: false, error: `Could not start generator.py: ${err.message}`, urls: [] },
         { status: 500 },
@@ -503,10 +503,11 @@ function runGenerator(
     child.on("close", (code: number | null) => {
       clearTimeout(timeout);
 
-      // Always flush stderr — this is where generator.py logs API errors, image load failures, etc.
+      // Provider stderr may contain user input or response bodies. Keep only a
+      // bounded structural signal in application logs.
       if (stderr.trim()) {
-        const lines = stderr.trim().split("\n");
-        lines.forEach(l => console.log("[generator.py stderr]", l));
+        const stderrLineCount = stderr.trim().split("\n").length;
+        console.warn(JSON.stringify({ event: "generator_stderr", lineCount: stderrLineCount }));
       }
 
       if (code !== 0) {
@@ -539,7 +540,7 @@ function runGenerator(
         const topError = !result.ok && result.errors?.length
           ? result.errors[0]
           : undefined;
-        console.log("[generate]", result.keyword, "→", result.urls?.length ?? 0, "urls", topError ? `| error: ${topError}` : "");
+        console.log(JSON.stringify({ event: "generator_completed", ok: !!result.ok, outputCount: result.urls?.length ?? 0, hasError: !!topError }));
         // Report the ACTUAL number of images produced (urls.length) for usage
         // metering — a partial/zero success is metered at its real count only.
         const successfulImageCount = result.ok && Array.isArray(result.urls) ? result.urls.length : 0;
@@ -550,8 +551,8 @@ function runGenerator(
         Promise.resolve(onComplete?.({ ok: !!result.ok, successfulImageCount }))
           .catch(() => { /* metering must never break the response */ })
           .then(() => resolve(NextResponse.json({ ...result, ...responseMeta, error: topError, source: "generator_py" })));
-      } catch (parseErr) {
-        console.error("[generate] JSON parse failed:", parseErr, "raw stdout:", stdout.slice(0, 500));
+      } catch {
+        console.error(JSON.stringify({ event: "generator_output_parse_failed" }));
         resolve(NextResponse.json(
           { ok: false, error: "Invalid JSON from generator.py — see server terminal for details", raw: stdout.slice(0, 300), urls: [] },
           { status: 500 },
@@ -611,7 +612,7 @@ async function enqueueGenerationJob(
     .single();
 
   if (error || !data?.id) {
-    console.error("[generate] enqueue insert failed:", error?.message);
+    console.error(JSON.stringify({ event: "generation_enqueue_failed", hasDatabaseError: !!error }));
     return null;
   }
   return { jobId: data.id as string, slots: slotCount };
@@ -919,41 +920,32 @@ export async function POST(req: NextRequest) {
           { status: 429 },
         );
       }
-    } catch (err) {
+    } catch {
       // Fail open — a metering failure must not block generation.
-      console.error("[/api/generate] allowance check error:", (err as Error)?.message ?? String(err));
+      console.error(JSON.stringify({ event: "generation_allowance_check_failed" }));
     }
   }
 
-  console.log(
-    `[/api/generate] keyword="${keyword}" count=${count}/${imageCountClamp.requested} style_ref=${styleRef ? "yes" : "no"} ` +
-    `product_images=${productImages.length} enhancer_model=${process.env.OPENAI_PROMPT_ENHANCER_MODEL ? "set" : "not set"}`
-  );
+  console.log(JSON.stringify({ event: "generation_request_ready", count, requestedCount: imageCountClamp.requested, hasReference: !!styleRef, productImageCount: productImages.length, enhancerConfigured: !!process.env.OPENAI_PROMPT_ENHANCER_MODEL }));
   console.log(JSON.stringify({
     event: "api_generate_payload_debug",
     productImageCount: productImages.length,
     referenceImageCount: styleRef ? 1 : 0,
     imageOrdering: "image_inputs[] is the provider source of truth: products first, references last",
-    imageInputs: imageInputs.map(({ order, role, sourceUrl }) => ({
-      order,
-      role,
-      sourceUrl: sourceUrl.length > 120 ? `${sourceUrl.slice(0, 120)}…` : sourceUrl,
-    })),
-    productImages: productImages.map((u, i) => ({ index: i + 1, url: u.length > 120 ? `${u.slice(0, 120)}…` : u })),
-    references: styleRef ? [{ index: 1, url: styleRef.length > 120 ? `${styleRef.slice(0, 120)}…` : styleRef }] : [],
+    imageInputCount: imageInputs.length,
     promptMode,
     promptVersion,
-    category,
+    hasCategory: !!category,
     outputType,
     aspectRatio: pinFormat,
     modelKey,
     referenceStrength,
-    selectedTags,
-    primaryFormatTag,
-    directionBrief: directionBrief.slice(0, 500),
+    selectedTagCount: selectedTags.length,
+    hasPrimaryFormatTag: !!primaryFormatTag,
+    hasDirectionBrief: !!directionBrief,
     briefManuallyEdited,
-    inferredCategory,
-    selectedOpportunity,
+    hasInferredCategory: !!inferredCategory,
+    hasSelectedOpportunity: !!selectedOpportunity,
     productImageCountRequested,
     referenceImageCountRequested,
     requestedImageCount: imageCountClamp.requested,
@@ -961,7 +953,7 @@ export async function POST(req: NextRequest) {
     countClamped: imageCountClamp.clamped,
     outputCount,
     variationMode,
-    outputVariants,
+    outputVariantCount: outputVariants.length,
     generationRequestId,
     studioClientId: studioClientId ? "set" : "missing",
     maxImagesPerRequest: MAX_IMAGES_PER_REQUEST,
@@ -1040,7 +1032,7 @@ export async function POST(req: NextRequest) {
         params: jobParams as unknown as Record<string, unknown>,
       });
       if (ledger.kind === "reserved") {
-        console.log(`[/api/generate] enqueued job=${ledger.jobId} slots=${ledger.slots} user=${userId} (metered)`);
+        console.log(JSON.stringify({ event: "generation_enqueued", slots: ledger.slots, metered: true }));
         // Decision #11 (2026-08-28): carry a usage snapshot on the metered response so
         // the client can show remaining capacity without a second round trip. Never
         // throws — availability readback failure must not fail a successful enqueue.
@@ -1073,7 +1065,7 @@ export async function POST(req: NextRequest) {
     if (!enqueued) {
       return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
     }
-    console.log(`[/api/generate] enqueued job=${enqueued.jobId} slots=${enqueued.slots} user=${userId}`);
+    console.log(JSON.stringify({ event: "generation_enqueued", slots: enqueued.slots, metered: false }));
     return NextResponse.json({ jobId: enqueued.jobId, slots: enqueued.slots });
   }
 
@@ -1109,9 +1101,7 @@ export async function POST(req: NextRequest) {
   if (!userLock.acquired) {
     console.warn(JSON.stringify({
       event: "user_generation_limit",
-      generationOwnerId,
       generationRequestId,
-      lockPath: userLock.path,
     }));
     return NextResponse.json({
       ok: false,

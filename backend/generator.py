@@ -394,18 +394,18 @@ async def _url_to_part(url: str) -> dict | None:
             r = await client.get(url, headers=headers)
             r.raise_for_status()
             if not r.content:
-                print(f"[generator] ✗ ref image empty body: {url[:70]}", file=sys.stderr)
+                print("[generator] reference image returned an empty body", file=sys.stderr)
                 return None
             mime = r.headers.get("content-type", "").split(";")[0].strip().lower()
             part = _bytes_to_inline_part(r.content, mime)  # re-encodes from raw bytes
             if not part:
-                print(f"[generator] ✗ ref image not a supported image (mime={mime!r}): {url[:70]}", file=sys.stderr)
+                print(f"[generator] reference image has unsupported mime={mime!r}", file=sys.stderr)
                 return None
             kb = len(r.content) // 1024
-            print(f"[generator] ✓ ref image loaded from URL: {url[:70]} ({kb}KB)", file=sys.stderr)
+            print(f"[generator] reference image loaded ({kb}KB)", file=sys.stderr)
             return part
     except Exception as e:
-        print(f"[generator] ✗ FAILED to load ref image from URL: {url[:70]}\n  reason: {e}", file=sys.stderr)
+        print(f"[generator] reference image load failed category={type(e).__name__}", file=sys.stderr)
         return None
 
 
@@ -416,7 +416,7 @@ async def _image_input_to_part(inp: str) -> dict | None:
     if inp.startswith("http://") or inp.startswith("https://"):
         return await _url_to_part(inp)
     # blob: URLs, filesystem paths, and bare strings can never be serialized — drop loudly.
-    print(f"[generator] ✗ unsupported image input scheme (not data:/http): {inp[:48]!r}", file=sys.stderr)
+    print("[generator] unsupported image input scheme", file=sys.stderr)
     return None
 
 
@@ -1397,12 +1397,12 @@ async def _generate_via_native_generate_content(
 
             # ── Auth / key errors ─────────────────────────────────────────────
             if r.status_code in (401, 403):
-                print(f"[generator] auth error: {r.text[:300]}", file=sys.stderr)
+                print("[generator] provider authentication error", file=sys.stderr)
                 raise ValueError(f"{ERR_AUTH}::HTTP {r.status_code} — check LINAPI_KEY: {r.text[:200]}")
 
             # ── Bad request (payload too large, model not found, etc.) ─────────
             if r.status_code == 400:
-                print(f"[generator] bad request: {r.text[:400]}", file=sys.stderr)
+                print("[generator] provider rejected the request payload", file=sys.stderr)
                 raise ValueError(f"{ERR_PAYLOAD}::HTTP 400 — {r.text[:250]}")
 
             # ── 5xx server errors — retry with backoff ────────────────────────
@@ -1412,12 +1412,12 @@ async def _generate_via_native_generate_content(
                     print(f"[generator] server error {r.status_code}, waiting {wait}s before retry", file=sys.stderr)
                     await asyncio.sleep(wait)
                     continue
-                print(f"[generator] server error body: {r.text[:400]}", file=sys.stderr)
+                print(f"[generator] provider server error status={r.status_code}", file=sys.stderr)
                 raise ValueError(f"{ERR_SERVER}::HTTP {r.status_code} — {r.text[:200]}")
 
             # ── Other non-200 ─────────────────────────────────────────────────
             if r.status_code != 200:
-                print(f"[generator] unexpected status {r.status_code}: {r.text[:400]}", file=sys.stderr)
+                print(f"[generator] unexpected provider status={r.status_code}", file=sys.stderr)
                 raise ValueError(f"{ERR_UNKNOWN}::HTTP {r.status_code} — {r.text[:200]}")
 
             # ── Parse successful response ─────────────────────────────────────
@@ -1754,16 +1754,13 @@ async def prepare_generation(data: dict) -> dict:
                "error_type": "api_payload_error", "urls": [], "keyword": keyword}}
 
     # ── Collect image parts: reference first, then products ────────────────────
-    print(
-        f"\n[generator] === New generation request ===\n"
-        f"  keyword       : {keyword}\n"
-        f"  category      : {category_passed}\n"
-        f"  inferred_cat  : {inferred_category}\n"
-        f"  count         : {count}\n"
-        f"  style_ref     : {('data-url (' + str(len(style_ref)) + ' chars)') if style_ref and style_ref.startswith('data:') else style_ref or 'NONE'}\n"
-        f"  product_images: {len(product_images)} images",
-        file=sys.stderr
-    )
+    print(json.dumps({
+        "event": "generation_request_prepared",
+        "count": count,
+        "hasCategory": bool(category_passed),
+        "hasReference": bool(style_ref),
+        "productImageCount": len(product_images),
+    }), file=sys.stderr)
 
     # ── Load product images + reference in PARALLEL ───────────────────────────
     # Previous approach was sequential (4 products = 4 serial downloads).
@@ -1786,13 +1783,13 @@ async def prepare_generation(data: dict) -> dict:
         kind = str(target.get("role") or "input")
         src = str(target.get("sourceUrl") or "")
         if isinstance(result, Exception):
-            print(f"[generator] ✗ {kind} image load EXCEPTION: {result}", file=sys.stderr)
+            print(f"[generator] {kind} image load failed category={type(result).__name__}", file=sys.stderr)
             continue
         if result:
             loaded_inputs.append({**target, "part": result})
-            print(f"[generator] ✓ {kind} image loaded order={target.get('order')} source={src[:70]}", file=sys.stderr)
+            print(f"[generator] {kind} image loaded order={target.get('order')}", file=sys.stderr)
         else:
-            print(f"[generator] ✗ {kind} image FAILED to load order={target.get('order')} source={src[:70]}", file=sys.stderr)
+            print(f"[generator] {kind} image failed order={target.get('order')}", file=sys.stderr)
 
     t_img_elapsed = time.time() - t_img_start
     product_parts: list[dict] = [i["part"] for i in loaded_inputs if i.get("role") == "product"]

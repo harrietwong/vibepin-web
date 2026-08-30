@@ -709,6 +709,6 @@ async def enhance(
         }
     except Exception as exc:
         elapsed = round(time.time() - t0, 1)
-        reason  = f"{type(exc).__name__}: {str(exc)[:150]}"
+        reason = f"provider_{type(exc).__name__.lower()}"
         print(f"[enhancer] ✗ VLM call failed after {elapsed}s — {reason}", file=sys.stderr)
         return _fallback_result(user_raw_text, text_overlay, fmt, reason, category)
