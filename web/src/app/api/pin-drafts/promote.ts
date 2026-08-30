@@ -99,8 +99,31 @@ function nonEmptyString(v: unknown): v is string {
  *   1. payload.plannedAt        — local "YYYY-MM-DDTHH:mm" (studio store authority)
  *   2. scheduledDate[+scheduledTime] — "YYYY-MM-DD" [+ "HH:mm"] fallback
  *
- * Returns null when the Pin is NOT scheduled, OR is already posted (postedAt /
- * remotePinId present) — a posted Pin must never be re-scanned as "due".
+ * Returns null when the Pin is NOT scheduled.
+ *
+ * PUBLISHED MARKERS (postedAt / remotePinId) do NOT blanket-null the result any more.
+ * They used to, and that made a reschedule of a Posted Content unrunnable: the cron
+ * scans `scheduled_at`, so nulling it here meant the merchant's new slot was never
+ * looked at. It killed BOTH the deliberate re-schedule (the drawer/card path never
+ * clears postedAt/remotePinId — smartScheduleDraft / assignDraftToDate / bulkUpdateDrafts
+ * only touch the schedule fields) and the 409 re-base case, where the re-based retry
+ * legitimately carries the server's postedAt together with the merchant's new time.
+ *
+ * The rule now distinguishes the two things a schedule-plus-marker can mean:
+ *   • schedule STRICTLY LATER than postedAt → a deliberate re-schedule made after the
+ *     post. It is honoured. Re-sending is prevented downstream, not here: the cron's
+ *     owed rule `publishedForSchedule` (publishedAt >= scheduledAt) closes exactly the
+ *     destinations already published FOR this schedule, and `supersededDestinationResults`
+ *     archives the earlier post's permalink into `previousResults`.
+ *   • schedule NOT later than the post → a stale client still holding the pre-publish
+ *     schedule. Nulled, as before.
+ *
+ * LEGACY / UNPARSEABLE: a `remotePinId` with no usable `postedAt` cannot be compared, so
+ * it is NULLED (the old behaviour). Deliberately not `updatedAt`-as-proxy: the reschedule
+ * edit itself bumps `updatedAt` to now, so every future schedule would pass trivially and
+ * the guard would vanish for precisely the rows that have no publish history to protect
+ * them — such rows may carry `remotePinId` with no `destinationResults` at all, so
+ * `pendingDestinations` would owe every destination and double-post.
  *
  * TIMEZONE (RC0 WP2): the wall-clock has no offset of its own, so we need the user's
  * timezone to resolve it to a real UTC instant. When payload.scheduleTimezone is a valid
@@ -111,9 +134,33 @@ function nonEmptyString(v: unknown): v is string {
  * deterministic behavior — so nothing regresses for Pins scheduled before this change.
  */
 export function buildScheduledAt(payload: Record<string, unknown>): string | null {
-  // Already published → never due.
-  if (nonEmptyString(payload.postedAt) || nonEmptyString(payload.remotePinId)) return null;
+  const scheduled = deriveScheduledAt(payload);
+  if (!scheduled) return null;
+  return publishedGuardAllows(payload, scheduled) ? scheduled : null;
+}
 
+/**
+ * Does the published state of this payload allow `scheduled` to stand?
+ *
+ * True when nothing says the Content was posted, or when the schedule is strictly
+ * later than the post it would supersede. False for the stale-client case (the schedule
+ * is the pre-publish one the client still holds) and for a posted Content whose
+ * post-time cannot be read — see the LEGACY note on buildScheduledAt.
+ */
+function publishedGuardAllows(payload: Record<string, unknown>, scheduled: string): boolean {
+  const postedAt = nonEmptyString(payload.postedAt) ? payload.postedAt.trim() : "";
+  const hasMarker = !!postedAt || nonEmptyString(payload.remotePinId);
+  if (!hasMarker) return true;
+
+  const postedMs = postedAt ? Date.parse(postedAt) : NaN;
+  if (Number.isNaN(postedMs)) return false; // legacy / unparseable → keep nulling.
+  const scheduledMs = Date.parse(scheduled);
+  if (Number.isNaN(scheduledMs)) return false;
+  return scheduledMs > postedMs;
+}
+
+/** The due instant the payload's wall-clock resolves to, ignoring published state. */
+function deriveScheduledAt(payload: Record<string, unknown>): string | null {
   const local = deriveLocalPlanned(payload);
   if (!local) return null;
 

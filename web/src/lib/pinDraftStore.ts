@@ -1469,14 +1469,38 @@ export function mergeServerDrafts(
  *    — which is exactly the state being reconstructed. With no local edit at all,
  *    nothing is recomputed: the server's payload is adopted verbatim.
  *
- * `updatedAt` is max(local, server) — never a fresh `Date.now()`. The retry has
- * to clear the server's LWW (strict `<`, so a tie passes) without inventing a
- * timestamp newer than a write the cron may be making concurrently.
+ * `updatedAt` is max(local, server payload, server ROW column) — never a fresh
+ * `Date.now()`. The retry has to clear the server's LWW (strict `<`, so a tie
+ * passes) without inventing a timestamp newer than a write the cron may be making
+ * concurrently.
+ *
+ * The ROW column is the third input for a reason. `payload.updatedAt` and the
+ * `updated_at` COLUMN are not the same clock: a write that touches only columns —
+ * a tombstone, a cap-enforcement sweep — bumps `updated_at` without rewriting the
+ * payload. Stamping the retry from the payload alone then produces a retry that is
+ * older than the row it is aiming at, the route answers `200 skippedStale`, the
+ * client treats that as success and drops the outbox entry, and the edit is gone
+ * with no error anywhere. `row` carries what the 409 body actually observed.
  *
  * Returns the merged draft, or null when the draft is gone locally (deleted
  * mid-flight — a tombstone covers it and there is nothing to re-base).
  */
-export function rebaseDraftOnServer(server: PinDraft, sent: PinDraft): PinDraft | null {
+/**
+ * The server ROW's own columns, as observed in the 409 body — distinct from the
+ * payload stored inside it. Optional so the pure merge stays callable without one.
+ */
+export interface ServerRowMeta {
+  /** The `updated_at` COLUMN. May be newer than `payload.updatedAt` (see above). */
+  updatedAt?: string | null;
+  /** The promoted `scheduled_at` COLUMN, carried for callers that reason about it. */
+  scheduledAt?: string | null;
+}
+
+export function rebaseDraftOnServer(
+  server: PinDraft,
+  sent: PinDraft,
+  row?: ServerRowMeta,
+): PinDraft | null {
   if (!server || typeof server.id !== "string" || !server.id) return null;
   const data = load();
   const local = data.drafts[server.id];
@@ -1515,7 +1539,15 @@ export function rebaseDraftOnServer(server: PinDraft, sent: PinDraft): PinDraft 
     merged.status = status;
     merged.planningStatus = status === "ready" ? "ready" : "needs_review";
   }
-  merged.updatedAt = tsMs(local.updatedAt) > tsMs(server.updatedAt) ? local.updatedAt : server.updatedAt;
+  // max(local, server payload, server row column) — the column is the one that can
+  // be newer than everything in the payload, and the one the route's LWW compares.
+  const stamps: Array<string | null | undefined> = [local.updatedAt, server.updatedAt, row?.updatedAt];
+  let newest = local.updatedAt;
+  for (const candidate of stamps) {
+    if (typeof candidate !== "string" || !candidate) continue;
+    if (tsMs(candidate) > tsMs(newest)) newest = candidate;
+  }
+  merged.updatedAt = newest;
 
   const next = merged as unknown as PinDraft;
   const normalized = normalizeDraftMedia(next) ?? next;
