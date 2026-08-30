@@ -41,7 +41,7 @@ import {
   type PublishingMode,
   type PublishingFormat,
 } from "@/lib/publishingPrefsStore";
-import { SOCIAL_PROVIDERS, platformName, type SocialProvider } from "@/lib/social/platforms";
+import { VISIBLE_SOCIAL_PROVIDERS, platformName } from "@/lib/social/platforms";
 import { fetchSocialConnections } from "@/lib/social/socialClient";
 import { getCachedConnections, setCachedConnections } from "@/lib/social/connectionsCache";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
@@ -953,7 +953,7 @@ function PublishingTab({ saveFnRef }: { saveFnRef: React.MutableRefObject<(() =>
           <p style={{ margin: 0, fontSize: 12, color: UI.textSec }}>{t("socialPanel.loading")}</p>
         ) : null}
 
-        {SOCIAL_PROVIDERS.map(provider => {
+        {VISIBLE_SOCIAL_PROVIDERS.map(provider => {
           const summary = platforms.find(p => p.provider === provider);
           const accounts = (summary?.accounts ?? []).filter(a => a.connectionStatus === "connected");
           // A platform with no connected account offers nothing to default TO. Showing

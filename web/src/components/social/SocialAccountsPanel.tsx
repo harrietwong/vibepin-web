@@ -19,7 +19,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Link as LinkIcon, Loader2, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import { PlatformIcon } from "@/components/social/PlatformIcon";
-import { PLATFORMS, SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
+import { PLATFORMS, SOCIAL_PROVIDERS, VISIBLE_SOCIAL_PROVIDERS, type SocialProvider } from "@/lib/social/platforms";
 import type { PlatformConnectionSummary, SocialConnection } from "@/lib/social/types";
 import { SETTINGS_SOCIAL_PATH } from "@/lib/settingsPaths";
 
@@ -2116,7 +2116,7 @@ export function SocialAccountsPanel() {
       )}
 
       {(summaries !== null || loadError) &&
-        SOCIAL_PROVIDERS.map(provider => {
+        VISIBLE_SOCIAL_PROVIDERS.map(provider => {
           const summary =
             (summaries ?? notConnectedSummaries()).find(s => s.provider === provider);
           if (!summary) return null;

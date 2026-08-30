@@ -64,6 +64,18 @@ export const SOCIAL_PROVIDERS: readonly SocialProvider[] = [
   "tiktok",
 ] as const;
 
+/**
+ * Platforms exposed in customer-facing account and publishing surfaces today.
+ * TikTok intentionally remains in the canonical provider catalog so its stored
+ * data contract and future adapter work are preserved, but it has no customer
+ * entry point until connection and publishing are ready to launch.
+ */
+export const VISIBLE_SOCIAL_PROVIDERS: readonly SocialProvider[] = [
+  "pinterest",
+  "instagram",
+  "facebook",
+] as const;
+
 export const PLATFORMS: Record<SocialProvider, PlatformMeta> = {
   pinterest: {
     provider: "pinterest",

@@ -39,7 +39,7 @@ export function PricingSection() {
           <p className="text-[14px] leading-relaxed" style={{ color: "#8B93A1" }}>
             Explore high-save products, trending Pins, and keyword ideas for free. Upgrade when you
             need more AI generation, scheduling, and publishing across Pinterest, Instagram,
-            TikTok, and Facebook.
+            and Facebook.
           </p>
         </div>
 

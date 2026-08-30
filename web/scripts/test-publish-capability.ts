@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { PLATFORMS, SOCIAL_PROVIDERS } from "../src/lib/social/platforms";
+import { PLATFORMS, SOCIAL_PROVIDERS, VISIBLE_SOCIAL_PROVIDERS } from "../src/lib/social/platforms";
 
 let passed = 0;
 function test(name: string, fn: () => void) { fn(); passed++; console.log(`  OK  ${name}`); }
@@ -30,6 +30,11 @@ test("Pinterest, Instagram and Facebook are publishable; TikTok is not", () => {
   assert.equal(PLATFORMS.instagram.liveConnect, true);
   assert.equal(PLATFORMS.facebook.liveConnect, true);
   assert.equal(PLATFORMS.tiktok.liveConnect, false);
+});
+
+test("TikTok stays in the future provider catalog but has no customer-facing entry point", () => {
+  assert.equal(SOCIAL_PROVIDERS.includes("tiktok"), true);
+  assert.deepEqual(VISIBLE_SOCIAL_PROVIDERS, ["pinterest", "instagram", "facebook"]);
 });
 test("the official provider really does route Instagram to an implementation", () => {
   assert.match(official, /provider === "instagram"[\s\S]{0,120}publishToInstagramAccount/);
