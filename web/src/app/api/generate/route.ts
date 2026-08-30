@@ -227,7 +227,10 @@ function requestFallbackIdentity(req: NextRequest, body: Record<string, unknown>
  * seam is gated on an env flag that production never sets.
  */
 async function resolveAuthenticatedUserId(req: NextRequest): Promise<string | null> {
-  if (process.env.ALLOW_GENERATION_AUTH_TEST_HEADER === "true") {
+  if (
+    process.env.NODE_ENV !== "production"
+    && process.env.ALLOW_GENERATION_AUTH_TEST_HEADER === "true"
+  ) {
     const testUserId = req.headers.get("x-vibepin-test-user-id")?.trim();
     if (testUserId) return testUserId;
   }
@@ -616,6 +619,14 @@ async function enqueueGenerationJob(
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  // Production generation is authenticated in every execution mode. Keep this
+  // before JSON parsing so anonymous callers cannot spend moderation/provider
+  // work or use malformed input to probe the parser.
+  const authUserId = await resolveAuthenticatedUserId(req);
+  if (process.env.NODE_ENV === "production" && !authUserId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await req.json();
@@ -696,7 +707,6 @@ export async function POST(req: NextRequest) {
   // authenticated: 401 before a single moderation call. The bound/validation work
   // below applies to every path, so the anonymous inline path is amplification-
   // capped even though it is not authenticated.
-  const authUserId = await resolveAuthenticatedUserId(req);
   if (GENERATION_MODE === "worker" && !authUserId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

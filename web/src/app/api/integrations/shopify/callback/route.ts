@@ -15,7 +15,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { getUserIdFromCookieSession } from "@/lib/server/authUser";
+import { getUserIdFromCookies } from "@/lib/server/authUser";
 import { resolvePlan, getEntitlements } from "@/lib/server/entitlements";
 import { upsertConnection, listConnections } from "@/lib/server/shopify/connectionStore";
 import { verifyLaunchQueryHmac } from "@/lib/server/shopify/hmac";
@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
   if (!isShopifyConfigured()) return done(req, "config_error");
   if (!verifyLaunchQueryHmac(params)) return done(req, "hmac_invalid");
 
-  const uid = await getUserIdFromCookieSession();
+  const uid = await getUserIdFromCookies().catch(() => null);
   if (!uid) return done(req, "state_mismatch");
 
   const cookieValue = req.cookies.get(SHOPIFY_OAUTH_STATE_COOKIE)?.value;
