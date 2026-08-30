@@ -2704,6 +2704,17 @@ const fr: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Raccourcissez le titre ou la description avant de programmer ou publier.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Vous avez utilisé toutes les images IA incluses dans votre forfait actuel. Passez à un forfait supérieur pour générer plus d'images.",
+  "studioBoard.limit.text.allUsed": "Vous avez utilisé toutes les générations de texte IA incluses dans votre forfait actuel. Passez à un forfait supérieur pour continuer à générer du contenu IA.",
+  "studioBoard.limit.post.allUsed": "Vous avez utilisé toutes les publications programmées incluses dans votre forfait actuel. Passez à un forfait supérieur pour programmer ou publier davantage.",
+  "studioBoard.limit.upgradeCta": "Voir les forfaits",
+  "studioBoard.limit.reachedTitle": "Limite du forfait atteinte",
+  "studioBoard.limit.image.overRequestTitle": "Pas assez d'images IA restantes",
+  "studioBoard.limit.image.overRequestBody": "Vous avez demandé {requested} images mais il n'en reste que {remaining} dans votre forfait actuel. Générez les images restantes ou passez à un forfait supérieur.",
+  "studioBoard.limit.image.generateRemaining": "Générer {remaining} à la place",
+  "studioBoard.limit.image.generateOneRemaining": "Générer 1 à la place",
 };
 
 export default fr;

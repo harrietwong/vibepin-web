@@ -27,7 +27,22 @@
 
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
-import { consumeScheduledPost, deriveScheduledPostKey } from "@/lib/server/usage/meterScheduledPost";
+import {
+  consumeScheduledPost,
+  deriveScheduledPostKey,
+  immediateBucketForNow,
+  releaseScheduledPost,
+  scheduledPostLimitResponseBody,
+  signImmediateBucket,
+  usageEnforceFor,
+} from "@/lib/server/usage/meterScheduledPost";
+import {
+  classifyDelivery,
+  isRefundable,
+  readProviderSignal,
+  type DeliveryOutcome,
+} from "@/lib/server/usage/deliveryOutcome";
+import { NeedsReconnectError, NotConnectedError, PinterestTrialAccessError } from "@/lib/server/pinterest/service";
 import { publishPinForUser } from "@/lib/server/pinterest/publishPin";
 import { createServerClient } from "@/lib/supabase";
 import {
@@ -112,15 +127,117 @@ export async function POST(req: Request) {
   // (all live callers send it); sourcePinId is the documented fallback. Metered before
   // the provider call so a crash mid-publish still records the action the user took,
   // and fail-open in shadow so a ledger outage can never block a publish.
+  // Minted ONCE, here, and relayed to the client in both the success and typed-failure
+  // JSON below — this is the value /api/publish/social's second call for the SAME
+  // Content should use instead of computing its own, so a UTC-midnight straddle
+  // between the two requests cannot compute two different date buckets for one
+  // publish (see meterScheduledPost.ts's module header).
+  // mintedAt is the SAME instant the bucket itself is derived from — both travel to
+  // the client together and the social route verifies the signature against this
+  // exact pair (meterScheduledPost.ts's classifyImmediateBucket), never a value it
+  // computes itself.
+  const meteringBucketMintedAt = Date.now();
+  const meteringBucket = immediateBucketForNow(meteringBucketMintedAt);
+  // Signed only against draftId (never the sourcePinId fallback below): the social
+  // route verifies a relayed bucket against ITS OWN `postId`, which the client always
+  // sends as the draft id (see publishContent.ts) — signing against a different
+  // identity here would make a legitimate relay unverifiable there. `null` (Fix 5,
+  // production with no real salt configured) means "refuse to sign" — omit both sig
+  // and mintedAt below rather than relay an unsigned/forgeable bucket.
+  const meteringBucketSig = draftId ? signImmediateBucket(uid, draftId, meteringBucket, meteringBucketMintedAt) : undefined;
   const meterIdentity = draftId ?? (sourcePinId || null);
+  // The key this request charged under. Kept so a refund below releases the EXACT
+  // key that was consumed — re-deriving it would recompute the UTC bucket and could
+  // land on a different day (and refund nothing).
+  let meterKey: string | null = null;
+  // Whether THIS request's consume actually charged a unit (v68 `replayed:false`).
+  // The refund gate below reads it — see the comment there for why a replayed consume
+  // must never be released.
+  let meterFresh = false;
   if (meterIdentity) {
-    await consumeScheduledPost({
+    meterKey = deriveScheduledPostKey(uid, meterIdentity, undefined, meteringBucket);
+    const consumed = await consumeScheduledPost({
       userId: uid,
-      key: deriveScheduledPostKey(uid, meterIdentity),
+      key: meterKey,
       referenceId: meterIdentity,
       metadata: { source: "immediate" },
     });
+    meterFresh = consumed.kind === "consumed" && consumed.fresh === true;
+
+    // ── A.4.0 BLOCKING SITE — refuse over-quota BEFORE touching Pinterest ───────
+    // Until now `insufficient` was recorded and discarded: the scheduled-post
+    // enforce flag was a switch wired to nothing. This is the gate it turns on, and
+    // it sits ahead of the provider call on purpose — a publish refused after
+    // Pinterest already created the Pin is not a refusal, it is a lie plus a charge.
+    // Both conditions are required: the global mode must be `enforce` AND the
+    // per-type flag must be on (usageEnforceFor). In `shadow` this branch is
+    // unreachable and behaviour is exactly as before. 402 matches the image/text
+    // limit responses so the client's existing limit handling applies unchanged.
+    // No refund here: an `insufficient` consume never charged anything.
+    if (consumed.kind === "insufficient" && usageEnforceFor("scheduled_post")) {
+      if (lockKey) _inFlightPublishes.delete(lockKey);
+      void recordFailedPublishEvent(analyticsDb, eventBase, Date.now() - publishStartedMs, {
+        code: "scheduled_post_limit_reached",
+        message: "Scheduled post limit reached",
+      });
+      return Response.json(scheduledPostLimitResponseBody(), { status: 402 });
+    }
   }
+
+  /**
+   * ── DELIVERY TRI-STATE → REFUND (design §A.4; PRD v3.2 §5.3/§5.4) ────────────
+   * This route charges before publishing, so it owes a refund when nothing was
+   * created. The mapping, in the order it is evaluated:
+   *
+   *   not_sent  (REFUND)  typed `result.ok === false` — every code in
+   *                       PublishValidationFailure: bad_request, invalid_image_url,
+   *                       invalid_link, board_not_owned, carousel_too_few,
+   *                       carousel_too_many, carousel_aspect_mismatch — plus a thrown
+   *                       NotConnectedError / NeedsReconnectError (incl.
+   *                       MissingPinterestScopesError, its subclass). None of these
+   *                       reached Pinterest.
+   *   rejected  (REFUND)  thrown with a real Pinterest status 4xx AND no pin id.
+   *   sent      (CHARGE)  result.ok === true, or a thrown error that nonetheless
+   *                       carries a pin id.
+   *   delivery_unknown    thrown with no provider status at all (DatabaseError,
+   *             (CHARGE)  ConfigurationError, a socket error, our own 502 "Pinterest
+   *                       did not return a Pin id" — which has no observed provider
+   *                       status), or a 5xx.
+   *
+   * PinterestTrialAccessError is deliberately NOT refunded: the Pin is publishable,
+   * just not until Pinterest approves the app, and the same key will be charged
+   * again on the eventual retry. Refunding it would churn release/re-consume pairs
+   * for an account that simply has not been approved yet.
+   *
+   * The classification reads ONLY `providerStatus` / `providerResourceId` — never
+   * message text (see deliveryOutcome.ts).
+   */
+  const settleMetering = async (outcome: DeliveryOutcome): Promise<void> => {
+    if (!meterKey || !meterIdentity) return;
+    // ── ONLY A FRESH CONSUME MAY BE RELEASED (Codex round 7, High 1 + High 2) ────
+    // The key K is shared with /api/publish/social (same Content) and with a same-day
+    // retry of this same draft, while `usage_release_scheduled_post` takes only
+    // (user, K, reason) — it refunds the family's standing consume regardless of who
+    // asks. Without this gate, a request whose consume merely REPLAYED could give
+    // back a unit another attempt charged and delivered. `fresh` is v68's own
+    // `replayed:false`, i.e. "this request inserted the consume event".
+    // Deliberately also excludes `off` / `insufficient` / `error` consumes: none of
+    // them charged anything here, so a release after one of them could only hit a
+    // PRIOR attempt's consume.
+    // Residual, deferred to publish-action identity (PRD v3.2 §21 5A): two CONCURRENT
+    // attempts on the same key where the fresh one fails and the replaying one
+    // succeeds still refunds a delivered publish. A same-day retry AFTER a success is
+    // not a residual — it is correctly non-refundable, the unit was earned.
+    if (!meterFresh) return;
+    if (!isRefundable(outcome)) return;
+    await releaseScheduledPost({
+      userId: uid,
+      key: meterKey,
+      reason: outcome,
+      referenceId: meterIdentity,
+      metadata: { source: "immediate", route: "pinterest_pins" },
+    });
+  };
 
   try {
     const result = await publishPinForUser({
@@ -148,7 +265,23 @@ export async function POST(req: Request) {
         code: result.code,
         message: result.error,
       });
-      return Response.json({ error: result.error, code: result.code }, { status: result.status });
+      // Every typed failure is decided before (or instead of) a successful create —
+      // board_not_owned included, since Pinterest refused it and created nothing.
+      await settleMetering(classifyDelivery({ preNetwork: true }));
+      // meteringBucket travels even on a typed failure: the client may still proceed to
+      // publish this Content's other (social) destinations, and that call needs the
+      // SAME bucket this request metered under (see meterScheduledPost.ts header).
+      // meteringBucketSig travels alongside it so the social route can AUTHENTICATE
+      // the bucket, not merely accept whatever date shape it is handed.
+      return Response.json(
+        {
+          error: result.error,
+          code: result.code,
+          meteringBucket,
+          ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}),
+        },
+        { status: result.status },
+      );
     }
 
     void recordPublishEvent(analyticsDb, PUBLISH_EVENT_SUCCEEDED, {
@@ -166,6 +299,16 @@ export async function POST(req: Request) {
         // Which account this published through, so the client can pin an adopted
         // (previously untargeted) draft to it — adopt-once (PRD §14).
         connectionId: result.connectionId,
+        // Server-minted immediate-publish bucket (see meterScheduledPost.ts header) —
+        // additive field, relayed by the client to /api/publish/social so a second
+        // fan-out call for this SAME Content buckets identically even across a UTC
+        // midnight straddle.
+        meteringBucket,
+        // HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt) so the social
+        // route can verify this bucket really was minted here (and how long ago), not
+        // merely accept an in-window date shape. Travels together with the sig — a
+        // mintedAt with no sig (or vice versa) is meaningless to the verifier.
+        ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}),
       },
       { status: 201 },
     );
@@ -173,7 +316,22 @@ export async function POST(req: Request) {
     // Record the failure BEFORE mapping to a Response — recordFailedPublishEvent is fully
     // wrapped/best-effort so this can never mask the original Pinterest error.
     void recordFailedPublishEvent(analyticsDb, eventBase, Date.now() - publishStartedMs, err);
-    return pinterestErrorResponse(err);
+    // Classify by TYPE first, then by observed provider status. Our own connection
+    // errors carry an HTTP `status` we chose (409/401) that no provider ever sent —
+    // reading that as a provider rejection is exactly the bug the two-field rule
+    // exists to prevent, so they are matched by class before any status is consulted.
+    if (err instanceof PinterestTrialAccessError) {
+      // Not a delivery failure — an app-approval state. Charge stands (see above).
+    } else if (err instanceof NotConnectedError || err instanceof NeedsReconnectError) {
+      await settleMetering(classifyDelivery({ preNetwork: true }));
+    } else {
+      await settleMetering(classifyDelivery(readProviderSignal(err)));
+    }
+    // meteringBucket(+Sig) travels even on an UNTYPED (thrown) failure, for the same
+    // reason it travels on a typed one above: the client may still proceed to this
+    // Content's social destinations, and that call needs the identical bucket this
+    // request metered under.
+    return pinterestErrorResponse(err, { meteringBucket, ...(meteringBucketSig ? { meteringBucketSig, meteringBucketMintedAt } : {}) });
   } finally {
     if (lockKey) _inFlightPublishes.delete(lockKey);
   }

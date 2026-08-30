@@ -2896,6 +2896,17 @@ const zhTW: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "請縮短標題或描述後再排程或發布。",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "您已用完目前方案包含的全部 AI 圖片。升級方案即可產生更多圖片。",
+  "studioBoard.limit.text.allUsed": "您已用完目前方案包含的全部 AI 文案產生次數。升級方案即可繼續產生 AI 內容。",
+  "studioBoard.limit.post.allUsed": "您已用完目前方案包含的全部排程發布次數。升級方案即可排程或發布更多內容。",
+  "studioBoard.limit.upgradeCta": "查看方案",
+  "studioBoard.limit.reachedTitle": "已達方案上限",
+  "studioBoard.limit.image.overRequestTitle": "剩餘 AI 圖片不足",
+  "studioBoard.limit.image.overRequestBody": "您要求產生 {requested} 張圖片，但目前方案僅剩 {remaining} 張。可改為產生剩餘數量，或升級方案取得更多。",
+  "studioBoard.limit.image.generateRemaining": "改為產生 {remaining} 張",
+  "studioBoard.limit.image.generateOneRemaining": "改為產生 1 張",
 };
 
 export default zhTW;

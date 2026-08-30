@@ -36,12 +36,14 @@ export const CORE: string[] = [
   "test-asset-classification",
   "test-mvp-taxonomy",
   "test-model-label",
+  "test-limit-reached-parse",
   "test-model-switch",
   "test-assistant-detectors",
   "test-analytics-events",
   // Pinterest
   "test-pinterest-oauth",
   "test-pinterest-integrations-repair",
+  "test-pinterest-route-helpers",
   "test-pinterest-connection-consistency",
   "test-pinterest-client-dedupe",
   "test-published-pin-summary",
@@ -118,6 +120,11 @@ export const CORE: string[] = [
   "test-generation-metering",
   "test-text-metering",
   "test-scheduled-post-metering",
+  "test-usage-enforce-switches",
+  "test-publish-refund-mapping",
+  "test-cron-refund-mapping",
+  "test-ai-copy-model-config",
+  "test-social-only-metering",
   "test-aup-compliance",
   "test-public-compliance-copy",
   // Settings / support
@@ -224,6 +231,7 @@ export const STUDIO: string[] = [
   "test-drawer-product-state",
   "test-generation-product-link",
   "test-ai-generation-run",
+  "test-limit-reached-flow",
   "test-url-persistence",
   "test-pin-details-phase3",
   "test-pin-details-modal-compact",
@@ -321,6 +329,20 @@ export const EXCLUDED: Record<string, string> = {
     "unique_violation handler — so a future fix is a visible change, not an accident. " +
     "Fails loudly rather than skipping when credentials are absent, like the other " +
     "test-db-* channels.",
+  "test-db-post-release":
+    "REAL-POSTGRES integration test for the v68 scheduled-post REFUND path — writes and " +
+    "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +
+    "rather than the hermetic `npm test` gate. The refund rule (PRD v3.2 §5.3/§5.4) is " +
+    "settled almost entirely inside plpgsql: whether a refunded publish gets CHARGED " +
+    "AGAIN on the next attempt depends on the key-family arithmetic " +
+    "usage_consume_scheduled_post now does under the account lock (K → K:r1 → K:r2), and " +
+    "whether a repeated refund double-decrements depends on the (user_id, " +
+    "idempotency_key) unique. A fake that answers {ok:true} proves the TS unwraps an " +
+    "envelope and nothing about the arithmetic the money rests on. It also pins the " +
+    "exact refusal string the real RPC returns (`insufficient_capacity`), which the " +
+    "A.4.0 blocking sites match on — a mismatch there is a limit gate that is green in " +
+    "the fakes and open in production. Fails loudly rather than skipping when " +
+    "credentials are absent, like the other test-db-* channels.",
   "test-usage-ledger-db":
     "REAL-POSTGRES integration test for the v55 usage-ledger primitives — writes and " +
     "deletes rows in the isolated Supabase test project, so it runs via `npm run test:db` " +

@@ -70,7 +70,10 @@ let rpcCalls: RpcCall[] = [];
 let enqueueInsertCount = 0;
 
 // Controls what the ledger RPC returns, so a test can force insufficient/error.
-type LedgerMode = "reserve_ok" | "reserve_insufficient" | "reserve_error";
+// "reserve_insufficient_no_availability" mirrors an older/partial RPC payload that
+// omits available_recurring/available_bonus entirely (decision #6, 2026-08-28: the
+// route must still respond with nulls, not throw or leave the keys undefined).
+type LedgerMode = "reserve_ok" | "reserve_insufficient" | "reserve_insufficient_no_availability" | "reserve_error";
 let ledgerMode: LedgerMode = "reserve_ok";
 
 function ledgerResult(fn: string): { data: unknown; error: { message: string; code?: string } | null } {
@@ -82,12 +85,18 @@ function ledgerResult(fn: string): { data: unknown; error: { message: string; co
     if (ledgerMode === "reserve_insufficient") {
       return { data: { ok: false, reason: "insufficient_capacity", job_id: null, available_recurring: 0, available_bonus: 0 }, error: null };
     }
+    if (ledgerMode === "reserve_insufficient_no_availability") {
+      return { data: { ok: false, reason: "insufficient_capacity", job_id: null }, error: null };
+    }
     return { data: { ok: true, replayed: false, reservation_id: "res-1", job_id: "job-metered-1" }, error: null };
   }
   if (fn === "usage_reserve") {
     if (ledgerMode === "reserve_error") return { data: null, error: { message: "ledger down" } };
     if (ledgerMode === "reserve_insufficient") {
       return { data: { ok: false, reason: "insufficient_capacity", available_recurring: 0, available_bonus: 0 }, error: null };
+    }
+    if (ledgerMode === "reserve_insufficient_no_availability") {
+      return { data: { ok: false, reason: "insufficient_capacity" }, error: null };
     }
     return { data: { ok: true, replayed: false, reservation_id: "res-1" }, error: null };
   }
@@ -126,13 +135,20 @@ function fakeServerClient() {
           };
         },
         select() {
-          // Two consumers of .select():
+          // Three consumers of .select():
           //   - generation_worker_status heartbeat lookup (.eq().maybeSingle/single)
           //   - creem_subscriptions grant lookup (.eq().in() → [])
+          //   - usage_accounts availability readback (.eq().maybeSingle) — decision #11
           const chain = {
             eq() {
               return {
-                maybeSingle: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
+                maybeSingle: async () => {
+                  if (table === "usage_accounts") {
+                    // limit 100, used 10, reserved 5 → availableAfterReservation = 85.
+                    return { data: { ai_images_used: 10, ai_images_limit: 100, ai_images_reserved: 5 }, error: null };
+                  }
+                  return { data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null };
+                },
                 single: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
                 // creem_subscriptions: no active subscription → free plan.
                 in: async () => ({ data: [], error: null }),
@@ -237,12 +253,18 @@ type RunOpts = {
   anon?: boolean;
   ledger?: LedgerMode;
   urls?: number;
+  // Per-type enforce switch (decision #8, 2026-08-28). Defaults to ON so every
+  // pre-existing "ENFORCE ... -> 402" case below keeps asserting the blocking path
+  // unchanged; pass `false` to prove enforce-mode WITHOUT the flag does not block.
+  enforceAiImages?: boolean;
 };
 
 async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{ status: number; json: Record<string, unknown> }> {
   const meter = opts.meterMode ?? "off";
   if (meter === "off") delete process.env.USAGE_METERING_MODE;
   else process.env.USAGE_METERING_MODE = meter;
+  if (opts.enforceAiImages === false) delete process.env.USAGE_ENFORCE_AI_IMAGES;
+  else process.env.USAGE_ENFORCE_AI_IMAGES = "true";
   process.env.GENERATION_MODE = opts.genMode ?? "inline";
   process.env.MODERATION_MOCK_DECISION = opts.decision ?? "allow";
   ledgerMode = opts.ledger ?? "reserve_ok";
@@ -262,6 +284,7 @@ async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{
   } finally {
     process.env.GENERATION_MODE = "inline";
     delete process.env.USAGE_METERING_MODE;
+    delete process.env.USAGE_ENFORCE_AI_IMAGES;
     if (anonHeaderWasOn) process.env.ALLOW_GENERATION_AUTH_TEST_HEADER = anonHeaderWasOn;
   }
 }
@@ -311,6 +334,34 @@ async function main() {
     assertEq(b.ok, false, "ok:false");
     assertEq((b.urls as unknown[]).length, 0, "urls empty");
     assertEq(b.generation_request_id, "gen_1", "request id echoed");
+  });
+
+  // ── Product decision #6 (2026-08-28): the 402 body must carry availability ────
+  await test("UNIT: enforce limit body WITHOUT availability omits the availability fields' values (undefined)", () => {
+    const b = meter.aiImageLimitResponseBody("gen_1");
+    assertEq(b.available_recurring, undefined, "no availability arg → no available_recurring key set");
+    assertEq(b.available_bonus, undefined, "no availability arg → no available_bonus key set");
+    assertEq(b.requested, undefined, "no availability arg → no requested key set");
+  });
+
+  await test("UNIT: enforce limit body WITH availability carries available_recurring/available_bonus/requested", () => {
+    const b = meter.aiImageLimitResponseBody("gen_1", { availableRecurring: 3, availableBonus: 2, requested: 5 });
+    assertEq(b.available_recurring, 3, "available_recurring");
+    assertEq(b.available_bonus, 2, "available_bonus");
+    assertEq(b.requested, 5, "requested");
+    // Existing keys are unchanged when availability is also passed.
+    assertEq(b.code, "ai_image_limit_reached", "code unchanged");
+    assertEq(b.error_type, "ai_image_limit_reached", "error_type unchanged");
+    assertEq(b.ok, false, "ok:false unchanged");
+    assertEq((b.urls as unknown[]).length, 0, "urls empty unchanged");
+    assertEq(b.generation_request_id, "gen_1", "request id echoed unchanged");
+  });
+
+  await test("UNIT: enforce limit body WITH availability but null recurring/bonus keeps the keys present as null", () => {
+    const b = meter.aiImageLimitResponseBody("gen_1", { availableRecurring: null, availableBonus: null, requested: 1 });
+    assertEq(b.available_recurring, null, "available_recurring null (unknown), key still present");
+    assertEq(b.available_bonus, null, "available_bonus null (unknown), key still present");
+    assertEq(b.requested, 1, "requested");
   });
 
   // ── OFF MODE — the default; ZERO ledger calls on every path ───────────────────
@@ -426,6 +477,11 @@ async function main() {
     assertEq(status, 402, "limit response status");
     assertEq(json.code, "ai_image_limit_reached", "code");
     assertEq(enqueueInsertCount, 0, "no fallback enqueue in enforce mode");
+    // Product decision #6 (2026-08-28): the fake RPC's insufficient payload carries
+    // available_recurring: 0, available_bonus: 0 — the route must forward them verbatim.
+    assertEq(json.available_recurring, 0, "available_recurring forwarded from the ledger RPC");
+    assertEq(json.available_bonus, 0, "available_bonus forwarded from the ledger RPC");
+    assertEq(json.requested, 4, "requested echoes the slot count asked for (default count=4)");
   });
 
   await test("ENFORCE inline: insufficient balance → 402, no dispatch", async () => {
@@ -433,12 +489,66 @@ async function main() {
     assertEq(status, 402, "limit response status");
     assertEq(json.code, "ai_image_limit_reached", "code");
     assertEq(spawnCount, 0, "no generator dispatch when the limit was reached");
+    assertEq(json.available_recurring, 0, "available_recurring forwarded from the ledger RPC");
+    assertEq(json.available_bonus, 0, "available_bonus forwarded from the ledger RPC");
+    assertEq(json.requested, 4, "requested echoes the slot count asked for (default count=4)");
+  });
+
+  await test("ENFORCE worker: insufficient balance with NO availability in the RPC payload → nulls, not undefined", async () => {
+    const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "reserve_insufficient_no_availability" });
+    assertEq(status, 402, "limit response status");
+    assertEq(json.code, "ai_image_limit_reached", "code");
+    assertEq(json.available_recurring, null, "missing RPC field → null (not undefined)");
+    assertEq(json.available_bonus, null, "missing RPC field → null (not undefined)");
+    assertEq(json.requested, 4, "requested is still echoed from the route's own count, independent of the RPC payload");
+  });
+
+  await test("ENFORCE inline: insufficient balance with NO availability in the RPC payload → nulls, not undefined", async () => {
+    const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "inline", ledger: "reserve_insufficient_no_availability" });
+    assertEq(status, 402, "limit response status");
+    assertEq(json.code, "ai_image_limit_reached", "code");
+    assertEq(json.available_recurring, null, "missing RPC field → null (not undefined)");
+    assertEq(json.available_bonus, null, "missing RPC field → null (not undefined)");
+    assertEq(json.requested, 4, "requested is still echoed from the route's own count, independent of the RPC payload");
   });
 
   await test("ENFORCE worker: sufficient balance still generates normally", async () => {
     const { status, json } = await run(fullBody(), { meterMode: "enforce", genMode: "worker", ledger: "reserve_ok" });
     assertEq(status, 200, "status");
     assertEq(json.jobId, "job-metered-1", "metered job id");
+  });
+
+  // ── PER-TYPE ENFORCE SWITCH (decision #8, 2026-08-28) ─ the global mode alone
+  // blocks nothing until USAGE_ENFORCE_AI_IMAGES is also set ─────────────────
+  await test("ENFORCE worker WITHOUT USAGE_ENFORCE_AI_IMAGES: insufficient balance does NOT block", async () => {
+    const { status, json } = await run(fullBody(), {
+      meterMode: "enforce", genMode: "worker", ledger: "reserve_insufficient", enforceAiImages: false,
+    });
+    assertEq(status, 200, "generation still proceeds — the global mode alone does not block");
+    assertEq(json.jobId, "job_plain", "fell back to the plain enqueue, same as shadow");
+  });
+
+  await test("ENFORCE inline WITHOUT USAGE_ENFORCE_AI_IMAGES: insufficient balance does NOT block", async () => {
+    const { status, json } = await run(fullBody(), {
+      meterMode: "enforce", genMode: "inline", ledger: "reserve_insufficient", enforceAiImages: false,
+    });
+    assertEq(status, 200, "generation still proceeds — the global mode alone does not block");
+    assertEq(json.ok, true, "ok");
+  });
+
+  // ── Decision #11 (2026-08-28): the metered enqueue response carries a usage block ─
+  await test("SHADOW worker: reserved response includes usage.reserved and usage.availableAfterReservation", async () => {
+    const { status, json } = await run(fullBody({ count: 1 }), { meterMode: "shadow", genMode: "worker", ledger: "reserve_ok" });
+    assertEq(status, 200, "status");
+    const usage = json.usage as Record<string, unknown> | undefined;
+    assert(!!usage && typeof usage === "object", "usage object present on the metered response");
+    assertEq(usage!.reserved, 1, "reserved echoes the slot count");
+    assertEq(usage!.availableAfterReservation, 85, "computed from usage_accounts: limit 100 - used 10 - reserved 5");
+  });
+
+  await test("OFF worker: the plain enqueue response has NO usage field (unmetered path unchanged)", async () => {
+    const { json } = await run(fullBody(), { meterMode: "off", genMode: "worker" });
+    assertEq(json.usage, undefined, "off mode: byte-for-byte unchanged, no usage field");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -141,16 +141,34 @@ export function checkUnmergedBranches(branches, opts) {
  * local/test. Pure (env in → problems out) and exported at the top BEFORE any side
  * effects, so a unit test can drive it with fake env.
  */
+// Mirror of web/src/lib/ai-copy/modelId.ts isPlausibleModelId — the guard is a
+// dependency-free .mjs and cannot import the TS module, so the rule is duplicated
+// here verbatim; modelId.ts is the source of truth and test-predeploy-guard pins both.
+function isPlausibleModelId(value) {
+  if (typeof value !== "string") return false;
+  if (value.length === 0 || value.length > 120) return false;
+  if (/\s/.test(value)) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value);
+}
+
 export function checkAiCopyTextModelForProd(env) {
   const problems = [];
   const hasProviderCredential =
     String(env.LINAPI_KEY ?? "").trim() !== "" || String(env.OPENAI_API_KEY ?? "").trim() !== "";
   if (!hasProviderCredential) return problems;
-  if (String(env.AI_COPY_TEXT_MODEL ?? "").trim() === "") {
+  const model = String(env.AI_COPY_TEXT_MODEL ?? "").trim();
+  if (model === "") {
     problems.push(
       "an AI-copy provider credential is configured (LINAPI_KEY or OPENAI_API_KEY) but AI_COPY_TEXT_MODEL is unset/blank — " +
         "refusing a production deploy on an implicit default model (a credential change would silently change which model writes user copy). " +
         "Set AI_COPY_TEXT_MODEL explicitly.",
+    );
+  } else if (!isPlausibleModelId(model)) {
+    problems.push(
+      "AI_COPY_TEXT_MODEL is set but is not a plausible model id (" +
+        "must be at most 120 chars, contain no whitespace, and match ^[A-Za-z0-9][A-Za-z0-9._:/-]*$) — " +
+        "the runtime treats an implausible id exactly like an unset one and fails closed in production (PRD v3.2 §6.5). " +
+        "Fix the value rather than deploying a model id the provider cannot resolve.",
     );
   }
   return problems;
@@ -367,6 +385,24 @@ try {
 // generation on an implicit, credential-dependent default model.
 for (const problem of checkAiCopyTextModelForProd(process.env)) {
   failures.push(problem);
+}
+
+// --- Informational only: per-type usage enforce switches (decision #8, 2026-08-28) ---
+// USAGE_METERING_MODE=enforce alone blocks nothing — each usage type only actually
+// enforces when its own flag is also truthy (see usageEnforceFor in
+// src/lib/server/usage/meterGeneration.ts). This is NOT a blocking check: an operator
+// may deliberately ship enforce mode with zero/some/all type flags on. Print the
+// current combination so a deploy log always shows what will actually block.
+{
+  const enforceFlagNames = ["USAGE_ENFORCE_AI_IMAGES", "USAGE_ENFORCE_AI_TEXT", "USAGE_ENFORCE_SCHEDULED_POSTS"];
+  const isTruthyFlag = (raw) => {
+    if (!raw) return false;
+    const v = String(raw).trim().toLowerCase();
+    return v === "1" || v === "true";
+  };
+  const meteringMode = String(process.env.USAGE_METERING_MODE ?? "off").trim().toLowerCase();
+  const flagStates = enforceFlagNames.map((name) => `${name}=${isTruthyFlag(process.env[name]) ? "on" : "off"}`);
+  infoLines.push(`usage metering mode: ${meteringMode || "off"} | enforce switches: ${flagStates.join(", ")}`);
 }
 
 // --- Resolve outcome ---

@@ -2774,6 +2774,17 @@ const tr: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Planlamadan veya yayınlamadan önce başlığı veya açıklamayı kısaltın.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Mevcut planınıza dahil olan tüm yapay zekâ görsellerini kullandınız. Daha fazla görsel oluşturmak için planınızı yükseltin.",
+  "studioBoard.limit.text.allUsed": "Mevcut planınıza dahil olan tüm yapay zekâ metin oluşturma haklarını kullandınız. Yapay zekâ içeriği oluşturmaya devam etmek için planınızı yükseltin.",
+  "studioBoard.limit.post.allUsed": "Mevcut planınıza dahil olan tüm zamanlanmış gönderileri kullandınız. Daha fazla gönderi zamanlamak veya yayımlamak için planınızı yükseltin.",
+  "studioBoard.limit.upgradeCta": "Planları görüntüle",
+  "studioBoard.limit.reachedTitle": "Plan sınırına ulaşıldı",
+  "studioBoard.limit.image.overRequestTitle": "Yeterli yapay zekâ görseli kalmadı",
+  "studioBoard.limit.image.overRequestBody": "{requested} görsel istediniz ancak mevcut planınızda yalnızca {remaining} kaldı. Bunun yerine kalanları oluşturun veya daha fazlası için planınızı yükseltin.",
+  "studioBoard.limit.image.generateRemaining": "Bunun yerine {remaining} oluştur",
+  "studioBoard.limit.image.generateOneRemaining": "Bunun yerine 1 oluştur",
 };
 
 export default tr;

@@ -50,6 +50,7 @@ const { contentDestinationResults } = require("../src/lib/contentDraftModel") as
 /* eslint-enable @typescript-eslint/no-require-imports */
 import type { PinDraft } from "../src/lib/pinDraftStore";
 import type { PublishContentDeps } from "../src/lib/studio/publishContent";
+import { SocialApiError } from "../src/lib/social/socialClient";
 
 let pass = 0;
 let fail = 0;
@@ -109,6 +110,9 @@ type SocialCall = Parameters<PublishContentDeps["publishToSocial"]>[0];
 function makeDeps(opts: {
   pinFails?: { code?: string; message: string };
   socialStatus?: "published" | "failed";
+  /** publishToSocial REJECTS (a whole-request refusal, e.g. a 402 before any
+   *  destination was attempted) instead of resolving with a per-destination body. */
+  socialThrows?: Error;
 } = {}) {
   const pinCalls: PinCall[] = [];
   const socialCalls: SocialCall[] = [];
@@ -125,6 +129,7 @@ function makeDeps(opts: {
     }) as unknown as PublishContentDeps["publishPin"],
     publishToSocial: (async (input: SocialCall) => {
       socialCalls.push(input);
+      if (opts.socialThrows) throw opts.socialThrows;
       const status = opts.socialStatus ?? "published";
       return {
         ok: status === "published",
@@ -496,6 +501,61 @@ async function main(): Promise<void> {
   const ids = out.results.map(r => r.destinationId);
   assert.ok(ids.includes("instagram:" + IG_CONN) && ids.includes("instagram:conn-ig-2"), JSON.stringify(ids));
 });
+
+  console.log("\n=== social-only refusals carry their code onto the outcome ===");
+
+  await test("social-only publish refused with 402 scheduled_post_limit_reached -> outcome has that errorCode", async () => {
+    const draft = seedDraft({
+      id: "social-limit",
+      destinations: [{ provider: "instagram", socialConnectionId: IG_CONN }],
+    });
+    const { deps, socialCalls } = makeDeps({
+      socialThrows: new SocialApiError(
+        "You have reached your scheduled post limit for this billing period.",
+        402,
+        "scheduled_post_limit_reached",
+      ),
+    });
+    const out = await publishContent(draft.id, { deps });
+
+    assert.equal(socialCalls.length, 1, "the call was attempted");
+    assert.equal(out.published.length, 0);
+    assert.equal(out.failed.length, 1);
+    const ig = out.results.find(r => r.provider === "instagram")!;
+    assert.equal(ig.status, "failed");
+    assert.equal(ig.errorCode, "scheduled_post_limit_reached");
+    assert.match(ig.errorMessage ?? "", /scheduled post limit/);
+  });
+
+  await test("a generic 500 social failure -> no errorCode, message preserved", async () => {
+    const draft = seedDraft({
+      id: "social-500",
+      destinations: [{ provider: "instagram", socialConnectionId: IG_CONN }],
+    });
+    const { deps } = makeDeps({
+      socialThrows: new SocialApiError("Internal server error.", 500),
+    });
+    const out = await publishContent(draft.id, { deps });
+
+    const ig = out.results.find(r => r.provider === "instagram")!;
+    assert.equal(ig.status, "failed");
+    assert.equal(ig.errorCode, undefined, "a code-less refusal must not fabricate one");
+    assert.equal(ig.errorMessage, "Internal server error.");
+  });
+
+  await test("a non-SocialApiError social failure (e.g. a network throw) -> no errorCode either", async () => {
+    const draft = seedDraft({
+      id: "social-network",
+      destinations: [{ provider: "instagram", socialConnectionId: IG_CONN }],
+    });
+    const { deps } = makeDeps({ socialThrows: new Error("Could not reach social connections.") });
+    const out = await publishContent(draft.id, { deps });
+
+    const ig = out.results.find(r => r.provider === "instagram")!;
+    assert.equal(ig.status, "failed");
+    assert.equal(ig.errorCode, undefined);
+    assert.equal(ig.errorMessage, "Could not reach social connections.");
+  });
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);

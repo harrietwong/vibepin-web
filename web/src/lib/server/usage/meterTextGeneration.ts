@@ -63,7 +63,7 @@ import {
 
 // Re-export the shared mode surface so callers can import the whole meter contract
 // from one place if they prefer (the route imports usageMeteringMode from here).
-export { usageMeteringMode, type UsageMeteringMode } from "./meterGeneration";
+export { usageMeteringMode, type UsageMeteringMode, usageEnforceFor, type UsageEnforceType } from "./meterGeneration";
 
 /** The single canonical slot key for a text reservation. One request = one unit. */
 export const TEXT_SLOT_KEYS = ["s0"] as const;

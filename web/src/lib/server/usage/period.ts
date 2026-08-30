@@ -155,3 +155,111 @@ function parseIso(value: string | null): Date | null {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+// MONTHLY SUB-WINDOWS INSIDE A LONGER SUBSCRIPTION PERIOD (annual plans)
+// ════════════════════════════════════════════════════════════════════════════════
+// Product rule (裁决 #2 / PRD v3.2 §9.1): an ANNUAL subscriber pays yearly but gets
+// the SAME MONTHLY allowances as a monthly subscriber, reset MONTHLY, anchored on the
+// subscription start. Billing cadence and allowance cadence are separate concerns.
+//
+// The webhook hands us the subscription's current_period_start/end, which for an
+// annual plan is a TWELVE-MONTH window. Feeding that to usage_ensure_account would
+// store a 12-month usage period, so the ledger would only reset once a year. The fix
+// is entirely on this side: derive the monthly sub-window that contains `now` and pass
+// THAT as p_period_start/end, while p_period_anchor stays the subscription start.
+//
+// WHY NO MIGRATION: the v56 rollover already advances by whole months from the stored
+// anchor (`anchor + N months`, smallest N with anchor + N months > now). Once the
+// FIRST period we insert is one month wide and the anchor is the subscription start,
+// every subsequent rollover the RPC performs is already monthly — including across the
+// year-2 renewal boundary, because year-2's start is anchor + 12 months, i.e. a point
+// on the very same monthly lattice. The RPC contract is untouched.
+
+/** A half-open monthly window plus the month index N it came from (window = [anchor+(N-1)mo, anchor+N mo)). */
+export type MonthlyWindow = {
+  start: Date;
+  end: Date;
+  /** Smallest whole month count N with anchor + N months > now. Always >= 1. */
+  n: number;
+};
+
+/**
+ * The monthly window containing `now`, measured in whole months from `anchorMs`.
+ *
+ * This is the v56 rollover rule expressed in TS, character for character:
+ *   find the smallest whole N such that  anchor + N months  is STRICTLY after now,
+ *   then window = [anchor + (N-1) months, anchor + N months).
+ * Month arithmetic is addMonthsUtcClamped, which reproduces Postgres's end-of-month
+ * clamp (2024-01-31 + 1 month = 2024-02-29). Every boundary is computed from the FIXED
+ * anchor rather than from the previous boundary, so there is no drift and a month-end
+ * anchor recovers its day-of-month the moment the target month is long enough.
+ *
+ * When `now` is at or before the anchor (a subscription whose start is in the future,
+ * or the very instant it begins) N stays 1 and the window is [anchor, anchor+1mo) —
+ * the same degenerate-but-valid answer freePeriodForNow gives. The 1200-month (100y)
+ * guard mirrors the SQL safety valve so a corrupt anchor cannot spin the loop.
+ *
+ * PURE: no clock, no DB, no env. `nowMs` is always passed in.
+ */
+export function monthlyWindowFrom(anchorMs: number, nowMs: number): MonthlyWindow {
+  const anchor = new Date(anchorMs);
+  let n = 1;
+  while (addMonthsUtcClamped(anchor, n).getTime() <= nowMs && n < 1200) {
+    n += 1;
+  }
+  return {
+    start: addMonthsUtcClamped(anchor, n - 1),
+    end: addMonthsUtcClamped(anchor, n),
+    n,
+  };
+}
+
+/**
+ * Keep a monthly sub-window inside the subscription's current_period_end.
+ *
+ * Two distinct jobs, and the second one is the load-bearing safety property:
+ *
+ *  1. TRUNCATE the final sub-window. An annual period is rarely an exact whole number
+ *     of months away from every boundary — and a plan's last month can overhang the
+ *     subscription end by hours (or by a day, via the month-end clamp). The window must
+ *     never claim allowance past the point the renewal webhook will re-anchor from.
+ *
+ *  2. REPAIR a stale window. If `now` is already at or past the subscription end (a
+ *     late renewal webhook, a lazy ensure fired after expiry, a replayed event), the
+ *     naive window computed from `now` starts AT OR AFTER subEnd. Clamping only the end
+ *     would then yield end <= start, and usage_ensure_account raises
+ *     `p_period_end must be after p_period_start` → the webhook 500s → Creem retries
+ *     forever. So instead we recompute the LAST window that still lies inside the
+ *     subscription (the one containing subEnd − 1ms) and truncate that.
+ *
+ *     For a MONTHLY subscription this repair is what makes the change a no-op: a stale
+ *     monthly hint re-derives exactly [start, end) — the same pair passed through
+ *     verbatim today.
+ *
+ * `subscriptionEndMs` that is not a finite number (absent/unparseable hint end) returns
+ * the window untouched: with no known subscription end there is nothing to clamp to,
+ * and inventing one would freeze the window.
+ */
+export function clampToSubscriptionEnd(
+  window: MonthlyWindow,
+  subscriptionEndMs: number,
+  anchorMs: number,
+): MonthlyWindow {
+  if (!Number.isFinite(subscriptionEndMs)) return window;
+  // Subscription end at or before the anchor is a contradictory hint; the caller's
+  // ordering repair (paidPeriodFromMirror) owns that case, so leave the window alone
+  // rather than produce an empty period here.
+  if (subscriptionEndMs <= anchorMs) return window;
+
+  let w = window;
+  if (w.start.getTime() >= subscriptionEndMs) {
+    // Stale: fall back to the last window that still contains a point inside the
+    // subscription. subEnd − 1ms is inside by construction (subEnd > anchor).
+    w = monthlyWindowFrom(anchorMs, subscriptionEndMs - 1);
+  }
+  if (w.end.getTime() > subscriptionEndMs) {
+    return { start: w.start, end: new Date(subscriptionEndMs), n: w.n };
+  }
+  return w;
+}

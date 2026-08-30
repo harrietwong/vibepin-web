@@ -21,6 +21,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
 process.env.USAGE_REQUEST_KEY_SALT = "test-salt";
 
 import assert from "node:assert";
+import crypto from "node:crypto";
 
 let passed = 0;
 let failed = 0;
@@ -90,6 +91,245 @@ async function load(mode: string) {
     assert.equal(a, b, "two immediate publishes of one draft the same day are one action");
   });
 
+  // ── The server-minted bucket override (the midnight-relay fix) ───────────────
+  await test("deriveScheduledPostKey with a bucketOverride uses it INSTEAD of computing its own", async () => {
+    const m = await load("shadow");
+    const withOverride = m.deriveScheduledPostKey("u-1", "pd_x", undefined, "2020-01-01");
+    // Compare against a key manually built from the same salted-hash contract by
+    // driving `immediateBucketForNow` to report that exact date, so this assertion
+    // does not depend on today's real UTC date.
+    const asIfToday = m.deriveScheduledPostKey("u-1", "pd_x", undefined, m.immediateBucketForNow(Date.parse("2020-01-01T12:00:00.000Z")));
+    assert.equal(withOverride, asIfToday, "the override IS the bucket the key is built from");
+  });
+
+  await test("a real scheduledAtIso always wins over a bucketOverride — the override only applies on the immediate path", async () => {
+    const m = await load("shadow");
+    const withScheduledAt = m.deriveScheduledPostKey("u-1", "pd_x", "2026-08-01T09:00:00.000Z", "2020-01-01");
+    const withoutOverride = m.deriveScheduledPostKey("u-1", "pd_x", "2026-08-01T09:00:00.000Z");
+    assert.equal(withScheduledAt, withoutOverride, "a scheduled key must ignore an override — it is never on the immediate path");
+  });
+
+  // -- classifyImmediateBucket -- strict bucket-format validation ----------------
+  await test("classifyImmediateBucket: a well-formed but unsigned bucket is bad_signature (no sig sent)", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2026-08-15", undefined, nowMs, nowMs), "bad_signature");
+  });
+
+  await test("classifyImmediateBucket: malformed strings are rejected before the signature is even checked", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-08-15T12:00:00.000Z");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2026-8-1", "deadbeef", nowMs, nowMs), "malformed", "unpadded month/day");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", 123, "deadbeef", nowMs, nowMs), "malformed", "non-string candidate");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "", "deadbeef", nowMs, nowMs), "malformed", "empty string");
+  });
+
+  // -- Strict calendar validation (Codex round 3, Low -- still enforced by classifyImmediateBucket) --
+  // A naive regex+Date.parse pair lets "2026-02-30" or "2026-13-01" through:
+  // JS's Date normalizes overflow fields FORWARD into a real (different) date
+  // instead of failing, so classifyImmediateBucket must reject anything whose
+  // own ISO round-trip does not equal the input string, on top of the regex.
+  await test("classifyImmediateBucket: 2026-02-30 (calendar-invalid day) is malformed", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2026-03-01T12:00:00.000Z");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2026-02-30", "deadbeef", nowMs, nowMs), "malformed", "February never has a 30th");
+  });
+
+  await test("classifyImmediateBucket: 2024-02-29 (real leap day) round-trips ok when correctly signed", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2024-02-29T12:00:00.000Z");
+    const sig = m.signImmediateBucket("u-1", "pd_x", "2024-02-29", mintedAtMs);
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2024-02-29", sig, mintedAtMs, mintedAtMs), "ok", "2024 is a leap year -- Feb 29 is real");
+  });
+
+  await test("classifyImmediateBucket: 2025-02-29 (2025 is NOT a leap year) is malformed", async () => {
+    const m = await load("shadow");
+    const nowMs = Date.parse("2025-03-01T12:00:00.000Z");
+    assert.equal(m.classifyImmediateBucket("u-1", "pd_x", "2025-02-29", "deadbeef", nowMs, nowMs), "malformed", "2025 has no Feb 29 -- it normalizes forward to Mar 1");
+  });
+
+  // -- signImmediateBucket / verifyImmediateBucket (Codex round 4 -- mintedAt-bound) --
+  await test("signImmediateBucket/verifyImmediateBucket: round-trips across a UTC-midnight straddle within the relay window", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-28T23:59:59.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs); // "2026-08-28" -- the mint instant's OWN date
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    const verifyAtMs = Date.parse("2026-08-29T00:00:01.000Z"); // 2s later, crossed midnight
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs, verifyAtMs), true, "a relay that straddles UTC midnight still resolves to the day it was minted on");
+  });
+
+  await test("verifyImmediateBucket: the same genuine signature verified 20 hours later is stale", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-28T23:59:59.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    const verifyAtMs = mintedAtMs + 20 * 60 * 60 * 1000; // 20 hours later
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs, verifyAtMs), false, "far past IMMEDIATE_BUCKET_MAX_RELAY_MS");
+  });
+
+  await test("verifyImmediateBucket: a mintedAt in the future beyond skew tolerance fails", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    const verifyAtMs = mintedAtMs - 60_000; // "now" is a minute BEFORE the mint -- negative age
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs, verifyAtMs), false, "negative age (clock skew) is rejected as stale");
+  });
+
+  await test("verifyImmediateBucket: a tampered bucket (different day than what was signed) fails", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-16", sig, mintedAtMs, mintedAtMs), false);
+  });
+
+  await test("verifyImmediateBucket: a tampered mintedAtMs fails", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig, mintedAtMs + 1, mintedAtMs + 1), false, "the mintedAtMs bound into the sig was changed");
+  });
+
+  await test("verifyImmediateBucket: a signature minted for a different draftId fails", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_other", bucket, sig, mintedAtMs, mintedAtMs), false);
+  });
+
+  await test("verifyImmediateBucket: a signature minted for a different userId fails", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-2", "pd_x", bucket, sig, mintedAtMs, mintedAtMs), false);
+  });
+
+  await test("verifyImmediateBucket: missing/undefined/non-string signatures are rejected, never throw", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, undefined, mintedAtMs, mintedAtMs), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, null, mintedAtMs, mintedAtMs), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, 123, mintedAtMs, mintedAtMs), false);
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, "", mintedAtMs, mintedAtMs), false);
+  });
+
+  await test("verifyImmediateBucket: a shorter/longer or non-hex signature is rejected without throwing (timingSafeEqual length-mismatch guard)", async () => {
+    const m = await load("shadow");
+    const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+    const bucket = m.immediateBucketForNow(mintedAtMs);
+    const sig = m.signImmediateBucket("u-1", "pd_x", bucket, mintedAtMs) as string;
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", bucket, sig.slice(0, -2), mintedAtMs, mintedAtMs));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig.slice(0, -2), mintedAtMs, mintedAtMs), false, "truncated signature must not verify");
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", bucket, sig + "00", mintedAtMs, mintedAtMs));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, sig + "00", mintedAtMs, mintedAtMs), false, "extended signature must not verify");
+    assert.doesNotThrow(() => m.verifyImmediateBucket("u-1", "pd_x", bucket, "not-hex-at-all!!", mintedAtMs, mintedAtMs));
+    assert.equal(m.verifyImmediateBucket("u-1", "pd_x", bucket, "not-hex-at-all!!", mintedAtMs, mintedAtMs), false, "non-hex garbage must not verify");
+  });
+
+  // -- deriveScheduledPostKey override path ----------------------------------------
+  await test("deriveScheduledPostKey: an override bucket is used verbatim on the immediate path", async () => {
+    const m = await load("shadow");
+    const withOverride = m.deriveScheduledPostKey("u-1", "pd_x", undefined, "2020-01-01");
+    const manual = crypto
+      .createHash("sha256")
+      .update(`test-salt|u-1|post:pd_x:2020-01-01`)
+      .digest("hex")
+      .slice(0, 48);
+    assert.equal(withOverride, manual, "the override is used verbatim, not re-derived");
+  });
+
+  await test("deriveScheduledPostKey: no override falls back to today's bucket (immediateBucketForNow())", async () => {
+    const m = await load("shadow");
+    const noOverride = m.deriveScheduledPostKey("u-1", "pd_x");
+    const today = m.deriveScheduledPostKey("u-1", "pd_x", undefined, m.immediateBucketForNow());
+    assert.equal(noOverride, today, "with no override, the key falls back to today's own bucket");
+  });
+
+  await test("deriveScheduledPostKey: the scheduledAt path is unchanged by the presence of an override", async () => {
+    const m = await load("shadow");
+    const withScheduledAt = m.deriveScheduledPostKey("u-1", "pd_x", "2026-08-01T09:00:00.000Z");
+    const manual = crypto
+      .createHash("sha256")
+      .update(`test-salt|u-1|post:pd_x:2026-08-01T09:00:00.000Z`)
+      .digest("hex")
+      .slice(0, 48);
+    assert.equal(withScheduledAt, manual, "scheduledAtIso always drives the bucket verbatim, override or not");
+  });
+
+  // -- production + default salt refuses to sign (Codex round 4, Fix 5) -----------
+  await test("signImmediateBucket: production with NEITHER USAGE_REQUEST_KEY_SALT nor SUPABASE_SERVICE_ROLE_KEY set returns null", async () => {
+    const savedSalt = process.env.USAGE_REQUEST_KEY_SALT;
+    const savedServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const savedVercelEnv = process.env.VERCEL_ENV;
+    delete process.env.USAGE_REQUEST_KEY_SALT;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.VERCEL_ENV = "production";
+    try {
+      const m = await load("shadow");
+      const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+      const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15", mintedAtMs);
+      assert.equal(sig, null, "production must refuse to sign with the public default salt");
+    } finally {
+      if (savedSalt === undefined) delete process.env.USAGE_REQUEST_KEY_SALT; else process.env.USAGE_REQUEST_KEY_SALT = savedSalt;
+      if (savedServiceKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = savedServiceKey;
+      if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = savedVercelEnv;
+    }
+  });
+
+  // -- Codex round 5: blank/whitespace primary salt must not select an empty HMAC key --
+  await test("signImmediateBucket: production with USAGE_REQUEST_KEY_SALT=\"\" falls through to the service-role key (never signs with an empty key)", async () => {
+    const saved = { salt: process.env.USAGE_REQUEST_KEY_SALT, svc: process.env.SUPABASE_SERVICE_ROLE_KEY, env: process.env.VERCEL_ENV };
+    process.env.USAGE_REQUEST_KEY_SALT = "";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "svc-key-for-test";
+    process.env.VERCEL_ENV = "production";
+    try {
+      const m = await load("shadow");
+      const mintedAtMs = Date.parse("2026-08-15T12:00:00.000Z");
+      const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15", mintedAtMs);
+      assert.equal(typeof sig, "string", "signs because a real (service-role) salt is available");
+      assert.equal(m.verifyImmediateBucket("u-1", "pd_x", "2026-08-15", sig, mintedAtMs, mintedAtMs + 1000), true, "verifies with the same resolved salt");
+      // The key must be the service-role value, not "": a signature computed over an
+      // empty key would be publicly reproducible.
+      const { createHmac } = await import("node:crypto");
+      const emptyKeySig = createHmac("sha256", "").update(`u-1|pd_x|2026-08-15|${mintedAtMs}`).digest("hex");
+      assert.notEqual(sig, emptyKeySig, "must NOT equal an empty-key HMAC");
+    } finally {
+      if (saved.salt === undefined) delete process.env.USAGE_REQUEST_KEY_SALT; else process.env.USAGE_REQUEST_KEY_SALT = saved.salt;
+      if (saved.svc === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = saved.svc;
+      if (saved.env === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = saved.env;
+    }
+  });
+
+  await test("signImmediateBucket: production with whitespace-only primary salt and NO service-role key returns null", async () => {
+    const saved = { salt: process.env.USAGE_REQUEST_KEY_SALT, svc: process.env.SUPABASE_SERVICE_ROLE_KEY, env: process.env.VERCEL_ENV };
+    process.env.USAGE_REQUEST_KEY_SALT = "   ";
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.VERCEL_ENV = "production";
+    try {
+      const m = await load("shadow");
+      const sig = m.signImmediateBucket("u-1", "pd_x", "2026-08-15", Date.parse("2026-08-15T12:00:00.000Z"));
+      assert.equal(sig, null, "whitespace is absent, and absent + production = refuse to sign");
+    } finally {
+      if (saved.salt === undefined) delete process.env.USAGE_REQUEST_KEY_SALT; else process.env.USAGE_REQUEST_KEY_SALT = saved.salt;
+      if (saved.svc === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = saved.svc;
+      if (saved.env === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = saved.env;
+    }
+  });
+
+
+  // Cross-route parity (pins path vs. social path deriving the identical key for
+  // the same Content) is proven at the real-route level in
+  // test-social-only-metering.ts, which loads BOTH actual route modules and
+  // compares the p_idempotency_key each one's real consume call sends — calling
+  // deriveScheduledPostKey(uid, draftId) twice in a row here was tautological
+  // (same function, same args, in the same process) and proved nothing about the
+  // two routes actually agreeing on what "the identity" is.
+
   // ── Mode contract ────────────────────────────────────────────────────────────
   await test("OFF: no ledger call at all", async () => {
     const m = await load("off");
@@ -145,6 +385,32 @@ async function load(mode: string) {
     const { rpc } = makeRpc(() => ({ ok: false, reason: "limit_reached" }));
     const r = await m.consumeScheduledPost({ userId: "u-1", key: "k", deps: { rpc, ensure: ensureNoop } });
     assert.ok(r.kind !== "consumed");
+  });
+
+  // ── PER-TYPE ENFORCE SWITCH (decision #8, 2026-08-28) ─ usageEnforceFor exists for
+  // scheduled_post too, but consumeScheduledPost itself is STILL fully unwired to any
+  // blocking decision (Phase 6C, not this phase) ─ so it must never block regardless
+  // of the mode/flag combination below. When 6C wires a caller-side block, that call
+  // site should read usageEnforceFor("scheduled_post"), exactly like the image/text
+  // call sites do ─ proven directly against the shared switch in
+  // test-usage-enforce-switches.ts.
+  await test("ENFORCE + USAGE_ENFORCE_SCHEDULED_POSTS on: a ledger refusal is reported but STILL does not block (6C not wired yet)", async () => {
+    process.env.USAGE_ENFORCE_SCHEDULED_POSTS = "true";
+    const m = await load("enforce");
+    assert.equal(m.usageEnforceFor("scheduled_post"), true, "the switch itself is on");
+    const { rpc } = makeRpc(() => ({ ok: false, reason: "limit_reached" }));
+    const r = await m.consumeScheduledPost({ userId: "u-1", key: "k", deps: { rpc, ensure: ensureNoop } });
+    assert.ok(r.kind !== "consumed", "still not consumed (refusal reported)");
+    delete process.env.USAGE_ENFORCE_SCHEDULED_POSTS;
+  });
+
+  await test("ENFORCE WITHOUT USAGE_ENFORCE_SCHEDULED_POSTS: a ledger refusal is reported but does not block either", async () => {
+    delete process.env.USAGE_ENFORCE_SCHEDULED_POSTS;
+    const m = await load("enforce");
+    assert.equal(m.usageEnforceFor("scheduled_post"), false, "the switch is off — global mode alone does not flip it");
+    const { rpc } = makeRpc(() => ({ ok: false, reason: "limit_reached" }));
+    const r = await m.consumeScheduledPost({ userId: "u-1", key: "k", deps: { rpc, ensure: ensureNoop } });
+    assert.ok(r.kind !== "consumed", "still not consumed (refusal reported, no block either way — unwired)");
   });
 
   await test("SHADOW: a replayed consume is reported as replayed, not double-counted", async () => {

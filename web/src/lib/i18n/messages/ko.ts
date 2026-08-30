@@ -2693,6 +2693,17 @@ const ko: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "제목이나 설명을 줄인 후 예약하거나 게시하세요.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "현재 요금제에 포함된 AI 이미지를 모두 사용했습니다. 이미지를 더 생성하려면 요금제를 업그레이드하세요.",
+  "studioBoard.limit.text.allUsed": "현재 요금제에 포함된 AI 텍스트 생성을 모두 사용했습니다. AI 콘텐츠를 계속 생성하려면 요금제를 업그레이드하세요.",
+  "studioBoard.limit.post.allUsed": "현재 요금제에 포함된 예약 게시물을 모두 사용했습니다. 게시물을 더 예약하거나 게시하려면 요금제를 업그레이드하세요.",
+  "studioBoard.limit.upgradeCta": "요금제 보기",
+  "studioBoard.limit.reachedTitle": "요금제 한도에 도달했습니다",
+  "studioBoard.limit.image.overRequestTitle": "남은 AI 이미지가 부족합니다",
+  "studioBoard.limit.image.overRequestBody": "{requested}장을 요청했지만 현재 요금제에는 {remaining}장만 남아 있습니다. 남은 만큼 생성하거나 요금제를 업그레이드하세요.",
+  "studioBoard.limit.image.generateRemaining": "대신 {remaining}장 생성",
+  "studioBoard.limit.image.generateOneRemaining": "대신 1장 생성",
 };
 
 export default ko;

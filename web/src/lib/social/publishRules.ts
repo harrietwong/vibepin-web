@@ -23,6 +23,25 @@ export type DestinationOutcome = {
   externalPostUrl?: string | null;
   accountName?: string | null;
   error?: string | null;
+  /**
+   * What the PLATFORM itself reported about this destination — the HTTP status it
+   * really returned and any resource id it really created. Carried on the outcome
+   * (rather than recomputed later from `error` text) because the usage refund
+   * decision is made after the whole fan-out, and by then the thrown error is gone.
+   * Read ONLY by lib/server/usage/deliveryOutcome.ts, never rendered.
+   *
+   * Both undefined = no platform status was observed → `delivery_unknown` → the
+   * scheduled-post charge stands. NOT persisted to the destination result rows.
+   */
+  providerStatus?: number | null;
+  providerResourceId?: string | null;
+  /**
+   * True when this destination failed BEFORE any request left us (no connection,
+   * a platform we cannot publish to, a payload our own rules refused). Refundable
+   * `not_sent` regardless of status, and set by the dispatcher that knows — the
+   * refund classifier never infers it from an error message.
+   */
+  preNetwork?: boolean;
 };
 
 /** A Pinterest result produced by the dedicated Pinterest path, folded in here. */

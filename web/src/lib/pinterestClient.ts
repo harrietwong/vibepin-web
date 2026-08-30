@@ -32,6 +32,19 @@ export type PinterestClientError = Error & {
    * Remove dialog shows this number rather than its own earlier estimate.
    */
   scheduledCount?: number;
+  /** /api/pinterest/pins relays its server-minted immediate-publish bucket on EVERY
+   *  failure body (typed AND thrown/unexpected), so a caller that proceeds to publish
+   *  this Content's other (social) destinations can still relay it. Present only on a
+   *  publishPin() rejection. */
+  meteringBucket?: string;
+  /** HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt), relayed
+   *  alongside them so the social route can authenticate the bucket instead of
+   *  merely accepting its date shape. */
+  meteringBucketSig?: string;
+  /** The server instant (Date.now()) the bucket+sig above were minted at — the
+   *  social route's verification is bound to THIS value, not its own "now". Absent
+   *  whenever meteringBucketSig is (they always travel together). */
+  meteringBucketMintedAt?: number;
 };
 
 export type PinterestAccount = { id: string | null; username: string | null; accountType: string | null };
@@ -67,6 +80,18 @@ export type PublishResult = {
   /** The connection this Pin published through — pinned onto the draft as its target
    *  when it had none yet (adopt-once, PRD §14). Absent in sandbox mode. */
   connectionId?: string;
+  /** Server-minted immediate-publish UTC date bucket (meterScheduledPost.ts). Relayed
+   *  to /api/publish/social by callers that proceed to fan out to social destinations,
+   *  so the two requests for the same Content never bucket differently across a UTC
+   *  midnight straddle. */
+  meteringBucket?: string;
+  /** HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt) — relayed
+   *  alongside them so the social route can authenticate the bucket rather than
+   *  merely accept its date shape. */
+  meteringBucketSig?: string;
+  /** The server instant the bucket+sig were minted at (Fix 5 relay-age binding).
+   *  Absent whenever meteringBucketSig is. */
+  meteringBucketMintedAt?: number;
 };
 
 function currentReturnTo(): string {
@@ -207,6 +232,15 @@ type ParsedError = {
   pinterestCode?: string;
   httpStatus: number;
   scheduledCount?: number;
+  /** Present on ANY /api/pinterest/pins failure body — typed AND thrown/unexpected —
+   *  since pinterestErrorResponse's `extra` param now merges it in universally. */
+  meteringBucket?: string;
+  /** HMAC over (uid, draftId, meteringBucket, meteringBucketMintedAt), relayed
+   *  alongside them whenever the bucket is. */
+  meteringBucketSig?: string;
+  /** The server instant the bucket+sig were minted at. Present on any failure body
+   *  that also carries meteringBucketSig. */
+  meteringBucketMintedAt?: number;
 };
 
 async function parseErrorResponse(res: Response): Promise<ParsedError> {
@@ -224,6 +258,9 @@ async function parseErrorResponse(res: Response): Promise<ParsedError> {
       httpStatus,
       // Carried so the Remove dialog can reopen on the server's own count.
       scheduledCount: typeof body?.scheduledCount === "number" ? body.scheduledCount : undefined,
+      meteringBucket: typeof body?.meteringBucket === "string" ? body.meteringBucket : undefined,
+      meteringBucketSig: typeof body?.meteringBucketSig === "string" ? body.meteringBucketSig : undefined,
+      meteringBucketMintedAt: typeof body?.meteringBucketMintedAt === "number" ? body.meteringBucketMintedAt : undefined,
     };
   } catch {
     return {
@@ -241,6 +278,9 @@ function toClientError(body: ParsedError): PinterestClientError {
   err.pinterestCode = body.pinterestCode;
   err.httpStatus = body.httpStatus;
   err.scheduledCount = body.scheduledCount;
+  err.meteringBucket = body.meteringBucket;
+  err.meteringBucketSig = body.meteringBucketSig;
+  err.meteringBucketMintedAt = body.meteringBucketMintedAt;
   return err;
 }
 

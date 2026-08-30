@@ -2717,6 +2717,17 @@ const pt: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Encurte o título ou a descrição antes de agendar ou publicar.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Você usou todas as imagens de IA incluídas no seu plano atual. Faça upgrade do seu plano para gerar mais imagens.",
+  "studioBoard.limit.text.allUsed": "Você usou todas as gerações de texto com IA incluídas no seu plano atual. Faça upgrade do seu plano para continuar gerando conteúdo com IA.",
+  "studioBoard.limit.post.allUsed": "Você usou todas as publicações agendadas incluídas no seu plano atual. Faça upgrade do seu plano para agendar ou publicar mais.",
+  "studioBoard.limit.upgradeCta": "Ver planos",
+  "studioBoard.limit.reachedTitle": "Limite do plano atingido",
+  "studioBoard.limit.image.overRequestTitle": "Não há imagens de IA suficientes",
+  "studioBoard.limit.image.overRequestBody": "Você pediu {requested} imagens, mas restam apenas {remaining} no seu plano atual. Gere as imagens restantes ou faça upgrade do seu plano para obter mais.",
+  "studioBoard.limit.image.generateRemaining": "Gerar {remaining} em vez disso",
+  "studioBoard.limit.image.generateOneRemaining": "Gerar 1 em vez disso",
 };
 
 export default pt;

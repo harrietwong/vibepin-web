@@ -2699,6 +2699,17 @@ const ja: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "タイトルまたは説明を短くしてから、スケジュールまたは公開してください。",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "現在のプランに含まれるAI画像をすべて使い切りました。さらに画像を生成するにはプランをアップグレードしてください。",
+  "studioBoard.limit.text.allUsed": "現在のプランに含まれるAIテキスト生成をすべて使い切りました。AIコンテンツの生成を続けるにはプランをアップグレードしてください。",
+  "studioBoard.limit.post.allUsed": "現在のプランに含まれる予約投稿をすべて使い切りました。さらに投稿を予約または公開するにはプランをアップグレードしてください。",
+  "studioBoard.limit.upgradeCta": "プランを見る",
+  "studioBoard.limit.reachedTitle": "プランの上限に達しました",
+  "studioBoard.limit.image.overRequestTitle": "AI画像の残数が足りません",
+  "studioBoard.limit.image.overRequestBody": "{requested}枚をリクエストしましたが、現在のプランの残りは{remaining}枚です。残りの枚数で生成するか、プランをアップグレードしてください。",
+  "studioBoard.limit.image.generateRemaining": "代わりに{remaining}枚生成",
+  "studioBoard.limit.image.generateOneRemaining": "代わりに1枚生成",
 };
 
 export default ja;

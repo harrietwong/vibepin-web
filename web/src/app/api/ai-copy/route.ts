@@ -6,6 +6,7 @@ import { retrievePinterestKeywords, type KeywordContextResult } from "@/lib/ai-c
 import { appendShopifyProductDetails } from "@/lib/ai-copy/shopifyGrounding";
 import {
   usageMeteringMode,
+  usageEnforceFor,
   reserveTextGeneration,
   settleTextGeneration,
   releaseTextGeneration,
@@ -318,12 +319,14 @@ export async function POST(req: Request) {
   // exists for the WHOLE request — including the internal quality-gate retries and the
   // keyword-refine call — yet is settled exactly once, so 1 request = 1 charge no
   // matter how many model calls fire. `off` (default) touches the ledger not at all;
-  // `shadow` never blocks (fail-open); `enforce` (Phase 6A, off in prod) refuses when
-  // the account is out of text capacity. userId is already resolved (401'd otherwise).
+  // `shadow` never blocks (fail-open); `enforce` refuses when the account is out of
+  // text capacity AND the per-type USAGE_ENFORCE_AI_TEXT flag is on (decision #8,
+  // 2026-08-28 — the global mode alone blocks nothing). userId is already resolved
+  // (401'd otherwise).
   let textReservation: TextReservation = { kind: "off" };
   if (usageMeteringMode() !== "off") {
     textReservation = await reserveTextGeneration({ userId, generationRequestId: requestId });
-    if (textReservation.kind === "insufficient" && usageMeteringMode() === "enforce") {
+    if (textReservation.kind === "insufficient" && usageEnforceFor("ai_text_generation")) {
       return NextResponse.json(aiTextLimitResponseBody(requestId), { status: 402 });
     }
     // shadow: insufficient/error/skipped → proceed unmetered (fail-open, inverse of
@@ -331,6 +334,17 @@ export async function POST(req: Request) {
   }
 
   try {
+    // Force the lazy `cfg.textModel` getter now, unconditionally — BEFORE either
+    // generation branch below (fast-path cached-analysis text call OR vision-fallback
+    // analyzeAndWriteCopy) and before any provider/seam call. The fast path already
+    // reaches this getter inside generateCopyFromAnalysis, but the vision-fallback path
+    // (no cached analysis) never touches `.textModel` — analyzeAndWriteCopy only reads
+    // `.visionModel` — so in production with AI_COPY_TEXT_MODEL unset that branch used
+    // to slip past the fail-closed assertion added to visionServer.ts and still reach
+    // the provider. Reading it here for its throw-on-access side effect (in production,
+    // unset → CopyError "ai_copy_model_unset", 503) closes that gap for both branches;
+    // the caught CopyError below turns it into the intended 503 response.
+    void cfg.textModel;
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);
     mark("received");
 

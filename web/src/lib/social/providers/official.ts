@@ -60,8 +60,16 @@ export const officialProvider: SocialPublishingProvider = {
    *
    * Failure shapes (PublishResult has no per-reason status beyond
    * published/failed/not_implemented, so the distinction rides `error`):
-   *   - no publishable Page  → ok:false, status:"failed", "Connect a Facebook Page first."
-   *   - Graph rejected it    → ok:false, status:"failed", classified FacebookApiError message
+   *   - no publishable Page  → ok:false, status:"failed", preNetwork:true,
+   *                             "Connect a Facebook Page first."
+   *   - Graph rejected it    → ok:false, status:"failed", classified FacebookApiError
+   *                             message + Graph's own providerStatus (never preNetwork)
+   *
+   * `preNetwork` marks every failure decided in this file WITHOUT reaching the
+   * platform (credentials, account selection, our own media rules). It exists because
+   * those failures carry no providerStatus, and "no status" is also what a timeout
+   * looks like — which the product CHARGES for. Unflagged, a merchant paid a
+   * scheduled-post unit for "Connect a Facebook Page first." See ../types.ts.
    * INSTAGRAM — publishes an image post to the connected professional account
    * (see publishToInstagramAccount below for its two-step container flow).
    *
@@ -81,7 +89,12 @@ export const officialProvider: SocialPublishingProvider = {
     // must NOT silently fall back to any other credential.
     const userId = input.userId?.trim();
     if (!userId) {
-      return { ok: false, status: "failed", error: "Connect a Facebook Page first." };
+      // Decided here, with no Graph call made: `preNetwork` so the usage classifier
+      // reads this as `not_sent` (refundable) instead of `delivery_unknown`. Every
+      // credential/validation refusal in this file carries the same flag — see the
+      // field's doc comment in ../types.ts for why absence of a providerStatus is not
+      // enough to tell "we never sent it" apart from "it timed out".
+      return { ok: false, status: "failed", error: "Connect a Facebook Page first.", preNetwork: true };
     }
 
     // Every image the Content carries, in display order — never just the cover.
@@ -91,22 +104,55 @@ export const officialProvider: SocialPublishingProvider = {
     if (imageUrls.length) {
       const media = checkFacebookMedia(toMediaItems(imageUrls));
       if (!media.ok) {
-        return { ok: false, status: "failed", error: media.message };
+        // Our OWN media rules refused the set — nothing was sent to Graph.
+        return { ok: false, status: "failed", error: media.message, preNetwork: true };
       }
     }
 
-    const { getSelectedPageToken } = await import("@/lib/server/facebook/connectionStore");
-    // Name the account to publish as. With several Facebook accounts connected,
-    // the store refuses to guess — the destination the merchant selected carries
-    // the connection id, and that is the target.
-    const selected = await getSelectedPageToken(userId, input.connection?.id);
+    // Reading the stored credential is still PRE-NETWORK: if the store itself throws
+    // (Supabase unavailable, a decrypt failure, a bug), Graph was never called, so the
+    // failure must carry `preNetwork` like every other refusal decided in this file.
+    // Unflagged it would surface with no providerStatus — indistinguishable from a
+    // timeout, which the product CHARGES as `delivery_unknown`. See ../types.ts.
+    let selected: Awaited<ReturnType<typeof import("@/lib/server/facebook/connectionStore").getSelectedPageToken>>;
+    try {
+      const { getSelectedPageToken } = await import("@/lib/server/facebook/connectionStore");
+      // Name the account to publish as. With several Facebook accounts connected,
+      // the store refuses to guess — the destination the merchant selected carries
+      // the connection id, and that is the target.
+      selected = await getSelectedPageToken(userId, input.connection?.id);
+    } catch {
+      // The store's internal detail is never surfaced to the merchant — same wording
+      // discipline as the Graph catch below.
+      return {
+        ok: false,
+        status: "failed",
+        error: "Could not read your Facebook connection. Please try again.",
+        preNetwork: true,
+      };
+    }
     // null covers every not-publishable state (no row, disconnected, reconnect
     // required, no Page selected, undecryptable token) — one clean message.
     if (!selected) {
-      return { ok: false, status: "failed", error: "Connect a Facebook Page first." };
+      return { ok: false, status: "failed", error: "Connect a Facebook Page first.", preNetwork: true };
     }
 
-    const { publishToPage, FacebookApiError } = await import("@/lib/server/facebook/service");
+    // Loading the service module is ALSO pre-network — if the import itself throws,
+    // Graph was never called, so this must not fall through as a statusless failure
+    // (which the classifier charges as `delivery_unknown`). Kept OUT of the dispatch
+    // try below on purpose: that catch means "the request may have reached Graph".
+    let fbService: typeof import("@/lib/server/facebook/service");
+    try {
+      fbService = await import("@/lib/server/facebook/service");
+    } catch {
+      return {
+        ok: false,
+        status: "failed",
+        error: "Could not publish to Facebook. Please try again.",
+        preNetwork: true,
+      };
+    }
+    const { publishToPage, FacebookApiError } = fbService;
     try {
       const result = await publishToPage(selected.pageAccessToken, selected.pageId, {
         // Facebook has no separate title field — title and caption are one body.
@@ -131,7 +177,13 @@ export const officialProvider: SocialPublishingProvider = {
       const message = err instanceof FacebookApiError
         ? err.message
         : "Could not publish to Facebook. Please try again.";
-      return { ok: false, status: "failed", error: message };
+      // Graph's OWN status, only when Graph really answered. Anything else (a
+      // socket error, a timeout, a bug in our code) leaves it null, which the
+      // refund classifier reads as `delivery_unknown` and keeps the charge —
+      // deliberately, since we cannot prove the post was not created. See
+      // lib/server/usage/deliveryOutcome.ts.
+      const providerStatus = err instanceof FacebookApiError ? err.status : null;
+      return { ok: false, status: "failed", error: message, providerStatus, providerResourceId: null };
     }
   },
 
@@ -168,31 +220,59 @@ export const officialProvider: SocialPublishingProvider = {
 async function publishToInstagramAccount(input: PublishPostInput): Promise<PublishResult> {
   const userId = input.userId?.trim();
   if (!userId) {
-    return { ok: false, status: "failed", error: "Connect an Instagram account first." };
+    // Same contract as the Facebook branch: refused before any Instagram call, so
+    // `preNetwork` (→ `not_sent`, refundable) rather than an unexplained failure the
+    // usage classifier would have to charge as `delivery_unknown`.
+    return { ok: false, status: "failed", error: "Connect an Instagram account first.", preNetwork: true };
   }
 
-  const { getInstagramAccessToken } = await import("@/lib/server/instagram/connectionStore");
-  // Name the account to publish as — same contract as Facebook: with several
-  // connected the store refuses to guess, and the selected destination carries
-  // the connection id that identifies the target.
-  const connection = await getInstagramAccessToken(userId, input.connection?.id);
+  // Same contract as the Facebook branch: a THROW from the credential store happens
+  // before any Instagram call, so it is `preNetwork` (→ `not_sent`, refundable) and
+  // not the statusless failure the classifier would otherwise have to charge.
+  let connection: Awaited<ReturnType<typeof import("@/lib/server/instagram/connectionStore").getInstagramAccessToken>>;
+  try {
+    const { getInstagramAccessToken } = await import("@/lib/server/instagram/connectionStore");
+    // Name the account to publish as — same contract as Facebook: with several
+    // connected the store refuses to guess, and the selected destination carries
+    // the connection id that identifies the target.
+    connection = await getInstagramAccessToken(userId, input.connection?.id);
+  } catch {
+    return {
+      ok: false,
+      status: "failed",
+      error: "Could not read your Instagram connection. Please try again.",
+      preNetwork: true,
+    };
+  }
   if (!connection?.userId) {
-    return { ok: false, status: "failed", error: "Connect an Instagram account first." };
+    return { ok: false, status: "failed", error: "Connect an Instagram account first.", preNetwork: true };
   }
 
   // Every image the Content carries, in display order — never just the cover.
   const imageUrls = (input.post.imageUrls ?? []).filter(u => typeof u === "string" && u.trim());
   if (!imageUrls.length) {
-    return { ok: false, status: "failed", error: "Instagram posts need an image." };
+    return { ok: false, status: "failed", error: "Instagram posts need an image.", preNetwork: true };
   }
   // Count limits decided before any API call, so an over-long set gets an
   // actionable message instead of publishing a silently truncated carousel.
   const media = checkInstagramMedia(toMediaItems(imageUrls));
   if (!media.ok) {
-    return { ok: false, status: "failed", error: media.message };
+    return { ok: false, status: "failed", error: media.message, preNetwork: true };
   }
 
-  const { publishToInstagram, InstagramApiError } = await import("@/lib/server/instagram/service");
+  // Same reasoning as the Facebook branch: an import failure never reached Instagram.
+  let igService: typeof import("@/lib/server/instagram/service");
+  try {
+    igService = await import("@/lib/server/instagram/service");
+  } catch {
+    return {
+      ok: false,
+      status: "failed",
+      error: "Could not publish to Instagram. Please try again.",
+      preNetwork: true,
+    };
+  }
+  const { publishToInstagram, InstagramApiError } = igService;
   try {
     const result = await publishToInstagram({
       accessToken: connection.accessToken,
@@ -214,6 +294,8 @@ async function publishToInstagramAccount(input: PublishPostInput): Promise<Publi
     const message = err instanceof InstagramApiError
       ? err.message
       : "Could not publish to Instagram. Please try again.";
-    return { ok: false, status: "failed", error: message };
+    // Same contract as the Facebook branch: a real Instagram status or nothing.
+    const providerStatus = err instanceof InstagramApiError ? err.status : null;
+    return { ok: false, status: "failed", error: message, providerStatus, providerResourceId: null };
   }
 }

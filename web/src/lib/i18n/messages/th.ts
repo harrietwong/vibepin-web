@@ -2696,6 +2696,17 @@ const th: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "ย่อชื่อหรือคำอธิบายให้สั้นลงก่อนกำหนดเวลาหรือเผยแพร่",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "คุณใช้ภาพ AI ที่รวมอยู่ในแพ็กเกจปัจจุบันของคุณหมดแล้ว อัปเกรดแพ็กเกจเพื่อสร้างภาพเพิ่มเติม",
+  "studioBoard.limit.text.allUsed": "คุณใช้การสร้างข้อความด้วย AI ที่รวมอยู่ในแพ็กเกจปัจจุบันของคุณหมดแล้ว อัปเกรดแพ็กเกจเพื่อสร้างเนื้อหา AI ต่อ",
+  "studioBoard.limit.post.allUsed": "คุณใช้โพสต์ที่ตั้งเวลาซึ่งรวมอยู่ในแพ็กเกจปัจจุบันของคุณหมดแล้ว อัปเกรดแพ็กเกจเพื่อตั้งเวลาหรือเผยแพร่โพสต์เพิ่มเติม",
+  "studioBoard.limit.upgradeCta": "ดูแพ็กเกจ",
+  "studioBoard.limit.reachedTitle": "ถึงขีดจำกัดของแพ็กเกจแล้ว",
+  "studioBoard.limit.image.overRequestTitle": "ภาพ AI ที่เหลือไม่เพียงพอ",
+  "studioBoard.limit.image.overRequestBody": "คุณขอ {requested} ภาพ แต่แพ็กเกจปัจจุบันของคุณเหลืออยู่เพียง {remaining} ภาพ สร้างเท่าที่เหลือแทน หรืออัปเกรดแพ็กเกจเพื่อรับเพิ่ม",
+  "studioBoard.limit.image.generateRemaining": "สร้าง {remaining} ภาพแทน",
+  "studioBoard.limit.image.generateOneRemaining": "สร้าง 1 ภาพแทน",
 };
 
 export default th;

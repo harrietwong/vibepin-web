@@ -15,8 +15,11 @@
  *   - null == unlimited (business scheduled posts)
  *   - the pricing DISPLAY strings derive to exactly today's published values
  *     (AI images with the 3,000 comma; scheduled posts with "Unlimited")
- *   - the unpublished text numbers (20/500/2000/10000) do NOT leak into ANY
- *     pricing display string
+ *   - the text-generation numbers (20/500/2,000/10,000) ARE published on the
+ *     "AI titles, descriptions, and hashtags" comparison row and per-plan
+ *     bullets (step 6A, PRD v3.1 §6.2 decision 8/9), and match
+ *     monthlyAiTextGenerations exactly
+ *   - "AI image credits" and "premium model" no longer appear in pricingPlans.ts
  *   - Shopify limits still match the pre-existing entitlements.ts values, and the
  *     SHOPIFY_PRODUCT_LIMIT_* env override still works after unification
  *
@@ -162,9 +165,9 @@ async function main() {
     const byLabel = (label: string) => rows.find((r) => r.label === label);
 
     assertEq(
-      JSON.stringify(byLabel("AI image credits")?.values),
+      JSON.stringify(byLabel("AI images")?.values),
       JSON.stringify(["10 / month", "150 / month", "800 / month", "3,000 / month"]),
-      "AI image credits (published)",
+      "AI images (published)",
     );
     assertEq(
       JSON.stringify(byLabel("Scheduled posts")?.values),
@@ -225,37 +228,51 @@ async function main() {
     );
   });
 
-  // ── Text numbers must not leak anywhere user-visible ───────────────────────
-  await test("unpublished text-generation numbers (20/500/2000/10000) appear in NO pricing display string", async () => {
+  // ── Text numbers ARE now published (step 6A, decision 8/9) ─────────────────
+  await test("published text-generation numbers (20/500/2,000/10,000) appear in the AI titles/descriptions/hashtags row and matching bullets", async () => {
     const pp = await import("../src/lib/pricingPlans");
-    // Collect every user-visible string the pricing surfaces render.
-    const visible: string[] = [];
-    for (const t of pp.PRICING_TIERS) {
-      visible.push(t.name, t.description, t.cta, ...t.bullets, ...t.previewBullets);
-    }
-    for (const s of pp.COMPARISON_SECTIONS) {
-      visible.push(s.title);
-      for (const r of s.rows) {
-        visible.push(r.label, ...(r.note ? [r.note] : []), ...r.values);
-      }
-    }
-    for (const f of pp.PRICING_FAQ) visible.push(f.question, f.answer);
-    visible.push(pp.ACCOUNTS_HELPER_TEXT, ...pp.ENTERPRISE_PLAN.bullets, ...pp.PRICING_REASSURANCE);
+    const rows = pp.COMPARISON_SECTIONS.flatMap((s) => s.rows);
+    const textRow = rows.find((r) => r.label === "AI titles, descriptions, and hashtags");
+    assert(!!textRow, "AI titles, descriptions, and hashtags row missing");
+    assertEq(
+      JSON.stringify(textRow!.values),
+      JSON.stringify(["20 / month", "500 / month", "2,000 / month", "10,000 / month"]),
+      "AI titles, descriptions, and hashtags (published)",
+    );
+    assertEq(
+      JSON.stringify(textRow!.values),
+      JSON.stringify(pe.allowanceRowValues("monthlyAiTextGenerations", pe.formatMonthlyAllowance)),
+      "text-quota row matches monthlyAiTextGenerations exactly",
+    );
 
-    const haystack = visible.join("\n");
-    // Whole-number match (word boundaries so "150" ⊄ a check for "50" etc.).
-    for (const n of ["500", "2000", "2,000", "10000", "10,000"]) {
+    const expectedBullet: Record<string, string> = {
+      free: "20 AI text generations / month",
+      starter: "500 AI text generations / month",
+      pro: "2,000 AI text generations / month",
+      business: "10,000 AI text generations / month",
+    };
+    for (const t of pp.PRICING_TIERS) {
       assert(
-        !new RegExp(`\\b${n.replace(/,/g, ",?")}\\b`).test(haystack),
-        `text-limit number "${n}" leaked into a pricing display string`,
+        t.bullets.includes(expectedBullet[t.id]),
+        `${t.id} bullets missing "${expectedBullet[t.id]}"`,
       );
     }
-    // "20" is a common substring (e.g. "Save 20%" is elsewhere) — assert the
-    // text value itself is not published as a standalone allowance figure.
-    assert(!/\b20 (AI|text|monthly)/i.test(haystack), `"20" text allowance leaked`);
-    // Sanity: the number DOES live in the config.
+
+    // Sanity: the number lives in the config too.
     assertEq(pe.getPlanEntitlements("free").monthlyAiTextGenerations, 20, "text limit is in the config");
     assertEq(pe.getPlanEntitlements("business").monthlyAiTextGenerations, 10000, "biz text in config");
+  });
+
+  // ── Deprecated terminology must be fully gone from pricingPlans.ts ──────────
+  await test("\"AI image credits\" and \"premium model\" no longer appear anywhere in pricingPlans.ts", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(
+      path.join(__dirname, "..", "src", "lib", "pricingPlans.ts"),
+      "utf-8",
+    );
+    assert(!src.includes("AI image credits"), '"AI image credits" still appears in pricingPlans.ts');
+    assert(!src.includes("premium model"), '"premium model" still appears in pricingPlans.ts');
   });
 
   // ── Shopify limits unchanged after unification + env override still works ───
@@ -295,19 +312,19 @@ async function main() {
 
   // Locate the display rows.
   const allRows = COMPARISON_SECTIONS.flatMap((s) => s.rows);
-  const imageRow = allRows.find((r) => r.label === "AI image credits");
+  const imageRow = allRows.find((r) => r.label === "AI images");
   const scheduledRow = allRows.find((r) => r.label === "Scheduled posts");
   const accountsRow = allRows.find((r) => r.label === "Accounts per platform");
 
   await test("pricingPlans still exposes the rows this test depends on", () => {
-    if (!imageRow) throw new Error("AI image credits row missing");
+    if (!imageRow) throw new Error("AI images row missing");
     if (!scheduledRow) throw new Error("Scheduled posts row missing");
     if (!accountsRow) throw new Error("Accounts per platform row missing");
   });
 
   const planOrder = ["free", "starter", "pro", "business"] as const;
 
-  await test("monthlyAiImages matches the AI image credits display cells", () => {
+  await test("monthlyAiImages matches the AI images display cells", () => {
     planOrder.forEach((plan, i) => {
       assertEq(
         PLAN_ENTITLEMENTS[plan].monthlyAiImages,

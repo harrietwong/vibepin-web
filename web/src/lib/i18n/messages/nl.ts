@@ -2717,6 +2717,17 @@ const nl: Partial<Record<MessageKey, string>> = {
 
   "studioBoard.toast.fieldTooLong": "Kort de titel of beschrijving in voordat je inplant of publiceert.",
 
+
+  // Usage limits (PRD v3.2 section 4.3 / 6.4, product decision #6).
+  "studioBoard.limit.image.allUsed": "Je hebt alle AI-afbeeldingen uit je huidige abonnement gebruikt. Upgrade je abonnement om meer afbeeldingen te genereren.",
+  "studioBoard.limit.text.allUsed": "Je hebt alle AI-tekstgeneraties uit je huidige abonnement gebruikt. Upgrade je abonnement om AI-content te blijven genereren.",
+  "studioBoard.limit.post.allUsed": "Je hebt alle geplande posts uit je huidige abonnement gebruikt. Upgrade je abonnement om meer posts te plannen of te publiceren.",
+  "studioBoard.limit.upgradeCta": "Abonnementen bekijken",
+  "studioBoard.limit.reachedTitle": "Abonnementslimiet bereikt",
+  "studioBoard.limit.image.overRequestTitle": "Niet genoeg AI-afbeeldingen over",
+  "studioBoard.limit.image.overRequestBody": "Je vroeg om {requested} afbeeldingen, maar er zijn er nog maar {remaining} over in je huidige abonnement. Genereer in plaats daarvan de resterende afbeeldingen of upgrade je abonnement.",
+  "studioBoard.limit.image.generateRemaining": "In plaats daarvan {remaining} genereren",
+  "studioBoard.limit.image.generateOneRemaining": "In plaats daarvan 1 genereren",
 };
 
 export default nl;
