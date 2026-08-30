@@ -48,6 +48,10 @@ and the production predeploy completeness guard correctly blocks this tree.
   names and Creem mode/webhook names, but values remain encrypted/redacted at the
   current access level. No production value was copied to Preview and no cloud
   configuration was changed.
+- Local configuration audit found six Creem product IDs and a webhook secret, but
+  no `CREEM_MODE` or current `CREEM_API_KEY`; the extra-account product IDs are
+  also absent. Those values cannot be proven to belong to the sandbox, so they
+  were not written to Preview. Guessing here could mix live and test billing.
 
 ## Migration And Recovery Boundary
 
@@ -71,6 +75,10 @@ and the production predeploy completeness guard correctly blocks this tree.
   no-mock browser interaction chain.
 - The logged-in Chrome control connection timed out twice during navigation and
   then became unavailable. No browser E2E pass is claimed.
+- The in-app browser reached the protected deployment and followed Vercel's
+  `Continue with ChatGPT` login path, but OpenAI then required the user's personal
+  login credentials. No credentials were entered; browser acceptance now requires
+  a user-completed login session.
 - Preview has no `USAGE_METERING_MODE` or per-type `USAGE_ENFORCE_*` variables;
   consequently there is no Preview shadow stream to review. Shadow review is
   BLOCKED. No enforce switch was changed.
@@ -96,4 +104,3 @@ and the production predeploy completeness guard correctly blocks this tree.
    multi-channel publishing E2E chain.
 5. Review resulting shadow ledger/refund outcomes, then re-run the guard after the
    26 active branches have explicit integration or exclusion receipts.
-
