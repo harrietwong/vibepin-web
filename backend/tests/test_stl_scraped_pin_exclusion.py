@@ -20,7 +20,10 @@ moment it mattered.
 
 import json
 import sys
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -156,6 +159,64 @@ class TestScrapedPinLoaderFailsLoud(unittest.TestCase):
         fake_pw.assert_not_called()
 
 
+class TestRecentReportSourcePinRotation(unittest.TestCase):
+    def _write_report(self, root: Path, stamp: str, generated_at: datetime,
+                      pin_ids: list[str]) -> None:
+        (root / f"product_supply_expand_shop_the_look_{stamp}.json").write_text(
+            json.dumps({
+                "generatedAt": generated_at.isoformat(),
+                "perPin": [{"sourcePinId": pin_id} for pin_id in pin_ids],
+                "writes": {"pin_products": 0},
+            }),
+            encoding="utf-8",
+        )
+
+    def test_loads_zero_write_and_failed_proof_source_pins_within_window(self):
+        now = datetime(2026, 8, 30, 15, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_report(root, "20260830_140000", now - timedelta(hours=1),
+                               ["zero-write", "all-existing", "proof-failed"])
+            self._write_report(root, "20260820_140000", now - timedelta(days=10),
+                               ["too-old"])
+            # The mutable convenience copy is deliberately not part of the
+            # stamped history and must not double-count the same run.
+            (root / "product_supply_expand_shop_the_look_latest.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            with patch.object(stl, "LOG_DIR", root):
+                ids, status = stl._load_recent_report_source_pin_ids(now=now)
+
+        self.assertEqual(ids, {"zero-write", "all-existing", "proof-failed"})
+        self.assertEqual(status["reportsLoaded"], 1)
+        self.assertEqual(status["sourcePinsLoaded"], 3)
+        self.assertEqual(status["windowDays"], 7)
+        self.assertEqual(status["errors"], [])
+
+    def test_bad_report_is_visible_but_does_not_erase_good_history(self):
+        now = datetime(2026, 8, 30, 15, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_report(root, "20260830_140000", now, ["good"])
+            (root / "product_supply_expand_shop_the_look_20260830_130000.json").write_text(
+                "{broken", encoding="utf-8"
+            )
+            with patch.object(stl, "LOG_DIR", root):
+                ids, status = stl._load_recent_report_source_pin_ids(now=now)
+
+        self.assertEqual(ids, {"good"})
+        self.assertEqual(status["reportsLoaded"], 1)
+        self.assertEqual(len(status["errors"]), 1)
+
+    def test_rotation_window_config_is_bounded(self):
+        for value in ("0", "31", "not-an-int"):
+            with self.subTest(value=value), patch.dict(
+                "os.environ", {stl.SOURCE_ROTATION_DAYS_ENV: value}
+            ):
+                with self.assertRaises(RuntimeError):
+                    stl._source_rotation_days()
+
+
 class TestExclusionActuallyExcludes(unittest.TestCase):
     """Selection must skip avoided pins even though they sort first.
 
@@ -282,7 +343,7 @@ class TestSpikeLogAndDatabaseUnion(unittest.TestCase):
     database knows what every machine scraped. Dropping either loses history.
     """
 
-    def _run_selection(self, *, spike_ids, db_ids):
+    def _run_selection(self, *, spike_ids, db_ids, recent_ids=()):
         import asyncio
         from contextlib import ExitStack
 
@@ -301,6 +362,14 @@ class TestSpikeLogAndDatabaseUnion(unittest.TestCase):
                                              return_value=set(spike_ids)))
             stack.enter_context(patch.object(stl, "_load_scraped_source_pin_ids",
                                              return_value=set(db_ids)))
+            stack.enter_context(patch.object(
+                stl,
+                "_load_recent_report_source_pin_ids",
+                return_value=(set(recent_ids), {
+                    "windowDays": 7,
+                    "sourcePinsLoaded": len(set(recent_ids)),
+                }),
+            ))
             stack.enter_context(patch.object(stl, "select_source_pins",
                                              side_effect=fake_select))
             stack.enter_context(patch.dict(
@@ -326,11 +395,20 @@ class TestSpikeLogAndDatabaseUnion(unittest.TestCase):
         captured = self._run_selection(spike_ids={"legacy1"}, db_ids=set())
         self.assertIn("legacy1", captured["avoid_pin_ids"])
 
+    def test_recent_zero_write_ids_are_in_the_union(self):
+        captured = self._run_selection(
+            spike_ids={"spike"}, db_ids={"written"}, recent_ids={"zero-write"}
+        )
+        self.assertEqual(
+            captured["avoid_pin_ids"], {"spike", "written", "zero-write"}
+        )
+
     def test_provenance_is_reported(self):
         captured = self._run_selection(spike_ids={"a", "b"}, db_ids={"b", "c", "d"})
         sources = captured["avoid_sources"]
         self.assertEqual(sources["spikeLog"], 2)
         self.assertEqual(sources["database"], 3)
+        self.assertEqual(sources["recentReports"], 0)
         self.assertEqual(sources["overlap"], 1)
         self.assertEqual(sources["union"], 4)
 
@@ -369,6 +447,13 @@ class TestFrozenSourceReportSkipsTheDatabase(unittest.TestCase):
             with ExitStack() as stack:
                 loader = stack.enter_context(
                     patch.object(stl, "_load_scraped_source_pin_ids", return_value=set()))
+                recent_loader = stack.enter_context(
+                    patch.object(
+                        stl,
+                        "_load_recent_report_source_pin_ids",
+                        return_value=(set(), {}),
+                    )
+                )
                 # Stop the run the moment it reaches the browser: this test is
                 # about what happens BEFORE that, and it must never touch the
                 # network or the real session file.
@@ -385,6 +470,7 @@ class TestFrozenSourceReportSkipsTheDatabase(unittest.TestCase):
                         source_report_path=path,
                     ))
                 loader.assert_not_called()
+                recent_loader.assert_not_called()
 
 
 if __name__ == "__main__":

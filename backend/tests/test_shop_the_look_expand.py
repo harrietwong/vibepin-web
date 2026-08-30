@@ -300,6 +300,9 @@ class TestDryRunReport(unittest.TestCase):
     def test_preflight_detects_existing_hash(self):
         """Candidate whose hash already exists in DB must be counted as skip, not insert."""
         candidate = _make_candidate()
+        canonical_hash = stl.supply_core.url_hash(
+            stl.supply_core.normalize_product_url(candidate["product_url"])
+        )
         per_pin = [{
             "source": {"pin_id": "p1", "category": "fashion", "save_count": 10000},
             "shopModuleDetected": True,
@@ -307,7 +310,7 @@ class TestDryRunReport(unittest.TestCase):
             "candidates": [candidate],
             "issue": None,
         }]
-        with self._patch_preflight(existing_hashes=["abc123"]):
+        with self._patch_preflight(existing_hashes=[canonical_hash]):
             report, _ = _build_report(per_pin, {}, elapsed=5, apply=False)
         agg = report["aggregate"]
         self.assertEqual(agg["projectedInsertCount"], 0)
@@ -485,22 +488,35 @@ class TestSourceReportLoading(unittest.TestCase):
 
 
 class TestPreflightExisting(unittest.TestCase):
-    def test_no_hashes_returns_all_as_inserts(self):
+    def test_missing_caller_hash_is_derived_by_shared_core(self):
         candidates = [{"product_url": "https://etsy.com/listing/1/rug"}]
         with patch.object(stl, "select_many", return_value=[]):
             result = _preflight_existing(candidates)
         self.assertEqual(result["projectedInsertCount"], 1)
         self.assertEqual(result["projectedSkipExistingCount"], 0)
         self.assertEqual(result["projectedUpdateCount"], 0)
-        self.assertFalse(result["checked"])
+        self.assertTrue(result["checked"])
+        normalized = stl.supply_core.normalize_product_url(candidates[0]["product_url"])
+        self.assertEqual(
+            result["insertCandidates"][0]["normalized_product_url_hash"],
+            stl.supply_core.url_hash(normalized),
+        )
 
     def test_hash_match_counted_as_skip_not_update(self):
+        url_a = "https://etsy.com/listing/1?variation=red"
+        url_b = "https://etsy.com/listing/2?variation=blue"
+        hash_a = stl.supply_core.url_hash(
+            stl.supply_core.normalize_product_url(url_a)
+        )
+        hash_b = stl.supply_core.url_hash(
+            stl.supply_core.normalize_product_url(url_b)
+        )
         candidates = [
-            {"normalized_product_url_hash": "hash_a", "product_url": "https://etsy.com/listing/1"},
-            {"normalized_product_url_hash": "hash_b", "product_url": "https://etsy.com/listing/2"},
+            {"normalized_product_url_hash": "forged-a", "product_url": url_a},
+            {"normalized_product_url_hash": "forged-b", "product_url": url_b},
         ]
         def fake_select(table, filters=None, **_kwargs):
-            return [{"normalized_product_url_hash": "hash_a"}]
+            return [{"normalized_product_url_hash": hash_a}]
         with patch.object(stl, "select_many", side_effect=fake_select):
             result = _preflight_existing(candidates)
         self.assertEqual(result["projectedInsertCount"], 1)
@@ -508,7 +524,9 @@ class TestPreflightExisting(unittest.TestCase):
         self.assertEqual(result["projectedUpdateCount"], 0)
         self.assertEqual(result["legacyTouchedProjected"], 0)
         self.assertEqual(len(result["insertCandidates"]), 1)
-        self.assertEqual(result["insertCandidates"][0]["normalized_product_url_hash"], "hash_b")
+        self.assertEqual(
+            result["insertCandidates"][0]["normalized_product_url_hash"], hash_b
+        )
 
 
 class TestProductIdeasVisibility(unittest.TestCase):
@@ -733,14 +751,18 @@ class TestInsertOnlyWriteSemantics(unittest.TestCase):
             "domain": "etsy.com",
             "extraction_method": "network_json",
         }
+        canonical_hash = stl.supply_core.url_hash(
+            stl.supply_core.normalize_product_url(candidate["product_url"])
+        )
         per_pin = [{"source": {"pin_id": "p1", "category": "fashion", "save_count": 10000},
                     "shopModuleDetected": True, "shopTabClicked": False,
                     "candidates": [candidate], "issue": None}]
 
         def fake_select(table, filters=None, **_kw):
-            # Simulate: hash_a is already in DB
+            # Simulate: the shared-core canonical hash is already in DB. The
+            # caller-carried hash_a is intentionally not authoritative.
             if table == "pin_products" and filters and "normalized_product_url_hash" in filters:
-                return [{"normalized_product_url_hash": "hash_a"}]
+                return [{"normalized_product_url_hash": canonical_hash}]
             return []
 
         with patch.object(stl, "select_many", side_effect=fake_select):
@@ -1002,21 +1024,29 @@ class TestLifecycleCoexistence(unittest.TestCase):
         The retired URL must therefore appear as an INSERT candidate, and the
         active one as a skip.
         """
+        candidates = self._candidates()
+        retired_hash = stl.supply_core.url_hash(
+            stl.supply_core.normalize_product_url(candidates[0]["product_url"])
+        )
+        active_hash = stl.supply_core.url_hash(
+            stl.supply_core.normalize_product_url(candidates[1]["product_url"])
+        )
+
         def fake_select(table, filters=None, **_kw):
             # Faithful to PostgREST: the not-retired filter excludes the
             # retired row, so it never comes back.
             self.assertIn("or", filters or {})
-            return [{"normalized_product_url_hash": "hash_active",
+            return [{"normalized_product_url_hash": active_hash,
                      "lifecycle_status": None}]
 
         with patch.object(stl, "select_many", side_effect=fake_select):
-            result = _preflight_existing(self._candidates())
+            result = _preflight_existing(candidates)
 
         insert_hashes = [c["normalized_product_url_hash"]
                          for c in result["insertCandidates"]]
-        self.assertIn("hash_retired", insert_hashes,
+        self.assertIn(retired_hash, insert_hashes,
                       "a retired row must NOT blacklist its URL")
-        self.assertNotIn("hash_active", insert_hashes,
+        self.assertNotIn(active_hash, insert_hashes,
                          "an active row must still dedup")
         self.assertEqual(result["projectedInsertCount"], 1)
         self.assertEqual(result["projectedSkipExistingCount"], 1)
@@ -2747,6 +2777,60 @@ class TestShortlinkWiredIntoReport(unittest.TestCase):
         self.assertEqual(unique[0]["product_url"], self.PDP,
                          "an expiring redirect must not be persisted as source_url")
         self.assertEqual(unique[0]["shortlink_original_url"], "https://amzn.to/3QYT1Ll")
+
+    def test_writer_resolves_before_shared_core_dedup_and_preflight(self):
+        resolver = MagicMock()
+        resolver.resolve.return_value = self.PDP
+        writer = stl._IncrementalWriter(
+            batch_size=10, enabled=True, shortlink_resolver=resolver
+        )
+        candidate = _prepare_candidate(
+            {
+                "product_url": "https://amzn.to/3QYT1Ll",
+                "product_title": None,
+                "merchant": None,
+                "image_url": None,
+                "price": None,
+                "currency": None,
+                "extraction_method": "network_json",
+            },
+            {"pin_id": "pin-1", "category": "home-decor", "save_count": 10,
+             "seed_keyword": "desk decor"},
+            index=0,
+            shop_detected=True,
+            shop_tab_clicked=False,
+        )
+        with patch.object(
+            stl,
+            "_preflight_existing",
+            side_effect=lambda rows: {"insertCandidates": list(rows)},
+        ):
+            rows = writer._filter_batch([candidate])
+
+        self.assertEqual(rows[0]["product_url"], self.PDP)
+        self.assertEqual(rows[0]["shortlink_original_url"], "https://amzn.to/3QYT1Ll")
+        normalized = stl.supply_core.normalize_product_url(self.PDP)
+        self.assertEqual(
+            rows[0]["normalized_product_url_hash"],
+            stl.supply_core.url_hash(normalized),
+        )
+
+    def test_prepare_candidate_uses_supply_core_canonicalization(self):
+        url = "https://www.etsy.com/listing/123/widget?variation=red&utm_source=pin"
+        row = _prepare_candidate(
+            {"product_url": url, "extraction_method": "network_json"},
+            {"pin_id": "pin-2", "category": "fashion", "save_count": 2,
+             "seed_keyword": "widget"},
+            index=0,
+            shop_detected=True,
+            shop_tab_clicked=False,
+        )
+        expected = stl.supply_core.normalize_product_url(url)
+        self.assertEqual(row["normalized_product_url"], expected)
+        self.assertEqual(
+            row["normalized_product_url_hash"],
+            stl.supply_core.url_hash(expected),
+        )
 
 if __name__ == "__main__":
     unittest.main()

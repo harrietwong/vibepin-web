@@ -37,8 +37,6 @@ from product_harvest import (  # type: ignore
     accept_link,
     classify_link,
     get_domain,
-    normalize_product_url,
-    url_hash,
 )
 # Single source of truth for the NULL-safe "not retired" dedup filter. Retired
 # rows must never count as "already exists" — see product_lifecycle.py.
@@ -131,6 +129,16 @@ STL_WRITE_BATCH_SIZE_DEFAULT = 10
 # merchant verification separately capped; this counts candidate URLs handed
 # to supply_core conservatively, even when a fetch fails before HTTP completes.
 MAX_MERCHANT_DISCOVERY_CANDIDATES_PER_RUN = 100
+# Source Pins that produced no new row are absent from pin_products, so the DB
+# exclusion alone cannot stop them occupying tomorrow's scan budget again. Keep
+# a short, bounded memory of every Source Pin actually scanned in recent run
+# reports. Seven days is long enough to rotate through the pool without making a
+# transient Pinterest/merchant failure a permanent blacklist.
+SOURCE_ROTATION_DAYS_ENV = "VIBEPIN_SUPPLY_SOURCE_ROTATION_DAYS"
+SOURCE_ROTATION_DAYS_DEFAULT = 7
+SOURCE_ROTATION_DAYS_MIN = 1
+SOURCE_ROTATION_DAYS_MAX = 30
+SOURCE_ROTATION_REPORT_LIMIT = 32
 
 
 def _stl_write_batch_size() -> int:
@@ -308,6 +316,82 @@ def _load_previous_spike_ids() -> set[str]:
         return {str(r.get("sourcePinId")) for r in data.get("perPin", []) if r.get("sourcePinId")}
     except Exception:
         return set()
+
+
+def _source_rotation_days() -> int:
+    raw = (os.environ.get(SOURCE_ROTATION_DAYS_ENV) or "").strip()
+    if not raw:
+        return SOURCE_ROTATION_DAYS_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{SOURCE_ROTATION_DAYS_ENV} must be an integer") from exc
+    if not SOURCE_ROTATION_DAYS_MIN <= value <= SOURCE_ROTATION_DAYS_MAX:
+        raise RuntimeError(
+            f"{SOURCE_ROTATION_DAYS_ENV} must be between "
+            f"{SOURCE_ROTATION_DAYS_MIN} and {SOURCE_ROTATION_DAYS_MAX}"
+        )
+    return value
+
+
+def _load_recent_report_source_pin_ids(
+    *, now: datetime | None = None,
+) -> tuple[set[str], dict[str, Any]]:
+    """Load Source Pins scanned by recent completed STL reports.
+
+    This complements ``pin_products`` rather than replacing it. A Source Pin
+    that yielded only active duplicates, failed merchant proof, or zero products
+    has no new pin_products row, yet re-running it the next night consumes the
+    same scarce scan slot. Reports are bounded by both age and file count; bad
+    files are surfaced in metadata but cannot erase the DB-backed history.
+    """
+    anchor = now or datetime.now(tz=timezone.utc)
+    if anchor.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    days = _source_rotation_days()
+    cutoff = anchor.astimezone(timezone.utc) - timedelta(days=days)
+    stamped = re.compile(r"^product_supply_expand_shop_the_look_\d{8}_\d{6}\.json$")
+    paths = sorted(
+        (p for p in LOG_DIR.glob("product_supply_expand_shop_the_look_*.json")
+         if stamped.match(p.name)),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    considered = paths[:SOURCE_ROTATION_REPORT_LIMIT]
+    ids: set[str] = set()
+    loaded = 0
+    errors: list[str] = []
+    for path in considered:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            generated_raw = str(data.get("generatedAt") or "").strip()
+            generated_at = datetime.fromisoformat(generated_raw.replace("Z", "+00:00"))
+            if generated_at.tzinfo is None:
+                raise ValueError("generatedAt is timezone-naive")
+            if generated_at.astimezone(timezone.utc) < cutoff:
+                continue
+            per_pin = data.get("perPin")
+            if not isinstance(per_pin, list):
+                raise ValueError("perPin is not a list")
+            ids.update(
+                str(row.get("sourcePinId"))
+                for row in per_pin
+                if isinstance(row, dict) and row.get("sourcePinId")
+            )
+            loaded += 1
+        except Exception as exc:  # noqa: BLE001 - reported, never silently trusted
+            if len(errors) < 10:
+                errors.append(f"{path.name}: {type(exc).__name__}: {str(exc)[:160]}")
+    return ids, {
+        "windowDays": days,
+        "reportLimit": SOURCE_ROTATION_REPORT_LIMIT,
+        "reportsFound": len(paths),
+        "reportsConsidered": len(considered),
+        "reportsLoaded": loaded,
+        "sourcePinsLoaded": len(ids),
+        "truncated": len(paths) > len(considered),
+        "errors": errors,
+    }
 
 
 class ScrapedPinHistoryUnavailable(RuntimeError):
@@ -513,10 +597,11 @@ def select_source_pins(
             "exhaustedCategories": exhausted_categories,
             "repeatScrapeFallbackUsed": False,
             "note": (
-                "Already-scraped source pins are excluded using pin_products "
-                "(the database), not a local log file. When a category cannot "
-                "be filled the run selects fewer pins and reports the shortfall "
-                "here; it never re-admits an already-scraped pin to hit the quota."
+                "Already-scraped source pins are excluded using durable "
+                "pin_products history plus a bounded recent-report rotation for "
+                "zero-write/all-existing/proof-failed runs. When a category "
+                "cannot be filled the run selects fewer pins and reports the "
+                "shortfall here; it never re-admits an avoided pin to hit the quota."
             ),
         },
     }
@@ -646,13 +731,16 @@ def _fallback_key(candidate: dict) -> str:
 
 
 def _dedup_key(candidate: dict) -> str:
-    normalized = normalize_product_url(candidate.get("product_url") or "")
-    return "url:" + url_hash(normalized) if normalized else _fallback_key(candidate)
+    normalized = supply_core.normalize_product_url(candidate.get("product_url") or "")
+    return (
+        "url:" + supply_core.url_hash(normalized)
+        if normalized else _fallback_key(candidate)
+    )
 
 
 def _prepare_candidate(candidate: dict, source: dict, *, index: int, shop_detected: bool, shop_tab_clicked: bool) -> dict:
     url = candidate.get("product_url") or ""
-    normalized = normalize_product_url(url)
+    normalized = supply_core.normalize_product_url(url)
     title = (candidate.get("product_title") or "").strip()
     merchant = (candidate.get("merchant") or "").strip()
     classification = classify_link(url, title or None) if url else {
@@ -682,7 +770,9 @@ def _prepare_candidate(candidate: dict, source: dict, *, index: int, shop_detect
         "merchant_source": merchant_source,
         "product_url": url or None,
         "normalized_product_url": normalized or None,
-        "normalized_product_url_hash": url_hash(normalized) if normalized else None,
+        "normalized_product_url_hash": (
+            supply_core.url_hash(normalized) if normalized else None
+        ),
         "image_url": candidate.get("image_url"),
         "price": candidate.get("price"),
         "currency": candidate.get("currency"),
@@ -1077,6 +1167,23 @@ def _preflight_existing(unique: list[dict]) -> dict:
     (see product_lifecycle.py, and the NULL trap documented there: the filter
     must be the NULL-safe OR form, since NULL means active).
     """
+    # Never trust a caller-carried hash. supply_core owns the persisted
+    # normalized URL/hash contract, so the preflight must derive the same key
+    # from the resolved PDP that the writer and DB red lines will use.
+    canonical: list[dict] = []
+    for candidate in unique:
+        normalized = supply_core.normalize_product_url(
+            candidate.get("product_url") or ""
+        )
+        canonical.append({
+            **candidate,
+            "normalized_product_url": normalized or None,
+            "normalized_product_url_hash": (
+                supply_core.url_hash(normalized) if normalized else None
+            ),
+        })
+    unique = canonical
+
     hashes = [c["normalized_product_url_hash"] for c in unique
                if c.get("normalized_product_url_hash")]
     if not hashes:
@@ -1351,6 +1458,7 @@ def _build_report(
     source_report_validation: dict | None = None,
     session_health: dict | None = None,
     response_errors: dict | None = None,
+    shortlink_resolver: ShortlinkResolver | None = None,
 ) -> tuple[dict, list[dict]]:
     raw = [c for pin in per_pin for c in pin.get("candidates", [])]
     rejected: list[dict] = []
@@ -1359,7 +1467,7 @@ def _build_report(
     # dead shortener repeated across thirty source pins costs one HEAD, not
     # thirty. Only SHORTLINK_DOMAINS hosts are ever fetched; everything else
     # short-circuits without touching the network.
-    shortlink_resolver = ShortlinkResolver()
+    shortlink_resolver = shortlink_resolver or ShortlinkResolver()
     for candidate in raw:
         url = candidate.get("product_url") or ""
         if not url:
@@ -1706,12 +1814,19 @@ class _IncrementalWriter:
     # report unboundedly. The COUNTS stay exact; only the samples are capped.
     MAX_ERROR_SAMPLES = 10
 
-    def __init__(self, *, batch_size: int, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        batch_size: int,
+        enabled: bool = True,
+        shortlink_resolver: ShortlinkResolver | None = None,
+    ) -> None:
         self.batch_size = max(1, int(batch_size))
         self.enabled = enabled
         self._pending: list[dict] = []
         self._pins_since_flush = 0
         self._seen_keys: set[str] = set()
+        self._shortlink_resolver = shortlink_resolver or ShortlinkResolver()
         self.batches_written = 0
         self.batches_failed = 0
         self.pins_flushed = 0
@@ -1946,10 +2061,22 @@ class _IncrementalWriter:
             if not url:
                 self.rejected_count += 1
                 continue
-            ok, _reason = accept_link(url)
+            ok, _reason = accept_link(url, resolver=self._shortlink_resolver)
             if not ok:
                 self.rejected_count += 1
                 continue
+            resolved = resolve_link(url, self._shortlink_resolver)
+            normalized = supply_core.normalize_product_url(resolved)
+            candidate = {
+                **candidate,
+                "product_url": resolved,
+                "normalized_product_url": normalized or None,
+                "normalized_product_url_hash": (
+                    supply_core.url_hash(normalized) if normalized else None
+                ),
+            }
+            if resolved != url:
+                candidate["shortlink_original_url"] = url
             # Card title/image/price are deliberately discarded by
             # _stl_candidates(). A valid PDP URL must reach the bounded shared
             # core so the merchant page can prove a real non-Pinterest image,
@@ -2305,10 +2432,12 @@ async def run_shop_the_look_expand(
         # re-scrape spent pins for ~25 minutes and call it a run.
         prior_ids = _load_previous_spike_ids()
         scraped_ids = _load_scraped_source_pin_ids()
-        avoid_ids = prior_ids | scraped_ids
+        recent_report_ids, rotation_status = _load_recent_report_source_pin_ids()
+        avoid_ids = prior_ids | scraped_ids | recent_report_ids
         print(
             f"[product-supply-expand] excluding {len(avoid_ids)} already-scraped "
             f"source pins (spikeLog={len(prior_ids)}, database={len(scraped_ids)}, "
+            f"recentReports={len(recent_report_ids)}, "
             f"overlap={len(prior_ids & scraped_ids)})",
             flush=True,
         )
@@ -2319,10 +2448,12 @@ async def run_shop_the_look_expand(
             avoid_sources={
                 "spikeLog": len(prior_ids),
                 "database": len(scraped_ids),
+                "recentReports": len(recent_report_ids),
                 "overlap": len(prior_ids & scraped_ids),
                 "union": len(avoid_ids),
             },
         )
+        selection["sourceRotation"] = rotation_status
         if len(sources) != limit:
             selection["warning"] = f"selected {len(sources)} of requested {limit} source pins"
 
@@ -2353,7 +2484,16 @@ async def run_shop_the_look_expand(
     # dry-run (which must remain a strict read-only path). Constructed here so
     # the batch size is fixed for the whole run and appears in the report even
     # when the crawl produces nothing.
-    writer = _IncrementalWriter(batch_size=_stl_write_batch_size(), enabled=apply)
+    # One resolver is shared by the incremental writer and the final reporting
+    # pass. A shortlink is resolved at most once per run, and both paths dedup
+    # the exact same resolved PDP instead of reporting it as accepted while the
+    # writer rejects the unresolved shortener host.
+    shortlink_resolver = ShortlinkResolver()
+    writer = _IncrementalWriter(
+        batch_size=_stl_write_batch_size(),
+        enabled=apply,
+        shortlink_resolver=shortlink_resolver,
+    )
     if apply:
         print(
             f"[product-supply-expand] incremental write ON — flushing every "
@@ -2525,6 +2665,7 @@ async def run_shop_the_look_expand(
             "count": int(state.get("responseErrors") or 0),
             "samples": list(state.get("responseErrorSamples") or []),
         },
+        shortlink_resolver=shortlink_resolver,
     )
     report["v28SchemaCheck"] = v28_status
 
