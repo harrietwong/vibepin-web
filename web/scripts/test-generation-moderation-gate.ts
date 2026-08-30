@@ -65,6 +65,18 @@ export {};
 import { Module } from "node:module";
 import { EventEmitter } from "node:events";
 
+const originalFetch = globalThis.fetch;
+let fastApiProbeCount = 0;
+globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  const fastApiUrl = process.env.FASTAPI_URL?.replace(/\/$/, "") ?? "";
+  if (fastApiUrl && url.startsWith(fastApiUrl)) {
+    fastApiProbeCount++;
+    throw new Error("hermetic FastAPI probe blocked");
+  }
+  return originalFetch(input, init);
+};
+
 let passed = 0;
 let failed = 0;
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -197,14 +209,30 @@ const originalResolve = (Module as any)._resolveFilename;
   // Successful inline generations meter usage after dispatch. This suite exercises
   // moderation and rate-limit ordering, not Supabase metering; keep it hermetic so
   // the 40-request ceiling proof cannot wait on a fake endpoint.
-  if (/[\\/]lib[\\/]server[\\/]usage(\.ts)?$/.test(request) || request === "@/lib/server/usage") {
+  if (/[\\/]server[\\/]entitlements(\.ts)?$/.test(request) || request === "@/lib/server/entitlements") {
+    return { resolvePlan: async () => "free" };
+  }
+  if (/[\\/]server[\\/]usage(\.ts|[\\/]index\.ts)?$/.test(request) || request === "@/lib/server/usage") {
     return {
-      checkAllowance: async () => ({ allowed: true, used: 0, limit: null }),
-      recordUsage: async () => {},
+      checkAllowance: async () => ({ allowed: true, plan: "free", limit: 100, used: 0, remaining: 100 }),
+      recordUsage: async () => undefined,
     };
   }
-  if (/[\\/]lib[\\/]server[\\/]entitlements(\.ts)?$/.test(request) || request === "@/lib/server/entitlements") {
-    return { resolvePlan: async () => "free" };
+  if (/[\\/]server[\\/]aiCostLog(\.ts)?$/.test(request) || request === "@/lib/server/aiCostLog") {
+    return {
+      recordAiCost: async () => ({ recorded: true }),
+      estimateCost: () => null,
+    };
+  }
+  if (/[\\/]usage[\\/]meterGeneration(\.ts)?$/.test(request) || request === "@/lib/server/usage/meterGeneration") {
+    return {
+      usageMeteringMode: () => "off",
+      reserveGenerationJobViaLedger: async () => ({ kind: "off" }),
+      reserveInline: async () => ({ kind: "off" }),
+      settleInline: async () => undefined,
+      releaseInline: async () => undefined,
+      aiImageLimitResponseBody: () => ({ error: "limit_reached" }),
+    };
   }
   if (/[\\/]creem[\\/]moderatePrompt(\.ts)?$/.test(request) || request === "@/lib/server/creem/moderatePrompt") {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -264,6 +292,7 @@ class FakeLimiterStore {
 // The limiter module is loaded ONCE and shared by module identity, so installing the
 // fake here is what the route handler sees — even across the route-module evictions
 // these runners do (evicting the ROUTE does not evict the limiter).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const rateLimitModule = require("../src/lib/server/rateLimit") as typeof import("../src/lib/server/rateLimit");
 let limiterStore = new FakeLimiterStore();
 function resetLimiter() {
@@ -409,6 +438,62 @@ async function runAnon(
   } finally {
     process.env.GENERATION_MODE = "inline";
     process.env.ALLOW_GENERATION_AUTH_TEST_HEADER = "true";
+  }
+}
+
+type ProductionRunOptions = {
+  mode: "inline" | "worker";
+  rawBody: string;
+  testHeaderUserId?: string;
+};
+
+/**
+ * Exercise the production auth boundary with a raw body. Keeping the body raw is
+ * load-bearing: malformed JSON must still receive 401 before the parser runs.
+ */
+async function runProductionRequest(
+  options: ProductionRunOptions,
+): Promise<{ status: number; json: Record<string, unknown>; res: Response; bodyUsed: boolean }> {
+  const mutableEnv = process.env as unknown as Record<string, string | undefined>;
+  const previousNodeEnv = mutableEnv.NODE_ENV;
+  const previousMode = mutableEnv.GENERATION_MODE;
+  const previousTestHeaderGate = mutableEnv.ALLOW_GENERATION_AUTH_TEST_HEADER;
+  mutableEnv.NODE_ENV = "production";
+  mutableEnv.GENERATION_MODE = options.mode;
+  if (options.testHeaderUserId) {
+    mutableEnv.ALLOW_GENERATION_AUTH_TEST_HEADER = "true";
+  } else {
+    delete mutableEnv.ALLOW_GENERATION_AUTH_TEST_HEADER;
+  }
+  spawnCount = 0;
+  enqueueInsertCount = 0;
+  moderateCallCount = 0;
+  moderateExternalIds = [];
+  lastEnqueuedParams = null;
+  lastSpawnPayload = null;
+  fastApiProbeCount = 0;
+  try {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (options.testHeaderUserId) {
+      headers["x-vibepin-test-user-id"] = options.testHeaderUserId;
+    }
+    const req = new Request("https://vibepin.co/api/generate", {
+      method: "POST",
+      headers,
+      body: options.rawBody,
+    });
+    delete require.cache[require.resolve("../src/app/api/generate/route")];
+    const route = await import(`../src/app/api/generate/route?production=${options.mode}_${Math.random()}`);
+    const res = (await route.POST(req as never)) as Response;
+    const json = (await res.clone().json()) as Record<string, unknown>;
+    return { status: res.status, json, res, bodyUsed: req.bodyUsed };
+  } finally {
+    if (previousNodeEnv === undefined) delete mutableEnv.NODE_ENV;
+    else mutableEnv.NODE_ENV = previousNodeEnv;
+    if (previousMode === undefined) delete mutableEnv.GENERATION_MODE;
+    else mutableEnv.GENERATION_MODE = previousMode;
+    if (previousTestHeaderGate === undefined) delete mutableEnv.ALLOW_GENERATION_AUTH_TEST_HEADER;
+    else mutableEnv.ALLOW_GENERATION_AUTH_TEST_HEADER = previousTestHeaderGate;
   }
 }
 
@@ -732,6 +817,95 @@ async function main() {
     assertEq(enqueueInsertCount, 0, "no enqueue");
     assertEq(spawnCount, 0, "no dispatch");
   });
+
+  await test("AUTH: production inline anonymous request → 401 before paid work", async () => {
+    const { status, json, bodyUsed } = await runProductionRequest({
+      mode: "inline",
+      rawBody: JSON.stringify(fullBody()),
+    });
+    assertEq(status, 401, "production inline mode is authenticated");
+    assertEq(json.error, "unauthorized", "stable auth error");
+    assertEq(moderateCallCount, 0, "ZERO moderation calls before auth");
+    assertEq(spawnCount, 0, "ZERO generator dispatch");
+    assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+    assertEq(fastApiProbeCount, 0, "ZERO FastAPI probes before auth");
+    assertEq(bodyUsed, false, "request body is not consumed before auth");
+  });
+
+  await test("AUTH: production worker anonymous request → 401 before paid work", async () => {
+    const { status, json, bodyUsed } = await runProductionRequest({
+      mode: "worker",
+      rawBody: JSON.stringify(fullBody()),
+    });
+    assertEq(status, 401, "production worker mode is authenticated");
+    assertEq(json.error, "unauthorized", "stable auth error");
+    assertEq(moderateCallCount, 0, "ZERO moderation calls before auth");
+    assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+    assertEq(fastApiProbeCount, 0, "ZERO FastAPI probes before auth");
+    assertEq(bodyUsed, false, "request body is not consumed before auth");
+  });
+
+  await test("AUTH: production FastAPI-eligible anonymous request → 401 before probe", async () => {
+    const { status, json, bodyUsed } = await runProductionRequest({
+      mode: "inline",
+      rawBody: JSON.stringify({
+        keyword: "plain keyword",
+        prompt: "",
+        directionBrief: "",
+        category: "",
+        selectedTags: [],
+        provider_mode: "mock",
+      }),
+    });
+    assertEq(status, 401, "the FastAPI-eligible branch is authenticated in production");
+    assertEq(json.error, "unauthorized", "stable auth error");
+    assertEq(moderateCallCount, 0, "ZERO moderation calls before auth");
+    assertEq(spawnCount, 0, "ZERO fallback dispatch");
+    assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+    assertEq(fastApiProbeCount, 0, "ZERO FastAPI health/task probes before auth");
+    assertEq(bodyUsed, false, "request body is not consumed before auth");
+  });
+
+  for (const mode of ["inline", "worker"] as const) {
+    await test(`AUTH: production ${mode} malformed body → 401 before JSON parsing`, async () => {
+      const { status, json, bodyUsed } = await runProductionRequest({
+        mode,
+        rawBody: "{not valid json",
+      });
+      assertEq(status, 401, "auth precedes body parsing");
+      assertEq(json.error, "unauthorized", "the parser error is not exposed first");
+      assertEq(moderateCallCount, 0, "ZERO moderation calls");
+      assertEq(spawnCount, 0, "ZERO generator dispatch");
+      assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+      assertEq(fastApiProbeCount, 0, "ZERO FastAPI probes");
+      assertEq(bodyUsed, false, "malformed body is not parsed before auth");
+    });
+  }
+
+  for (const scenario of [
+    { name: "inline", mode: "inline" as const, body: fullBody() },
+    { name: "worker", mode: "worker" as const, body: fullBody() },
+    {
+      name: "FastAPI-eligible inline",
+      mode: "inline" as const,
+      body: { keyword: "plain keyword", prompt: "", directionBrief: "", category: "", selectedTags: [] },
+    },
+  ]) {
+    await test(`AUTH: production ${scenario.name} ignores ALLOW_GENERATION_AUTH_TEST_HEADER`, async () => {
+      const { status, json, bodyUsed } = await runProductionRequest({
+        mode: scenario.mode,
+        rawBody: JSON.stringify(scenario.body),
+        testHeaderUserId: "u_test_header_must_not_authenticate",
+      });
+      assertEq(status, 401, "the test-only header is disabled in production");
+      assertEq(json.error, "unauthorized", "stable auth error");
+      assertEq(moderateCallCount, 0, "ZERO moderation calls");
+      assertEq(spawnCount, 0, "ZERO generator dispatch");
+      assertEq(enqueueInsertCount, 0, "ZERO enqueue");
+      assertEq(fastApiProbeCount, 0, "ZERO FastAPI health/task probes");
+      assertEq(bodyUsed, false, "request body is not consumed before verified auth");
+    });
+  }
 
   await test("AUTH: unauthenticated worker request cannot be amplified by a big tag array", async () => {
     // Even a maximum-size legitimate body must not buy a single call when the
@@ -1198,31 +1372,36 @@ async function main() {
     assert(GEN_RULE.limit > 25, `the chosen limit (${GEN_RULE.limit}) leaves headroom above a 25-request session`);
   });
 
-  await test("RATE LIMIT: the ceiling actually binds after `limit` admitted requests", async () => {
-    // Proves the counter is real (not merely that a pre-filled row denies): drive
-    // the handler until it flips, and check it flipped at exactly the configured
-    // limit, having admitted every request before that.
+  await test("RATE LIMIT: the final slot admits once, then 429s in the same fixed window", async () => {
+    // Freeze the clock and pre-fill limit-1. The old 41-handler loop could take
+    // longer than five minutes under load and cross into a new window, producing a
+    // false failure. Two real handler calls prove the same boundary deterministically.
     resetLimiter();
     const userId = freshUser();
-    let admitted = 0;
-    let denialStatus = 0;
-    const realNow = Date.now;
-    // Keep all requests in one fixed window. Without this, a test that happens
-    // to cross an epoch-aligned 5-minute boundary truthfully receives a fresh
-    // window and intermittently reports 41 admissions for a 40-slot rule.
-    Date.now = () => 1_700_000_100_000;
+    const originalDateNow = Date.now;
+    const fixedNow = 1_800_000_123_000;
+    Date.now = () => fixedNow;
     try {
-      for (let i = 0; i < GEN_RULE.limit + 1; i++) {
-        const { status } = await runAs(userId, fullBody());
-        if (status === 200) { admitted++; continue; }
-        denialStatus = status;
-        break;
-      }
+      const windowStart = new Date(windowStartMs(fixedNow, GEN_RULE.windowSeconds)).toISOString();
+      limiterStore.fill(`user:${userId}`, "image_generation", windowStart, GEN_RULE.limit - 1);
+
+      const admitted = await runAs(userId, fullBody());
+      assertEq(admitted.status, 200, "the final available slot is admitted");
+      assertEq(spawnCount, 1, "the admitted request reaches the provider exactly once");
+      assert(moderateCallCount > 0, "the admitted request reaches moderation");
+
+      const denied = await runAs(userId, fullBody());
+      assertEq(denied.status, 429, "the immediately following request is throttled");
+      assertEq(denied.json.code, "rate_limited", "stable machine-readable code");
+      const retryAfter = Number(denied.res.headers.get("Retry-After"));
+      assert(Number.isFinite(retryAfter) && retryAfter >= 1, "Retry-After is present and positive");
+      assert(retryAfter <= GEN_RULE.windowSeconds, "Retry-After stays inside the fixed window");
+      assertEq(moderateCallCount, 0, "the denied request buys ZERO moderation calls");
+      assertEq(spawnCount, 0, "the denied request buys ZERO provider dispatch");
+      assertEq(enqueueInsertCount, 0, "the denied request enqueues nothing");
     } finally {
-      Date.now = realNow;
+      Date.now = originalDateNow;
     }
-    assertEq(admitted, GEN_RULE.limit, "exactly `limit` requests were admitted");
-    assertEq(denialStatus, 429, "request limit+1 is throttled");
   });
 
   await test("RATE LIMIT: one user's exhausted window does not throttle another user", async () => {
@@ -1271,11 +1450,16 @@ async function main() {
   console.log(`\n${passed} passed, ${failed} failed\n`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (Module as any)._load = originalLoad;
+  globalThis.fetch = originalFetch;
   rateLimitModule.__setRateLimitStoreForTests(null);
   if (failed > 0) process.exit(1);
 }
 
 main().catch((e) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (Module as any)._load = originalLoad;
+  globalThis.fetch = originalFetch;
+  rateLimitModule.__setRateLimitStoreForTests(null);
   console.error(e);
   process.exit(1);
 });
