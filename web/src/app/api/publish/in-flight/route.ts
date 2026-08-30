@@ -25,6 +25,7 @@
  */
 
 import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
+import { isAttemptLive } from "@/lib/server/publish/inFlight";
 import { createServerClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -40,25 +41,6 @@ function isMissingTable(code: string | undefined): boolean {
  * publishing forever, and the drawer would show a spinner that never resolves.
  * Matches the cron's own stale-claim window.
  */
-export const STALE_AFTER_MS = 10 * 60 * 1000;
-
-/**
- * Is this attempt still live, given when it started?
- *
- * Exported and pure so the staleness rule can be tested directly: it is the one
- * piece of judgement in this route, and getting it wrong is invisible in a happy-
- * path test — too strict and a real publish looks idle, too lax and a dead worker
- * leaves a spinner that never resolves.
- */
-export function isAttemptLive(createdAt: string, nowMs = Date.now()): boolean {
-  const startedMs = Date.parse(createdAt);
-  // An unparseable timestamp is treated as live: the row exists and says it is
-  // publishing, so the safer reading is "something is happening" rather than
-  // discarding a real attempt over a formatting problem.
-  if (!Number.isFinite(startedMs)) return true;
-  return nowMs - startedMs <= STALE_AFTER_MS;
-}
-
 export async function GET(req: Request): Promise<Response> {
   const uid = await getUserIdFromBearerOrCookies(req);
   if (!uid) return Response.json({ error: "Unauthorized" }, { status: 401 });

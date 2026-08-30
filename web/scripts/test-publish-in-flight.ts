@@ -39,7 +39,7 @@ const MIN = 60 * 1000;
 
 async function main() {
   const { isAttemptLive, STALE_AFTER_MS } =
-    await import("../src/app/api/publish/in-flight/route");
+    await import("../src/lib/server/publish/inFlight");
 
   const now = Date.parse("2026-08-18T12:00:00.000Z");
   const ago = (ms: number) => new Date(now - ms).toISOString();
