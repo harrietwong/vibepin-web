@@ -48,6 +48,37 @@ from pipeline_tracking import (  # noqa: E402
 # as opposed to exit 1 = "a precondition was verified and is genuinely wrong".
 # 75 is EX_TEMPFAIL from sysexits.h: retryable, the caller should try later.
 EXIT_PRECONDITION_UNVERIFIED = 75
+# A completed process is not a successful Product Supply run when its own
+# report says Pinterest evidence was unauthenticated, partially rendered, or
+# timed out.  Keep this distinct from both a verified code failure (1) and an
+# unverifiable database precondition (75) so systemd/operations can fail closed
+# without parsing log prose.
+EXIT_PRODUCT_SUPPLY_UNTRUSTED = 76
+
+
+class ProductSupplyReportUntrusted(RuntimeError):
+    """The worker finished, but its Supply evidence cannot support success."""
+
+
+def _require_trusted_product_supply_report(report: object) -> None:
+    if not isinstance(report, dict):
+        raise ProductSupplyReportUntrusted("Product Supply report is missing")
+    quality = report.get("dataQuality") or {}
+    aggregate = report.get("aggregate") or {}
+    if quality.get("resultTrust") != "trusted" or quality.get("authenticatedRun") is not True:
+        raise ProductSupplyReportUntrusted(
+            f"Product Supply report is not trusted: {quality.get('resultTrust') or 'missing'}"
+        )
+    render_failures = aggregate.get("renderFailureCount")
+    timeout_count = aggregate.get("timeoutCount")
+    if type(render_failures) is not int or render_failures != 0:
+        raise ProductSupplyReportUntrusted(
+            f"Product Supply report has render failures: {render_failures!r}"
+        )
+    if type(timeout_count) is not int or timeout_count != 0:
+        raise ProductSupplyReportUntrusted(
+            f"Product Supply report has Pin timeouts: {timeout_count!r}"
+        )
 
 
 def _log(msg: str) -> None:
@@ -420,7 +451,7 @@ async def job_product_supply_expand(ctx: dict, *, engine: str = "shop-the-look",
                                     limit: int = 50, seed_pin_limit: int = 100,
                                     related_per_pin: int = 8, depth: int = 1,
                                     apply: bool = False,
-                                    source_report: str | None = None) -> None:
+                                    source_report: str | None = None) -> dict:
     """Bounded product-supply expansion. Shop-the-Look is the production default;
     the old related outbound path remains available only as an explicit engine."""
     import json
@@ -454,6 +485,9 @@ async def job_product_supply_expand(ctx: dict, *, engine: str = "shop-the-look",
     print(json.dumps({"stats": ctx["stats"], "aggregate": aggregate,
                       "sourceSelection": report.get("sourceSelection")},
                      indent=2, ensure_ascii=False, default=str))
+    if engine == "shop-the-look":
+        _require_trusted_product_supply_report(report)
+    return report
 
 
 async def job_trend_provider_health(ctx: dict, *, region: str = "US") -> None:
@@ -879,6 +913,9 @@ def main() -> int:
         if type(exc).__name__ == "SchemaCheckUnavailable":
             pipeline._err(f"Worker could not verify preconditions: {exc}")
             return EXIT_PRECONDITION_UNVERIFIED
+        if isinstance(exc, ProductSupplyReportUntrusted):
+            pipeline._err(f"Worker rejected untrusted Product Supply receipt: {exc}")
+            return EXIT_PRODUCT_SUPPLY_UNTRUSTED
         pipeline._err(f"Worker failed: {exc}")
         return 1
 

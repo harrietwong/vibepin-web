@@ -41,6 +41,7 @@ def valid_summary() -> dict:
         "resultTrust": "trusted",
         "authenticatedRun": True,
         "renderFailureCount": 0,
+        "timeoutCount": 0,
         "productJsonResponses": 120,
         "pinsWithZeroProductJson": 4,
         "responseErrorCount": 0,
@@ -200,6 +201,17 @@ def test_complete_scheduled_run_contract_accepts_zero_to_fifty_writes() -> None:
         require_canary_write=False,
         require_scheduled_run=True,
     )
+
+
+def test_scheduled_run_rejects_any_pin_timeout() -> None:
+    summary = scheduled_summary(writes=1)
+    summary["timeoutCount"] = 1
+    with pytest.raises(RuntimeError, match="Pin timeouts"):
+        cutover._validate_audit_summary(
+            summary,
+            require_canary_write=False,
+            require_scheduled_run=True,
+        )
 
 
 def test_launch_scheduled_profile_accepts_only_exact_v37_mix() -> None:

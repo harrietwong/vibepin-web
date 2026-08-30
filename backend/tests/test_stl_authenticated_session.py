@@ -419,6 +419,30 @@ class TestReportTrustVerdict(unittest.TestCase):
                          "partial:some_pins_failed_to_render")
         self.assertEqual(report["aggregate"]["renderFailureCount"], 1)
 
+    def test_all_pin_timeouts_are_untrusted_even_without_render_failure_flag(self):
+        per_pin = [
+            _pin(issue="goto_timeout:net::ERR_TUNNEL_CONNECTION_FAILED")
+            for _ in range(3)
+        ]
+        report = self._report(per_pin, HEALTHY)
+        self.assertEqual(
+            report["dataQuality"]["resultTrust"],
+            "untrusted:all_pins_timed_out",
+        )
+        self.assertEqual(report["aggregate"]["timeoutCount"], 3)
+        self.assertEqual(report["aggregate"]["renderFailureCount"], 0)
+
+    def test_one_pin_timeout_makes_the_run_partial(self):
+        per_pin = [
+            _pin(visibleCardCount=8, productJsonResponses=12),
+            _pin(issue="goto_timeout:net::ERR_TUNNEL_CONNECTION_FAILED"),
+        ]
+        report = self._report(per_pin, HEALTHY)
+        self.assertEqual(
+            report["dataQuality"]["resultTrust"],
+            "partial:some_pins_timed_out",
+        )
+
     def test_whole_pin_timeout_is_counted_and_stage_is_preserved(self):
         per_pin = [
             _pin(visibleCardCount=8, productJsonResponses=12),

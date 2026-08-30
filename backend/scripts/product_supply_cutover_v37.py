@@ -607,6 +607,7 @@ summary = {
     "resultTrust": (r.get("dataQuality") or {}).get("resultTrust"),
     "authenticatedRun": (r.get("dataQuality") or {}).get("authenticatedRun"),
     "renderFailureCount": (r.get("aggregate") or {}).get("renderFailureCount"),
+    "timeoutCount": (r.get("aggregate") or {}).get("timeoutCount"),
     "productJsonResponses": (r.get("aggregate") or {}).get("productJsonResponses"),
     "pinsWithZeroProductJson": (r.get("aggregate") or {}).get("pinsWithZeroProductJson"),
     "responseErrorCount": (r.get("responseErrors") or {}).get("count", 0),
@@ -800,6 +801,9 @@ def _validate_audit_summary(
             raise RuntimeError("scheduled report is not a trusted authenticated run")
         if summary.get("renderFailureCount") != 0:
             raise RuntimeError("scheduled report contains render failures")
+        timeout_count = summary.get("timeoutCount")
+        if type(timeout_count) is not int or timeout_count != 0:
+            raise RuntimeError("scheduled report contains Pin timeouts")
         response_error_count = summary.get("responseErrorCount")
         response_error_samples = summary.get("responseErrorSamples")
         product_json_responses = summary.get("productJsonResponses")

@@ -1474,6 +1474,7 @@ def _build_report(
     health = dict(session_health or {})
     authenticated_run = health.get("authValid") is True
     render_failures = aggregate["renderFailureCount"]
+    timeout_count = aggregate["timeoutCount"]
     # Verdict: is this run's product count trustworthy as evidence about supply?
     if health.get("issue") in ("session_expired",):
         trust = "untrusted:session_expired"
@@ -1481,6 +1482,10 @@ def _build_report(
         trust = "untrusted:unauthenticated"
     elif health.get("authValid") is False:
         trust = "untrusted:not_logged_in"
+    elif per_pin and timeout_count == len(per_pin):
+        trust = "untrusted:all_pins_timed_out"
+    elif timeout_count:
+        trust = "partial:some_pins_timed_out"
     elif per_pin and render_failures == len(per_pin):
         trust = "untrusted:all_pins_failed_to_render"
     elif render_failures:

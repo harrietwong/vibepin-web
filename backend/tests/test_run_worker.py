@@ -9,7 +9,49 @@ from unittest.mock import AsyncMock, Mock, patch
 import run_worker
 
 
+def _trusted_supply_report() -> dict:
+    return {
+        "dataQuality": {"resultTrust": "trusted", "authenticatedRun": True},
+        "aggregate": {
+            "renderFailureCount": 0,
+            "timeoutCount": 0,
+            "sourcePinsScanned": 1,
+            "uniqueAcceptedProducts": 0,
+        },
+        "sourceSelection": {"selectedTotal": 1},
+    }
+
+
 class TestRunWorker(unittest.IsolatedAsyncioTestCase):
+    async def test_product_supply_rejects_untrusted_runtime_report(self):
+        import shop_the_look_expand
+
+        report = _trusted_supply_report()
+        report["dataQuality"]["resultTrust"] = "partial:some_pins_timed_out"
+        report["aggregate"]["timeoutCount"] = 1
+        with patch.object(
+            shop_the_look_expand,
+            "run_shop_the_look_expand",
+            new=AsyncMock(return_value=report),
+        ):
+            with self.assertRaises(run_worker.ProductSupplyReportUntrusted):
+                await run_worker.job_product_supply_expand(
+                    {}, engine="shop-the-look", limit=1, apply=False
+                )
+
+    async def test_product_supply_accepts_trusted_runtime_report(self):
+        import shop_the_look_expand
+
+        report = _trusted_supply_report()
+        with patch.object(
+            shop_the_look_expand,
+            "run_shop_the_look_expand",
+            new=AsyncMock(return_value=report),
+        ):
+            result = await run_worker.job_product_supply_expand(
+                {}, engine="shop-the-look", limit=1, apply=False
+            )
+        self.assertIs(result, report)
     async def test_job_trends_records_stats(self):
         ctx = {"stats": {}}
         with patch.object(run_worker.pipeline, "step_interests", new_callable=AsyncMock) as interests:
@@ -266,6 +308,13 @@ class TestUnverifiedPreconditionExitCode(unittest.TestCase):
         code = self._run_main_with(RuntimeError(
             "v28 migration has not been applied — missing columns: ['seed_keyword']."))
         self.assertEqual(code, 1)
+
+    def test_untrusted_supply_receipt_exits_76(self):
+        code = self._run_main_with(run_worker.ProductSupplyReportUntrusted(
+            "partial:some_pins_timed_out"
+        ))
+        self.assertEqual(code, run_worker.EXIT_PRODUCT_SUPPLY_UNTRUSTED)
+        self.assertEqual(code, 76)
 
     def test_the_two_outcomes_have_different_exit_codes(self):
         from shop_the_look_expand import SchemaCheckUnavailable
