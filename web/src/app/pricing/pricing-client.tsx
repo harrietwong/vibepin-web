@@ -14,6 +14,7 @@ import {
   PRICING_FAQ,
   PRICING_REASSURANCE,
   PRICING_TIERS,
+  SCHEDULED_POST_COUNTING_TEXT,
   type PlanKey,
 } from "@/lib/pricingPlans";
 import {
@@ -283,7 +284,7 @@ function CellValue({ value, highlighted }: { value: string; highlighted: boolean
   );
 }
 
-function ComparisonTable() {
+function ComparisonTable({ yearly }: { yearly: boolean }) {
   return (
     <div className="overflow-x-auto rounded-2xl border" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
       <table className="w-full min-w-[760px] border-collapse" style={{ background: "var(--surface-2)" }}>
@@ -292,18 +293,21 @@ function ComparisonTable() {
             <th className="text-left px-5 py-4 text-[12px] font-bold uppercase tracking-widest w-[32%]" style={{ color: "#6B7280" }}>
               Features
             </th>
-            {PRICING_TIERS.map(plan => (
-              <th
-                key={plan.id}
-                className="px-4 py-4 text-center w-[17%]"
-                style={plan.highlighted ? { background: "rgba(124,58,237,0.10)" } : undefined}
-              >
-                <span className="block text-[13px] font-black text-white">{plan.name}</span>
-                <span className="block text-[11px] mt-0.5" style={{ color: "#6B7280", ...MONO }}>
-                  ${plan.priceMonthly}/mo
-                </span>
-              </th>
-            ))}
+            {PRICING_TIERS.map(plan => {
+              const displayedPrice = yearly ? plan.priceYearly : plan.priceMonthly;
+              return (
+                <th
+                  key={plan.id}
+                  className="px-4 py-4 text-center w-[17%]"
+                  style={plan.highlighted ? { background: "rgba(124,58,237,0.10)" } : undefined}
+                >
+                  <span className="block text-[13px] font-black text-white">{plan.name}</span>
+                  <span className="block text-[11px] mt-0.5" style={{ color: "#6B7280", ...MONO }}>
+                    ${displayedPrice}/mo
+                  </span>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         {COMPARISON_SECTIONS.map(section => (
@@ -648,8 +652,11 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
               AI. Publish to Pinterest, Instagram, and Facebook.
             </p>
           </div>
-          <ComparisonTable />
-          <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-5" style={{ color: "#6B7280" }}>
+          <ComparisonTable yearly={yearly} />
+          <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-5" style={{ color: "#C8CDD6" }}>
+            {SCHEDULED_POST_COUNTING_TEXT}
+          </p>
+          <p className="text-[12px] leading-relaxed text-center max-w-[640px] mx-auto mt-2" style={{ color: "#6B7280" }}>
             {ACCOUNTS_HELPER_TEXT}
           </p>
           {/* The add-on, stated where the account numbers are: someone reading

@@ -279,6 +279,10 @@ export const COMPARISON_SECTIONS: ComparisonSection[] = [
  */
 export const EXTRA_ACCOUNT_PRICE_USD = { monthly: 7, yearlyPerMonth: 5 } as const;
 
+/** One published Content consumes one scheduled-post allowance, regardless of channels. */
+export const SCHEDULED_POST_COUNTING_TEXT =
+  "One Content counts as 1 scheduled post, no matter how many channels it publishes to.";
+
 /** Caption rendered under the comparison table to explain the account model. */
 export const ACCOUNTS_HELPER_TEXT =
   "An account means one connected Pinterest, Instagram, or Facebook account/page. Starter includes 1 account per platform, Pro includes 2 accounts per platform, and Business includes 3 accounts per platform.";
@@ -289,9 +293,10 @@ export const ACCOUNTS_HELPER_TEXT =
  * (and translated) independently.
  */
 export const EXTRA_ACCOUNT_HELPER_TEXT =
-  `Need more? Add extra account slots for $${EXTRA_ACCOUNT_PRICE_USD.monthly} per account / month ` +
-  `($${EXTRA_ACCOUNT_PRICE_USD.yearlyPerMonth} billed yearly). A slot can be used on any platform, ` +
-  "and you can add as many as you need. Available on Starter, Pro, and Business.";
+  `Only paid plans can add multiple social account slots for any platform: ` +
+  `$${EXTRA_ACCOUNT_PRICE_USD.monthly} per account / month with monthly billing, or ` +
+  `$${EXTRA_ACCOUNT_PRICE_USD.yearlyPerMonth} per account / month with annual billing. ` +
+  "Available on Starter, Pro, and Business.";
 
 export type PricingFaqItem = {
   question: string;
@@ -322,7 +327,8 @@ export const PRICING_FAQ: PricingFaqItem[] = [
   {
     question: "Can I schedule unlimited posts?",
     answer:
-      "Business includes unlimited scheduled posts. Pro includes 300 scheduled posts per month. Starter includes 150 scheduled posts per month. Free includes 5 scheduled posts per month.",
+      "Business includes unlimited scheduled posts. Pro includes 300 scheduled posts per month. Starter includes 150 scheduled posts per month. Free includes 5 scheduled posts per month. " +
+      SCHEDULED_POST_COUNTING_TEXT,
   },
   {
     question: "How many accounts can I connect?",
@@ -332,10 +338,9 @@ export const PRICING_FAQ: PricingFaqItem[] = [
   {
     question: "Need more accounts on a plan?",
     answer:
-      `Add extra account slots for $${EXTRA_ACCOUNT_PRICE_USD.monthly} per account / month ` +
-      `($${EXTRA_ACCOUNT_PRICE_USD.yearlyPerMonth} per account / month billed yearly). ` +
-      "A slot can be used on any platform — Pinterest, Instagram, or Facebook — and there is no limit " +
-      "on how many you can add. Extra account slots are available on Starter, Pro, and Business.",
+      `Only Starter, Pro, and Business can add multiple social account slots for any platform — ` +
+      `Pinterest, Instagram, or Facebook — for $${EXTRA_ACCOUNT_PRICE_USD.monthly} per account / month ` +
+      `with monthly billing, or $${EXTRA_ACCOUNT_PRICE_USD.yearlyPerMonth} per account / month with annual billing.`,
   },
   {
     question: "Which plan should I choose?",

@@ -189,7 +189,11 @@ async function main() {
   // ── TikTok is not a platform we publish to ─────────────────────────────────
   await test("no pricing string mentions TikTok", async () => {
     const pp = await import("../src/lib/pricingPlans");
-    const visible: string[] = [pp.ACCOUNTS_HELPER_TEXT, pp.EXTRA_ACCOUNT_HELPER_TEXT];
+    const visible: string[] = [
+      pp.ACCOUNTS_HELPER_TEXT,
+      pp.EXTRA_ACCOUNT_HELPER_TEXT,
+      pp.SCHEDULED_POST_COUNTING_TEXT,
+    ];
     for (const t of pp.PRICING_TIERS) {
       visible.push(t.name, t.description, t.cta, ...t.bullets, ...t.previewBullets);
     }
@@ -211,7 +215,7 @@ async function main() {
       typeof price.yearlyPerMonth === "number" && price.yearlyPerMonth > 0,
       "yearly per-month price set",
     );
-    const faq = pp.PRICING_FAQ.find((f) => /extra account slots/i.test(f.answer));
+    const faq = pp.PRICING_FAQ.find((f) => /multiple social account slots/i.test(f.answer));
     assert(!!faq, "an FAQ entry must explain the add-on");
     for (const text of [pp.EXTRA_ACCOUNT_HELPER_TEXT, faq!.answer]) {
       assert(text.includes(`$${price.monthly}`), `add-on copy must quote $${price.monthly}`);
@@ -220,11 +224,53 @@ async function main() {
         `add-on copy must quote the yearly price $${price.yearlyPerMonth}`,
       );
       assert(/any platform/i.test(text), "a slot works on any platform — say so");
+      assert(/multiple/i.test(text), "paid customers can add multiple slots — say so");
+      assert(/only/i.test(text), "the add-on copy must explicitly exclude the Free plan");
     }
     // Free is not in the add-on's audience: the copy names the paid plans.
     assert(
       /Starter, Pro,? and Business/.test(faq!.answer),
       "the FAQ must say which plans can buy it",
+    );
+  });
+
+  await test("scheduled-post copy defines one Content as one post across any number of channels", async () => {
+    const pp = await import("../src/lib/pricingPlans");
+    assert(/one Content/i.test(pp.SCHEDULED_POST_COUNTING_TEXT), "copy names the Content unit");
+    assert(/1 scheduled post/i.test(pp.SCHEDULED_POST_COUNTING_TEXT), "copy names the charged unit");
+    assert(
+      /no matter how many channels/i.test(pp.SCHEDULED_POST_COUNTING_TEXT),
+      "copy says channel fan-out does not multiply usage",
+    );
+    const faq = pp.PRICING_FAQ.find((f) => /schedule unlimited posts/i.test(f.question));
+    assert(faq?.answer.includes(pp.SCHEDULED_POST_COUNTING_TEXT), "FAQ repeats the counting rule");
+  });
+
+  await test("comparison-table prices follow the billing toggle", async () => {
+    const pp = await import("../src/lib/pricingPlans");
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../src/app/pricing/pricing-client.tsx", import.meta.url), "utf8");
+    assertEq(
+      JSON.stringify(pp.PRICING_TIERS.map((plan) => plan.priceMonthly)),
+      JSON.stringify([0, 19, 49, 99]),
+      "monthly comparison prices remain $0/$19/$49/$99",
+    );
+    assertEq(
+      JSON.stringify(pp.PRICING_TIERS.map((plan) => plan.priceYearly)),
+      JSON.stringify([0, 15, 39, 79]),
+      "annual comparison prices remain $0/$15/$39/$79",
+    );
+    assert(
+      /function ComparisonTable\(\{ yearly \}: \{ yearly: boolean \}\)/.test(source),
+      "comparison table receives the current billing period",
+    );
+    assert(
+      /const displayedPrice = yearly \? plan\.priceYearly : plan\.priceMonthly/.test(source),
+      "comparison headers select annual or monthly plan prices",
+    );
+    assert(
+      /<ComparisonTable yearly=\{yearly\} \/>/.test(source),
+      "pricing page passes the billing toggle to the comparison table",
     );
   });
 
