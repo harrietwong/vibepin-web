@@ -767,6 +767,33 @@ async function main() {
 
   // ── Source contract ─────────────────────────────────────────────────────────
 
+  await test("409: a newer local edit survives an older tombstone and is retried", async () => {
+    reset();
+    const a = store.createBoardDraft({ imageUrl: "https://x/s9.png", source: "uploaded_image", title: "initial" });
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl });
+    await until(() => srv.live().length === 1, 3_000);
+    const putsBefore = srv.putCalls().length;
+
+    // LWW's documented rule is that an edit newer than the tombstone wins and
+    // revives the draft server-side. A CAS conflict can still hand that tombstone
+    // back after our request was read, so the 409 path must keep the outbox entry
+    // and retry the surviving local draft instead of acknowledging it as deleted.
+    const deletedAt = new Date(Date.now() - 120_000).toISOString();
+    const tombstone = { ...serverDraft(a.id, deletedAt, { title: "server-old" }), deletedAt };
+    srv.staleNext([a.id], 1, [tombstone]);
+
+    store.updateDraft(a.id, { title: "local-newer" });
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 4_000);
+
+    const puts = srv.putCalls().slice(putsBefore);
+    assert.equal(puts.length, 2,
+      `a local edit newer than the tombstone must be retried and revive the row (saw ${puts.length} PUTs)`);
+    assert.equal(store.getDraft(a.id)?.title, "local-newer", "the newer local edit must remain in the store");
+    assert.equal(srv.rows.get(a.id)?.payload.title, "local-newer", "the newer edit must reach the server");
+    assert.equal(srv.rows.get(a.id)?.deletedAt, undefined, "the accepted retry must clear the tombstone");
+  });
+
   await test("source: reconcileStale re-bases field-level and never LWWs a live server payload", () => {
     const src = fs
       .readFileSync(path.join(__dirname_, "../src/lib/pinDraftSync.ts"), "utf8")

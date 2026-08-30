@@ -520,12 +520,11 @@ interface StaleConflictBody {
  * server's re-read) is still returned as conflicted: nothing to re-base onto, so
  * the retry simply re-sends what we have, and the next cycle sees whatever landed.
  *
- * A row that is TOMBSTONED, though, is not re-based and not retried — it is applied.
- * The delete happened on the server (another device, the draft cap), and re-sending
- * the local copy would revive it (route.ts writes `deleted_at: null` on a newer PUT),
- * so the draft the merchant deleted would keep coming back. `mergeServerDrafts` is
- * exactly how the startup pull applies a server deletion, including its rule that a
- * newer LOCAL edit survives the tombstone — same question, so the same answer.
+ * A row that is TOMBSTONED is resolved with the same LWW rule as the startup pull.
+ * A newer tombstone removes the local draft and must not be retried, because a retry
+ * would revive what the merchant deleted. A newer local edit survives and MUST stay
+ * conflicted so it is retried: that is how the documented "newer local edit revives"
+ * rule reaches the server instead of becoming a browser-only edit.
  *
  * `ids` collects the drafts whose outbox entry must be dropped rather than retried:
  * with the draft gone locally, `rebuildChunk` would skip it and its entry would sit
@@ -557,15 +556,16 @@ async function reconcileStale(
     conflicted.add(id);
     const current = e?.current ?? null;
 
-    // Tombstoned on the server → apply the deletion, do not re-base and do not retry.
+    // Tombstoned on the server → apply the same LWW rule as the startup pull.
     const deletedAt = typeof current?.deleted_at === "string" ? current.deleted_at.trim() : "";
     if (deletedAt) {
-      mergeServerDrafts([], [{ id, deletedAt }]);
-      // Whether or not the local copy survived (a newer local edit does), this write
-      // is finished as far as THIS cycle is concerned: there is nothing to re-base a
-      // retry onto. Drop the entry so the outbox does not stall on a draft that may
-      // no longer exist; a surviving local draft is re-diffed on the next store write.
-      dropped?.add(id);
+      const { removed } = mergeServerDrafts([], [{ id, deletedAt }]);
+      // Only acknowledge the PUT when the tombstone actually won. If a newer local
+      // edit survived, leave the id conflicted and the outbox entry intact so the
+      // normal one-shot retry revives the server row. Dropping it here would report
+      // "synced" while the edit exists only in localStorage, with no later write
+      // guaranteed to enqueue it again.
+      if (removed > 0 || !getDraft(id)) dropped?.add(id);
       continue;
     }
 
