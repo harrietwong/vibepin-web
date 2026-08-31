@@ -56,6 +56,7 @@ import {
 import { AMAZON_MARKETPLACES, type AmazonMarketplace } from "@/lib/affiliate/amazon";
 import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { ShopifyTab } from "@/components/settings/ShopifyTab";
+import { useViewportBucket } from "@/hooks/useViewportBucket";
 
 const PRICING_PATH = "/pricing";
 
@@ -1463,6 +1464,7 @@ export function SettingsModal({
   onClose: () => void;
 }) {
   const { t } = useLocale();
+  const isMobile = useViewportBucket() === "mobile";
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const accountSaveFn       = useRef<(() => Promise<void>) | null>(null);
   const publishingSaveFn    = useRef<(() => Promise<void>) | null>(null);
@@ -1494,6 +1496,7 @@ export function SettingsModal({
   }, [tab]);
 
   const showSave = tab === "account" || tab === "publishing" || tab === "amazon" || tab === "smart-schedule" || tab === "ai-settings" || tab === "language";
+  const visibleTabs = TABS.filter(tabItem => tabItem.id !== "shopify" || isShopifyIntegrationEnabled());
 
   if (!open) return null;
 
@@ -1512,14 +1515,14 @@ export function SettingsModal({
         aria-modal="true"
         aria-label={t("settings.title")}
         style={{
-          width: "min(920px, calc(100vw - 64px))",
-          height: "78vh",
-          maxHeight: 820,
-          minHeight: 620,
+          width: isMobile ? "calc(100vw - 16px)" : "min(920px, calc(100vw - 64px))",
+          height: isMobile ? "calc(100dvh - 16px)" : "78vh",
+          maxHeight: isMobile ? "none" : 820,
+          minHeight: isMobile ? 0 : 620,
           display: "flex",
           flexDirection: "column",
           background: "var(--app-shell-bg, #0B1120)",
-          borderRadius: 20,
+          borderRadius: isMobile ? 14 : 20,
           border: `1px solid var(--app-border, rgba(255,255,255,0.10))`,
           boxShadow: "0 24px 64px rgba(0,0,0,0.5), 0 8px 24px rgba(0,0,0,0.3)",
           overflow: "hidden",
@@ -1527,8 +1530,8 @@ export function SettingsModal({
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{
-          padding: "16px 22px 14px", borderBottom: `1px solid ${UI.border}`,
+        <div data-testid="settings-modal-header" style={{
+          padding: isMobile ? "14px 14px 12px" : "16px 22px 14px", borderBottom: `1px solid ${UI.border}`,
           display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexShrink: 0,
         }}>
           <div>
@@ -1548,13 +1551,39 @@ export function SettingsModal({
         </div>
 
         {/* Body */}
-        <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <div data-testid="settings-modal-body" style={{
+          display: "flex", flex: 1, minHeight: 0, overflow: "hidden",
+          flexDirection: isMobile ? "column" : "row",
+        }}>
           {/* Sidebar — only real tabs, no phantom entries */}
-          <div style={{
+          {isMobile ? (
+            <div data-testid="settings-mobile-tab-picker" style={{
+              flexShrink: 0, padding: "10px 12px", borderBottom: `1px solid ${UI.border}`,
+            }}>
+              <select
+                data-testid="settings-mobile-tab-select"
+                aria-label={t("settings.title")}
+                value={tab}
+                onChange={event => setTab(event.target.value as SettingsTab)}
+                style={{
+                  width: "100%", minWidth: 0, padding: "9px 34px 9px 11px",
+                  borderRadius: 9, border: `1px solid ${UI.border}`,
+                  background: UI.surface2, color: UI.text, fontSize: 13, fontWeight: 700,
+                }}
+              >
+                {visibleTabs.map(tabItem => (
+                  <option key={tabItem.id} value={tabItem.id}>
+                    {tabItem.labelKey ? t(tabItem.labelKey) : tabItem.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+          <div data-testid="settings-desktop-sidebar" style={{
             width: 164, flexShrink: 0, borderRight: `1px solid ${UI.border}`,
             padding: "12px 8px", display: "flex", flexDirection: "column", gap: 2, overflowY: "auto",
           }}>
-            {TABS.filter(tabItem => tabItem.id !== "shopify" || isShopifyIntegrationEnabled()).map(tabItem => {
+            {visibleTabs.map(tabItem => {
               const active = tab === tabItem.id;
               return (
                 <button key={tabItem.id} type="button" data-testid={tabItem.testId} onClick={() => setTab(tabItem.id)}
@@ -1572,9 +1601,13 @@ export function SettingsModal({
               );
             })}
           </div>
+          )}
 
           {/* Content */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px 52px", minWidth: 0 }}>
+          <div data-testid="settings-modal-content" style={{
+            flex: 1, overflowY: "auto", overflowX: "hidden",
+            padding: isMobile ? "14px 12px 40px" : "18px 20px 52px", minWidth: 0,
+          }}>
             {tab === "account"        && <AccountTab       saveFnRef={accountSaveFn} />}
             {tab === "billing"        && <BillingTab />}
             {/* SocialAccountsPanel reads the OAuth-return query via useSearchParams,
@@ -1601,9 +1634,9 @@ export function SettingsModal({
         </div>
 
         {/* Footer */}
-        <div style={{
-          padding: "12px 20px", borderTop: `1px solid ${UI.border}`,
-          display: "flex", justifyContent: "flex-end", gap: 10, flexShrink: 0,
+        <div data-testid="settings-modal-footer" style={{
+          padding: isMobile ? "10px 12px" : "12px 20px", borderTop: `1px solid ${UI.border}`,
+          display: "flex", justifyContent: "flex-end", gap: 10, flexShrink: 0, flexWrap: "wrap",
         }}>
           <button type="button" data-testid="settings-cancel" onClick={onClose}
             style={{

@@ -130,6 +130,7 @@ export const CORE: string[] = [
   "test-public-compliance-copy",
   // Settings / support
   "test-settings-p0",
+  "test-settings-social-responsive",
   "test-support-ai-responder",
   "test-support-translator",
   "test-support-metrics",

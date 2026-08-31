@@ -289,7 +289,7 @@ test("平台层只剩 Add another,不再有任何针对既有账号的动作", (
   assert.match(panelSrc, /data-testid=\{`social-add-account-\$\{summary\.provider\}`\}/,
     "Add another 必须留在平台层");
   // N>1 时不显示平台徽章的规则原样保留。
-  assert.match(panelSrc, /\{!hasSeveralAccounts && <Chip chip=\{chip\} \/>\}/);
+  assert.match(panelSrc, /\{!hasSeveralAccounts && <Chip chip=\{chip\} mobile=\{mobile\} \/>\}/);
   assert.match(panelSrc, /const hasSeveralAccounts = summary\.accountCount > 1;/);
 });
 

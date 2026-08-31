@@ -84,6 +84,7 @@ import {
 import { isMultiSocialAccountsEnabled } from "@/lib/socialFeatureFlags";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
+import { useViewportBucket } from "@/hooks/useViewportBucket";
 
 /**
  * `?facebook=<status>` OAuth-return consumption (照 PinterestSettingsPanel /
@@ -306,7 +307,7 @@ function statusChip(summary: PlatformConnectionSummary, tr: (key: MessageKey) =>
   };
 }
 
-function Chip({ chip }: { chip: StatusChip }) {
+function Chip({ chip, mobile = false }: { chip: StatusChip; mobile?: boolean }) {
   return (
     <span
       style={{
@@ -320,7 +321,10 @@ function Chip({ chip }: { chip: StatusChip }) {
         color: chip.color,
         background: chip.bg,
         border: `1px solid ${chip.border}`,
-        whiteSpace: "nowrap",
+        whiteSpace: mobile ? "normal" : "nowrap",
+        maxWidth: "100%",
+        overflowWrap: mobile ? "anywhere" : "normal",
+        flexShrink: mobile ? 1 : 0,
       }}
     >
       <span style={{ width: 6, height: 6, borderRadius: "50%", background: chip.color }} />
@@ -358,6 +362,7 @@ function PlatformCard({
   onRefresh: () => void;
 }) {
   const { t: tr } = useLocale();
+  const mobile = useViewportBucket() === "mobile";
   const meta = PLATFORMS[summary.provider];
   const chip = statusChip(summary, tr);
   const connected = summary.connected;
@@ -379,19 +384,24 @@ function PlatformCard({
         background: UI.surface,
         border: `1px solid ${connected ? "rgba(16,185,129,0.22)" : UI.border}`,
         borderRadius: 14,
-        padding: "16px 16px",
+        padding: mobile ? "12px" : "16px 16px",
+        minWidth: 0,
+        overflow: "hidden",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div data-testid={`social-card-header-${summary.provider}`} style={{
+        display: "flex", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 10 : 12,
+        minWidth: 0,
+      }}>
         <PlatformIcon provider={summary.provider} size={38} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: UI.text }}>
+          <div style={{ display: "flex", alignItems: mobile ? "flex-start" : "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: UI.text, minWidth: 0, overflowWrap: "anywhere" }}>
               {hasSeveralAccounts ? `${meta.name} · ${summary.accountCount}${tr("socialPanel.card.accountsCountSuffix")}` : meta.name}
             </p>
-            {!hasSeveralAccounts && <Chip chip={chip} />}
+            {!hasSeveralAccounts && <Chip chip={chip} mobile={mobile} />}
           </div>
-          <p style={{ margin: "3px 0 0", fontSize: 12, color: UI.textSec }}>
+          <p style={{ margin: "3px 0 0", fontSize: 12, color: UI.textSec, overflowWrap: "anywhere" }}>
             {connected
               ? hasSeveralAccounts
                 ? tr("socialPanel.card.eachAccountBelow")
@@ -463,6 +473,7 @@ function PlatformCard({
           they offer belong to a ROW, never to the platform (PRD 0809 §II). */}
       <AccountRows
         summary={summary}
+        mobile={mobile}
         busyAccountId={busyAccountId}
         connecting={connecting}
         onAccountAction={onAccountAction}
@@ -1277,11 +1288,13 @@ const ACCOUNT_ACTION_ICON: Record<AccountRowAction, typeof RefreshCw> = {
  */
 function AccountRows({
   summary,
+  mobile,
   busyAccountId,
   connecting,
   onAccountAction,
 }: {
   summary: PlatformConnectionSummary;
+  mobile: boolean;
   busyAccountId: string | null;
   /** A connect/reconnect redirect is in flight for this platform. */
   connecting: boolean;
@@ -1308,20 +1321,27 @@ function AccountRows({
             data-testid={`social-account-row-${account.id}`}
             data-account-row-state={state}
             style={{
-              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+              display: "flex", alignItems: mobile ? "flex-start" : "center", gap: 10, flexWrap: "wrap",
+              flexDirection: mobile ? "column" : "row",
               padding: "8px 10px", borderRadius: 10,
-              border: `1px solid ${UI.border}`, background: UI.surface2,
+              border: `1px solid ${UI.border}`, background: UI.surface2, minWidth: 0,
             }}
           >
             <span
               style={{
-                flex: 1, minWidth: 120, fontSize: 12, fontWeight: 600, color: UI.text,
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                flex: mobile ? "0 1 auto" : 1, minWidth: mobile ? 0 : 120,
+                width: mobile ? "100%" : "auto", fontSize: 12, fontWeight: 600, color: UI.text,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: mobile ? "normal" : "nowrap",
+                overflowWrap: mobile ? "anywhere" : "normal",
               }}
             >
               {accountLabelFor(summary.provider, account, tr)}
             </span>
-            <Chip chip={chip} />
+            <Chip chip={chip} mobile={mobile} />
+            <div data-testid={`social-account-actions-${account.id}`} style={{
+              display: "flex", flexWrap: "wrap", gap: 8, minWidth: 0,
+              width: mobile ? "100%" : "auto",
+            }}>
             {accountRowActions(state).map(action => {
               const Icon = ACCOUNT_ACTION_ICON[action];
               return (
@@ -1348,6 +1368,7 @@ function AccountRows({
                 </button>
               );
             })}
+            </div>
           </div>
         );
       })}
