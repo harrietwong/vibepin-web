@@ -131,8 +131,8 @@ async function main() {
       keyword: "pin",
       count: 2,
     };
-    const d0 = makePlaceholder({ idem: "lost-0", intentId: "board_reload_g0", intentPayload });
-    const d1 = makePlaceholder({ idem: "lost-1", intentId: "board_reload_g0", intentPayload });
+    const d0 = makePlaceholder({ idem: "lost-0", slot: 0, intentId: "board_reload_g0", intentPayload });
+    const d1 = makePlaceholder({ idem: "lost-1", slot: 1, intentId: "board_reload_g0", intentPayload });
     let postCount = 0;
     fetchImpl = async (url) => {
       if (url === "/api/generate") {
