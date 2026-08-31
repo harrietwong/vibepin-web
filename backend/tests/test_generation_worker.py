@@ -326,7 +326,7 @@ class GenerationWorkerTest(unittest.IsolatedAsyncioTestCase):
         err = db.job("j1")["results"][0]["error"]
         self.assertIsNotNone(err)
         self.assertNotIn(secret, err, "the raw LINAPI_KEY value must be redacted")
-        self.assertIn("[REDACTED]", err)
+        self.assertEqual(err, "api_auth_error")
 
     def test_sanitize_error_masks_bearer_and_value(self):
         secret = "abcd1234efgh5678ijkl"
@@ -346,7 +346,7 @@ class GenerationWorkerTest(unittest.IsolatedAsyncioTestCase):
             status = await worker.process_job(db.job("j1"), client=db)
         self.assertEqual(status, "failed")
         self.assertTrue(all(r["status"] == "failed" for r in db.job("j1")["results"]))
-        self.assertIn("keyword is required", db.job("j1")["results"][0]["error"])
+        self.assertEqual(db.job("j1")["results"][0]["error"], "api_payload_error")
 
     # ── worker_status heartbeat upsert ────────────────────────────────────────
     def test_worker_status_upsert(self):

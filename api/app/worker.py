@@ -68,6 +68,20 @@ _SECRET_ENV_KEYS = (
     "OPENAI_API_KEY",
 )
 
+_SAFE_ERROR_CATEGORIES = frozenset({
+    "rate_limited",
+    "safety_blocked",
+    "api_auth_error",
+    "api_payload_error",
+    "api_server_error",
+    "model_returned_text",
+    "image_load_failed",
+    "provider_busy",
+    "invalid_model_key",
+    "configuration_error",
+    "unknown_error",
+})
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -98,12 +112,11 @@ def get_client():
 # ── Error sanitisation ──────────────────────────────────────────────────────────
 
 def sanitize_error(exc: BaseException) -> str:
-    """Turn a slot exception into a short, secret-free message for the results row.
+    """Return only a stable, allowlisted error category for the results row.
 
-    generator.py encodes classified errors as "type::detail" (ValueError). We keep
-    the classified message but strip any secret values that could have leaked into
-    an upstream error body, and clamp the length. NEVER returns a stack trace or a
-    raw provider response verbatim beyond a short clamp.
+    generator.py encodes classified errors as ``type::detail``. The detail is
+    deliberately discarded so provider bodies, prompts, URLs, credentials and
+    exception text can never cross the worker result boundary.
     """
     msg = str(exc) if exc is not None else "unknown_error"
     category = msg.split("::", 1)[0].strip().lower() if "::" in msg else type(exc).__name__.lower()
@@ -116,7 +129,7 @@ def sanitize_error(exc: BaseException) -> str:
     # Defence in depth: mask an obvious "Bearer <token>" fragment if present.
     import re as _re
     msg = _re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]{8,}", "Bearer [REDACTED]", msg)
-    return category[:160] or "unknown_error"
+    return category if category in _SAFE_ERROR_CATEGORIES else "unknown_error"
 
 
 # ── Phase 4I: usage metering (settle per slot; release on terminal pre-slot fail) ─
@@ -369,7 +382,9 @@ async def process_job(job: dict, client=None) -> str:
         # rather than settling each slot as a failure — release is the primitive for
         # "nothing ran". Idempotent + swallow-on-failure.
         emit = prep.get("emit") or {}
-        err = sanitize_error(RuntimeError(str(emit.get("error") or "generation setup failed")))
+        error_type = str(emit.get("error_type") or "api_payload_error")
+        raw_error = str(emit.get("error") or "generation setup failed")
+        err = sanitize_error(RuntimeError(f"{error_type}::{raw_error}"))
         for r in results:
             if r.get("status") != "done":
                 r.update({"status": "failed", "imageUrl": None, "error": err})

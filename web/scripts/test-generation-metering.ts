@@ -215,6 +215,9 @@ class FakeLimiterStore {
   async bump() { return true; }
   async prune() {}
 }
+// The harness intentionally needs the CommonJS cache seam before dynamically
+// importing the route under test.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const rateLimitModule = require("../src/lib/server/rateLimit") as typeof import("../src/lib/server/rateLimit");
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 rateLimitModule.__setRateLimitStoreForTests(new FakeLimiterStore() as any);
