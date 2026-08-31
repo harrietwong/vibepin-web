@@ -138,7 +138,7 @@ export const RATE_LIMITS: Record<RateLimitedRoute, RateLimitRule> = {
    * POST /api/quality-judge — one grading call per generated image.
    *
    * Naturally the most bounded of the three: it only runs on AI-GENERATED results,
-   * inline, capped by MAX_IMAGES_PER_REQUEST (default 2, hard cap 4) per generation.
+   * inline, capped by MAX_IMAGES_PER_REQUEST (default 4, hard cap 4) per generation.
    * A user cannot generate faster than the image provider returns.
    *
    * 120/5min = 24/min sustained, i.e. 30 back-to-back 4-image generations inside one
@@ -149,7 +149,7 @@ export const RATE_LIMITS: Record<RateLimitedRoute, RateLimitRule> = {
   /**
    * POST /api/generate — the image generation route. THE most expensive request in
    * the product: one admitted call buys up to MAX_IMAGES_PER_REQUEST paid image
-   * generations (route.ts:44-47 — default 2, hard cap 4) PLUS a moderation batch of
+   * generations (route.ts:44-47 — default 4, hard cap 4) PLUS a moderation batch of
    * up to MAX_MODERATION_CHECKS = 56 outbound Creem calls.
    *
    * This is a REQUEST-VELOCITY / ABUSE CEILING, not allowance metering. Metering

@@ -40,12 +40,24 @@ export type GenerationStore = {
   deleteDraft: (id: string) => void;
 };
 
-export type GenerationResult = { urls: string[] };
+export type GenerationResult = {
+  urls: string[];
+  /** Worker responses preserve slot position; null marks an exact failed slot. */
+  slotOutputs?: Array<string | null>;
+};
 
 export type RunAiGenerationDeps = {
   store: GenerationStore;
+  /** Connected-account defaults copied to every generated Content draft. */
+  defaultDestinations?: Parameters<typeof import("@/lib/pinDraftStore").createBoardDraft>[0]["defaultDestinations"];
   /** One call per reference group. Rejecting fails only that group. */
-  generate: (args: { styleReference: string | null; batchRequestId: string; setup: AiVersionOptions }) => Promise<GenerationResult>;
+  generate: (args: {
+    styleReference: string | null;
+    batchRequestId: string;
+    setup: AiVersionOptions;
+    /** Allows worker dispatch to persist job/slot recovery metadata before polling. */
+    placeholderIds: string[];
+  }) => Promise<GenerationResult>;
   resolveModelLabel: (a: undefined, modelKey: string) => string;
   onAnalyze?: (draftId: string) => void;
   onJudge?: (draftId: string) => void;
@@ -157,6 +169,7 @@ export async function runAiGeneration(
   const groupPlaceholders = groups.map(group =>
     Array.from({ length: group.requestCount }, (_, i) => {
       const placeholder = store.createBoardDraft({
+        defaultDestinations: deps.defaultDestinations,
         imageUrl: parent?.imageUrl ?? "",
         source: "ai_generated_from_upload",
         idempotencyKey: `gen:${requestId}:${group.index}:${i}`,
@@ -195,22 +208,28 @@ export async function runAiGeneration(
         styleReference: group.reference?.imageUrl ?? null,
         batchRequestId: requestId,
         setup: opts,
+        placeholderIds: placeholders.map(p => p.id),
       });
-      result.urls.slice(0, placeholders.length).forEach((url, i) => {
-        store.completeGeneratedDraft(placeholders[i].id, url);
-        deps.onAnalyze?.(placeholders[i].id);
-        deps.onJudge?.(placeholders[i].id);
+      const outputs = result.slotOutputs
+        ? Array.from({ length: placeholders.length }, (_, i) => result.slotOutputs?.[i] ?? null)
+        : Array.from({ length: placeholders.length }, (_, i) => result.urls[i] ?? null);
+      outputs.forEach((url, i) => {
+        if (url) {
+          store.completeGeneratedDraft(placeholders[i].id, url);
+          deps.onAnalyze?.(placeholders[i].id);
+          deps.onJudge?.(placeholders[i].id);
+          okCount++;
+        } else {
+          store.failGeneratedDraft(placeholders[i].id);
+          failCount++;
+        }
       });
-      okCount += Math.min(result.urls.length, placeholders.length);
-      const unfilled = placeholders.slice(result.urls.length);
-      unfilled.forEach(p => store.failGeneratedDraft(p.id));
-      failCount += unfilled.length;
       // A provider may return MORE images than requested. Those are DISCARDED:
       // totalPins is the only source of truth for the final record count (PRD
       // Section G / acceptance 26 — "不得创建超过请求数量的草稿"). Persisting them
       // would make the batch deliver more Pins than the CTA promised and inflate
       // the success count.
-      const discarded = Math.max(0, result.urls.length - placeholders.length);
+      const discarded = Math.max(0, (result.slotOutputs?.length ?? result.urls.length) - placeholders.length);
       if (discarded > 0 && process.env.NODE_ENV !== "production") {
         // Dev-only: dropping provider output is intentional but should not be
         // invisible while iterating. No user-facing surface — the CTA already

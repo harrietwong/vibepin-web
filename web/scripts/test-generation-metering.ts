@@ -30,9 +30,10 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
 process.env.CREEM_API_KEY = "creem_test_fake";
 process.env.ALLOW_GENERATION_MOCK_PROVIDER = "true";
 process.env.ALLOW_GENERATION_AUTH_TEST_HEADER = "true";
-// Allow up to 4 images so the partial-settlement test can reserve 4 slots (default
-// clamp is 2). This mirrors the route's own hard-cap env (ALLOW_MAX_IMAGES_PER_REQUEST_OVER_4).
-process.env.MAX_IMAGES_PER_REQUEST = "4";
+// Exercise the production default capacity contract. Individual deployments may
+// lower MAX_IMAGES_PER_REQUEST, but an unset env must accept the UI's count=4.
+delete process.env.MAX_IMAGES_PER_REQUEST;
+delete process.env.ALLOW_MAX_IMAGES_PER_REQUEST_OVER_4;
 process.env.FASTAPI_URL = "http://127.0.0.1:1"; // unroutable → FastAPI probe fails fast
 
 import os from "node:os";
@@ -68,6 +69,7 @@ function assert(cond: unknown, msg: string) {
 type RpcCall = { fn: string; args: Record<string, unknown> };
 let rpcCalls: RpcCall[] = [];
 let enqueueInsertCount = 0;
+let enqueuedRows: Array<Record<string, unknown>> = [];
 
 // Controls what the ledger RPC returns, so a test can force insufficient/error.
 // "reserve_insufficient_no_availability" mirrors an older/partial RPC payload that
@@ -122,7 +124,10 @@ function fakeServerClient() {
     from(table: string) {
       return {
         insert(_row: unknown) {
-          if (table === "generation_jobs") enqueueInsertCount++;
+          if (table === "generation_jobs") {
+            enqueueInsertCount++;
+            enqueuedRows.push(_row as Record<string, unknown>);
+          }
           return {
             select() {
               return {
@@ -274,6 +279,7 @@ async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{
   urlCount = opts.urls ?? 1;
   rpcCalls = [];
   enqueueInsertCount = 0;
+  enqueuedRows = [];
   spawnCount = 0;
   const anonHeaderWasOn = process.env.ALLOW_GENERATION_AUTH_TEST_HEADER;
   if (opts.anon) delete process.env.ALLOW_GENERATION_AUTH_TEST_HEADER;
@@ -383,6 +389,31 @@ async function main() {
     assertEq(json.jobId, "job_plain", "plain-insert job id (not the metered one)");
     assertEq(enqueueInsertCount, 1, "one plain enqueue insert");
     assertEq(ledgerCalls().length, 0, "no ledger RPC in off mode");
+  });
+
+  await test("CAPACITY: real route defaults to four slots per reference and hard-clamps larger requests", async () => {
+    const first = await run(fullBody({ count: 4, generationRequestId: "capacity-a" }), {
+      meterMode: "off", genMode: "worker",
+    });
+    assertEq(first.status, 200, "count=4 status");
+    assertEq(first.json.slots, 4, "the default route must expose all four UI-requested slots");
+    assertEq(enqueuedRows.length, 1, "one real route enqueue");
+    const firstParams = enqueuedRows[0].params as Record<string, unknown>;
+    assertEq(firstParams.count, 4, "worker params keep count=4");
+    assertEq(firstParams.actualImageCount, 4, "worker params record actual count=4");
+    assertEq(firstParams.countClamped, false, "a valid UI count=4 is not clamped");
+
+    const oversized = await run(fullBody({ count: 8, generationRequestId: "capacity-b" }), {
+      meterMode: "off", genMode: "worker",
+    });
+    assertEq(oversized.status, 200, "oversized status");
+    assertEq(oversized.json.slots, 4, "the default server hard cap remains four");
+    assertEq(enqueuedRows.length, 1, "one enqueue for the oversized request");
+    const oversizedParams = enqueuedRows[0].params as Record<string, unknown>;
+    assertEq(oversizedParams.count, 4, "oversized worker params are hard-clamped");
+    assertEq(oversizedParams.requestedImageCount, 8, "original requested count remains auditable");
+    assertEq(oversizedParams.actualImageCount, 4, "actual count records the hard cap");
+    assertEq(oversizedParams.countClamped, true, "hard-cap clamp is explicit");
   });
 
   // ── SHADOW MODE — reserve happens, but failures never block ───────────────────

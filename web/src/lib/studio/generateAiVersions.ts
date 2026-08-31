@@ -10,10 +10,11 @@
 import { createBrowserClient } from "@supabase/ssr";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { AiVersionOptions } from "@/components/studio/AiVersionDrawer";
-import { PINS_PER_REFERENCE_OPTIONS } from "@/lib/studio/selectedReferences";
 import { LimitReachedError, parseLimitReachedResponse } from "@/lib/usage/limitReached";
 
-const MAX_PINS_PER_REFERENCE = Math.max(...PINS_PER_REFERENCE_OPTIONS);
+// The server contract allows at most four outputs in one request. The visible
+// selector can evolve independently, while persisted/remix callers may carry 4.
+const MAX_PINS_PER_REFERENCE = 4;
 
 let _client: ReturnType<typeof createBrowserClient> | null = null;
 function browser() {
@@ -39,6 +40,32 @@ export type AiVersionGenerateResult = {
   countClamped?: boolean;
   source?: string;
 };
+
+type GenerateResponseBody = {
+  ok?: boolean;
+  urls?: string[];
+  generation_request_id?: string;
+  generationRequestId?: string;
+  prompt_snapshot?: Record<string, unknown>;
+  requested_image_count?: number;
+  actual_image_count?: number;
+  count_clamped?: boolean;
+  source?: string;
+  jobId?: string;
+  slots?: number;
+};
+
+function parseInlineResult(body: GenerateResponseBody, fallbackRequestId: string): AiVersionGenerateResult {
+  return {
+    urls: Array.isArray(body.urls) ? body.urls.filter(Boolean) : [],
+    generationRequestId: body.generation_request_id || body.generationRequestId || fallbackRequestId,
+    promptSnapshot: body.prompt_snapshot,
+    requestedImageCount: body.requested_image_count,
+    actualImageCount: body.actual_image_count,
+    countClamped: body.count_clamped,
+    source: body.source,
+  };
+}
 
 /**
  * Build the POST /api/generate body shared by the inline and worker paths.
@@ -171,52 +198,44 @@ export async function generateAiVersions(opts: {
     if (limit) throw new LimitReachedError(limit);
     throw new Error(`Generation failed (${res.status})`);
   }
-  const body = await res.json() as {
-    ok?: boolean;
-    urls?: string[];
-    generation_request_id?: string;
-    generationRequestId?: string;
-    prompt_snapshot?: Record<string, unknown>;
-    requested_image_count?: number;
-    actual_image_count?: number;
-    count_clamped?: boolean;
-    source?: string;
-  };
-  return {
-    urls: Array.isArray(body.urls) ? body.urls.filter(Boolean) : [],
-    generationRequestId: body.generation_request_id || body.generationRequestId || generationRequestId,
-    promptSnapshot: body.prompt_snapshot,
-    requestedImageCount: body.requested_image_count,
-    actualImageCount: body.actual_image_count,
-    countClamped: body.count_clamped,
-    source: body.source,
-  };
+  return parseInlineResult(await res.json() as GenerateResponseBody, generationRequestId);
 }
 
 // ── WP3-P1: enqueue + poll (GENERATION_MODE=worker path) ────────────────────────
 
-export type EnqueueGenerationResult = { jobId: string; slots: number } | null;
+export type EnqueueGenerationResult =
+  | { mode: "worker"; jobId: string; slots: number }
+  | { mode: "inline"; result: AiVersionGenerateResult };
 
 /**
- * POST /api/generate and probe the response shape. Returns null when the server is
- * NOT in worker mode (no jobId in the body) — callers should fall back to the
- * existing synchronous generateAiVersions() path unchanged. Throws only on network/
- * non-JSON failures and on the 503 "generation_unavailable" honest-failure (worker
- * heartbeat stale/missing) so the caller's existing catch-block failure handling
- * applies uniformly.
+ * POST /api/generate exactly once and preserve whichever state-changing result the
+ * server produced. Worker mode returns the queued job; inline mode returns the
+ * images from this same response, so callers never probe and dispatch twice.
  */
 export async function enqueueGeneration(opts: {
   source?: PinDraft | null;
   keyword?: string;
   setup: AiVersionOptions;
+  /** This group's style reference. Null means a product/prompt-only group. */
+  styleReference?: string | null;
+  /** Shared across groups triggered by one user action. */
+  batchRequestId?: string;
 }): Promise<EnqueueGenerationResult> {
   const { source, setup } = opts;
-  const generationRequestId = `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const generationRequestId = opts.batchRequestId
+    ? `${opts.batchRequestId}_g${Math.random().toString(36).slice(2, 6)}`
+    : `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   const res = await fetch("/api/generate", {
     method: "POST",
     headers: await authHeaders(),
-    body: JSON.stringify(buildGenerateBody({ source, keyword: opts.keyword, setup, generationRequestId })),
+    body: JSON.stringify(buildGenerateBody({
+      source,
+      keyword: opts.keyword,
+      setup,
+      generationRequestId,
+      styleReference: opts.styleReference,
+    })),
   });
 
   if (res.status === 503) {
@@ -232,13 +251,20 @@ export async function enqueueGeneration(opts: {
     throw new Error(`Generation failed (${res.status})`);
   }
 
-  const body = await res.json() as { jobId?: string; slots?: number };
-  if (!body.jobId || typeof body.slots !== "number") return null; // inline-mode shape — caller falls back
-  return { jobId: body.jobId, slots: body.slots };
+  const body = await res.json() as GenerateResponseBody;
+  if (body.jobId && typeof body.slots === "number") {
+    return { mode: "worker", jobId: body.jobId, slots: body.slots };
+  }
+  return { mode: "inline", result: parseInlineResult(body, generationRequestId) };
 }
 
 export type GenerationJobResult = { slot: number; status: "pending" | "done" | "failed"; imageUrl: string | null; error: string | null };
 export type GenerationJobStatus = "queued" | "running" | "done" | "partial" | "failed";
+
+export type AwaitedGenerationJobResult = AiVersionGenerateResult & {
+  /** Slot-preserving output. Null means that exact worker slot failed or was absent. */
+  slotOutputs: Array<string | null>;
+};
 
 export type PollGenerationCallbacks = {
   onSlot: (slot: number, status: "done" | "failed", url?: string) => void;
@@ -371,4 +397,62 @@ export function pollGenerationJob(
   return {
     stop: () => { stopped = true; clear(); activePolls.delete(jobId); },
   };
+}
+
+/**
+ * Resolve one worker job into the inline result shape while preserving sparse
+ * slots. Compacting successful URLs would attach a later slot's image to the
+ * wrong placeholder whenever an earlier slot failed.
+ */
+export function awaitGenerationJob(
+  jobId: string,
+  slots: number,
+  opts?: { intervalMs?: number; timeoutMs?: number },
+): Promise<AwaitedGenerationJobResult> {
+  const slotCount = Math.max(1, Math.floor(slots || 1));
+  const slotOutputs: Array<string | null> = Array.from({ length: slotCount }, () => null);
+
+  return new Promise(resolve => {
+    pollGenerationJob(jobId, {
+      onSlot: (slot, status, url) => {
+        if (slot < 0 || slot >= slotOutputs.length) return;
+        slotOutputs[slot] = status === "done" && url ? url : null;
+      },
+      onEnd: () => {
+        resolve({
+          urls: slotOutputs.filter((url): url is string => !!url),
+          slotOutputs,
+          generationRequestId: jobId,
+          source: "worker",
+        });
+      },
+    }, opts);
+  });
+}
+
+/**
+ * Dispatch and fully consume one reference group. The one POST is both the mode
+ * discovery and the real operation; its inline result is never discarded.
+ */
+export async function dispatchGenerationGroup(opts: {
+  source?: PinDraft | null;
+  keyword?: string;
+  setup: AiVersionOptions;
+  styleReference: string | null;
+  batchRequestId: string;
+  placeholderIds: string[];
+  onWorkerJob: (jobId: string, slots: number, placeholderIds: string[]) => void;
+  poll?: { intervalMs?: number; timeoutMs?: number };
+}): Promise<AiVersionGenerateResult | AwaitedGenerationJobResult> {
+  const dispatched = await enqueueGeneration({
+    source: opts.source,
+    keyword: opts.keyword,
+    setup: opts.setup,
+    styleReference: opts.styleReference,
+    batchRequestId: opts.batchRequestId,
+  });
+  if (dispatched.mode === "inline") return dispatched.result;
+
+  opts.onWorkerJob(dispatched.jobId, dispatched.slots, opts.placeholderIds);
+  return awaitGenerationJob(dispatched.jobId, dispatched.slots, opts.poll);
 }

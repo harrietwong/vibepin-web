@@ -307,6 +307,40 @@ class GenerationWorkerTest(unittest.IsolatedAsyncioTestCase):
             status = await worker.process_job(db.job("j1"), client=db)
         self.assertEqual(status, "done")
 
+    async def test_two_four_slot_reference_jobs_produce_exactly_eight_results(self):
+        """Cross-layer capacity proof for Create Pin's two-reference count=4 batch.
+
+        The route enqueues one job per reference group. Given the two count=4 rows
+        that contract produces, the real worker must preserve four local slot
+        indices on each job and emit eight results in total.
+        """
+        jobs = [_seed_job("ref-a", "running", count=4),
+                _seed_job("ref-b", "running", count=4)]
+        db = FakeSupabase(seed={"generation_jobs": jobs})
+
+        async def _slot(plan, slot):
+            return f"https://generated/{plan['reference']}/{slot}.png"
+
+        async def _prep(params):
+            return {"ok": True, "plan": {"count": params["count"],
+                                           "reference": params["reference"]}}
+
+        db.job("ref-a")["params"]["reference"] = "a"
+        db.job("ref-b")["params"]["reference"] = "b"
+        with patch.object(worker.generator, "prepare_generation", _prep), \
+             patch.object(worker.generator, "generate_slot", _slot):
+            statuses = [await worker.process_job(db.job(job_id), client=db)
+                        for job_id in ("ref-a", "ref-b")]
+
+        self.assertEqual(statuses, ["done", "done"])
+        results_a = db.job("ref-a")["results"]
+        results_b = db.job("ref-b")["results"]
+        self.assertEqual(len(results_a) + len(results_b), 8)
+        self.assertEqual([r["slot"] for r in results_a], [0, 1, 2, 3])
+        self.assertEqual([r["slot"] for r in results_b], [0, 1, 2, 3])
+        self.assertTrue(all("/a/" in r["imageUrl"] for r in results_a))
+        self.assertTrue(all("/b/" in r["imageUrl"] for r in results_b))
+
     # ── Error sanitisation: the LINAPI_KEY value never lands in results ────────
     async def test_error_sanitized_no_secret_leak(self):
         secret = "sk-supersecretlinapikey-1234567890"

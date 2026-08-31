@@ -65,7 +65,7 @@ const LOCK_ROOT = process.env.VIBEPIN_GENERATION_LOCK_DIR
   : path.join(os.tmpdir(), "vibepin-generation-locks");
 const MAX_IMAGES_PER_REQUEST = Math.max(1, Math.min(
   process.env.ALLOW_MAX_IMAGES_PER_REQUEST_OVER_4 === "true" ? 99 : 4,
-  Number(process.env.MAX_IMAGES_PER_REQUEST ?? 2) || 2,
+  Number(process.env.MAX_IMAGES_PER_REQUEST ?? 4) || 4,
 ));
 const USER_GENERATION_LOCK_TTL_MS = Number(process.env.USER_GENERATION_LOCK_TTL_MS ?? GENERATOR_TIMEOUT_MS + 60_000);
 

@@ -81,10 +81,30 @@ async function main() {
       return jsonResponse({ jobId: "job-123", slots: 3 });
     };
     const result = await mod.enqueueGeneration({ setup: MOCK_SETUP });
-    assert(result !== null, "expected a non-null enqueue result");
-    assert(result!.jobId === "job-123", `expected jobId job-123, got ${result!.jobId}`);
-    assert(result!.slots === 3, `expected slots 3, got ${result!.slots}`);
+    assert(result.mode === "worker", `expected worker mode, got ${result.mode}`);
+    if (result.mode !== "worker") throw new Error("expected worker result");
+    assert(result.jobId === "job-123", `expected jobId job-123, got ${result.jobId}`);
+    assert(result.slots === 3, `expected slots 3, got ${result.slots}`);
     assert(calls.length === 1, `expected exactly 1 fetch call, got ${calls.length}`);
+  });
+
+  await test("enqueueGeneration: one group sends only its own reference and keeps the batch identity", async () => {
+    calls = [];
+    fetchImpl = async () => jsonResponse({ jobId: "job-ref", slots: 3 });
+    await mod.enqueueGeneration({
+      setup: { ...MOCK_SETUP, referenceImages: ["https://cdn/legacy-first.jpg"] },
+      styleReference: "https://cdn/group-b.jpg",
+      batchRequestId: "board_batch",
+    });
+
+    assert(calls.length === 1, `expected exactly one state-changing POST, got ${calls.length}`);
+    const body = JSON.parse(String(calls[0].init?.body ?? "{}")) as Record<string, unknown>;
+    assert(body.style_ref === "https://cdn/group-b.jpg", `wrong group style_ref: ${String(body.style_ref)}`);
+    assert(body.referenceImageCountRequested === 1, "one request must carry exactly one reference group");
+    assert(String(body.generationRequestId).startsWith("board_batch_g"), "group request must correlate to the batch intent");
+    const inputs = body.image_inputs as Array<{ role?: string; sourceUrl?: string }>;
+    const references = inputs.filter(input => input.role === "reference");
+    assert(references.length === 1 && references[0].sourceUrl === "https://cdn/group-b.jpg", "legacy first reference must not leak into group B");
   });
 
   await test("enqueueGeneration: worker unhealthy (503) throws generation_unavailable, no zombie swallow", async () => {
@@ -99,10 +119,22 @@ async function main() {
     assert(threw, "expected enqueueGeneration to throw on 503");
   });
 
-  await test("enqueueGeneration: inline-mode response shape (no jobId) returns null", async () => {
-    fetchImpl = async () => jsonResponse({ ok: true, urls: ["https://cdn/a.jpg"], keyword: "x" });
+  await test("enqueueGeneration: inline-mode response is returned from the same request", async () => {
+    calls = [];
+    fetchImpl = async () => jsonResponse({
+      ok: true,
+      urls: ["https://cdn/a.jpg"],
+      generation_request_id: "inline-123",
+      requested_image_count: 1,
+      actual_image_count: 1,
+    });
     const result = await mod.enqueueGeneration({ setup: MOCK_SETUP });
-    assert(result === null, "expected null so the caller falls back to the inline path");
+    assert(result.mode === "inline", `expected inline mode, got ${result.mode}`);
+    if (result.mode !== "inline") throw new Error("expected inline result");
+    assert(result.result.urls.length === 1, "expected the generated URL to be preserved");
+    assert(result.result.urls[0] === "https://cdn/a.jpg", "expected the original inline URL");
+    assert(result.result.generationRequestId === "inline-123", "expected inline generation id");
+    assert(calls.length === 1, `expected exactly 1 fetch call, got ${calls.length}`);
   });
 
   await test("enqueueGeneration: non-503 non-ok response throws", async () => {
@@ -171,6 +203,28 @@ async function main() {
     assert(slot1Events.length === 1, `expected slot 1 to fire exactly once, got ${slot1Events.length}`);
     const slot2Events = slotEvents.filter(e => e.slot === 2);
     assert(slot2Events.length === 1 && slot2Events[0].status === "failed", "slot 2 should report failed exactly once");
+  });
+
+  await test("awaitGenerationJob: sparse worker results preserve their original slots", async () => {
+    calls = [];
+    fetchImpl = async () => jsonResponse({
+      status: "partial",
+      results: [
+        { slot: 0, status: "failed", imageUrl: null, error: "provider error" },
+        { slot: 1, status: "done", imageUrl: "https://cdn/slot-1.jpg", error: null },
+        { slot: 2, status: "failed", imageUrl: null, error: "timeout" },
+        { slot: 3, status: "done", imageUrl: "https://cdn/slot-3.jpg", error: null },
+      ],
+    });
+
+    const result = await mod.awaitGenerationJob("job-sparse", 4, { intervalMs: 1 });
+    assert(result.slotOutputs.length === 4, "all requested worker slots must remain addressable");
+    assert(result.slotOutputs[0] === null, "failed slot 0 must stay null");
+    assert(result.slotOutputs[1] === "https://cdn/slot-1.jpg", "slot 1 URL moved");
+    assert(result.slotOutputs[2] === null, "failed slot 2 must stay null");
+    assert(result.slotOutputs[3] === "https://cdn/slot-3.jpg", "slot 3 URL moved");
+    assert(result.urls.join(",") === "https://cdn/slot-1.jpg,https://cdn/slot-3.jpg", "compact success list should still be available");
+    assert(calls.length === 1 && calls[0].url.endsWith("/api/generation-jobs/job-sparse"), "worker job should be polled once when terminal");
   });
 
   await test("pollGenerationJob: terminal 'done' status stops polling immediately", async () => {

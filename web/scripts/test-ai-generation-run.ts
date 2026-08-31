@@ -33,6 +33,7 @@ async function test(name: string, fn: () => void | Promise<void>): Promise<void>
 async function main() {
   const store = await import("../src/lib/pinDraftStore");
   const { runAiGeneration } = await import("../src/lib/studio/runAiGeneration");
+  const { dispatchGenerationGroup } = await import("../src/lib/studio/generateAiVersions");
   const reset = () => { mem.clear(); store.__resetMemoryCacheForTests(); };
 
   // Typed as the real AiVersionOptions (not `as never`, which makes spreading it a
@@ -110,6 +111,114 @@ async function main() {
     );
     assert.equal(r.okCount, 2);
     assert.equal(r.failCount, 1);
+  });
+
+  await test("worker sparse slots never shift a successful image onto the wrong placeholder", async () => {
+    reset();
+    const r = await runAiGeneration(
+      { parent: null, opts: { ...baseOpts, count: 4, selectedReferences: [ref("a")] } },
+      deps(async () => ({
+        urls: ["slot-1", "slot-3"],
+        slotOutputs: [null, "slot-1", null, "slot-3"],
+      })),
+    );
+    const all = store.getAllDrafts()
+      .filter(d => d.generationSessionId?.startsWith("board_"))
+      .sort((a, b) => a.idempotencyKey!.localeCompare(b.idempotencyKey!));
+    assert.equal(all.length, 4);
+    assert.equal(all[0].generationStatus, "failed", "slot 0 must remain failed");
+    assert.equal(all[1].imageUrl, "slot-1", "slot 1 success moved to another placeholder");
+    assert.equal(all[2].generationStatus, "failed", "slot 2 must remain failed");
+    assert.equal(all[3].imageUrl, "slot-3", "slot 3 success moved to another placeholder");
+    assert.equal(r.okCount, 2);
+    assert.equal(r.failCount, 2);
+  });
+
+  await test("each serial group receives only its own placeholder ids", async () => {
+    reset();
+    const groupIds: string[][] = [];
+    await runAiGeneration(
+      { parent: null, opts: { ...baseOpts, count: 2, selectedReferences: [ref("a"), ref("b")] } },
+      {
+        ...deps(async () => ({ urls: ["u1", "u2"] })),
+        generate: async ({ placeholderIds }) => {
+          groupIds.push([...placeholderIds]);
+          return { urls: ["u1", "u2"] };
+        },
+      },
+    );
+    assert.equal(groupIds.length, 2);
+    assert.equal(groupIds[0].length, 2);
+    assert.equal(groupIds[1].length, 2);
+    assert.equal(new Set(groupIds.flat()).size, 4, "a worker job must never stamp another group's placeholders");
+  });
+
+  await test("real worker adapter: 2 references x 4 creates and resolves exactly 8 attributed Pins", async () => {
+    reset();
+    const fetchCalls: Array<{ url: string; body?: Record<string, unknown> }> = [];
+    let jobNumber = 0;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "/api/generate") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        fetchCalls.push({ url, body });
+        jobNumber++;
+        return new Response(JSON.stringify({ jobId: `job-${jobNumber}`, slots: 4 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      }
+      fetchCalls.push({ url });
+      const jobId = url.split("/").pop()!;
+      return new Response(JSON.stringify({
+        status: "done",
+        results: Array.from({ length: 4 }, (_, slot) => ({
+          slot,
+          status: "done",
+          imageUrl: `https://out/${jobId}/${slot}.jpg`,
+          error: null,
+        })),
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+
+    const opts = { ...baseOpts, count: 4, selectedReferences: [ref("a"), ref("b")] };
+    const r = await runAiGeneration({ parent: null, opts }, {
+      store: store as never,
+      resolveModelLabel: () => "Gemini",
+      now: () => 2,
+      randomId: () => "worker",
+      generate: ({ styleReference, batchRequestId, setup, placeholderIds }) =>
+        dispatchGenerationGroup({
+          source: null,
+          setup,
+          styleReference,
+          batchRequestId,
+          placeholderIds,
+          poll: { intervalMs: 1 },
+          onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
+            store.updateDraft(id, { generationJobId: jobId, generationSlot: slot });
+          }),
+        }),
+    });
+
+    const posts = fetchCalls.filter(call => call.url === "/api/generate");
+    const polls = fetchCalls.filter(call => call.url.startsWith("/api/generation-jobs/"));
+    assert.equal(posts.length, 2, "one and only one enqueue per reference group");
+    assert.equal(polls.length, 2, "each terminal worker job should be polled once");
+    assert.deepEqual(posts.map(call => call.body?.style_ref), ["https://cdn/a.jpg", "https://cdn/b.jpg"]);
+    assert.deepEqual(posts.map(call => call.body?.count), [4, 4], "the client must not silently clamp a valid count=4 batch to 3");
+    assert.equal(r.totalPins, 8);
+    assert.equal(r.okCount, 8);
+    assert.equal(r.failCount, 0);
+
+    const generated = store.getAllDrafts().filter(d => d.generationSessionId === "board_2_worker");
+    assert.equal(generated.length, 8);
+    assert.equal(generated.filter(d => d.referenceId === "a" && d.generationJobId === "job-1").length, 4);
+    assert.equal(generated.filter(d => d.referenceId === "b" && d.generationJobId === "job-2").length, 4);
+    assert.deepEqual(
+      generated.filter(d => d.referenceId === "b").map(d => d.generationSlot).sort(),
+      [0, 1, 2, 3],
+      "group B worker slots must remain local to group B",
+    );
   });
 
   // ── Product link: chosen vs inherited vs none (Codex #1/#4) ───────────────
@@ -211,6 +320,27 @@ async function main() {
       }),
     );
     assert.equal(seenAtFirstCall, 6, "batch size visible immediately, not group by group");
+  });
+
+  await test("generated placeholders keep connected-account default destinations", async () => {
+    reset();
+    await runAiGeneration(
+      { parent: null, opts: { ...baseOpts, count: 1 } },
+      {
+        ...deps(async () => ({ urls: ["u"] })),
+        defaultDestinations: [{
+          provider: "pinterest",
+          socialConnectionId: "conn-1",
+          boardId: "board-1",
+          boardName: "Recent board",
+        }],
+      },
+    );
+    const generated = store.getAllDrafts().find(d => d.generationSessionId?.startsWith("board_"))!;
+    assert.equal(generated.targetConnectionId, "conn-1");
+    assert.equal(generated.boardId, "board-1");
+    assert.equal(generated.boardName, "Recent board");
+    assert.equal(generated.scheduledDestinations?.[0]?.socialConnectionId, "conn-1");
   });
 
   console.log(`\nAI generation run: ${passed} passed, ${failed} failed`);

@@ -35,7 +35,7 @@ import { draftReadiness } from "@/lib/weeklyPlanStats";
 import { ensureScheduledPlanTime } from "@/lib/smartSchedule";
 import { uploadPinImage } from "@/lib/studio/uploadPinImage";
 import { measureImageFile } from "@/lib/studio/measureImageFile";
-import { generateAiVersions, enqueueGeneration, pollGenerationJob } from "@/lib/studio/generateAiVersions";
+import { dispatchGenerationGroup } from "@/lib/studio/generateAiVersions";
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { type SelectedReference } from "@/lib/studio/selectedReferences";
 import { runAiGeneration } from "@/lib/studio/runAiGeneration";
@@ -788,12 +788,8 @@ export function StudioBoard() {
   const handleAiGenerate = useCallback(async (
     opts: AiVersionOptions,
     /**
-     * The "Generate R instead" retry runs AFTER the drawer has closed (every path
-     * nulls aiDrawer before the server can refuse), so it cannot re-derive its parent
-     * from drawer state — without this the retry would hit the `!aiDrawer` guard and
-     * silently do nothing, and a version-mode retry would lose its parent draft and
-     * target media. The refused run's context is captured on the prompt and passed
-     * back in here verbatim.
+     * The "Generate R instead" retry runs after the drawer closes, so it must carry
+     * the original parent/target context explicitly.
      */
     retryContext?: { parent: PinDraft | null; targetMediaId?: string },
   ) => {
@@ -801,278 +797,41 @@ export function StudioBoard() {
     const parent = retryContext
       ? retryContext.parent
       : aiDrawer!.mode === "version" ? aiDrawer!.draft : null;
-    // Which media item a result replaces, and on which draft. Only meaningful when the
-    // generation lands back on the SAME Content the merchant clicked Regenerate on:
-    // version mode also creates brand-new placeholder cards, and an id from the parent
-    // would name nothing there (completeGeneratedDraft falls back to media[0], which is
-    // correct for a new card and wrong to force). Threaded as a pair for that reason.
     const retryTargetMediaId = retryContext
       ? retryContext.targetMediaId
       : aiDrawer!.mode === "version" ? aiDrawer!.targetMediaId : undefined;
-    const regenerateTarget = parent && retryTargetMediaId
-      ? { draftId: parent.id, mediaId: retryTargetMediaId }
-      : null;
-    const replaceMetaFor = (draftId: string): { replaceMediaId?: string } =>
-      regenerateTarget && regenerateTarget.draftId === draftId
-        ? { replaceMediaId: regenerateTarget.mediaId }
-        : {};
+
     setAiGenerating(true);
-    // Regenerating from an existing pin (version mode) is a "regenerate" action.
     if (parent) track("regenerate_clicked", { draftId: parent.id });
 
-    // ── Path selection ────────────────────────────────────────────────────────
-    // WP3-P1's worker path and the grouped multi-reference path are BOTH live, and
-    // they are chosen by a runtime probe, not a build flag:
-    //   * GENERATION_MODE=worker (production)  → enqueueGeneration returns a jobId.
-    //     That path is server-authenticated, one job per run, results delivered by
-    //     slot — it owns its own placeholders and is kept exactly as-is below.
-    //   * GENERATION_MODE=inline (dev/self-hosted) → enqueueGeneration returns null
-    //     and we fall through to runAiGeneration, which plans one request PER style
-    //     reference (the API can only carry one style_ref per call and 429s on a
-    //     concurrent second call, so groups must be serial).
-    // Probing FIRST matters: runAiGeneration creates placeholders eagerly, so
-    // letting it run before we know the mode would leave orphan cards behind in
-    // worker mode.
-    // A usage refusal must be distinguishable from a generic worker error: the first
-    // opens the quota dialog, the second shows "couldn't generate". Catching them into
-    // one "error" sentinel (as this did) would show the wrong message for a 402.
-    const workerProbe = await enqueueGeneration({ source: parent, setup: opts })
-      .catch((err: unknown) => (isLimitReachedError(err) ? { limit: err.limit } : ("error" as const)));
-    if (workerProbe && typeof workerProbe === "object" && "limit" in workerProbe) {
-      // No placeholder cards exist yet on this path, so there is nothing to clean up.
-      setAiDrawer(null);
-      handleGenerationLimit(workerProbe.limit, Math.max(1, opts.count || 1), opts, { parent, targetMediaId: retryTargetMediaId });
-      return;
-    }
-    if (workerProbe === "error") {
-      // Worker path errored (e.g. 503 generation_unavailable) — surface it rather than
-      // silently falling back to the (likely also broken) inline path. No placeholder
-      // cards exist yet, so there is nothing to clean up.
-      setAiDrawer(null);
-      setAiGenerating(false);
-      toast.error(tr("studioBoard.toast.couldNotGenerate"));
-      return;
-    }
-
-    if (!workerProbe) {
-      // ── Inline mode: grouped, one request per style reference ────────────────
-      // The run itself lives in lib/studio/runAiGeneration so it can be driven by
-      // tests with a real store and a fake generate() — see test-ai-generation-run.
-      const batchToastId = `gen-batch-${Date.now()}`;
-      let groupTotal = 1;
-      let limitStopped = false;
-      await runAiGeneration({ parent, opts }, {
-        store: pinDraftStore,
-        generate: ({ styleReference, batchRequestId, setup }) =>
-          generateAiVersions({ source: parent, setup, styleReference, batchRequestId }),
-        resolveModelLabel: (_a, modelKey) => resolveModelLabel(undefined, modelKey),
-        onAnalyze: id => { void startImageAnalysis(id); },
-        onJudge: id => { void startQualityJudge(id); },
-        onPlaceholdersReady: totalPins => {
-          // Close the drawer right away — generation continues and the cards update.
-          setAiDrawer(null);
-          setAiGenerating(false);
-          toast.success(totalPins === 1
-            ? tr("studioBoard.toast.generatingOne")
-            : tr("studioBoard.toast.generatingMany").replace("{n}", String(totalPins)));
-        },
-        onGroupProgress: (current, total) => {
-          groupTotal = total;
-          // Batch progress lives in a toast because the drawer closes as soon as the
-          // placeholders exist (multi-group runs are long — N serial requests).
-          if (total > 1) {
-            toast.loading(
-              tr("studioBoard.toast.generatingReferenceProgress")
-                .replace("{current}", String(current))
-                .replace("{total}", String(total)),
-              { id: batchToastId },
-            );
-          }
-        },
-        onLimitReached: (limit, { retryCount }) => {
-          // Stop the batch UI and hand the decision to the user. The run has already
-          // removed every placeholder it did not fill, so nothing is left dangling.
-          if (groupTotal > 1) toast.dismiss(batchToastId);
-          limitStopped = true;
-          handleGenerationLimit(limit, retryCount, opts, { parent, targetMediaId: retryTargetMediaId });
-        },
-        onSettled: ({ okCount, failCount }) => {
-          if (groupTotal > 1) toast.dismiss(batchToastId);
-          // A usage refusal is NOT "we could not generate": the dialog explains it.
-          // Without this guard a red error toast would render UNDER the dialog.
-          if (limitStopped) return;
-          if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
-          else if (okCount) toast.success(parent
-            ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
-            : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
-          else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
-        },
-      });
-      return;
-    }
-
-    // ── Worker mode (WP3-P1/P2) ───────────────────────────────────────────────
-    // Create N Generating placeholder cards so the user sees the task started
-    // (PRD 8.9). Stable keys gen:{requestId}:{i}; lineage preserved; the original
-    // upload is never touched.
-    const requestId = `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const requested = Math.max(1, opts.count || 1);
-    const setupSnapshot = {
-      mode: parent ? ("board_ai_version" as const) : ("board_ai_scratch" as const),
-      keyword: parent?.keyword,
-      category: opts.category || parent?.category,
-      opportunityTitle: parent?.opportunity,
-      noTextOverlay: true,
-      imagesPerReference: opts.count,
-      selectedProducts: opts.productImages.map((imageUrl, index) => ({
-        imageUrl,
-        title: opts.productMetadata[index]?.title || parent?.title || `Product ${index + 1}`,
-        productUrl: opts.productMetadata[index]?.productUrl,
-      })),
-      selectedReferences: opts.referenceImages.map(imageUrl => ({ imageUrl })),
-      promptSnapshot: opts.directionBrief,
-      creativeDirectionSnapshot: opts.creativeDirectionMeta,
-      createdFrom: "studio_board",
-      format: opts.format,
-      model: resolveModelLabel(undefined, opts.modelKey),
-      modelKey: opts.modelKey,
-    };
-    const seedDestinations = defaultDestinationsForNewContent();
-    const placeholders = Array.from({ length: requested }, (_, i) =>
-      pinDraftStore.createBoardDraft({
-        defaultDestinations: seedDestinations,
-        // Placeholder shows the parent image while generating; scratch mode has none.
-        imageUrl: parent?.imageUrl ?? "",
-        source: "ai_generated_from_upload",
-        idempotencyKey: `gen:${requestId}:${i}`,
-        generationStatus: "generating",
-        parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
-        title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
-        model: resolveModelLabel(undefined, opts.modelKey),
-        format: opts.format,
-        generationSessionId: requestId,
-        promptSnapshot: opts.directionBrief,
-        setupSnapshot,
-        // WP3-P2: this index IS the worker-mode results[] slot (placeholders[i] ↔
-        // slot i, 1:1 — see the enqueue block below). Stamped unconditionally, even
-        // in what may turn out to be the inline-mode fallback, since it's a stable
-        // per-card fact and harmless when unused.
-        generationSlot: i,
-      }),
-    );
-    // Close the drawer right away — generation continues and the cards update.
-    setAiDrawer(null);
-    setAiGenerating(false);
-    toast.success(requested === 1 ? tr("studioBoard.toast.generatingOne") : tr("studioBoard.toast.generatingMany").replace("{n}", String(requested)));
-
-    // 2) WP3-P1: try the worker enqueue path first (response-shape probe — a jobId
-    //    means the server is in GENERATION_MODE=worker). null means inline mode; fall
-    //    back to the original synchronous generateAiVersions() path unchanged below.
-    let enqueued: Awaited<ReturnType<typeof enqueueGeneration>> = null;
-    try {
-      enqueued = await enqueueGeneration({ source: parent, setup: opts });
-    } catch (err) {
-      // A usage refusal is not a failure of these Pins: nothing was attempted, so the
-      // placeholders are DELETED (not failed — a failed card offers a Retry that would
-      // hit the same 402) and the user gets the quota dialog instead of an error toast.
-      if (isLimitReachedError(err)) {
-        placeholders.forEach(ph => pinDraftStore.deleteDraft(ph.id));
-        handleGenerationLimit(err.limit, Math.max(1, opts.count || 1), opts, { parent, targetMediaId: retryTargetMediaId });
-        return;
-      }
-      // Worker path errored (e.g. 503 generation_unavailable) — fail these placeholders
-      // outright rather than silently falling back to the (likely also broken) inline path.
-      placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
-      toast.error(tr("studioBoard.toast.couldNotGenerate"));
-      return;
-    }
-
-    if (enqueued) {
-      // Stamp the job id on each placeholder (slot i ↔ placeholders[i], 1:1 by index —
-      // no new cards are ever created in this path, matching the P1 contract).
-      placeholders.forEach(p => pinDraftStore.updateDraft(p.id, { generationJobId: enqueued!.jobId }));
-      let doneCount = 0, failCount = 0;
-      pollGenerationJob(enqueued.jobId, {
-        onSlot: (slot, status, url) => {
-          const placeholder = placeholders[slot];
-          if (!placeholder) return;
-          if (status === "done" && url) {
-            pinDraftStore.completeGeneratedDraft(placeholder.id, url, replaceMetaFor(placeholder.id));
-            void startImageAnalysis(placeholder.id);
-            doneCount++;
-          } else {
-            pinDraftStore.failGeneratedDraft(placeholder.id);
-            failCount++;
-          }
-        },
-        onEnd: () => {
-          if (doneCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(doneCount)).replace("{okPlural}", doneCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
-          else if (doneCount) toast.success(parent
-            ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s")
-            : tr("studioBoard.toast.createdAiPins").replace("{n}", String(doneCount)).replace("{plural}", doneCount === 1 ? "" : "s"));
-          else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
-        },
-      });
-      return;
-    }
-
-    // 2b) Inline mode (unchanged): run generation; resolve/fail each placeholder.
-    //    A closed drawer or a partial failure never rolls back successful results.
-    try {
-      const result = await generateAiVersions({ source: parent, setup: opts });
-      result.urls.slice(0, placeholders.length).forEach((url, i) => {
-        // Persist the server generation id + this card's stable asset key so the future
-        // AI-adoption metric joins on ids, not the imageUrl string.
-        pinDraftStore.completeGeneratedDraft(placeholders[i].id, url, {
-          generationId: result.generationRequestId,
-          assetKey: `gen:${requestId}:${i}`,
-          ...replaceMetaFor(placeholders[i].id),
-        });
-        void startImageAnalysis(placeholders[i].id);
-        // Phase C: grade AI results in parallel (independent of copy analysis).
-        void startQualityJudge(placeholders[i].id);
-      });
-      // Requested more than came back → the unfilled placeholders failed.
-      placeholders.slice(result.urls.length).forEach(p => pinDraftStore.failGeneratedDraft(p.id));
-      // Returned more than requested (count clamped up is rare but possible) → extra cards.
-      result.urls.slice(placeholders.length).forEach((url, i) => {
-        const extra = pinDraftStore.createBoardDraft({
-          imageUrl: url, source: "ai_generated_from_upload", idempotencyKey: `gen:${requestId}:extra:${i}`,
-          parentDraftId: parent?.id, sourceImageUrl: parent?.imageUrl,
-          title: parent?.title, keyword: parent?.keyword, category: opts.category || parent?.category,
-          model: resolveModelLabel(undefined, opts.modelKey), format: opts.format,
-          generationSessionId: requestId, promptSnapshot: opts.directionBrief, setupSnapshot,
-          sourceGenerationId: result.generationRequestId, sourceAssetKey: `gen:${requestId}:extra:${i}`,
-          defaultDestinations: seedDestinations,
-        });
-        void startImageAnalysis(extra.id);
-        void startQualityJudge(extra.id);
-      });
-      const okCount = Math.min(result.urls.length, placeholders.length) + Math.max(0, result.urls.length - placeholders.length);
-      const failCount = Math.max(0, placeholders.length - result.urls.length);
-      if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
-      else if (okCount) toast.success(parent
-        ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
-        : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
-      else { placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id)); toast.error(tr("studioBoard.toast.noAiPinsGenerated")); }
-    } catch {
-      placeholders.forEach(p => pinDraftStore.failGeneratedDraft(p.id));
-      toast.error(tr("studioBoard.toast.couldNotGenerate"));
-    }
-    // The run itself lives in lib/studio/runAiGeneration so it can be driven by
-    // tests with a real store and a fake generate() — see test-ai-generation-run.
+    // One orchestration owns both runtime modes. Each reference group performs one
+    // state-changing POST and consumes that exact response: inline results are used
+    // directly; worker results are polled to terminal before the next group starts.
     const batchToastId = `gen-batch-${Date.now()}`;
     let groupTotal = 1;
     let limitStopped = false;
+
     await runAiGeneration({ parent, opts }, {
       store: pinDraftStore,
-      generate: ({ styleReference, batchRequestId, setup }) =>
-        generateAiVersions({ source: parent, setup, styleReference, batchRequestId }),
+      defaultDestinations: defaultDestinationsForNewContent(),
+      generate: ({ styleReference, batchRequestId, setup, placeholderIds }) =>
+        dispatchGenerationGroup({
+          source: parent,
+          setup,
+          styleReference,
+          batchRequestId,
+          placeholderIds,
+          onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
+            pinDraftStore.updateDraft(id, {
+              generationJobId: jobId,
+              generationSlot: slot,
+            });
+          }),
+        }),
       resolveModelLabel: (_a, modelKey) => resolveModelLabel(undefined, modelKey),
       onAnalyze: id => { void startImageAnalysis(id); },
       onJudge: id => { void startQualityJudge(id); },
       onPlaceholdersReady: totalPins => {
-        // Close the drawer right away — generation continues and the cards update.
         setAiDrawer(null);
         setAiGenerating(false);
         toast.success(totalPins === 1
@@ -1081,8 +840,6 @@ export function StudioBoard() {
       },
       onGroupProgress: (current, total) => {
         groupTotal = total;
-        // Batch progress lives in a toast because the drawer closes as soon as the
-        // placeholders exist (multi-group runs are long — N serial requests).
         if (total > 1) {
           toast.loading(
             tr("studioBoard.toast.generatingReferenceProgress")
@@ -1093,22 +850,32 @@ export function StudioBoard() {
         }
       },
       onLimitReached: (limit, { retryCount }) => {
-        // Stop the batch UI and hand the decision to the user. The run has already
-        // removed every placeholder it did not fill, so nothing is left dangling.
         if (groupTotal > 1) toast.dismiss(batchToastId);
         limitStopped = true;
-        handleGenerationLimit(limit, retryCount, opts, { parent, targetMediaId: retryTargetMediaId });
+        handleGenerationLimit(limit, retryCount, opts, {
+          parent,
+          targetMediaId: retryTargetMediaId,
+        });
       },
       onSettled: ({ okCount, failCount }) => {
         if (groupTotal > 1) toast.dismiss(batchToastId);
-        // A usage refusal is NOT "we could not generate": the dialog explains it.
-        // Without this guard a red error toast would render UNDER the dialog.
         if (limitStopped) return;
-        if (okCount && failCount) toast.error(tr("studioBoard.toast.generatedSomeFailedSome").replace("{okCount}", String(okCount)).replace("{okPlural}", okCount === 1 ? "" : "s").replace("{failCount}", String(failCount)));
-        else if (okCount) toast.success(parent
-          ? tr("studioBoard.toast.createdAiPinsKeptOriginal").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s")
-          : tr("studioBoard.toast.createdAiPins").replace("{n}", String(okCount)).replace("{plural}", okCount === 1 ? "" : "s"));
-        else toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+        if (okCount && failCount) {
+          toast.error(tr("studioBoard.toast.generatedSomeFailedSome")
+            .replace("{okCount}", String(okCount))
+            .replace("{okPlural}", okCount === 1 ? "" : "s")
+            .replace("{failCount}", String(failCount)));
+        } else if (okCount) {
+          toast.success(parent
+            ? tr("studioBoard.toast.createdAiPinsKeptOriginal")
+              .replace("{n}", String(okCount))
+              .replace("{plural}", okCount === 1 ? "" : "s")
+            : tr("studioBoard.toast.createdAiPins")
+              .replace("{n}", String(okCount))
+              .replace("{plural}", okCount === 1 ? "" : "s"));
+        } else {
+          toast.error(tr("studioBoard.toast.noAiPinsGenerated"));
+        }
       },
     });
   }, [aiDrawer, defaultDestinationsForNewContent, handleGenerationLimit, tr]);
@@ -1480,12 +1247,10 @@ export function StudioBoard() {
                 {tr("studioBoard.selectProduct")}
               </button>
             )}
-            {/* Bulk bar (PRD §19): count · Edit · Publish · Delete · Clear. Deliberately
-                lightweight — no embedded forms; Edit opens the batch workspace. Edit is
-                available for ONE selected Pin too: gating it at ≥2 made a merchant
-                deselect-and-reselect to reach the same editor. "Select all" spans the
-                current filter result only, which is what the merchant can see. */}
-            {selectedIds.size > 0 && (
+            {/* Bulk bar (PRD §19): count · Edit · Publish · Delete · Clear. It is a
+                multi-select workspace, so it appears only after at least two Pins are
+                selected. "Select all" spans the current visible filter result. */}
+            {selectedIds.size >= 2 && (
               <div data-testid="bulk-bar" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
                 <span data-testid="bulk-selected-count" style={{ fontSize: 11.5, fontWeight: 800, color: BUI.text }}>
                   {tr("studioBoard.bulk.selectedCount").replace("{n}", String(selectedIds.size))}

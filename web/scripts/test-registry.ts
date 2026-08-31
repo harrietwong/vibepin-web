@@ -234,6 +234,7 @@ export const STUDIO: string[] = [
   "test-drawer-product-state",
   "test-generation-product-link",
   "test-ai-generation-run",
+  "test-studio-generation-orchestration",
   "test-limit-reached-flow",
   "test-url-persistence",
   "test-pin-details-phase3",
