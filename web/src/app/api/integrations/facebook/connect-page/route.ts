@@ -27,7 +27,7 @@
  *     would silently connect the wrong Page.
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import {
   connectFacebookPageManually,
   getFacebookUserToken,
@@ -116,7 +116,7 @@ function publicCodeFor(code: string): string {
 }
 
 export async function POST(req: Request) {
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

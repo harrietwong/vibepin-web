@@ -19,7 +19,7 @@
  * store refuses (409) rather than re-pointing an arbitrary one.
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import {
   selectFacebookPage,
   MULTIPLE_FACEBOOK_CONNECTIONS,
@@ -28,7 +28,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

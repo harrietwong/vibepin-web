@@ -40,6 +40,7 @@ function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
 
 const planSrc = readFileSync(join(process.cwd(), "src/components/plan/WeeklyPlanWorkspace.tsx"), "utf8");
 const listSrc = readFileSync(join(process.cwd(), "src/components/plan/PlanListView.tsx"), "utf8");
+const queueSrc = readFileSync(join(process.cwd(), "src/app/app/queue/page.tsx"), "utf8");
 
 console.log("Weekly Plan List view + IA");
 
@@ -148,6 +149,12 @@ test("Schedule label is 'Schedule', not 'Schedule selected (N)'", () => {
 // 14
 test("No debug diagnostics rendered in List view", () => {
   assert(!/pin-card-plan-debug|data-vp-|console\.(debug|log)/.test(listSrc), "debug diagnostics present in List view");
+});
+
+test("Queue load failures render one explicit retryable alert", () => {
+  assert(queueSrc.includes('data-testid="queue-load-error"'), "queue load alert missing");
+  assert(queueSrc.includes("!!error || !!apiError"), "transport and API failures must share the alert");
+  assert(queueSrc.includes("onClick={() => mutate()}"), "queue load alert must offer retry");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

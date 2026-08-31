@@ -299,6 +299,7 @@ export default function QueuePage() {
 
   const apiError      = !isLoading && data && "error" in data ? (data as { error: string }).error : null;
   const tableNotExist = apiError?.includes("publishing_queue");
+  const loadFailed = !tableNotExist && !isLoading && (!!error || !!apiError);
 
   return (
     <div className="app-page min-h-screen flex flex-col">
@@ -359,6 +360,15 @@ export default function QueuePage() {
             <p className="text-xs text-gray-400">
               {tr("queue.notSetUp.runSqlPrefix")} <code className="bg-gray-100 px-1 py-0.5 rounded">POST /api/publish</code>.
             </p>
+          </div>
+        </div>
+      ) : loadFailed ? (
+        <div className="flex-1 flex items-center justify-center px-6 py-16">
+          <div data-testid="queue-load-error" role="alert" className="max-w-sm w-full text-center rounded-2xl border border-red-100 bg-red-50 p-6">
+            <p className="text-sm font-semibold text-red-700">{tr("queue.row.updateFailed")}</p>
+            <button type="button" onClick={() => mutate()} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-red-700 border border-red-200">
+              {tr("queue.header.refresh")}
+            </button>
           </div>
         </div>
       ) : view === "calendar" ? (

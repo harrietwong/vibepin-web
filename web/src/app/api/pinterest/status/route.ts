@@ -17,7 +17,7 @@
  * sandbox_demo/none, which Settings renders as not-connected).
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { getActiveConnection, toSafeStatus } from "@/lib/server/pinterest/connectionStore";
 import {
   canAttemptSandboxPublish,
@@ -30,7 +30,7 @@ import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/rou
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) return unauthorized();
 
   const apiEnv = getPinterestApiEnv();

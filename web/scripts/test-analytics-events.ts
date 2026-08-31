@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert";
+import Module from "node:module";
 
 // ── window / navigator shim (must exist before importing analytics.ts) ─────────
 const listeners = new Map<string, Set<() => void>>();
@@ -37,6 +38,10 @@ Object.defineProperty(globalThis, "navigator", { value: navShim, configurable: t
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void): void {
   try { fn(); passed++; console.log(`  OK ${name}`); }
+  catch (e) { failed++; console.log(`  FAIL ${name}\n     ${(e as Error).stack ?? (e as Error).message}`); }
+}
+async function asyncTest(name: string, fn: () => Promise<void>): Promise<void> {
+  try { await fn(); passed++; console.log(`  OK ${name}`); }
   catch (e) { failed++; console.log(`  FAIL ${name}\n     ${(e as Error).stack ?? (e as Error).message}`); }
 }
 
@@ -131,6 +136,94 @@ async function main() {
       analytics.__flushAnalyticsForTests();
     });
     (globalThis as unknown as { navigator: { sendBeacon?: unknown } }).navigator.sendBeacon = savedBeacon;
+  });
+
+  await asyncTest("forged SSR cookie is verified and rejected before analytics body parsing", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon";
+    let verifiedCalls = 0;
+    let jsonCalls = 0;
+    let insertCalls = 0;
+    const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unknown })._load;
+    (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = function (
+      this: unknown, request: string, parent: unknown, isMain: boolean,
+    ) {
+      if (request === "@supabase/supabase-js") {
+        return { createClient: () => ({ auth: { getUser: async () => {
+          verifiedCalls++;
+          return { data: { user: null }, error: new Error("invalid token") };
+        } } }) };
+      }
+      if (request === "@supabase/ssr") {
+        return { createServerClient: () => ({ auth: { getSession: async () => ({ data: { session: {
+          access_token: "forged-access-token",
+          user: { id: "forged-user-id" },
+        } } }) } }) };
+      }
+      if (request === "next/headers") {
+        return { cookies: async () => ({ getAll: () => [], set: () => undefined }) };
+      }
+      if (request.endsWith("/lib/supabase") || request === "@/lib/supabase") {
+        return { createServerClient: () => ({ from: () => ({ insert: async () => {
+          insertCalls++;
+          return { error: null };
+        } }) }) };
+      }
+      return originalLoad.call(this, request, parent, isMain);
+    } as never;
+
+    try {
+      const authPath = require.resolve("../src/lib/server/authUser");
+      delete require.cache[authPath];
+      const auth = await import("../src/lib/server/authUser");
+      const forged = await auth.getUserIdFromSameOriginSession(new Request("https://vibepin.co/api/private"));
+      assert.equal(forged, null, "locally decoded forged user id must not be accepted");
+      assert.equal(verifiedCalls, 1, "cookie access token must be verified with Auth");
+
+      const routePath = require.resolve("../src/app/api/analytics/events/route");
+      const recordPath = require.resolve("../src/lib/server/recordEvent");
+      delete require.cache[routePath];
+      delete require.cache[recordPath];
+      const route = await import("../src/app/api/analytics/events/route");
+      const req = {
+        headers: new Headers(),
+        json: async () => { jsonCalls++; return { events: [{ event: "forged" }] }; },
+      } as unknown as Request;
+      const response = await route.POST(req);
+      assert.equal(response.status, 204);
+      assert.equal(jsonCalls, 0, "unauthenticated analytics must not parse the body");
+      assert.equal(insertCalls, 0, "forged identity must not insert analytics");
+    } finally {
+      (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = originalLoad;
+    }
+  });
+
+  await asyncTest("all four private GET handlers reject when verified auth fails", async () => {
+    const originalLoad = (Module as unknown as { _load: (...args: unknown[]) => unknown })._load;
+    (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = function (
+      this: unknown, request: string, parent: unknown, isMain: boolean,
+    ) {
+      if (request.includes("server/authUser")) {
+        return { getUserIdFromBearerOrCookies: async () => null };
+      }
+      return originalLoad.call(this, request, parent, isMain);
+    } as never;
+    try {
+      for (const spec of [
+        "../src/app/api/integrations/facebook/pages/route",
+        "../src/app/api/social/connections/route",
+        "../src/app/api/pinterest/boards/route",
+        "../src/app/api/pinterest/status/route",
+      ]) {
+        const resolved = require.resolve(spec);
+        delete require.cache[resolved];
+        const route = await import(spec) as { GET: (req: Request) => Promise<Response> };
+        const response = await route.GET(new Request(`https://vibepin.co${spec.split("/api")[1]}`));
+        assert.equal(response.status, 401, `${spec} must reject forged/unverified identity`);
+      }
+    } finally {
+      (Module as unknown as { _load: (...args: unknown[]) => unknown })._load = originalLoad;
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

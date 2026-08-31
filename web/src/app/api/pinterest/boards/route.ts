@@ -6,7 +6,7 @@
  *   { items: [{ id, name, description, privacy }], bookmark: string | null }
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { PinterestClient } from "@/lib/server/pinterest/service";
 import { canAttemptSandboxPublish, isSandboxDemoBoard } from "@/lib/server/pinterest/config";
 import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/routeHelpers";
@@ -14,7 +14,7 @@ import { pinterestErrorResponse, unauthorized } from "@/lib/server/pinterest/rou
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) return unauthorized();
 
   try {

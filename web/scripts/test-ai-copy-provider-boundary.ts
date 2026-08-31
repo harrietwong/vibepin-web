@@ -532,6 +532,16 @@ async function main() {
     }
   });
 
+  await test("paid AI routes reuse the verified spend identity for cost attribution", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    for (const spec of [ROUTES.analyze, ROUTES["quality-judge"]]) {
+      const src = fs.readFileSync(path.resolve(__dirname, `${spec}.ts`), "utf8");
+      assert(src.includes("const costUserId = userId;"), `${spec}: cost identity must equal verified auth identity`);
+      assert(!src.includes("getUserIdFromSameOriginSession"), `${spec}: weak second identity lookup remains`);
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (Module as any)._load = originalLoad;

@@ -28,7 +28,6 @@ import {
 } from "@/lib/ai-copy/visionServer";
 import { judgeImageQuality } from "@/lib/ai-copy/qualityJudgeServer";
 import { judgeFromRawScores, JUDGE_VERSION } from "@/lib/ai-copy/judgeVerdict";
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
 
 export const runtime = "nodejs";
 
@@ -71,8 +70,8 @@ export async function POST(req: Request) {
 
   const body = await req.json() as Body;
   const cfg = providerConfig();
-  // Best-effort — cost logging only; this route's auth posture is unchanged.
-  const costUserId = await getUserIdFromSameOriginSession(req).catch(() => null);
+  // Cost attribution must use the same verified identity that authorized spend.
+  const costUserId = userId;
 
   try {
     if (!cfg.key) throw new CopyError("ai_copy_provider_not_configured", 500, PROVIDER_MESSAGE);

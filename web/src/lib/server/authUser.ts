@@ -118,10 +118,10 @@ export async function getUserIdFromCookieSession(): Promise<string | null> {
 }
 
 /**
- * Resolve user id for same-origin browser APIs. Prefer the cookie session so
- * post-OAuth GETs do not wait on a client-side Supabase token refresh or a
- * server-side bearer verification round trip.
+ * Resolve user id for same-origin browser APIs. This compatibility name is
+ * intentionally verified: a locally decoded SSR session is attacker-controlled
+ * until its access token has been checked by Supabase Auth.
  */
 export async function getUserIdFromSameOriginSession(req: Request): Promise<string | null> {
-  return (await getUserIdFromCookieSession()) ?? (await getUserIdFromBearer(req));
+  return getUserIdFromBearerOrCookies(req);
 }

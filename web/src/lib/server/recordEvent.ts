@@ -14,7 +14,7 @@
  * analytics write is never a reason for a product request to break.
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import { normalizeAnalyticsEvents } from "@/lib/analyticsIngest";
 
@@ -45,16 +45,12 @@ export function isMissingTableError(err: { code?: string; message?: string } | n
  * is delegated to normalizeAnalyticsEvents so server-side events obey exactly the
  * same limits as client-side ones.
  */
-export async function recordAnalyticsEvents(
-  req: Request,
+export async function recordAnalyticsEventsForUser(
+  userId: string,
   rows: AnalyticsEventInput[],
 ): Promise<void> {
   try {
     if (!Array.isArray(rows) || rows.length === 0) return;
-
-    // Unauthenticated → nothing to attribute the event to; drop it.
-    const userId = await getUserIdFromSameOriginSession(req);
-    if (!userId) return;
 
     const normalized = normalizeAnalyticsEvents(
       rows.map(r => ({
@@ -83,5 +79,23 @@ export async function recordAnalyticsEvents(
     // Never propagate: cookies() outside a request scope, a missing service key,
     // a network blip — none of these may surface to the caller's response.
     console.error("[recordAnalyticsEvents] unexpected error:", err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Best-effort request wrapper for server routes that do not already have a
+ * verified identity. The public analytics route authenticates before reading
+ * its body and calls recordAnalyticsEventsForUser directly.
+ */
+export async function recordAnalyticsEvents(
+  req: Request,
+  rows: AnalyticsEventInput[],
+): Promise<void> {
+  try {
+    const userId = await getUserIdFromBearerOrCookies(req);
+    if (!userId) return;
+    await recordAnalyticsEventsForUser(userId, rows);
+  } catch (err) {
+    console.error("[recordAnalyticsEvents] auth error:", err instanceof Error ? err.message : err);
   }
 }

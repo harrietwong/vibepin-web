@@ -1,11 +1,11 @@
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { getPinterestDefaultBoard, savePinterestDefaultBoard } from "@/lib/social/server/socialConnectionStore";
 import { unauthorized } from "@/lib/server/pinterest/routeHelpers";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) return unauthorized();
   // Default boards are per-account (board ids are). `connectionId` names which connected
   // account to read; omitted ⇒ the user's default connection, unchanged behaviour.
@@ -15,7 +15,7 @@ export async function GET(req: Request) {
 }
 
 export async function PATCH(req: Request) {
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) return unauthorized();
 
   let body: unknown;
@@ -28,7 +28,9 @@ export async function PATCH(req: Request) {
   const input = body as { boardId?: unknown; boardName?: unknown; connectionId?: unknown };
   const boardId = typeof input.boardId === "string" ? input.boardId.trim() : "";
   const boardName = typeof input.boardName === "string" ? input.boardName.trim() : null;
-  const connectionId = typeof input.connectionId === "string" ? input.connectionId.trim() : "";
+  const bodyConnectionId = typeof input.connectionId === "string" ? input.connectionId.trim() : "";
+  const queryConnectionId = (new URL(req.url).searchParams.get("connectionId") ?? "").trim();
+  const connectionId = bodyConnectionId || queryConnectionId;
   if (!boardId) {
     return Response.json({ error: "boardId is required", code: "bad_request" }, { status: 400 });
   }

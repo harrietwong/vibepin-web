@@ -933,6 +933,20 @@ async function main() {
     );
   });
 
+  await test("Facebook private routes require verified bearer-or-cookie identity", () => {
+    const readSrc = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
+    for (const rel of [
+      "../src/app/api/integrations/facebook/pages/route.ts",
+      "../src/app/api/integrations/facebook/connect-page/route.ts",
+      "../src/app/api/integrations/facebook/select-page/route.ts",
+    ]) {
+      const src = readSrc(rel);
+      assert(src.includes("getUserIdFromBearerOrCookies"), `${rel}: verified helper missing`);
+      assert(!src.includes("getUserIdFromSameOriginSession"), `${rel}: weak session helper remains`);
+      assert(/getUserIdFromBearerOrCookies\(req\)\.catch\(\(\) => null\)/.test(src), `${rel}: auth failures must reject`);
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

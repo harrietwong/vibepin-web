@@ -46,7 +46,7 @@
  * reason for the Settings page to fail to load.
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { listConnectionsForSettings, summarizeConnectionList } from "@/lib/social/server/socialConnectionStore";
 import { getActivePlanInterval, resolvePlan } from "@/lib/server/entitlements";
 import {
@@ -57,9 +57,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  // Read-only, non-secret metadata — same-origin cookie session (no network verify
-  // round trip), matching /api/pinterest/status and /api/pinterest/boards.
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

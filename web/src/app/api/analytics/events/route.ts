@@ -17,7 +17,8 @@
  */
 
 import { normalizeAnalyticsEvents } from "@/lib/analyticsIngest";
-import { recordAnalyticsEvents } from "@/lib/server/recordEvent";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
+import { recordAnalyticsEventsForUser } from "@/lib/server/recordEvent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +26,11 @@ export const dynamic = "force-dynamic";
 const noContent = () => new Response(null, { status: 204 });
 
 export async function POST(req: Request) {
+  // Authenticate before parsing an attacker-controlled body. A forged local SSR
+  // session is not identity; the bearer/cookie token must verify with Auth.
+  const userId = await getUserIdFromBearerOrCookies(req).catch(() => null);
+  if (!userId) return noContent();
+
   let body: unknown;
   try {
     body = await req.json();
@@ -35,9 +41,9 @@ export async function POST(req: Request) {
   const rows = normalizeAnalyticsEvents(body);
   if (rows.length === 0) return noContent();
 
-  // Never throws; unauthenticated batches are dropped inside (204, never rejected).
-  await recordAnalyticsEvents(
-    req,
+  // Never throws; authentication already completed before body parsing.
+  await recordAnalyticsEventsForUser(
+    userId,
     rows.map(r => ({
       event_name: r.event_name,
       draft_id:   r.draft_id,

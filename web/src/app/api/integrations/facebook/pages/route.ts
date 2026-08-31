@@ -11,7 +11,7 @@
  * /api/social/connections).
  */
 
-import { getUserIdFromSameOriginSession } from "@/lib/server/authUser";
+import { getUserIdFromBearerOrCookies } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import type { FacebookConnectionMetadata } from "@/lib/server/facebook/connectionStore";
 
@@ -25,7 +25,7 @@ function isMissingTable(code: string | undefined): boolean {
 }
 
 export async function GET(req: Request) {
-  const uid = await getUserIdFromSameOriginSession(req);
+  const uid = await getUserIdFromBearerOrCookies(req).catch(() => null);
   if (!uid) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

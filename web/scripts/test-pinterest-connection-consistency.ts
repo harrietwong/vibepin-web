@@ -47,6 +47,8 @@ const root = process.cwd();
 const callbackRoute = readFileSync(join(root, "src/app/api/auth/pinterest/callback/route.ts"), "utf8");
 const socialStore = readFileSync(join(root, "src/lib/social/server/socialConnectionStore.ts"), "utf8");
 const statusRoute = readFileSync(join(root, "src/app/api/pinterest/status/route.ts"), "utf8");
+const boardsRoute = readFileSync(join(root, "src/app/api/pinterest/boards/route.ts"), "utf8");
+const socialRoute = readFileSync(join(root, "src/app/api/social/connections/route.ts"), "utf8");
 const panel = readFileSync(join(root, "src/components/social/SocialAccountsPanel.tsx"), "utf8");
 const connectionStore = readFileSync(join(root, "src/lib/server/pinterest/connectionStore.ts"), "utf8");
 
@@ -128,6 +130,14 @@ async function main() {
     assert(!canPublishWithPinterest({ ...base, connectionSource: "none" }), "none must not allow the publish path");
     assert(!canPublishWithPinterest({ ...base }), "missing connectionSource must not allow the publish path");
     assert(!canPublishWithPinterest({ ...base, connectionSource: "db", needsReconnect: true }), "needsReconnect must block the publish path");
+  });
+
+  await test("Pinterest and social private GETs require verified identity", () => {
+    for (const [name, src] of [["status", statusRoute], ["boards", boardsRoute], ["social", socialRoute]] as const) {
+      assert(src.includes("getUserIdFromBearerOrCookies"), `${name}: verified helper missing`);
+      assert(!src.includes("getUserIdFromSameOriginSession"), `${name}: weak cookie-session helper remains`);
+      assert(/getUserIdFromBearerOrCookies\(req\)\.catch\(\(\) => null\)/.test(src), `${name}: verification errors must reject`);
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
