@@ -339,6 +339,7 @@ function assertNoLinePattern(source: string, pattern: RegExp, message: string) {
 }
 
 const routeSource = read("../src/app/api/generate/route.ts");
+const recoverySource = read("../src/lib/studio/generationRecovery.ts");
 const generatorSource = read("../../backend/generator.py");
 const workerSource = read("../../api/app/worker.py");
 
@@ -457,6 +458,15 @@ async function main() {
     }
     assert(!/stderr\.slice\s*\(|stdout\.slice\s*\(|\{\s*\.\.\.result\b|\braw\s*:\s*stdout/.test(routeSource),
       "route must never forward raw subprocess output or spread an untrusted generator result");
+  });
+
+  await test("client recovery never logs owner-bound intent payloads", () => {
+    for (const call of extractConsoleCalls(recoverySource)) {
+      assert(!/generationIntentPayload|\bpayload\b|ownerId|serialized/.test(call),
+        `recovery console call may expose private owner/payload data: ${call.replace(/\s+/g, " ").slice(0, 160)}`);
+    }
+    assert(!/console\.(?:log|warn|error|info|debug)\s*\([^)]*generationIntent/.test(recoverySource),
+      "generation recovery must not log intent identifiers or bodies");
   });
 
   await test("Python source guard forbids raw traceback/logger exception emission", () => {

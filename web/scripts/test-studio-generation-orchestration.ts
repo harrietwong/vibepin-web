@@ -41,10 +41,15 @@ test("inline mode consumes the same dispatch response without a second request",
 
 test("worker mode stamps each group's recovery job and local slot before polling", () => {
   assert.match(handler, /onIntentPrepared:[\s\S]*?generationIntentId: intentId,[\s\S]*?generationIntentPayload: payload/);
+  assert.match(handler, /onIntentPrepared: \(intentId, payload, ownerId, ids\)[\s\S]*?generationIntentOwnerId: ownerId/);
   assert.match(handler, /onWorkerJob: \(jobId, _slots, ids\) => ids\.forEach\(\(id, slot\) => \{[\s\S]*?generationJobId: jobId,[\s\S]*?generationSlot: slot/);
   assert.match(helperSource, /opts\.onWorkerJob\(dispatched\.jobId, dispatched\.slots, opts\.placeholderIds\)/);
   assert.match(helperSource, /return awaitGenerationJob\(dispatched\.jobId, dispatched\.slots, opts\.poll\)/);
   assert.doesNotMatch(handler, /pollGenerationJob\(/);
+});
+
+test("ambiguous owner-bound intent reconciles before any Try Again can create a new action", () => {
+  assert.match(source, /if \(d\.generationRecoveryPending && d\.generationIntentId && d\.generationIntentPayload\) \{[\s\S]*?reconcileGeneratingDrafts\(\);[\s\S]*?return;/);
 });
 
 test("the component does not maintain a second worker-only placeholder implementation", () => {

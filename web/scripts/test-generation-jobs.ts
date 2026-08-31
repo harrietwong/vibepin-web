@@ -24,10 +24,9 @@ async function test(name: string, fn: () => Promise<void> | void) {
 }
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
 
-// Stub the supabase browser session lookup so authHeaders() never makes a real call —
-// createBrowserClient() itself doesn't hit the network on construction, and
-// auth.getSession() resolves locally against an empty session, so no fetch mock is
-// needed for auth; the mocked global.fetch below only ever sees /api/... calls.
+// Enqueue now requires a network-verified owner before persisting a replay body.
+// Pure-node tests provide that identity through the explicit test seam; polling's
+// legacy authHeaders() lookup remains local and the fetch mock only sees /api calls.
 
 const MOCK_SETUP: AiVersionOptions = {
   prompt: "test prompt",
@@ -70,6 +69,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 async function main() {
   const mod = await import("../src/lib/studio/generateAiVersions");
+  const enqueue = (opts: Parameters<typeof mod.enqueueGeneration>[0]) => mod.enqueueGeneration(opts, {
+    resolveAuthContext: async () => ({
+      ownerId: "11111111-1111-4111-8111-111111111111",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test-user-a" },
+    }),
+  });
 
   console.log("WP3-P1 generation-jobs: enqueue + poll");
 
@@ -80,7 +85,7 @@ async function main() {
       assert(url.includes("/api/generate"), `expected /api/generate, got ${url}`);
       return jsonResponse({ jobId: "job-123", slots: 3 });
     };
-    const result = await mod.enqueueGeneration({ setup: MOCK_SETUP });
+    const result = await enqueue({ setup: MOCK_SETUP });
     assert(result.mode === "worker", `expected worker mode, got ${result.mode}`);
     if (result.mode !== "worker") throw new Error("expected worker result");
     assert(result.jobId === "job-123", `expected jobId job-123, got ${result.jobId}`);
@@ -91,7 +96,7 @@ async function main() {
   await test("enqueueGeneration: one group sends only its own reference and keeps the batch identity", async () => {
     calls = [];
     fetchImpl = async () => jsonResponse({ jobId: "job-ref", slots: 3 });
-    await mod.enqueueGeneration({
+    await enqueue({
       setup: { ...MOCK_SETUP, referenceImages: ["https://cdn/legacy-first.jpg"] },
       styleReference: "https://cdn/group-b.jpg",
       batchRequestId: "board_batch",
@@ -111,12 +116,27 @@ async function main() {
     fetchImpl = async () => jsonResponse({ error: "generation_unavailable" }, 503);
     let threw = false;
     try {
-      await mod.enqueueGeneration({ setup: MOCK_SETUP });
+      await enqueue({ setup: MOCK_SETUP });
     } catch (e) {
       threw = true;
       assert((e as Error).message === "generation_unavailable", `expected generation_unavailable message, got ${(e as Error).message}`);
     }
     assert(threw, "expected enqueueGeneration to throw on 503");
+  });
+
+  await test("enqueueGeneration: transport loss then refusal stays unknown until exact reconciliation", async () => {
+    calls = [];
+    let attempt = 0;
+    fetchImpl = async () => {
+      attempt++;
+      if (attempt === 1) throw new Error("commit response lost");
+      return jsonResponse({ error: "generation_unavailable" }, 503);
+    };
+    let code = "";
+    try { await enqueue({ setup: MOCK_SETUP }); }
+    catch (error) { code = String((error as { code?: unknown }).code ?? ""); }
+    assert(attempt === 2, `expected one replay, got ${attempt} attempts`);
+    assert(code === "generation_outcome_unknown", `expected ambiguous outcome, got ${code || "no code"}`);
   });
 
   await test("enqueueGeneration: inline-mode response is returned from the same request", async () => {
@@ -128,7 +148,7 @@ async function main() {
       requested_image_count: 1,
       actual_image_count: 1,
     });
-    const result = await mod.enqueueGeneration({ setup: MOCK_SETUP });
+    const result = await enqueue({ setup: MOCK_SETUP });
     assert(result.mode === "inline", `expected inline mode, got ${result.mode}`);
     if (result.mode !== "inline") throw new Error("expected inline result");
     assert(result.result.urls.length === 1, "expected the generated URL to be preserved");
@@ -140,7 +160,7 @@ async function main() {
   await test("enqueueGeneration: non-503 non-ok response throws", async () => {
     fetchImpl = async () => jsonResponse({ error: "boom" }, 500);
     let threw = false;
-    try { await mod.enqueueGeneration({ setup: MOCK_SETUP }); }
+    try { await enqueue({ setup: MOCK_SETUP }); }
     catch { threw = true; }
     assert(threw, "expected a throw on 500");
   });

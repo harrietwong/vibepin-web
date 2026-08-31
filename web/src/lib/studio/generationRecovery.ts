@@ -22,38 +22,68 @@
  *         concurrent poll loop for the same jobId).
  *       - 404 / malformed body → the whole job's cards are judged dead (job doesn't
  *         exist or isn't ours — nothing will ever resolve them).
- *       - network error → retried once; a second failure judges the job's cards dead.
+ *       - network/5xx ambiguity → retried once; a second unknown outcome remains
+ *         recoverable and cannot become a fresh user Retry.
+ *
+ * Recovery bodies are origin-local but owner-bound. Before any POST/GET, one
+ * network-verified Supabase owner/token pair is captured; drafts belonging to a
+ * different (or unknown) owner cause zero requests and remain available when their
+ * original owner signs back in.
  */
 
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import { authHeaders, pollGenerationJob, type GenerationJobResult, type GenerationJobStatus } from "@/lib/studio/generateAiVersions";
+import {
+  pollGenerationJob,
+  verifiedGenerationAuthContext,
+  type GenerationJobResult,
+  type GenerationJobStatus,
+  type VerifiedGenerationAuthContext,
+} from "@/lib/studio/generateAiVersions";
 
 type JobStatusBody = { status?: GenerationJobStatus; results?: GenerationJobResult[] };
 type RecoveredIntentBody = { jobId?: string; slots?: number };
+type RecoveryProbe<T> =
+  | { kind: "ok"; body: T }
+  | { kind: "definitive_failure" }
+  | { kind: "unknown" };
 
-async function fetchJobStatus(jobId: string): Promise<{ ok: true; body: JobStatusBody } | { ok: false; notFound: boolean }> {
+export type GenerationRecoveryOptions = {
+  intervalMs?: number;
+  timeoutMs?: number;
+  /** Test-only: production always resolves a network-verified immutable context. */
+  authContext?: VerifiedGenerationAuthContext;
+  /** Test-only transport seam. */
+  fetchImpl?: typeof fetch;
+};
+
+async function fetchJobStatus(
+  jobId: string,
+  authContext: VerifiedGenerationAuthContext,
+  send: typeof fetch,
+): Promise<RecoveryProbe<JobStatusBody>> {
   try {
-    const res = await fetch(`/api/generation-jobs/${jobId}`, { headers: await authHeaders() });
-    if (res.status === 404) return { ok: false, notFound: true };
-    if (!res.ok) return { ok: false, notFound: false };
+    const res = await send(`/api/generation-jobs/${jobId}`, { headers: authContext.headers });
+    if (res.status === 404) return { kind: "definitive_failure" };
+    if (!res.ok) return res.status >= 500 ? { kind: "unknown" } : { kind: "definitive_failure" };
     const body = await res.json() as JobStatusBody;
     if (!body || typeof body.status !== "string" || !Array.isArray(body.results)) {
-      return { ok: false, notFound: false };
+      return { kind: "unknown" };
     }
-    return { ok: true, body };
+    return { kind: "ok", body };
   } catch {
-    return { ok: false, notFound: false };
+    return { kind: "unknown" };
   }
 }
 
-/** One retry on network/transport failure; a 404 (or a second failure) is NOT retried. */
-async function fetchJobStatusWithRetry(jobId: string): Promise<{ ok: true; body: JobStatusBody } | { ok: false }> {
-  const first = await fetchJobStatus(jobId);
-  if (first.ok) return first;
-  if (first.notFound) return { ok: false };
-  const second = await fetchJobStatus(jobId);
-  if (second.ok) return second;
-  return { ok: false };
+/** One retry only for an unknown transport/server outcome; definitive 4xx stops. */
+async function fetchJobStatusWithRetry(
+  jobId: string,
+  authContext: VerifiedGenerationAuthContext,
+  send: typeof fetch,
+): Promise<RecoveryProbe<JobStatusBody>> {
+  const first = await fetchJobStatus(jobId, authContext, send);
+  if (first.kind !== "unknown") return first;
+  return fetchJobStatus(jobId, authContext, send);
 }
 
 /** Apply a terminal (done/partial/failed) job's results to its drafts, matched by generationSlot. */
@@ -83,25 +113,36 @@ type PinDraftLike = {
   generationJobId?: string;
   generationIntentId?: string;
   generationIntentPayload?: Record<string, unknown>;
+  generationIntentOwnerId?: string;
+  generationRecoveryPending?: boolean;
 };
 
-async function recoverJobIdFromIntent(payload: Record<string, unknown>): Promise<RecoveredIntentBody | null> {
+async function recoverJobIdFromIntent(
+  payload: Record<string, unknown>,
+  authContext: VerifiedGenerationAuthContext,
+  send: typeof fetch,
+): Promise<RecoveryProbe<RecoveredIntentBody>> {
   const serialized = JSON.stringify(payload);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await fetch("/api/generate", {
+      const response = await send("/api/generate", {
         method: "POST",
-        headers: await authHeaders(),
+        headers: authContext.headers,
         body: serialized,
       });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        if (response.status >= 500) continue;
+        return { kind: "definitive_failure" };
+      }
       const body = await response.json() as RecoveredIntentBody;
-      return body.jobId && typeof body.slots === "number" ? body : null;
+      return body.jobId && typeof body.slots === "number"
+        ? { kind: "ok", body }
+        : { kind: "unknown" };
     } catch {
       // One bounded retry replays the exact persisted intent body.
     }
   }
-  return null;
+  return { kind: "unknown" };
 }
 
 /**
@@ -114,14 +155,31 @@ async function recoverJobIdFromIntent(payload: Record<string, unknown>): Promise
  * `pollOpts` is test-only plumbing (overrides pollGenerationJob's interval/timeout so
  * unit tests don't hang on the real 4s/15min defaults) — production callers never pass it.
  */
-export async function reconcileGeneratingDrafts(pollOpts?: { intervalMs?: number; timeoutMs?: number }): Promise<void> {
+export async function reconcileGeneratingDrafts(options?: GenerationRecoveryOptions): Promise<void> {
   const generating = pinDraftStore.generatingDrafts();
   if (!generating.length) return;
+
+  // Resolve one immutable, network-verified owner/token pair before reading any
+  // recovery payload. If signed out or verification fails, do nothing: preserving
+  // A's record is safer than either replaying it anonymously or mutating it for B.
+  let authContext: VerifiedGenerationAuthContext;
+  try {
+    authContext = options?.authContext ?? await verifiedGenerationAuthContext();
+  } catch {
+    return;
+  }
+  const send = options?.fetchImpl ?? fetch;
+
+  // localStorage is origin-wide. Only the exact verified owner may inspect/replay
+  // its recovery records. Ownerless legacy rows and another user's rows remain
+  // untouched and cause ZERO requests; the original owner can recover after login.
+  const owned = generating.filter(d => d.generationIntentOwnerId === authContext.ownerId);
+  if (!owned.length) return;
 
   // A response can be lost after the DB commit but before onWorkerJob stores jobId.
   // Recover those cards by replaying their exact persisted intent before judging any
   // no-job placeholder dead. The DB anchor returns the original job.
-  const withoutJobId = generating.filter(d => !d.generationJobId);
+  const withoutJobId = owned.filter(d => !d.generationJobId);
   const recoverable = new Map<string, PinDraftLike[]>();
   const unrecoverable: PinDraftLike[] = [];
   for (const draft of withoutJobId) {
@@ -138,7 +196,7 @@ export async function reconcileGeneratingDrafts(pollOpts?: { intervalMs?: number
   // Group the jobId-bearing drafts by job so each job is checked exactly once
   // regardless of how many slots/cards it has.
   const byJob = new Map<string, PinDraftLike[]>();
-  for (const d of generating) {
+  for (const d of owned) {
     if (!d.generationJobId) continue;
     const list = byJob.get(d.generationJobId) ?? [];
     list.push(d);
@@ -148,24 +206,41 @@ export async function reconcileGeneratingDrafts(pollOpts?: { intervalMs?: number
   for (const drafts of recoverable.values()) {
     const payload = drafts[0].generationIntentPayload;
     if (!payload) { killDrafts(drafts); continue; }
-    const recovered = await recoverJobIdFromIntent(payload);
-    if (!recovered?.jobId) { killDrafts(drafts); continue; }
+    const recovered = await recoverJobIdFromIntent(payload, authContext, send);
+    if (recovered.kind === "unknown") {
+      drafts.forEach(draft => pinDraftStore.updateDraft(draft.id, {
+        generationStatus: "generating",
+        generationRecoveryPending: true,
+      }));
+      continue;
+    }
+    if (recovered.kind === "definitive_failure") { killDrafts(drafts); continue; }
+    const { jobId } = recovered.body;
+    if (!jobId) { killDrafts(drafts); continue; }
     const slotDrafts = drafts.map((draft, slot) => ({
       ...draft,
       generationSlot: draft.generationSlot ?? slot,
     }));
     for (const draft of slotDrafts) {
       pinDraftStore.updateDraft(draft.id, {
-        generationJobId: recovered.jobId,
+        generationJobId: jobId,
         generationSlot: draft.generationSlot,
+        generationRecoveryPending: false,
       });
     }
-    byJob.set(recovered.jobId, slotDrafts);
+    byJob.set(jobId, slotDrafts);
   }
 
   await Promise.all(Array.from(byJob.entries()).map(async ([jobId, drafts]) => {
-    const result = await fetchJobStatusWithRetry(jobId);
-    if (!result.ok) {
+    const result = await fetchJobStatusWithRetry(jobId, authContext, send);
+    if (result.kind === "unknown") {
+      drafts.forEach(draft => pinDraftStore.updateDraft(draft.id, {
+        generationStatus: "generating",
+        generationRecoveryPending: true,
+      }));
+      return;
+    }
+    if (result.kind === "definitive_failure") {
       killDrafts(drafts);
       return;
     }
@@ -194,6 +269,6 @@ export async function reconcileGeneratingDrafts(pollOpts?: { intervalMs?: number
         // No toast here — reconcile runs silently on mount/reload; StudioBoard's
         // own enqueue-time flow is what owns the user-facing toast copy.
       },
-    }, pollOpts);
+    }, { intervalMs: options?.intervalMs, timeoutMs: options?.timeoutMs });
   }));
 }

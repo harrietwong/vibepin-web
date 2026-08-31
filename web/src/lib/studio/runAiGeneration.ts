@@ -21,7 +21,7 @@ import type { LinkedProduct } from "@/lib/pinMetadata";
 import { planReferenceGroups } from "@/lib/studio/selectedReferences";
 import { resolveProductPublicUrl, toLinkedProduct } from "@/lib/studio/productSelection";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
-import { generationRequestIdForGroup } from "@/lib/studio/generationIntent";
+import { generationRequestIdForGroup, isAmbiguousGenerationOutcomeError } from "@/lib/studio/generationIntent";
 import { isLimitReachedError, type LimitReached } from "@/lib/usage/limitReached";
 
 /**
@@ -255,6 +255,20 @@ export async function runAiGeneration(
         // never attempted at all. Neither produced a Pin, so both are DELETED rather
         // than marked failed — a failed card offers a Retry that cannot succeed.
         for (let i = group.index; i < groups.length; i++) {
+          groupPlaceholders[i].forEach(p => store.deleteDraft(p.id));
+        }
+        break;
+      }
+      if (isAmbiguousGenerationOutcomeError(err)) {
+        // Both responses were lost, so the durable job may already exist. Keep this
+        // group's exact placeholders/intent in a non-retryable in-flight state. Any
+        // later reference groups were never submitted and are removed; starting them
+        // while this account's outcome is unknown would defeat serial ownership.
+        placeholders.forEach(p => store.updateDraft(p.id, {
+          generationStatus: "generating",
+          generationRecoveryPending: true,
+        }));
+        for (let i = group.index + 1; i < groups.length; i++) {
           groupPlaceholders[i].forEach(p => store.deleteDraft(p.id));
         }
         break;

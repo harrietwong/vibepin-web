@@ -11,7 +11,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { LimitReachedError, parseLimitReachedResponse } from "@/lib/usage/limitReached";
-import { generationRequestIdForGroup } from "@/lib/studio/generationIntent";
+import { AmbiguousGenerationOutcomeError, generationRequestIdForGroup } from "@/lib/studio/generationIntent";
 export { generationRequestIdForGroup } from "@/lib/studio/generationIntent";
 
 // The server contract allows at most four outputs in one request. The visible
@@ -69,6 +69,29 @@ function parseInlineResult(body: GenerateResponseBody, fallbackRequestId: string
     actualImageCount: body.actual_image_count,
     countClamped: body.count_clamped,
     source: body.source,
+  };
+}
+
+export type VerifiedGenerationAuthContext = {
+  ownerId: string;
+  headers: Record<string, string>;
+};
+
+/**
+ * Resolve and network-verify one immutable auth context for a state-changing
+ * generation operation. The captured token is reused for both POST attempts, so
+ * an account switch between attempts cannot send user A's payload as user B.
+ */
+export async function verifiedGenerationAuthContext(): Promise<VerifiedGenerationAuthContext> {
+  const client = browser();
+  const { data: { session } } = await client.auth.getSession();
+  const accessToken = session?.access_token;
+  if (!accessToken) throw new Error("unauthenticated");
+  const { data: { user }, error } = await client.auth.getUser(accessToken);
+  if (error || !user?.id) throw new Error("unauthenticated");
+  return {
+    ownerId: user.id,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
   };
 }
 
@@ -227,6 +250,13 @@ export type EnqueueGenerationResult =
  * POST /api/generate once, with one bounded retry only for an ambiguous transport
  * failure. Both attempts carry the exact same durable intent and payload.
  */
+export type EnqueueGenerationTestDeps = {
+  /** Test-only seam; production always performs the network-verified lookup above. */
+  resolveAuthContext?: () => Promise<VerifiedGenerationAuthContext>;
+  /** Test-only transport seam. */
+  fetchImpl?: typeof fetch;
+};
+
 export async function enqueueGeneration(opts: {
   source?: PinDraft | null;
   keyword?: string;
@@ -239,8 +269,8 @@ export async function enqueueGeneration(opts: {
   groupIndex?: number;
   /** Exact persisted group intent; preferred over reconstructing from batch metadata. */
   generationIntentId?: string;
-  onIntentPrepared?: (intentId: string, payload: Record<string, unknown>) => void;
-}): Promise<EnqueueGenerationResult> {
+  onIntentPrepared?: (intentId: string, payload: Record<string, unknown>, ownerId: string) => void;
+}, testDeps?: EnqueueGenerationTestDeps): Promise<EnqueueGenerationResult> {
   const { source, setup } = opts;
   const generationRequestId = opts.generationIntentId || (opts.batchRequestId
     ? generationRequestIdForGroup(opts.batchRequestId, opts.groupIndex ?? 0)
@@ -254,17 +284,32 @@ export async function enqueueGeneration(opts: {
     styleReference: opts.styleReference,
     durableGenerationIntent: true,
   });
-  opts.onIntentPrepared?.(generationRequestId, payload);
+  const authContext = await (testDeps?.resolveAuthContext ?? verifiedGenerationAuthContext)();
+  opts.onIntentPrepared?.(generationRequestId, payload, authContext.ownerId);
 
   const serialized = JSON.stringify(payload);
+  const send = testDeps?.fetchImpl ?? fetch;
   let res: Response;
+  let earlierOutcomeUnknown = false;
   try {
-    res = await fetch("/api/generate", { method: "POST", headers: await authHeaders(), body: serialized });
+    res = await send("/api/generate", { method: "POST", headers: authContext.headers, body: serialized });
   } catch {
+    earlierOutcomeUnknown = true;
     // One bounded ambiguous-transport replay with the SAME durable intent. The DB
     // unique anchor returns the original job if the first response was lost.
-    res = await fetch("/api/generate", { method: "POST", headers: await authHeaders(), body: serialized });
+    try {
+      res = await send("/api/generate", { method: "POST", headers: authContext.headers, body: serialized });
+    } catch {
+      // Either request may already have committed. Never translate this into a
+      // retryable failure: reload/recovery must replay this exact persisted intent.
+      throw new AmbiguousGenerationOutcomeError();
+    }
   }
+
+  // Once an earlier attempt has an unknown outcome, a later refusal cannot prove
+  // that the first request did not commit. Preserve the intent and let replay-first
+  // reconciliation establish the authoritative job instead of enabling Retry.
+  if (earlierOutcomeUnknown && !res.ok) throw new AmbiguousGenerationOutcomeError();
 
   if (res.status === 503) {
     let code = "generation_unavailable";
@@ -478,9 +523,11 @@ export async function dispatchGenerationGroup(opts: {
   groupIndex: number;
   generationIntentId: string;
   placeholderIds: string[];
-  onIntentPrepared: (intentId: string, payload: Record<string, unknown>, placeholderIds: string[]) => void;
+  onIntentPrepared: (intentId: string, payload: Record<string, unknown>, ownerId: string, placeholderIds: string[]) => void;
   onWorkerJob: (jobId: string, slots: number, placeholderIds: string[]) => void;
   poll?: { intervalMs?: number; timeoutMs?: number };
+  /** Test-only auth/transport seam; production callers omit it. */
+  testDeps?: EnqueueGenerationTestDeps;
 }): Promise<AiVersionGenerateResult | AwaitedGenerationJobResult> {
   const dispatched = await enqueueGeneration({
     source: opts.source,
@@ -490,8 +537,8 @@ export async function dispatchGenerationGroup(opts: {
     batchRequestId: opts.batchRequestId,
     groupIndex: opts.groupIndex,
     generationIntentId: opts.generationIntentId,
-    onIntentPrepared: (intentId, payload) => opts.onIntentPrepared(intentId, payload, opts.placeholderIds),
-  });
+    onIntentPrepared: (intentId, payload, ownerId) => opts.onIntentPrepared(intentId, payload, ownerId, opts.placeholderIds),
+  }, opts.testDeps);
   if (dispatched.mode === "inline") return dispatched.result;
 
   opts.onWorkerJob(dispatched.jobId, dispatched.slots, opts.placeholderIds);

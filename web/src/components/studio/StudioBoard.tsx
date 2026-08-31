@@ -823,10 +823,12 @@ export function StudioBoard() {
           groupIndex,
           generationIntentId,
           placeholderIds,
-          onIntentPrepared: (intentId, payload, ids) => ids.forEach(id => {
+          onIntentPrepared: (intentId, payload, ownerId, ids) => ids.forEach(id => {
             pinDraftStore.updateDraft(id, {
               generationIntentId: intentId,
               generationIntentPayload: payload,
+              generationIntentOwnerId: ownerId,
+              generationRecoveryPending: false,
             });
           }),
           onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
@@ -1093,6 +1095,13 @@ export function StudioBoard() {
   // has not published is re-sent.
   const handleTryAgain = useCallback((d: PinDraft) => {
     if (isActionablePublishFailure(d)) { void handlePublish(d.id); return; }
+    // Defensive retry gate: an ambiguous POST is not a failed generation. Reconcile
+    // its exact owner-bound intent instead of opening a drawer that would create a
+    // new requestId/job and potentially charge twice.
+    if (d.generationRecoveryPending && d.generationIntentId && d.generationIntentPayload) {
+      void reconcileGeneratingDrafts();
+      return;
+    }
     const parent = d.parentDraftId ? pinDraftStore.getDraft(d.parentDraftId) : null;
     // Restore the failed card's OWN generation group reference, so retrying a failed
     // reference group regenerates against the same reference instead of reopening a

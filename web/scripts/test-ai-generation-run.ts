@@ -196,6 +196,12 @@ async function main() {
           generationIntentId,
           placeholderIds,
           onIntentPrepared: () => {},
+          testDeps: {
+            resolveAuthContext: async () => ({
+              ownerId: "11111111-1111-4111-8111-111111111111",
+              headers: { "Content-Type": "application/json", Authorization: "Bearer test-user-a" },
+            }),
+          },
           poll: { intervalMs: 1 },
           onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
             store.updateDraft(id, { generationJobId: jobId, generationSlot: slot });

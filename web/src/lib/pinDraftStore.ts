@@ -236,6 +236,10 @@ export interface PinDraft {
   generationIntentId?: string;
   /** Exact bounded POST body used only to recover an intent whose response was lost. */
   generationIntentPayload?: Record<string, unknown>;
+  /** Network-verified Supabase user that prepared the recovery payload. */
+  generationIntentOwnerId?: string;
+  /** True only while the POST may have committed but no response was observed. */
+  generationRecoveryPending?: boolean;
   /** WP3-P2: this placeholder's index into the generation_jobs row's `results[]`
    *  array. Stamped at creation time (StudioBoard's worker-mode enqueue maps
    *  placeholders[i] ↔ slot i 1:1). Reconcile-after-reload matches a reloaded
@@ -672,6 +676,8 @@ export function createBoardDraft(input: {
   generationJobId?: string;
   generationIntentId?: string;
   generationIntentPayload?: Record<string, unknown>;
+  generationIntentOwnerId?: string;
+  generationRecoveryPending?: boolean;
   /** WP3-P2: this placeholder's slot index in the job's results[] array. */
   generationSlot?: number;
   /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
@@ -777,6 +783,8 @@ export function createBoardDraft(input: {
     generationJobId:     input.generationJobId,
     generationIntentId:  input.generationIntentId,
     generationIntentPayload: input.generationIntentPayload,
+    generationIntentOwnerId: input.generationIntentOwnerId,
+    generationRecoveryPending: input.generationRecoveryPending,
     generationSlot:      input.generationSlot,
     sourceGenerationId:  input.sourceGenerationId,
     sourceAssetKey:      input.sourceAssetKey,
@@ -821,6 +829,8 @@ export function completeGeneratedDraft(
     media: nextMedia,
     coverMediaId: cover?.id ?? generatedMediaId,
     generationStatus: "completed",
+    generationRecoveryPending: false,
+    generationIntentPayload: undefined,
     // Persist the server generation id + a stable asset key so the AI-adoption metric can
     // join on ids, not image-URL strings. Only set when provided (legacy callers unchanged).
     ...(meta?.generationId ? { sourceGenerationId: meta.generationId } : {}),
@@ -1057,7 +1067,11 @@ export function splitContentMedia(id: string, mediaIds?: readonly string[]): Pin
 
 /** Mark a Generating placeholder as failed (per-result or whole-run failure). */
 export function failGeneratedDraft(id: string): PinDraft | null {
-  return updateDraft(id, { generationStatus: "failed" });
+  return updateDraft(id, {
+    generationStatus: "failed",
+    generationRecoveryPending: false,
+    generationIntentPayload: undefined,
+  });
 }
 
 /**

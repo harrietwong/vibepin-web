@@ -9,7 +9,8 @@
  *   - terminal done job   → resolved via generationSlot matching, not array order
  *   - terminal partial job (done+failed mixed) → each slot resolved independently
  *   - 404 response        → job's cards judged dead
- *   - network error       → retried once; second failure judges cards dead
+ *   - network error       → retried once; unknown outcome remains recoverable
+ *   - owner switch        → zero replay under the wrong verified user
  *   - two reconcile calls for the same live job → no duplicate poll loop (activePolls dedup)
  *   - slots created out of creation-order still match correctly via generationSlot
  */
@@ -69,6 +70,22 @@ async function test(name: string, fn: () => Promise<void> | void) {
 async function main() {
   const store = await import("../src/lib/pinDraftStore");
   const recovery = await import("../src/lib/studio/generationRecovery");
+  const generation = await import("../src/lib/studio/generateAiVersions");
+  const { runAiGeneration } = await import("../src/lib/studio/runAiGeneration");
+  const { getPinLifecycle } = await import("../src/lib/studio/pinLifecycle");
+
+  const OWNER_A = "11111111-1111-4111-8111-111111111111";
+  const OWNER_B = "22222222-2222-4222-8222-222222222222";
+  const authContext = (ownerId: string) => ({
+    ownerId,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer test-${ownerId}` },
+  });
+  const reconcile = (ownerId = OWNER_A, opts: { intervalMs?: number; timeoutMs?: number } = {}) =>
+    recovery.reconcileGeneratingDrafts({
+      ...opts,
+      authContext: authContext(ownerId),
+      fetchImpl: globalThis.fetch,
+    });
 
   function reset() { mem.clear(); calls = []; store.__resetMemoryCacheForTests(); }
 
@@ -78,6 +95,8 @@ async function main() {
     idem: string;
     intentId?: string;
     intentPayload?: Record<string, unknown>;
+    ownerId?: string;
+    recoveryPending?: boolean;
   }) {
     return store.createBoardDraft({
       imageUrl: "https://cdn/parent.jpg",
@@ -88,6 +107,8 @@ async function main() {
       generationSlot: opts.slot,
       generationIntentId: opts.intentId,
       generationIntentPayload: opts.intentPayload,
+      generationIntentOwnerId: opts.ownerId ?? OWNER_A,
+      generationRecoveryPending: opts.recoveryPending,
     });
   }
 
@@ -96,7 +117,7 @@ async function main() {
   await test("no generationJobId → judged dead immediately (pre-P2 behavior preserved)", async () => {
     reset();
     const d = makePlaceholder({ idem: "no-job" });
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     const reloaded = store.getDraft(d.id);
     assert.equal(reloaded?.generationStatus, "failed");
     assert.equal(calls.length, 0, "no jobId → no network call at all");
@@ -126,11 +147,128 @@ async function main() {
         ],
       });
     };
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     assert.equal(postCount, 1, "one replay per intent group, not per placeholder");
     assert.equal(store.getDraft(d0.id)?.generationJobId, "job-recovered-intent");
     assert.equal(store.getDraft(d0.id)?.imageUrl, "https://cdn/recovered-0.jpg");
     assert.equal(store.getDraft(d1.id)?.imageUrl, "https://cdn/recovered-1.jpg");
+  });
+
+  await test("two lost POST responses keep exact intent recoverable; reload resolves original job", async () => {
+    reset();
+    type Opts = Parameters<typeof runAiGeneration>[0]["opts"];
+    const opts: Opts = {
+      prompt: "private product prompt", hiddenPrompt: "private hidden prompt",
+      productImages: [], referenceImages: [], selectedReferences: [],
+      count: 2, format: "Pinterest 2:3", modelKey: "gemini_image",
+      variationMode: "distinct", outputVariants: [], category: "home",
+      selectedTags: [], directionBrief: "private direction", briefManuallyEdited: false,
+      creativeDirectionMeta: {} as Opts["creativeDirectionMeta"], productMetadata: [],
+      primaryProductSelection: null,
+    };
+    let postAttempts = 0;
+    let committed = false;
+    const result = await runAiGeneration({ parent: null, opts }, {
+      store: store as never,
+      resolveModelLabel: () => "Gemini",
+      now: () => 7,
+      randomId: () => "double-loss",
+      generate: async ({ styleReference, batchRequestId, groupIndex, generationIntentId, setup, placeholderIds }) => {
+        const dispatched = await generation.enqueueGeneration({
+          source: null,
+          setup,
+          styleReference,
+          batchRequestId,
+          groupIndex,
+          generationIntentId,
+          onIntentPrepared: (intentId, payload, ownerId) => placeholderIds.forEach(id => {
+            store.updateDraft(id, {
+              generationIntentId: intentId,
+              generationIntentPayload: payload,
+              generationIntentOwnerId: ownerId,
+            });
+          }),
+        }, {
+          resolveAuthContext: async () => authContext(OWNER_A),
+          fetchImpl: async () => {
+            postAttempts++;
+            if (postAttempts === 1) committed = true; // DB commit, response lost
+            assert.equal(committed, true, "second attempt is an exact replay after commit");
+            throw new Error("response lost");
+          },
+        });
+        if (dispatched.mode === "inline") return dispatched.result;
+        throw new Error("unexpected visible enqueue response");
+      },
+    });
+    assert.equal(postAttempts, 2, "one original POST plus one bounded exact replay");
+    assert.equal(result.okCount, 0);
+    assert.equal(result.failCount, 0, "unknown outcome is not a definitive failure");
+    const pending = store.getAllDrafts();
+    assert.equal(pending.length, 2, "no replacement placeholders were created");
+    for (const draft of pending) {
+      assert.equal(draft.generationStatus, "generating");
+      assert.equal(draft.generationRecoveryPending, true);
+      assert.equal(draft.generationIntentOwnerId, OWNER_A);
+      assert.ok(draft.generationIntentPayload, "exact body survives transport exhaustion");
+      assert.equal(getPinLifecycle(draft), "generating", "Try Again remains unavailable until reconciliation");
+    }
+
+    // Simulated reload: lose module memory, keep durable localStorage. The next exact
+    // replay returns the already-committed job and its original slot results.
+    store.__resetMemoryCacheForTests();
+    fetchImpl = async (url) => url === "/api/generate"
+      ? jsonResponse({ jobId: "job-double-loss", slots: 2, replayed: true })
+      : jsonResponse({
+          status: "done",
+          results: [
+            { slot: 0, status: "done", imageUrl: "https://cdn/double-0.jpg", error: null },
+            { slot: 1, status: "done", imageUrl: "https://cdn/double-1.jpg", error: null },
+          ],
+        });
+    await reconcile();
+    const resolved = store.getAllDrafts();
+    assert.equal(resolved.length, 2, "reconciliation reuses the original placeholders");
+    assert.deepEqual(resolved.map(d => d.imageUrl).sort(), ["https://cdn/double-0.jpg", "https://cdn/double-1.jpg"]);
+    assert.ok(resolved.every(d => d.generationStatus === "completed"));
+    assert.ok(resolved.every(d => d.generationRecoveryPending === false));
+    assert.ok(resolved.every(d => d.generationIntentPayload === undefined), "terminal state drops private replay body");
+  });
+
+  await test("A logout → B mount performs zero replay; A re-login recovers original intent", async () => {
+    reset();
+    const privatePayload = {
+      generation_intent_version: 1,
+      generationRequestId: "owner-a-intent",
+      prompt: "A_PRIVATE_PROMPT_MUST_NEVER_REPLAY_AS_B",
+      count: 1,
+    };
+    const draft = makePlaceholder({
+      idem: "owner-switch-0",
+      intentId: "owner-a-intent",
+      intentPayload: privatePayload,
+      ownerId: OWNER_A,
+      recoveryPending: true,
+    });
+
+    fetchImpl = async () => { throw new Error("B must make zero recovery requests"); };
+    await reconcile(OWNER_B);
+    assert.equal(calls.length, 0, "wrong owner cannot POST payload or GET job status");
+    const afterB = store.getDraft(draft.id)!;
+    assert.equal(afterB.generationStatus, "generating", "B mount does not mutate A's recovery record");
+    assert.equal(afterB.generationRecoveryPending, true);
+    assert.equal(afterB.generationIntentPayload?.prompt, privatePayload.prompt);
+
+    fetchImpl = async (url) => url === "/api/generate"
+      ? jsonResponse({ jobId: "job-owner-a", slots: 1, replayed: true })
+      : jsonResponse({
+          status: "done",
+          results: [{ slot: 0, status: "done", imageUrl: "https://cdn/owner-a.jpg", error: null }],
+        });
+    await reconcile(OWNER_A);
+    assert.equal(calls.filter(call => call.url === "/api/generate").length, 1);
+    assert.equal(store.getDraft(draft.id)?.generationStatus, "completed");
+    assert.equal(store.getDraft(draft.id)?.imageUrl, "https://cdn/owner-a.jpg");
   });
 
   await test("queued/running job → card stays generating, poll loop registered", async () => {
@@ -143,7 +281,7 @@ async function main() {
     };
     // Short interval/timeout so the resumed poll loop self-terminates quickly instead
     // of hanging the test process on the real 4s/15min production defaults.
-    await recovery.reconcileGeneratingDrafts({ intervalMs: 5, timeoutMs: 30 });
+    await reconcile(OWNER_A, { intervalMs: 5, timeoutMs: 30 });
     const reloaded = store.getDraft(d.id);
     assert.equal(reloaded?.generationStatus, "generating", "still generating — job is alive");
     const gen = await import("../src/lib/studio/generateAiVersions");
@@ -167,7 +305,7 @@ async function main() {
         { slot: 1, status: "done", imageUrl: "https://cdn/result-1.jpg", error: null },
       ],
     });
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     const r0 = store.getDraft(d0.id);
     const r1 = store.getDraft(d1.id);
     assert.equal(r0?.generationStatus, "completed");
@@ -188,7 +326,7 @@ async function main() {
         { slot: 1, status: "failed", imageUrl: null, error: "provider timeout" },
       ],
     });
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     assert.equal(store.getDraft(dOk.id)?.generationStatus, "completed");
     assert.equal(store.getDraft(dFail.id)?.generationStatus, "failed");
   });
@@ -198,19 +336,20 @@ async function main() {
     const jobId = "job-missing-1";
     const d = makePlaceholder({ jobId, slot: 0, idem: "missing-0" });
     fetchImpl = async () => jsonResponse({ error: "not_found" }, 404);
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     assert.equal(store.getDraft(d.id)?.generationStatus, "failed");
   });
 
-  await test("network error → retried once; second failure judges cards dead", async () => {
+  await test("network error → retried once; second unknown outcome remains recoverable", async () => {
     reset();
     const jobId = "job-network-err-1";
     const d = makePlaceholder({ jobId, slot: 0, idem: "neterr-0" });
     let attempt = 0;
     fetchImpl = async () => { attempt++; throw new Error("network down"); };
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     assert.equal(attempt, 2, `expected exactly 2 attempts (1 + 1 retry), got ${attempt}`);
-    assert.equal(store.getDraft(d.id)?.generationStatus, "failed");
+    assert.equal(store.getDraft(d.id)?.generationStatus, "generating");
+    assert.equal(store.getDraft(d.id)?.generationRecoveryPending, true);
   });
 
   await test("network error then success on retry → job resolved normally, no premature kill", async () => {
@@ -223,7 +362,7 @@ async function main() {
       if (attempt === 1) throw new Error("network blip");
       return jsonResponse({ status: "done", results: [{ slot: 0, status: "done", imageUrl: "https://cdn/recovered.jpg", error: null }] });
     };
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     assert.equal(attempt, 2);
     assert.equal(store.getDraft(d.id)?.generationStatus, "completed");
     assert.equal(store.getDraft(d.id)?.imageUrl, "https://cdn/recovered.jpg");
@@ -241,8 +380,8 @@ async function main() {
     // Fire both reconcile passes back-to-back, as could happen with a fast double-mount.
     // Short interval/timeout so both loops self-terminate quickly (real defaults would hang the test).
     await Promise.all([
-      recovery.reconcileGeneratingDrafts({ intervalMs: 5, timeoutMs: 30 }),
-      recovery.reconcileGeneratingDrafts({ intervalMs: 5, timeoutMs: 30 }),
+      reconcile(OWNER_A, { intervalMs: 5, timeoutMs: 30 }),
+      reconcile(OWNER_A, { intervalMs: 5, timeoutMs: 30 }),
     ]);
     const gen = await import("../src/lib/studio/generateAiVersions");
     assert.equal(gen.isPollingJob(jobId), true, "job should be actively polled");
@@ -272,7 +411,7 @@ async function main() {
         { slot: 2, status: "done", imageUrl: "https://cdn/s2.jpg", error: null },
       ],
     });
-    await recovery.reconcileGeneratingDrafts();
+    await reconcile();
     assert.equal(store.getDraft(d0.id)?.imageUrl, "https://cdn/s0.jpg");
     assert.equal(store.getDraft(d1.id)?.imageUrl, "https://cdn/s1.jpg");
     assert.equal(store.getDraft(d2.id)?.imageUrl, "https://cdn/s2.jpg");
@@ -291,7 +430,7 @@ async function main() {
       throw new Error(`unexpected url ${url}`);
     };
     // Short interval/timeout so the running job's resumed poll loop self-terminates quickly.
-    await recovery.reconcileGeneratingDrafts({ intervalMs: 5, timeoutMs: 30 });
+    await reconcile(OWNER_A, { intervalMs: 5, timeoutMs: 30 });
     assert.equal(store.getDraft(dead.id)?.generationStatus, "failed", "no-jobId leftover judged dead");
     assert.equal(store.getDraft(dDone.id)?.generationStatus, "completed", "terminal job applied");
     assert.equal(store.getDraft(dRunning.id)?.generationStatus, "generating", "running job stays alive");
