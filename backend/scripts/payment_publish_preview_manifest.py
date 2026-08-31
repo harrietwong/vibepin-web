@@ -57,6 +57,12 @@ MIGRATION_ORDER = [
             "retain_v68_functions_and_ledger_events",
         ],
     },
+    {
+        "version": 71,
+        "apply": "backend/db/migrate_v71_generation_intent_idempotency.sql",
+        "recovery": "backend/db/rollback_v71_generation_intent_idempotency.sql",
+        "recoveryMode": "sql_rollback",
+    },
 ]
 
 REQUIRED_EVIDENCE = [
