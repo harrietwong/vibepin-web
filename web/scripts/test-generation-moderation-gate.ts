@@ -166,7 +166,7 @@ function fakeSpawn() {
   child.kill = () => {};
   // Emit a valid generator.py JSON result on the next tick, then close cleanly.
   setImmediate(() => {
-    child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, urls: ["u1"], keyword: "k", style: "lifestyle" }) + "\n"));
+    child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, urls: ["https://example.test/generated/1.png"], keyword: "k", style: "lifestyle" }) + "\n"));
     child.emit("close", 0);
   });
   return child;

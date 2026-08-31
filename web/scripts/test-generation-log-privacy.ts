@@ -64,10 +64,15 @@ const SENTINELS = {
   productUrl: "http://127.0.0.1:1/VP_SECRET_PRODUCT_URL?token=prod_6e0f",
   referenceUrl: "http://127.0.0.1:1/VP_SECRET_REFERENCE_URL?token=ref_1ac9",
   userId: "11111111-1111-4111-8111-111111111111",
+  generationRequestId: "VP_SECRET_REQUEST_ID_1B66",
+  studioClientId: "VP_SECRET_OWNER_ID_7D20",
   providerBody: "VP_SECRET_PROVIDER_BODY_5B72",
 } as const;
 
-const ROUTE_RAW_VALUES = Object.values(SENTINELS);
+const ROUTE_LOG_RAW_VALUES = Object.values(SENTINELS);
+const ROUTE_RESPONSE_RAW_VALUES = Object.entries(SENTINELS)
+  .filter(([key]) => key !== "generationRequestId")
+  .map(([, value]) => value);
 const GENERATOR_RAW_VALUES = [
   SENTINELS.keyword,
   SENTINELS.prompt,
@@ -77,6 +82,8 @@ const GENERATOR_RAW_VALUES = [
   SENTINELS.outputVariant,
   SENTINELS.productUrl,
   SENTINELS.referenceUrl,
+  SENTINELS.generationRequestId,
+  SENTINELS.studioClientId,
 ] as const;
 
 function fakeServerClient() {
@@ -233,11 +240,12 @@ function routeBody(): Record<string, unknown> {
     provider_mode: "mock",
     model_key: "gemini_image",
     count: 1,
-    generationRequestId: "gen_privacy_sentinel",
+    generationRequestId: SENTINELS.generationRequestId,
+    studioClientId: SENTINELS.studioClientId,
   };
 }
 
-async function runRoute(mode: "inline" | "worker"): Promise<void> {
+async function runRoute(mode: "inline" | "worker"): Promise<string> {
   const mutableEnv = process.env as unknown as Record<string, string | undefined>;
   const previousNodeEnv = mutableEnv.NODE_ENV;
   const previousMode = mutableEnv.GENERATION_MODE;
@@ -249,11 +257,12 @@ async function runRoute(mode: "inline" | "worker"): Promise<void> {
     const routePath = require.resolve("../src/app/api/generate/route");
     delete require.cache[routePath];
     const route = await import(`../src/app/api/generate/route?privacy=${mode}_${Math.random()}`);
-    await route.POST(new Request("https://vibepin.co/api/generate", {
+    const response = await route.POST(new Request("https://vibepin.co/api/generate", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(routeBody()),
     }) as never);
+    return await response.text();
   } finally {
     if (previousNodeEnv === undefined) delete mutableEnv.NODE_ENV;
     else mutableEnv.NODE_ENV = previousNodeEnv;
@@ -321,11 +330,13 @@ async function main() {
   console.log("\nGeneration production-log privacy sentinels\n");
 
   await test("route runtime logs contain no raw prompt, URL, uid or provider sentinels", async () => {
+    const responseBodies: string[] = [];
     const output = await captureConsole(async () => {
-      await runRoute("inline");
-      await runRoute("worker");
+      responseBodies.push(await runRoute("inline"));
+      responseBodies.push(await runRoute("worker"));
     });
-    assertNoRawValues(output, ROUTE_RAW_VALUES, "route logs");
+    assertNoRawValues(output, ROUTE_LOG_RAW_VALUES, "route logs");
+    assertNoRawValues(responseBodies.join("\n"), ROUTE_RESPONSE_RAW_VALUES, "route response");
   });
 
   await test("generator runtime stderr contains no raw request sentinels", () => {
@@ -344,6 +355,8 @@ async function main() {
       mockProviderBehavior: "success",
       mockProviderDelayMs: 1,
       count: 1,
+      generationRequestId: SENTINELS.generationRequestId,
+      generationOwnerId: SENTINELS.studioClientId,
     };
     const result = pythonResult([generatorPath, "--from-stdin"], JSON.stringify(payload), {
       LINAPI_KEY: "",
@@ -351,6 +364,35 @@ async function main() {
       OPENAI_PROMPT_ENHANCER_MODEL: "",
     });
     assertNoRawValues(result.stderr, GENERATOR_RAW_VALUES, "generator stderr");
+    assertNoRawValues(result.stdout, GENERATOR_RAW_VALUES, "generator result");
+  });
+
+  await test("generator provider failures expose only classified errors", () => {
+    const backendPath = path.resolve(__dirname, "../../backend");
+    const script = [
+      "import asyncio, json, os, sys",
+      `sys.path.insert(0, ${JSON.stringify(backendPath)})`,
+      "import generator",
+      "generator.LINAPI_KEY = 'privacy-test-key'",
+      "generator._ENHANCER_AVAILABLE = False",
+      "async def fail_provider(*_args, **_kwargs):",
+      "    raise RuntimeError('api_server_error::' + os.environ['VP_PROVIDER_SENTINEL'])",
+      "generator._call_api = fail_provider",
+      "payload = {'keyword': os.environ['VP_KEYWORD_SENTINEL'], 'prompt': os.environ['VP_PROMPT_SENTINEL'], 'providerMode': 'real', 'model_key': 'gemini_image', 'count': 1}",
+      "result = asyncio.run(generator.generate_from_payload(payload))",
+      "print(json.dumps(result))",
+    ].join("\n");
+    const result = pythonResult(["-c", script], undefined, {
+      LINAPI_GEMINI_IMAGE_MODEL: "gemini-3.1-flash-image-preview",
+      VP_PROVIDER_SENTINEL: SENTINELS.providerBody,
+      VP_KEYWORD_SENTINEL: SENTINELS.keyword,
+      VP_PROMPT_SENTINEL: SENTINELS.prompt,
+    });
+    assertNoRawValues(result.stderr, [SENTINELS.providerBody, SENTINELS.keyword, SENTINELS.prompt], "provider failure stderr");
+    assertNoRawValues(result.stdout, [SENTINELS.providerBody, SENTINELS.keyword, SENTINELS.prompt], "provider failure result");
+    const parsed = JSON.parse(result.stdout) as { error_type?: unknown; errors?: unknown };
+    assert(parsed.error_type === "api_server_error", "provider failure keeps its allowlisted category");
+    assert(Array.isArray(parsed.errors) && parsed.errors.length === 1, "provider failure returns one safe error message");
   });
 
   await test("prompt enhancer classifies provider errors without raw exception text", () => {
@@ -392,11 +434,13 @@ async function main() {
     assert(/^[a-z][a-z0-9_]*(?:::[a-z0-9_ .-]+)?$/i.test(value), "worker sanitizer returns a structured category/generic message");
   });
 
-  await test("route source guard checks only individual console calls", () => {
+  await test("route source guard forbids raw subprocess output in logs and responses", () => {
     for (const call of extractConsoleCalls(routeSource)) {
       assert(!/result\.keyword|stdout\.slice\s*\(|stderr\.(?:trim|slice)|directionBrief\.slice\s*\(|sourceUrl\.slice\s*\(/.test(call),
         `console call contains an obvious raw-value expression: ${call.replace(/\s+/g, " ").slice(0, 160)}`);
     }
+    assert(!/stderr\.slice\s*\(|stdout\.slice\s*\(|\{\s*\.\.\.result\b|\braw\s*:\s*stdout/.test(routeSource),
+      "route must never forward raw subprocess output or spread an untrusted generator result");
   });
 
   await test("Python source guard forbids raw traceback/logger exception emission", () => {

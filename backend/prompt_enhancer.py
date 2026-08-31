@@ -665,7 +665,7 @@ async def enhance(
         )
         print(
             f"[enhancer] ✓ cache hit ({ckey[:8]}…) "
-            f"category in={category!r} detected={detected_category!r} effective={effective_category!r}",
+            f"categoryProvided={bool(category)} categoryDetected={bool(detected_category)}",
             file=sys.stderr,
         )
         return {
@@ -690,7 +690,7 @@ async def enhance(
         print(
             f"[enhancer] ✓ analysis complete in {elapsed}s "
             f"— model={ENHANCER_MODEL} products={len(prod_limited)} refs={len(ref_limited)} "
-            f"category in={category!r} detected={detected_category!r} effective={effective_category!r}",
+            f"categoryProvided={bool(category)} categoryDetected={bool(detected_category)}",
             file=sys.stderr,
         )
         _save_cache(ckey, plan)

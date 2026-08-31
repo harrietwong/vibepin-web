@@ -182,7 +182,7 @@ function fakeSpawn() {
   child.stderr = new EventEmitter();
   child.kill = () => {};
   setImmediate(() => {
-    const urls = Array.from({ length: urlCount }, (_, i) => `u${i}`);
+    const urls = Array.from({ length: urlCount }, (_, i) => `https://example.test/generated/${i}.png`);
     child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, urls, keyword: "k", style: "lifestyle" }) + "\n"));
     child.emit("close", 0);
   });

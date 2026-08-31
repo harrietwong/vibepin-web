@@ -89,6 +89,82 @@ type ResponseMeta = {
   generation_request_id?: string;
 };
 
+const GENERATOR_ERROR_MESSAGES: Record<string, string> = {
+  rate_limited: "The image provider is busy. Please retry later.",
+  safety_blocked: "The image request was blocked by the provider safety policy.",
+  api_auth_error: "The image provider is not configured correctly.",
+  api_payload_error: "The image provider rejected the generation request.",
+  api_server_error: "The image provider is temporarily unavailable.",
+  model_returned_text: "The image provider did not return an image.",
+  image_load_failed: "One or more input images could not be processed.",
+  provider_busy: "The image provider is busy. Please retry later.",
+  invalid_model_key: "The selected image model is not supported.",
+  configuration_error: "The image provider is not configured correctly.",
+  unknown_error: "Image generation failed.",
+};
+
+type GeneratorRawResult = {
+  ok?: unknown;
+  count?: unknown;
+  urls?: unknown;
+  error_type?: unknown;
+  requested_image_count?: unknown;
+  actual_image_count?: unknown;
+  count_clamped?: unknown;
+  prompt_snapshot?: unknown;
+};
+
+function safeGeneratorErrorType(value: unknown): string {
+  return typeof value === "string" && value in GENERATOR_ERROR_MESSAGES ? value : "unknown_error";
+}
+
+function logHash(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function safeGeneratorUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((url): url is string => typeof url === "string" && /^https:\/\//i.test(url) && url.length <= 4096)
+    .slice(0, 8);
+}
+
+function safePromptSnapshot(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  const booleanFields = [
+    "has_user_raw_text", "has_output_type", "has_reference_strength",
+    "used_text_only_fallback", "has_category", "fashion_safety_applied",
+    "enhancer_failed", "count_clamped",
+  ];
+  const numberFields = [
+    "product_image_count", "reference_image_count", "products_loaded",
+    "references_loaded", "final_prompt_length", "requested_image_count",
+    "actual_image_count", "output_count", "output_variant_count", "created_at",
+  ];
+  for (const field of booleanFields) if (typeof input[field] === "boolean") output[field] = input[field];
+  for (const field of numberFields) {
+    if (typeof input[field] === "number" && Number.isFinite(input[field])) output[field] = input[field];
+  }
+  if (typeof input.final_prompt_hash === "string" && /^[a-f0-9]{16}$/.test(input.final_prompt_hash)) {
+    output.final_prompt_hash = input.final_prompt_hash;
+  }
+  if (typeof input.provider_endpoint === "string" && ["/images/edits", "/images/generations", "native:generateContent", "chat.completions"].includes(input.provider_endpoint)) {
+    output.provider_endpoint = input.provider_endpoint;
+  }
+  if (typeof input.prompt_mode === "string" && ["legacy", "creative_direction_v2"].includes(input.prompt_mode)) {
+    output.prompt_mode = input.prompt_mode;
+  }
+  if (typeof input.variation_mode === "string" && ["distinct", "similar"].includes(input.variation_mode)) {
+    output.variation_mode = input.variation_mode;
+  }
+  if (typeof input.prompt_version === "string" && /^\d{1,3}$/.test(input.prompt_version)) {
+    output.prompt_version = input.prompt_version;
+  }
+  return output;
+}
+
 // ── FastAPI path (optional — only if server is running) ───────────────────────
 async function tryFastAPI(keyword: string, style: string, productUrl?: string) {
   try {
@@ -482,7 +558,7 @@ function runGenerator(
       clearTimeout(timeout);
       console.error(JSON.stringify({ event: "generator_spawn_failed", errorCategory: err.name || "Error" }));
       resolve(NextResponse.json(
-        { ok: false, error: `Could not start generator.py: ${err.message}`, urls: [] },
+        { ok: false, error: "Could not start the image generator.", error_type: "api_server_error", urls: [] },
         { status: 500 },
       ));
     });
@@ -511,9 +587,9 @@ function runGenerator(
       }
 
       if (code !== 0) {
-        console.error(`[generate] generator.py exited with code ${code}`);
+        console.error(JSON.stringify({ event: "generator_exit_failed", exitCode: code }));
         resolve(NextResponse.json(
-          { ok: false, error: `generator.py exited with code ${code}`, stderr: stderr.slice(0, 1000), urls: [] },
+          { ok: false, error: "Image generation failed.", error_type: "api_server_error", urls: [] },
           { status: 500 },
         ));
         return;
@@ -522,7 +598,7 @@ function runGenerator(
       if (!stdout.trim()) {
         console.error("[generate] generator.py produced no stdout");
         resolve(NextResponse.json(
-          { ok: false, error: "generator.py produced no output — check terminal for stderr details", urls: [] },
+          { ok: false, error: "Image generation failed.", error_type: "api_server_error", urls: [] },
           { status: 500 },
         ));
         return;
@@ -531,30 +607,41 @@ function runGenerator(
       // generator.py writes one JSON line to stdout
       const lastLine = stdout.trim().split("\n").pop() ?? "";
       try {
-        const result = JSON.parse(lastLine) as {
-          ok: boolean; urls: string[]; errors?: string[] | null; keyword: string; style: string;
-          prompt_snapshot?: Record<string, unknown>;
-        };
-        // Surface generator-level errors as a top-level `error` field so the
-        // frontend toast handler (which checks result.error, not result.errors) fires.
-        const topError = !result.ok && result.errors?.length
-          ? result.errors[0]
-          : undefined;
-        console.log(JSON.stringify({ event: "generator_completed", ok: !!result.ok, outputCount: result.urls?.length ?? 0, hasError: !!topError }));
+        const result = JSON.parse(lastLine) as GeneratorRawResult;
+        const urls = safeGeneratorUrls(result.urls);
+        const ok = result.ok === true && urls.length > 0;
+        const errorType = ok ? undefined : safeGeneratorErrorType(result.error_type);
+        const topError = errorType ? GENERATOR_ERROR_MESSAGES[errorType] : undefined;
+        const promptSnapshot = safePromptSnapshot(result.prompt_snapshot);
+        console.log(JSON.stringify({ event: "generator_completed", ok, outputCount: urls.length, hasError: !!topError }));
         // Report the ACTUAL number of images produced (urls.length) for usage
         // metering — a partial/zero success is metered at its real count only.
-        const successfulImageCount = result.ok && Array.isArray(result.urls) ? result.urls.length : 0;
+        const successfulImageCount = ok ? urls.length : 0;
         // AWAIT metering before resolving: on Vercel serverless the runtime can
         // freeze right after the response resolves, dropping any in-flight insert
         // (systematic under-count). recordUsage never throws and the insert is
         // fast, so this does not affect perceived latency.
-        Promise.resolve(onComplete?.({ ok: !!result.ok, successfulImageCount }))
+        Promise.resolve(onComplete?.({ ok, successfulImageCount }))
           .catch(() => { /* metering must never break the response */ })
-          .then(() => resolve(NextResponse.json({ ...result, ...responseMeta, error: topError, source: "generator_py" })));
+          .then(() => resolve(NextResponse.json({
+            ok,
+            count: typeof result.count === "number" ? result.count : urls.length,
+            urls,
+            errors: topError ? [topError] : undefined,
+            error_details: errorType ? [{ error_type: errorType, message: topError }] : undefined,
+            error_type: errorType,
+            requested_image_count: typeof result.requested_image_count === "number" ? result.requested_image_count : responseMeta.requested_image_count,
+            actual_image_count: typeof result.actual_image_count === "number" ? result.actual_image_count : responseMeta.actual_image_count,
+            count_clamped: typeof result.count_clamped === "boolean" ? result.count_clamped : responseMeta.count_clamped,
+            generation_request_id: responseMeta.generation_request_id,
+            prompt_snapshot: promptSnapshot,
+            error: topError,
+            source: "generator_py",
+          })));
       } catch {
         console.error(JSON.stringify({ event: "generator_output_parse_failed" }));
         resolve(NextResponse.json(
-          { ok: false, error: "Invalid JSON from generator.py — see server terminal for details", raw: stdout.slice(0, 300), urls: [] },
+          { ok: false, error: "Image generation failed.", error_type: "api_server_error", urls: [] },
           { status: 500 },
         ));
       }
@@ -801,7 +888,7 @@ export async function POST(req: NextRequest) {
     const unavailable = rateLimit.reason === "limiter_unavailable";
     console.warn(JSON.stringify({
       event: unavailable ? "generation_rate_limiter_unavailable" : "generation_rate_limited",
-      generationRequestId,
+      requestHash: logHash(generationRequestId),
       identityKind: rateLimitIdentity.startsWith("user:") ? "user" : "anonymous",
     }));
     return NextResponse.json(
@@ -842,7 +929,7 @@ export async function POST(req: NextRequest) {
   if (moderationChecks.length > MAX_MODERATION_CHECKS) {
     console.warn(JSON.stringify({
       event: "moderation_check_limit_exceeded",
-      generationRequestId,
+      requestHash: logHash(generationRequestId),
       checkCount: moderationChecks.length,
       maxChecks: MAX_MODERATION_CHECKS,
     }));
@@ -858,7 +945,7 @@ export async function POST(req: NextRequest) {
     moderationChecks.map(check =>
       moderatePrompt({
         prompt: check.text,
-        externalId: `${generationRequestId}:${check.suffix}`,
+        externalId: `${logHash(generationRequestId)}:${check.suffix}`,
         costContext: { userId: authUserId },
       }),
     ),
@@ -936,10 +1023,10 @@ export async function POST(req: NextRequest) {
     promptMode,
     promptVersion,
     hasCategory: !!category,
-    outputType,
-    aspectRatio: pinFormat,
+    hasOutputType: !!outputType,
+    hasAspectRatio: !!pinFormat,
     modelKey,
-    referenceStrength,
+    hasReferenceStrength: !!referenceStrength,
     selectedTagCount: selectedTags.length,
     hasPrimaryFormatTag: !!primaryFormatTag,
     hasDirectionBrief: !!directionBrief,
@@ -952,9 +1039,9 @@ export async function POST(req: NextRequest) {
     actualImageCount: count,
     countClamped: imageCountClamp.clamped,
     outputCount,
-    variationMode,
+    hasVariationMode: !!variationMode,
     outputVariantCount: outputVariants.length,
-    generationRequestId,
+    requestHash: logHash(generationRequestId),
     studioClientId: studioClientId ? "set" : "missing",
     maxImagesPerRequest: MAX_IMAGES_PER_REQUEST,
     providerMode,
@@ -1101,7 +1188,7 @@ export async function POST(req: NextRequest) {
   if (!userLock.acquired) {
     console.warn(JSON.stringify({
       event: "user_generation_limit",
-      generationRequestId,
+      requestHash: logHash(generationRequestId),
     }));
     return NextResponse.json({
       ok: false,

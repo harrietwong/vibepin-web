@@ -22,6 +22,7 @@ Requires:
 import argparse
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import os
@@ -300,6 +301,17 @@ def _emit(data: dict) -> None:
     sys.stdout.flush()
 
 
+def _log_event(event: str, **fields: object) -> None:
+    """Write structural production metadata without user/provider content."""
+    print(json.dumps({"event": event, **fields}, ensure_ascii=True), file=sys.stderr)
+
+
+def _opaque_id(value: object) -> str | None:
+    """Return a short correlation hash without exposing the source identifier."""
+    raw = str(value or "")
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:16] if raw else None
+
+
 # ── Image input helpers ────────────────────────────────────────────────────────
 
 _SUPPORTED_IMAGE_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/heic", "image/heif"}
@@ -371,8 +383,8 @@ def _data_url_to_part(data_url: str) -> dict | None:
     mime = m.group(1).strip().lower()
     try:
         raw = _b64_to_bytes_strict(m.group(2))
-    except Exception as e:
-        print(f"[generator] ✗ data-url base64 invalid: {e}", file=sys.stderr)
+    except Exception:
+        print("[generator] data-url base64 invalid", file=sys.stderr)
         return None
     return _bytes_to_inline_part(raw, mime)
 
@@ -399,7 +411,7 @@ async def _url_to_part(url: str) -> dict | None:
             mime = r.headers.get("content-type", "").split(";")[0].strip().lower()
             part = _bytes_to_inline_part(r.content, mime)  # re-encodes from raw bytes
             if not part:
-                print(f"[generator] reference image has unsupported mime={mime!r}", file=sys.stderr)
+                print("[generator] reference image has unsupported mime", file=sys.stderr)
                 return None
             kb = len(r.content) // 1024
             print(f"[generator] reference image loaded ({kb}KB)", file=sys.stderr)
@@ -439,7 +451,7 @@ def _safe_part_manifest(part: dict, *, output_index: int, part_index: int, role:
         "outputIndex":       output_index,
         "partIndex":         part_index,
         "role":              role,
-        "sourceImageId":     (source_id[:80] + "…") if len(source_id) > 80 else source_id,
+        "sourceImageHash":   hashlib.sha256(source_id.encode("utf-8", "replace")).hexdigest()[:16] if source_id else None,
         "mimeType":          mime,
         "rawByteLength":     raw_len,
         "base64Length":      len(data),
@@ -975,6 +987,31 @@ ERR_IMAGE_LOAD      = "image_load_failed"
 ERR_PROVIDER_BUSY   = "provider_busy"
 ERR_UNKNOWN         = "unknown_error"
 
+_SAFE_ERROR_MESSAGES = {
+    ERR_RATE_LIMITED: "The image provider is busy. Please retry later.",
+    ERR_SAFETY_BLOCKED: "The image request was blocked by the provider safety policy.",
+    ERR_AUTH: "The image provider is not configured correctly.",
+    ERR_PAYLOAD: "The image provider rejected the generation request.",
+    ERR_SERVER: "The image provider is temporarily unavailable.",
+    ERR_MODEL_TEXT: "The image provider did not return an image.",
+    ERR_IMAGE_LOAD: "One or more input images could not be processed.",
+    ERR_PROVIDER_BUSY: "The image provider is busy. Please retry later.",
+    ERR_UNKNOWN: "Image generation failed.",
+    "invalid_model_key": "The selected image model is not supported.",
+    "configuration_error": "The image provider is not configured correctly.",
+}
+
+
+def _classified_error(exc: BaseException | None) -> str:
+    """Return only a known error category; never propagate exception text."""
+    raw = str(exc or "")
+    candidate = raw.split("::", 1)[0].strip().lower() if "::" in raw else ERR_UNKNOWN
+    return candidate if candidate in _SAFE_ERROR_MESSAGES else ERR_UNKNOWN
+
+
+def _safe_error_message(error_type: str | None) -> str:
+    return _SAFE_ERROR_MESSAGES.get(error_type or ERR_UNKNOWN, _SAFE_ERROR_MESSAGES[ERR_UNKNOWN])
+
 # Retry-After backoff for 429 responses (seconds per attempt 0, 1, 2).
 # The spec asks for 30 / 60 / 120 s; after all retries the group is marked rate_limited.
 BACKOFF_SCHEDULE_S = [30, 60, 120]
@@ -994,11 +1031,7 @@ def _lock_remove(path: Path) -> None:
     except FileNotFoundError:
         return
     except Exception as exc:
-        print(json.dumps({
-            "event": "provider_limiter_cleanup_failed",
-            "path": str(path),
-            "error": str(exc)[:200],
-        }), file=sys.stderr)
+        _log_event("provider_limiter_cleanup_failed", errorType=type(exc).__name__)
 
 
 def _try_acquire_provider_permit_sync(owner: dict) -> Path | None:
@@ -1066,42 +1099,42 @@ class ProviderPermit:
             if permit:
                 self.permit_dir = permit
                 wait_ms = round((time.time() - self.started_at) * 1000)
-                print(json.dumps({
-                    "event": "provider_limiter_acquired",
-                    "limit": PROVIDER_CONCURRENCY_LIMIT,
-                    "waitMs": wait_ms,
-                    "permit": permit.name,
-                    **owner,
-                }), file=sys.stderr)
+                _log_event(
+                    "provider_limiter_acquired",
+                    limit=PROVIDER_CONCURRENCY_LIMIT,
+                    waitMs=wait_ms,
+                    requestHash=_opaque_id(self.generation_request_id),
+                    outputIndex=self.output_index,
+                )
                 return self
             if time.time() >= deadline:
                 wait_ms = round((time.time() - self.started_at) * 1000)
-                print(json.dumps({
-                    "event": "provider_limiter_timeout",
-                    "limit": PROVIDER_CONCURRENCY_LIMIT,
-                    "waitMs": wait_ms,
-                    **owner,
-                }), file=sys.stderr)
+                _log_event(
+                    "provider_limiter_timeout",
+                    limit=PROVIDER_CONCURRENCY_LIMIT,
+                    waitMs=wait_ms,
+                    requestHash=_opaque_id(self.generation_request_id),
+                    outputIndex=self.output_index,
+                )
                 raise ValueError(f"{ERR_PROVIDER_BUSY}::Provider is busy. Please retry shortly.")
             if not printed_wait:
                 printed_wait = True
-                print(json.dumps({
-                    "event": "provider_limiter_wait",
-                    "limit": PROVIDER_CONCURRENCY_LIMIT,
-                    **owner,
-                }), file=sys.stderr)
+                _log_event(
+                    "provider_limiter_wait",
+                    limit=PROVIDER_CONCURRENCY_LIMIT,
+                    requestHash=_opaque_id(self.generation_request_id),
+                    outputIndex=self.output_index,
+                )
             await asyncio.sleep(0.35)
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self.permit_dir:
             await asyncio.to_thread(_lock_remove, self.permit_dir)
-            print(json.dumps({
-                "event": "provider_limiter_released",
-                "permit": self.permit_dir.name,
-                "generationRequestId": self.generation_request_id,
-                "outputIndex": self.output_index,
-                "variantRole": self.variant_role,
-            }), file=sys.stderr)
+            _log_event(
+                "provider_limiter_released",
+                requestHash=_opaque_id(self.generation_request_id),
+                outputIndex=self.output_index,
+            )
 
 
 # ── Aspect ratio mapping (user chip → Gemini imageConfig.aspectRatio) ──────────
@@ -1174,16 +1207,7 @@ async def _generate_via_images_edit_api(
         "size": size,
         "response_format": "b64_json",
     }
-    print(json.dumps({
-        "event": "debug_final_request_payload",
-        "endpoint": "/images/edits",
-        "model": model_id,
-        "size": size,
-        "input_image_count": len(files),
-        "input_order": image_input_order or "products first, references last",
-        "imageManifest": image_manifest,
-        "prompt_first_1000": prompt[:1000],
-    }), file=sys.stderr)
+    _log_event("provider_request", endpoint="images_edits", inputImageCount=len(files), promptLength=len(prompt))
     max_attempts = len(BACKOFF_SCHEDULE_S) + 1
     async with httpx.AsyncClient(timeout=300.0) as client:
         for attempt in range(max_attempts):
@@ -1202,18 +1226,18 @@ async def _generate_via_images_edit_api(
                 await asyncio.sleep(wait)
                 continue
             if r.status_code in (401, 403):
-                raise ValueError(f"{ERR_AUTH}::HTTP {r.status_code} — check LINAPI_KEY: {r.text[:200]}")
+                raise ValueError(f"{ERR_AUTH}::http_{r.status_code}")
             if r.status_code == 400:
-                raise ValueError(f"{ERR_PAYLOAD}::HTTP 400 from /images/edits — {r.text[:350]}")
+                raise ValueError(f"{ERR_PAYLOAD}::http_400")
             if r.status_code in (404, 405):
                 raise ValueError(f"{ERR_PAYLOAD}::/images/edits unsupported for {model_id}; refusing text-only fallback because reference images would be dropped")
             if r.status_code >= 500:
                 if attempt < len(BACKOFF_SCHEDULE_S):
                     await asyncio.sleep(BACKOFF_SCHEDULE_S[attempt])
                     continue
-                raise ValueError(f"{ERR_SERVER}::HTTP {r.status_code} — {r.text[:200]}")
+                raise ValueError(f"{ERR_SERVER}::http_{r.status_code}")
             if r.status_code != 200:
-                raise ValueError(f"{ERR_UNKNOWN}::HTTP {r.status_code} — {r.text[:200]}")
+                raise ValueError(f"{ERR_UNKNOWN}::http_{r.status_code}")
             payload = r.json()
             items = payload.get("data") or []
             if not items:
@@ -1255,15 +1279,7 @@ async def _generate_via_images_api(
         "size": size,
         "response_format": "b64_json",
     }
-    print(json.dumps({
-        "event": "debug_final_request_payload",
-        "endpoint": "/images/generations",
-        "model": model_id,
-        "size": size,
-        "input_image_count": 0,
-        "warning": "text-only endpoint",
-        "prompt_first_1000": prompt[:1000],
-    }), file=sys.stderr)
+    _log_event("provider_request", endpoint="images_generations", inputImageCount=0, promptLength=len(prompt))
     max_attempts = len(BACKOFF_SCHEDULE_S) + 1
     async with httpx.AsyncClient(timeout=300.0) as client:
         for attempt in range(max_attempts):
@@ -1281,16 +1297,16 @@ async def _generate_via_images_api(
                 await asyncio.sleep(wait)
                 continue
             if r.status_code in (401, 403):
-                raise ValueError(f"{ERR_AUTH}::HTTP {r.status_code} — check LINAPI_KEY: {r.text[:200]}")
+                raise ValueError(f"{ERR_AUTH}::http_{r.status_code}")
             if r.status_code == 400:
-                raise ValueError(f"{ERR_PAYLOAD}::HTTP 400 — {r.text[:250]}")
+                raise ValueError(f"{ERR_PAYLOAD}::http_400")
             if r.status_code >= 500:
                 if attempt < len(BACKOFF_SCHEDULE_S):
                     await asyncio.sleep(BACKOFF_SCHEDULE_S[attempt])
                     continue
-                raise ValueError(f"{ERR_SERVER}::HTTP {r.status_code} — {r.text[:200]}")
+                raise ValueError(f"{ERR_SERVER}::http_{r.status_code}")
             if r.status_code != 200:
-                raise ValueError(f"{ERR_UNKNOWN}::HTTP {r.status_code} — {r.text[:200]}")
+                raise ValueError(f"{ERR_UNKNOWN}::http_{r.status_code}")
             data = r.json()
             items = data.get("data") or []
             if not items:
@@ -1353,16 +1369,7 @@ async def _generate_via_native_generate_content(
         },
     }
 
-    print(json.dumps({
-        "event": "debug_final_request_payload",
-        "endpoint": "native:generateContent",
-        "model": model,
-        "aspectRatio": _gemini_aspect_ratio(pin_format),
-        "input_image_count": len(image_parts or []),
-        "input_order": image_input_order or [],
-        "imageManifest": image_manifest,
-        "prompt_first_1000": prompt[:1000],
-    }), file=sys.stderr)
+    _log_event("provider_request", endpoint="native_generate_content", inputImageCount=len(image_parts or []), promptLength=len(prompt))
 
     max_attempts = len(BACKOFF_SCHEDULE_S) + 1  # 4 total
     async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client:
@@ -1398,12 +1405,12 @@ async def _generate_via_native_generate_content(
             # ── Auth / key errors ─────────────────────────────────────────────
             if r.status_code in (401, 403):
                 print("[generator] provider authentication error", file=sys.stderr)
-                raise ValueError(f"{ERR_AUTH}::HTTP {r.status_code} — check LINAPI_KEY: {r.text[:200]}")
+                raise ValueError(f"{ERR_AUTH}::http_{r.status_code}")
 
             # ── Bad request (payload too large, model not found, etc.) ─────────
             if r.status_code == 400:
                 print("[generator] provider rejected the request payload", file=sys.stderr)
-                raise ValueError(f"{ERR_PAYLOAD}::HTTP 400 — {r.text[:250]}")
+                raise ValueError(f"{ERR_PAYLOAD}::http_400")
 
             # ── 5xx server errors — retry with backoff ────────────────────────
             if r.status_code >= 500:
@@ -1413,12 +1420,12 @@ async def _generate_via_native_generate_content(
                     await asyncio.sleep(wait)
                     continue
                 print(f"[generator] provider server error status={r.status_code}", file=sys.stderr)
-                raise ValueError(f"{ERR_SERVER}::HTTP {r.status_code} — {r.text[:200]}")
+                raise ValueError(f"{ERR_SERVER}::http_{r.status_code}")
 
             # ── Other non-200 ─────────────────────────────────────────────────
             if r.status_code != 200:
                 print(f"[generator] unexpected provider status={r.status_code}", file=sys.stderr)
-                raise ValueError(f"{ERR_UNKNOWN}::HTTP {r.status_code} — {r.text[:200]}")
+                raise ValueError(f"{ERR_UNKNOWN}::http_{r.status_code}")
 
             # ── Parse successful response ─────────────────────────────────────
             data = r.json()
@@ -1428,28 +1435,23 @@ async def _generate_via_native_generate_content(
                 feedback = data.get("promptFeedback") or {}
                 block_reason = feedback.get("blockReason") or ""
                 api_error    = data.get("error") or {}
-                print(
-                    f"[generator] No candidates. blockReason={block_reason!r} "
-                    f"api_error={json.dumps(api_error)[:200]} keys={list(data.keys())}",
-                    file=sys.stderr,
-                )
+                _log_event("provider_no_candidates", hasBlockReason=bool(block_reason), hasApiError=bool(api_error))
                 if block_reason:
-                    raise ValueError(f"{ERR_SAFETY_BLOCKED}::Model blocked: blockReason={block_reason}")
-                raise ValueError(f"{ERR_UNKNOWN}::No candidates in API response (no block reason found)")
+                    raise ValueError(f"{ERR_SAFETY_BLOCKED}::blocked")
+                raise ValueError(f"{ERR_UNKNOWN}::no_candidates")
 
             for cand in candidates:
                 finish = cand.get("finishReason") or ""
                 if finish not in ("", "STOP"):
-                    print(f"[generator] finishReason={finish}", file=sys.stderr)
+                    _log_event("provider_nonstandard_finish", hasFinishReason=True)
 
                 for part in (cand.get("content") or {}).get("parts") or []:
                     b64 = (part.get("inlineData") or {}).get("data")
                     if b64:
                         return base64.b64decode(b64)
                     if "text" in part:
-                        text_snippet = part["text"][:200]
-                        print(f"[generator] Got text instead of image: {text_snippet}", file=sys.stderr)
-                        raise ValueError(f"{ERR_MODEL_TEXT}::Model returned text instead of image: {text_snippet[:120]}")
+                        print("[generator] provider returned text instead of an image", file=sys.stderr)
+                        raise ValueError(f"{ERR_MODEL_TEXT}::text_response")
 
     raise ValueError(f"{ERR_UNKNOWN}::No image data after {max_attempts} attempts")
 
@@ -1549,15 +1551,14 @@ async def _call_api(
         provider_model=effective_model,
     ):
         if provider_mode == "mock":
-            print(json.dumps({
-                "event": "mock_provider_call",
-                "behavior": mock_provider_behavior,
-                "delayMs": mock_provider_delay_ms,
-                "generationRequestId": generation_request_id,
-                "outputIndex": output_index,
-                "variantRole": variant_role,
-                "wouldCallLinapi": False,
-            }), file=sys.stderr)
+            _log_event(
+                "mock_provider_call",
+                behavior=mock_provider_behavior,
+                delayMs=mock_provider_delay_ms,
+                requestHash=_opaque_id(generation_request_id),
+                outputIndex=output_index,
+                wouldCallLinapi=False,
+            )
             await asyncio.sleep(max(0, mock_provider_delay_ms) / 1000)
             if mock_provider_behavior in ("fail_all", "provider_timeout"):
                 raise ValueError(f"{ERR_SERVER}::Mock provider forced failure")
@@ -1574,12 +1575,11 @@ async def _call_api(
                     image_input_order=image_input_order, image_manifest=image_manifest,
                 )
             except Exception as e:
-                e_str = str(e)
-                etype = e_str.split("::", 1)[0] if "::" in e_str else ERR_UNKNOWN
+                etype = _classified_error(e)
                 if etype in NO_FALLBACK_ERRORS:
                     print(f"[generator] ✗ {etype} — not falling through to chat path (won't help)", file=sys.stderr)
                     raise
-                print(f"[generator] ✗ Native path failed ({etype}): {e_str[:200]} — trying chat fallback", file=sys.stderr)
+                _log_event("provider_native_fallback", errorType=etype)
                 return await _generate_via_chat(prompt, image_parts)
 
         if "gpt-image" in effective_model and image_parts:
@@ -1625,7 +1625,7 @@ async def _generate_one(
         mock_provider_delay_ms=mock_provider_delay_ms,
     )
     if provider_mode == "mock":
-        return f"https://mock.vibepin.local/studio/{generation_request_id}/{idx}_{uuid.uuid4().hex[:8]}.png"
+        return f"https://mock.vibepin.local/studio/{_opaque_id(generation_request_id) or 'anonymous'}/{idx}_{uuid.uuid4().hex[:8]}.png"
     filename = f"studio/{int(time.time())}_{idx}_{uuid.uuid4().hex[:8]}.png"
     return _upload_to_supabase(img_bytes, filename)
 
@@ -1656,8 +1656,8 @@ async def run_from_stdin() -> None:
             _emit({"ok": False, "error": "Empty stdin payload received", "urls": []})
             return
         data: dict = json.loads(raw)
-    except Exception as e:
-        _emit({"ok": False, "error": f"Failed to parse stdin payload: {e}", "urls": []})
+    except Exception:
+        _emit({"ok": False, "error": "Invalid stdin payload.", "error_type": ERR_PAYLOAD, "urls": []})
         return
 
     result = await generate_from_payload(data)
@@ -1728,9 +1728,10 @@ async def prepare_generation(data: dict) -> dict:
     # missing env var; this one is a key the product does not support at all.
     try:
         model_id       = _resolve_model_id(model_key)
-    except UnknownModelKeyError as exc:
-        return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": str(exc),
-               "error_type": "invalid_model_key", "urls": [], "keyword": keyword}}
+    except UnknownModelKeyError:
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False,
+               "error": _safe_error_message("invalid_model_key"),
+               "error_type": "invalid_model_key", "urls": []}}
     category_passed    = category
     inferred_category  = _infer_category(category, output_type, custom_prompt, product_metadata)
     category           = inferred_category
@@ -1740,27 +1741,28 @@ async def prepare_generation(data: dict) -> dict:
     if not keyword:
         return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": "keyword is required", "urls": []}}
     if not LINAPI_KEY and provider_mode != "mock":
-        return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": "LINAPI_KEY not set in environment", "urls": [], "keyword": keyword}}
+        return {"ok": False, "phase": "prepare", "emit": {"ok": False,
+                "error": _safe_error_message(ERR_AUTH), "error_type": ERR_AUTH, "urls": []}}
 
     # ── Provider / capability validation (never silently fall back to text-only) ──
     if model_key == "gemini_image" and not (model_id or "").strip():
         return {"ok": False, "phase": "prepare", "emit": {"ok": False, "error": "Gemini image model is not configured.",
-               "error_type": "configuration_error", "urls": [], "keyword": keyword}}
+               "error_type": "configuration_error", "urls": []}}
     _has_image_inputs    = bool(product_images) or bool(style_ref)
     _supports_image_input = _model_supports_image_input(model_id)
     if _has_image_inputs and not _supports_image_input:
         return {"ok": False, "phase": "prepare", "emit": {"ok": False,
                "error": "The selected image model does not support product/reference image inputs through the current provider configuration.",
-               "error_type": "api_payload_error", "urls": [], "keyword": keyword}}
+               "error_type": "api_payload_error", "urls": []}}
 
     # ── Collect image parts: reference first, then products ────────────────────
-    print(json.dumps({
-        "event": "generation_request_prepared",
-        "count": count,
-        "hasCategory": bool(category_passed),
-        "hasReference": bool(style_ref),
-        "productImageCount": len(product_images),
-    }), file=sys.stderr)
+    _log_event(
+        "generation_request_prepared",
+        count=count,
+        hasCategory=bool(category_passed),
+        hasReference=bool(style_ref),
+        productImageCount=len(product_images),
+    )
 
     # ── Load product images + reference in PARALLEL ───────────────────────────
     # Previous approach was sequential (4 products = 4 serial downloads).
@@ -1821,23 +1823,19 @@ async def prepare_generation(data: dict) -> dict:
             if reference_count_requested > 0 and loaded_references < reference_count_requested
             else "Selected images were not included in the provider image input payload."
         )
-        print(json.dumps({
-            "event": "image_input_validation_failed",
-            "productImageCountRequested": product_count_requested,
-            "referenceImageCountRequested": reference_count_requested,
-            "totalInputImageCount": len(image_parts),
-            "expectedInputImageCount": expected_input_count,
-            "imageInputOrder": image_input_order,
-            "imageManifest": image_manifest,
-            "usedTextOnlyFallback": False,
-        }), file=sys.stderr)
+        _log_event(
+            "image_input_validation_failed",
+            productImageCountRequested=product_count_requested,
+            referenceImageCountRequested=reference_count_requested,
+            totalInputImageCount=len(image_parts),
+            expectedInputImageCount=expected_input_count,
+            usedTextOnlyFallback=False,
+        )
         return {"ok": False, "phase": "prepare", "emit": {
             "ok": False,
             "error": missing_msg,
             "error_type": ERR_IMAGE_LOAD,
             "urls": [],
-            "keyword": keyword,
-            "style": style,
         }}
 
     if expected_input_count == 0:
@@ -1857,13 +1855,13 @@ async def prepare_generation(data: dict) -> dict:
         image_manifest_log.append(entry)
         if not entry["localDecodeOk"] or entry["base64Mod4"] != 0 or entry["hadDataUrlPrefix"]:
             bad_parts.append(entry)
-    print(json.dumps({
-        "event": "image_input_manifest",
-        "generationRequestId": generation_request_id,
-        "totalInputImageCount": len(image_parts),
-        "allImagePartsValid": len(bad_parts) == 0,
-        "parts": image_manifest_log,
-    }), file=sys.stderr)
+    _log_event(
+        "image_input_manifest",
+        requestHash=_opaque_id(generation_request_id),
+        totalInputImageCount=len(image_parts),
+        allImagePartsValid=len(bad_parts) == 0,
+        parts=image_manifest_log,
+    )
     if bad_parts:
         print(json.dumps({"event": "image_input_invalid_parts", "badParts": bad_parts}), file=sys.stderr)
         return {"ok": False, "phase": "prepare", "emit": {
@@ -1871,8 +1869,6 @@ async def prepare_generation(data: dict) -> dict:
             "error": "One of the input images could not be processed.",
             "error_type": ERR_IMAGE_LOAD,
             "urls": [],
-            "keyword": keyword,
-            "style": style,
         }}
 
     provider_endpoint = (
@@ -1887,57 +1883,43 @@ async def prepare_generation(data: dict) -> dict:
         f"[{loaded_references} references] = {len(image_parts)} total",
         file=sys.stderr
     )
-    print(json.dumps({
-        "event": "debug_image_input_assembly",
-        "productImageCountRequested": product_count_requested,
-        "referenceImageCountRequested": reference_count_requested,
-        "productImageCountLoaded": len(product_parts),
-        "referenceImageCountLoaded": loaded_references,
-        "totalInputImageCount": len(image_parts),
-        "expectedInputImageCount": expected_input_count,
-        "imageInputOrder": [
-            {**i, "sourceUrl": (i["sourceUrl"][:120] + "…") if len(i["sourceUrl"]) > 120 else i["sourceUrl"]}
-            for i in image_input_order
-        ],
-        "imageManifest": image_manifest,
-        "productUrls": product_images,
-        "referenceUrls": [i["sourceUrl"] for i in image_inputs if i.get("role") == "reference"],
-        "gptReceivesImages": bool(image_parts) and "gpt-image" in model_id.lower(),
-        "providerEndpoint": provider_endpoint,
-        "usedTextOnlyFallback": False if image_parts else provider_endpoint == "/images/generations",
-    }), file=sys.stderr)
+    _log_event(
+        "image_input_assembly",
+        productImageCountRequested=product_count_requested,
+        referenceImageCountRequested=reference_count_requested,
+        productImageCountLoaded=len(product_parts),
+        referenceImageCountLoaded=loaded_references,
+        totalInputImageCount=len(image_parts),
+        expectedInputImageCount=expected_input_count,
+        gptReceivesImages=bool(image_parts) and "gpt-image" in model_id.lower(),
+        providerEndpoint=provider_endpoint,
+        usedTextOnlyFallback=False if image_parts else provider_endpoint == "/images/generations",
+    )
 
     # ── DEBUG: Log all generation inputs before enhancement ──────────────────
-    print(json.dumps({
-        "event":                  "debug_generation_inputs",
-        "selectedProductImages":  [u[:80] + "…" if len(u) > 80 else u for u in product_images],
-        "selectedProductCount":   len(product_images),
-        "selectedPinReferences":  [style_ref[:80] + "…" if style_ref and len(style_ref) > 80 else style_ref] if style_ref else [],
-        "userIntentText":         custom_prompt,
-        "categoryPassedFromFrontend": category_passed,
-        "inferredCategory":       inferred_category,
-        "outputType":             output_type,
-        "aspectRatio":            pin_format,
-        "modelKey":               model_key,
-        "modelId":                model_id,
-        "promptMode":             prompt_mode,
-        "promptVersion":          prompt_version,
-        "generationRequestId":    generation_request_id,
-        "generationOwnerId":      generation_owner_id,
-        "providerMode":           provider_mode,
-        "mockProviderBehavior":    mock_provider_behavior if provider_mode == "mock" else None,
-        "mockProviderDelayMs":     mock_provider_delay_ms if provider_mode == "mock" else None,
-        "requestedImageCount":    requested_image_count,
-        "actualImageCount":       actual_image_count,
-        "countClamped":           count_clamped,
-        "outputCount":            output_count,
-        "variationMode":          variation_mode,
-        "outputVariants":         output_variants,
-        "creativeDirectionMeta":   creative_direction_meta,
-        "category":               category,
-        "style":                  style,
-        "productMetadata":        product_metadata,
-    }), file=sys.stderr)
+    _log_event(
+        "generation_inputs",
+        selectedProductCount=len(product_images),
+        hasReference=bool(style_ref),
+        hasUserIntent=bool(custom_prompt),
+        hasCategory=bool(category_passed),
+        hasOutputType=bool(output_type),
+        aspectRatio=pin_format,
+        modelKey=model_key,
+        promptMode=prompt_mode,
+        promptVersion=prompt_version,
+        requestHash=_opaque_id(generation_request_id),
+        hasOwner=bool(generation_owner_id),
+        providerMode=provider_mode,
+        requestedImageCount=requested_image_count,
+        actualImageCount=actual_image_count,
+        countClamped=count_clamped,
+        outputCount=output_count,
+        variationMode=variation_mode,
+        outputVariantCount=len(output_variants),
+        hasCreativeDirectionMeta=bool(creative_direction_meta),
+        productMetadataCount=len(product_metadata) if isinstance(product_metadata, list) else 0,
+    )
 
     # ── Prompt enhancement (Vision-to-Prompt) ─────────────────────────────────
     # Analyzes product + reference images with a VLM to produce a structured
@@ -1977,10 +1959,7 @@ async def prepare_generation(data: dict) -> dict:
     # the generator-level fashion safety + home-decor stripping also apply.
     detected_category = str(enhancer_result.get("detected_category") or "").strip()
     if detected_category and detected_category in _CATEGORY_MODULES and category in ("", "generic"):
-        print(
-            f"[generator] category upgraded by VLM analysis: {category!r} → {detected_category!r}",
-            file=sys.stderr,
-        )
+        _log_event("category_upgraded", categoryChanged=True)
         category    = detected_category
         output_type = _infer_output_type(output_type, category)
         fashion_safety_applied = category in _FASHION_IDS
@@ -2019,83 +1998,62 @@ async def prepare_generation(data: dict) -> dict:
             pin_format=pin_format,
         )
 
-    # ── DEBUG: Log enhancer output and final prompt ───────────────────────────
-    print(json.dumps({
-        "event":                 "debug_prompt_chain",
-        "enhancer_available":    _ENHANCER_AVAILABLE,
-        "enhancer_failed":       enhancer_result.get("enhancer_failed", not bool(enhancer_result)),
-        "cache_hit":             enhancer_result.get("cache_hit", False),
-        "enhancer_cache_key":    enhancer_result.get("cache_key"),
-        "enhancer_model":        enhancer_result.get("enhancer_model"),
-        "enhanced_custom_prompt": (enhanced_custom_prompt or "")[:1000],
-        "final_prompt":          final_prompt[:1000],
-        "final_prompt_length":   len(final_prompt),
-        "image_parts_count":     len(image_parts),
-        "product_parts_count":   len(product_parts),
-        "has_ref":               loaded_references > 0,
-        "imageManifest":         image_manifest,
-        "providerEndpoint":      provider_endpoint,
-        "model_id":              model_id,
-        "modelKey":              model_key,
-        "promptMode":            prompt_mode,
-        "promptVersion":         prompt_version,
-        "outputCount":           output_count,
-        "variationMode":         variation_mode,
-        "outputVariants":        output_variants,
-        "creativeDirectionMeta":  creative_direction_meta,
-        "pin_format":            pin_format,
-        "output_type":           output_type,
-        "categoryPassedFromFrontend": category_passed,
-        "inferredCategory":      inferred_category,
-        "detectedCategory":      enhancer_result.get("detected_category"),
-        "effectiveCategory":     category,
-        "home_decor_check":      _home_decor_term_hits(final_prompt),
-        "fashion_safety_applied": fashion_safety_applied,
-    }), file=sys.stderr)
+    _log_event(
+        "prompt_chain",
+        enhancerAvailable=_ENHANCER_AVAILABLE,
+        enhancerFailed=enhancer_result.get("enhancer_failed", not bool(enhancer_result)),
+        cacheHit=enhancer_result.get("cache_hit", False),
+        enhancedPromptLength=len(enhanced_custom_prompt or ""),
+        finalPromptLength=len(final_prompt),
+        finalPromptHash=_opaque_id(final_prompt),
+        imagePartsCount=len(image_parts),
+        productPartsCount=len(product_parts),
+        hasReference=loaded_references > 0,
+        providerEndpoint=provider_endpoint,
+        modelKey=model_key,
+        promptMode=prompt_mode,
+        promptVersion=prompt_version,
+        outputCount=output_count,
+        variationMode=variation_mode,
+        hasCreativeDirectionMeta=bool(creative_direction_meta),
+        fashionSafetyApplied=fashion_safety_applied,
+    )
 
     # ── Provider payload proof — confirms product + reference images reach the
     #    selected model, with the prompt hierarchy intact (both GPT and Gemini). ──
-    _ref_mode_match = re.search(r"referenceInfluenceMode:\s*([a-z_]+)", final_prompt)
-    print(json.dumps({
-        "event":                       "image_generation_provider_payload",
-        "selectedModel":               model_key,
-        "providerModel":               model_id,
-        "providerEndpoint":            provider_endpoint,
-        "promptMode":                  prompt_mode,
-        "productImageCountRequested":  product_count_requested,
-        "referenceImageCountRequested": reference_count_requested,
-        "totalInputImageCount":        len(image_parts),
-        "imageInputOrder":             image_input_order,
-        "imageManifest":               image_manifest,
-        "usedTextOnlyFallback":         False if image_parts else provider_endpoint == "/images/generations",
-        "referenceInfluenceMode":      _ref_mode_match.group(1) if _ref_mode_match else "n/a",
-        "promptContainsReferenceRequirements": "REFERENCE REQUIREMENTS" in final_prompt,
-        "promptContainsProductRequirements":   "PRODUCT REQUIREMENTS" in final_prompt,
-        "promptContainsAvoidStudio":   "studio" in final_prompt.lower(),
-    }), file=sys.stderr)
+    _log_event(
+        "image_generation_provider_payload",
+        selectedModel=model_key,
+        providerEndpoint=provider_endpoint,
+        promptMode=prompt_mode,
+        productImageCountRequested=product_count_requested,
+        referenceImageCountRequested=reference_count_requested,
+        totalInputImageCount=len(image_parts),
+        usedTextOnlyFallback=False if image_parts else provider_endpoint == "/images/generations",
+        promptContainsReferenceRequirements="REFERENCE REQUIREMENTS" in final_prompt,
+        promptContainsProductRequirements="PRODUCT REQUIREMENTS" in final_prompt,
+    )
 
     # ── Generate count variations in parallel ──────────────────────────────────
     style_pool = [style] + [s for s in STYLE_PROMPTS if s != style]
     styles     = [style_pool[i % len(style_pool)] for i in range(count)]
 
     # ── Structured log: all fields requested by the spec ──────────────────────
-    print(json.dumps({
-        "event":              "generation_start",
-        "keyword":            keyword,
-        "count":              count,
-        "generationRequestId": generation_request_id,
-        "requestedImageCount": requested_image_count,
-        "actualImageCount":    actual_image_count,
-        "countClamped":        count_clamped,
-        "outputCount":         output_count,
-        "variationMode":       variation_mode,
-        "outputVariants":      output_variants,
-        "productsRequested":  product_count_requested,
-        "productsLoaded":     loaded_products,
-        "referencesLoaded":   loaded_references,
-        "model":              model_id,
-        "model_key":          model_key,
-    }), file=sys.stderr)
+    _log_event(
+        "generation_start",
+        count=count,
+        requestHash=_opaque_id(generation_request_id),
+        requestedImageCount=requested_image_count,
+        actualImageCount=actual_image_count,
+        countClamped=count_clamped,
+        outputCount=output_count,
+        variationMode=variation_mode,
+        outputVariantCount=len(output_variants),
+        productsRequested=product_count_requested,
+        productsLoaded=loaded_products,
+        referencesLoaded=loaded_references,
+        modelKey=model_key,
+    )
 
     print(f"[generator] starting {count} image generation(s) in parallel via {model_id} (key={model_key})", file=sys.stderr)
     variant_prompts = [
@@ -2111,30 +2069,26 @@ async def prepare_generation(data: dict) -> dict:
 
     # ── Per-output provenance log: proves each output got a distinct, output-specific
     #    prompt (different hash) with the same products/reference manifest. ──────────
-    import hashlib as _hashlib
     for i in range(count):
         _vp = variant_prompts[i]
-        print(json.dumps({
-            "event":                       "per_output_generation_plan",
-            "generationRequestId":         generation_request_id,
-            "outputIndex":                 i,
-            "variantRole":                 variant_roles[i],
-            "variationMode":               variation_mode,
-            "model":                       model_id,
-            "modelKey":                    model_key,
-            "selectedTags":                selected_tags,
-            "primaryFormatTag":            primary_format_tag,
-            "directionBrief":              direction_brief[:200],
-            "productImageCountRequested":  product_count_requested,
-            "referenceImageCountRequested": reference_count_requested,
-            "totalInputImageCount":        len(image_parts),
-            "usedTextOnlyFallback":        False if image_parts else provider_endpoint == "/images/generations",
-            # Identical across every output — proves outputs 0/1 share the same image
-            # bytes and that DISTINCT mode varies only the text prompt, not serialization.
-            "imagePartShaList":            [e["sha256_16"] for e in image_manifest_log],
-            "perOutputPromptHash":         _hashlib.sha256(_vp.encode("utf-8", "replace")).hexdigest()[:16],
-            "perOutputPromptPreview":      _vp[-500:],
-        }), file=sys.stderr)
+        _log_event(
+            "per_output_generation_plan",
+            requestHash=_opaque_id(generation_request_id),
+            outputIndex=i,
+            hasExplicitVariantRole=bool(variant_roles[i]),
+            variationMode=variation_mode,
+            modelKey=model_key,
+            selectedTagCount=len(selected_tags),
+            hasPrimaryFormatTag=bool(primary_format_tag),
+            hasDirectionBrief=bool(direction_brief),
+            productImageCountRequested=product_count_requested,
+            referenceImageCountRequested=reference_count_requested,
+            totalInputImageCount=len(image_parts),
+            usedTextOnlyFallback=False if image_parts else provider_endpoint == "/images/generations",
+            imagePartShaList=[e["sha256_16"] for e in image_manifest_log],
+            perOutputPromptHash=hashlib.sha256(_vp.encode("utf-8", "replace")).hexdigest()[:16],
+            perOutputPromptLength=len(_vp),
+        )
 
     # Everything needed by the per-slot loop and the final emit is captured here.
     plan = {
@@ -2273,20 +2227,16 @@ async def generate_from_payload(data: dict) -> dict:
     error_details:    list[dict] = []
     for output_index, r in enumerate(results):
         if isinstance(r, Exception):
-            e_str = str(r)
-            if "::" in e_str:
-                etype, emsg = e_str.split("::", 1)
-            else:
-                etype, emsg = ERR_UNKNOWN, e_str
+            etype = _classified_error(r)
+            emsg = _safe_error_message(etype)
             error_types_seen.append(etype)
             error_messages.append(emsg)
             error_details.append({
                 "outputIndex": output_index,
                 "error_type": etype,
                 "message": emsg,
-                "variantRole": variant_roles[output_index] if output_index < len(variant_roles) else None,
             })
-            print(f"[generator] error [{etype}]: {emsg[:200]}", file=sys.stderr)
+            _log_event("generation_output_failed", outputIndex=output_index, errorType=etype)
 
     # Primary error type = most severe (prefer auth > rate_limit > safety > others)
     severity_order = [ERR_AUTH, ERR_PAYLOAD, ERR_PROVIDER_BUSY, ERR_RATE_LIMITED, ERR_SAFETY_BLOCKED, ERR_SERVER,
@@ -2297,16 +2247,15 @@ async def generate_from_payload(data: dict) -> dict:
             primary_error_type = etype
             break
 
-    print(json.dumps({
-        "event":        "generation_done",
-        "elapsedSec":   round(t_gen_elapsed, 1),
-        "succeeded":    len(urls),
-        "failed":       len(error_types_seen),
-        "count":        count,
-        "generationRequestId": generation_request_id,
-        "primaryErrorType": primary_error_type,
-        "errorDetails": error_details,
-    }), file=sys.stderr)
+    _log_event(
+        "generation_done",
+        elapsedSec=round(t_gen_elapsed, 1),
+        succeeded=len(urls),
+        failed=len(error_types_seen),
+        count=count,
+        requestHash=_opaque_id(generation_request_id),
+        primaryErrorType=primary_error_type,
+    )
 
     t_total_elapsed = time.time() - t_total_start
     print(
@@ -2318,8 +2267,6 @@ async def generate_from_payload(data: dict) -> dict:
 
     return {
         "ok":         len(urls) > 0,
-        "keyword":    keyword,
-        "style":      style,
         "count":      count,
         "urls":       urls,
         "errors":     error_messages if error_messages else None,
@@ -2328,41 +2275,30 @@ async def generate_from_payload(data: dict) -> dict:
         "requested_image_count": requested_image_count,
         "actual_image_count": actual_image_count,
         "count_clamped": count_clamped,
-        "generation_request_id": generation_request_id,
         "prompt_snapshot": {
-            "user_raw_text":          custom_prompt,
-            "output_type":            output_type,
-            "reference_strength":     reference_strength,
+            "has_user_raw_text":      bool(custom_prompt),
+            "has_output_type":        bool(output_type),
+            "has_reference_strength": bool(reference_strength),
             "product_image_count":    product_count_requested,
             "reference_image_count":  reference_count_requested,
             "provider_endpoint":      provider_endpoint,
-            "image_ordering":         image_input_order,
-            "image_manifest":         image_manifest,
             "used_text_only_fallback": False if image_parts else provider_endpoint == "/images/generations",
             "products_loaded":        len(product_parts),
             "references_loaded":      loaded_references,
-            "enhanced_prompt_plan":   enhancer_result.get("plan"),
-            "enhanced_custom_prompt": enhanced_custom_prompt,
-            "final_prompt":           final_prompt,
-            "category_passed":        category_passed,
-            "inferred_category":      inferred_category,
-            "detected_category":      enhancer_result.get("detected_category"),
-            "effective_category":     category,
-            "enhancer_cache_key":     enhancer_result.get("cache_key"),
+            "final_prompt_hash":      _opaque_id(final_prompt),
+            "final_prompt_length":    len(final_prompt),
+            "has_category":           bool(category),
             "home_decor_check":       _home_decor_term_hits(final_prompt),
             "fashion_safety_applied": fashion_safety_applied,
-            "enhancer_model":         enhancer_result.get("enhancer_model"),
             "enhancer_failed":        enhancer_result.get("enhancer_failed", not bool(enhancer_result)),
             "prompt_mode":            prompt_mode,
             "prompt_version":         prompt_version,
-            "creative_direction_meta": creative_direction_meta,
-            "generation_request_id":  generation_request_id,
             "requested_image_count":  requested_image_count,
             "actual_image_count":     actual_image_count,
             "count_clamped":          count_clamped,
             "output_count":           output_count,
             "variation_mode":         variation_mode,
-            "output_variants":        output_variants,
+            "output_variant_count":   len(output_variants),
             "created_at":             int(time.time()),
         },
     }
@@ -2371,7 +2307,7 @@ async def generate_from_payload(data: dict) -> dict:
 async def run(keyword: str, style: str, count: int) -> None:
     """Legacy CLI entry point (no image inputs)."""
     if not LINAPI_KEY:
-        _emit({"ok": False, "error": "LINAPI_KEY not set in environment", "urls": [], "keyword": keyword})
+        _emit({"ok": False, "error": _safe_error_message(ERR_AUTH), "error_type": ERR_AUTH, "urls": []})
         return
 
     style_pool = [style] + [s for s in STYLE_PROMPTS if s != style]
@@ -2381,15 +2317,15 @@ async def run(keyword: str, style: str, count: int) -> None:
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     urls   = [r for r in results if isinstance(r, str)]
-    errors = [str(r) for r in results if isinstance(r, Exception)]
+    error_types = [_classified_error(r) for r in results if isinstance(r, Exception)]
+    errors = [_safe_error_message(error_type) for error_type in error_types]
 
     _emit({
         "ok":     len(urls) > 0,
-        "keyword": keyword,
-        "style":   style,
         "count":   count,
         "urls":    urls,
         "errors":  errors if errors else None,
+        "error_type": error_types[0] if error_types else None,
     })
 
 
