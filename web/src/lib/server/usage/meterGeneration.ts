@@ -119,10 +119,35 @@ export function slotKeysForCount(count: number): string[] {
  * different user or a tampered id cannot collide with someone else's reservation.
  */
 export function deriveRequestKey(userId: string, generationRequestId: string): string {
-  const salt = process.env.USAGE_REQUEST_KEY_SALT ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "vibepin-usage";
+  const salt = (process.env.USAGE_REQUEST_KEY_SALT ?? "").trim()
+    || (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim()
+    || "vibepin-usage";
   return crypto
     .createHash("sha256")
     .update(`${salt}|${userId}|${generationRequestId}`)
+    .digest("hex")
+    .slice(0, 48);
+}
+
+/** Durable Create Pin intent keys must remain stable across service-role rotation and
+ * deployments. Unlike the legacy metering key above, they therefore require their
+ * own non-empty secret and never fall back to a service credential or public literal. */
+export class GenerationIntentSaltUnavailableError extends Error {
+  constructor() {
+    super("GENERATION_INTENT_KEY_SALT is required for durable generation intents");
+    this.name = "GenerationIntentSaltUnavailableError";
+  }
+}
+
+export function deriveDurableGenerationIntentKey(
+  userId: string,
+  generationRequestId: string,
+): string {
+  const salt = (process.env.GENERATION_INTENT_KEY_SALT ?? "").trim();
+  if (!salt) throw new GenerationIntentSaltUnavailableError();
+  return crypto
+    .createHmac("sha256", salt)
+    .update(`${userId}|${generationRequestId}`)
     .digest("hex")
     .slice(0, 48);
 }
@@ -161,8 +186,17 @@ export function defaultRpc(): RpcRunner {
 export type WorkerReserveOutcome =
   | { kind: "off" }
   | { kind: "skipped"; reason: string }
-  | { kind: "reserved"; reservationId: string; jobId: string; slots: number }
+  | {
+      kind: "reserved";
+      reservationId: string;
+      jobId: string;
+      slots: number;
+      replayed: boolean;
+      status?: string;
+      results?: unknown[];
+    }
   | { kind: "insufficient"; availableRecurring: number | null; availableBonus: number | null }
+  | { kind: "conflict" }
   | { kind: "error"; message: string };
 
 /**
@@ -180,6 +214,8 @@ export async function reserveGenerationJobViaLedger(args: {
   userId: string;
   count: number;
   generationRequestId: string;
+  intentKey: string;
+  intentFingerprint: string;
   params: Record<string, unknown>;
   deps?: { rpc?: RpcRunner; ensure?: typeof ensureUsageAccount };
 }): Promise<WorkerReserveOutcome> {
@@ -189,7 +225,10 @@ export async function reserveGenerationJobViaLedger(args: {
   const ensure = args.deps?.ensure ?? ensureUsageAccount;
   const rpc = args.deps?.rpc ?? defaultRpc();
   const slotKeys = slotKeysForCount(args.count);
-  const requestKey = deriveRequestKey(args.userId, args.generationRequestId);
+  const requestKey = args.intentKey;
+  if (!/^[0-9a-f]{48}$/.test(requestKey)) {
+    return { kind: "error", message: "invalid_intent_key" };
+  }
 
   // ensure → reserve (F8: idempotent; seeds the account row the RPC locks).
   try {
@@ -205,12 +244,15 @@ export async function reserveGenerationJobViaLedger(args: {
     return { kind: "error", message: "ensure_failed" };
   }
 
-  const { data, error } = await rpc("usage_reserve_generation_job", {
+  const { data, error } = await rpc("usage_reserve_generation_job_v2", {
     p_user_id: args.userId,
     p_slot_keys: slotKeys,
     p_request_key: requestKey,
+    p_intent_key: requestKey,
+    p_intent_fingerprint: args.intentFingerprint,
     p_params: args.params,
     p_operation: "image_generation",
+    p_metadata: {},
   });
 
   if (error) {
@@ -221,6 +263,7 @@ export async function reserveGenerationJobViaLedger(args: {
       code: error.code,
       error: error.message?.slice(0, 200),
     });
+    if (error.code === "23505") return { kind: "conflict" };
     return { kind: "error", message: error.message };
   }
 
@@ -244,7 +287,10 @@ export async function reserveGenerationJobViaLedger(args: {
 
   const reservationId = String(payload.reservation_id ?? "");
   const jobId = String(payload.job_id ?? "");
-  if (!reservationId || !jobId) {
+  // A mode-transition race may return a plain/off winner. That job deliberately
+  // has no reservation, but an exact replay is still valid and must not enqueue a
+  // second job. Fresh metered results still require both ids.
+  if (!jobId || (!reservationId && payload.replayed !== true)) {
     logEvent("usage_meter_reserve_incomplete", { path: "worker", mode, slots: slotKeys.length });
     return { kind: "error", message: "reserve_returned_no_job" };
   }
@@ -254,7 +300,15 @@ export async function reserveGenerationJobViaLedger(args: {
     slots: slotKeys.length,
     replayed: payload.replayed === true,
   });
-  return { kind: "reserved", reservationId, jobId, slots: slotKeys.length };
+  return {
+    kind: "reserved",
+    reservationId,
+    jobId,
+    slots: slotKeys.length,
+    replayed: payload.replayed === true,
+    status: typeof payload.job_status === "string" ? payload.job_status : undefined,
+    results: Array.isArray(payload.job_results) ? payload.job_results : undefined,
+  };
 }
 
 // ── INLINE PATH: reserve, then settle in-process from the parsed result ─────────

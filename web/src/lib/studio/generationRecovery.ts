@@ -29,6 +29,7 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import { authHeaders, pollGenerationJob, type GenerationJobResult, type GenerationJobStatus } from "@/lib/studio/generateAiVersions";
 
 type JobStatusBody = { status?: GenerationJobStatus; results?: GenerationJobResult[] };
+type RecoveredIntentBody = { jobId?: string; slots?: number };
 
 async function fetchJobStatus(jobId: string): Promise<{ ok: true; body: JobStatusBody } | { ok: false; notFound: boolean }> {
   try {
@@ -76,7 +77,32 @@ function killDrafts(drafts: PinDraftLike[]) {
   for (const d of drafts) pinDraftStore.failGeneratedDraft(d.id);
 }
 
-type PinDraftLike = { id: string; generationSlot?: number };
+type PinDraftLike = {
+  id: string;
+  generationSlot?: number;
+  generationJobId?: string;
+  generationIntentId?: string;
+  generationIntentPayload?: Record<string, unknown>;
+};
+
+async function recoverJobIdFromIntent(payload: Record<string, unknown>): Promise<RecoveredIntentBody | null> {
+  const serialized = JSON.stringify(payload);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: await authHeaders(),
+        body: serialized,
+      });
+      if (!response.ok) return null;
+      const body = await response.json() as RecoveredIntentBody;
+      return body.jobId && typeof body.slots === "number" ? body : null;
+    } catch {
+      // One bounded retry replays the exact persisted intent body.
+    }
+  }
+  return null;
+}
 
 /**
  * Reconcile every board draft still in a "generating" state on mount. Fire-and-forget
@@ -92,11 +118,22 @@ export async function reconcileGeneratingDrafts(pollOpts?: { intervalMs?: number
   const generating = pinDraftStore.generatingDrafts();
   if (!generating.length) return;
 
-  // Partition: no jobId → inline-mode leftovers, judged dead exactly as pre-P2.
+  // A response can be lost after the DB commit but before onWorkerJob stores jobId.
+  // Recover those cards by replaying their exact persisted intent before judging any
+  // no-job placeholder dead. The DB anchor returns the original job.
   const withoutJobId = generating.filter(d => !d.generationJobId);
-  if (withoutJobId.length) {
-    pinDraftStore.failStaleGeneratingDrafts(true);
+  const recoverable = new Map<string, PinDraftLike[]>();
+  const unrecoverable: PinDraftLike[] = [];
+  for (const draft of withoutJobId) {
+    if (draft.generationIntentId && draft.generationIntentPayload) {
+      const list = recoverable.get(draft.generationIntentId) ?? [];
+      list.push(draft);
+      recoverable.set(draft.generationIntentId, list);
+    } else {
+      unrecoverable.push(draft);
+    }
   }
+  killDrafts(unrecoverable);
 
   // Group the jobId-bearing drafts by job so each job is checked exactly once
   // regardless of how many slots/cards it has.
@@ -106,6 +143,24 @@ export async function reconcileGeneratingDrafts(pollOpts?: { intervalMs?: number
     const list = byJob.get(d.generationJobId) ?? [];
     list.push(d);
     byJob.set(d.generationJobId, list);
+  }
+
+  for (const drafts of recoverable.values()) {
+    const payload = drafts[0].generationIntentPayload;
+    if (!payload) { killDrafts(drafts); continue; }
+    const recovered = await recoverJobIdFromIntent(payload);
+    if (!recovered?.jobId) { killDrafts(drafts); continue; }
+    const slotDrafts = drafts.map((draft, slot) => ({
+      ...draft,
+      generationSlot: draft.generationSlot ?? slot,
+    }));
+    for (const draft of slotDrafts) {
+      pinDraftStore.updateDraft(draft.id, {
+        generationJobId: recovered.jobId,
+        generationSlot: draft.generationSlot,
+      });
+    }
+    byJob.set(recovered.jobId, slotDrafts);
   }
 
   await Promise.all(Array.from(byJob.entries()).map(async ([jobId, drafts]) => {

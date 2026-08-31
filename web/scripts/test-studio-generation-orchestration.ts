@@ -30,8 +30,8 @@ test("one orchestration performs exactly one enqueue call per planned reference 
 });
 
 test("the group dispatch carries its reference and shared batch identity", () => {
-  assert.match(handler, /generate: \(\{ styleReference, batchRequestId, setup, placeholderIds \}\)/);
-  assert.match(handler, /dispatchGenerationGroup\(\{[\s\S]*?source: parent,[\s\S]*?setup,[\s\S]*?styleReference,[\s\S]*?batchRequestId,[\s\S]*?placeholderIds/);
+  assert.match(handler, /generate: \(\{ styleReference, batchRequestId, groupIndex, generationIntentId, setup, placeholderIds \}\)/);
+  assert.match(handler, /dispatchGenerationGroup\(\{[\s\S]*?source: parent,[\s\S]*?setup,[\s\S]*?styleReference,[\s\S]*?batchRequestId,[\s\S]*?groupIndex,[\s\S]*?generationIntentId,[\s\S]*?placeholderIds/);
 });
 
 test("inline mode consumes the same dispatch response without a second request", () => {
@@ -40,6 +40,7 @@ test("inline mode consumes the same dispatch response without a second request",
 });
 
 test("worker mode stamps each group's recovery job and local slot before polling", () => {
+  assert.match(handler, /onIntentPrepared:[\s\S]*?generationIntentId: intentId,[\s\S]*?generationIntentPayload: payload/);
   assert.match(handler, /onWorkerJob: \(jobId, _slots, ids\) => ids\.forEach\(\(id, slot\) => \{[\s\S]*?generationJobId: jobId,[\s\S]*?generationSlot: slot/);
   assert.match(helperSource, /opts\.onWorkerJob\(dispatched\.jobId, dispatched\.slots, opts\.placeholderIds\)/);
   assert.match(helperSource, /return awaitGenerationJob\(dispatched\.jobId, dispatched\.slots, opts\.poll\)/);

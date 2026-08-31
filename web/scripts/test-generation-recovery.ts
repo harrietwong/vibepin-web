@@ -72,7 +72,13 @@ async function main() {
 
   function reset() { mem.clear(); calls = []; store.__resetMemoryCacheForTests(); }
 
-  function makePlaceholder(opts: { jobId?: string; slot?: number; idem: string }) {
+  function makePlaceholder(opts: {
+    jobId?: string;
+    slot?: number;
+    idem: string;
+    intentId?: string;
+    intentPayload?: Record<string, unknown>;
+  }) {
     return store.createBoardDraft({
       imageUrl: "https://cdn/parent.jpg",
       source: "ai_generated_from_upload",
@@ -80,6 +86,8 @@ async function main() {
       generationStatus: "generating",
       generationJobId: opts.jobId,
       generationSlot: opts.slot,
+      generationIntentId: opts.intentId,
+      generationIntentPayload: opts.intentPayload,
     });
   }
 
@@ -92,6 +100,37 @@ async function main() {
     const reloaded = store.getDraft(d.id);
     assert.equal(reloaded?.generationStatus, "failed");
     assert.equal(calls.length, 0, "no jobId → no network call at all");
+  });
+
+  await test("response lost before jobId persistence → exact intent replay reattaches original job", async () => {
+    reset();
+    const intentPayload = {
+      generation_intent_version: 1,
+      generationRequestId: "board_reload_g0",
+      keyword: "pin",
+      count: 2,
+    };
+    const d0 = makePlaceholder({ idem: "lost-0", intentId: "board_reload_g0", intentPayload });
+    const d1 = makePlaceholder({ idem: "lost-1", intentId: "board_reload_g0", intentPayload });
+    let postCount = 0;
+    fetchImpl = async (url) => {
+      if (url === "/api/generate") {
+        postCount++;
+        return jsonResponse({ jobId: "job-recovered-intent", slots: 2, replayed: true });
+      }
+      return jsonResponse({
+        status: "done",
+        results: [
+          { slot: 0, status: "done", imageUrl: "https://cdn/recovered-0.jpg", error: null },
+          { slot: 1, status: "done", imageUrl: "https://cdn/recovered-1.jpg", error: null },
+        ],
+      });
+    };
+    await recovery.reconcileGeneratingDrafts();
+    assert.equal(postCount, 1, "one replay per intent group, not per placeholder");
+    assert.equal(store.getDraft(d0.id)?.generationJobId, "job-recovered-intent");
+    assert.equal(store.getDraft(d0.id)?.imageUrl, "https://cdn/recovered-0.jpg");
+    assert.equal(store.getDraft(d1.id)?.imageUrl, "https://cdn/recovered-1.jpg");
   });
 
   await test("queued/running job → card stays generating, poll loop registered", async () => {

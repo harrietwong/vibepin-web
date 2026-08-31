@@ -27,6 +27,7 @@
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key";
+process.env.GENERATION_INTENT_KEY_SALT = "test-stable-generation-intent-salt";
 process.env.CREEM_API_KEY = "creem_test_fake";
 process.env.ALLOW_GENERATION_MOCK_PROVIDER = "true";
 process.env.ALLOW_GENERATION_AUTH_TEST_HEADER = "true";
@@ -70,27 +71,97 @@ type RpcCall = { fn: string; args: Record<string, unknown> };
 let rpcCalls: RpcCall[] = [];
 let enqueueInsertCount = 0;
 let enqueuedRows: Array<Record<string, unknown>> = [];
+let jobsByIntent = new Map<string, Record<string, unknown>>();
+let workerHealthy = true;
 
 // Controls what the ledger RPC returns, so a test can force insufficient/error.
 // "reserve_insufficient_no_availability" mirrors an older/partial RPC payload that
 // omits available_recurring/available_bonus entirely (decision #6, 2026-08-28: the
 // route must still respond with nulls, not throw or leave the keys undefined).
-type LedgerMode = "reserve_ok" | "reserve_insufficient" | "reserve_insufficient_no_availability" | "reserve_error";
+type LedgerMode =
+  | "reserve_ok"
+  | "reserve_replay"
+  | "reserve_conflict"
+  | "reserve_insufficient"
+  | "reserve_insufficient_no_availability"
+  | "reserve_error";
 let ledgerMode: LedgerMode = "reserve_ok";
 
-function ledgerResult(fn: string): { data: unknown; error: { message: string; code?: string } | null } {
+function ledgerResult(fn: string, args: Record<string, unknown>): { data: unknown; error: { message: string; code?: string } | null } {
+  const intentMapKey = `${String(args.p_user_id)}:${String(args.p_intent_key)}`;
+  const fingerprint = String(args.p_intent_fingerprint ?? "");
+  if (fn === "generation_lookup_job_by_intent") {
+    const existing = jobsByIntent.get(intentMapKey);
+    if (!existing) return { data: { found: false }, error: null };
+    if (existing.generation_intent_fingerprint !== fingerprint) {
+      return { data: null, error: { message: "generation intent conflict", code: "23505" } };
+    }
+    return { data: {
+      found: true, replayed: true, job_id: existing.id,
+      job_status: existing.status, job_results: existing.results,
+      reservation_id: existing.usage_reservation_id ?? null,
+    }, error: null };
+  }
+  if (fn === "generation_enqueue_job_idempotent") {
+    const existing = jobsByIntent.get(intentMapKey);
+    if (existing) {
+      if (existing.generation_intent_fingerprint !== fingerprint) {
+        return { data: null, error: { message: "generation intent conflict", code: "23505" } };
+      }
+      return { data: {
+        ok: true, replayed: true, job_id: existing.id,
+        job_status: existing.status, job_results: existing.results,
+      }, error: null };
+    }
+    enqueueInsertCount++;
+    const slotKeys = args.p_slot_keys as string[];
+    const results = slotKeys.map((_, slot) => ({ slot, status: "pending", imageUrl: null, error: null }));
+    const stored = {
+      id: jobsByIntent.size === 0 ? "job_plain" : `job_plain_${jobsByIntent.size + 1}`,
+      vibepin_user_id: args.p_user_id,
+      generation_intent_key: args.p_intent_key,
+      generation_intent_fingerprint: fingerprint,
+      status: "queued", results, params: args.p_params,
+    };
+    jobsByIntent.set(intentMapKey, stored);
+    enqueuedRows.push(stored);
+    return { data: { ok: true, replayed: false, job_id: stored.id, job_status: "queued", job_results: results }, error: null };
+  }
   if (fn === "usage_ensure_account") {
     return { data: { ok: true, action: "created", account_id: "acct-1" }, error: null };
   }
-  if (fn === "usage_reserve_generation_job") {
+  if (fn === "usage_reserve_generation_job_v2") {
     if (ledgerMode === "reserve_error") return { data: null, error: { message: "ledger down" } };
+    if (ledgerMode === "reserve_conflict") return { data: null, error: { message: "generation intent conflict", code: "23505" } };
+    if (ledgerMode === "reserve_replay") {
+      return {
+        data: {
+          ok: true,
+          replayed: true,
+          reservation_id: "res-1",
+          job_id: "job-metered-1",
+          job_status: "done",
+          job_results: [{ slot: 0, status: "done", imageUrl: "https://example.test/replayed.png", error: null }],
+        },
+        error: null,
+      };
+    }
     if (ledgerMode === "reserve_insufficient") {
       return { data: { ok: false, reason: "insufficient_capacity", job_id: null, available_recurring: 0, available_bonus: 0 }, error: null };
     }
     if (ledgerMode === "reserve_insufficient_no_availability") {
       return { data: { ok: false, reason: "insufficient_capacity", job_id: null }, error: null };
     }
-    return { data: { ok: true, replayed: false, reservation_id: "res-1", job_id: "job-metered-1" }, error: null };
+    const slotKeys = args.p_slot_keys as string[];
+    const results = slotKeys.map((_, slot) => ({ slot, status: "pending", imageUrl: null, error: null }));
+    const stored = {
+      id: "job-metered-1", vibepin_user_id: args.p_user_id,
+      generation_intent_key: args.p_intent_key,
+      generation_intent_fingerprint: fingerprint,
+      status: "queued", results, params: args.p_params, usage_reservation_id: "res-1",
+    };
+    jobsByIntent.set(intentMapKey, stored);
+    return { data: { ok: true, replayed: false, reservation_id: "res-1", job_id: stored.id, job_status: "queued", job_results: results }, error: null };
   }
   if (fn === "usage_reserve") {
     if (ledgerMode === "reserve_error") return { data: null, error: { message: "ledger down" } };
@@ -124,17 +195,27 @@ function fakeServerClient() {
     from(table: string) {
       return {
         insert(_row: unknown) {
-          if (table === "generation_jobs") {
-            enqueueInsertCount++;
-            enqueuedRows.push(_row as Record<string, unknown>);
-          }
           return {
             select() {
               return {
-                single: async () => ({
-                  data: { id: "job_plain", vibepin_user_id: "u", status: "queued", created_at: new Date().toISOString() },
-                  error: null,
-                }),
+                single: async () => {
+                  if (table !== "generation_jobs") return { data: null, error: null };
+                  enqueueInsertCount++;
+                  const row = _row as Record<string, unknown>;
+                  enqueuedRows.push(row);
+                  const mapKey = `${String(row.vibepin_user_id)}:${String(row.generation_intent_key)}`;
+                  const existing = jobsByIntent.get(mapKey);
+                  if (existing) {
+                    return { data: null, error: { message: "duplicate key", code: "23505" } };
+                  }
+                  const stored = {
+                    ...row,
+                    id: jobsByIntent.size === 0 ? "job_plain" : `job_plain_${jobsByIntent.size + 1}`,
+                    created_at: new Date().toISOString(),
+                  };
+                  jobsByIntent.set(mapKey, stored);
+                  return { data: stored, error: null };
+                },
               };
             },
           };
@@ -144,21 +225,22 @@ function fakeServerClient() {
           //   - generation_worker_status heartbeat lookup (.eq().maybeSingle/single)
           //   - creem_subscriptions grant lookup (.eq().in() → [])
           //   - usage_accounts availability readback (.eq().maybeSingle) — decision #11
+          const filters: Record<string, unknown> = {};
           const chain = {
-            eq() {
-              return {
-                maybeSingle: async () => {
-                  if (table === "usage_accounts") {
-                    // limit 100, used 10, reserved 5 → availableAfterReservation = 85.
-                    return { data: { ai_images_used: 10, ai_images_limit: 100, ai_images_reserved: 5 }, error: null };
-                  }
-                  return { data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null };
-                },
-                single: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
-                // creem_subscriptions: no active subscription → free plan.
-                in: async () => ({ data: [], error: null }),
-              };
+            eq(field: string, value: unknown) { filters[field] = value; return chain; },
+            maybeSingle: async () => {
+              if (table === "generation_jobs") {
+                const mapKey = `${String(filters.vibepin_user_id)}:${String(filters.generation_intent_key)}`;
+                return { data: jobsByIntent.get(mapKey) ?? null, error: null };
+              }
+              if (table === "usage_accounts") {
+                return { data: { ai_images_used: 10, ai_images_limit: 100, ai_images_reserved: 5 }, error: null };
+              }
+              return { data: { name: "generation-worker", last_seen: workerHealthy ? new Date().toISOString() : "2000-01-01T00:00:00.000Z" }, error: null };
             },
+            single: async () => ({ data: { name: "generation-worker", last_seen: new Date().toISOString() }, error: null }),
+            // creem_subscriptions: no active subscription → free plan.
+            in: async () => ({ data: [], error: null }),
           };
           return chain;
         },
@@ -166,7 +248,7 @@ function fakeServerClient() {
     },
     async rpc(fn: string, args: Record<string, unknown>) {
       rpcCalls.push({ fn, args });
-      return ledgerResult(fn);
+      return ledgerResult(fn, args);
     },
   };
 }
@@ -239,10 +321,10 @@ function fullBody(extra: Record<string, unknown> = {}): Record<string, unknown> 
     ...extra,
   };
 }
-function makeReq(body: Record<string, unknown>): Request {
+function makeReq(body: Record<string, unknown>, userId = randomUUID()): Request {
   return new Request("https://vibepin.co/api/generate", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-vibepin-test-user-id": randomUUID() },
+    headers: { "content-type": "application/json", "x-vibepin-test-user-id": userId },
     body: JSON.stringify(body),
   });
 }
@@ -265,6 +347,9 @@ type RunOpts = {
   // pre-existing "ENFORCE ... -> 402" case below keeps asserting the blocking path
   // unchanged; pass `false` to prove enforce-mode WITHOUT the flag does not block.
   enforceAiImages?: boolean;
+  preserveJobs?: boolean;
+  userId?: string;
+  workerHealthy?: boolean;
 };
 
 async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{ status: number; json: Record<string, unknown> }> {
@@ -280,13 +365,15 @@ async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{
   rpcCalls = [];
   enqueueInsertCount = 0;
   enqueuedRows = [];
+  if (!opts.preserveJobs) jobsByIntent = new Map();
   spawnCount = 0;
+  workerHealthy = opts.workerHealthy !== false;
   const anonHeaderWasOn = process.env.ALLOW_GENERATION_AUTH_TEST_HEADER;
   if (opts.anon) delete process.env.ALLOW_GENERATION_AUTH_TEST_HEADER;
   try {
     delete require.cache[require.resolve("../src/app/api/generate/route")];
     const route = await import(`../src/app/api/generate/route?m=${meter}_${opts.genMode}_${Math.random()}`);
-    const req = opts.anon ? makeAnonReq(body) : makeReq(body);
+    const req = opts.anon ? makeAnonReq(body) : makeReq(body, opts.userId as `${string}-${string}-${string}-${string}-${string}` | undefined);
     const res = await route.POST(req as never);
     const json = (await res.json()) as Record<string, unknown>;
     return { status: res.status, json };
@@ -299,13 +386,14 @@ async function run(body: Record<string, unknown>, opts: RunOpts = {}): Promise<{
 }
 
 const ledgerCalls = () => rpcCalls.filter(c => c.fn.startsWith("usage_"));
-const reserveCalls = () => rpcCalls.filter(c => c.fn === "usage_reserve" || c.fn === "usage_reserve_generation_job");
+const reserveCalls = () => rpcCalls.filter(c => c.fn === "usage_reserve" || c.fn === "usage_reserve_generation_job_v2");
 
 async function main() {
   console.log("\nGeneration route image-metering tests (Phase 4I shadow)\n");
 
   // ── Module-unit contract ─────────────────────────────────────────────────────
   const meter = await import("../src/lib/server/usage/meterGeneration");
+  const intentFingerprint = await import("../src/lib/server/generationIntent");
 
   await test("UNIT: default mode is off; flag parses shadow/enforce", () => {
     delete process.env.USAGE_METERING_MODE;
@@ -391,6 +479,42 @@ async function main() {
     assertEq(ledgerCalls().length, 0, "no ledger RPC in off mode");
   });
 
+  await test("UNIT: durable intent key is stable across service-role rotation", () => {
+    const savedService = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const before = meter.deriveDurableGenerationIntentKey("u1", "gen_x");
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "rotated-service-key";
+    const after = meter.deriveDurableGenerationIntentKey("u1", "gen_x");
+    process.env.SUPABASE_SERVICE_ROLE_KEY = savedService;
+    assertEq(after, before, "service credential rotation must not alter a durable intent key");
+  });
+
+  await test("UNIT: durable intent salt missing/blank fails closed", () => {
+    const saved = process.env.GENERATION_INTENT_KEY_SALT;
+    for (const value of [undefined, "", "   "]) {
+      if (value === undefined) delete process.env.GENERATION_INTENT_KEY_SALT;
+      else process.env.GENERATION_INTENT_KEY_SALT = value;
+      let threw = false;
+      try {
+        meter.deriveDurableGenerationIntentKey("u1", "gen_x");
+      } catch (error) {
+        threw = error instanceof meter.GenerationIntentSaltUnavailableError;
+      }
+      assert(threw, `salt ${JSON.stringify(value)} must fail closed`);
+    }
+    process.env.GENERATION_INTENT_KEY_SALT = saved;
+  });
+
+  await test("UNIT: immutable fingerprint is canonical by object-key order and ignores undefined optionals", () => {
+    const left = intentFingerprint.deriveGenerationIntentFingerprint(2, {
+      prompt: "same", nested: { b: 2, a: 1 }, optional: undefined,
+    });
+    const right = intentFingerprint.deriveGenerationIntentFingerprint(2, {
+      nested: { a: 1, b: 2 }, prompt: "same",
+    });
+    assertEq(left, right, "logical request must have one fingerprint");
+    assert(/^[0-9a-f]{64}$/.test(left), "fingerprint must be a 64-hex digest");
+  });
+
   await test("CAPACITY: real route defaults to four slots per reference and hard-clamps larger requests", async () => {
     const first = await run(fullBody({ count: 4, generationRequestId: "capacity-a" }), {
       meterMode: "off", genMode: "worker",
@@ -416,13 +540,92 @@ async function main() {
     assertEq(oversizedParams.countClamped, true, "hard-cap clamp is explicit");
   });
 
+  // ── P0 durable intent: replay precedes every fresh-request gate ──────────────
+  await test("INTENT: exact replay survives mode transition, unhealthy worker, and denied moderation", async () => {
+    const userId = "00000000-0000-4000-8000-000000000071";
+    const body = fullBody({ count: 2, generationRequestId: "stable-group-0", generation_intent_version: 1 });
+    const first = await run(body, { meterMode: "off", genMode: "worker", userId });
+    assertEq(first.status, 200, "fresh enqueue status");
+    const originalJob = first.json.jobId;
+
+    const replay = await run(body, {
+      meterMode: "enforce", genMode: "worker", userId, preserveJobs: true,
+      workerHealthy: false, decision: "deny", ledger: "reserve_insufficient",
+    });
+    assertEq(replay.status, 200, "replay bypasses fresh-request gates");
+    assertEq(replay.json.jobId, originalJob, "original job returned");
+    assertEq(replay.json.replayed, true, "response marks replay");
+    assertEq(enqueueInsertCount, 0, "no second enqueue");
+    assertEq(reserveCalls().length, 0, "no second reservation");
+  });
+
+  await test("INTENT: changed immutable count/prompt/product/ref/model/format/retry target returns 409", async () => {
+    const userId = "00000000-0000-4000-8000-000000000072";
+    const base = fullBody({ count: 2, generationRequestId: "immutable-group-0", generation_intent_version: 1 });
+    const created = await run(base, { meterMode: "off", genMode: "worker", userId });
+    assertEq(created.status, 200, "fixture created");
+    const mutations: Array<Record<string, unknown>> = [
+      { count: 3 },
+      { prompt: "changed prompt" },
+      { product_images: ["https://example.test/product.png"] },
+      { style_ref: "https://example.test/reference.png" },
+      { model_key: "gpt_image" },
+      { format: "square 1:1" },
+      { mode: "retry_single_output", retryOfOutputId: "output-other", retryOutputIndex: 1 },
+    ];
+    for (const mutation of mutations) {
+      const replay = await run({ ...base, ...mutation }, {
+        meterMode: "shadow", genMode: "worker", userId, preserveJobs: true,
+      });
+      assertEq(replay.status, 409, `immutable mutation ${Object.keys(mutation).join(",")} must conflict`);
+      assertEq(enqueueInsertCount, 0, "conflict writes no job");
+      assertEq(reserveCalls().length, 0, "conflict writes no reservation");
+    }
+  });
+
+  await test("INTENT: queued/running/done/partial/failed all replay the original lifecycle", async () => {
+    const userId = "00000000-0000-4000-8000-000000000073";
+    const body = fullBody({ generationRequestId: "lifecycle-group-0", generation_intent_version: 1 });
+    await run(body, { meterMode: "off", genMode: "worker", userId });
+    const stored = Array.from(jobsByIntent.values())[0];
+    for (const status of ["queued", "running", "done", "partial", "failed"]) {
+      stored.status = status;
+      const replay = await run(body, {
+        meterMode: "enforce", genMode: "worker", userId, preserveJobs: true,
+        workerHealthy: false, decision: "timeout", ledger: "reserve_insufficient",
+      });
+      assertEq(replay.status, 200, `${status} replay status`);
+      assertEq(replay.json.status, status, `${status} preserved`);
+      assertEq(replay.json.replayed, true, `${status} marked replay`);
+    }
+  });
+
+  await test("INTENT: same client id is isolated by user; a new group key creates new work", async () => {
+    const request = fullBody({ generationRequestId: "shared-client-id", generation_intent_version: 1 });
+    const a = await run(request, { genMode: "worker", userId: "00000000-0000-4000-8000-000000000074" });
+    const b = await run(request, { genMode: "worker", userId: "00000000-0000-4000-8000-000000000075", preserveJobs: true });
+    const c = await run({ ...request, generationRequestId: "shared-client-id-g1" }, {
+      genMode: "worker", userId: "00000000-0000-4000-8000-000000000074", preserveJobs: true,
+    });
+    assert(a.json.jobId !== b.json.jobId, "cross-user intent must not collide");
+    assert(a.json.jobId !== c.json.jobId, "different group intent must not collide");
+    assertEq(jobsByIntent.size, 3, "three independent anchors");
+  });
+
+  await test("INTENT: durable Create Pin request fails closed outside worker mode", async () => {
+    const result = await run(fullBody({ generation_intent_version: 1, generationRequestId: "worker-only-g0" }), { genMode: "inline" });
+    assertEq(result.status, 503, "inline durable request refused");
+    assertEq(result.json.error, "durable_generation_requires_worker", "fixed refusal code");
+    assertEq(spawnCount, 0, "no inline provider call");
+  });
+
   // ── SHADOW MODE — reserve happens, but failures never block ───────────────────
   await test("SHADOW worker: reserve OK → uses the metered job id, no plain insert", async () => {
     const { status, json } = await run(fullBody(), { meterMode: "shadow", genMode: "worker", ledger: "reserve_ok" });
     assertEq(status, 200, "status");
     assertEq(json.jobId, "job-metered-1", "returns the metered job id from the RPC");
     assertEq(enqueueInsertCount, 0, "no plain insert when the ledger reserve+enqueue succeeded");
-    assert(reserveCalls().some(c => c.fn === "usage_reserve_generation_job"), "reserved via the job RPC");
+    assert(reserveCalls().some(c => c.fn === "usage_reserve_generation_job_v2"), "reserved via the v2 job RPC");
   });
 
   await test("SHADOW worker: insufficient balance does NOT block — falls back to plain enqueue", async () => {

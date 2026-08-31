@@ -107,6 +107,21 @@ let enqueueInsertCount = 0;
 let lastEnqueuedParams: Record<string, unknown> | null = null;
 function fakeServerClient() {
   return {
+    async rpc(fn: string, args: Record<string, unknown>) {
+      if (fn === "generation_lookup_job_by_intent") {
+        return { data: { found: false }, error: null };
+      }
+      if (fn === "generation_enqueue_job_idempotent") {
+        enqueueInsertCount++;
+        lastEnqueuedParams = args.p_params as Record<string, unknown>;
+        const slots = args.p_slot_keys as string[];
+        return { data: {
+          ok: true, replayed: false, job_id: "job_fake", job_status: "queued",
+          job_results: slots.map((_, slot) => ({ slot, status: "pending", imageUrl: null, error: null })),
+        }, error: null };
+      }
+      return { data: null, error: null };
+    },
     from(table: string) {
       return {
         insert(_row: unknown) {
@@ -232,6 +247,9 @@ const originalResolve = (Module as any)._resolveFilename;
       settleInline: async () => undefined,
       releaseInline: async () => undefined,
       aiImageLimitResponseBody: () => ({ error: "limit_reached" }),
+      deriveRequestKey: () => "a".repeat(48),
+      deriveDurableGenerationIntentKey: () => "a".repeat(48),
+      readImagesAvailableAfterReservation: async () => null,
     };
   }
   if (/[\\/]creem[\\/]moderatePrompt(\.ts)?$/.test(request) || request === "@/lib/server/creem/moderatePrompt") {

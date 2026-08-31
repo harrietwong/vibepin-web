@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "node verify-v63.mjs",
-    "test:integrated-rollbacks": "node verify-integrated-rollbacks.mjs"
+    "test:integrated-rollbacks": "node verify-integrated-rollbacks.mjs",
+    "test:v71-generation-intent": "node verify-v71-generation-intent.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8"

@@ -36,8 +36,14 @@ import {
   releaseInline,
   aiImageLimitResponseBody,
   readImagesAvailableAfterReservation,
+  deriveDurableGenerationIntentKey,
   type InlineReservation,
 } from "@/lib/server/usage/meterGeneration";
+import {
+  deriveGenerationIntentFingerprint,
+  GenerationIntentConflictError,
+  isGenerationIntentConflict,
+} from "@/lib/server/generationIntent";
 import {
   buildModerationChecks,
   INPUT_LIMITS,
@@ -669,40 +675,74 @@ async function isWorkerHealthy(): Promise<boolean> {
   return Date.now() - lastSeenMs <= WORKER_HEARTBEAT_STALE_MS;
 }
 
-/**
- * Enqueue a generation_jobs row and return immediately (<1s). Honest-failure gate:
- * if the worker's heartbeat is missing/stale we return null WITHOUT inserting a row —
- * inserting anyway would create a job nobody will ever claim (a zombie task).
- */
+type GenerationIntentJob = {
+  jobId: string;
+  slots: number;
+  replayed: boolean;
+  status: string;
+  results: GenerationJobResult[];
+};
+
+function generationIntentJob(payload: Record<string, unknown>, fallbackSlots: number): GenerationIntentJob | null {
+  const jobId = String(payload.job_id ?? "");
+  if (!jobId) return null;
+  const results = Array.isArray(payload.job_results)
+    ? payload.job_results as GenerationJobResult[]
+    : [];
+  return {
+    jobId,
+    slots: results.length || fallbackSlots,
+    replayed: payload.replayed === true,
+    status: String(payload.job_status ?? "queued"),
+    results,
+  };
+}
+
+/** Exact read-only replay probe. Any database/schema error fails closed. */
+async function lookupGenerationJobIntent(
+  slotCount: number,
+  userId: string,
+  intentKey: string,
+  intentFingerprint: string,
+): Promise<GenerationIntentJob | null> {
+  const db = createServerClient();
+  const { data, error } = await db.rpc("generation_lookup_job_by_intent", {
+    p_user_id: userId,
+    p_intent_key: intentKey,
+    p_intent_fingerprint: intentFingerprint,
+  });
+  if (error?.code === "23505") throw new GenerationIntentConflictError();
+  if (error) {
+    console.error(JSON.stringify({ event: "generation_intent_lookup_failed", code: error.code }));
+    throw new Error("generation_intent_lookup_unavailable");
+  }
+  const payload = (data ?? {}) as Record<string, unknown>;
+  return payload.found === true ? generationIntentJob(payload, slotCount) : null;
+}
+
+/** Atomic unmetered enqueue used by off mode and every shadow fallback. */
 async function enqueueGenerationJob(
   slotCount: number,
   params: Record<string, unknown>,
   userId: string,
-): Promise<{ jobId: string; slots: number } | null> {
-  const healthy = await isWorkerHealthy();
-  if (!healthy) return null;
-
-  const results: GenerationJobResult[] = Array.from({ length: slotCount }, (_, i) => ({
-    slot: i, status: "pending", imageUrl: null, error: null,
-  }));
-
+  intentKey: string,
+  intentFingerprint: string,
+): Promise<GenerationIntentJob | null> {
   const db = createServerClient();
   const { data, error } = await db
-    .from("generation_jobs")
-    .insert({
-      vibepin_user_id: userId,
-      status: "queued",
-      params,
-      results,
-    })
-    .select("id")
-    .single();
-
-  if (error || !data?.id) {
-    console.error(JSON.stringify({ event: "generation_enqueue_failed", hasDatabaseError: !!error }));
+    .rpc("generation_enqueue_job_idempotent", {
+      p_user_id: userId,
+      p_intent_key: intentKey,
+      p_intent_fingerprint: intentFingerprint,
+      p_slot_keys: Array.from({ length: slotCount }, (_, index) => `slot:${index}`),
+      p_params: params,
+    });
+  if (error?.code === "23505") throw new GenerationIntentConflictError();
+  if (error) {
+    console.error(JSON.stringify({ event: "generation_enqueue_failed", code: error.code }));
     return null;
   }
-  return { jobId: data.id as string, slots: slotCount };
+  return generationIntentJob((data ?? {}) as Record<string, unknown>, slotCount);
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -720,6 +760,11 @@ export async function POST(req: NextRequest) {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  // Bound the full immutable fingerprint input before hashing or any paid work.
+  // Create Pin references are storage URLs, not inline image bytes.
+  if (Buffer.byteLength(JSON.stringify(body), "utf8") > 1_000_000) {
+    return invalidRequestResponse("oversized", "the request body exceeds 1 MB");
   }
 
   const keyword            = String(body.keyword       ?? "").trim();
@@ -765,7 +810,15 @@ export async function POST(req: NextRequest) {
   const outputVariants = Array.isArray(body.outputVariants)
     ? body.outputVariants as Array<Record<string, unknown>>
     : [];
-  const generationRequestId = String(body.generationRequestId ?? `gen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).trim();
+  const durableGenerationIntent = body.generation_intent_version === 1;
+  const suppliedGenerationRequestId = typeof body.generationRequestId === "string"
+    ? body.generationRequestId.trim()
+    : "";
+  if (durableGenerationIntent && (!suppliedGenerationRequestId || suppliedGenerationRequestId.length > 200)) {
+    return invalidRequestResponse("invalid-intent", "generationRequestId must contain 1 to 200 characters");
+  }
+  const generationRequestId = suppliedGenerationRequestId
+    || `gen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const studioClientId = String(body.studioClientId ?? "").trim();
   const providerMode = process.env.ALLOW_GENERATION_MOCK_PROVIDER === "true" && body.provider_mode === "mock" ? "mock" : "real";
   const mockProviderBehavior = String(body.mock_provider_behavior ?? "success");
@@ -846,6 +899,75 @@ export async function POST(req: NextRequest) {
     return invalidRequestResponse(generationRequestId, modelKeyValidation.detail);
   }
   const modelKey: string = modelKeyValidation.modelKey;
+
+  // Create Pin's durable flow is worker-only for this release. Inline/FastAPI do
+  // not have a durable result anchor and therefore cannot safely promise replay.
+  if (durableGenerationIntent && GENERATION_MODE !== "worker") {
+    return NextResponse.json({ error: "durable_generation_requires_worker" }, { status: 503 });
+  }
+
+  let workerJobParams: GeneratorPayload | null = null;
+  let generationIntentKey: string | null = null;
+  let generationIntentFingerprint: string | null = null;
+  if (GENERATION_MODE === "worker") {
+    const userId = authUserId;
+    if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    const promptWithLangForQueue = contentLanguage !== "en"
+      ? `${prompt}\n\n[Important: Generate any on-image text and descriptive copy in ${contentLanguage}. Keep Pinterest-native tone.]`
+      : prompt;
+    workerJobParams = {
+      keyword, style, count, prompt: promptWithLangForQueue, style_ref: styleRef,
+      product_images: productImages, image_inputs: imageInputs, category,
+      text_overlay: textOverlay, reference_strength: referenceStrength,
+      output_type: outputType, format: pinFormat, product_metadata: productMetadata,
+      model_key: modelKey, content_language: contentLanguage,
+      prompt_mode: promptMode, prompt_version: promptVersion,
+      creative_direction_meta: creativeDirectionMeta, selectedTags, primaryFormatTag,
+      directionBrief, briefManuallyEdited, inferredCategory, selectedOpportunity,
+      productImageCountRequested, referenceImageCountRequested, outputCount,
+      variationMode, outputVariants, requestedImageCount: imageCountClamp.requested,
+      actualImageCount: count, countClamped: imageCountClamp.clamped,
+      generationRequestId, generationOwnerId: `user:${userId}`, studioClientId,
+      providerMode, mockProviderBehavior, mockProviderDelayMs,
+      mode: isRetrySingleOutput ? "retry_single_output" : undefined,
+      retryOfOutputId: body.retryOfOutputId,
+      retryOutputIndex: body.retryOutputIndex,
+    };
+    try {
+      generationIntentKey = deriveDurableGenerationIntentKey(userId, generationRequestId);
+    } catch {
+      return NextResponse.json({ error: "generation_intent_unavailable" }, { status: 503 });
+    }
+    generationIntentFingerprint = deriveGenerationIntentFingerprint(
+      count,
+      workerJobParams as unknown as Record<string, unknown>,
+    );
+
+    // Exact replay is intentionally before health/rate/moderation/allowance. A
+    // retry is a read of the original durable operation, not a new paid action.
+    try {
+      const replay = await lookupGenerationJobIntent(
+        count, userId, generationIntentKey, generationIntentFingerprint,
+      );
+      if (replay) {
+        return NextResponse.json({
+          jobId: replay.jobId, slots: replay.slots, replayed: true,
+          status: replay.status, results: replay.results,
+        });
+      }
+    } catch (error) {
+      if (isGenerationIntentConflict(error)) {
+        return NextResponse.json({ error: "generation_intent_conflict" }, { status: 409 });
+      }
+      return NextResponse.json({ error: "generation_intent_unavailable" }, { status: 503 });
+    }
+
+    // Only fresh intents require a live worker. Replays above remain available
+    // through queued/running/done/partial/failed even during a worker outage.
+    if (!(await isWorkerHealthy())) {
+      return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
+    }
+  }
 
   // ── Step 2b: DURABLE per-user rate limit — before any PAID work ───────────────
   // An ABUSE CEILING on request velocity, not allowance metering (that is a later
@@ -1060,40 +1182,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
-    const promptWithLangForQueue = contentLanguage !== "en"
-      ? `${prompt}\n\n[Important: Generate any on-image text and descriptive copy in ${contentLanguage}. Keep Pinterest-native tone.]`
-      : prompt;
-    const jobParams: GeneratorPayload = {
-      keyword, style, count, prompt: promptWithLangForQueue, style_ref: styleRef, product_images: productImages, image_inputs: imageInputs, category,
-      text_overlay: textOverlay, reference_strength: referenceStrength,
-      output_type: outputType, format: pinFormat, product_metadata: productMetadata,
-      model_key: modelKey, content_language: contentLanguage,
-      prompt_mode: promptMode, prompt_version: promptVersion,
-      creative_direction_meta: creativeDirectionMeta,
-      selectedTags,
-      primaryFormatTag,
-      directionBrief,
-      briefManuallyEdited,
-      inferredCategory,
-      selectedOpportunity,
-      productImageCountRequested,
-      referenceImageCountRequested,
-      outputCount,
-      variationMode,
-      outputVariants,
-      requestedImageCount: imageCountClamp.requested,
-      actualImageCount: count,
-      countClamped: imageCountClamp.clamped,
-      generationRequestId,
-      generationOwnerId: `user:${userId}`,
-      studioClientId,
-      providerMode,
-      mockProviderBehavior,
-      mockProviderDelayMs,
-      mode: isRetrySingleOutput ? "retry_single_output" : undefined,
-      retryOfOutputId: body.retryOfOutputId,
-      retryOutputIndex: body.retryOutputIndex,
-    };
+    const jobParams = workerJobParams;
+    if (!jobParams || !generationIntentKey || !generationIntentFingerprint) {
+      return NextResponse.json({ error: "generation_intent_unavailable" }, { status: 503 });
+    }
 
     // ── Phase 4I: image metering (SHADOW by default; off = today's behaviour) ────
     // Reserve slots against the usage ledger BEFORE dispatch, AFTER the moderation
@@ -1107,15 +1199,12 @@ export async function POST(req: NextRequest) {
     // succeeds we use its jobId directly. In `off` mode the plain path is untouched.
     const meterMode = usageMeteringMode();
     if (meterMode !== "off") {
-      // Worker liveness is still an honest-failure gate even under metering: a job
-      // nobody will claim must not be reserved-and-enqueued. Reuse isWorkerHealthy().
-      if (!(await isWorkerHealthy())) {
-        return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
-      }
       const ledger = await reserveGenerationJobViaLedger({
         userId,
         count,
         generationRequestId,
+        intentKey: generationIntentKey,
+        intentFingerprint: generationIntentFingerprint,
         params: jobParams as unknown as Record<string, unknown>,
       });
       if (ledger.kind === "reserved") {
@@ -1127,8 +1216,18 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           jobId: ledger.jobId,
           slots: ledger.slots,
-          usage: { reserved: ledger.slots, availableAfterReservation },
+          replayed: ledger.replayed,
+          status: ledger.status,
+          results: ledger.results,
+          usage: {
+            reserved: ledger.replayed ? 0 : ledger.slots,
+            replayed: ledger.replayed,
+            availableAfterReservation,
+          },
         });
+      }
+      if (ledger.kind === "conflict") {
+        return NextResponse.json({ error: "generation_intent_conflict" }, { status: 409 });
       }
       if (ledger.kind === "insufficient" && usageEnforceFor("ai_image")) {
         // ENFORCE, gated by USAGE_ENFORCE_AI_IMAGES (decision #8, 2026-08-28 — the
@@ -1148,12 +1247,32 @@ export async function POST(req: NextRequest) {
       // moderation gate — see meterGeneration.ts.
     }
 
-    const enqueued = await enqueueGenerationJob(count, jobParams as unknown as Record<string, unknown>, userId);
+    let enqueued;
+    try {
+      enqueued = await enqueueGenerationJob(
+        count,
+        jobParams as unknown as Record<string, unknown>,
+        userId,
+        generationIntentKey,
+        generationIntentFingerprint,
+      );
+    } catch (error) {
+      if (isGenerationIntentConflict(error)) {
+        return NextResponse.json({ error: "generation_intent_conflict" }, { status: 409 });
+      }
+      throw error;
+    }
     if (!enqueued) {
       return NextResponse.json({ error: "generation_unavailable" }, { status: 503 });
     }
     console.log(JSON.stringify({ event: "generation_enqueued", slots: enqueued.slots, metered: false }));
-    return NextResponse.json({ jobId: enqueued.jobId, slots: enqueued.slots });
+    return NextResponse.json({
+      jobId: enqueued.jobId,
+      slots: enqueued.slots,
+      replayed: enqueued.replayed,
+      status: enqueued.status,
+      results: enqueued.results,
+    });
   }
 
   // Path 1: FastAPI (async task queue — only when server is running)

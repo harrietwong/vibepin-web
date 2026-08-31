@@ -232,6 +232,10 @@ export interface PinDraft {
    *  worker-mode enqueue path. Used to resume polling after a refresh (P2 reconcile);
    *  P1 only sets/clears it during the live in-page poll. */
   generationJobId?:    string;
+  /** Stable client operation id persisted before POST, for ambiguous retry/reload. */
+  generationIntentId?: string;
+  /** Exact bounded POST body used only to recover an intent whose response was lost. */
+  generationIntentPayload?: Record<string, unknown>;
   /** WP3-P2: this placeholder's index into the generation_jobs row's `results[]`
    *  array. Stamped at creation time (StudioBoard's worker-mode enqueue maps
    *  placeholders[i] ↔ slot i 1:1). Reconcile-after-reload matches a reloaded
@@ -666,6 +670,8 @@ export function createBoardDraft(input: {
   generationStatus?: string;
   /** WP3-P1: generation_jobs row id (worker-mode enqueue path only). */
   generationJobId?: string;
+  generationIntentId?: string;
+  generationIntentPayload?: Record<string, unknown>;
   /** WP3-P2: this placeholder's slot index in the job's results[] array. */
   generationSlot?: number;
   /** Server generation id + stable asset key (see PinDraft.sourceGenerationId). */
@@ -769,6 +775,8 @@ export function createBoardDraft(input: {
     assetError:          input.assetError,
     generationStatus:    input.generationStatus,
     generationJobId:     input.generationJobId,
+    generationIntentId:  input.generationIntentId,
+    generationIntentPayload: input.generationIntentPayload,
     generationSlot:      input.generationSlot,
     sourceGenerationId:  input.sourceGenerationId,
     sourceAssetKey:      input.sourceAssetKey,

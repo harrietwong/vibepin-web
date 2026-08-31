@@ -814,13 +814,21 @@ export function StudioBoard() {
     await runAiGeneration({ parent, opts }, {
       store: pinDraftStore,
       defaultDestinations: defaultDestinationsForNewContent(),
-      generate: ({ styleReference, batchRequestId, setup, placeholderIds }) =>
+      generate: ({ styleReference, batchRequestId, groupIndex, generationIntentId, setup, placeholderIds }) =>
         dispatchGenerationGroup({
           source: parent,
           setup,
           styleReference,
           batchRequestId,
+          groupIndex,
+          generationIntentId,
           placeholderIds,
+          onIntentPrepared: (intentId, payload, ids) => ids.forEach(id => {
+            pinDraftStore.updateDraft(id, {
+              generationIntentId: intentId,
+              generationIntentPayload: payload,
+            });
+          }),
           onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
             pinDraftStore.updateDraft(id, {
               generationJobId: jobId,

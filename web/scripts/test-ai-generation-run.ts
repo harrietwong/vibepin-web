@@ -186,13 +186,16 @@ async function main() {
       resolveModelLabel: () => "Gemini",
       now: () => 2,
       randomId: () => "worker",
-      generate: ({ styleReference, batchRequestId, setup, placeholderIds }) =>
+      generate: ({ styleReference, batchRequestId, groupIndex, generationIntentId, setup, placeholderIds }) =>
         dispatchGenerationGroup({
           source: null,
           setup,
           styleReference,
           batchRequestId,
+          groupIndex,
+          generationIntentId,
           placeholderIds,
+          onIntentPrepared: () => {},
           poll: { intervalMs: 1 },
           onWorkerJob: (jobId, _slots, ids) => ids.forEach((id, slot) => {
             store.updateDraft(id, { generationJobId: jobId, generationSlot: slot });

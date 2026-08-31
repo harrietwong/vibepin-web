@@ -11,6 +11,8 @@ import { createBrowserClient } from "@supabase/ssr";
 import type { PinDraft } from "@/lib/pinDraftStore";
 import type { AiVersionOptions } from "@/components/studio/AiVersionDrawer";
 import { LimitReachedError, parseLimitReachedResponse } from "@/lib/usage/limitReached";
+import { generationRequestIdForGroup } from "@/lib/studio/generationIntent";
+export { generationRequestIdForGroup } from "@/lib/studio/generationIntent";
 
 // The server contract allows at most four outputs in one request. The visible
 // selector can evolve independently, while persisted/remix callers may carry 4.
@@ -53,6 +55,9 @@ type GenerateResponseBody = {
   source?: string;
   jobId?: string;
   slots?: number;
+  replayed?: boolean;
+  status?: GenerationJobStatus;
+  results?: GenerationJobResult[];
 };
 
 function parseInlineResult(body: GenerateResponseBody, fallbackRequestId: string): AiVersionGenerateResult {
@@ -82,6 +87,7 @@ function buildGenerateBody(opts: {
   setup: AiVersionOptions;
   generationRequestId: string;
   styleReference?: string | null;
+  durableGenerationIntent?: boolean;
 }): Record<string, unknown> {
   const { source, setup, generationRequestId } = opts;
   const productImages = setup.productImages.length
@@ -95,6 +101,7 @@ function buildGenerateBody(opts: {
   const referenceImages = groupReference ? [groupReference] : [];
 
   return {
+    ...(opts.durableGenerationIntent ? { generation_intent_version: 1 } : {}),
     keyword: source?.keyword || opts.keyword || source?.title || setup.category || "pin",
     category: setup.category || source?.category || "",
     style: "editorial",
@@ -173,10 +180,12 @@ export async function generateAiVersions(opts: {
   styleReference?: string | null;
   /** Shared across all groups in one batch, for log/telemetry correlation. */
   batchRequestId?: string;
+  /** Stable reference-group position within the user action. */
+  groupIndex?: number;
 }): Promise<AiVersionGenerateResult> {
   const { source, setup } = opts;
   const generationRequestId = opts.batchRequestId
-    ? `${opts.batchRequestId}_g${Math.random().toString(36).slice(2, 6)}`
+    ? generationRequestIdForGroup(opts.batchRequestId, opts.groupIndex ?? 0)
     : `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   const res = await fetch("/api/generate", {
@@ -204,13 +213,19 @@ export async function generateAiVersions(opts: {
 // ── WP3-P1: enqueue + poll (GENERATION_MODE=worker path) ────────────────────────
 
 export type EnqueueGenerationResult =
-  | { mode: "worker"; jobId: string; slots: number }
+  | {
+      mode: "worker";
+      jobId: string;
+      slots: number;
+      replayed: boolean;
+      status?: GenerationJobStatus;
+      results?: GenerationJobResult[];
+    }
   | { mode: "inline"; result: AiVersionGenerateResult };
 
 /**
- * POST /api/generate exactly once and preserve whichever state-changing result the
- * server produced. Worker mode returns the queued job; inline mode returns the
- * images from this same response, so callers never probe and dispatch twice.
+ * POST /api/generate once, with one bounded retry only for an ambiguous transport
+ * failure. Both attempts carry the exact same durable intent and payload.
  */
 export async function enqueueGeneration(opts: {
   source?: PinDraft | null;
@@ -220,23 +235,36 @@ export async function enqueueGeneration(opts: {
   styleReference?: string | null;
   /** Shared across groups triggered by one user action. */
   batchRequestId?: string;
+  /** Stable reference-group position within the user action. */
+  groupIndex?: number;
+  /** Exact persisted group intent; preferred over reconstructing from batch metadata. */
+  generationIntentId?: string;
+  onIntentPrepared?: (intentId: string, payload: Record<string, unknown>) => void;
 }): Promise<EnqueueGenerationResult> {
   const { source, setup } = opts;
-  const generationRequestId = opts.batchRequestId
-    ? `${opts.batchRequestId}_g${Math.random().toString(36).slice(2, 6)}`
-    : `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const generationRequestId = opts.generationIntentId || (opts.batchRequestId
+    ? generationRequestIdForGroup(opts.batchRequestId, opts.groupIndex ?? 0)
+    : `board_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
 
-  const res = await fetch("/api/generate", {
-    method: "POST",
-    headers: await authHeaders(),
-    body: JSON.stringify(buildGenerateBody({
-      source,
-      keyword: opts.keyword,
-      setup,
-      generationRequestId,
-      styleReference: opts.styleReference,
-    })),
+  const payload = buildGenerateBody({
+    source,
+    keyword: opts.keyword,
+    setup,
+    generationRequestId,
+    styleReference: opts.styleReference,
+    durableGenerationIntent: true,
   });
+  opts.onIntentPrepared?.(generationRequestId, payload);
+
+  const serialized = JSON.stringify(payload);
+  let res: Response;
+  try {
+    res = await fetch("/api/generate", { method: "POST", headers: await authHeaders(), body: serialized });
+  } catch {
+    // One bounded ambiguous-transport replay with the SAME durable intent. The DB
+    // unique anchor returns the original job if the first response was lost.
+    res = await fetch("/api/generate", { method: "POST", headers: await authHeaders(), body: serialized });
+  }
 
   if (res.status === 503) {
     let code = "generation_unavailable";
@@ -253,7 +281,14 @@ export async function enqueueGeneration(opts: {
 
   const body = await res.json() as GenerateResponseBody;
   if (body.jobId && typeof body.slots === "number") {
-    return { mode: "worker", jobId: body.jobId, slots: body.slots };
+    return {
+      mode: "worker",
+      jobId: body.jobId,
+      slots: body.slots,
+      replayed: body.replayed === true,
+      status: body.status,
+      results: Array.isArray(body.results) ? body.results : undefined,
+    };
   }
   return { mode: "inline", result: parseInlineResult(body, generationRequestId) };
 }
@@ -440,7 +475,10 @@ export async function dispatchGenerationGroup(opts: {
   setup: AiVersionOptions;
   styleReference: string | null;
   batchRequestId: string;
+  groupIndex: number;
+  generationIntentId: string;
   placeholderIds: string[];
+  onIntentPrepared: (intentId: string, payload: Record<string, unknown>, placeholderIds: string[]) => void;
   onWorkerJob: (jobId: string, slots: number, placeholderIds: string[]) => void;
   poll?: { intervalMs?: number; timeoutMs?: number };
 }): Promise<AiVersionGenerateResult | AwaitedGenerationJobResult> {
@@ -450,6 +488,9 @@ export async function dispatchGenerationGroup(opts: {
     setup: opts.setup,
     styleReference: opts.styleReference,
     batchRequestId: opts.batchRequestId,
+    groupIndex: opts.groupIndex,
+    generationIntentId: opts.generationIntentId,
+    onIntentPrepared: (intentId, payload) => opts.onIntentPrepared(intentId, payload, opts.placeholderIds),
   });
   if (dispatched.mode === "inline") return dispatched.result;
 

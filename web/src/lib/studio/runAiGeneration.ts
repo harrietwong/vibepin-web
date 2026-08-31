@@ -21,6 +21,7 @@ import type { LinkedProduct } from "@/lib/pinMetadata";
 import { planReferenceGroups } from "@/lib/studio/selectedReferences";
 import { resolveProductPublicUrl, toLinkedProduct } from "@/lib/studio/productSelection";
 import { PRODUCT_DERIVED_URL_SOURCE } from "@/lib/studio/destinationUrlDerivation";
+import { generationRequestIdForGroup } from "@/lib/studio/generationIntent";
 import { isLimitReachedError, type LimitReached } from "@/lib/usage/limitReached";
 
 /**
@@ -54,6 +55,9 @@ export type RunAiGenerationDeps = {
   generate: (args: {
     styleReference: string | null;
     batchRequestId: string;
+    /** Stable within the batch; makes the per-group intent key deterministic. */
+    groupIndex: number;
+    generationIntentId: string;
     setup: AiVersionOptions;
     /** Allows worker dispatch to persist job/slot recovery metadata before polling. */
     placeholderIds: string[];
@@ -184,6 +188,8 @@ export async function runAiGeneration(
         model: resolveModelLabel(undefined, opts.modelKey),
         format: opts.format,
         generationSessionId: requestId,
+        generationIntentId: generationRequestIdForGroup(requestId, group.index),
+        generationSlot: i,
         promptSnapshot: opts.directionBrief,
         setupSnapshot,
       });
@@ -207,6 +213,8 @@ export async function runAiGeneration(
       const result = await generate({
         styleReference: group.reference?.imageUrl ?? null,
         batchRequestId: requestId,
+        groupIndex: group.index,
+        generationIntentId: generationRequestIdForGroup(requestId, group.index),
         setup: opts,
         placeholderIds: placeholders.map(p => p.id),
       });
