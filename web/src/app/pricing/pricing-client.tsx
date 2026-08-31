@@ -460,12 +460,15 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
   useEffect(() => {
     if (!pendingIntent || !authReady) return;
     const { planId } = pendingIntent;
-    setPendingIntent(null);
-    if (userId) {
-      void launchCheckout(planId);
-    } else {
-      routeToSignup(planId);
-    }
+    const timer = window.setTimeout(() => {
+      setPendingIntent(null);
+      if (userId) {
+        void launchCheckout(planId);
+      } else {
+        routeToSignup(planId);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [pendingIntent, authReady, userId, launchCheckout, routeToSignup]);
 
   // Timeout fallback: if auth never resolves, don't spin forever — degrade to
@@ -491,10 +494,13 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
     // Billing turned off: a crafted `/pricing?checkout=pro` return must NOT
     // auto-open checkout. Show the "coming soon" banner and clean the URL.
     if (!billingEnabled) {
-      autoCheckoutFired.current = true;
-      setCheckoutComingSoon(true);
-      router.replace("/pricing", { scroll: false });
-      return;
+      const timer = window.setTimeout(() => {
+        if (autoCheckoutFired.current) return;
+        autoCheckoutFired.current = true;
+        setCheckoutComingSoon(true);
+        router.replace("/pricing", { scroll: false });
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
     // Wait for the auth signal — treating a still-loading session as "logged
     // out" would wrongly drop the intent.
@@ -509,20 +515,24 @@ function PricingPageContent({ billingEnabled }: { billingEnabled: boolean }) {
       return;
     }
 
-    autoCheckoutFired.current = true;
-    setYearly(period === "year");
+    const timer = window.setTimeout(() => {
+      if (autoCheckoutFired.current) return;
+      autoCheckoutFired.current = true;
+      setYearly(period === "year");
 
-    if (!plan || !isPaidPlan(plan.id)) {
-      // Unknown / non-purchasable plan is a permanent condition — degrade.
-      setSelectedPlanId((plan?.id as PlanKey | undefined) ?? (checkoutPlanId as PlanKey));
-      setCheckoutUnavailable(true);
+      if (!plan || !isPaidPlan(plan.id)) {
+        // Unknown / non-purchasable plan is a permanent condition — degrade.
+        setSelectedPlanId((plan?.id as PlanKey | undefined) ?? (checkoutPlanId as PlanKey));
+        setCheckoutUnavailable(true);
+        router.replace("/pricing", { scroll: false });
+        return;
+      }
+
+      // Pass `period` explicitly — `setYearly` above has not applied yet.
+      void launchCheckout(plan.id, period);
       router.replace("/pricing", { scroll: false });
-      return;
-    }
-
-    // Pass `period` explicitly — `setYearly` above has not applied yet.
-    void launchCheckout(plan.id, period);
-    router.replace("/pricing", { scroll: false });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [searchParams, billingEnabled, authReady, userId, launchCheckout, router]);
 
   return (
