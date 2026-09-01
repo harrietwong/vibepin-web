@@ -22,6 +22,8 @@ import type {
   DeleteImpact,
 } from "@/lib/studio/bulkActions";
 import type { PublishBlocker } from "@/lib/studio/publishContent";
+import type { PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
+import { platformName } from "@/lib/social/platforms";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 
 type Translate = (key: MessageKey) => string;
@@ -101,6 +103,7 @@ const sectionHeading: React.CSSProperties = {
 export type BulkPublishSheetProps = {
   tr: Translate;
   partition: BulkPublishPartition;
+  confirmations: Record<string, PublishConfirmationSnapshot>;
   /** null = still on the confirm step; set = running; summary = done. */
   progress: { current: number; total: number } | null;
   summary: BulkPublishSummary | null;
@@ -108,7 +111,7 @@ export type BulkPublishSheetProps = {
   onClose: () => void;
 };
 
-export function BulkPublishSheet({ tr, partition, progress, summary, onConfirm, onClose }: BulkPublishSheetProps) {
+export function BulkPublishSheet({ tr, partition, confirmations, progress, summary, onConfirm, onClose }: BulkPublishSheetProps) {
   const readyCount = partition.ready.length;
   const running = !!progress && !summary;
   const total = readyCount + partition.blocked.length + partition.alreadyPublished.length + partition.generating.length;
@@ -150,6 +153,22 @@ export function BulkPublishSheet({ tr, partition, progress, summary, onConfirm, 
                   ? tr("studioBoard.bulkPublish.scheduledNoticeOne")
                   : fill(tr("studioBoard.bulkPublish.scheduledNotice"), { n: partition.scheduledNowCount })}
               </p>
+            )}
+
+            {partition.ready.length > 0 && (
+              <div data-testid="bulk-publish-exact-destinations">
+                <h3 style={sectionHeading}>{tr("publishConfirm.destinations")}</h3>
+                {partition.ready.map(item => {
+                  const snapshot = confirmations[item.id];
+                  return <div key={item.id} style={listRow}>
+                    <span style={{ minWidth: 0 }}><strong style={{ fontWeight: 750 }}>{item.title}</strong>
+                      {(snapshot?.publishableDestinations ?? []).map(destination => <span key={destination.id} style={{ display: "block", color: BUI.textSec, fontSize: 11.5, overflowWrap: "anywhere" }}>
+                        {platformName(destination.provider)} · {destination.accountLabel || destination.socialConnectionId}{destination.provider === "pinterest" ? ` · ${destination.boardName || destination.boardId}` : ""}
+                      </span>)}
+                    </span>
+                  </div>;
+                })}
+              </div>
             )}
 
             {partition.blocked.length > 0 && (

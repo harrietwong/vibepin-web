@@ -94,6 +94,15 @@ export interface PinDraft {
    * second publish started. Append-only history; never read by the publish path.
    */
   previousResults?:     DestinationPublishResult[];
+  /** Stable user-confirmed immediate-publish intent; persisted before provider dispatch. */
+  publishIntentId?:      string;
+  publishIntentStatus?:  "publishing" | "completed" | "recovery_pending";
+  publishIntentConfirmedAt?: string;
+  /** Exact provider/account/Board/Page snapshot the confirmation dialog displayed. */
+  publishIntentDestinations?: Array<{
+    id: string; provider: "pinterest" | "instagram" | "facebook";
+    socialConnectionId: string; accountLabel?: string; boardId?: string; boardName?: string;
+  }>;
   keyword:             string;
   category:            string;
   title:               string;

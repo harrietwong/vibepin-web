@@ -74,7 +74,7 @@ import { PublishDestinations } from "@/components/social/PublishDestinations";
 import { PublishResults } from "@/components/social/PublishResults";
 import { publishResultRows } from "@/lib/studio/publishResults";
 import { publishContent } from "@/lib/studio/publishContent";
-import { destinationKey, type PublishDestination, type PublishProvider } from "@/lib/contentDraftModel";
+import { buildPublishConfirmation, type ConfirmedPublishReceipt, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import { PinAICopyPanel } from "@/components/pins/PinAICopyPanel";
 import { fetchInFlightPublish } from "@/lib/social/socialClient";
 import { isSocialProvider, platformName, unschedulableDestinations, type SocialProvider } from "@/lib/social/platforms";
@@ -327,10 +327,8 @@ export function PinDetailsModal({
   const [customTimeBoardChangedNotice, setCustomTimeBoardChangedNotice] = useState(false);
   // Overflow menu (Publish now / Unschedule) — keeps the footer to one primary CTA.
   const [overflowOpen, setOverflowOpen] = useState(false);
-  // "Publish now" is irreversible and, when scheduled, drops the slot — confirm first.
-  const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
-  /** Which affordance opened the confirm dialog: Try again (retry) vs Publish now. */
-  const [publishIsRetry, setPublishIsRetry] = useState(false);
+  // Frozen exact destination snapshot shown before any immediate provider dispatch.
+  const [publishConfirmation, setPublishConfirmation] = useState<PublishConfirmationSnapshot | null>(null);
   const boardSelectRef = useRef<HTMLInputElement | null>(null);
 
   // ── Pinterest redirect feedback ─────────────────────────────────────────────
@@ -1065,11 +1063,40 @@ export function PinDetailsModal({
   // click and the publish.
   function requestPublish(options?: { retry?: boolean }) {
     if (publishing || isRedirectingToPinterest) return;
-    setPublishIsRetry(!!options?.retry);
-    setConfirmPublishOpen(true);
+    const capturedAt = new Date().toISOString();
+    const scheduledDestinations = socialDestinations.flatMap(provider => {
+      if (provider === "tiktok") return [];
+      const ids = provider === "pinterest"
+        ? (targetConnectionId ? [targetConnectionId] : [])
+        : socialAccountIds.filter(account => account.provider === provider).map(account => account.id);
+      return ids.map(connectionId => ({
+        provider,
+        socialConnectionId: connectionId,
+        accountLabel: provider === "pinterest"
+          ? (targetAccountLabel || undefined)
+          : (() => {
+              const account = destinationSummaries.find(summary => summary.provider === provider)?.accounts.find(item => item.id === connectionId);
+              return account?.providerAccountUsername || account?.providerAccountName || account?.providerAccountId || undefined;
+            })(),
+        ...(provider === "pinterest" ? {
+          boardId: boardId || undefined,
+          boardName: boards.find(item => item.id === boardId)?.name || undefined,
+        } : {}),
+        capturedAt,
+      }));
+    });
+    setPublishConfirmation(buildPublishConfirmation({
+      ...activeDraft,
+      title,
+      description,
+      altText,
+      destinationUrl,
+      imageUrl: publicImage,
+      scheduledDestinations,
+    }, { onlyPending: !!options?.retry }));
   }
 
-  async function handlePublish(retry: boolean) {
+  async function handlePublish(receipt: ConfirmedPublishReceipt) {
     // Dev-only click trace — verifies the handler fires from a real browser click.
     if (process.env.NODE_ENV !== "production") {
       console.log("[publish-click]", {
@@ -1085,47 +1112,14 @@ export function PinDetailsModal({
     // Duplicate-click / in-flight-redirect protection — the ONLY silent return.
     if (publishing || isRedirectingToPinterest) return;
 
-    // Auto-save current values, then clear prior feedback.
-    persistDraft();
+    // The receipt already froze the exact values the merchant saw. Do not write the
+    // draft again here: that would advance updatedAt after confirmation and correctly
+    // make this receipt stale. publishContent persists the confirmed snapshot before
+    // dispatch; normal field autosave remains independent of this action.
     setPublishError(null);
     setBoardError(false);
     setTrialAccess(false);
     setPublishAttempts((n) => n + 1);
-
-    // The destinations THIS click publishes to, built from the live checkbox state.
-    //
-    // Passed to publishContent explicitly rather than read from the draft: the drawer
-    // only freezes `scheduledDestinations` for a Pin that has a date ("Publish now
-    // needs no stored intent"), so an undated Pin has no stored intent and
-    // publishContent — which fails closed — would publish nowhere. What the merchant
-    // has ticked right now IS the intent for an immediate publish.
-    //
-    // One destination per TARGET, not per platform: with several accounts picked on a
-    // platform, each is its own destination, so each gets its own dispatch and its own
-    // result row. A platform with nothing narrowed keeps a null connection, and the
-    // server resolves its single connected account exactly as before.
-    function liveDestinations(providers: SocialProvider[]): PublishDestination[] {
-      // TikTok has no publish path yet (unschedulableDestinations already blocks it);
-      // it is dropped here rather than sent to a dispatcher that cannot serve it.
-      const publishable = providers.filter((p): p is PublishProvider => p !== "tiktok");
-      return publishable.flatMap((provider): PublishDestination[] => {
-        // socialAccountIds is flat across platforms; an id belonging to another
-        // platform is simply not among that provider's connections server-side,
-        // so scoping happens there rather than duplicating the account list here.
-        const ids = provider === "pinterest"
-          ? (targetConnectionId ? [targetConnectionId] : [])
-          : socialAccountIds.filter(a => a.provider === provider).map(a => a.id);
-        const accounts: (string | null)[] = ids.length ? ids : [null];
-        return accounts.map(id => ({
-          id: destinationKey(provider, id),
-          provider,
-          socialConnectionId: id,
-          ...(provider === "pinterest"
-            ? { boardId, boardName: boards.find(b => b.id === boardId)?.name ?? defaultBoard?.boardName ?? activeDraft.boardName ?? undefined }
-            : {}),
-        }));
-      });
-    }
 
     // ── Gating: everything below is UI state the shared publish cannot see ──────
     // Field-level validation stays HERE (it paints inline errors and moves focus);
@@ -1205,7 +1199,7 @@ export function PinDetailsModal({
     // lands seconds after Pinterest — announcing "published" and then silently
     // rewriting the same toast reads as two results for one click. A spinner that
     // resolves is honest about the wait.
-    const destinations = liveDestinations(socialDestinations);
+    const destinations = receipt.publishableDestinations;
     if (destinations.length > 1) {
       toast.loading(t("pinDetails.toast.publishSuccess"), { id: PUBLISH_TOAST_ID });
     }
@@ -1214,13 +1208,13 @@ export function PinDetailsModal({
       // the same Pin published from either surface produces the same per-destination
       // records — and the same records the cron worker writes for a scheduled one.
       //
-      // Destinations come from the live checkboxes (see liveDestinations); the copy,
-      // image and link come off the draft, which persistDraft() above has just made
-      // current. onlyPending is the shared retry semantics: a destination that already
+      // Destinations, copy, image and link all come from the frozen confirmation receipt.
+      // onlyPending is the shared retry semantics: a destination that already
       // published is not re-sent, so retrying a partial failure cannot double-post.
       const outcome = await publishContent(activeDraft.id, {
-        onlyPending: retry,
+        onlyPending: receipt.onlyPending,
         destinations,
+        confirmation: receipt,
         extras: {
           attachedProducts: products.length ? products : undefined,
           primaryProductUrl: primaryProduct?.productUrl,
@@ -2156,11 +2150,11 @@ export function PinDetailsModal({
             funnel here rather than publishing on their own). The second sentence about the
             scheduled time only shows when the Pin actually holds one. */}
         <ConfirmPublishDialog
-          open={confirmPublishOpen}
-          hasSchedule={isScheduled}
+          open={!!publishConfirmation}
+          snapshot={publishConfirmation}
           busy={publishing || isRedirectingToPinterest}
-          onCancel={() => setConfirmPublishOpen(false)}
-          onConfirm={() => { setConfirmPublishOpen(false); void handlePublish(publishIsRetry); }}
+          onCancel={() => setPublishConfirmation(null)}
+          onConfirm={receipt => { setPublishConfirmation(null); void handlePublish(receipt); }}
           ui={{ card: UI.card, border: UI.border, text: UI.text, textSec: UI.textSec }}
         />
 

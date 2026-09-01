@@ -2907,6 +2907,22 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "studioBoard.limit.image.overRequestBody": "您请求生成 {requested} 张图片，但当前套餐仅剩 {remaining} 张。可改为生成剩余数量，或升级套餐获取更多。",
   "studioBoard.limit.image.generateRemaining": "改为生成 {remaining} 张",
   "studioBoard.limit.image.generateOneRemaining": "改为生成 1 张",
+  "publishConfirm.title": "确认发布目标",
+  "publishConfirm.close": "关闭发布确认",
+  "publishConfirm.mediaCount": "{n} 个媒体素材",
+  "publishConfirm.caption": "文案：",
+  "publishConfirm.modeLabel": "发布方式：",
+  "publishConfirm.modeNow": "立即发布",
+  "publishConfirm.modeSchedule": "排期至 {time}（{timezone}）",
+  "publishConfirm.destinations": "发布目标",
+  "publishConfirm.missingBoard": "需要选择 Board",
+  "publishConfirm.noDestinations": "尚未保存发布目标。",
+  "publishConfirm.editDestinations": "请返回“编辑发布目标”完成设置后再发布。",
+  "publishConfirm.cancel": "取消",
+  "publishConfirm.confirmNow": "立即发布到 {n} 个目标",
+  "publishConfirm.confirmSchedule": "排期到 {n} 个目标",
+  "publishResults.deliveryUnknown": "正在确认投递结果",
+  "publishResults.recoveryHint": "暂时不要再次发布。请先核对原发布任务，避免生成重复帖子。",
 };
 
 export default zhCN;

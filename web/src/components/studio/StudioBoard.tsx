@@ -21,13 +21,12 @@ import * as pinDraftStore from "@/lib/pinDraftStore";
 import * as assetStore from "@/lib/assetStore";
 import { toProxyUrl } from "@/lib/imageProxy";
 import type { PinDraft } from "@/lib/pinDraftStore";
-import { startPinterestConnect, fetchPinterestDefaultBoard, savePinterestDefaultBoard } from "@/lib/pinterestClient";
+import { startPinterestConnect, savePinterestDefaultBoard } from "@/lib/pinterestClient";
 import { startImageAnalysis } from "@/lib/ai-copy/startImageAnalysis";
 import { startQualityJudge } from "@/lib/ai-copy/startQualityJudge";
 import { track } from "@/lib/analytics";
-import { beginPublish, endPublish, isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, mapPublishErrorToCategory, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
-import { isPinReady, isPublishableImage, pinFieldErrors, hasPinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
-import { readStoredTarget } from "@/lib/studio/publishTarget";
+import { isActionablePublishFailure, isActionablePublishFailureInWeek, listActionablePublishFailures, FAILED_SUB_ENTRY_KEY, FAILED_SUB_ENTRY_PUBLISH } from "@/lib/studio/pinLifecycle";
+import { isPinReady, isPublishableImage, pinFieldErrors, type PinFieldErrors } from "@/lib/pinReadiness";
 import { getCachedConnections } from "@/lib/social/connectionsCache";
 import { migrateMultiUploadMode, patchPublishingPrefs, resolveDefaultDestinations } from "@/lib/publishingPrefsStore";
 import { draftReadiness } from "@/lib/weeklyPlanStats";
@@ -38,8 +37,9 @@ import { dispatchGenerationGroup } from "@/lib/studio/generateAiVersions";
 import { reconcileGeneratingDrafts } from "@/lib/studio/generationRecovery";
 import { type SelectedReference } from "@/lib/studio/selectedReferences";
 import { runAiGeneration } from "@/lib/studio/runAiGeneration";
-import { isLimitReachedError, limitMessageKeyForCode, offerableRemaining, type LimitReached } from "@/lib/usage/limitReached";
+import { limitMessageKeyForCode, offerableRemaining, type LimitReached } from "@/lib/usage/limitReached";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { ConfirmPublishDialog } from "@/components/shared/ConfirmPublishDialog";
 import { SETTINGS_BILLING_PATH } from "@/lib/settingsPaths";
 import { resolveModelLabel } from "@/lib/studio/modelLabel";
 import { StudioBoardFilters } from "@/components/studio/StudioBoardFilters";
@@ -56,6 +56,7 @@ import { isShopifyIntegrationEnabled } from "@/lib/shopifyFlag";
 import { StudioPlanSidebar, type PlanScheduleSignal } from "@/components/studio/StudioPlanSidebar";
 import { contentDestinations, contentMedia } from "@/lib/contentDraftModel";
 import { publishContent, explainPublishBlockers } from "@/lib/studio/publishContent";
+import { buildPublishConfirmation, confirmPublishSnapshot, type ConfirmedPublishReceipt, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import {
   partitionBulkPublish, summarizeDeleteImpact, summarizeBulkPublish,
   type BulkPublishOutcomeRow, type BulkPublishSummary,
@@ -298,6 +299,7 @@ export function StudioBoard() {
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [publishConfirmation, setPublishConfirmation] = useState<PublishConfirmationSnapshot | null>(null);
   const [aiDrawer, setAiDrawer] = useState<AiDrawerState>(null);
   const [aiSetupCache, setAiSetupCache] = useState<Record<string, AiVersionDrawerSetup>>({});
   const [aiGenerating, setAiGenerating] = useState(false);
@@ -593,49 +595,31 @@ export function StudioBoard() {
   // Gating and toasts live here (they are card UI); the publish ITSELF is
   // publishContent(), the one function every surface goes through — see its header
   // for why four divergent publish paths was the defect.
-  const handlePublish = useCallback(async (id: string, options?: { onlyPending?: boolean }) => {
-    let d = pinDraftStore.getDraft(id); if (!d) return;
-    if (d.assetError || !isPublishableImage(d.imageUrl)) { toast.error(tr("studioBoard.toast.imageUnavailable")); return; }
-    const destinations = contentDestinations(d);
-    const pinterestTargets = destinations.filter(destination => destination.provider === "pinterest");
-    const socialTargets = destinations.filter(destination => destination.provider !== "pinterest");
-    // Publishing straight from the card never opens the details drawer, so the drawer's
-    // board auto-fill never ran for this draft. Without this, a user who has a default
-    // board set is still told to "complete required details" — the board they picked
-    // last time simply was never written onto this draft. Adopt it here before gating.
-    if (pinterestTargets.length && !d.boardId?.trim() && !noBoardAccess) {
-      try {
-        // Default board OF THE PIN'S TARGET connection (PRD §14): a draft already
-        // pinned to account B must never adopt account A's default board just because
-        // A is the workspace default. No stored target ⇒ server default connection,
-        // which is the pre-multi-account behaviour.
-        const fallback = await fetchPinterestDefaultBoard(undefined, readStoredTarget(d) || undefined);
-        if (fallback?.boardId) {
-          // The board lives on the draft; contentDestinations() reads it back onto the
-          // Pinterest destination, so there is no second place to keep in step.
-          d = pinDraftStore.updateDraft(id, { boardId: fallback.boardId, boardName: fallback.boardName ?? "" }) ?? d;
-        }
-      } catch { /* leave the draft as-is; the readiness gate below reports it */ }
+  const requestPublish = useCallback((id: string, options?: { onlyPending?: boolean }) => {
+    const draft = pinDraftStore.getDraft(id); if (!draft) return;
+    if (draft.assetError || !isPublishableImage(draft.imageUrl)) {
+      toast.error(tr("studioBoard.toast.imageUnavailable"));
+      return;
     }
-    // Pinterest readiness only gates the Pinterest destinations; a Content going only
-    // to Instagram/Facebook must not be blocked by a missing board.
-    const pinterestReady = !pinterestTargets.length || (!noBoardAccess && isPinReady(draftReadiness(d)));
-    if (!pinterestReady && !socialTargets.length) { setActiveId(id); toast.error(tr("studioBoard.toast.completeDetailsToPublish")); return; }
-    // Field length is a property of the Content itself, so it blocks every destination.
-    const lenErrors = pinFieldErrors({ title: d.title, description: d.description });
+    const lenErrors = pinFieldErrors({ title: draft.title, description: draft.description });
     if (lenErrors.title || lenErrors.description) {
       setActiveId(id);
-      setFieldErrors(prev => ({ ...prev, [id]: lenErrors }));
+      setFieldErrors(previous => ({ ...previous, [id]: lenErrors }));
       toast.error(tr("studioBoard.toast.fieldTooLong"));
       return;
     }
-    // publishContent takes the shared in-flight lock itself, resolves the destinations
-    // from the stored intent, media-checks each one, and writes the per-destination
-    // records plus the derived legacy fields. Nothing about the record is decided here.
-    // Default is Retry semantics (re-send only what has not published). A republish of
-    // an edited Posted Content passes onlyPending:false so the NEW content goes to every
-    // destination it names — otherwise editing a published Pin would publish nothing.
-    const outcome = await publishContent(id, { onlyPending: options?.onlyPending ?? true });
+    // Opening the dialog is read-only. It exposes missing/invalid destinations in the
+    // disabled-reason area instead of silently repairing them with a default account.
+    setPublishConfirmation(buildPublishConfirmation(draft, { onlyPending: options?.onlyPending ?? true }));
+  }, [tr]);
+
+  const handlePublish = useCallback(async (receipt: ConfirmedPublishReceipt) => {
+    setPublishConfirmation(null);
+    const outcome = await publishContent(receipt.draftId, {
+      onlyPending: receipt.onlyPending,
+      destinations: receipt.publishableDestinations,
+      confirmation: receipt,
+    });
     if (outcome.blocked === "locked") return;
     if (outcome.blocked) { toast.error(tr("studioBoard.toast.publishFailed")); return; }
     // A Retry with nothing left to send. Neutral, not an error: nothing failed, and
@@ -663,7 +647,7 @@ export function StudioBoard() {
         });
       } else toast.error(tr("studioBoard.toast.publishFailed"));
     }
-  }, [noBoardAccess, tr]);
+  }, [tr]);
 
   const handleCustomSchedule = useCallback((id: string, date: string, time: string) => {
     const d = pinDraftStore.getDraft(id); if (!d) return;
@@ -923,6 +907,7 @@ export function StudioBoard() {
   const [bulkPublishOpen, setBulkPublishOpen] = useState(false);
   const [bulkPublishProgress, setBulkPublishProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkPublishSummary, setBulkPublishSummary] = useState<BulkPublishSummary | null>(null);
+  const [bulkConfirmations, setBulkConfirmations] = useState<Record<string, PublishConfirmationSnapshot>>({});
 
   const selectedDrafts = useMemo(
     () => allItems.filter(item => selectedIds.has(item.draft.id)).map(item => item.draft),
@@ -966,6 +951,18 @@ export function StudioBoard() {
     [selectedDrafts, tr],
   );
 
+  const openBulkPublish = useCallback(() => {
+    const frozen: Record<string, PublishConfirmationSnapshot> = {};
+    for (const target of bulkPublishPartition.ready) {
+      const draft = pinDraftStore.getDraft(target.id);
+      if (draft) frozen[target.id] = buildPublishConfirmation(draft, { onlyPending: true });
+    }
+    setBulkConfirmations(frozen);
+    setBulkPublishSummary(null);
+    setBulkPublishProgress(null);
+    setBulkPublishOpen(true);
+  }, [bulkPublishPartition]);
+
   const runBulkPublish = useCallback(async () => {
     // Exactly the `ready` set the sheet showed — never a freshly recomputed one. A
     // partition computed a second time could differ (a sibling tab published one), and
@@ -979,7 +976,14 @@ export function StudioBoard() {
       setBulkPublishProgress({ current: i + 1, total: targets.length });
       // Sequential, and through publishContent so the shared per-draft in-flight lock
       // still protects against a card publish racing this loop.
-      const outcome = await publishContent(target.id, { onlyPending: true });
+      const snapshot = bulkConfirmations[target.id] ?? null;
+      const outcome = snapshot && !snapshot.blockers.length
+        ? await publishContent(target.id, {
+            onlyPending: true,
+            destinations: snapshot.publishableDestinations,
+            confirmation: confirmPublishSnapshot(snapshot),
+          })
+        : { published: [], failed: [], results: [], blocked: "invalid_confirmation" as const };
       if (outcome.blocked === "locked") {
         rows.push({ id: target.id, title: target.title, status: "skipped", message: tr("studioBoard.bulkPublish.alreadyPublishing") });
       } else if (outcome.blocked) {
@@ -1017,7 +1021,7 @@ export function StudioBoard() {
     }
     setBulkPublishSummary(summarizeBulkPublish(rows));
     setBulkPublishProgress(null);
-  }, [bulkPublishPartition, tr]);
+  }, [bulkConfirmations, bulkPublishPartition, tr]);
 
   const closeBulkPublish = useCallback(() => {
     // Only a completed run clears the selection: a cancelled sheet leaves the merchant
@@ -1099,7 +1103,7 @@ export function StudioBoard() {
   // Retry semantics come from handlePublish's default (`onlyPending ?? true`): only what
   // has not published is re-sent.
   const handleTryAgain = useCallback((d: PinDraft) => {
-    if (isActionablePublishFailure(d)) { void handlePublish(d.id); return; }
+    if (isActionablePublishFailure(d)) { requestPublish(d.id); return; }
     // Defensive retry gate: an ambiguous POST is not a failed generation. Reconcile
     // its exact owner-bound intent instead of opening a drawer that would create a
     // new requestId/job and potentially charge twice.
@@ -1185,7 +1189,7 @@ export function StudioBoard() {
     const cacheKey = nextDrawer.mode === "version" ? nextDrawer.draft.id : "scratch";
     if (retrySetup) setAiSetupCache(prev => ({ ...prev, [cacheKey]: retrySetup }));
     setAiDrawer(nextDrawer);
-  }, [handlePublish]);
+  }, [requestPublish]);
 
   // Persist failure is re-read on every render; the store emits (via
   // usePinBoardDrafts' subscription) after every write, including failed ones.
@@ -1270,7 +1274,7 @@ export function StudioBoard() {
                   style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: "#fff", background: BUI.gradient, border: 0, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
                   <Rows3 style={{ width: 13, height: 13 }} /> {tr("studioBoard.bulk.edit")}
                 </button>
-                <button type="button" data-testid="bulk-publish" onClick={() => { setBulkPublishSummary(null); setBulkPublishProgress(null); setBulkPublishOpen(true); }}
+                <button type="button" data-testid="bulk-publish" onClick={openBulkPublish}
                   style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 750, color: BUI.text, background: BUI.surface, border: `1px solid ${BUI.border}`, borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontFamily: "inherit" }}>
                   {tr("studioBoard.bulk.publish")}
                 </button>
@@ -1405,7 +1409,7 @@ export function StudioBoard() {
                 onPersist={handlePersist}
                 onSchedule={handleSchedule} onCustomSchedule={handleCustomSchedule}
                 onSelectProduct={(pin) => { setProductPickerTargetId(pin.id); setShowProductPicker(true); }}
-                onGenerateAiImage={handleGenerateAiImage} onPublish={handlePublish}
+                onGenerateAiImage={handleGenerateAiImage} onPublish={requestPublish}
                 onDelete={handleDelete} onArchive={handleArchive} onDuplicate={handleDuplicate}
                 onUnschedule={handleUnschedule} onMoveToUnscheduled={handleMoveToUnscheduled}
                 onDownload={(d) => { void handleDownload(d); }}
@@ -1513,10 +1517,18 @@ export function StudioBoard() {
         // callback is only the queue/refresh signal it always should have been.
         onPublishComplete={() => { /* results are written by publishContent */ }}
       />
+      <ConfirmPublishDialog
+        open={!!publishConfirmation}
+        snapshot={publishConfirmation}
+        busy={publishConfirmation ? isPublishing(publishConfirmation.draftId) : false}
+        onCancel={() => setPublishConfirmation(null)}
+        onConfirm={receipt => { void handlePublish(receipt); }}
+      />
       {bulkPublishOpen && (
         <BulkPublishSheet
           tr={tr}
           partition={bulkPublishPartition}
+          confirmations={bulkConfirmations}
           progress={bulkPublishProgress}
           summary={bulkPublishSummary}
           onConfirm={() => { void runBulkPublish(); }}

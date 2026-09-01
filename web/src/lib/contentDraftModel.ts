@@ -55,7 +55,7 @@ export interface PublishDestination {
   boardName?: string;
 }
 
-export type DestinationPublishStatus = "pending" | "publishing" | "published" | "failed";
+export type DestinationPublishStatus = "pending" | "publishing" | "published" | "failed" | "delivery_unknown";
 
 /**
  * One durable record per destination of one publish (PRD §27).

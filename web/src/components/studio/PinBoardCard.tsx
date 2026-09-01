@@ -29,7 +29,7 @@ import { PinCardMedia, resolveInitialFailureMediaUrl } from "@/components/studio
 import { ContentMediaStrip, MEDIA_DRAG_TYPE, currentDragSourceDraftId } from "@/components/studio/ContentMediaStrip";
 import { mediaNotices, offendingMediaIds as collectOffendingMediaIds, type MediaNotice } from "@/lib/studio/mediaNotice";
 import { PinFallbackArtwork } from "@/components/studio/PinFallbackArtwork";
-import { contentDestinationResults, contentDestinations, destinationKey, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
+import { contentDestinationResults, contentDestinations, destinationNeedsAttention, findDestinationResult, hasFailedDestination, type PublishProvider } from "@/lib/contentDraftModel";
 import type { PinterestBoard } from "@/lib/pinterestClient";
 import { PinFieldsForm, type PinFieldsValue } from "@/components/pins/PinFieldsForm";
 import { PinAICopyPanel, type PinAICopyPanelHandle, type PinAICopyResult } from "@/components/pins/PinAICopyPanel";
@@ -76,18 +76,6 @@ function scheduledSummary(d: PinDraft): string {
 }
 /** The scheduled day / clock time, split for the "publishes now instead of {date} {time}"
  *  confirm. Locale-formatted; empty when the Content has no slot. */
-function scheduledDateLabel(d: PinDraft): string {
-  const date = (d.scheduledDate ?? "").trim();
-  if (!date) return "";
-  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-function scheduledTimeLabel(d: PinDraft): string {
-  const t = (d.scheduledTime ?? "").trim();
-  if (!t) return "";
-  const [h, m] = t.split(":");
-  const hh = Number(h); const ampm = hh >= 12 ? "PM" : "AM"; const h12 = hh % 12 === 0 ? 12 : hh % 12;
-  return `${h12}:${String(Number(m ?? 0)).padStart(2, "0")} ${ampm}`;
-}
 // "Was scheduled: <time>" — reads the ISO snapshot WP-B captures right before a
 // failed publish clears the live schedule fields. The timestamp is formatted with the
 // merchant's locale; only the sentence around it is translated.
@@ -266,8 +254,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [editing, setEditing] = useState(false);
   /** "View results" expansion on a Posted card. */
   const [resultsOpen, setResultsOpen] = useState(false);
-  /** Publishing a Scheduled card early is confirmed first — it overrides their plan. */
-  const [confirmPublish, setConfirmPublish] = useState(false);
   /** The destination picker, anchored to the chips instead of expanding the card. */
   const [destinationsOpen, setDestinationsOpen] = useState(false);
   const [customTimeOpen, setCustomTimeOpen] = useState(false);
@@ -275,7 +261,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const [customTime, setCustomTime] = useState(() => draft.scheduledTime ?? "");
   const [selectedProviders, setSelectedProviders] = useState<PublishProvider[]>(() => {
     const providers = contentDestinations(draft).map(item => item.provider);
-    return providers.length ? Array.from(new Set(providers)) : ["pinterest"];
+    return Array.from(new Set(providers));
   });
   /**
    * The ACCOUNTS this Content publishes to, seeded from its stored intent — one entry
@@ -530,7 +516,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   const doPublish = useCallback((options?: { onlyPending?: boolean }) => {
     if (destinationError) return;
     flush();
-    setConfirmPublish(false);
     props.onPublish(draft.id, options);
   }, [flush, props, draft.id, destinationError]);
   const collapse = useCallback(() => { flush(); setEditing(false); props.onSetActive(null); }, [flush, props]);
@@ -865,9 +850,10 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
       <span style={{ fontWeight: 750, color: BUI.text }}>{platformName(row.provider as SocialProvider)}</span>
       {row.accountLabel && <span style={{ color: BUI.textMuted }}>{row.accountLabel}</span>}
       <span style={{ color: BUI.textMuted }}>—</span>
-      <span style={{ fontWeight: 700, color: row.status === "published" ? BUI.success : row.status === "failed" ? BUI.warning : BUI.textMuted }}>
+      <span style={{ fontWeight: 700, color: row.status === "published" ? BUI.success : row.status === "failed" || row.status === "delivery_unknown" ? BUI.warning : BUI.textMuted }}>
         {tr(row.status === "published" ? "studioBoard.card.resultPublished"
           : row.status === "failed" ? "studioBoard.card.resultFailed"
+          : row.status === "delivery_unknown" ? "publishResults.deliveryUnknown"
           : "studioBoard.card.resultPending")}
       </span>
       {row.status === "failed" && (
@@ -875,6 +861,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
           · {tr(getPublishErrorDisplayKey({ publishError: row.errorMessage, publishErrorCode: row.errorCode }))}
         </span>
       )}
+      {row.status === "delivery_unknown" && <span data-testid="card-result-recovery" style={{ color: BUI.textSec }}>· {tr("publishResults.recoveryHint")}</span>}
       {row.postUrl && (
         <a data-testid="card-result-link" href={row.postUrl} target="_blank" rel="noopener noreferrer"
           style={{ display: "inline-flex", alignItems: "center", gap: 3, color: BUI.purple, fontWeight: 700, textDecoration: "none" }}>
@@ -911,28 +898,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
     </div>
   );
 
-  /** The Scheduled-card publish confirm (PRD §20) — publishing early overrides a plan. */
-  const publishConfirm = confirmPublish ? (
-    <div data-testid="card-publish-confirm" role="dialog"
-      style={{ display: "flex", flexDirection: "column", gap: 7, padding: "9px 10px", borderRadius: 9, border: `1px solid ${BUI.borderHi}`, background: BUI.surface2 }}>
-      <p style={{ margin: 0, fontSize: 11.5, fontWeight: 800, color: BUI.text }}>{tr("studioBoard.card.publishConfirmTitle")}</p>
-      <p style={{ margin: 0, fontSize: 11, color: BUI.textSec, lineHeight: 1.4 }}>
-        {tr("studioBoard.card.publishConfirmBody")
-          .replace("{date}", scheduledDateLabel(draft))
-          .replace("{time}", scheduledTimeLabel(draft))}
-      </p>
-      <div style={{ display: "flex", gap: 6 }}>
-        <button type="button" data-testid="card-publish-confirm-yes" onClick={() => doPublish()} disabled={publishing}
-          style={{ ...primaryBtn, padding: "7px 10px", fontSize: 11.5 }}>
-          {tr("studioBoard.actions.publish")}
-        </button>
-        <button type="button" data-testid="card-publish-confirm-cancel" onClick={() => setConfirmPublish(false)}
-          style={{ ...secondaryBtn, padding: "7px 12px", fontSize: 11.5 }}>
-          {tr("studioBoard.actions.cancel")}
-        </button>
-      </div>
-    </div>
-  ) : null;
 
   /** Posted card: the per-platform summary + the expandable result list (PRD §3). */
   const resultsBlock = (view.hasPublished || view.needsAttention) ? (
@@ -1125,7 +1090,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               </button>
             </div>
             <div style={{ position: "relative", display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {(destinations.length ? destinations : [{ id: destinationKey("pinterest", null), provider: "pinterest" as const, socialConnectionId: null }]).map(destination => {
+              {destinations.map(destination => {
                 // Tolerates result ids written by earlier shapes, so an un-migrated
                 // draft keeps showing its real state instead of reverting to pending.
                 const result = findDestinationResult(destinationResults, destination);
@@ -1241,7 +1206,6 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
               "Publish" (§20); the failed card's primary is "Retry", which differs in
               SCOPE (only what failed), not in what the word means. */}
           {resultsBlock}
-          {publishConfirm}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
             {generating ? (
               <button type="button" data-testid="card-generating" disabled
@@ -1283,7 +1247,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
                   {tr("studioBoard.actions.edit")}
                 </button>
                 {/* Publishing now overrides the merchant's own plan, so it confirms first. */}
-                <button type="button" data-testid="card-publish" onClick={() => setConfirmPublish(true)} disabled={publishing} style={secondaryBtn}>
+                <button type="button" data-testid="card-publish" onClick={() => doPublish()} disabled={publishing} style={secondaryBtn}>
                   {publishing ? <Loader2 style={{ width: 13, height: 13 }} className="animate-spin" /> : null} {tr("studioBoard.actions.publish")}
                 </button>
                 <button type="button" data-testid="card-unschedule" onClick={() => props.onUnschedule(draft.id)} style={secondaryBtn}>

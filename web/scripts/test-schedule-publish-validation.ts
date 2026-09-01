@@ -88,7 +88,7 @@ async function main() {
   });
 
   // ── 5 / 6. Edit-then-immediately-Schedule/Publish uses the LATEST fields ─────
-  await test("5/6. StudioBoard handleSchedule/handlePublish re-read pinDraftStore.getDraft(id) at call time (no stale closure)", () => {
+  await test("5/6. StudioBoard handleSchedule/requestPublish re-read pinDraftStore.getDraft(id) at call time (no stale closure)", () => {
     const src = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
     assert.match(
       src,
@@ -100,8 +100,8 @@ async function main() {
       // `let` is allowed here (not just `const`): the board auto-adopt fix
       // reassigns `d` after re-reading the store. What matters for this
       // contract is that the draft is READ FRESH at call time, not closed over.
-      /const handlePublish = useCallback\(async \(id: string,?[^)]*\) => \{\s*\n\s*(?:const|let) d = pinDraftStore\.getDraft\(id\); if \(!d\) return;/,
-      "handlePublish must read the store fresh, not a closed-over draft",
+      /const requestPublish = useCallback\(\(id: string,?[^)]*\) => \{\s*\n\s*const draft = pinDraftStore\.getDraft\(id\); if \(!draft\) return;/,
+      "requestPublish must read the store fresh before freezing a receipt",
     );
   });
   await test("5/6b. PinBoardCard flushes pending debounced edits synchronously before onSchedule/onPublish", () => {
@@ -110,10 +110,7 @@ async function main() {
     // schedule or publish a half-recorded intent), then flush, then act. The ORDER is
     // what matters: flush() must land before the handler re-reads the store.
     assert.match(src, /const doSchedule = useCallback\(\(\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onSchedule\(draft\.id\);/);
-    // doPublish now carries the publish SCOPE ({ onlyPending }) and closes the
-    // confirm before dispatching. The invariant is unchanged: the destination guard
-    // and the synchronous flush both run BEFORE onPublish is called.
-    assert.match(src, /const doPublish = useCallback\(\(options\?: \{ onlyPending\?: boolean \}\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*setConfirmPublish\(false\);\s*\n\s*props\.onPublish\(draft\.id, options\);/);
+    assert.match(src, /const doPublish = useCallback\(\(options\?: \{ onlyPending\?: boolean \}\) => \{\s*\n\s*if \(destinationError\) return;\s*\n\s*flush\(\);\s*\n\s*props\.onPublish\(draft\.id, options\);/);
     // flush() must be a SYNCHRONOUS persistNow call (not merely clearing the debounce
     // timer) so the store write has landed before onSchedule/onPublish re-reads it.
     assert.match(src, // flush also settles the card's save-state line now, so the body spans several
@@ -121,20 +118,17 @@ async function main() {
     // edit persisted SYNCHRONOUSLY, before any schedule/publish leaves the card.
     /const flush = useCallback\(\(\) => \{\s*\n?\s*if \(timer\.current\) \{\s*\n?\s*clearTimeout\(timer\.current\); timer\.current = null;\s*\n?\s*persistNow\(pendingRef\.current\);/);
   });
-  await test("5/6c. DraftDetailsDrawer.handlePublish persists current field state, then reads the SAME state for the payload (single source, no second read)", () => {
+  await test("5/6c. DraftDetailsDrawer dispatches the frozen receipt without a post-confirmation rewrite", () => {
     const src = readFileSync(join(root, "src/components/plan/DraftDetailsDrawer.tsx"), "utf8");
     // The drawer's Publish / Retry both land here; the retry flag only changes onlyPending.
-    const start = src.indexOf("async function handlePublish(retry: boolean) {");
+    const start = src.indexOf("async function handlePublish(receipt: ConfirmedPublishReceipt) {");
     const end = src.indexOf("\n  const destMissing = !destinationUrl.trim();", start); // next top-level statement after handlePublish
     assert.ok(start > -1 && end > start, "handlePublish body bounds not found");
     const body = src.slice(start, end);
-    assert.match(body, /persistDraft\(\);/, "handlePublish must persist current field state before publishing");
-    // The drawer publishes through the shared publishContent, which reads copy / image /
-    // link off the draft in the store — so the store IS the single source, and the
-    // write (persistDraft) must land before that read starts.
+    assert.doesNotMatch(body, /persistDraft\(\);/, "a write after confirmation would stale the receipt");
     assert.match(body, /await publishContent\(activeDraft\.id, \{/, "the drawer must publish through the shared publishContent");
     assert.doesNotMatch(body, /await publishPin\(/, "no second Pinterest publish path may remain in the drawer");
-    assert.ok(body.indexOf("persistDraft();") < body.indexOf("await publishContent("), "persist must precede the shared publish");
+    assert.match(body, /confirmation: receipt/, "the exact confirmed receipt must reach the shared publisher");
   });
 
   await test("5/6d. PinBoardCard's board field rewrites the Pinterest entry it speaks for (a board edit IS a destination edit)", () => {
@@ -208,14 +202,12 @@ async function main() {
     assert.match(shared, /endPublish\(draftId\);/);
     // The Studio card's default is still Retry semantics; a republish of an edited
     // Posted Content overrides it explicitly, so the scope is a parameter now.
-    assert.match(studio, /await publishContent\(id, \{ onlyPending: options\?\.onlyPending \?\? true \}\)/);
+    assert.match(studio, /await publishContent\(receipt\.draftId, \{[\s\S]*?confirmation: receipt,/);
     assert.match(studio, /outcome\.blocked === "locked"/, "the card honours the lock's verdict");
-    assert.match(batch, /await publishContent\(p\.pinId, \{ onlyPending: true \}\)/);
+    assert.match(batch, /await publishContent\(p\.pinId, \{[\s\S]*?confirmation: confirmPublishSnapshot\(snapshot\),/);
     assert.match(batch, /outcome\.blocked === "locked"/);
-    // The history (non-draft) rows in the batch drawer still publish directly, so
-    // they still take the lock themselves; the Plan drawer now goes through
-    // publishContent and honours the lock's verdict like the card does.
-    assert.match(batch, /if \(!beginPublish\(p\.pinId\)\)/);
+    // Every current Batch row goes through publishContent; no direct provider path remains.
+    assert.doesNotMatch(batch, /await publishPin\(/);
     assert.match(drawer, /await publishContent\(activeDraft\.id, \{/);
     assert.match(drawer, /outcome\.blocked === "locked"/, "the drawer honours the lock's verdict");
   });
@@ -228,8 +220,8 @@ async function main() {
     assert.ok(start > -1 && end > start, "runPublish body bounds not found");
     const body = src.slice(start, end);
     assert.match(body, /for \(let i = 0; i < targets\.length; i\+\+\) \{/, "must iterate targets in a loop, not Promise.all-fail-fast");
-    assert.match(body, /try \{[\s\S]*?await publishPin\(/, "each publish call must be inside its own try");
-    assert.match(body, /\} catch \(e\) \{[\s\S]*?results\.push\(\{ pinId: p\.pinId, title, status: "failed"/, "a failure is recorded per-pin, not thrown out of the loop");
+    assert.match(body, /try \{[\s\S]*?await publishContent\(/, "each publish call must be inside its own try");
+    assert.match(body, /\} catch \(error\) \{[\s\S]*?results\.push\(\{ pinId: p\.pinId, title, status: "failed"/, "a failure is recorded per-pin, not thrown out of the loop");
   });
 
   // ── 9. Failed Schedule leaves the Pin Unscheduled (not falsely Scheduled) ────
@@ -335,12 +327,12 @@ async function main() {
   // ── Extra: all three UI surfaces wire the length gate into Schedule/Publish ──
   await test("StudioBoard.handleSchedule blocks on pinFieldErrors before ensureScheduledPlanTime", () => {
     const src = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
-    const fn = src.match(/const handleSchedule = useCallback\(\(id: string\) => \{[\s\S]*?\n  \}, \[noBoardAccess, tr\]\);/);
+    const fn = src.match(/const handleSchedule = useCallback\(\(id: string\) => \{[\s\S]*?\n  \}, \[[^\]]*noBoardAccess[^\]]*tr[^\]]*\]\);/);
     assert.ok(fn);
     assert.match(fn![0], /const lenErrors = pinFieldErrors\(\{ title: d\.title, description: d\.description \}\);/);
     assert.match(fn![0], /if \(lenErrors\.title \|\| lenErrors\.description\) \{/);
   });
-  await test("StudioBoard.handlePublish blocks on pinFieldErrors before beginPublish", () => {
+  await test("StudioBoard.requestPublish blocks on pinFieldErrors before freezing confirmation", () => {
     const src = readFileSync(join(root, "src/components/studio/StudioBoard.tsx"), "utf8");
     // The publish itself (and the shared lock it takes) moved into publishContent, so
     // the boundary the length gate must precede is now the call to it. Same invariant:
@@ -348,8 +340,8 @@ async function main() {
     // The signature also carries the publish SCOPE now ({ onlyPending }), so the match
     // is on the parameter list opening rather than an exact one-argument signature —
     // the invariant under test is the ORDER of the gate, not the arity.
-    const fn = src.match(/const handlePublish = useCallback\(async \(id: string,?[^)]*\) => \{[\s\S]*?await publishContent\(id,/);
-    assert.ok(fn, "handlePublish body up to the publishContent call not found");
+    const fn = src.match(/const requestPublish = useCallback\(\(id: string,?[^)]*\) => \{[\s\S]*?setPublishConfirmation\(buildPublishConfirmation/);
+    assert.ok(fn, "requestPublish body up to the frozen snapshot not found");
     assert.match(fn![0], /const lenErrors = pinFieldErrors/);
   });
   await test("DraftDetailsDrawer.canSchedule and handlePublish both include the length gate", () => {
@@ -572,6 +564,7 @@ async function main() {
       assert.deepEqual(findCalls, []);
     });
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (Module as any)._load = originalLoad;
   }
 

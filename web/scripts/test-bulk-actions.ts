@@ -41,7 +41,18 @@ function draft(over: Partial<PinDraft> = {}): PinDraft {
 
 /** A Pinterest destination with a board — the plain publishable case. */
 function pinterestReady(over: Partial<PinDraft> = {}): PinDraft {
-  return draft({ boardId: "board-1", boardName: "Home", ...over });
+  return draft({
+    boardId: "board-1",
+    boardName: "Home",
+    scheduledDestinations: [{
+      provider: "pinterest",
+      socialConnectionId: "pin-connection",
+      boardId: "board-1",
+      boardName: "Home",
+      capturedAt: "2026-09-01T00:00:00.000Z",
+    }],
+    ...over,
+  });
 }
 
 function instagramDest(connectionId: string | null) {
@@ -62,8 +73,7 @@ test("no destination at all is a whole-Content blocker", () => {
 });
 
 test("a Pinterest destination without a board reports missing_board", () => {
-  // remotePinId forces the legacy Pinterest destination to exist without a board.
-  const d = draft({ remotePinId: "" , publishError: "boom" });
+  const d = draft({ scheduledDestinations: [{ provider: "pinterest", socialConnectionId: "pin-connection", capturedAt: "2026-09-01T00:00:00.000Z" }] });
   const blockers = explainPublishBlockers(d);
   assert.equal(blockers.length, 1);
   assert.equal(blockers[0].code, "missing_board");
@@ -75,14 +85,11 @@ test("a ready Pinterest Content has no blockers", () => {
 });
 
 test("an Instagram intent with no account is not a publishable destination", () => {
-  // `isUsableDestination` drops a social entry with no connection id, so an ambiguous
-  // account never survives into `contentDestinations`: the Content simply has nowhere
-  // to publish. The sheet must therefore say "choose where to publish" rather than
-  // promising an Instagram send that the publisher would never make.
+  // A selected provider with no exact account is distinct from selecting no destination.
   const d = draft({ scheduledDestinations: instagramDest(null) } as Partial<PinDraft>);
   const blockers = explainPublishBlockers(d);
   assert.equal(blockers.length, 1);
-  assert.equal(blockers[0].code, "no_destinations");
+  assert.equal(blockers[0].code, "no_account");
 });
 
 test("a resolvable Instagram destination is publishable", () => {
@@ -91,7 +98,7 @@ test("a resolvable Instagram destination is publishable", () => {
 });
 
 test("no media is reported per destination, with the media rule's own code", () => {
-  const d = draft({ imageUrl: "", boardId: "board-1" });
+  const d = pinterestReady({ imageUrl: "" });
   const blockers = explainPublishBlockers(d);
   assert.equal(blockers.length, 1);
   assert.equal(blockers[0].code, "no_media");

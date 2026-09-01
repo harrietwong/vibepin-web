@@ -16,14 +16,13 @@ import {
   recommendRealBoard,
   type LinkedProduct,
 } from "@/lib/pinMetadata";
-import { startPinterestConnect, publishPin, type PinterestBoard } from "@/lib/pinterestClient";
+import { startPinterestConnect, type PinterestBoard } from "@/lib/pinterestClient";
 import { platformName } from "@/lib/social/platforms";
 import { usePinterestBoards } from "@/hooks/usePinterestBoards";
-import { beginPublish, endPublish, mapPublishErrorToCategory } from "@/lib/studio/pinLifecycle";
 import { publishContent } from "@/lib/studio/publishContent";
-import { readStoredTarget, sharedTargetForSelection } from "@/lib/studio/publishTarget";
+import { sharedTargetForSelection } from "@/lib/studio/publishTarget";
+import { buildPublishConfirmation, confirmPublishSnapshot, type PublishConfirmationSnapshot } from "@/lib/studio/publishConfirmation";
 import * as pinDraftStore from "@/lib/pinDraftStore";
-import type { PinterestClientError } from "@/lib/pinterestClient";
 import { generatePinterestPinCopy, isRateLimitError } from "@/lib/ai-copy/generatePinCopy";
 import { readResolvedContentLanguage } from "@/lib/i18n/config";
 import { isPinReady, pinMissingFieldLabels, pinFieldErrors, type ReadinessInput } from "@/lib/pinReadiness";
@@ -759,6 +758,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     : "ready";
   const [publishPhase,    setPublishPhase]    = useState<PublishPhase>(null);
   const [publishBlocked,  setPublishBlocked]  = useState<{ pinId: string; title: string; missing: string[] }[]>([]);
+  const [publishConfirmations, setPublishConfirmations] = useState<Record<string, PublishConfirmationSnapshot>>({});
   const [publishProgress, setPublishProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
   const [publishResults,  setPublishResults]  = useState<PublishResultRow[]>([]);
   // AI Copy batch generation — per-pin, sequential, with progress + summary.
@@ -1249,22 +1249,42 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
   // changes a schedule time; it triggers publishing and marks Pins published.
   function startPublish() {
     if (!checkedPins.length) return;
-    // Access guard: publishing needs a usable Pinterest connection.
-    if (boardsStatus === "not_connected") {
-      toast.error(tr("studioModals.publish.connectBeforePublish"));
-      return;
-    }
-    if (boardsStatus === "reconnect") {
-      toast.error(tr("studioModals.publish.connectionExpired"));
-      return;
-    }
-    const blocked = checkedPins
+    const readinessBlocked = checkedPins
       .map(p => ({ pinId: p.pinId, title: getVal(p, rowEdits, "title") || p.title || tr("studioModals.untitledPin"), missing: pubBlockingLabels(p, rowEdits) }))
       .filter(b => b.missing.length > 0);
-    // Some selected Pins are incomplete → validation summary (never silently skip).
-    if (blocked.length) { setPublishBlocked(blocked); setPublishPhase("blocked"); return; }
-    // All ready → confirm immediate publish (irreversible; not a schedule change).
-    setPublishPhase("confirm");
+    const confirmations: Record<string, PublishConfirmationSnapshot> = {};
+    const destinationBlocked: typeof readinessBlocked = [];
+    for (const pin of checkedPins) {
+      const draft = pinDraftStore.getDraft(pin.pinId);
+      if (!draft) {
+        destinationBlocked.push({ pinId: pin.pinId, title: pin.title || tr("studioModals.untitledPin"), missing: ["saved publishing destination"] });
+        continue;
+      }
+      const board = effBoard(pin, rowEdits);
+      const scheduledDestinations = (draft.scheduledDestinations ?? []).map(destination => destination.provider === "pinterest"
+        ? { ...destination, boardId: board.id || destination.boardId, boardName: board.name || destination.boardName }
+        : destination);
+      const snapshot = buildPublishConfirmation({
+        ...draft,
+        imageUrl: pin.imageUrl || draft.imageUrl,
+        title: getVal(pin, rowEdits, "title"),
+        description: getVal(pin, rowEdits, "description"),
+        altText: getVal(pin, rowEdits, "altText"),
+        destinationUrl: getVal(pin, rowEdits, "destinationUrl"),
+        scheduledDestinations,
+      }, { onlyPending: true });
+      if (snapshot.blockers.length) {
+        destinationBlocked.push({ pinId: pin.pinId, title: snapshot.title, missing: snapshot.blockers.map(item => item.message) });
+      } else {
+        confirmations[pin.pinId] = snapshot;
+      }
+    }
+    const blocked = [...readinessBlocked, ...destinationBlocked].filter((item, index, all) => all.findIndex(other => other.pinId === item.pinId) === index);
+    setPublishConfirmations(confirmations);
+    setPublishBlocked(blocked);
+    // The blocked screen explicitly lists every skipped Content. The user may then
+    // confirm only the exact publishable snapshots; zero publishable stays disabled.
+    setPublishPhase(blocked.length ? "blocked" : "confirm");
   }
   async function runPublish(targets: BatchPinRow[]) {
     setPublishResults([]);
@@ -1280,86 +1300,34 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
       if (!isPinReady(input)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") }); continue; }
       const lenErrors = pinFieldErrors(input);
       if (lenErrors.title || lenErrors.description) { results.push({ pinId: p.pinId, title, status: "skipped", message: lenErrors.title || lenErrors.description }); continue; }
-      // A row backed by a real draft publishes through the ONE shared publish
-      // function, so a batch publish produces exactly the per-destination records an
-      // immediate card publish does — and actually reaches Instagram/Facebook when
-      // the Content is scheduled to them. This path previously called publishPin
-      // directly (Pinterest only) and the parent then wrote a fabricated Pinterest
-      // "published" row for it.
-      //
-      // In the Studio (history) context `p.pinId` is NOT a pinDraftStore id — there is
-      // no draft to read destinations from or write results to — so those rows keep
-      // the direct single-image Pinterest publish below. That boundary is the reason
-      // both paths still exist.
-      const backingDraft = pinDraftStore.getDraft(p.pinId);
-      if (backingDraft) {
-        const outcome = await publishContent(p.pinId, { onlyPending: true });
-        if (outcome.blocked === "locked") {
-          results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") });
-        } else if (outcome.blocked) {
-          results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") });
-        } else if (outcome.nothingToRetry) {
-          // Every destination already published: a Retry has nothing to send. That is
-          // not a failure — reporting it as one would tell the merchant a live Pin broke.
-          results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioBoard.toast.nothingToRetry") });
-        } else if (outcome.published.length) {
-          const pinterest = outcome.published.find(r => r.provider === "pinterest");
-          results.push({ pinId: p.pinId, title, status: "published", url: pinterest?.postUrl ?? outcome.published[0].postUrl ?? undefined });
-          publishedIds.push(p.pinId);
-        } else {
-          results.push({ pinId: p.pinId, title, status: "failed", message: outcome.failed[0]?.errorMessage ?? tr("studioModals.publish.publishFailed") });
-        }
+      const snapshot = publishConfirmations[p.pinId];
+      if (!snapshot) {
+        results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") });
         continue;
       }
-      // Shared in-flight lock (StudioBoard.tsx's card publish uses the same registry) —
-      // skip a pin that's already being published from another surface rather than
-      // double-submitting it.
-      if (!beginPublish(p.pinId)) { results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") }); continue; }
+      let outcome: Awaited<ReturnType<typeof publishContent>>;
       try {
-        // Publish through the Pin's PINNED connection (PRD §14/§17): the draft's stored
-        // target, never the current default. No stored target ⇒ server default (adopted
-        // below). In the Studio context p.pinId isn't a draft id, getDraft returns null
-        // and this degrades to the pre-multi-account behaviour.
-        const targetId = readStoredTarget(pinDraftStore.getDraft(p.pinId));
-        const res = await publishPin({
-          boardId: effBoard(p, rowEdits).id, imageUrl: p.imageUrl,
-          title: input.title || undefined, description: input.description || undefined,
-          link: input.destinationUrl || undefined, altText: input.altText || undefined,
-          sourcePinId: p.pinId, connectionId: targetId || undefined,
-          // p.pinId is the pinDraftStore draft id in the Weekly-Plan context (joins to a
-          // draft) but NOT in the Studio context — draftId is best-effort, so a non-draft
-          // id simply won't join downstream. source is the immediate batch publish.
-          draftId: p.pinId, source: "immediate",
+        outcome = await publishContent(p.pinId, {
+          onlyPending: true,
+          destinations: snapshot.publishableDestinations,
+          confirmation: confirmPublishSnapshot(snapshot),
         });
-        results.push({ pinId: p.pinId, title, status: "published", url: res.pin.url });
+      } catch (error) {
+        results.push({ pinId: p.pinId, title, status: "failed", message: error instanceof Error ? error.message : tr("studioModals.publish.publishFailed") });
+        continue;
+      }
+      if (outcome.blocked === "locked" || outcome.blocked === "recovery_pending") {
+        results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.alreadyPublishing") });
+      } else if (outcome.blocked) {
+        results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioModals.publish.missingRequiredDetails") });
+      } else if (outcome.nothingToRetry) {
+        results.push({ pinId: p.pinId, title, status: "skipped", message: tr("studioBoard.toast.nothingToRetry") });
+      } else if (outcome.published.length) {
+        const pinterest = outcome.published.find(r => r.provider === "pinterest");
+        results.push({ pinId: p.pinId, title, status: "published", url: pinterest?.postUrl ?? outcome.published[0].postUrl ?? undefined });
         publishedIds.push(p.pinId);
-        // Adopt-once: pin the connection this draft actually published through.
-        if (!targetId && res.connectionId) {
-          pinDraftStore.updateDraft(p.pinId, { targetConnectionId: res.connectionId });
-        }
-      } catch (e) {
-        const err = e as PinterestClientError;
-        results.push({ pinId: p.pinId, title, status: "failed", message: err?.message ?? tr("studioModals.publish.publishFailed") });
-        // Persist the failure so a batch-published Pin that fails is truthfully shown
-        // as "failed" (not still Scheduled) and survives reload (PRD WP-B §11.5). In the
-        // Weekly Plan context p.pinId is the pinDraftStore draft id; in the Studio
-        // context it isn't, so updateDraft is a harmless no-op there (returns null).
-        const prev = pinDraftStore.getDraft(p.pinId);
-        pinDraftStore.updateDraft(p.pinId, {
-          publishError: err?.message || "Publish failed",
-          failureType: "publish",
-          errorCategory: mapPublishErrorToCategory(err?.code, err?.message),
-          publishErrorCode: err?.code,
-          previousScheduledTime: prev?.plannedAt
-            ? new Date(prev.plannedAt).toISOString()
-            : (prev?.scheduledDate
-                ? new Date(`${prev.scheduledDate}T${prev.scheduledTime?.trim() || "09:00"}:00`).toISOString()
-                : undefined),
-          scheduledDate: "",
-          scheduledTime: "",
-        });
-      } finally {
-        endPublish(p.pinId);
+      } else {
+        results.push({ pinId: p.pinId, title, status: "failed", message: outcome.failed[0]?.errorMessage ?? tr("studioModals.publish.publishFailed") });
       }
     }
     setPublishResults(results);
@@ -1378,7 +1346,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
     // (status → published; scheduled/unscheduled + counts refresh).
     if (publishedIds.length) onPublishComplete?.(publishedIds);
   }
-  const publishReadyCount = checkedPins.filter(p => isPinReady(pubReadinessInput(p, rowEdits))).length;
+  const publishReadyCount = Object.keys(publishConfirmations).length;
 
   // ── Filtering ────────────────────────────────────────────────────────────
   const visiblePins = pins.filter(p => {
@@ -1769,6 +1737,14 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
               <div data-testid="batch-edit-publish-confirm">
                 <h3 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: UI.text }}>{tr("studioModals.publish.confirmTitle")}</h3>
                 <p style={{ margin: "0 0 18px", fontSize: 12, color: UI.textSec, lineHeight: 1.5 }}>{tr("studioModals.publish.confirmBody")}</p>
+                <div data-testid="batch-edit-confirm-destinations" style={{ display: "grid", gap: 8, maxHeight: 300, overflowY: "auto", overflowX: "hidden", marginBottom: 16 }}>
+                  {Object.values(publishConfirmations).map(snapshot => <div key={snapshot.intentId} style={{ padding: 9, border: `1px solid ${UI.border}`, borderRadius: 8, minWidth: 0 }}>
+                    <strong style={{ display: "block", color: UI.text, fontSize: 11.5, overflowWrap: "anywhere" }}>{snapshot.title}</strong>
+                    {snapshot.publishableDestinations.map(destination => <div key={destination.id} style={{ marginTop: 4, color: UI.textSec, fontSize: 10.5, overflowWrap: "anywhere" }}>
+                      {platformName(destination.provider)} · {destination.accountLabel || destination.socialConnectionId}{destination.provider === "pinterest" ? ` · ${destination.boardName || destination.boardId}` : ""}
+                    </div>)}
+                  </div>)}
+                </div>
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
                   <button type="button" data-testid="batch-edit-publish-cancel" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
                   <button type="button" data-testid="batch-edit-publish-confirm-go" onClick={() => void runPublish(checkedPins)}
@@ -1794,7 +1770,7 @@ export function BatchEditDrawer({ open, pins, onClose, onApply, onGenerateMetada
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
                   <button type="button" onClick={() => setPublishPhase(null)} style={btnBase}>{tr("common.cancel")}</button>
                   {publishReadyCount > 0 && (
-                    <button type="button" data-testid="batch-edit-publish-ready" onClick={() => void runPublish(checkedPins.filter(p => isPinReady(pubReadinessInput(p, rowEdits))))}
+                    <button type="button" data-testid="batch-edit-publish-ready" onClick={() => void runPublish(checkedPins.filter(p => !!publishConfirmations[p.pinId]))}
                       style={{ ...btnBase, border: "none", background: UI.gradient, color: "#fff" }}>{tr("studioModals.publish.publishReadyPins")}</button>
                   )}
                 </div>

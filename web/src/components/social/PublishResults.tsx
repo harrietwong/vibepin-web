@@ -45,6 +45,8 @@ function statusPresentation(status: PublishResultRow["status"]) {
       return { Icon: CheckCircle2, labelKey: "publishResults.published" as const, color: UI.success, spin: false };
     case "failed":
       return { Icon: AlertTriangle, labelKey: "publishResults.failed" as const, color: UI.warning, spin: false };
+    case "delivery_unknown":
+      return { Icon: AlertTriangle, labelKey: "publishResults.deliveryUnknown" as const, color: UI.warning, spin: false };
     case "publishing":
       return { Icon: Loader2, labelKey: "publishResults.publishing" as const, color: UI.textSec, spin: true };
     default:
@@ -125,6 +127,12 @@ export function PublishResults({ rows }: { rows: PublishResultRow[] }) {
                     {t(getPublishErrorDisplayKey({ publishError: row.errorMessage ?? undefined, publishErrorCode: row.errorCode ?? undefined }))}
                     {" "}
                     {t("publishResults.retryHint")}
+                  </p>
+                )}
+                {row.status === "delivery_unknown" && (
+                  <p data-testid={`publish-result-${row.provider}-recovery`} role="alert"
+                    style={{ margin: "2px 0 0", fontSize: 10.5, color: UI.textSec, lineHeight: 1.4 }}>
+                    {t("publishResults.recoveryHint")}
                   </p>
                 )}
               </div>

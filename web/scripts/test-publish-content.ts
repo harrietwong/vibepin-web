@@ -45,6 +45,7 @@ const storage = new FakeStorage();
 // required here rather than statically imported (static imports hoist above them).
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { publishContent } = require("../src/lib/studio/publishContent") as typeof import("../src/lib/studio/publishContent");
+const { buildPublishConfirmation, confirmPublishSnapshot } = require("../src/lib/studio/publishConfirmation") as typeof import("../src/lib/studio/publishConfirmation");
 const pinDraftStore = require("../src/lib/pinDraftStore") as typeof import("../src/lib/pinDraftStore");
 const { contentDestinationResults } = require("../src/lib/contentDraftModel") as typeof import("../src/lib/contentDraftModel");
 /* eslint-enable @typescript-eslint/no-require-imports */
@@ -98,7 +99,13 @@ function seedDraft(opts: {
     boardName: "Home decor",
     targetConnectionId: PIN_CONN,
     scheduledDestinations: (opts.destinations ?? [{ provider: "pinterest", socialConnectionId: PIN_CONN }])
-      .map(d => ({ ...d, capturedAt: NOW })),
+      .map(d => ({
+        ...d,
+        ...(d.provider === "pinterest" && d.socialConnectionId === PIN_CONN && !d.boardId
+          ? { boardId: "board-1", boardName: "Home decor" }
+          : {}),
+        capturedAt: NOW,
+      })),
     destinationResults: opts.destinationResults,
   })!;
 }
@@ -149,6 +156,20 @@ function makeDeps(opts: {
   return { deps, pinCalls, socialCalls };
 }
 
+async function publishConfirmed(
+  draftId: string,
+  options: import("../src/lib/studio/publishContent").PublishContentOptions = {},
+) {
+  const current = pinDraftStore.getDraft(draftId);
+  if (!current) return publishContent(draftId, options);
+  const snapshot = buildPublishConfirmation(current, { onlyPending: options.onlyPending ?? false });
+  return publishContent(draftId, {
+    ...options,
+    destinations: snapshot.publishableDestinations,
+    confirmation: confirmPublishSnapshot(snapshot, NOW),
+  });
+}
+
 async function main(): Promise<void> {
   console.log("\n=== every destination gets its own durable record ===");
 
@@ -161,7 +182,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps } = makeDeps();
-  const out = await publishContent(draft.id, { deps });
+  const out = await publishConfirmed(draft.id, { deps });
 
   assert.equal(out.blocked, undefined, "nothing should have blocked");
   assert.equal(out.published.length, 2, `expected 2 published, got ${out.published.length}`);
@@ -198,7 +219,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps } = makeDeps({ socialStatus: "failed" });
-  const out = await publishContent(draft.id, { deps });
+  const out = await publishConfirmed(draft.id, { deps });
 
   assert.equal(out.published.length, 1, "Pinterest still published");
   assert.equal(out.failed.length, 1, "Instagram is recorded failed, not dropped");
@@ -234,7 +255,7 @@ async function main(): Promise<void> {
     }],
   });
   const { deps, pinCalls, socialCalls } = makeDeps();
-  const out = await publishContent(draft.id, { onlyPending: true, deps });
+  const out = await publishConfirmed(draft.id, { onlyPending: true, deps });
 
   assert.equal(pinCalls.length, 0, "the already-published Pinterest destination is NOT re-sent");
   assert.equal(socialCalls.length, 1, "only the pending Instagram destination is dispatched");
@@ -254,7 +275,7 @@ async function main(): Promise<void> {
     }],
   });
   const { deps, pinCalls } = makeDeps();
-  await publishContent(draft.id, { deps });
+  await publishConfirmed(draft.id, { deps });
   assert.equal(pinCalls.length, 1, "an explicit publish re-sends");
 });
 
@@ -270,7 +291,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, pinCalls, socialCalls } = makeDeps();
-  const out = await publishContent(draft.id, { deps });
+  const out = await publishConfirmed(draft.id, { deps });
 
   assert.equal(pinCalls.length, 0, "Pinterest is never called with a set its rule refuses");
   assert.equal(socialCalls.length, 1, "Instagram is unaffected by Pinterest's rule");
@@ -294,7 +315,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, pinCalls, socialCalls } = makeDeps();
-  await publishContent(draft.id, { deps });
+  await publishConfirmed(draft.id, { deps });
 
   const expected = ["https://cdn.test/img-0.jpg", "https://cdn.test/img-1.jpg", "https://cdn.test/img-2.jpg"];
   assert.deepEqual(pinCalls[0].imageUrls, expected, "Pinterest gets the whole carousel in display order");
@@ -310,9 +331,9 @@ async function main(): Promise<void> {
   // No board, no target, no intent — contentDestinations() must find nothing rather
   // than defaulting to Pinterest.
   const { deps, pinCalls, socialCalls } = makeDeps();
-  const out = await publishContent(created.id, { deps });
+  const out = await publishConfirmed(created.id, { deps });
 
-  assert.equal(out.blocked, "no_destinations");
+  assert.equal(out.blocked, "invalid_confirmation");
   assert.equal(pinCalls.length, 0, "no Pinterest call");
   assert.equal(socialCalls.length, 0, "no social call");
 });
@@ -333,7 +354,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, socialCalls } = makeDeps();
-  const out = await publishContent(draft.id, { deps });
+  const out = await publishConfirmed(draft.id, { deps });
 
   assert.equal(socialCalls.length, 0, "an account-less destination is never sent");
   assert.ok(!out.published.some(r => r.provider === "instagram"), "and is never reported published");
@@ -363,7 +384,7 @@ async function main(): Promise<void> {
   });
   const before = JSON.stringify(pinDraftStore.getDraft(draft.id)!.destinationResults);
   const { deps, pinCalls, socialCalls } = makeDeps();
-  const out = await publishContent(draft.id, { onlyPending: true, deps });
+  const out = await publishConfirmed(draft.id, { onlyPending: true, deps });
 
   assert.equal(out.nothingToRetry, true, "the outcome says so explicitly");
   assert.equal(out.blocked, undefined, "nothingToRetry is NOT a blocked reason — callers toast blocked as an error");
@@ -391,7 +412,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, pinCalls, socialCalls } = makeDeps();
-  const out = await publishContent(draft.id, { onlyPending: false, deps });
+  const out = await publishConfirmed(draft.id, { onlyPending: false, deps });
 
   assert.equal(out.nothingToRetry, undefined, "an explicit republish is never 'nothing to retry'");
   assert.equal(pinCalls.length, 1, "Pinterest gets the new content");
@@ -415,7 +436,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, pinCalls, socialCalls } = makeDeps();
-  const out = await publishContent(draft.id, { onlyPending: true, deps });
+  const out = await publishConfirmed(draft.id, { onlyPending: true, deps });
 
   assert.equal(out.nothingToRetry, undefined, "there WAS something to retry");
   assert.equal(pinCalls.length, 0, "the published destination is not re-sent");
@@ -452,7 +473,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, pinCalls } = makeDeps();
-  const out = await publishContent(draft.id, { deps });
+  const out = await publishConfirmed(draft.id, { deps });
 
   assert.equal(pinCalls.length, 2, "one publish per account, not one for the platform");
   assert.deepEqual(pinCalls.map(c => c.connectionId), [PIN_CONN, "conn-pin-2"]);
@@ -473,7 +494,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, pinCalls } = makeDeps();
-  const out = await publishContent(draft.id, { deps });
+  const out = await publishConfirmed(draft.id, { deps });
 
   assert.equal(pinCalls.length, 1, "only the account that HAS a board is dispatched");
   assert.equal(pinCalls[0].boardId, "board-1");
@@ -492,7 +513,7 @@ async function main(): Promise<void> {
     ],
   });
   const { deps, socialCalls } = makeDeps();
-  const out = await publishContent(draft.id, { deps });
+  const out = await publishConfirmed(draft.id, { deps });
 
   assert.equal(socialCalls.length, 1, "one fan-out call carries both accounts");
   assert.deepEqual(socialCalls[0].destinations.map(d => d.socialConnectionId), [IG_CONN, "conn-ig-2"],
@@ -516,7 +537,7 @@ async function main(): Promise<void> {
         "scheduled_post_limit_reached",
       ),
     });
-    const out = await publishContent(draft.id, { deps });
+    const out = await publishConfirmed(draft.id, { deps });
 
     assert.equal(socialCalls.length, 1, "the call was attempted");
     assert.equal(out.published.length, 0);
@@ -527,7 +548,7 @@ async function main(): Promise<void> {
     assert.match(ig.errorMessage ?? "", /scheduled post limit/);
   });
 
-  await test("a generic 500 social failure -> no errorCode, message preserved", async () => {
+  await test("a generic 500 social failure -> delivery unknown and resubmit locked", async () => {
     const draft = seedDraft({
       id: "social-500",
       destinations: [{ provider: "instagram", socialConnectionId: IG_CONN }],
@@ -535,26 +556,27 @@ async function main(): Promise<void> {
     const { deps } = makeDeps({
       socialThrows: new SocialApiError("Internal server error.", 500),
     });
-    const out = await publishContent(draft.id, { deps });
+    const out = await publishConfirmed(draft.id, { deps });
 
     const ig = out.results.find(r => r.provider === "instagram")!;
-    assert.equal(ig.status, "failed");
+    assert.equal(ig.status, "delivery_unknown");
     assert.equal(ig.errorCode, undefined, "a code-less refusal must not fabricate one");
-    assert.equal(ig.errorMessage, "Internal server error.");
+    assert.match(ig.errorMessage ?? "", /Delivery status is unknown/);
+    assert.equal(out.recoveryPending, true);
   });
 
-  await test("a non-SocialApiError social failure (e.g. a network throw) -> no errorCode either", async () => {
+  await test("a network throw -> delivery unknown and no fabricated code", async () => {
     const draft = seedDraft({
       id: "social-network",
       destinations: [{ provider: "instagram", socialConnectionId: IG_CONN }],
     });
     const { deps } = makeDeps({ socialThrows: new Error("Could not reach social connections.") });
-    const out = await publishContent(draft.id, { deps });
+    const out = await publishConfirmed(draft.id, { deps });
 
     const ig = out.results.find(r => r.provider === "instagram")!;
-    assert.equal(ig.status, "failed");
+    assert.equal(ig.status, "delivery_unknown");
     assert.equal(ig.errorCode, undefined);
-    assert.equal(ig.errorMessage, "Could not reach social connections.");
+    assert.match(ig.errorMessage ?? "", /Delivery status is unknown/);
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -11,8 +11,8 @@
  * worker produces for a scheduled one.
  *
  * The contract:
- *   - INTENT comes from `contentDestinations()` → `scheduledDestinations[]`, the same
- *     record the due-time worker reads. It fails CLOSED: no resolvable destination
+ *   - INTENT comes only from a user-confirmed snapshot of `scheduledDestinations[]`,
+ *     the same record the due-time worker reads. It fails CLOSED: no resolvable destination
  *     means nothing is sent, not "default to Pinterest".
  *   - Each destination is media-checked on its own (PRD §29). A set Pinterest refuses
  *     (6 images) but Instagram accepts must still publish to Instagram — a per-platform
@@ -27,10 +27,8 @@
 import * as pinDraftStore from "../pinDraftStore";
 import type { PinDraft } from "../pinDraftStore";
 import {
-  contentDestinations,
   contentDestinationResults,
   contentMedia,
-  destinationKey,
   findDestinationResult,
   legacyFieldsFromResults,
   supersededResults,
@@ -49,8 +47,11 @@ import {
 import { publishPin, type AttachedProduct, type PinterestClientError } from "../pinterestClient";
 import { publishToSocial, SocialApiError } from "../social/socialClient";
 import { beginPublish, endPublish, mapPublishErrorToCategory } from "./pinLifecycle";
+import { explicitPublishDestinations, receiptMatchesDispatch, type ConfirmedPublishReceipt } from "./publishConfirmation";
 
 export type PublishContentOptions = {
+  /** Mandatory user confirmation receipt for every immediate provider dispatch. */
+  confirmation?: ConfirmedPublishReceipt;
   /**
    * Skip destinations whose stored result is already `published` — Retry semantics.
    *
@@ -106,7 +107,7 @@ export type PublishContentOutcome = {
    * publishing this Content (the shared in-flight lock); `no_destinations` = the
    * Content names no resolvable destination; `not_found` = no such draft.
    */
-  blocked?: "locked" | "no_destinations" | "not_found";
+  blocked?: "locked" | "no_destinations" | "not_found" | "confirmation_required" | "invalid_confirmation" | "recovery_pending";
   /**
    * A Retry (`onlyPending: true`) found every destination already published, so nothing
    * was sent. NOT a `blocked` value: every caller treats a non-locked `blocked` as a
@@ -136,6 +137,8 @@ export type PublishContentOutcome = {
    * original. Never rendered — the durable rows are what the merchant sees.
    */
   errors?: Array<{ provider: string; error: unknown }>;
+  /** At least one provider may have accepted the post but its response was lost. */
+  recoveryPending?: boolean;
 };
 
 const defaultDeps: PublishContentDeps = {
@@ -214,7 +217,7 @@ export type PublishBlocker = {
  * "some blockers" as partial, not as a whole-Content block.
  */
 export function explainPublishBlockers(draft: ContentDraftLike): PublishBlocker[] {
-  const destinations = contentDestinations(draft);
+  const destinations = explicitPublishDestinations(draft as PinDraft);
   if (!destinations.length) {
     return [{
       code: "no_destinations",
@@ -324,13 +327,37 @@ export async function publishContent(
   const draft = pinDraftStore.getDraft(draftId);
   if (!draft) return { published: [], failed: [], results: [], blocked: "not_found" };
 
-  // An explicit destination list is this click's intent; otherwise read the Content's.
-  const destinations = options.destinations?.length
-    ? [...options.destinations]
-    : contentDestinations(draft);
+  const confirmation = options.confirmation;
+  if (!confirmation) {
+    return { published: [], failed: [], results: contentDestinationResults(draft), blocked: "confirmation_required" };
+  }
+  if (options.onlyPending !== undefined && options.onlyPending !== confirmation.onlyPending) {
+    return { published: [], failed: [], results: contentDestinationResults(draft), blocked: "invalid_confirmation" };
+  }
+  if (!receiptMatchesDispatch(confirmation, draft)) {
+    return { published: [], failed: [], results: contentDestinationResults(draft), blocked: "invalid_confirmation" };
+  }
+  // The dialog's frozen, exact snapshot is the ONLY dispatch input. An explicit empty
+  // list never falls through to stored/legacy/default Pinterest intent.
+  const confirmedDestinations = [...confirmation.destinations];
+  const destinations = [...confirmation.publishableDestinations];
   const priorResults = contentDestinationResults(draft);
   if (!destinations.length) {
     return { published: [], failed: [], results: priorResults, blocked: "no_destinations" };
+  }
+
+  if (draft.publishIntentId === confirmation.intentId) {
+    if (draft.publishIntentStatus === "recovery_pending" || draft.publishIntentStatus === "publishing") {
+      return { published: [], failed: [], results: priorResults, blocked: "recovery_pending" };
+    }
+    if (draft.publishIntentStatus === "completed" && !confirmation.onlyPending) {
+      return {
+        published: priorResults.filter(row => row.status === "published"),
+        failed: priorResults.filter(row => row.status === "failed"),
+        results: priorResults,
+        nothingToRetry: true,
+      };
+    }
   }
 
   // Retry targets what has not published yet — and ONLY that.
@@ -340,7 +367,11 @@ export async function publishContent(
   // defect onlyPending exists to prevent. A surface that means "send this again" now
   // has to say `onlyPending: false`; a Retry with nothing pending does nothing at all,
   // before the lock and before any store write, and reports it neutrally.
-  const targets = options.onlyPending
+  const hasUnknownDelivery = destinations.some(d => findDestinationResult(priorResults, d)?.status === "delivery_unknown");
+  if (confirmation.onlyPending && hasUnknownDelivery) {
+    return { published: [], failed: [], results: priorResults, blocked: "recovery_pending" };
+  }
+  const targets = confirmation.onlyPending
     ? destinations.filter(d => findDestinationResult(priorResults, d)?.status !== "published")
     : destinations;
   if (!targets.length) {
@@ -356,11 +387,16 @@ export async function publishContent(
 
   try {
     const submittedAt = deps.now();
-    const media = contentMedia(draft).map(item => ({ url: item.url, width: item.width, height: item.height }));
+    const media = confirmation.media.map(item => ({ url: item.url, width: item.width, height: item.height }));
 
     // Per-destination pre-check. A destination refused by its platform's rule is
     // recorded failed and dropped from the dispatch; the others proceed.
     const refused: DestinationPublishResult[] = [];
+    for (const blocker of confirmation.blockers) {
+      if (!blocker.destinationId) continue;
+      const destination = confirmedDestinations.find(item => item.id === blocker.destinationId);
+      if (destination) refused.push(refusedRow(destination, blocker.code, blocker.message, submittedAt));
+    }
     const dispatch: PublishDestination[] = [];
     for (const destination of targets) {
       const check = checkMediaForProvider(destination.provider, media);
@@ -373,6 +409,30 @@ export async function publishContent(
     // rather than as a Content that was never submitted.
     pinDraftStore.updateDraft(draftId, {
       publishError: undefined,
+      publishIntentId: confirmation.intentId,
+      publishIntentStatus: "publishing",
+      publishIntentConfirmedAt: confirmation.confirmedAt,
+      title: confirmation.title,
+      description: confirmation.description,
+      altText: confirmation.altText,
+      destinationUrl: confirmation.destinationUrl,
+      media: confirmation.media,
+      scheduledDestinations: confirmedDestinations.map(destination => ({
+        provider: destination.provider,
+        socialConnectionId: destination.socialConnectionId ?? "",
+        ...(destination.accountLabel ? { accountLabel: destination.accountLabel } : {}),
+        ...(destination.boardId ? { boardId: destination.boardId } : {}),
+        ...(destination.boardName ? { boardName: destination.boardName } : {}),
+        capturedAt: confirmation.confirmedAt,
+      })),
+      publishIntentDestinations: confirmedDestinations.map(destination => ({
+        id: destination.id,
+        provider: destination.provider,
+        socialConnectionId: destination.socialConnectionId ?? "",
+        ...(destination.accountLabel ? { accountLabel: destination.accountLabel } : {}),
+        ...(destination.boardId ? { boardId: destination.boardId } : {}),
+        ...(destination.boardName ? { boardName: destination.boardName } : {}),
+      })),
       destinationResults: mergeResults(priorResults, [
         ...refused,
         ...dispatch.map(d => baseRow(d, "publishing", submittedAt)),
@@ -380,7 +440,6 @@ export async function publishContent(
     });
 
     const outcomes: DestinationPublishResult[] = [...refused];
-    let adoptedConnectionId: string | undefined;
     let trialAccess = false;
     const errors: Array<{ provider: string; error: unknown }> = [];
     // Server-minted immediate-publish bucket (meterScheduledPost.ts), relayed from
@@ -409,16 +468,16 @@ export async function publishContent(
           // carries the whole carousel in the merchant's display order.
           imageUrl: media[0]?.url ?? draft.imageUrl,
           imageUrls: media.map(m => m.url),
-          title: draft.title || undefined,
-          description: draft.description || undefined,
-          link: draft.destinationUrl || undefined,
-          altText: draft.altText || undefined,
+          title: confirmation.title || undefined,
+          description: confirmation.description || undefined,
+          link: confirmation.destinationUrl || undefined,
+          altText: confirmation.altText || undefined,
           sourcePinId: draftId,
           draftId,
           source: "immediate",
-          // Publish AS the account this destination names. Null only for a legacy
-          // draft; the server then resolves the default and reports it back below.
-          connectionId: destination.socialConnectionId ?? undefined,
+          // A confirmed exact account is mandatory. The server is never asked to
+          // resolve/adopt a default account for an immediate publish.
+          connectionId: destination.socialConnectionId as string,
           // Surface-specific extras (product attachment), passed through untouched.
           ...(options.extras?.attachedProducts?.length
             ? { attachedProducts: options.extras.attachedProducts }
@@ -426,9 +485,6 @@ export async function publishContent(
           ...(options.extras?.primaryProductUrl ? { primaryProductUrl: options.extras.primaryProductUrl } : {}),
           ...(options.extras?.productAttachmentMode ? { productAttachmentMode: options.extras.productAttachmentMode } : {}),
         });
-        // Adopt-once (PRD §14): an untargeted draft keeps the connection it really
-        // published through, so every later retry/action stays on that account.
-        if (!destination.socialConnectionId && res.connectionId) adoptedConnectionId = res.connectionId;
         // First pinterest call to answer wins the bucket — later calls (a second
         // pinterest destination, rare) never overwrite it.
         if (!meteringBucket && res.meteringBucket) meteringBucket = res.meteringBucket;
@@ -436,11 +492,8 @@ export async function publishContent(
         if (!meteringBucketMintedAt && res.meteringBucketMintedAt) meteringBucketMintedAt = res.meteringBucketMintedAt;
         outcomes.push({
           ...baseRow(destination, "published", submittedAt),
-          // A legacy destination's row now names the account that actually received it.
-          socialConnectionId: destination.socialConnectionId ?? res.connectionId ?? null,
-          destinationId: destination.socialConnectionId
-            ? destination.id
-            : destinationKey("pinterest", res.connectionId ?? null),
+          socialConnectionId: destination.socialConnectionId,
+          destinationId: destination.id,
           remoteId: res.pin.id,
           postUrl: res.pin.url,
           publishedAt: deps.now(),
@@ -473,10 +526,11 @@ export async function publishContent(
           });
           continue;
         }
+        const ambiguous = typeof err?.httpStatus !== "number" || err.httpStatus >= 500;
         outcomes.push({
-          ...baseRow(destination, "failed", submittedAt),
+          ...baseRow(destination, ambiguous ? "delivery_unknown" : "failed", submittedAt),
           errorCode: err?.code,
-          errorMessage: err?.message || "Publishing failed.",
+          errorMessage: ambiguous ? "Delivery status is unknown. Check the original publish before trying again." : (err?.message || "Publishing failed."),
         });
       }
     }
@@ -487,10 +541,10 @@ export async function publishContent(
           postId: draftId,
           post: {
             imageUrls: media.map(m => m.url),
-            title: draft.title || undefined,
-            caption: draft.description || undefined,
-            destinationUrl: draft.destinationUrl || undefined,
-            altText: draft.altText || undefined,
+            title: confirmation.title || undefined,
+            caption: confirmation.description || undefined,
+            destinationUrl: confirmation.destinationUrl || undefined,
+            altText: confirmation.altText || undefined,
           },
           // Never send a destination without an account: the server would have to guess
           // which connection the merchant meant, which is the wrong-account defect.
@@ -550,9 +604,11 @@ export async function publishContent(
         // has none, and this stays undefined exactly as it did before — the message is
         // still shown, StudioBoard's limit UI just does not fire for it.
         const errorCode = error instanceof SocialApiError ? error.code : undefined;
+        const ambiguous = !(error instanceof SocialApiError) || error.status >= 500;
         errors.push({ provider: "social", error });
         for (const destination of socialTargets) {
-          outcomes.push({ ...baseRow(destination, "failed", submittedAt), errorCode, errorMessage: message });
+          outcomes.push({ ...baseRow(destination, ambiguous ? "delivery_unknown" : "failed", submittedAt), errorCode,
+            errorMessage: ambiguous ? "Delivery status is unknown. Check the original publish before trying again." : message });
         }
       }
     }
@@ -564,6 +620,7 @@ export async function publishContent(
     const previousResults = supersededResults(priorResults, outcomes, draft.previousResults ?? []);
     const published = results.filter(r => r.status === "published");
     const failed = results.filter(r => r.status === "failed");
+    const recoveryPending = results.some(r => r.status === "delivery_unknown");
     const legacy = legacyFieldsFromResults(results, draft);
     const firstFailure = outcomes.find(r => r.status === "failed");
     // A publish that delivered nothing releases its schedule (WP-B §11.5) and keeps the
@@ -585,18 +642,18 @@ export async function publishContent(
       failureType: legacy.publishError ? "publish" : undefined,
       errorCategory: legacy.publishError ? mapPublishErrorToCategory(legacy.publishErrorCode, legacy.publishError) : undefined,
       publishErrorCode: legacy.publishErrorCode,
+      publishIntentStatus: recoveryPending ? "recovery_pending" : "completed",
       previousScheduledTime: totalFailure ? prevScheduled : draft.previousScheduledTime,
       scheduledDate: totalFailure ? "" : draft.scheduledDate,
       scheduledTime: totalFailure ? "" : draft.scheduledTime,
-      ...(adoptedConnectionId ? { targetConnectionId: adoptedConnectionId } : {}),
     } as Partial<PinDraft>);
 
     return {
       published,
       failed,
       results,
-      ...(adoptedConnectionId ? { adoptedConnectionId } : {}),
       ...(trialAccess ? { trialAccess: true } : {}),
+      ...(recoveryPending ? { recoveryPending: true } : {}),
       ...(errors.length ? { errors } : {}),
     };
   } finally {
