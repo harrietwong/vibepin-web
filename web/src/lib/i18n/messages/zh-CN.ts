@@ -456,6 +456,12 @@ const zhCN: Partial<Record<MessageKey, string>> = {
   "sync.status.synced": "所有更改已同步",
   "sync.status.syncing": "正在同步…",
   "sync.status.error": "同步遇到问题，正在重试；你的数据仍保存在本设备。",
+  "sync.status.actionRequired": "有 {n} 个草稿需要处理后才能同步。",
+  "studioBoard.card.syncIssue.destinationNotSchedulable": "此发布目标暂不支持排期。请选择其他目标，或立即发布。",
+  "studioBoard.card.syncIssue.destinationUnavailable": "所选发布账号当前不可用。请重新连接或选择其他账号。",
+  "studioBoard.card.syncIssue.quotaExceeded": "当前套餐已达到排期上限，此草稿尚未排期。",
+  "studioBoard.card.syncIssue.payloadTooLarge": "此草稿内容过大，无法同步。请减少媒体或内容后重试。",
+  "studioBoard.card.syncIssue.review": "检查草稿",
   // ── connectPage ──
   "connectPage.openingPinterest": "正在打开 Pinterest…",
   "connectPage.returnHint": "连接账号后，你将返回你的 Pin。",

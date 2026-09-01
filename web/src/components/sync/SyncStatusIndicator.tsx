@@ -32,12 +32,14 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 const SERVER_SNAPSHOT: AggregateSyncStatus = { state: "synced", pendingCount: 0, errorStores: [] };
 const serverSnapshot = () => SERVER_SNAPSHOT;
 
-type CombinedState = "synced" | "syncing" | "error";
+type CombinedState = "synced" | "syncing" | "error" | "action_required";
 
 function combine(a: AggregateSyncStatus, b: PinDraftSyncStatus): { state: CombinedState; pendingCount: number } {
   const state: CombinedState =
     a.state === "error" || b.state === "error"
       ? "error"
+      : b.state === "action_required"
+        ? "action_required"
       : a.state === "syncing" || b.state === "syncing"
         ? "syncing"
         : "synced";
@@ -66,10 +68,13 @@ export function SyncStatusIndicator() {
   if (state === "synced") return null;
 
   const isError = state === "error";
-  const color = isError ? "#F59E0B" : "#3B82F6";
+  const isActionRequired = state === "action_required";
+  const color = isError || isActionRequired ? "#F59E0B" : "#3B82F6";
   const label =
     isError
       ? t("sync.status.error")
+      : isActionRequired
+        ? t("sync.status.actionRequired").replace("{n}", String(drafts.actionRequiredCount ?? 0))
       : `${t("sync.status.syncing")}${pendingCount > 0 ? ` (${pendingCount})` : ""}`;
 
   return (
@@ -92,8 +97,8 @@ export function SyncStatusIndicator() {
         <span
           style={{
             width: 8, height: 8, borderRadius: "50%", background: color,
-            boxShadow: `0 0 0 3px ${isError ? "rgba(245,158,11,0.16)" : "rgba(59,130,246,0.16)"}`,
-            animation: isError ? undefined : "vp-sync-pulse 1.2s ease-in-out infinite",
+            boxShadow: `0 0 0 3px ${isError || isActionRequired ? "rgba(245,158,11,0.16)" : "rgba(59,130,246,0.16)"}`,
+            animation: isError || isActionRequired ? undefined : "vp-sync-pulse 1.2s ease-in-out infinite",
           }}
         />
       </span>

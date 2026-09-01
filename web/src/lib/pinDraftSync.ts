@@ -21,8 +21,8 @@
  *  - Failures (network / 401 / 5xx / 202 deferred): outbox is NEVER dropped;
  *    exponential backoff capped at 60s keeps retrying. localStorage remains the
  *    offline cache layer, so a dead server costs nothing (§8.3 zero regression).
- *  - Drafts whose payload exceeds 200KB are skipped with a warning (the server
- *    would 413 the whole batch otherwise); everything else keeps syncing.
+ *  - Drafts whose payload exceeds 200KB become per-draft action-required issues;
+ *    valid siblings continue syncing and the rejected revision is not hot-retried.
  *
  * SSR-safe: init() is a no-op without window. init() is idempotent.
  */
@@ -33,6 +33,8 @@ import {
   getDraft,
   mergeServerDrafts,
   rebaseDraftOnServer,
+  setPinDraftOwnerScope,
+  clearPinDraftOwnerScope,
   type PinDraft,
 } from "./pinDraftStore";
 
@@ -41,6 +43,10 @@ import {
 export type GetAccessToken = () => Promise<string | null>;
 
 export interface PinDraftSyncOptions {
+  /** Verified Supabase user id. Required by product code; omitted only by legacy tests. */
+  ownerUserId?: string;
+  /** Workspace namespace. Defaults to "default" until multi-workspace ships. */
+  workspaceId?: string;
   /** Debounce between a store write and the flush. Default 1500ms. */
   debounceMs?: number;
   /** First retry delay after a failure. Default 2000ms. */
@@ -65,9 +71,18 @@ export interface PinDraftSyncOptions {
  * so errorStores is either [] or ["pin-drafts"].
  */
 export interface PinDraftSyncStatus {
-  state: "synced" | "syncing" | "error";
+  state: "synced" | "syncing" | "error" | "action_required";
   pendingCount: number;
   errorStores: string[];
+  actionRequiredCount?: number;
+}
+
+export interface PinDraftSyncIssue {
+  draftId: string;
+  updatedAt: string;
+  code: "destination_not_schedulable" | "destination_unavailable" | "quota_exceeded" | "payload_too_large";
+  userMessageKey: string;
+  retryable: false;
 }
 
 /** WP-E telemetry hooks, injected by the registry (keeps analytics out of the engine). */
@@ -83,6 +98,20 @@ const ERROR_THRESHOLD = 3;
 type OutboxEntry =
   | { kind: "put"; updatedAt: string }
   | { kind: "delete"; deletedAt: string };
+
+interface DurableSyncState {
+  version: 1;
+  outbox: Record<string, OutboxEntry>;
+  issues: Record<string, PinDraftSyncIssue>;
+}
+
+type DraftSyncOutcome = {
+  draftId?: string;
+  status?: "applied" | "stale" | "rejected" | "deferred";
+  code?: string;
+  userMessageKey?: string;
+  retryable?: boolean;
+};
 
 interface ServerDraftRecord {
   draftId: string;
@@ -112,6 +141,9 @@ let _opts = { ...DEFAULTS, fetchImpl: undefined as typeof fetch | undefined };
 let _lastSeen = new Map<string, string>();
 /** Pending changes not yet acknowledged by the server. Never dropped on failure. */
 let _outbox = new Map<string, OutboxEntry>();
+let _issues = new Map<string, PinDraftSyncIssue>();
+let _ownerKey = "legacy";
+let _runEpoch = 0;
 
 let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let _retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -136,14 +168,20 @@ function computeStatus(): PinDraftSyncStatus {
   const pendingCount = _outbox.size;
   const inError = _failureCount >= ERROR_THRESHOLD;
   const state: PinDraftSyncStatus["state"] =
-    inError ? "error" : pendingCount > 0 || !_ready ? "syncing" : "synced";
-  return { state, pendingCount, errorStores: inError ? [PIN_DRAFT_STORE_KEY] : [] };
+    !_initialized ? "synced" : inError ? "error" : _issues.size > 0 ? "action_required" : pendingCount > 0 || !_ready ? "syncing" : "synced";
+  return {
+    state,
+    pendingCount,
+    errorStores: inError || _issues.size > 0 ? [PIN_DRAFT_STORE_KEY] : [],
+    actionRequiredCount: _issues.size,
+  };
 }
 
 function statusEqual(a: PinDraftSyncStatus, b: PinDraftSyncStatus): boolean {
   return (
     a.state === b.state &&
     a.pendingCount === b.pendingCount &&
+    a.actionRequiredCount === b.actionRequiredCount &&
     a.errorStores.length === b.errorStores.length &&
     a.errorStores.every((s, i) => s === b.errorStores[i])
   );
@@ -171,6 +209,11 @@ export function subscribePinDraftSyncStatus(cb: () => void): () => void {
   return () => { _statusSubs.delete(cb); };
 }
 
+/** Deterministic, card-addressable sync problem for the current owner only. */
+export function getPinDraftSyncIssue(draftId: string): PinDraftSyncIssue | null {
+  return _issues.get(draftId) ?? null;
+}
+
 function maybeEnterError(): void {
   if (_failureCount >= ERROR_THRESHOLD && !_inErrorState) {
     _inErrorState = true;
@@ -192,6 +235,54 @@ function fetcher(): typeof fetch {
   return _opts.fetchImpl ?? fetch;
 }
 
+function durableStateKey(): string {
+  return `vp:pin_draft_sync:v2:${_ownerKey}`;
+}
+
+function loadDurableState(): void {
+  _outbox = new Map();
+  _issues = new Map();
+  try {
+    const raw = localStorage.getItem(durableStateKey());
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Partial<DurableSyncState>;
+    if (parsed.version !== 1) return;
+    for (const [id, entry] of Object.entries(parsed.outbox ?? {})) {
+      if (entry?.kind === "put" && typeof entry.updatedAt === "string") _outbox.set(id, entry);
+      if (entry?.kind === "delete" && typeof entry.deletedAt === "string") _outbox.set(id, entry);
+    }
+    for (const [id, issue] of Object.entries(parsed.issues ?? {})) {
+      if (issue?.draftId === id && typeof issue.updatedAt === "string" && issue.retryable === false) {
+        _issues.set(id, issue);
+      }
+    }
+  } catch {
+    // Corrupt sync metadata must never expose another owner or block the draft store.
+    _outbox = new Map();
+    _issues = new Map();
+  }
+}
+
+function persistDurableState(): void {
+  try {
+    const state: DurableSyncState = {
+      version: 1,
+      outbox: Object.fromEntries(_outbox),
+      issues: Object.fromEntries(_issues),
+    };
+    localStorage.setItem(durableStateKey(), JSON.stringify(state));
+  } catch {
+    // The local draft store already surfaces quota failures. Sync metadata remains
+    // in memory and is reconstructed from updatedAt on a later healthy session.
+  }
+}
+
+function ownerStorageKey(ownerUserId?: string, workspaceId?: string): string {
+  const owner = ownerUserId?.trim();
+  if (!owner) return "legacy";
+  return `${encodeURIComponent(owner)}:${encodeURIComponent(workspaceId?.trim() || "default")}`;
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -200,10 +291,21 @@ function fetcher(): typeof fetch {
  */
 export function initPinDraftSync(getToken: GetAccessToken, options?: PinDraftSyncOptions): void {
   if (typeof window === "undefined") return;
-  if (_initialized) return;
+  const nextOwnerKey = ownerStorageKey(options?.ownerUserId, options?.workspaceId);
+  if (_initialized && nextOwnerKey === _ownerKey) {
+    _getToken = getToken;
+    return;
+  }
+  if (_initialized) stopPinDraftSync({ clearOwnerScope: false });
+  if (options?.ownerUserId?.trim()) {
+    setPinDraftOwnerScope(options.ownerUserId, options.workspaceId ?? "default");
+  }
   _initialized = true;
+  const epoch = ++_runEpoch;
+  _ownerKey = nextOwnerKey;
   _getToken = getToken;
   _opts = { ...DEFAULTS, fetchImpl: options?.fetchImpl, ...stripUndefined(options ?? {}) };
+  loadDurableState();
 
   const onStoreEvent = () => {
     if (!_ready) return; // pre-pull writes are captured by the post-seed full diff
@@ -212,22 +314,58 @@ export function initPinDraftSync(getToken: GetAccessToken, options?: PinDraftSyn
   window.addEventListener(DRAFT_STORE_EVENT, onStoreEvent);
   _unsubscribe = () => window.removeEventListener(DRAFT_STORE_EVENT, onStoreEvent);
 
-  void startupPull();
+  void startupPull(epoch);
+}
+
+/**
+ * Stop the singleton before logout/account switch. Timers/listeners and all
+ * in-memory snapshots are detached, while this owner's durable outbox remains.
+ */
+export function stopPinDraftSync(options: { clearOwnerScope?: boolean } = {}): void {
+  _runEpoch++;
+  if (_debounceTimer) clearTimeout(_debounceTimer);
+  if (_retryTimer) clearTimeout(_retryTimer);
+  persistDurableState();
+  _unsubscribe?.();
+  _initialized = false;
+  _ready = false;
+  _getToken = null;
+  _lastSeen = new Map();
+  _outbox = new Map();
+  _issues = new Map();
+  _debounceTimer = null;
+  _retryTimer = null;
+  _flushing = false;
+  _flushQueued = false;
+  _failureCount = 0;
+  _unsubscribe = null;
+  _ownerKey = "legacy";
+  if (options.clearOwnerScope !== false) clearPinDraftOwnerScope();
+  notifyStatus();
 }
 
 function stripUndefined<T extends object>(obj: T): Partial<T> {
   const out: Partial<T> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (v !== undefined && k !== "fetchImpl") (out as Record<string, unknown>)[k] = v;
+    if (v !== undefined && k !== "fetchImpl" && k !== "ownerUserId" && k !== "workspaceId") {
+      (out as Record<string, unknown>)[k] = v;
+    }
   }
   return out;
 }
 
 // ── Startup pull → merge → seed baseline → first diff ────────────────────────
 
-async function startupPull(): Promise<void> {
+class StaleSyncRunError extends Error {}
+
+function ensureActive(epoch: number): void {
+  if (!_initialized || epoch !== _runEpoch) throw new StaleSyncRunError("stale pin-draft sync run");
+}
+
+async function startupPull(epoch = _runEpoch): Promise<void> {
   try {
-    const { live, deleted } = await pullAllPages();
+    const { live, deleted } = await pullAllPages(epoch);
+    ensureActive(epoch);
 
     // LWW merge into the local store (single persist + emit inside).
     mergeServerDrafts(
@@ -244,17 +382,18 @@ async function startupPull(): Promise<void> {
     _failureCount = 0;
     maybeRecover();
     diffNow(); // diffNow calls notifyStatus (covers the ready transition)
-  } catch {
+  } catch (error) {
+    if (error instanceof StaleSyncRunError) return;
     // Server unreachable / table pending: retry the pull with backoff. Local
     // behaviour stays pure-localStorage until the pull succeeds (§8.3).
     _failureCount++;
     maybeEnterError();
     notifyStatus();
-    scheduleRetry(() => void startupPull());
+    scheduleRetry(() => void startupPull(epoch));
   }
 }
 
-async function pullAllPages(): Promise<{
+async function pullAllPages(epoch: number): Promise<{
   live: ServerDraftRecord[];
   deleted: Array<{ id: string; deletedAt: string }>;
 }> {
@@ -265,6 +404,7 @@ async function pullAllPages(): Promise<{
   let guard = 0;
 
   do {
+    ensureActive(epoch);
     const qs = new URLSearchParams({ limit: String(_opts.pageSize) });
     if (cursor) qs.set("cursor", cursor);
     const res = await fetcher()(`${_opts.endpoint}?${qs.toString()}`, {
@@ -294,6 +434,12 @@ function diffNow(): void {
 
   for (const [id, updatedAt] of current) {
     if (_lastSeen.get(id) !== updatedAt) {
+      const issue = _issues.get(id);
+      // A deterministic rejection is acknowledged for this exact revision. Do not
+      // hot-retry it after reload. A real merchant edit changes updatedAt, clears the
+      // issue, and becomes a fresh outbox entry.
+      if (issue?.updatedAt === updatedAt) continue;
+      if (issue) _issues.delete(id);
       _outbox.set(id, { kind: "put", updatedAt });
       changed = true;
     }
@@ -306,11 +452,24 @@ function diffNow(): void {
   }
 
   _lastSeen = current;
+  if (changed) persistDurableState();
   if (changed) scheduleFlush();
   notifyStatus(); // outbox may have grown/shrunk → status may have changed
 }
 
 function scheduleFlush(): void {
+  // A store event raised by reconcile/merge while a request is still in flight
+  // belongs to the NEXT cycle. Starting its debounce now shortens (or entirely
+  // consumes) the cycle boundary before the current PUT has finished. Record one
+  // queued pass instead; `finally` starts the debounce after `_flushing` clears.
+  if (_flushing) {
+    _flushQueued = true;
+    return;
+  }
+  // A failed/deferred cycle owns the next attempt through its backoff timer.
+  // A concurrent store event may add work to the same durable outbox, but must not
+  // create a second, earlier scheduler that bypasses that backoff.
+  if (_retryTimer) return;
   if (_debounceTimer) clearTimeout(_debounceTimer);
   _debounceTimer = setTimeout(() => {
     _debounceTimer = null;
@@ -319,6 +478,12 @@ function scheduleFlush(): void {
 }
 
 function scheduleRetry(run: () => void): void {
+  // Retry is the sole scheduler after a failed/deferred cycle. Cancel any debounce
+  // that was armed by a reconcile-driven store event before the failure surfaced.
+  if (_debounceTimer) {
+    clearTimeout(_debounceTimer);
+    _debounceTimer = null;
+  }
   if (_retryTimer) clearTimeout(_retryTimer);
   const delay = Math.min(_opts.backoffBaseMs * 2 ** Math.max(_failureCount - 1, 0), _opts.backoffMaxMs);
   _retryTimer = setTimeout(() => {
@@ -339,9 +504,11 @@ async function flush(): Promise<void> {
   if (_flushing) { _flushQueued = true; return; }
   if (_outbox.size === 0) return;
   _flushing = true;
+  const epoch = _runEpoch;
 
   try {
     const token = await requireToken();
+    ensureActive(epoch);
 
     // Snapshot the entries being flushed; a concurrent edit replaces the entry
     // in the outbox, and we only ack entries that are still identical afterwards.
@@ -356,9 +523,17 @@ async function flush(): Promise<void> {
       const draft = getDraft(id);
       if (!draft) { _outbox.delete(id); continue; } // deleted meanwhile → a delete entry exists/will exist
       if (payloadBytes(draft) > _opts.maxPayloadBytes) {
-        console.warn(`[pinDraftSync] draft ${id} exceeds ${_opts.maxPayloadBytes} bytes — skipped`);
+        console.warn(`[pinDraftSync] a draft exceeds ${_opts.maxPayloadBytes} bytes — action required`);
+        _issues.set(id, {
+          draftId: id,
+          updatedAt: draft.updatedAt,
+          code: "payload_too_large",
+          userMessageKey: "studioBoard.card.syncIssue.payloadTooLarge",
+          retryable: false,
+        });
         _outbox.delete(id);
         _telemetry?.onOversizeSkipped?.(id);
+        persistDurableState();
         continue;
       }
       puts.push({ id, entry, draft });
@@ -367,9 +542,14 @@ async function flush(): Promise<void> {
     for (let i = 0; i < puts.length; i += _opts.batchSize) {
       const chunk = puts.slice(i, i + _opts.batchSize);
       const res = await putChunk(token, chunk);
+      ensureActive(epoch);
       if (res.status === 202) throw new DeferredError(); // table not applied yet — keep outbox, retry later
+      if (await applyDeterministicHttpError(res, chunk, epoch)) continue;
 
       if (res.status === 409) {
+        // A modern 409 may also contain accepted/rejected siblings. Apply those
+        // outcomes first, but keep retryable CAS-stale entries for re-base below.
+        const outcomeResult = await applyPutOutcomes(res, chunk, epoch, { deferPending: false });
         // The server refused these drafts because the stored row changed between
         // its read and its write — the row we are holding is genuinely older than
         // what is stored. Reconcile instead of insisting: re-base onto the server's
@@ -378,18 +558,38 @@ async function flush(): Promise<void> {
         // Ids the server has TOMBSTONED: reconcileStale applied the deletion, and
         // they must be acked rather than retried — re-sending would revive the row.
         const dropped = new Set<string>();
-        const conflicted = await reconcileStale(res, chunk, dropped);
-        // Everything the server DID apply in that request is durable; only the
-        // conflicted ids still owe a write. A dropped id owes nothing.
-        ackEntries(chunk.filter(c => !conflicted.has(c.id) || dropped.has(c.id)));
+        const conflicted = await reconcileStale(res, chunk, dropped, epoch);
+        ensureActive(epoch);
+        // Legacy 409s have no per-draft outcomes, so their stale list remains the
+        // only proof that non-conflicted siblings landed. In v2, ack only explicit
+        // terminal outcomes (already handled above); an omitted non-conflict stays
+        // durable and is retried with backoff instead of being guessed successful.
+        if (outcomeResult === null) {
+          ackEntries(chunk.filter(c => !conflicted.has(c.id) || dropped.has(c.id)));
+        } else {
+          ackEntries(chunk.filter(c => dropped.has(c.id)));
+        }
+        const pendingNonConflicted = outcomeResult !== null && chunk.some(
+          sent => !conflicted.has(sent.id) && _outbox.get(sent.id) === sent.entry,
+        );
         for (const id of dropped) conflicted.delete(id);
-        if (conflicted.size === 0) continue;
+        if (conflicted.size === 0) {
+          if (pendingNonConflicted) throw new DeferredError();
+          continue;
+        }
 
         const retry = rebuildChunk(conflicted);
-        if (retry.length === 0) { scheduleFlush(); continue; }
+        if (retry.length === 0) {
+          if (pendingNonConflicted) throw new DeferredError();
+          scheduleFlush();
+          continue;
+        }
         const res2 = await putChunk(token, retry);
+        ensureActive(epoch);
         if (res2.status === 202) throw new DeferredError();
+        if (await applyDeterministicHttpError(res2, retry, epoch)) continue;
         if (res2.status === 409) {
+          const retryOutcomeResult = await applyPutOutcomes(res2, retry, epoch, { deferPending: false });
           // Lost the race twice in one cycle. Stop here on purpose: a third attempt
           // is the same bet, and looping would hammer the endpoint for as long as
           // the other writer keeps winning. The entries stay in the outbox and the
@@ -399,9 +599,13 @@ async function flush(): Promise<void> {
           // Fold the SECOND conflict's current row in as well, so the next cycle
           // starts from what is actually stored instead of repeating this dance.
           const dropped2 = new Set<string>();
-          await reconcileStale(res2, retry, dropped2);
+          const conflicted2 = await reconcileStale(res2, retry, dropped2, epoch);
+          ensureActive(epoch);
           // A row tombstoned by the second conflict owes nothing either.
           ackEntries(retry.filter(c => dropped2.has(c.id)));
+          const pendingRetryNonConflicted = retryOutcomeResult !== null && retry.some(
+            sent => !conflicted2.has(sent.id) && !dropped2.has(sent.id) && _outbox.get(sent.id) === sent.entry,
+          );
           console.warn(
             `[pinDraftSync] draft(s) still stale after one merge+retry — deferred to the next sync: ${[...conflicted].join(", ")}`,
           );
@@ -411,16 +615,18 @@ async function flush(): Promise<void> {
           // Bounded work per cycle (one PUT + at most one retry), debounce-spaced,
           // and each cycle re-merges first, so the payload converges rather than
           // re-sending the same losing copy.
+          if (pendingNonConflicted || pendingRetryNonConflicted) throw new DeferredError();
           scheduleFlush();
           continue;
         }
         if (!res2.ok) throw new Error(`pin-drafts PUT failed: ${res2.status}`);
-        ackEntries(retry);
+        if (!(await applyPutOutcomes(res2, retry, epoch))) ackEntries(retry);
+        if (pendingNonConflicted) throw new DeferredError();
         continue;
       }
 
       if (!res.ok) throw new Error(`pin-drafts PUT failed: ${res.status}`);
-      ackEntries(chunk);
+      if (!(await applyPutOutcomes(res, chunk, epoch))) ackEntries(chunk);
     }
 
     for (let i = 0; i < deletes.length; i += _opts.batchSize) {
@@ -431,6 +637,7 @@ async function flush(): Promise<void> {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ draftIds: chunk.map(c => c.id), deletedAt }),
       });
+      ensureActive(epoch);
       if (!res.ok && res.status !== 202) throw new Error(`pin-drafts DELETE failed: ${res.status}`);
       if (res.status === 202) throw new DeferredError();
       ackEntries(chunk);
@@ -438,19 +645,27 @@ async function flush(): Promise<void> {
 
     _failureCount = 0;
     maybeRecover();
+    persistDurableState();
     notifyStatus(); // outbox drained + failure cleared → likely back to "synced"
-  } catch {
+  } catch (error) {
+    if (error instanceof StaleSyncRunError) return;
     // Outbox entries stay put — exponential backoff (capped at backoffMaxMs), forever.
     // A 202 deferred (table not applied) backs off the same way.
     _failureCount++;
+    // Store events raised while the request was in flight may have set this flag.
+    // On any failed/deferred cycle, the retry timer is the sole scheduler; letting
+    // finally consume _flushQueued would bypass backoff and create a hot loop.
+    _flushQueued = false;
     maybeEnterError();
     notifyStatus();
     scheduleRetry(() => void flush());
   } finally {
-    _flushing = false;
-    if (_flushQueued) {
-      _flushQueued = false;
-      scheduleFlush();
+    if (epoch === _runEpoch) {
+      _flushing = false;
+      if (_flushQueued) {
+        _flushQueued = false;
+        scheduleFlush();
+      }
     }
   }
 }
@@ -470,6 +685,117 @@ async function putChunk(token: string, chunk: PutChunk): Promise<Response> {
       drafts: chunk.map(c => ({ draftId: c.id, updatedAt: c.draft.updatedAt, payload: c.draft })),
     }),
   });
+}
+
+function deterministicIssue(outcome: DraftSyncOutcome, sent: PutChunk[number]): PinDraftSyncIssue | null {
+  if (outcome.status !== "rejected" || outcome.retryable !== false) return null;
+  if (![
+    "destination_not_schedulable",
+    "destination_unavailable",
+    "quota_exceeded",
+    "payload_too_large",
+  ].includes(outcome.code ?? "")) return null;
+  return {
+    draftId: sent.id,
+    updatedAt: sent.draft.updatedAt,
+    code: outcome.code as PinDraftSyncIssue["code"],
+    userMessageKey: outcome.userMessageKey || `studioBoard.card.syncIssue.${outcome.code}`,
+    retryable: false,
+  };
+}
+
+/**
+ * Apply a v2 per-draft response. Returns null for the legacy aggregate response,
+ * allowing old servers to keep the previous ack-whole-chunk behavior. A Set is
+ * returned for v2 even when empty, so callers never confuse an incomplete v2
+ * response with a legacy success.
+ */
+async function applyPutOutcomes(
+  res: Response,
+  chunk: PutChunk,
+  epoch = _runEpoch,
+  options: { deferPending?: boolean } = {},
+): Promise<Set<string> | null> {
+  let body: { outcomes?: DraftSyncOutcome[] } | null = null;
+  try { body = (await res.clone().json()) as { outcomes?: DraftSyncOutcome[] }; } catch { body = null; }
+  ensureActive(epoch);
+  if (!Array.isArray(body?.outcomes)) return null;
+
+  const sentById = new Map(chunk.map(c => [c.id, c]));
+  const terminal = new Set<string>();
+  for (const outcome of body.outcomes) {
+    const sent = typeof outcome.draftId === "string" ? sentById.get(outcome.draftId) : undefined;
+    if (!sent) continue;
+    if (outcome.status === "applied" || (outcome.status === "stale" && outcome.retryable === false)) {
+      ackEntries([sent]);
+      _issues.delete(sent.id);
+      terminal.add(sent.id);
+      continue;
+    }
+    const issue = deterministicIssue(outcome, sent);
+    if (issue) {
+      _issues.set(sent.id, issue);
+      ackEntries([sent]);
+      terminal.add(sent.id);
+    }
+    // deferred/retryable outcomes intentionally remain in the durable outbox.
+  }
+  persistDurableState();
+  notifyStatus();
+  const pendingFromChunk = chunk.some(sent => _outbox.get(sent.id) === sent.entry);
+  if (pendingFromChunk && options.deferPending !== false) throw new DeferredError();
+  return terminal;
+}
+
+/**
+ * Rollout compatibility for the old batch-wide 422/429 contract. A listed bad
+ * draft becomes action-required; siblings remain in the outbox and are retried in
+ * a clean request, so one legacy rejection still cannot block them forever.
+ */
+async function applyDeterministicHttpError(res: Response, chunk: PutChunk, epoch = _runEpoch): Promise<boolean> {
+  if (![413, 422, 429].includes(res.status)) return false;
+  let body: { code?: string; drafts?: Array<{ draftId?: string }> } | null = null;
+  try { body = (await res.clone().json()) as { code?: string; drafts?: Array<{ draftId?: string }> }; } catch { body = null; }
+  ensureActive(epoch);
+  const code = body?.code;
+  if (!code || ![
+    "destination_not_schedulable",
+    "destination_unavailable",
+    "quota_exceeded",
+    "payload_too_large",
+  ].includes(code)) return false;
+
+  const listed = new Set(
+    (body?.drafts ?? []).map(item => item?.draftId).filter((id): id is string => typeof id === "string" && !!id),
+  );
+  const affected = chunk.filter(sent => {
+    if (listed.size > 0) return listed.has(sent.id);
+    if (code === "quota_exceeded") return !!(sent.draft.plannedAt || sent.draft.scheduledDate);
+    return chunk.length === 1;
+  });
+  if (affected.length === 0) return false;
+
+  const keyByCode: Record<string, string> = {
+    destination_not_schedulable: "studioBoard.card.syncIssue.destinationNotSchedulable",
+    destination_unavailable: "studioBoard.card.syncIssue.destinationUnavailable",
+    quota_exceeded: "studioBoard.card.syncIssue.quotaExceeded",
+    payload_too_large: "studioBoard.card.syncIssue.payloadTooLarge",
+  };
+  for (const sent of affected) {
+    _issues.set(sent.id, {
+      draftId: sent.id,
+      updatedAt: sent.draft.updatedAt,
+      code: code as PinDraftSyncIssue["code"],
+      userMessageKey: keyByCode[code],
+      retryable: false,
+    });
+    ensureActive(epoch);
+  }
+  ackEntries(affected);
+  notifyStatus();
+  const pendingFromChunk = chunk.some(sent => _outbox.get(sent.id) === sent.entry);
+  if (pendingFromChunk) throw new DeferredError();
+  return true;
 }
 
 /**
@@ -534,10 +860,12 @@ async function reconcileStale(
   res: Response,
   chunk: PutChunk,
   dropped?: Set<string>,
+  epoch = _runEpoch,
 ): Promise<Set<string>> {
   const conflicted = new Set<string>();
   let body: StaleConflictBody | null = null;
   try { body = (await res.json()) as StaleConflictBody; } catch { body = null; }
+  ensureActive(epoch);
 
   const entries = body?.stale?.length
     ? body.stale
@@ -615,11 +943,13 @@ function ackEntries(chunk: Array<{ id: string; entry: OutboxEntry }>): void {
   for (const { id, entry } of chunk) {
     if (_outbox.get(id) === entry) _outbox.delete(id);
   }
+  persistDurableState();
 }
 
 // ── Test hooks (not used by product code) ─────────────────────────────────────
 
 export function __resetPinDraftSyncForTests(): void {
+  _runEpoch++;
   if (_debounceTimer) clearTimeout(_debounceTimer);
   if (_retryTimer) clearTimeout(_retryTimer);
   _unsubscribe?.();
@@ -629,6 +959,8 @@ export function __resetPinDraftSyncForTests(): void {
   _opts = { ...DEFAULTS, fetchImpl: undefined };
   _lastSeen = new Map();
   _outbox = new Map();
+  _issues = new Map();
+  _ownerKey = "legacy";
   _debounceTimer = null;
   _retryTimer = null;
   _flushing = false;
@@ -648,6 +980,7 @@ export function __getPinDraftSyncDebug(): {
   outboxSize: number;
   failureCount: number;
   outboxKinds: Record<string, "put" | "delete">;
+  actionRequired: Record<string, string>;
 } {
   const outboxKinds: Record<string, "put" | "delete"> = {};
   for (const [id, e] of _outbox) outboxKinds[id] = e.kind;
@@ -657,6 +990,7 @@ export function __getPinDraftSyncDebug(): {
     outboxSize: _outbox.size,
     failureCount: _failureCount,
     outboxKinds,
+    actionRequired: Object.fromEntries([..._issues].map(([id, issue]) => [id, issue.code])),
   };
 }
 

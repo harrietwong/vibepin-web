@@ -24,7 +24,7 @@ import { AssistantLauncher } from "@/components/assistant/AssistantLauncher";
 import { AssistantPanel } from "@/components/assistant/AssistantPanel";
 import { useSessionUser } from "@/lib/useSessionUser";
 import { markNavClick, markRouteVisible } from "@/lib/navTiming";
-import { initPinDraftSync } from "@/lib/pinDraftSync";
+import { initPinDraftSync, stopPinDraftSync } from "@/lib/pinDraftSync";
 import { initAllUserStoreSync } from "@/lib/userStoreSyncRegistry";
 import { SyncStatusIndicator } from "@/components/sync/SyncStatusIndicator";
 
@@ -316,14 +316,24 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // initPinDraftSync is idempotent and SSR-safe; failures degrade to the
   // existing pure-localStorage behaviour (outbox retries in the background).
   useEffect(() => {
-    const getToken = async () =>
-      (await supabase.auth.getSession()).data.session?.access_token ?? null;
-    initPinDraftSync(getToken);
+    const ownerUserId = sessionUser?.id;
+    if (!ownerUserId) {
+      stopPinDraftSync();
+      return;
+    }
+    const getToken = async () => {
+      const session = (await supabase.auth.getSession()).data.session;
+      // Fail closed across account switches: an A outbox is never sent under B's
+      // token during the render/effect handoff.
+      return session?.user.id === ownerUserId ? session.access_token : null;
+    };
+    initPinDraftSync(getToken, { ownerUserId, workspaceId: "default" });
     // WP-B: account-level sync for the settings/prefs + local caches (schedule,
     // notifications, publishing, brand, affiliate, niches, bookmarks, pin metadata,
     // pin sessions/records). Same token; same degrade-to-localStorage guarantees.
     initAllUserStoreSync(getToken);
-  }, []);
+    return () => stopPinDraftSync({ clearOwnerScope: false });
+  }, [sessionUser?.id]);
 
   // Dev-only nav timing: log once the new route has committed.
   useEffect(() => {
@@ -375,6 +385,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function handleLogout() {
+    stopPinDraftSync();
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();

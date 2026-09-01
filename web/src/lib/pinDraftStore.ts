@@ -34,7 +34,9 @@ import {
   type DestinationPublishResult,
 } from "./contentDraftModel";
 
-const STORE_KEY       = "vp:pin_drafts:v1";
+const LEGACY_STORE_KEY = "vp:pin_drafts:v1";
+const SCOPED_STORE_PREFIX = "vp:pin_drafts:v2";
+const LEGACY_MIGRATED_KEY = "vp:pin_drafts:v2:legacy_migrated";
 const MAX_DRAFTS      = 500;
 export const DRAFT_STORE_EVENT = "vp:pin_drafts_updated";
 
@@ -403,6 +405,63 @@ function ok(): boolean { return typeof window !== "undefined"; }
 // is observable (hasPersistFailure), and retryPersist() can recover.
 let _memData: StoreData | null = null;
 let _persistFailed = false;
+let _ownerScope: { ownerUserId: string; workspaceId: string } | null = null;
+
+function scopedStoreKey(): string {
+  if (!_ownerScope) return LEGACY_STORE_KEY;
+  return `${SCOPED_STORE_PREFIX}:${encodeURIComponent(_ownerScope.ownerUserId)}:${encodeURIComponent(_ownerScope.workspaceId)}`;
+}
+
+/**
+ * Bind the durable draft cache to the verified session owner before sync starts.
+ * Switching owners drops only the in-memory view; each owner's durable records stay
+ * in their own localStorage namespace and are restored when that owner returns.
+ */
+export function setPinDraftOwnerScope(ownerUserId: string, workspaceId = "default"): void {
+  if (!ok()) return;
+  const owner = ownerUserId.trim();
+  const workspace = workspaceId.trim() || "default";
+  if (!owner) {
+    clearPinDraftOwnerScope();
+    return;
+  }
+  if (_ownerScope?.ownerUserId === owner && _ownerScope.workspaceId === workspace) return;
+
+  _ownerScope = { ownerUserId: owner, workspaceId: workspace };
+  _memData = null;
+  _persistFailed = false;
+  _snapshotVersion = -1;
+
+  // One-time migration of the historical global cache. The marker and removal are
+  // intentionally owner-agnostic: the first VERIFIED owner claims the old cache;
+  // later accounts can never inherit it.
+  try {
+    const key = scopedStoreKey();
+    if (!localStorage.getItem(key) && !localStorage.getItem(LEGACY_MIGRATED_KEY)) {
+      const legacy = localStorage.getItem(LEGACY_STORE_KEY);
+      if (legacy) localStorage.setItem(key, legacy);
+      localStorage.setItem(LEGACY_MIGRATED_KEY, "1");
+      localStorage.removeItem(LEGACY_STORE_KEY);
+    }
+  } catch {
+    _persistFailed = true;
+  }
+  emit();
+}
+
+/** Stop exposing the previous owner's cache while leaving their scoped data durable. */
+export function clearPinDraftOwnerScope(): void {
+  if (!_ownerScope && !_memData) return;
+  _ownerScope = null;
+  _memData = null;
+  _persistFailed = false;
+  _snapshotVersion = -1;
+  emit();
+}
+
+export function getPinDraftOwnerScope(): { ownerUserId: string; workspaceId: string } | null {
+  return _ownerScope ? { ..._ownerScope } : null;
+}
 
 /**
  * Bring one draft's persisted media in line with "the cover IS media[0]".
@@ -447,7 +506,7 @@ function load(): StoreData {
   if (_memData) return _memData;
   let changed = false;
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = localStorage.getItem(scopedStoreKey());
     const p = raw ? (JSON.parse(raw) as Partial<StoreData>) : {};
     const drafts = p.drafts ?? {};
     // The one-time cover normalization runs HERE, at the single point where
@@ -478,7 +537,7 @@ function persist(data: StoreData): void {
   // Memory always reflects the latest state — even when the disk write fails.
   _memData = trimmed;
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(scopedStoreKey(), JSON.stringify(trimmed));
     _persistFailed = false;
   } catch {
     // Quota exceeded / storage unavailable. Edits stay in memory; surface the
@@ -494,7 +553,7 @@ export function hasPersistFailure(): boolean { return _persistFailed; }
 export function retryPersist(): boolean {
   if (!ok() || !_memData) return true;
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(_memData));
+    localStorage.setItem(scopedStoreKey(), JSON.stringify(_memData));
     _persistFailed = false;
   } catch {
     _persistFailed = true;
@@ -507,6 +566,8 @@ export function retryPersist(): boolean {
 export function __resetMemoryCacheForTests(): void {
   _memData = null;
   _persistFailed = false;
+  _ownerScope = null;
+  _snapshotVersion = -1;
 }
 
 function emit(): void {

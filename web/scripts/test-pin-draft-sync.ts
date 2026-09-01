@@ -53,6 +53,10 @@ function createMockServer(initial: Row[] = []) {
   const log: Array<{ method: string; url: string; body?: { drafts?: Array<{ draftId: string }>; draftIds?: string[]; deletedAt?: string } }> = [];
   let failCount = 0;
   let deferWrites = false;
+  const rejected = new Map<string, "destination_not_schedulable" | "destination_unavailable">();
+  let legacyBatchReject = false;
+  let omitOutcomeId: string | null = null;
+  let putGate: Promise<void> | null = null;
   // Drafts the next PUT(s) must answer 409 stale for, and the row the client is
   // handed as `current`. This is the server having lost its compare-and-set:
   // the stored row moved between the LWW read and the conditional write.
@@ -89,18 +93,53 @@ function createMockServer(initial: Row[] = []) {
     if (deferWrites) return json({ deferred: true }, 202);
     if (method === "PUT") {
       const drafts = body.drafts as Array<{ draftId: string; updatedAt: string; payload: Record<string, unknown> }>;
+      if (putGate) { const gate = putGate; putGate = null; await gate; }
       if (onPut) { const fn = onPut; onPut = null; fn(); }
+      if (legacyBatchReject) {
+        const bad = drafts.filter(draft => rejected.has(draft.draftId));
+        if (bad.length > 0) {
+          const code = rejected.get(bad[0].draftId)!;
+          return json({ code, drafts: bad.map(draft => ({ draftId: draft.draftId })) }, 422);
+        }
+      }
       const conflicts = staleFor > 0 ? drafts.filter(d => staleIds.has(d.draftId)) : [];
       if (staleFor > 0) staleFor--;
       let applied = 0, skippedStale = 0;
+      const outcomes: Array<{ draftId: string; status: string; code?: string; userMessageKey?: string; retryable: boolean }> = [];
       for (const d of drafts) {
         if (conflicts.some(c => c.draftId === d.draftId)) continue; // conditional write matched nothing
+        const rejectedCode = rejected.get(d.draftId);
+        if (rejectedCode) {
+          outcomes.push({
+            draftId: d.draftId,
+            status: "rejected",
+            code: rejectedCode,
+            userMessageKey: rejectedCode === "destination_unavailable"
+              ? "studioBoard.card.syncIssue.destinationUnavailable"
+              : "studioBoard.card.syncIssue.destinationNotSchedulable",
+            retryable: false,
+          });
+          continue;
+        }
         const ex = rows.get(d.draftId);
-        if (ex && Date.parse(d.updatedAt) < Date.parse(ex.updatedAt)) { skippedStale++; continue; }
+        if (ex && Date.parse(d.updatedAt) < Date.parse(ex.updatedAt)) {
+          skippedStale++;
+          outcomes.push({ draftId: d.draftId, status: "stale", retryable: false });
+          continue;
+        }
         rows.set(d.draftId, { draftId: d.draftId, updatedAt: d.updatedAt, payload: d.payload });
         applied++;
+        outcomes.push({ draftId: d.draftId, status: "applied", retryable: false });
       }
       if (conflicts.length > 0) {
+        for (const conflict of conflicts) {
+          outcomes.push({
+            draftId: conflict.draftId,
+            status: "stale",
+            code: "write_conflict",
+            retryable: true,
+          });
+        }
         const stale = conflicts.map(c => {
           const cur = staleCurrent.get(c.draftId) ?? rows.get(c.draftId) ?? null;
           return {
@@ -118,9 +157,17 @@ function createMockServer(initial: Row[] = []) {
               : null,
           };
         });
-        return json({ error: "stale", code: "stale", stale, current: stale[0].current, applied, skippedStale }, 409);
+        const responseOutcomes = omitOutcomeId
+          ? outcomes.filter(outcome => outcome.draftId !== omitOutcomeId)
+          : outcomes;
+        omitOutcomeId = null;
+        return json({ error: "stale", code: "stale", stale, current: stale[0].current, applied, skippedStale, outcomes: responseOutcomes }, 409);
       }
-      return json({ applied, skippedStale });
+      const responseOutcomes = omitOutcomeId
+        ? outcomes.filter(outcome => outcome.draftId !== omitOutcomeId)
+        : outcomes;
+      omitOutcomeId = null;
+      return json({ applied, skippedStale, outcomes: responseOutcomes });
     }
     if (method === "DELETE") {
       let applied = 0;
@@ -139,6 +186,17 @@ function createMockServer(initial: Row[] = []) {
     rows, log, fetchImpl,
     failNext: (n: number) => { failCount = n; },
     defer: (on: boolean) => { deferWrites = on; },
+    rejectDraft: (id: string, code: "destination_not_schedulable" | "destination_unavailable") => {
+      rejected.set(id, code);
+    },
+    clearRejected: (id: string) => { rejected.delete(id); },
+    useLegacyBatchReject: () => { legacyBatchReject = true; },
+    omitNextOutcome: (id: string) => { omitOutcomeId = id; },
+    holdNextPut: () => {
+      let release!: () => void;
+      putGate = new Promise<void>(resolve => { release = resolve; });
+      return release;
+    },
     /** Answer 409 stale for these drafts on the next `times` PUT(s), handing back `current`. */
     staleNext: (ids: string[], times: number, current?: Row[]) => {
       staleIds = new Set(ids);
@@ -377,6 +435,191 @@ async function main() {
     srv.defer(false);
     await until(() => srv.live().some(r => r.draftId === a.id), 5_000);
     assert.equal(sync.__getPinDraftSyncDebug().outboxSize, 0);
+  });
+
+  await test("CP-13 mixed result: valid sibling persists; deterministic rejection is acknowledged, card-addressable, and not hot-retried", async () => {
+    reset();
+    const good = store.createBoardDraft({ imageUrl: "https://x/cp13-good.png", source: "uploaded_image" });
+    const bad = store.createBoardDraft({ imageUrl: "https://x/cp13-bad.png", source: "uploaded_image" });
+    const srv = createMockServer();
+    srv.rejectDraft(bad.id, "destination_unavailable");
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl, ownerUserId: "owner-a", workspaceId: "default" });
+
+    await until(() => srv.live().some(row => row.draftId === good.id), 3_000);
+    await until(() => sync.__getPinDraftSyncDebug().actionRequired[bad.id] === "destination_unavailable", 3_000);
+    assert.equal(sync.__getPinDraftSyncDebug().outboxSize, 0, "deterministic rejection leaves no retrying outbox entry");
+    const putCount = srv.putCalls().length;
+    await sleep(100);
+    assert.equal(srv.putCalls().length, putCount, "same rejected revision must not hot retry");
+    assert.equal(sync.getPinDraftSyncIssue(bad.id)?.updatedAt, store.getDraft(bad.id)?.updatedAt);
+
+    // A genuine edit changes updatedAt and is the only thing that re-arms this draft.
+    srv.clearRejected(bad.id);
+    store.updateDraft(bad.id, { title: "fixed" });
+    await until(() => srv.live().some(row => row.draftId === bad.id), 3_000);
+    assert.equal(sync.getPinDraftSyncIssue(bad.id), null);
+  });
+
+  await test("CP-13 rollout compatibility: legacy batch 422 isolates the bad draft and retries the valid sibling once", async () => {
+    reset();
+    const good = store.createBoardDraft({ imageUrl: "https://x/legacy-good.png", source: "uploaded_image" });
+    const bad = store.createBoardDraft({ imageUrl: "https://x/legacy-bad.png", source: "uploaded_image" });
+    const srv = createMockServer();
+    srv.rejectDraft(bad.id, "destination_unavailable");
+    srv.useLegacyBatchReject();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl, ownerUserId: "owner-legacy" });
+    await until(() => srv.rows.has(good.id), 3_000);
+    await until(() => !!sync.getPinDraftSyncIssue(bad.id), 3_000);
+    assert.ok(!srv.rows.has(bad.id));
+    assert.equal(sync.__getPinDraftSyncDebug().outboxSize, 0);
+    assert.equal(srv.putCalls().length, 2, "one rejected batch followed by one valid-sibling retry");
+  });
+
+  await test("CP-13 incomplete v2 outcomes: an unmentioned draft is not acked or hot-looped and retries after bounded backoff", async () => {
+    reset();
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, {
+      ...FAST,
+      backoffBaseMs: 80,
+      backoffMaxMs: 80,
+      fetchImpl: srv.fetchImpl,
+      ownerUserId: "owner-incomplete",
+    });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+
+    const draft = store.createBoardDraft({ imageUrl: "https://x/incomplete.png", source: "uploaded_image" });
+    srv.omitNextOutcome(draft.id);
+    await until(() => srv.putCalls().length === 1, 3_000);
+    await sleep(35);
+    assert.equal(srv.putCalls().length, 1, "missing outcome must not cause an immediate scheduleFlush loop");
+    assert.equal(sync.__getPinDraftSyncDebug().outboxSize, 1, "missing outcome must never be mis-acked");
+
+    await until(() => srv.putCalls().length === 2, 3_000);
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 3_000);
+    assert.ok(srv.rows.has(draft.id));
+  });
+
+  await test("CP-13 mixed 409: rejected sibling remains action-required while only CAS-stale sibling is reconciled", async () => {
+    reset();
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl, ownerUserId: "owner-mixed-409" });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+
+    const good = store.createBoardDraft({ imageUrl: "https://x/cas-good.png", source: "uploaded_image", title: "local" });
+    const bad = store.createBoardDraft({ imageUrl: "https://x/cas-bad.png", source: "uploaded_image" });
+    const future = new Date(Date.now() + 60_000).toISOString();
+    srv.rejectDraft(bad.id, "destination_unavailable");
+    srv.staleNext([good.id], 1, [serverDraft(good.id, future, { title: "server-won" })]);
+
+    await until(() => sync.getPinDraftSyncIssue(bad.id)?.code === "destination_unavailable", 3_000);
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 3_000);
+    assert.equal(sync.getPinDraftSyncIssue(bad.id)?.code, "destination_unavailable");
+    assert.equal(store.getDraft(good.id)?.title, "server-won");
+    assert.ok(!srv.rows.has(bad.id), "deterministic rejected sibling must never be written during CAS retry");
+  });
+
+  await test("CP-13 incomplete 409 outcomes: missing applied sibling stays durable while rejection and CAS reconciliation remain isolated", async () => {
+    reset();
+    const srv = createMockServer();
+    sync.initPinDraftSync(getToken, {
+      ...FAST,
+      backoffBaseMs: 80,
+      backoffMaxMs: 80,
+      fetchImpl: srv.fetchImpl,
+      ownerUserId: "owner-incomplete-409",
+    });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+
+    const conflicted = store.createBoardDraft({ imageUrl: "https://x/incomplete-conflict.png", source: "uploaded_image" });
+    const omitted = store.createBoardDraft({ imageUrl: "https://x/incomplete-applied.png", source: "uploaded_image" });
+    const rejected = store.createBoardDraft({ imageUrl: "https://x/incomplete-rejected.png", source: "uploaded_image" });
+    const future = new Date(Date.now() + 60_000).toISOString();
+    srv.rejectDraft(rejected.id, "destination_unavailable");
+    srv.staleNext([conflicted.id], 1, [serverDraft(conflicted.id, future, { title: "server-current" })]);
+    srv.omitNextOutcome(omitted.id);
+
+    await until(() => srv.putCalls().length === 2, 3_000); // initial 409 + one CAS retry
+    await until(() => sync.getPinDraftSyncIssue(rejected.id)?.code === "destination_unavailable", 3_000);
+    await sleep(35);
+    assert.equal(srv.putCalls().length, 2, "omitted sibling must wait for backoff after the CAS retry");
+    assert.equal(sync.__getPinDraftSyncDebug().outboxSize, 1, "only the omitted sibling should remain pending");
+    assert.equal(sync.getPinDraftSyncIssue(rejected.id)?.code, "destination_unavailable");
+
+    await until(() => srv.putCalls().length === 3, 3_000);
+    await until(() => sync.__getPinDraftSyncDebug().outboxSize === 0, 3_000);
+    assert.ok(srv.rows.has(omitted.id));
+    assert.ok(!srv.rows.has(rejected.id));
+  });
+
+  await test("CP-13 reload: a deterministic issue and durable outbox state restore without replaying the rejected revision", async () => {
+    reset();
+    const bad = store.createBoardDraft({ imageUrl: "https://x/cp13-reload.png", source: "uploaded_image" });
+    const srv = createMockServer();
+    srv.rejectDraft(bad.id, "destination_not_schedulable");
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl, ownerUserId: "owner-reload" });
+    await until(() => !!sync.getPinDraftSyncIssue(bad.id), 3_000);
+    const callsBeforeReload = srv.putCalls().length;
+
+    sync.stopPinDraftSync({ clearOwnerScope: false });
+    store.__resetMemoryCacheForTests();
+    sync.initPinDraftSync(getToken, { ...FAST, fetchImpl: srv.fetchImpl, ownerUserId: "owner-reload" });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+    await sleep(100);
+    assert.equal(srv.putCalls().length, callsBeforeReload, "reload must not replay the unchanged rejected revision");
+    assert.equal(sync.getPinDraftSyncIssue(bad.id)?.code, "destination_not_schedulable");
+  });
+
+  await test("CP-13 A→B→A: stores, singleton state, payloads and recovery metadata stay owner-scoped", async () => {
+    reset();
+    const srvA = createMockServer();
+    const srvB = createMockServer();
+    const tokenA = async () => "private-token-a";
+    const tokenB = async () => "private-token-b";
+
+    sync.initPinDraftSync(tokenA, { ...FAST, fetchImpl: srvA.fetchImpl, ownerUserId: "owner-a" });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+    const a = store.createBoardDraft({ imageUrl: "https://x/owner-a.png", source: "uploaded_image", title: "A-only" });
+    await until(() => srvA.rows.has(a.id), 3_000);
+
+    sync.stopPinDraftSync();
+    sync.initPinDraftSync(tokenB, { ...FAST, fetchImpl: srvB.fetchImpl, ownerUserId: "owner-b" });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+    assert.equal(store.getDraft(a.id), null, "B must never see A's local draft");
+    const b = store.createBoardDraft({ imageUrl: "https://x/owner-b.png", source: "uploaded_image", title: "B-only" });
+    await until(() => srvB.rows.has(b.id), 3_000);
+    assert.ok(srvB.putCalls().every(call => call.body?.drafts?.every(draft => draft.draftId !== a.id)), "A payload must never be sent with B's token");
+
+    sync.stopPinDraftSync();
+    sync.initPinDraftSync(tokenA, { ...FAST, fetchImpl: srvA.fetchImpl, ownerUserId: "owner-a" });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+    assert.equal(store.getDraft(a.id)?.title, "A-only", "A's scoped cache restores on return");
+    assert.equal(store.getDraft(b.id), null, "A must never see B's local draft");
+    const diagnostics = JSON.stringify(sync.__getPinDraftSyncDebug());
+    assert.ok(!diagnostics.includes("owner-a") && !diagnostics.includes("private-token"), "diagnostics must redact owner/token identity");
+  });
+
+  await test("CP-13 stale response: A's late PUT response cannot mutate B's singleton/store after account switch", async () => {
+    reset();
+    const srvA = createMockServer();
+    const srvB = createMockServer();
+    sync.initPinDraftSync(async () => "token-a", { ...FAST, fetchImpl: srvA.fetchImpl, ownerUserId: "late-owner-a" });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+    const releaseA = srvA.holdNextPut();
+    const a = store.createBoardDraft({ imageUrl: "https://x/late-a.png", source: "uploaded_image" });
+    await until(() => srvA.putCalls().length === 1, 3_000);
+
+    sync.stopPinDraftSync();
+    sync.initPinDraftSync(async () => "token-b", { ...FAST, fetchImpl: srvB.fetchImpl, ownerUserId: "late-owner-b" });
+    assert.ok(await sync.__waitForPinDraftSyncReady());
+    const b = store.createBoardDraft({ imageUrl: "https://x/late-b.png", source: "uploaded_image" });
+    await until(() => srvB.rows.has(b.id), 3_000);
+    releaseA();
+    await sleep(80);
+
+    assert.equal(store.getDraft(a.id), null, "late A response must not merge/ack against B's store");
+    assert.ok(store.getDraft(b.id), "B's active store remains intact");
+    assert.equal(sync.__getPinDraftSyncDebug().failureCount, 0);
+    assert.ok(srvB.putCalls().every(call => call.body?.drafts?.every(draft => draft.draftId !== a.id)));
   });
 
   await test("200KB guard: oversized draft is skipped, the rest keeps syncing", async () => {

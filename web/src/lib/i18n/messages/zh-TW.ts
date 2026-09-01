@@ -453,6 +453,12 @@ const zhTW: Partial<Record<MessageKey, string>> = {
   "sync.status.synced": "所有變更已同步",
   "sync.status.syncing": "同步中…",
   "sync.status.error": "同步發生問題，正在重試；你的資料仍保存在此裝置上。",
+  "sync.status.actionRequired": "有 {n} 個草稿需要處理後才能同步。",
+  "studioBoard.card.syncIssue.destinationNotSchedulable": "此發布目標暫不支援排程。請選擇其他目標，或立即發布。",
+  "studioBoard.card.syncIssue.destinationUnavailable": "所選發布帳號目前無法使用。請重新連接或選擇其他帳號。",
+  "studioBoard.card.syncIssue.quotaExceeded": "目前方案已達排程上限，此草稿尚未排程。",
+  "studioBoard.card.syncIssue.payloadTooLarge": "此草稿內容過大，無法同步。請減少媒體或內容後重試。",
+  "studioBoard.card.syncIssue.review": "檢查草稿",
 
   // ── opportunity ──
   "opportunity.card.estVolume": "預估搜尋量",

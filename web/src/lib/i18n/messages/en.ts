@@ -559,6 +559,12 @@ const en = {
   "sync.status.synced": "All changes synced",
   "sync.status.syncing": "Syncing…",
   "sync.status.error": "Sync issue — retrying. Your data is still saved on this device.",
+  "sync.status.actionRequired": "{n} draft(s) need attention before they can sync.",
+  "studioBoard.card.syncIssue.destinationNotSchedulable": "This publishing destination cannot be scheduled yet. Choose another destination or publish now.",
+  "studioBoard.card.syncIssue.destinationUnavailable": "A selected publishing account is unavailable. Reconnect it or choose another account.",
+  "studioBoard.card.syncIssue.quotaExceeded": "This draft could not be scheduled because the plan limit was reached.",
+  "studioBoard.card.syncIssue.payloadTooLarge": "This draft is too large to sync. Remove some media or details and try again.",
+  "studioBoard.card.syncIssue.review": "Review draft",
 
   // ── Merged namespace modules (see ./en/*.ts) ──
   ...connectPageMessages,

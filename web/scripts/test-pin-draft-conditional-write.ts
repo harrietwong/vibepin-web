@@ -61,6 +61,8 @@ type Row = {
 let table: Row[] = [];
 let log: string[] = [];
 let meterCalls: string[] = [];
+let allowanceAllowed = true;
+const unavailableDraftIds = new Set<string>();
 /** 在下一次写入落地之前跑一次的钩子 —— 用它模拟 cron 抢在中间 CAS 写入。 */
 let beforeWrite: (() => void) | null = null;
 /** 下一次 insert 强制返回 23505(有人抢先建了这一行)。 */
@@ -70,6 +72,8 @@ function resetDb() {
   table = [];
   log = [];
   meterCalls = [];
+  allowanceAllowed = true;
+  unavailableDraftIds.clear();
   beforeWrite = null;
   forceUniqueViolation = false;
 }
@@ -192,7 +196,7 @@ const originalLoad = (Module as any)._load;
   }
   if (/[\\/]server[\\/]usage(\.ts)?$/.test(request) || request === "@/lib/server/usage") {
     return {
-      checkAllowance: async () => ({ allowed: true, used: 0, limit: 100 }),
+      checkAllowance: async () => ({ allowed: allowanceAllowed, used: allowanceAllowed ? 0 : 100, limit: 100 }),
       recordUsage: async (args: { referenceId?: string }) => {
         meterCalls.push(String(args.referenceId));
         return { ok: true };
@@ -202,7 +206,14 @@ const originalLoad = (Module as any)._load;
   // 目的地可用性:这些用例不测它,恒定"都可用"。
   if (/scheduledDestinationsAvailable(\.ts)?$/.test(request)
     || request === "@/lib/server/social/scheduledDestinationsAvailable") {
-    return { unavailableScheduleDestinations: async () => [] };
+    return {
+      unavailableScheduleDestinations: async (_userId: string, targets: Array<{ draftId: string }>) =>
+        targets.filter(target => unavailableDraftIds.has(target.draftId)).map(target => ({
+          draftId: target.draftId,
+          provider: "pinterest",
+          reason: "disconnected",
+        })),
+    };
   }
   return originalLoad.call(this, request, parent, isMain);
 };
@@ -268,7 +279,10 @@ async function main() {
       { draftId: "d1", updatedAt: "2026-06-01T00:00:00.000Z", payload: draftPayload("d1", "2026-06-01T00:00:00.000Z") },
     ]));
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { applied: 1, skippedStale: 0 });
+    const body = await res.json() as { applied: number; skippedStale: number; outcomes: Array<{ draftId: string; status: string }> };
+    assert.equal(body.applied, 1);
+    assert.equal(body.skippedStale, 0);
+    assert.deepEqual(body.outcomes, [{ draftId: "d1", status: "applied", retryable: false }]);
     assert.equal(table.length, 1);
     assert.ok(log.some(l => l.startsWith("insert:pin_drafts")), "行不存在时走 INSERT");
   });
@@ -280,7 +294,9 @@ async function main() {
       { draftId: "d1", updatedAt: "2026-06-02T00:00:00.000Z", payload: draftPayload("d1", "2026-06-02T00:00:00.000Z", { title: "newer" }) },
     ]));
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { applied: 1, skippedStale: 0 });
+    const body = await res.json() as { applied: number; skippedStale: number };
+    assert.equal(body.applied, 1);
+    assert.equal(body.skippedStale, 0);
     assert.equal((table[0].payload as { title: string }).title, "newer");
     const upd = log.find(l => l.startsWith("update:pin_drafts"));
     assert.ok(upd, "行存在时走 UPDATE");
@@ -295,7 +311,10 @@ async function main() {
       { draftId: "d1", updatedAt: "2026-06-01T00:00:00.000Z", payload: draftPayload("d1", "2026-06-01T00:00:00.000Z") },
     ]));
     assert.equal(res.status, 200, "LWW 跳过是正常结果,不是冲突");
-    assert.deepEqual(await res.json(), { applied: 0, skippedStale: 1 });
+    const body = await res.json() as { applied: number; skippedStale: number; outcomes: Array<{ draftId: string; status: string }> };
+    assert.equal(body.applied, 0);
+    assert.equal(body.skippedStale, 1);
+    assert.deepEqual(body.outcomes.map(item => [item.draftId, item.status]), [["d1", "stale"]]);
     assert.ok(!log.some(l => l.startsWith("update:") || l.startsWith("insert:")), "被 LWW 跳过的 draft 一个字都不该写");
   });
 
@@ -333,10 +352,12 @@ async function main() {
       code?: string; applied?: number;
       current?: { payload?: Record<string, unknown>; updated_at?: string; scheduled_at?: string | null };
       stale?: Array<{ draftId?: string; current?: { payload?: Record<string, unknown> } }>;
+      outcomes?: Array<{ draftId?: string; status?: string; code?: string; retryable?: boolean }>;
     };
     assert.equal(body.code, "stale");
     assert.equal(body.applied, 0);
     assert.equal(body.stale?.[0]?.draftId, "d1");
+    assert.deepEqual(body.outcomes, [{ draftId: "d1", status: "stale", code: "write_conflict", retryable: true }]);
     // 409 必须带上当前行,客户端要拿它做合并再重试。
     assert.equal(body.current?.updated_at, "2026-06-03T00:00:00.000Z");
     assert.equal(body.current?.scheduled_at, null);
@@ -366,9 +387,17 @@ async function main() {
     ]));
     assert.ok(fired);
     assert.equal(res.status, 409);
-    const body = await res.json() as { applied?: number; stale?: Array<{ draftId?: string }> };
+    const body = await res.json() as {
+      applied?: number;
+      stale?: Array<{ draftId?: string }>;
+      outcomes?: Array<{ draftId?: string; status?: string; retryable?: boolean }>;
+    };
     assert.equal(body.applied, 1, "没冲突的那条是独立的写,不该被同伴的冲突拖下水");
     assert.deepEqual(body.stale?.map(s => s.draftId), ["dA"]);
+    assert.deepEqual(body.outcomes?.map(item => [item.draftId, item.status, item.retryable]), [
+      ["dB", "applied", false],
+      ["dA", "stale", true],
+    ]);
     assert.equal((table.find(r => r.draft_id === "dA")!.payload as { title: string }).title, "t-dA",
       "冲突那条必须保持服务器的内容");
     assert.equal((table.find(r => r.draft_id === "dB")!.payload as { title: string }).title, "B-new");
@@ -417,6 +446,114 @@ async function main() {
     }]));
     assert.equal(res.status, 200);
     assert.deepEqual(meterCalls, ["dS"], "写成功的排程仍然要计一次");
+  });
+
+  // ── 4) CP-13: deterministic failures are per draft ───────────────────────
+  console.log("\n=== 4) CP-13:坏 draft 不得阻塞有效兄弟,且不得热重试 ===");
+
+  const futureDay = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  const scheduled = (id: string, provider: string, connectionId: string) => draftPayload(
+    id,
+    "2026-09-01T12:00:00.000Z",
+    {
+      scheduledDate: futureDay,
+      scheduledTime: "10:00",
+      scheduleTimezone: "UTC",
+      scheduledDestinations: [{ provider, socialConnectionId: connectionId, capturedAt: "2026-09-01T11:00:00.000Z" }],
+    },
+  );
+
+  await test("mixed valid+unschedulable: valid sibling persists, rejected sibling gets action-required outcome", async () => {
+    resetDb();
+    const res = await route.PUT(putRequest([
+      { draftId: "good", updatedAt: "2026-09-01T12:00:00.000Z", payload: draftPayload("good", "2026-09-01T12:00:00.000Z") },
+      { draftId: "bad", updatedAt: "2026-09-01T12:00:00.000Z", payload: scheduled("bad", "tiktok", "tt-1") },
+    ]));
+    assert.equal(res.status, 200);
+    const body = await res.json() as { applied: number; outcomes: Array<{ draftId: string; status: string; code?: string; retryable: boolean }> };
+    assert.equal(body.applied, 1);
+    assert.ok(table.some(row => row.draft_id === "good"), "valid sibling must persist");
+    assert.ok(!table.some(row => row.draft_id === "bad"), "unschedulable draft must not persist");
+    assert.deepEqual(body.outcomes.map(item => [item.draftId, item.status, item.code ?? ""]), [
+      ["good", "applied", ""],
+      ["bad", "rejected", "destination_not_schedulable"],
+    ]);
+    assert.equal(body.outcomes[1].retryable, false);
+  });
+
+  await test("only-invalid: returns per-draft rejection with zero writes", async () => {
+    resetDb();
+    const res = await route.PUT(putRequest([
+      { draftId: "bad-only", updatedAt: "2026-09-01T12:00:00.000Z", payload: scheduled("bad-only", "tiktok", "tt-2") },
+    ]));
+    assert.equal(res.status, 200);
+    const body = await res.json() as { applied: number; outcomes: Array<{ status: string; retryable: boolean }> };
+    assert.equal(body.applied, 0);
+    assert.deepEqual(body.outcomes.map(item => [item.status, item.retryable]), [["rejected", false]]);
+    assert.equal(table.length, 0);
+  });
+
+  await test("oversized payload is rejected per draft without blocking a valid sibling", async () => {
+    resetDb();
+    const huge = draftPayload("huge", "2026-09-01T12:00:00.000Z", { description: "x".repeat(205 * 1024) });
+    const res = await route.PUT(putRequest([
+      { draftId: "small", updatedAt: "2026-09-01T12:00:00.000Z", payload: draftPayload("small", "2026-09-01T12:00:00.000Z") },
+      { draftId: "huge", updatedAt: "2026-09-01T12:00:00.000Z", payload: huge },
+    ]));
+    const body = await res.json() as { applied: number; outcomes: Array<{ draftId: string; code?: string }> };
+    assert.equal(res.status, 200);
+    assert.equal(body.applied, 1);
+    assert.equal(body.outcomes.find(item => item.draftId === "huge")?.code, "payload_too_large");
+    assert.ok(table.some(row => row.draft_id === "small"));
+    assert.ok(!table.some(row => row.draft_id === "huge"));
+  });
+
+  await test("unavailable destination rejects only its own draft", async () => {
+    resetDb();
+    unavailableDraftIds.add("gone");
+    const res = await route.PUT(putRequest([
+      { draftId: "plain", updatedAt: "2026-09-01T12:00:00.000Z", payload: draftPayload("plain", "2026-09-01T12:00:00.000Z") },
+      { draftId: "gone", updatedAt: "2026-09-01T12:00:00.000Z", payload: scheduled("gone", "pinterest", "missing") },
+    ]));
+    const body = await res.json() as { applied: number; outcomes: Array<{ draftId: string; code?: string }> };
+    assert.equal(res.status, 200);
+    assert.equal(body.applied, 1);
+    assert.equal(body.outcomes.find(item => item.draftId === "gone")?.code, "destination_unavailable");
+    assert.ok(table.some(row => row.draft_id === "plain"));
+    assert.ok(!table.some(row => row.draft_id === "gone"));
+  });
+
+  await test("quota rejection does not block an unrelated unscheduled draft or meter either rejected row", async () => {
+    resetDb();
+    allowanceAllowed = false;
+    const res = await route.PUT(putRequest([
+      { draftId: "plain-q", updatedAt: "2026-09-01T12:00:00.000Z", payload: draftPayload("plain-q", "2026-09-01T12:00:00.000Z") },
+      { draftId: "quota", updatedAt: "2026-09-01T12:00:00.000Z", payload: scheduled("quota", "pinterest", "pin-1") },
+    ]));
+    const body = await res.json() as { applied: number; outcomes: Array<{ draftId: string; code?: string }> };
+    assert.equal(res.status, 200);
+    assert.equal(body.applied, 1);
+    assert.equal(body.outcomes.find(item => item.draftId === "quota")?.code, "quota_exceeded");
+    assert.deepEqual(meterCalls, []);
+    assert.ok(table.some(row => row.draft_id === "plain-q"));
+  });
+
+  await test("mixed scheduled siblings: accepted destination meters once; rejected destination never enters usage", async () => {
+    resetDb();
+    const res = await route.PUT(putRequest([
+      { draftId: "scheduled-good", updatedAt: "2026-09-01T12:00:00.000Z", payload: scheduled("scheduled-good", "pinterest", "pin-1") },
+      { draftId: "scheduled-bad", updatedAt: "2026-09-01T12:00:00.000Z", payload: scheduled("scheduled-bad", "tiktok", "tt-3") },
+    ]));
+    const body = await res.json() as { applied: number; outcomes: Array<{ draftId: string; status: string; code?: string }> };
+    assert.equal(res.status, 200);
+    assert.equal(body.applied, 1);
+    assert.deepEqual(meterCalls, ["scheduled-good"]);
+    assert.ok(table.some(row => row.draft_id === "scheduled-good"));
+    assert.ok(!table.some(row => row.draft_id === "scheduled-bad"));
+    assert.deepEqual(body.outcomes.map(item => [item.draftId, item.status, item.code ?? ""]), [
+      ["scheduled-good", "applied", ""],
+      ["scheduled-bad", "rejected", "destination_not_schedulable"],
+    ]);
   });
 
   console.log(`\n${passed} passed`);

@@ -14,7 +14,7 @@
  *           tags) → autosave + Schedule. No manual publish-time fields.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { MessageKey } from "@/lib/i18n/messages/en";
 import { ChevronDown, ChevronUp, ExternalLink, Loader2, MoreVertical, Layers, Check, CalendarClock, X, Star, AlertTriangle, Sparkles } from "lucide-react";
@@ -47,6 +47,7 @@ import type { SelectedAccount } from "@/components/social/PublishDestinations";
 import type { PlatformConnectionSummary } from "@/lib/social/types";
 import { BUI, STUDIO_UI, toneColor, fieldStyle, labelStyle } from "@/components/studio/boardUI";
 import { track } from "@/lib/analytics";
+import { getPinDraftSyncIssue, getPinDraftSyncStatus, subscribePinDraftSyncStatus } from "@/lib/pinDraftSync";
 
 const PERSIST_DEBOUNCE = 400;
 
@@ -337,6 +338,30 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
   }, []);
   const retrySave = useCallback(() => { retryPersist(); setPersistFailed(hasPersistFailure()); }, []);
   const saveState: "saved" | "saving" | "failed" = persistFailed ? "failed" : pendingSave ? "saving" : "saved";
+  const draftSyncStatus = useSyncExternalStore(
+    subscribePinDraftSyncStatus,
+    getPinDraftSyncStatus,
+    getPinDraftSyncStatus,
+  );
+  const syncIssue = useMemo(
+    () => getPinDraftSyncIssue(draft.id),
+    [draft.id, draft.updatedAt, draftSyncStatus],
+  );
+  const syncIssueNotice = syncIssue ? (
+    <div data-testid="card-sync-action-required" role="alert" data-code={syncIssue.code}
+      style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${BUI.border}`, background: "#fffbeb", color: "#92400e" }}>
+      <span style={{ display: "inline-flex", alignItems: "flex-start", gap: 5, fontSize: 10.5, fontWeight: 700, lineHeight: 1.4 }}>
+        <AlertTriangle style={{ width: 12, height: 12, flexShrink: 0, marginTop: 1 }} />
+        {tr(syncIssue.userMessageKey as MessageKey)}
+      </span>
+      <button type="button" data-testid="card-sync-review" onClick={() => {
+        props.onSetActive(draft.id);
+        if (syncIssue.code.startsWith("destination_")) setDestinationsOpen(true);
+      }} style={{ flexShrink: 0, border: 0, background: "none", color: BUI.purple, padding: 0, fontSize: 10.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+        {tr("studioBoard.card.syncIssue.review")}
+      </button>
+    </div>
+  ) : null;
 
   const persistNow = useCallback((f: PinFieldsValue) => {
     // Read the stored record FRESH (same contract as handlePublish): `persistNow` is
@@ -1041,6 +1066,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
             </button>
           </div>
         )}
+        {syncIssueNotice}
         <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 7 }}>
           {/* Posted header line: when it went live + a single "Needs attention" chip
               on a partial success. One notice, never a stack (PRD §5). */}
@@ -1343,6 +1369,7 @@ function PinBoardCardImpl(props: PinBoardCardProps) {
         </div>
       </div>
 
+      {syncIssueNotice}
       <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
         {/* AI actions — Generate copy primary, Create AI Version secondary */}
         <PinFieldsForm value={fields} boards={boards} boardsLoading={boardsLoading} disconnected={disconnected}

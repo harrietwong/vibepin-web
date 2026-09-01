@@ -103,9 +103,11 @@ test("handlePublish auto-saves via persistDraft before publishing", () => {
 
 console.log("\n=== pinDraftStore persistence layer ===");
 
-test("updateDraft reads from localStorage with STORE_KEY", () => {
-  assert.ok(storeSource.includes('localStorage.getItem(STORE_KEY)'), "store must read from STORE_KEY");
-  assert.ok(storeSource.includes('localStorage.setItem(STORE_KEY'), "store must write to STORE_KEY");
+test("updateDraft reads and writes the verified owner/workspace storage key", () => {
+  assert.ok(storeSource.includes("function scopedStoreKey()"), "store must resolve one canonical scoped key");
+  assert.ok(storeSource.includes("localStorage.getItem(scopedStoreKey())"), "store must read from the active owner scope");
+  assert.ok(storeSource.includes("localStorage.setItem(scopedStoreKey(),"), "store must write to the active owner scope");
+  assert.ok(storeSource.includes('const SCOPED_STORE_PREFIX = "vp:pin_drafts:v2"'), "scoped v2 prefix must remain stable");
 });
 
 test("updateDraft emits DRAFT_STORE_EVENT after every write (listeners get live updates)", () => {
@@ -115,8 +117,9 @@ test("updateDraft emits DRAFT_STORE_EVENT after every write (listeners get live 
   assert.ok(storeSource.includes("window.dispatchEvent(new Event(DRAFT_STORE_EVENT))"), "emit must dispatch DRAFT_STORE_EVENT on window");
 });
 
-test("STORE_KEY is stable (changing it would silently lose all drafts)", () => {
-  assert.ok(storeSource.includes('"vp:pin_drafts:v1"'), 'STORE_KEY must be "vp:pin_drafts:v1"');
+test("legacy STORE_KEY remains stable and is migration-only", () => {
+  assert.ok(storeSource.includes('const LEGACY_STORE_KEY = "vp:pin_drafts:v1"'), 'legacy key must remain "vp:pin_drafts:v1"');
+  assert.ok(storeSource.includes("localStorage.removeItem(LEGACY_STORE_KEY)"), "verified-owner migration must retire the global cache");
 });
 
 test("updateDraft returns the updated draft (allows onSaved callback to fire)", () => {

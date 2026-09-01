@@ -5,7 +5,8 @@
  *                                   (updated_at desc, draft_id asc stable order; INCLUDES tombstones so
  *                                    clients can converge local deletes)
  * PUT    { drafts: [{draftId, updatedAt, payload}] } (≤50)
- *                                 → { applied, skippedStale }  (server LWW: incoming.updatedAt < row → skip)
+ *                                 → { applied, skippedStale, outcomes[] } with one result per draft
+ *                                   (server LWW: incoming.updatedAt < row → stale)
  *                                 → 409 {code:"stale", stale:[{draftId, current}], current} when a row
  *                                   changed between the LWW read and the write (see the conditional write)
  * DELETE { draftIds: string[], deletedAt } (≤50)
@@ -20,7 +21,6 @@ import { getUserIdFromBearer } from "@/lib/server/authUser";
 import { createServerClient } from "@/lib/supabase";
 import { resolvePlan } from "@/lib/server/entitlements";
 import { checkAllowance, recordUsage } from "@/lib/server/usage";
-import { platformName } from "@/lib/social/platforms";
 import {
   unavailableScheduleDestinations,
   type ScheduleTarget,
@@ -46,6 +46,13 @@ const MAX_PAYLOAD_BYTES = 200 * 1024; // 200KB per draft payload
 const MAX_DRAFTS_PER_USER = 500;      // mirror of pinDraftStore MAX_DRAFTS
 
 type IncomingDraft = { draftId: string; updatedAt: string; payload: Record<string, unknown> };
+type DraftSyncOutcome = {
+  draftId: string;
+  status: "applied" | "stale" | "rejected" | "deferred";
+  code?: string;
+  userMessageKey?: string;
+  retryable: boolean;
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -195,6 +202,7 @@ export async function PUT(req: Request) {
   if (raw.length > MAX_BATCH) return jsonError(400, "bad_request", `At most ${MAX_BATCH} drafts per request`);
 
   const incoming: IncomingDraft[] = [];
+  const parseRejected: DraftSyncOutcome[] = [];
   for (const item of raw) {
     const d = item as Partial<IncomingDraft> | null;
     if (
@@ -205,9 +213,20 @@ export async function PUT(req: Request) {
       return jsonError(400, "bad_request", "Each draft needs draftId, updatedAt (ISO) and payload (object)");
     }
     if (Buffer.byteLength(JSON.stringify(d.payload), "utf8") > MAX_PAYLOAD_BYTES) {
-      return jsonError(413, "payload_too_large", `Draft ${d.draftId} payload exceeds 200KB`);
+      parseRejected.push({
+        draftId: d.draftId,
+        status: "rejected",
+        code: "payload_too_large",
+        userMessageKey: "studioBoard.card.syncIssue.payloadTooLarge",
+        retryable: false,
+      });
+      continue;
     }
     incoming.push({ draftId: d.draftId, updatedAt: d.updatedAt as string, payload: d.payload as Record<string, unknown> });
+  }
+
+  if (incoming.length === 0) {
+    return Response.json({ applied: 0, skippedStale: 0, outcomes: parseRejected });
   }
 
   const db = createServerClient();
@@ -266,6 +285,8 @@ export async function PUT(req: Request) {
   // conditional write below can aim its predicate at exactly that row.
   const rows: Array<{ draftId: string; row: Record<string, unknown> }> = [];
   let skippedStale = 0;
+  const outcomes: DraftSyncOutcome[] = [...parseRejected];
+  const rejected = new Map<string, DraftSyncOutcome>();
   // Drafts transitioning from NOT-scheduled → scheduled in THIS request (each is
   // one scheduled_post metered event). Only tracked when the scheduled_at column
   // exists; skipped entirely otherwise.
@@ -279,7 +300,11 @@ export async function PUT(req: Request) {
   for (const d of incoming) {
     const rowMs = existingMs.get(d.draftId);
     const incMs = parseMs(d.updatedAt)!;
-    if (rowMs !== undefined && incMs < rowMs) { skippedStale++; continue; } // server LWW
+    if (rowMs !== undefined && incMs < rowMs) {
+      skippedStale++;
+      outcomes.push({ draftId: d.draftId, status: "stale", code: "server_newer", retryable: false });
+      continue;
+    } // server LWW
     const p = d.payload;
     if (scheduledAtAvailable) {
       const incomingScheduledAt = buildScheduledAt(p);
@@ -323,25 +348,18 @@ export async function PUT(req: Request) {
     } });
   }
 
-  // ── Schedulable-destination gate ──────────────────────────────────────────
-  // Before the upsert, so an unsupported scheduled destination is never persisted
-  // and never silently discarded. 422 (not 400): the request is well-formed, the
-  // capability is temporarily unavailable.
-  if (unschedulable.length > 0) {
-    const names = [...new Set(unschedulable.flatMap(u => u.providers))]
-      .map(p => platformName(p as Parameters<typeof platformName>[0]));
-    return Response.json(
-      {
-        error: "destination_not_schedulable",
-        code: "destination_not_schedulable",
-        drafts: unschedulable,
-        userMessage:
-          names.length === 1
-            ? `Scheduling to ${names[0]} is temporarily unavailable. You can still publish now.`
-            : `Scheduling to ${names.join(" and ")} is temporarily unavailable. You can still publish now.`,
-      },
-      { status: 422 },
-    );
+  // ── Per-draft deterministic destination gates ─────────────────────────────
+  // A bad sibling must never block unrelated drafts. Each rejected revision is
+  // acknowledged as action-required (retryable=false); the client retries only
+  // after the merchant edits that draft and changes updatedAt.
+  for (const item of unschedulable) {
+    rejected.set(item.draftId, {
+      draftId: item.draftId,
+      status: "rejected",
+      code: "destination_not_schedulable",
+      userMessageKey: "studioBoard.card.syncIssue.destinationNotSchedulable",
+      retryable: false,
+    });
   }
 
   // ── Destination-EXISTS gate ───────────────────────────────────────────────
@@ -358,31 +376,22 @@ export async function PUT(req: Request) {
   // `target_disconnected`, a visible failure on a Content that was never posted.
   // No duplicate post, no silent success. See scheduledDestinationsAvailable.ts.
   //
-  // 422, like the gate above: the request is well formed, the destination is not
-  // usable. A distinct code (`destination_unavailable`) because the remedy is
+  // A per-draft rejection, like the gate above: the request is well formed, but
+  // the destination is unusable. A distinct code (`destination_unavailable`) because the remedy is
   // different — reconnect or pick another account, not "wait for the platform".
-  if (scheduleTargets.length > 0) {
-    const unavailable = await unavailableScheduleDestinations(userId, scheduleTargets);
+  const eligibleScheduleTargets = scheduleTargets.filter(target => !rejected.has(target.draftId));
+  if (eligibleScheduleTargets.length > 0) {
+    const unavailable = await unavailableScheduleDestinations(userId, eligibleScheduleTargets);
     if (unavailable.length > 0) {
-      const names = [...new Set(
-        unavailable.map(u => (u.provider ? platformName(u.provider) : null)).filter((n): n is string => !!n),
-      )];
-      const disconnected = unavailable.some(u => u.reason === "disconnected");
-      const userMessage = names.length === 0
-        // The id resolves to nothing at all, so there is no platform to name.
-        ? "One of the accounts this schedule publishes to is no longer connected. Pick another account, then schedule again."
-        : disconnected
-          ? `Your ${names.join(" and ")} account is no longer connected, so this can't be scheduled. Reconnect it, or pick another account.`
-          : `The ${names.join(" and ")} account this schedule publishes to no longer exists. Pick another account, then schedule again.`;
-      return Response.json(
-        {
-          error: "destination_unavailable",
+      for (const item of unavailable) {
+        rejected.set(item.draftId, {
+          draftId: item.draftId,
+          status: "rejected",
           code: "destination_unavailable",
-          drafts: unavailable,
-          userMessage,
-        },
-        { status: 422 },
-      );
+          userMessageKey: "studioBoard.card.syncIssue.destinationUnavailable",
+          retryable: false,
+        });
+      }
     }
   }
 
@@ -391,21 +400,21 @@ export async function PUT(req: Request) {
   // when this batch introduces new schedules. Publish-now is a different path
   // (this endpoint only stores scheduled_at derived from plannedAt/scheduledDate)
   // and is never metered here. Fails OPEN on a metering error.
-  if (newlyScheduledDraftIds.length > 0) {
+  const quotaCandidateIds = newlyScheduledDraftIds.filter(id => !rejected.has(id));
+  if (quotaCandidateIds.length > 0) {
     try {
       const plan = await resolvePlan(userId);
-      const allowance = await checkAllowance(userId, "scheduled_post", newlyScheduledDraftIds.length, plan);
+      const allowance = await checkAllowance(userId, "scheduled_post", quotaCandidateIds.length, plan);
       if (!allowance.allowed) {
-        return Response.json(
-          {
-            error: "quota_exceeded",
+        for (const draftId of quotaCandidateIds) {
+          rejected.set(draftId, {
+            draftId,
+            status: "rejected",
             code: "quota_exceeded",
-            quota: { used: allowance.used, limit: allowance.limit },
-            userMessage:
-              "You've reached this month's scheduled-post limit for your plan. Upgrade your plan or wait until next month to schedule more.",
-          },
-          { status: 429 },
-        );
+            userMessageKey: "studioBoard.card.syncIssue.quotaExceeded",
+            retryable: false,
+          });
+        }
       }
     } catch (err) {
       console.error("[pin-drafts PUT] scheduled_post allowance error:", (err as Error)?.message ?? String(err));
@@ -439,7 +448,7 @@ export async function PUT(req: Request) {
   const staleConflicts: Array<{ draftId: string; current: CurrentRow | null }> = [];
   const written: string[] = [];
 
-  for (const { draftId, row } of rows) {
+  for (const { draftId, row } of rows.filter(candidate => !rejected.has(candidate.draftId))) {
     const observed = observedUpdatedAt.get(draftId) ?? null;
     const exists = observedUpdatedAt.has(draftId);
 
@@ -495,7 +504,10 @@ export async function PUT(req: Request) {
       continue;
     }
     written.push(draftId);
+    outcomes.push({ draftId, status: "applied", retryable: false });
   }
+
+  outcomes.push(...rejected.values());
 
   if (written.length > 0) {
     await enforceDraftCap(db, userId);
@@ -532,6 +544,14 @@ export async function PUT(req: Request) {
   // `current` mirrors stale[0] so a single-draft client can read the specced
   // shape without unpacking the array.
   if (staleConflicts.length > 0) {
+    for (const conflict of staleConflicts) {
+      outcomes.push({
+        draftId: conflict.draftId,
+        status: "stale",
+        code: "write_conflict",
+        retryable: true,
+      });
+    }
     return Response.json(
       {
         error: "Draft changed on the server since it was read — merge and retry",
@@ -540,12 +560,13 @@ export async function PUT(req: Request) {
         current: staleConflicts[0].current,
         applied: written.length,
         skippedStale,
+        outcomes,
       },
       { status: 409 },
     );
   }
 
-  return Response.json({ applied: written.length, skippedStale });
+  return Response.json({ applied: written.length, skippedStale, outcomes });
 }
 
 /** The row shape returned to a client whose write lost the CAS. */
