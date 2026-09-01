@@ -108,16 +108,29 @@ function oracleIsWatched(state: string, used: number | null, limit: number | nul
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
+// A day, in ms — shared by every fixture below that expresses dates relative
+// to "now" instead of a calendar literal, so nothing in this file goes stale.
+const DAY_MS = 86_400_000;
+
 /**
  * A production-shaped usage_accounts row. Column names are written out literally
  * so this fixture is itself an assertion about the v55/v56 lineage: an
  * implementation that queries `owner_id` finds nothing here.
+ *
+ * period_start/period_end default to a window centered on the real current
+ * time (15 days in, 15 days left) rather than a calendar literal: a fixed
+ * date fixture eventually falls into the past and the new expired-period
+ * exclusion (isPeriodExpired) then correctly — but misleadingly — excludes
+ * these rows from quota watch, failing the test for a reason that has
+ * nothing to do with a regression. Tests that deliberately want an expired
+ * or not-yet-started period pass explicit period_start/period_end.
  */
 function accountRow(over: Partial<Record<string, unknown>> & { user_id: string }) {
+  const now = Date.now();
   return {
     plan_key: "pro",
-    period_start: "2026-08-01T09:40:00.000Z",
-    period_end: "2026-09-01T09:40:00.000Z",
+    period_start: new Date(now - 15 * DAY_MS).toISOString(),
+    period_end: new Date(now + 15 * DAY_MS).toISOString(),
     ai_images_used: 0,
     ai_images_limit: 800,
     ai_images_reserved: 0,
